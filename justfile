@@ -213,9 +213,15 @@ wrapper-gate base="origin/main":
 state-holder-gate:
     python3 scripts/ci/state_holder_gate.py
 
+# The modifier matrix's Cranpose and Compose halves are generated from one
+# description (tools/compose-twin/matrix.toml); a hand edit to either, or a
+# description changed without generating, fails here.
+twin-matrix-check:
+    python3 tools/compose-twin/generate_matrix.py --check
+
 # The gates fast enough to run before every commit: what `.githooks/pre-commit`
 # runs. Everything here finishes in seconds against a warm xtask build.
-precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate ci-contract-gates
+precommit: fmt-check typos complexity-gate duplication-gate wrapper-gate state-holder-gate twin-matrix-check ci-contract-gates
 
 # The gates that describe CI to itself: which scheduling class each robot
 # example is in, what a parallel worker can reach, and the twenty-minute cap
@@ -776,7 +782,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions twin-matrix-check test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 

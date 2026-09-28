@@ -1,0 +1,106 @@
+# The modifier matrix (issue #905, section 3): one description of small
+# probes, which `generate_matrix.py` turns into the same scenes for
+# Cranpose (apps/desktop-demo/src/test_screens/compose_twin_matrix.rs) and
+# Compose (src/main/kotlin/dev/cranpose/twin/Matrix.kt).
+#
+# A frame is a grid of cells; each cell holds one probe and is compared on
+# its own. After editing, run `python3 tools/compose-twin/generate_matrix.py`
+# and render the Compose frames again (see README.md).
+
+[grid]
+origin = 4
+columns = 4
+rows = 4
+cell_width = 128
+cell_height = 104
+
+# name = [red, green, blue, alpha]
+[colors]
+red = [0.85, 0.35, 0.30, 1.0]
+blue = [0.30, 0.55, 0.90, 1.0]
+green = [0.35, 0.80, 0.45, 1.0]
+gold = [0.95, 0.75, 0.25, 1.0]
+dim = [0.22, 0.24, 0.30, 1.0]
+
+# One modifier, as each framework spells it.
+[ops]
+pad = { rust = "padding(6.0)", kotlin = "padding(6.dp)" }
+edge = { rust = "padding_each(10.0, 2.0, 4.0, 8.0)", kotlin = "padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)" }
+bg = { rust = "background(RED)", kotlin = "background(Red)" }
+bg2 = { rust = "background(BLUE)", kotlin = "background(Blue)" }
+size = { rust = "size_points(64.0, 44.0)", kotlin = "size(64.dp, 44.dp)" }
+width = { rust = "width(52.0)", kotlin = "width(52.dp)" }
+fill = { rust = "fill_max_width()", kotlin = "fillMaxWidth()" }
+offset = { rust = "offset(7.0, 5.0)", kotlin = "offset(7.dp, 5.dp)" }
+clip = { rust = "clip_to_bounds()", kotlin = "clipToBounds()" }
+alpha = { rust = "graphics_layer_value(GraphicsLayer { alpha: 0.5, ..Default::default() })", kotlin = "graphicsLayer { alpha = 0.5f }" }
+
+# Every ordered chain of `length` distinct ops, each on a box around a
+# 20 by 14 green block. Solid shapes on whole pixels leave nothing to
+# antialiasing, so these cells must match exactly.
+[[chains]]
+name = "chains2"
+length = 2
+ops = ["pad", "edge", "bg", "bg2", "size", "width", "fill", "offset", "clip", "alpha"]
+
+[[chains]]
+name = "chains3"
+length = 3
+ops = ["pad", "bg", "bg2", "size", "fill", "offset", "clip"]
+
+# The same chains around a line of text instead of the block. Glyph edges
+# may differ by antialiasing, so these cells skip the reference's edges.
+[[chains]]
+name = "text2"
+length = 2
+ops = ["pad", "edge", "bg", "size", "width", "fill", "offset"]
+text = "Ag Text"
+
+# Rows and columns of three blocks, each arrangement against each
+# cross-axis alignment, in a dim 121 by 65 (row) or 89 by 97 (column) box:
+# odd sizes, so centring lands on a half pixel that has to round as
+# Compose rounds it.
+[arrangements]
+start = { rust = "LinearArrangement::Start", kotlin = "Start" }
+end = { rust = "LinearArrangement::End", kotlin = "End" }
+center = { rust = "LinearArrangement::Center", kotlin = "Center" }
+between = { rust = "LinearArrangement::SpaceBetween", kotlin = "SpaceBetween" }
+around = { rust = "LinearArrangement::SpaceAround", kotlin = "SpaceAround" }
+evenly = { rust = "LinearArrangement::SpaceEvenly", kotlin = "SpaceEvenly" }
+spaced = { rust = "LinearArrangement::SpacedBy(7.0)", kotlin = "spacedBy(7.dp)" }
+
+[row_alignments]
+top = { rust = "VerticalAlignment::Top", kotlin = "Top" }
+center = { rust = "VerticalAlignment::CenterVertically", kotlin = "CenterVertically" }
+bottom = { rust = "VerticalAlignment::Bottom", kotlin = "Bottom" }
+
+[column_alignments]
+start = { rust = "HorizontalAlignment::Start", kotlin = "Start" }
+center = { rust = "HorizontalAlignment::CenterHorizontally", kotlin = "CenterHorizontally" }
+end = { rust = "HorizontalAlignment::End", kotlin = "End" }
+
+# A 30 by 20 block in a dim 121 by 91 box, at each content alignment.
+[box_alignments]
+top_start = { rust = "Alignment::new(HorizontalAlignment::Start, VerticalAlignment::Top)", kotlin = "TopStart" }
+top_center = { rust = "Alignment::new(HorizontalAlignment::CenterHorizontally, VerticalAlignment::Top)", kotlin = "TopCenter" }
+top_end = { rust = "Alignment::new(HorizontalAlignment::End, VerticalAlignment::Top)", kotlin = "TopEnd" }
+center_start = { rust = "Alignment::new(HorizontalAlignment::Start, VerticalAlignment::CenterVertically)", kotlin = "CenterStart" }
+center = { rust = "Alignment::new(HorizontalAlignment::CenterHorizontally, VerticalAlignment::CenterVertically)", kotlin = "Center" }
+center_end = { rust = "Alignment::new(HorizontalAlignment::End, VerticalAlignment::CenterVertically)", kotlin = "CenterEnd" }
+bottom_start = { rust = "Alignment::new(HorizontalAlignment::Start, VerticalAlignment::Bottom)", kotlin = "BottomStart" }
+bottom_center = { rust = "Alignment::new(HorizontalAlignment::CenterHorizontally, VerticalAlignment::Bottom)", kotlin = "BottomCenter" }
+bottom_end = { rust = "Alignment::new(HorizontalAlignment::End, VerticalAlignment::Bottom)", kotlin = "BottomEnd" }
+
+# Weighted children of a 121 by 40 row: each entry is one row, a list of
+# [weight, fill] children (weight 0: a fixed 18 wide block).
+[weights]
+rows = [
+  [[1.0, true], [1.0, true]],
+  [[1.0, true], [2.0, true]],
+  [[1.0, true], [0.0, true], [1.0, true]],
+  [[1.0, false], [1.0, true]],
+  [[1.0, true], [1.0, true], [1.0, true]],
+  [[0.0, true], [3.0, true], [0.0, true]],
+  [[1.0, false], [2.0, false]],
+  [[1.0, true], [1.0, true], [1.0, true], [1.0, true], [1.0, true], [1.0, true], [1.0, true]],
+]

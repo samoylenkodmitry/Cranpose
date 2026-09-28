@@ -1,6 +1,7 @@
 pub mod accessibility_navigation;
 pub mod accessibility_robot;
 pub mod compose_twin;
+mod compose_twin_matrix;
 pub mod font_scale_repro;
 pub mod nested_glass_cache_repro;
 pub mod pressed_state_repro;

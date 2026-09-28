@@ -1,4 +1,8 @@
-use crate::test_screens::compose_twin::{twin_stray_pixels, TWIN_STRAY_DELTA};
+use crate::test_screens::compose_twin::{
+    twin_stray_pixels,
+    TwinTolerance::{Edges, Exact},
+    MATRIX_FRAMES, MATRIX_GRID, TWIN_FRAME_HEIGHT, TWIN_FRAME_WIDTH, TWIN_STRAY_DELTA,
+};
 
 const WIDTH: usize = 12;
 const HEIGHT: usize = 8;
@@ -23,7 +27,7 @@ fn frame_with_box(left: usize) -> Vec<u8> {
 #[test]
 fn identical_frames_have_no_stray_pixels() {
     let frame = frame_with_box(2);
-    assert_eq!(twin_stray_pixels(&frame, &frame, WIDTH), Some(0));
+    assert_eq!(twin_stray_pixels(&frame, &frame, WIDTH, Edges), Some(0));
 }
 
 #[test]
@@ -32,7 +36,10 @@ fn antialiasing_on_an_edge_does_not_stray() {
     let mut actual = reference.clone();
     let edge = (3 * WIDTH + 1) * 4;
     actual[edge] = DARK[0] + TWIN_STRAY_DELTA * 3;
-    assert_eq!(twin_stray_pixels(&reference, &actual, WIDTH), Some(0));
+    assert_eq!(
+        twin_stray_pixels(&reference, &actual, WIDTH, Edges),
+        Some(0)
+    );
 }
 
 #[test]
@@ -41,7 +48,10 @@ fn a_difference_away_from_edges_strays() {
     let mut actual = reference.clone();
     let interior = (3 * WIDTH + 4) * 4;
     actual[interior] = 0;
-    assert_eq!(twin_stray_pixels(&reference, &actual, WIDTH), Some(1));
+    assert_eq!(
+        twin_stray_pixels(&reference, &actual, WIDTH, Edges),
+        Some(1)
+    );
 }
 
 #[test]
@@ -49,7 +59,7 @@ fn a_box_moved_by_two_pixels_strays_beside_its_edges() {
     let reference = frame_with_box(2);
     let actual = frame_with_box(4);
     assert_eq!(
-        twin_stray_pixels(&reference, &actual, WIDTH),
+        twin_stray_pixels(&reference, &actual, WIDTH, Edges),
         Some(2 * HEIGHT)
     );
 }
@@ -57,6 +67,42 @@ fn a_box_moved_by_two_pixels_strays_beside_its_edges() {
 #[test]
 fn frames_of_different_sizes_do_not_compare() {
     let frame = frame_with_box(2);
-    assert_eq!(twin_stray_pixels(&frame, &frame[4..], WIDTH), None);
-    assert_eq!(twin_stray_pixels(&frame, &frame, 0), None);
+    assert_eq!(twin_stray_pixels(&frame, &frame[4..], WIDTH, Edges), None);
+    assert_eq!(twin_stray_pixels(&frame, &frame, 0, Edges), None);
+}
+
+#[test]
+fn a_box_moved_by_one_pixel_strays_only_in_an_exact_comparison() {
+    let reference = frame_with_box(2);
+    let actual = frame_with_box(3);
+    assert_eq!(
+        twin_stray_pixels(&reference, &actual, WIDTH, Edges),
+        Some(0)
+    );
+    assert_eq!(
+        twin_stray_pixels(&reference, &actual, WIDTH, Exact),
+        Some(2 * HEIGHT)
+    );
+}
+
+#[test]
+fn matrix_cells_tile_the_frame_from_its_origin() {
+    let (x, y, width, height) = MATRIX_GRID.cell(0);
+    assert_eq!((x, y), (MATRIX_GRID.origin, MATRIX_GRID.origin));
+    assert_eq!(MATRIX_GRID.cell(1), (x + width, y, width, height));
+    let columns = MATRIX_GRID.columns as usize;
+    assert_eq!(MATRIX_GRID.cell(columns), (x, y + height, width, height));
+}
+
+#[test]
+fn every_matrix_cell_lies_inside_the_frame() {
+    for frame in &MATRIX_FRAMES {
+        assert!(!frame.cells.is_empty(), "{} has no cells", frame.name);
+        let (x, y, width, height) = MATRIX_GRID.cell(frame.cells.len() - 1);
+        assert!(
+            x + width <= TWIN_FRAME_WIDTH && y + height <= TWIN_FRAME_HEIGHT,
+            "{} lays a cell outside the frame",
+            frame.name
+        );
+    }
 }

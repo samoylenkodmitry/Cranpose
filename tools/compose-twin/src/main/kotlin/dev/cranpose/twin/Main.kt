@@ -17,7 +17,7 @@ fun main(args: Array<String>) {
     require(args.size == 3) { "usage: outDir regularFont boldFont" }
     val out = File(args[0]).apply { mkdirs() }
     DemoFonts.load(File(args[1]), File(args[2]))
-    for ((name, content) in SCENES) {
+    for ((name, content) in SCENES + MATRIX_FRAMES) {
         val scene = ImageComposeScene(SCENE_WIDTH, SCENE_HEIGHT, Density(1f)) {
             SceneFrame { content() }
         }
