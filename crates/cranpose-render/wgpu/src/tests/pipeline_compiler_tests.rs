@@ -65,8 +65,14 @@ fn dropping_every_handle_skips_the_jobs_not_started() {
     );
     drop(compiler);
     assert!(handle.is_active(), "a surviving handle keeps the worker");
+    // The last handle waits for the job in flight, so it is released while
+    // that drop waits.
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        release.send(()).expect("the first job is waiting");
+    });
     drop(handle);
-    release.send(()).unwrap();
+    releaser.join().expect("the releaser ends");
     assert_eq!(
         second_ran.recv_timeout(Duration::from_millis(500)),
         Err(mpsc::RecvTimeoutError::Disconnected),
@@ -82,4 +88,32 @@ fn an_inactive_compiler_drops_jobs() {
     compiler.enqueue(CompileLane::Demanded, move || ran.send(()).unwrap());
     let deadline = Instant::now() + Duration::from_millis(100);
     assert!(observed.recv_timeout(deadline - Instant::now()).is_err());
+}
+
+#[test]
+fn the_last_handle_waits_for_the_compile_in_flight() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let compiler = PipelineCompiler::spawn();
+    let (started, compiling) = mpsc::channel();
+    let finished = Arc::new(AtomicBool::new(false));
+    let done = Arc::clone(&finished);
+    compiler.enqueue(CompileLane::WarmUp, move || {
+        started.send(()).expect("the test is waiting");
+        std::thread::sleep(Duration::from_millis(200));
+        done.store(true, Ordering::Release);
+    });
+    compiling
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the compile starts");
+
+    drop(compiler);
+
+    assert!(
+        finished.load(Ordering::Acquire),
+        "a dropped compiler must not leave a compile running, which a process exit can crash"
+    );
 }

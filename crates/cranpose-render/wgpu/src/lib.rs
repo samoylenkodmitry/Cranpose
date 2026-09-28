@@ -84,11 +84,12 @@ use frontend::{DevOverlayCache, RendererFrontend};
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
 pub use initial_present::{clear_to_background, clear_to_default_background};
 pub use pass_timing::{GpuPassTimingEntry, GpuPassTimingReport};
+use pipeline_compiler::PipelineCompilation;
 #[cfg(not(target_arch = "wasm32"))]
 use present_runtime::{
     PresentControl, PresentHandle, PresentMsg, PresentRuntimeInit, PresentState,
 };
-use render::GpuRenderer;
+use render::{GpuRenderer, GpuRendererInit};
 pub use render::{
     frame_clear_color, frames_presented, pipelines_created, pipelines_created_off_frame,
 };
@@ -168,6 +169,15 @@ pub struct DebugCpuAllocationStats {
     pub scratch_glyph_instances_cap: usize,
     pub layer_cache_len: usize,
     pub layer_cache_bytes: u64,
+}
+
+/// The device a renderer draws with and the surface format it presents.
+struct GpuTarget {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    surface_format: wgpu::TextureFormat,
+    adapter_backend: wgpu::Backend,
+    adapter_downlevel: wgpu::DownlevelFlags,
 }
 
 pub(crate) struct TextSystemState {
@@ -364,18 +374,62 @@ impl WgpuRenderer {
         adapter_backend: wgpu::Backend,
         adapter_downlevel: wgpu::DownlevelFlags,
     ) {
-        self.retire_live_backend();
-        self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        let gpu_renderer = GpuRenderer::new(
+        let target = GpuTarget {
             device,
             queue,
             surface_format,
             adapter_backend,
             adapter_downlevel,
-            self.frontend.text_fonts.clone(),
-            self.renderer_epoch,
-        );
-        self.backend = PresentBackend::Sync(Box::new(gpu_renderer));
+        };
+        self.install_gpu(target, PipelineCompilation::Background);
+    }
+
+    /// [`init_gpu`][Self::init_gpu], compiling every pipeline where it is
+    /// first needed instead of on the background compiler: no frame draws
+    /// with a stand-in, which a reference frame in a test must not.
+    #[doc(hidden)]
+    pub fn init_gpu_compiling_inline_for_tests(
+        &mut self,
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        surface_format: wgpu::TextureFormat,
+        adapter_backend: wgpu::Backend,
+        adapter_downlevel: wgpu::DownlevelFlags,
+    ) {
+        let target = GpuTarget {
+            device,
+            queue,
+            surface_format,
+            adapter_backend,
+            adapter_downlevel,
+        };
+        self.install_gpu(target, PipelineCompilation::Inline);
+    }
+
+    fn install_gpu(&mut self, target: GpuTarget, pipeline_compilation: PipelineCompilation) {
+        let init = self.next_gpu_init(target, pipeline_compilation);
+        self.backend = PresentBackend::Sync(Box::new(GpuRenderer::new(init)));
+    }
+
+    /// Retires the live backend and bumps the renderer epoch, then describes
+    /// the renderer that replaces it on `target`.
+    fn next_gpu_init(
+        &mut self,
+        target: GpuTarget,
+        pipeline_compilation: PipelineCompilation,
+    ) -> GpuRendererInit {
+        self.retire_live_backend();
+        self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
+        GpuRendererInit {
+            device: target.device,
+            queue: target.queue,
+            surface_format: target.surface_format,
+            adapter_backend: target.adapter_backend,
+            adapter_downlevel: target.adapter_downlevel,
+            text_fonts: self.frontend.text_fonts.clone(),
+            renderer_epoch: self.renderer_epoch,
+            pipeline_compilation,
+        }
     }
 
     /// [`init_gpu`][Self::init_gpu] for the threaded present runtime
@@ -407,16 +461,15 @@ impl WgpuRenderer {
         clock: Option<Arc<dyn Fn() -> i64 + Send + Sync>>,
         observer: Option<Box<dyn PresentObserver>>,
     ) -> Result<(), WgpuRendererError> {
-        self.retire_live_backend();
-        self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        let init = PresentRuntimeInit {
+        let target = GpuTarget {
             device,
             queue,
             surface_format,
             adapter_backend,
             adapter_downlevel,
-            text_fonts: self.frontend.text_fonts.clone(),
-            renderer_epoch: self.renderer_epoch,
+        };
+        let init = PresentRuntimeInit {
+            gpu: self.next_gpu_init(target, PipelineCompilation::Background),
             clock,
             observer,
         };
@@ -435,16 +488,15 @@ impl WgpuRenderer {
         adapter_backend: wgpu::Backend,
         adapter_downlevel: wgpu::DownlevelFlags,
     ) -> InlinePresentRuntime {
-        self.retire_live_backend();
-        self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        let init = PresentRuntimeInit {
+        let target = GpuTarget {
             device,
             queue,
             surface_format,
             adapter_backend,
             adapter_downlevel,
-            text_fonts: self.frontend.text_fonts.clone(),
-            renderer_epoch: self.renderer_epoch,
+        };
+        let init = PresentRuntimeInit {
+            gpu: self.next_gpu_init(target, PipelineCompilation::Background),
             clock: None,
             observer: None,
         };

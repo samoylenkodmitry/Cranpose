@@ -127,8 +127,11 @@ impl DerefMut for LockedRenderer {
 }
 
 impl LockedRenderer {
+    /// A reference renderer beside the locked one. It compiles every
+    /// pipeline where first needed, so its frames never draw with a
+    /// stand-in a slow machine's background compiler has not replaced yet.
     pub fn beside_locked() -> Result<LockedRenderer, String> {
-        Ok(with_app_context(create_headless_renderer()?, None))
+        Ok(with_app_context(headless_renderer_beside_locked()?, None))
     }
 
     pub fn render_current_scene_to_texture(
@@ -236,7 +239,11 @@ pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
         wgpu::Limits::default(),
         "Replacement Contract Test Device",
     )?
-    .attach(renderer, wgpu::TextureFormat::Bgra8UnormSrgb);
+    .attach(
+        renderer,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        device::Pipelines::Background,
+    );
     Ok(())
 }
 
@@ -248,8 +255,20 @@ pub fn headless_renderer_parts_unencoded() -> Result<(MutexGuard<'static, ()>, W
 }
 
 /// A second renderer beside one already holding the GPU test lock.
+/// [`LockedRenderer::beside_locked`] without an app context.
 pub fn headless_renderer_beside_locked() -> Result<WgpuRenderer, String> {
-    create_headless_renderer()
+    let device = device::HeadlessDevice::request(
+        wgpu::Backends::all(),
+        wgpu::Limits::default(),
+        "Reference Render Contract Test Device",
+    )?;
+    let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
+    device.attach(
+        &mut renderer,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        device::Pipelines::Inline,
+    );
+    Ok(renderer)
 }
 
 fn create_headless_renderer() -> Result<WgpuRenderer, String> {
@@ -277,7 +296,7 @@ fn create_headless_renderer_configured(
     let device =
         device::HeadlessDevice::request(backends, limits, "Shared Render Contract Test Device")?;
     let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-    device.attach(&mut renderer, surface_format);
+    device.attach(&mut renderer, surface_format, device::Pipelines::Background);
     Ok(renderer)
 }
 

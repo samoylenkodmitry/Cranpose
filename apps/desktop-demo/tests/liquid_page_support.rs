@@ -30,7 +30,11 @@ pub fn headless_renderer(label: &'static str) -> Option<WgpuRenderer> {
     )
     .ok()?;
     let mut renderer = WgpuRenderer::new(desktop_app::fonts::DEMO_FONTS);
-    device.attach(&mut renderer, wgpu::TextureFormat::Bgra8UnormSrgb);
+    device.attach(
+        &mut renderer,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        crate::gpu_test_device::Pipelines::Background,
+    );
     Some(renderer)
 }
 

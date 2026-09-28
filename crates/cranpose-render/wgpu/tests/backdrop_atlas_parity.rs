@@ -623,15 +623,19 @@ fn blur_substrates_preserve_captures_and_match_mixed_atlases_across_frames() {
             }
             support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
         };
-        let direct = capture(&mut renderer, scene(false));
+        let direct =
+            support::capture_graph_settled(&mut renderer, scene(false), FRAME_WIDTH, FRAME_HEIGHT);
         let reference = capture(
             &mut support::LockedRenderer::beside_locked().expect("reference renderer"),
             scene(false),
         );
-        assert_eq!(
-            support::max_channel_delta(&direct.pixels, &reference.pixels),
-            0,
-            "reused blur uploads must match a fresh frame"
+        // Stale reused uploads would move pixels far. NVIDIA's Vulkan driver
+        // draws the reused and the fresh frame a step apart even with both on
+        // their final pipelines (#859), so a step is allowed.
+        let delta = support::max_channel_delta(&direct.pixels, &reference.pixels);
+        assert!(
+            delta <= 1,
+            "reused blur uploads must match a fresh frame, off by {delta}"
         );
         let mixed = capture(&mut renderer, scene(true));
         let top = (GLASS_TOP + y_offset).max(0.0);

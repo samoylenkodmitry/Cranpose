@@ -1,9 +1,21 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{
-    Arc,
+    Arc, Mutex, PoisonError,
     atomic::{AtomicBool, Ordering},
-    mpsc::{self, Sender},
+    mpsc::{self, Receiver, Sender},
 };
+
+/// How long the last handle waits for a lane to finish the pipeline it is
+/// building. A process that exits while a thread is inside the driver's
+/// pipeline compile can crash in the driver's own teardown (NVIDIA's does,
+/// #859), so a dropped compiler lets that compile end; a driver slower than
+/// this is left to it rather than holding the dropping thread.
+#[cfg(not(target_arch = "wasm32"))]
+const LANE_FINISH_WAIT: web_time::Duration = web_time::Duration::from_secs(5);
+
+/// The compiler's threads, one per [`CompileLane`].
+#[cfg(not(target_arch = "wasm32"))]
+const LANES: usize = 2;
 
 #[cfg(not(target_arch = "wasm32"))]
 type Job = Box<dyn FnOnce() + Send + 'static>;
@@ -46,7 +58,8 @@ pub(crate) enum CompileLane {
 /// Each [`CompileLane`] has its own thread and runs its jobs in the order
 /// they were queued, so a pipeline a frame is waiting for never queues
 /// behind warm-ups, which take seconds each on a slow device's driver. The
-/// threads end with the last handle and skip the jobs they had not started.
+/// threads end with the last handle, which skips the jobs they had not
+/// started and waits, up to [`LANE_FINISH_WAIT`], for the ones they had.
 #[derive(Clone, Default)]
 pub(crate) struct PipelineCompiler {
     #[cfg(not(target_arch = "wasm32"))]
@@ -55,22 +68,47 @@ pub(crate) struct PipelineCompiler {
 
 #[cfg(not(target_arch = "wasm32"))]
 struct Workers {
-    demanded: Sender<Job>,
-    warm_up: Sender<Job>,
+    /// `None` once dropping has closed the lanes.
+    demanded: Option<Sender<Job>>,
+    warm_up: Option<Sender<Job>>,
     stopped: Arc<AtomicBool>,
+    /// Each lane's thread says here that it has ended. Behind a mutex only
+    /// so the handle is `Sync`; the last handle reads it without locking.
+    finished: Mutex<Receiver<()>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for Workers {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
+        self.demanded = None;
+        self.warm_up = None;
+        let finished = self
+            .finished
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        let deadline = web_time::Instant::now() + LANE_FINISH_WAIT;
+        for _ in 0..LANES {
+            let left = deadline.saturating_duration_since(web_time::Instant::now());
+            if finished.recv_timeout(left).is_err() {
+                log::warn!(
+                    "[gpu-pipeline] a compile outlived its renderer by {LANE_FINISH_WAIT:?}"
+                );
+                break;
+            }
+        }
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn spawn_lane(name: &str, stopped: &Arc<AtomicBool>) -> std::io::Result<Sender<Job>> {
+fn spawn_lane(
+    name: &str,
+    stopped: &Arc<AtomicBool>,
+    finished: &Sender<()>,
+) -> std::io::Result<Sender<Job>> {
     let (jobs, queued) = mpsc::channel::<Job>();
     let stopped = Arc::clone(stopped);
+    let finished = finished.clone();
     std::thread::Builder::new()
         .name(name.into())
         .spawn(move || {
@@ -81,11 +119,29 @@ fn spawn_lane(name: &str, stopped: &Arc<AtomicBool>) -> std::io::Result<Sender<J
                 }
                 job();
             }
+            let _ = finished.send(());
         })?;
     Ok(jobs)
 }
 
+/// Where a renderer compiles its pipelines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PipelineCompilation {
+    /// On background threads, a general pipeline standing in until the
+    /// specialized one is ready.
+    Background,
+    /// Where each is first needed, so no draw uses a stand-in.
+    Inline,
+}
+
 impl PipelineCompiler {
+    pub(crate) fn for_compilation(compilation: PipelineCompilation) -> Self {
+        match compilation {
+            PipelineCompilation::Background => Self::spawn(),
+            PipelineCompilation::Inline => Self::inactive(),
+        }
+    }
+
     /// A compiler that runs nothing: every resource compiles where it is
     /// first needed.
     pub(crate) fn inactive() -> Self {
@@ -101,15 +157,19 @@ impl PipelineCompiler {
                 return Self::inactive();
             }
             let stopped = Arc::new(AtomicBool::new(false));
-            let lanes = spawn_lane("cranpose-pipelines", &stopped).and_then(|demanded| {
-                spawn_lane("cranpose-warm-up", &stopped).map(|warm_up| (demanded, warm_up))
-            });
+            let (finished_tx, finished) = mpsc::channel();
+            let lanes =
+                spawn_lane("cranpose-pipelines", &stopped, &finished_tx).and_then(|demanded| {
+                    spawn_lane("cranpose-warm-up", &stopped, &finished_tx)
+                        .map(|warm_up| (demanded, warm_up))
+                });
             match lanes {
                 Ok((demanded, warm_up)) => Self {
                     workers: Some(Arc::new(Workers {
-                        demanded,
-                        warm_up,
+                        demanded: Some(demanded),
+                        warm_up: Some(warm_up),
                         stopped,
+                        finished: Mutex::new(finished),
                     })),
                 },
                 Err(error) => {
@@ -142,10 +202,10 @@ impl PipelineCompiler {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(workers) = self.workers.as_ref() {
             let jobs = match lane {
-                CompileLane::Demanded => &workers.demanded,
-                CompileLane::WarmUp => &workers.warm_up,
+                CompileLane::Demanded => workers.demanded.as_ref(),
+                CompileLane::WarmUp => workers.warm_up.as_ref(),
             };
-            if jobs.send(Box::new(job)).is_err() {
+            if jobs.is_none_or(|jobs| jobs.send(Box::new(job)).is_err()) {
                 log::error!("[gpu-pipeline] background compiler stopped unexpectedly");
             }
         }
