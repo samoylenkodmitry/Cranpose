@@ -1,7 +1,8 @@
 # Cranpose
 
-[IntelliJ IDEA and RustRover support](docs/intellij.md): Cargo target controls,
-composable navigation, interactive previews and on-demand layout inspection.
+[Cranpose Studio on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/34594-cranpose) ·
+[IntelliJ IDEA and RustRover guide](docs/intellij.md): live editing, component
+previews, layout inspection and local platform builds.
 
 <img width="1536" height="1024" alt="Cranpose" src="https://github.com/user-attachments/assets/2ce48dfe-a048-4b9d-8812-a0e4534691f8" />
 

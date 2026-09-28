@@ -6,6 +6,11 @@ saved run configurations and composable navigation. Its project tool window is
 rendered with Cranpose. The [host template](https://github.com/samoylenkodmitry/cranpose-intellij-plugin-template)
 provides the embedding layer for other IntelliJ plugins.
 
+Find [Cranpose Studio on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/34594-cranpose).
+Signed versions awaiting Marketplace review are also available from
+[GitHub Releases](https://github.com/samoylenkodmitry/cranpose-idea/releases) and
+can be installed with **Settings → Plugins → Install Plugin from Disk**.
+
 ## Register component previews
 
 Enable the `cranpose/preview` feature alongside your desktop features. Add a
