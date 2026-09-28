@@ -782,7 +782,7 @@ _disk-guard:
 # all seven on every pull request.
 
 # What a pull request is gated on. Run this before pushing.
-ci: fmt-check typos versions test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
+ci: fmt-check typos versions twin-matrix-check test clippy clippy-release clippy-optional-backends clippy-svg clippy-hyphenation clippy-robot clippy-wasm doc budgets complexity-gate duplication-gate state-holder-gate test-robot-discovery test-shell-helpers test-host-lock test-ci-filters test-features test-property bench-smoke test-ci-gate-reachability test-layout test-robot-suite-partition test-android-accessibility-contract
 
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
