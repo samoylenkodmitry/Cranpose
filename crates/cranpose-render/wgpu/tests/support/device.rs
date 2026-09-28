@@ -1,11 +1,29 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use cranpose_render_wgpu::WgpuRenderer;
 
-pub fn headless_adapter(backends: wgpu::Backends) -> Result<wgpu::Adapter, String> {
+/// The test process's one wgpu instance for `backends`.
+///
+/// Test threads that create and drop Vulkan instances at once race inside
+/// the loader, which loads and unloads driver libraries per instance: with a
+/// driver that fails to load, a parallel run jumped to a null function
+/// pointer in `vkEnumerateInstanceExtensionProperties` (#859). One instance
+/// per backend set, kept for the life of the process, scans the drivers once.
+fn shared_instance(backends: wgpu::Backends) -> wgpu::Instance {
+    static INSTANCES: Mutex<Vec<(wgpu::Backends, wgpu::Instance)>> = Mutex::new(Vec::new());
+    let mut instances = INSTANCES.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, instance)) = instances.iter().find(|(held, _)| *held == backends) {
+        return instance.clone();
+    }
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = backends;
     let instance = wgpu::Instance::new(descriptor);
+    instances.push((backends, instance.clone()));
+    instance
+}
+
+pub fn headless_adapter(backends: wgpu::Backends) -> Result<wgpu::Adapter, String> {
+    let instance = shared_instance(backends);
     pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::LowPower,
         ..wgpu::RequestAdapterOptions::default()
