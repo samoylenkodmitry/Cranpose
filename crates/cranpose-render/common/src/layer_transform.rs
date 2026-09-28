@@ -148,9 +148,12 @@ pub fn layer_transform_to_parent(
     placement: Point,
     layer: &GraphicsLayer,
 ) -> ProjectiveTransform {
+    // Local space keeps the node's origin at `placement`, wherever the
+    // layer's bounds sit in it, so a layer bounded at a coordinator away
+    // from the node's origin clips and pivots there without moving content.
     let placement_rect = Rect {
-        x: placement.x,
-        y: placement.y,
+        x: placement.x + local_bounds.x,
+        y: placement.y + local_bounds.y,
         width: local_bounds.width,
         height: local_bounds.height,
     };

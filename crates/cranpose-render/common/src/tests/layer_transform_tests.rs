@@ -82,3 +82,50 @@ fn layer_transform_to_parent_scales_about_transform_origin() {
         "scale must not move the layer center when transform origin is centered"
     );
 }
+
+#[test]
+fn a_layer_bounded_away_from_the_node_origin_leaves_the_content_where_the_node_is() {
+    // A clip declared before an offset: its layer starts where the offset
+    // does, 7 and 5 before the node's origin.
+    let layer_bounds = Rect {
+        x: -7.0,
+        y: -5.0,
+        width: 20.0,
+        height: 14.0,
+    };
+    let placement = Point { x: 30.0, y: 40.0 };
+    let transform = layer_transform_to_parent(layer_bounds, placement, &GraphicsLayer::default());
+
+    assert_eq!(transform.map_point(Point { x: 0.0, y: 0.0 }), placement);
+    assert_eq!(
+        transform.bounds_for_rect(layer_bounds),
+        Rect {
+            x: 23.0,
+            y: 35.0,
+            width: 20.0,
+            height: 14.0,
+        }
+    );
+}
+
+#[test]
+fn a_layer_bounded_away_from_the_node_origin_pivots_on_its_own_centre() {
+    let layer_bounds = Rect {
+        x: -10.0,
+        y: 0.0,
+        width: 20.0,
+        height: 10.0,
+    };
+    let layer = GraphicsLayer {
+        rotation_z: 180.0,
+        transform_origin: TransformOrigin::CENTER,
+        ..Default::default()
+    };
+    let transform = layer_transform_to_parent(layer_bounds, Point::default(), &layer);
+
+    let turned = transform.map_point(Point { x: 10.0, y: 5.0 });
+    assert!(
+        (turned.x + 10.0).abs() < 1e-3 && (turned.y - 5.0).abs() < 1e-3,
+        "{turned:?}"
+    );
+}

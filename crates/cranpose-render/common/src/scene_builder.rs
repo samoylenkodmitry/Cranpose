@@ -508,7 +508,6 @@ fn try_translate_scrolled_layer(
 
 struct TranslatedContainer {
     node_id: NodeId,
-    clip_to_bounds: bool,
     graphics_layer: GraphicsLayer,
 }
 
@@ -533,10 +532,10 @@ fn translated_container(
         return Err("container has own primitive children");
     }
     if !layout_state.is_placed()
-        || layout_state.size().width != container.local_bounds.width
-        || layout_state.size().height != container.local_bounds.height
+        || Rect::from_size(layout_state.size()) != container.node_rect()
+        || modifier_slices.layer_bounds(layout_state.size()) != container.local_bounds
     {
-        return Err("container unplaced or resized");
+        return Err("container unplaced, resized or its layer moved");
     }
     let outer_count = modifier_slices.outer_draw_command_count();
     if (outer_count > 0 && !wrapped)
@@ -563,7 +562,6 @@ fn translated_container(
     }
     Ok(TranslatedContainer {
         node_id,
-        clip_to_bounds,
         graphics_layer,
     })
 }
@@ -658,9 +656,7 @@ fn check_retained_children(
         if layer.has_origin_sinks {
             return Err("child subtree publishes window origins");
         }
-        if state.size().width != layer.local_bounds.width
-            || state.size().height != layer.local_bounds.height
-        {
+        if Rect::from_size(state.size()) != layer.node_rect() {
             return Err("child resized");
         }
     }
@@ -883,7 +879,6 @@ fn translate_layer_from_data(
     };
     let TranslatedContainer {
         node_id,
-        clip_to_bounds,
         graphics_layer,
     } = container_plan;
     let child_plan = match translated_children(applier, container, dirty_nodes, &fresh_children) {
@@ -932,11 +927,7 @@ fn translate_layer_from_data(
         geometry,
     );
     modifier_slices.publish_pointer_input_size(layout_state.size());
-    container.hit_test = hit_test_from_slices(
-        &modifier_slices,
-        container.local_bounds,
-        clip_to_bounds || graphics_layer.clip,
-    );
+    container.hit_test = hit_test_from_slices(&modifier_slices);
 
     container.has_hit_targets = container.hit_test.is_some()
         || container.children.iter().any(|child| match child {
@@ -983,6 +974,7 @@ fn layer_hit_graph_state_dirty(previous: &LayerNode, replacement: &LayerNode) ->
 
     previous.has_hit_targets != replacement.has_hit_targets
         || previous.local_bounds != replacement.local_bounds
+        || previous.node_bounds != replacement.node_bounds
         || previous.transform_to_parent != replacement.transform_to_parent
         || previous.clip_rect() != replacement.clip_rect()
         || previous.graphics_layer.shape != replacement.graphics_layer.shape
@@ -1045,22 +1037,13 @@ fn build_layer_node_internal(
     let text_pan = slices.text_pan_resolver();
     let outer = outer_draws(node_id, draw_commands, outer_draw_command_count, size);
     let layer_draw_commands = &draw_commands[outer_draw_command_count..];
-    let local_bounds = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: size.width,
-        height: size.height,
-    };
+    let (local_bounds, node_bounds) = layer_and_node_bounds(&slices, size);
     let graphics_layer = graphics_layer.unwrap_or_default();
     let transform_to_parent = layer_transform_to_parent(local_bounds, placement, &graphics_layer);
     let isolation = isolation_reasons(&graphics_layer);
     let cache_policy = layer_cache_policy(&graphics_layer, isolation);
     let shadow_clip = clip_to_bounds.then_some(local_bounds);
-    let hit_test = slices_hit_something(&slices).then(|| HitTestNode {
-        shape: None,
-        handlers: Rc::clone(&slices),
-        clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
-    });
+    let hit_test = hit_test_from_slices(&slices);
 
     let node_motion_context_animated = inherited_motion_context_animated || motion_context_animated;
     let child_translated_content_context =
@@ -1135,6 +1118,7 @@ fn build_layer_node_internal(
         node_id: Some(node_id),
         wraps: None,
         local_bounds,
+        node_bounds,
         transform_to_parent,
         content_offset,
         motion_context_animated: node_motion_context_animated,
@@ -1260,16 +1244,22 @@ fn build_layer_node_from_applier_internal(
     )
 }
 
-fn hit_test_from_slices(
-    slices: &Rc<ModifierNodeSlices>,
-    bounds: Rect,
-    clip: bool,
-) -> Option<HitTestNode> {
+fn hit_test_from_slices(slices: &Rc<ModifierNodeSlices>) -> Option<HitTestNode> {
     slices_hit_something(slices).then(|| HitTestNode {
         shape: None,
         handlers: Rc::clone(slices),
-        clip: clip.then_some(bounds),
     })
+}
+
+/// A node's layer bounds and, when they differ from it, its own rect (see
+/// [`LayerNode::node_bounds`]).
+fn layer_and_node_bounds(slices: &ModifierNodeSlices, size: Size) -> (Rect, Option<Rect>) {
+    let node_bounds = Rect::from_size(size);
+    let layer_bounds = slices.layer_bounds(size);
+    (
+        layer_bounds,
+        (layer_bounds != node_bounds).then_some(node_bounds),
+    )
 }
 
 /// Whether a node's slices make it a hit target: a pointer input or a
@@ -1297,12 +1287,7 @@ fn build_layer_node_from_data(
         return None;
     }
 
-    let local_bounds = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: layout_state.size().width,
-        height: layout_state.size().height,
-    };
+    let (local_bounds, node_bounds) = layer_and_node_bounds(&modifier_slices, layout_state.size());
     if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!(
             "[scene-update-diag] build layer node={node_id:?} size=({:.2},{:.2}) pos=({:.2},{:.2})",
@@ -1324,11 +1309,7 @@ fn build_layer_node_from_data(
     let isolation = isolation_reasons(&graphics_layer);
     let cache_policy = layer_cache_policy(&graphics_layer, isolation);
     let shadow_clip = clip_to_bounds.then_some(local_bounds);
-    let hit_test = hit_test_from_slices(
-        &modifier_slices,
-        local_bounds,
-        clip_to_bounds || graphics_layer.clip,
-    );
+    let hit_test = hit_test_from_slices(&modifier_slices);
 
     modifier_slices.publish_pointer_input_size(layout_state.size());
 
@@ -1458,6 +1439,7 @@ fn build_layer_node_from_data(
         node_id: Some(node_id),
         wraps: None,
         local_bounds,
+        node_bounds,
         transform_to_parent,
         content_offset: layout_state.content_offset,
         motion_context_animated: node_motion_context_animated,
@@ -1696,15 +1678,16 @@ fn wrap_layer_with_outer_draws(
     placement: Point,
     outer: OuterDraws,
 ) -> LayerNode {
-    let local_bounds = layer.local_bounds;
     layer.transform_to_parent =
-        layer_transform_to_parent(local_bounds, Point::default(), &layer.graphics_layer);
+        layer_transform_to_parent(layer.local_bounds, Point::default(), &layer.graphics_layer);
     layer.origin_in_parent = Point::default();
+    // The outer draws sit on the node's rect, outside its layer.
+    let node_rect = layer.node_rect();
     let wrapper = LayerNode {
         wraps: layer.node_id,
-        local_bounds,
+        local_bounds: node_rect,
         transform_to_parent: layer_transform_to_parent(
-            local_bounds,
+            node_rect,
             placement,
             &GraphicsLayer::default(),
         ),

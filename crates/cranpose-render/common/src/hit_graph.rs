@@ -75,7 +75,10 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
         return;
     }
     let transform = layer.transform_to_parent.then(parent_transform);
-    let transformed_quad = transform.map_rect(layer.local_bounds);
+    // The node's handlers sit on its own rect; its clip, at its layer's
+    // bounds, cuts them as it cuts what the layer holds.
+    let node_rect = layer.node_rect();
+    let transformed_quad = transform.map_rect(node_rect);
     let transformed_rect = quad_bounds(transformed_quad);
 
     if transformed_rect.width <= 0.0 || transformed_rect.height <= 0.0 {
@@ -113,7 +116,7 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
             HitGeometry {
                 rect: transformed_rect,
                 quad: transformed_quad,
-                local_bounds: layer.local_bounds,
+                local_bounds: node_rect,
                 world_to_local,
                 hit_clip_bounds,
                 hit_clips,

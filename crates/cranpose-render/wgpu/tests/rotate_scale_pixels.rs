@@ -34,10 +34,12 @@ fn render_layered_rect(modifier: Modifier) -> cranpose_render_wgpu::CapturedFram
                 .background(Color(0.05, 0.05, 0.06, 1.0)),
             BoxSpec::new(),
             move || {
+                // The offset comes first: a layer declared before an offset
+                // pivots where the offset starts, as in Compose.
                 Box(
-                    modifier
-                        .clone()
+                    Modifier::empty()
                         .offset(RECT_LEFT, RECT_TOP)
+                        .then(modifier.clone())
                         .size_points(RECT_WIDTH, RECT_HEIGHT)
                         .background(Color(0.9, 0.1, 0.1, 1.0)),
                     BoxSpec::new(),

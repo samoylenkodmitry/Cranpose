@@ -239,7 +239,6 @@ pub struct HitTestNode {
     /// that only names an icon is still a hit target, which is how a
     /// decorative panel carries a cursor without handling clicks.
     pub handlers: Rc<ModifierNodeSlices>,
-    pub clip: Option<Rect>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -307,7 +306,14 @@ pub struct LayerNode {
     /// address the node through this id because the node's layer has none of the
     /// outer draws and the wrapper has no node id of its own.
     pub wraps: Option<NodeId>,
+    /// The bounds of the node's layer, where its clip cuts, its transforms
+    /// pivot and an offscreen pass draws it.
     pub local_bounds: Rect,
+    /// The node's own rect, `(0, 0, size)`, where its pointer handlers are,
+    /// when it differs from `local_bounds`: a clip or graphics layer that
+    /// wraps a coordinator a later padding or offset moves bounds the layer
+    /// there instead, as in Compose. `None` when the two agree.
+    pub node_bounds: Option<Rect>,
     pub transform_to_parent: ProjectiveTransform,
     pub content_offset: Point,
     pub motion_context_animated: bool,
@@ -351,6 +357,7 @@ impl Default for LayerNode {
                 width: 0.0,
                 height: 0.0,
             },
+            node_bounds: None,
             transform_to_parent: ProjectiveTransform::identity(),
             content_offset: Point::default(),
             motion_context_animated: false,
@@ -382,7 +389,7 @@ impl LayerNode {
     /// describes it, stays within its bounds: it clips to them, or its draws,
     /// its texts and its children placed where they are all fit inside.
     pub fn content_draws_within_bounds(&self) -> bool {
-        if self.clip_rect().is_some() {
+        if self.visual_clip_rect().is_some() {
             return true;
         }
         let bounds = inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK);
@@ -413,8 +420,24 @@ impl LayerNode {
             )
     }
 
+    /// The node's own rect, where its pointer handlers are.
+    pub fn node_rect(&self) -> Rect {
+        self.node_bounds.unwrap_or(self.local_bounds)
+    }
+
     pub fn clip_rect(&self) -> Option<Rect> {
         (self.clip_to_bounds || self.graphics_layer.clip).then_some(self.local_bounds)
+    }
+
+    /// Where the layer's drawing is cut: its clip or, when it composites
+    /// through an offscreen buffer for its alpha or by request, its bounds,
+    /// as Compose's layer-sized buffer cuts it. Hit testing takes only
+    /// [`Self::clip_rect`]: alpha hides nothing from a finger.
+    pub fn visual_clip_rect(&self) -> Option<Rect> {
+        self.clip_rect().or_else(|| {
+            (self.isolation.group_opacity || self.isolation.explicit_offscreen)
+                .then_some(self.local_bounds)
+        })
     }
 
     pub fn effect(&self) -> Option<&RenderEffect> {

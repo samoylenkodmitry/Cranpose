@@ -302,3 +302,48 @@ fn a_clip_or_a_shadow_decides_containment_whatever_the_content() {
     }));
     assert!(!bounded(50.0, 50.0, vec![shadowed]).content_draws_within_bounds());
 }
+
+#[test]
+fn a_group_opacity_layer_cuts_its_drawing_at_its_bounds_but_not_its_hits() {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 20.0,
+        height: 10.0,
+    };
+    let layer = LayerNode {
+        isolation: IsolationReasons {
+            group_opacity: true,
+            ..Default::default()
+        },
+        ..test_layer(bounds, Vec::new())
+    };
+    assert_eq!(layer.clip_rect(), None);
+    assert_eq!(layer.visual_clip_rect(), Some(bounds));
+    assert_eq!(test_layer(bounds, Vec::new()).visual_clip_rect(), None);
+}
+
+#[test]
+fn a_node_rect_is_its_own_rect_or_else_its_layer_bounds() {
+    let layer_bounds = Rect {
+        x: 4.0,
+        y: 4.0,
+        width: 12.0,
+        height: 2.0,
+    };
+    let node = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 20.0,
+        height: 10.0,
+    };
+    assert_eq!(
+        test_layer(layer_bounds, Vec::new()).node_rect(),
+        layer_bounds
+    );
+    let split = LayerNode {
+        node_bounds: Some(node),
+        ..test_layer(layer_bounds, Vec::new())
+    };
+    assert_eq!(split.node_rect(), node);
+}

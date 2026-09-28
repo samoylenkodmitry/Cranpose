@@ -297,6 +297,7 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
             width: 40.0,
             height: 24.0,
         },
+        node_bounds: None,
         transform_to_parent: cranpose_render_common::graph::ProjectiveTransform::translation(
             12.0, 8.0,
         ),
@@ -313,7 +314,6 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
             handlers: Rc::new(cranpose_ui::collect_slices_from_modifier(
                 &cranpose_ui::Modifier::empty().clickable(|_point| {}),
             )),
-            clip: None,
         }),
         has_hit_targets: true,
         has_origin_sinks: false,
