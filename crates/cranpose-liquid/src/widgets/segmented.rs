@@ -199,7 +199,7 @@ pub fn LiquidSegmentedControl(
         );
     });
 
-    Box(track.then(modifier), BoxSpec::default(), move || {
+    Box(modifier.then(track), BoxSpec::default(), move || {
         let segments = Rc::clone(&segments);
         let on_select = Rc::clone(&on_select);
         BoxWithConstraints(Modifier::empty().padding(TRACK_PADDING), move |scope| {

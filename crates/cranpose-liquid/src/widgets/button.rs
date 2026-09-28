@@ -388,7 +388,7 @@ pub fn GlassButton(
         ..Default::default()
     });
     let content = Rc::new(RefCell::new(content));
-    let button = base.then(modifier);
+    let button = modifier.then(base);
     Box(pressed_modifier, BoxSpec::default(), move || {
         let content = Rc::clone(&content);
         let content_layer = content_layer.clone();
@@ -508,7 +508,7 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
         alpha: content_alpha.get().clamp(0.0, 1.0) * foreground_alpha.clamp(0.0, 1.0),
         ..Default::default()
     });
-    let button = base.then(modifier);
+    let button = modifier.then(base);
     Box(pressed_modifier, BoxSpec::default(), move || {
         let foreground_spec = spec.clone();
         let content_layer = content_layer.clone();
@@ -626,7 +626,7 @@ pub fn GlassIconButtonGroup(
     let ghost_trailing_shift = width - full_width;
     let gesture_items = Rc::clone(&live_items);
     let gesture_press_orphaned = Rc::clone(&press_orphaned);
-    let gesture = Modifier::empty()
+    let gesture = modifier
         .size(Size::new(width, spec.diameter))
         .pointer_input(count, move |scope: PointerInputScope| {
             let gesture_items = Rc::clone(&gesture_items);
@@ -694,8 +694,7 @@ pub fn GlassIconButtonGroup(
                     })
                     .await;
             }
-        })
-        .then(modifier);
+        });
 
     Box(gesture, BoxSpec::default(), move || {
         let pitch = spec.diameter + spec.spacing;

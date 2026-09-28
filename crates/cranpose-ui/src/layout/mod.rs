@@ -1125,6 +1125,19 @@ fn semantics_node_from_applier(
     }
 }
 
+/// Writes a node's coordinator geometry with `write`, and reports the node
+/// to the scene when a coordinator moved: a layer bounded by an inner
+/// coordinator moves with it, though the node's own size may not.
+fn write_node_geometry(
+    geometry: Option<&crate::modifier::CoordinatorGeometry>,
+    node_id: NodeId,
+    write: impl FnOnce(&crate::modifier::CoordinatorGeometry) -> bool,
+) {
+    if geometry.is_some_and(write) {
+        crate::render_state::record_geometry_scene_node(node_id);
+    }
+}
+
 /// The modal the semantics tree of `root` would be rooted at, found without
 /// building the tree: the topmost placed, visible modal that takes space,
 /// or `None` when no modal is open. Unlike a tree build, it leaves the
@@ -1983,14 +1996,14 @@ impl LayoutBuilderState {
                 constraints,
                 placements,
             );
-            if let Some(geometry) = geometry {
+            write_node_geometry(geometry.as_deref(), node_id, |geometry| {
                 geometry.replace([GeometryRect {
                     x: 0.0,
                     y: 0.0,
                     width: final_size.width,
                     height: final_size.height,
-                }]);
-            }
+                }])
+            });
 
             return ModifierChainMeasurement {
                 size: final_size,
@@ -2016,11 +2029,11 @@ impl LayoutBuilderState {
             height: placeable.height(),
         };
 
-        if let Some(geometry) = geometry {
+        write_node_geometry(geometry.as_deref(), node_id, |geometry| {
             runtime_state
                 .coordinator_chain()
-                .write_geometry(&geometry, offset);
-        }
+                .write_geometry(geometry, offset)
+        });
 
         let content_offset = placeable.content_offset();
         let all_placement_offset = Point {
@@ -2808,8 +2821,13 @@ impl CoordinatorChain {
     }
 
     /// Writes where each coordinator and the node's content ended up in the
-    /// last measure, relative to the node drawn at its `node_offset`.
-    fn write_geometry(&self, geometry: &crate::modifier::CoordinatorGeometry, node_offset: Point) {
+    /// last measure, relative to the node drawn at its `node_offset`, and
+    /// says whether any of them moved.
+    fn write_geometry(
+        &self,
+        geometry: &crate::modifier::CoordinatorGeometry,
+        node_offset: Point,
+    ) -> bool {
         let content = self.total_content_offset_from(0);
         let placed = |inner_offset: Point, size: Size| GeometryRect {
             x: content.x - inner_offset.x - node_offset.x,
@@ -2825,7 +2843,7 @@ impl CoordinatorChain {
                     Point::default(),
                     self.inner_size.get(),
                 ))),
-        );
+        )
     }
 
     fn total_content_offset_from(&self, index: usize) -> Point {

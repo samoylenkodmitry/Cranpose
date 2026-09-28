@@ -85,7 +85,8 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
     let placeholder = spec.placeholder;
     BasicTextFieldDecorated(
         state,
-        base.then(modifier)
+        modifier
+            .then(base)
             .padding_symmetric(14.0, 0.0)
             .role(cranpose_ui::SemanticsWidgetRole::SearchField)
             .content_description(placeholder.clone()),
