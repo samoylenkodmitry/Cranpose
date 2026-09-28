@@ -69,6 +69,30 @@ fn scope_update_reuses_storage_and_replaces_payload_and_callback() {
     assert_eq!(Rc::strong_count(&second), 1);
 }
 
+/// A callback that captures nothing does the same thing for every scope, as
+/// `RecomposeScope::invalidate` does for every group: its scopes share one
+/// `Rc` instead of each allocating one.
+#[test]
+fn scopes_observed_with_a_capture_free_callback_share_it() {
+    let _guard = reset_runtime_for_tests();
+    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let read = || {
+        let _ = state.get();
+    };
+    fn changed(_: &TestScope) {}
+    observer.observe_reads(TestScope("a"), changed, read);
+    observer.observe_reads(TestScope("b"), changed, read);
+    let a = observer.inner.find_scope_entry(&TestScope("a")).unwrap();
+    let b = observer.inner.find_scope_entry(&TestScope("b")).unwrap();
+    assert!(Rc::ptr_eq(&a.borrow().on_changed, &b.borrow().on_changed));
+    observer.observe_reads(TestScope("a"), changed, read);
+    assert!(
+        Rc::ptr_eq(&a.borrow().on_changed, &b.borrow().on_changed),
+        "observing a scope again keeps the shared callback"
+    );
+}
+
 #[test]
 fn reobservation_refreshes_captures_and_preserves_shared_callbacks() {
     let _guard = reset_runtime_for_tests();
