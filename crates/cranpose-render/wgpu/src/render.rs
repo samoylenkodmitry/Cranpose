@@ -1427,6 +1427,49 @@ impl GlyphInstance {
             attributes: &Self::ATTRIBS,
         }
     }
+
+    /// The part of the quad inside `edges` (left, top, right, bottom, in the
+    /// quad's own space), its atlas coordinates cut to match; `None` when
+    /// none of it is inside.
+    pub(crate) fn clipped_to(self, edges: [f32; 4]) -> Option<Self> {
+        let [x0, y0, x1, y1] = self.rect;
+        let rect = [
+            x0.max(edges[0]),
+            y0.max(edges[1]),
+            x1.min(edges[2]),
+            y1.min(edges[3]),
+        ];
+        if rect[2] <= rect[0] || rect[3] <= rect[1] {
+            return None;
+        }
+        if rect == self.rect {
+            return Some(self);
+        }
+        let [u0, v0, u1, v1] = self.uv;
+        let u = |x: f32| u0 + (x - x0) / (x1 - x0) * (u1 - u0);
+        let v = |y: f32| v0 + (y - y0) / (y1 - y0) * (v1 - v0);
+        Some(Self {
+            rect,
+            uv: [u(rect[0]), v(rect[1]), u(rect[2]), v(rect[3])],
+            ..self
+        })
+    }
+}
+
+/// A text clip's edges in device pixels of the space its glyph quads are
+/// laid out in, before a viewport transform moves them.
+fn glyph_clip_edges(clip: Rect, root_scale: f32) -> [f32; 4] {
+    [
+        canonicalize_device_coordinate(clip.x * root_scale),
+        canonicalize_device_coordinate(clip.y * root_scale),
+        canonicalize_device_coordinate((clip.x + clip.width) * root_scale),
+        canonicalize_device_coordinate((clip.y + clip.height) * root_scale),
+    ]
+}
+
+/// Whether `clip` cuts into `rect`.
+fn clip_cuts(clip: Option<Rect>, rect: Rect) -> bool {
+    clip.is_some_and(|clip| clip.intersect(rect) != Some(rect))
 }
 
 #[repr(C)]
@@ -4286,6 +4329,11 @@ impl GpuRenderer {
         record_cached_hits: bool,
     ) -> usize {
         let start = glyph_instances.len();
+        // A turned viewport has no scissor for the clip: its quads are cut
+        // to it before the turn instead.
+        let turned_clip = clip
+            .filter(|_| !viewport.transform.is_identity())
+            .map(|clip| glyph_clip_edges(clip, root_scale));
         glyph_instances.extend(
             quads
                 .iter()
@@ -4298,7 +4346,11 @@ impl GpuRenderer {
                         root_scale,
                     )
                 })
-                .filter_map(|quad| cached_text_glyph_instance(source_raster_rect, &quad)),
+                .filter_map(|quad| cached_text_glyph_instance(source_raster_rect, &quad))
+                .filter_map(|glyph| match turned_clip {
+                    Some(edges) => glyph.clipped_to(edges),
+                    None => Some(glyph),
+                }),
         );
         let appended = glyph_instances.len() - start;
         if record_cached_hits {
@@ -4554,8 +4606,13 @@ impl GpuRenderer {
                 continue;
             };
 
+            // A retained run's quads are uploaded whole: under a turn only
+            // the shared path cuts them to a clip.
+            let clip_needs_cut =
+                !viewport.transform.is_identity() && clip_cuts(source_draw.clip, draw_rect);
             if let Some(entries) = cached_entries.as_ref()
                 && entries.len() >= RETAINED_TEXT_GLYPH_RUN_MIN_QUADS
+                && !clip_needs_cut
                 && self.emit_retained_text_glyph_run_if_ready(
                     run_key,
                     GlyphRunQuads {

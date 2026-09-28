@@ -40,6 +40,9 @@ enum Scene {
     /// 100x100 box it sits in; the clip cuts both its ends, so only its
     /// height changes what it shows.
     Clipped,
+    /// A paragraph of ink text naming `w`, wrapped to 140 points and held to
+    /// 30, turned by 21 degrees: the text clips its lines to its own bounds.
+    ClippedText,
 }
 
 impl Scene {
@@ -109,6 +112,25 @@ fn TurnedPage(scene: Scene, offscreen: bool, width: MutableState<f32>) {
                             .then(turned(-15.0, offscreen || scene == Scene::InSurface)),
                         centred(),
                         move || InkBox(w * 0.4, 40.0, 40.0, offscreen),
+                    );
+                }
+                Scene::ClippedText => {
+                    Box(
+                        Modifier::empty()
+                            .size_points(140.0, 30.0)
+                            .then(turned(21.0, offscreen)),
+                        BoxSpec::default(),
+                        move || {
+                            Text(
+                                format!("Cut by its own bounds as it turns, {w} wide"),
+                                Modifier::empty(),
+                                TextStyle::from_span_style(SpanStyle {
+                                    color: Some(INK),
+                                    font_size: TextUnit::Sp(18.0),
+                                    ..Default::default()
+                                }),
+                            );
+                        },
                     );
                 }
                 Scene::Clipped => {
@@ -279,6 +301,11 @@ fn a_turned_box_drawn_in_place_covers_what_its_surface_covers() {
 #[test]
 fn turned_text_drawn_in_place_lands_where_its_surface_lands() {
     assert_lands_alike(Scene::Text, 0.04, 0.25);
+}
+
+#[test]
+fn turned_text_its_clip_cuts_draws_in_place_where_its_surface_lands() {
+    assert_lands_alike(Scene::ClippedText, 0.04, 0.25);
 }
 
 #[test]
