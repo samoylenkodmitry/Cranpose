@@ -310,11 +310,43 @@ struct CachedTextGlyphQuad {
 }
 
 struct CachedTextGlyphRun {
+    /// The run's glyphs that draw: zero-sized and transparent ones are left
+    /// out when the run is cached.
     glyphs: Rc<[SoftwareGlyphAtlasPlacement]>,
-    quads: Option<Rc<[CachedTextGlyphQuad]>>,
+    /// Where each of `glyphs` sits in the atlas at `atlas_generation`. A
+    /// glyph's quad is derived from the two as it is drawn, so no glyph is
+    /// held twice.
+    atlas_entries: Option<Rc<[GlyphAtlasEntry]>>,
     atlas_generation: u64,
     /// The frame the run last drew in; see [`TEXT_GLYPH_RUN_IDLE_FRAMES`].
     last_frame: Cell<u64>,
+}
+
+/// A cached run drawn as quads: its glyphs and their atlas entries, each
+/// quad derived as it is read.
+#[derive(Clone, Copy)]
+struct GlyphRunQuads<'a> {
+    glyphs: &'a [SoftwareGlyphAtlasPlacement],
+    entries: &'a [GlyphAtlasEntry],
+    atlas_size: u32,
+}
+
+impl GlyphRunQuads<'_> {
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = CachedTextGlyphQuad> + '_ {
+        self.glyphs
+            .iter()
+            .zip(self.entries)
+            .map(|(glyph, entry)| cached_text_glyph_quad(glyph, *entry, self.atlas_size))
+    }
+}
+
+/// Whether `glyph` puts any pixels down.
+fn glyph_draws(glyph: &SoftwareGlyphAtlasPlacement) -> bool {
+    glyph.width != 0 && glyph.height != 0 && glyph.color.3 > 0.0
 }
 
 struct CachedGpuTextGlyphRun {
@@ -2099,7 +2131,7 @@ pub struct GpuRenderer {
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
     pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
-    scratch_text_glyph_quads: Vec<CachedTextGlyphQuad>,
+    scratch_text_glyph_entries: Vec<GlyphAtlasEntry>,
     frame_graph_executor: WgpuFrameGraphExecutor,
     deferred_offscreen_releases: Vec<OffscreenTarget>,
     pub(crate) effect_renderer: EffectRenderer,
@@ -2343,7 +2375,7 @@ impl GpuRenderer {
             scratch_image_cmds: Vec::new(),
             scratch_glyph_cmds: Vec::new(),
             scratch_text_glyph_run: Vec::new(),
-            scratch_text_glyph_quads: Vec::new(),
+            scratch_text_glyph_entries: Vec::new(),
             frame_graph_executor,
             deferred_offscreen_releases: Vec::new(),
             effect_renderer,
@@ -4188,60 +4220,49 @@ impl GpuRenderer {
         self.glyph_atlas_entry_for(&upload_glyph)
     }
 
-    fn prepare_text_glyph_quads(
+    /// The atlas entries of a run's drawing glyphs: of `cached_glyph_run`,
+    /// which holds only those, or of the drawing glyphs of `collected_run`,
+    /// a run just collected, whose new glyphs are uploaded here.
+    fn prepare_text_glyph_entries(
         &mut self,
         run_key: TextGlyphRunCacheKey,
         atlas_generation: u64,
         cached_glyph_run: Option<&[SoftwareGlyphAtlasPlacement]>,
         collected_run: &[SoftwareGlyphAtlasRunGlyph],
-        generated_quads: &mut Vec<CachedTextGlyphQuad>,
-    ) -> Result<Rc<[CachedTextGlyphQuad]>, String> {
-        generated_quads.clear();
+        entries: &mut Vec<GlyphAtlasEntry>,
+    ) -> Result<Rc<[GlyphAtlasEntry]>, String> {
+        entries.clear();
         if let Some(glyph_run) = cached_glyph_run {
             for glyph in glyph_run {
-                if glyph.width == 0 || glyph.height == 0 || glyph.color.3 <= 0.0 {
-                    continue;
-                }
-                let entry = self.glyph_atlas_entry_for_placement(glyph)?;
-                generated_quads.push(cached_text_glyph_quad(
-                    glyph,
-                    entry,
-                    self.text_glyph_atlas.size(),
-                ));
+                entries.push(self.glyph_atlas_entry_for_placement(glyph)?);
             }
         } else {
             for run_glyph in collected_run {
-                let placement = run_glyph.placement();
-                if placement.width == 0 || placement.height == 0 || placement.color.3 <= 0.0 {
+                if !glyph_draws(&run_glyph.placement()) {
                     continue;
                 }
-                let entry = match run_glyph {
+                entries.push(match run_glyph {
                     SoftwareGlyphAtlasRunGlyph::Cached(placement) => {
                         self.glyph_atlas_entry_for_placement(placement)?
                     }
                     SoftwareGlyphAtlasRunGlyph::New(glyph) => self.glyph_atlas_entry_for(glyph)?,
-                };
-                generated_quads.push(cached_text_glyph_quad(
-                    &placement,
-                    entry,
-                    self.text_glyph_atlas.size(),
-                ));
+                });
             }
         }
 
-        let quads: Rc<[CachedTextGlyphQuad]> = Rc::from(generated_quads.as_slice());
+        let entries: Rc<[GlyphAtlasEntry]> = Rc::from(entries.as_slice());
         if let Some(cached) = self.text_glyph_run_cache.get_mut(&run_key) {
-            cached.quads = Some(Rc::clone(&quads));
+            cached.atlas_entries = Some(Rc::clone(&entries));
             cached.atlas_generation = atlas_generation;
         }
-        Ok(quads)
+        Ok(entries)
     }
 
     #[expect(clippy::too_many_arguments)]
     fn append_text_glyph_quad_run(
         &mut self,
         source_raster_rect: Rect,
-        quads: &[CachedTextGlyphQuad],
+        quads: GlyphRunQuads<'_>,
         clip: Option<Rect>,
         viewport: ViewportUniformParams,
         root_scale: f32,
@@ -4261,7 +4282,7 @@ impl GpuRenderer {
                         root_scale,
                     )
                 })
-                .filter_map(|quad| cached_text_glyph_instance(source_raster_rect, quad)),
+                .filter_map(|quad| cached_text_glyph_instance(source_raster_rect, &quad)),
         );
         let appended = glyph_instances.len() - start;
         if record_cached_hits {
@@ -4325,7 +4346,7 @@ impl GpuRenderer {
     fn emit_retained_text_glyph_run_if_ready(
         &mut self,
         cache_key: TextGlyphRunCacheKey,
-        quads: &[CachedTextGlyphQuad],
+        quads: GlyphRunQuads<'_>,
         viewport: ViewportUniformParams,
         source_raster_rect: Rect,
         scissor: (u32, u32, u32, u32),
@@ -4356,7 +4377,7 @@ impl GpuRenderer {
     fn ensure_retained_text_glyph_run(
         &mut self,
         cache_key: TextGlyphRunCacheKey,
-        quads: &[CachedTextGlyphQuad],
+        quads: GlyphRunQuads<'_>,
     ) -> bool {
         let atlas_generation = self.text_glyph_atlas.generation();
         if self
@@ -4377,7 +4398,7 @@ impl GpuRenderer {
             &self.device,
             quads
                 .iter()
-                .filter_map(|quad| cached_text_glyph_instance(origin, quad)),
+                .filter_map(|quad| cached_text_glyph_instance(origin, &quad)),
         ) else {
             return false;
         };
@@ -4410,8 +4431,8 @@ impl GpuRenderer {
         let initial_instance_len = glyph_instances.len();
         let initial_cmd_len = glyph_cmds.len();
         let mut collected_run = std::mem::take(&mut self.scratch_text_glyph_run);
-        let mut generated_quads = std::mem::take(&mut self.scratch_text_glyph_quads);
-        generated_quads.clear();
+        let mut generated_entries = std::mem::take(&mut self.scratch_text_glyph_entries);
+        generated_entries.clear();
         let mut visited = 0usize;
         let mut emitted_glyphs = 0usize;
         let mut run_hits = 0usize;
@@ -4444,15 +4465,19 @@ impl GpuRenderer {
                 static_text_motion,
             );
             let atlas_generation = self.text_glyph_atlas.generation();
-            let mut cached_quad_run = None;
+            let mut cached_entries = None;
             let frame = self.text_glyph_run_frame;
-            let cached_glyph_run = if let Some(cached) = self.text_glyph_run_cache.get(&run_key) {
+            // The run's drawing glyphs, and whether they came from the cache
+            // rather than from `collected_run`.
+            let (run_glyphs, glyphs_cached) = if let Some(cached) =
+                self.text_glyph_run_cache.get(&run_key)
+            {
                 cached.last_frame.set(frame);
                 run_hits = run_hits.saturating_add(1);
                 if cached.atlas_generation == atlas_generation {
-                    cached_quad_run = cached.quads.as_ref().map(Rc::clone);
+                    cached_entries = cached.atlas_entries.as_ref().map(Rc::clone);
                 }
-                Some(Rc::clone(&cached.glyphs))
+                (Rc::clone(&cached.glyphs), true)
             } else {
                 run_misses = run_misses.saturating_add(1);
                 collected_run.clear();
@@ -4487,17 +4512,18 @@ impl GpuRenderer {
                 let glyphs: Rc<[SoftwareGlyphAtlasPlacement]> = collected_run
                     .iter()
                     .map(SoftwareGlyphAtlasRunGlyph::placement)
+                    .filter(glyph_draws)
                     .collect();
                 self.text_glyph_run_cache.put(
                     run_key,
                     CachedTextGlyphRun {
-                        glyphs,
-                        quads: None,
+                        glyphs: Rc::clone(&glyphs),
+                        atlas_entries: None,
                         atlas_generation: 0,
                         last_frame: Cell::new(frame),
                     },
                 );
-                None
+                (glyphs, false)
             };
 
             let draw_rect = Rect {
@@ -4512,41 +4538,50 @@ impl GpuRenderer {
                 continue;
             };
 
-            if let Some(quad_run) = cached_quad_run.as_ref()
-                && quad_run.len() >= RETAINED_TEXT_GLYPH_RUN_MIN_QUADS
+            if let Some(entries) = cached_entries.as_ref()
+                && entries.len() >= RETAINED_TEXT_GLYPH_RUN_MIN_QUADS
                 && self.emit_retained_text_glyph_run_if_ready(
                     run_key,
-                    quad_run.as_ref(),
+                    GlyphRunQuads {
+                        glyphs: &run_glyphs,
+                        entries,
+                        atlas_size: self.text_glyph_atlas.size(),
+                    },
                     viewport,
                     source_raster_rect,
                     scissor,
                     glyph_cmds,
                 )
             {
-                emitted_glyphs = emitted_glyphs.saturating_add(quad_run.len());
+                emitted_glyphs = emitted_glyphs.saturating_add(entries.len());
                 continue;
             }
 
             let instance_start = glyph_instances.len();
-            let (quad_run, cached) = match cached_quad_run {
-                Some(quad_run) => (quad_run, true),
+            let (entries, cached) = match cached_entries {
+                Some(entries) => (entries, true),
                 None => {
-                    let Ok(quad_run) = self.prepare_text_glyph_quads(
+                    let Ok(entries) = self.prepare_text_glyph_entries(
                         run_key,
                         atlas_generation,
-                        cached_glyph_run.as_deref(),
+                        glyphs_cached.then_some(&*run_glyphs),
                         &collected_run,
-                        &mut generated_quads,
+                        &mut generated_entries,
                     ) else {
                         fallback = true;
                         break;
                     };
-                    (quad_run, false)
+                    (entries, false)
                 }
+            };
+            let quads = GlyphRunQuads {
+                glyphs: &run_glyphs,
+                entries: &entries,
+                atlas_size: self.text_glyph_atlas.size(),
             };
             emitted_glyphs = emitted_glyphs.saturating_add(self.append_text_glyph_quad_run(
                 source_raster_rect,
-                quad_run.as_ref(),
+                quads,
                 source_draw.clip,
                 viewport,
                 root_scale,
@@ -4566,7 +4601,7 @@ impl GpuRenderer {
         }
 
         self.scratch_text_glyph_run = collected_run;
-        self.scratch_text_glyph_quads = generated_quads;
+        self.scratch_text_glyph_entries = generated_entries;
         if fallback {
             glyph_instances.truncate(initial_instance_len);
             glyph_cmds.truncate(initial_cmd_len);

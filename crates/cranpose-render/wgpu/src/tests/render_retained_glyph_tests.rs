@@ -34,10 +34,51 @@ fn test_quads() -> [CachedTextGlyphQuad; 1] {
     }]
 }
 
+/// A one-glyph run drawn at `x`: a white 2×2 glyph over the atlas's
+/// top-left corner.
+type TestRun = ([SoftwareGlyphAtlasPlacement; 1], [GlyphAtlasEntry; 1]);
+
+fn test_run(x: i32) -> TestRun {
+    let key = SoftwareGlyphAtlasKey {
+        font_hash: 0,
+        glyph_id: 0,
+        scale_x_bits: 0,
+        scale_y_bits: 0,
+        embolden_px_bits: 0,
+        slant_bits: 0,
+    };
+    (
+        [SoftwareGlyphAtlasPlacement {
+            key,
+            x,
+            y: 0,
+            width: 2,
+            height: 2,
+            color: Color(1.0, 1.0, 1.0, 1.0),
+        }],
+        [GlyphAtlasEntry {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        }],
+    )
+}
+
+fn run_quads<'a>(renderer: &GpuRenderer, run: &'a TestRun) -> GlyphRunQuads<'a> {
+    GlyphRunQuads {
+        glyphs: &run.0,
+        entries: &run.1,
+        atlas_size: renderer.text_glyph_atlas.size(),
+    }
+}
+
 fn queue_glyph(renderer: &mut GpuRenderer, key: u64, x: f32, commands: &mut Vec<GlyphDrawCmd>) {
+    let run = test_run(0);
+    let quads = run_quads(renderer, &run);
     assert!(renderer.emit_retained_text_glyph_run_if_ready(
         TextGlyphRunCacheKey(key),
-        &test_quads(),
+        quads,
         ViewportUniformParams {
             width: 8,
             height: 8,
@@ -173,9 +214,9 @@ fn queued_glyph_draw_keeps_its_quads_after_cache_eviction() {
     renderer.text_glyph_gpu_run_cache = BoundedLruCache::with_capacity_at_least_one(1);
     let mut commands = Vec::new();
     queue_glyph(&mut renderer, 1, 0.0, &mut commands);
-    let mut moved = test_quads();
-    moved[0].x = 4;
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), &moved));
+    let moved = test_run(4);
+    let quads = run_quads(&renderer, &moved);
+    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), quads));
     assert!(
         renderer
             .text_glyph_gpu_run_cache
@@ -354,7 +395,7 @@ fn a_glyph_run_no_frame_draws_leaves_the_cpu_cache() {
     let (_lock, mut renderer) = test_renderer();
     let run = |renderer: &GpuRenderer| CachedTextGlyphRun {
         glyphs: Rc::from(Vec::new()),
-        quads: None,
+        atlas_entries: None,
         atlas_generation: 0,
         last_frame: Cell::new(renderer.text_glyph_run_frame),
     };
@@ -399,8 +440,10 @@ fn a_glyph_run_no_frame_draws_leaves_the_cpu_cache() {
 #[test]
 fn a_retained_run_no_frame_draws_gives_its_quads_back() {
     let (_lock, mut renderer) = test_renderer();
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(1), &test_quads()));
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), &test_quads()));
+    let run = test_run(0);
+    let quads = run_quads(&renderer, &run);
+    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(1), quads));
+    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), quads));
     for _ in 0..TEXT_GLYPH_RUN_IDLE_FRAMES {
         renderer.begin_text_glyph_run_frame();
         assert!(
@@ -705,4 +748,52 @@ fn shared_glyphs_inside_their_scissor_draw_unclipped_within_their_bounds() {
         (Some((2, 0, 6, 8)), (2, 0, 6, 8)),
         "a glyph past the scissor keeps it"
     );
+}
+
+#[test]
+fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
+    let (_lock, renderer) = test_renderer();
+    let (mut glyphs, mut entries) = test_run(3);
+    glyphs[0].color = Color(2.0, 0.5, -1.0, 1.0);
+    entries[0] = GlyphAtlasEntry {
+        x: 6,
+        y: 10,
+        width: 4,
+        height: 8,
+    };
+    let run = (glyphs, entries);
+    let quads = run_quads(&renderer, &run);
+    let atlas_size = renderer.text_glyph_atlas.size();
+
+    let derived: Vec<_> = quads.iter().collect();
+
+    assert_eq!(quads.len(), 1);
+    let [quad] = derived.as_slice() else {
+        panic!("one glyph derives one quad");
+    };
+    let expected = cached_text_glyph_quad(&run.0[0], run.1[0], atlas_size);
+    assert_eq!((quad.x, quad.y, quad.width, quad.height), (3, 0, 2, 2));
+    assert_eq!(quad.color, (1.0, 0.5, 0.0, 1.0), "colour is clamped");
+    assert_eq!(quad.uv.min, expected.uv.min);
+    assert_eq!(quad.uv.max, expected.uv.max);
+    assert_eq!(quad.uv.sample_bounds, expected.uv.sample_bounds);
+}
+
+#[test]
+fn only_a_glyph_with_area_and_colour_draws() {
+    let (glyphs, _) = test_run(0);
+    let glyph = glyphs[0];
+    assert!(glyph_draws(&glyph));
+    assert!(!glyph_draws(&SoftwareGlyphAtlasPlacement {
+        width: 0,
+        ..glyph
+    }));
+    assert!(!glyph_draws(&SoftwareGlyphAtlasPlacement {
+        height: 0,
+        ..glyph
+    }));
+    assert!(!glyph_draws(&SoftwareGlyphAtlasPlacement {
+        color: Color(1.0, 1.0, 1.0, 0.0),
+        ..glyph
+    }));
 }
