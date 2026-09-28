@@ -1,6 +1,8 @@
 package dev.cranpose.twin
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,6 +57,7 @@ val SCENES: List<Pair<String, @Composable () -> Unit>> = listOf(
     "modifier-order" to { ModifierOrderProbes() },
     "text-fields" to { TextFieldProbes() },
     "text-selection" to { TextSelectionProbe() },
+    "scroll-minimum" to { ScrollMinimumProbe() },
 )
 
 /** The demo's fonts, loaded from the files Cranpose embeds. */
@@ -298,3 +301,15 @@ fun TextSelectionProbe() {
     LaunchedEffect(Unit) { requester.requestFocus() }
 }
 
+@Composable
+fun ScrollMinimumProbe() {
+    Column(
+        Modifier.fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .background(Color(0.12f, 0.16f, 0.28f, 1f)),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(Modifier.size(120.dp, 60.dp).background(Color(0.9f, 0.5f, 0.2f, 1f), RoundedCornerShape(8.dp)))
+    }
+}

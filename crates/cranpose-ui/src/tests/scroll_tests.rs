@@ -1888,3 +1888,58 @@ fn an_ordinary_scroll_still_claims_the_drag() {
         );
     });
 }
+
+/// Where the one child of a `fill_max_size().vertical_scroll()` column,
+/// centered by its arrangement, is placed in a 320×300 viewport.
+fn centered_child_top() -> f32 {
+    let child = Rc::new(Cell::new(None));
+    let slot = Rc::clone(&child);
+    let mut composition = crate::run_test_composition(move || {
+        let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|scroll| *scroll);
+        let slot = Rc::clone(&slot);
+        Column(
+            Modifier::empty()
+                .fill_max_size()
+                .vertical_scroll(scroll, false),
+            ColumnSpec::default().vertical_arrangement(crate::LinearArrangement::Center),
+            move || {
+                slot.set(Some(crate::Box(
+                    Modifier::empty().size_points(40.0, 30.0),
+                    crate::BoxSpec::default(),
+                    || {},
+                )));
+            },
+        );
+    });
+    let root = composition.root().expect("scroll column root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    measure_layout(
+        &mut applier,
+        root,
+        cranpose_ui_graphics::Size {
+            width: 320.0,
+            height: 300.0,
+        },
+    )
+    .expect("layout measurement");
+    let top = applier
+        .with_node::<crate::LayoutNode, _>(child.get().expect("child id"), |node| {
+            node.layout_state().position().y
+        })
+        .expect("child node");
+    applier.clear_runtime_handle();
+    top
+}
+
+#[test]
+fn scroll_content_keeps_the_incoming_minimum_along_the_scroll() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    assert_eq!(
+        centered_child_top(),
+        135.0,
+        "the column is at least the viewport's height, as in Compose, so its \
+         centered child sits in the viewport's middle"
+    );
+}
