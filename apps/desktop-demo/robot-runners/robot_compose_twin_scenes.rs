@@ -45,9 +45,12 @@ pub(crate) fn main() {
                 robot
                     .pump_frames(3)
                     .unwrap_or_else(|err| panic!("failed to settle scene '{name}': {err}"));
-                let shot = robot
-                    .screenshot()
-                    .unwrap_or_else(|err| panic!("screenshot failed for scene '{name}': {err}"));
+                let shot = if twin.density == 1.0 {
+                    robot.screenshot()
+                } else {
+                    robot.screenshot_with_scale(twin.density)
+                }
+                .unwrap_or_else(|err| panic!("screenshot failed for scene '{name}': {err}"));
                 let image = RgbaImage::from_raw(shot.width, shot.height, shot.pixels)
                     .unwrap_or_else(|| panic!("scene '{name}' screenshot had an unexpected size"));
                 let path = shot_dir.join(format!("{name}.png"));
@@ -109,7 +112,7 @@ fn differing_cells(twin: &TwinScene, reference: &RgbaImage, image: &RgbaImage) -
         .iter()
         .enumerate()
         .filter_map(|(index, cell)| {
-            let (x, y, width, height) = MATRIX_GRID.cell(index);
+            let (x, y, width, height) = MATRIX_GRID.cell(index, twin.density);
             let label = format!("{} / {cell}", twin.name);
             let expected = imageops::crop_imm(reference, x, y, width, height).to_image();
             let actual = imageops::crop_imm(image, x, y, width, height).to_image();

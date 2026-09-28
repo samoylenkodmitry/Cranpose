@@ -6,11 +6,11 @@
 use std::cell::RefCell;
 
 use cranpose_core::{rememberMutableStateOf, MutableState};
-use cranpose_foundation::text::TextFieldState;
+use cranpose_foundation::text::{TextFieldState, TextRange};
 use cranpose_ui::{
     composable, text::SpanStyle, BasicTextField, BasicTextFieldDecorated, BasicTextFieldOptions,
-    BoxSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text, TextStyle,
-    VerticalAlignment,
+    BasicTextFieldWithOptions, BoxSpec, Color, Column, ColumnSpec, FocusRequester,
+    LinearArrangement, Modifier, Row, RowSpec, Text, TextStyle, VerticalAlignment,
 };
 
 pub use super::compose_twin_matrix::{MATRIX_FRAMES, MATRIX_GRID};
@@ -35,6 +35,8 @@ pub struct TwinScene {
     /// compared on its own; empty for a scene compared whole.
     pub cells: &'static [&'static str],
     pub tolerance: TwinTolerance,
+    /// The density both frameworks lay the scene out and capture it at.
+    pub density: f32,
 }
 
 /// How much of a capture may differ from its Compose frame.
@@ -56,26 +58,30 @@ pub struct TwinGrid {
 }
 
 impl TwinGrid {
-    /// Cell `index`'s left, top, width and height.
-    pub fn cell(&self, index: usize) -> (u32, u32, u32, u32) {
+    /// Cell `index`'s left, top, width and height in the device pixels of
+    /// `density`, each length rounded as both frameworks round it.
+    pub fn cell(&self, index: usize, density: f32) -> (u32, u32, u32, u32) {
         let index = u32::try_from(index).unwrap_or(u32::MAX);
+        let px = |points: u32| (points as f32 * density + 0.5).floor() as u32;
+        let (width, height) = (px(self.cell_width), px(self.cell_height));
         (
-            self.origin + index % self.columns * self.cell_width,
-            self.origin + index / self.columns * self.cell_height,
-            self.cell_width,
-            self.cell_height,
+            px(self.origin) + index % self.columns * width,
+            px(self.origin) + index / self.columns * height,
+            width,
+            height,
         )
     }
 }
 
 /// The hand-written scenes, in the Compose twin's `SCENES` order.
-pub const TWIN_SCENES: [TwinScene; 6] = [
+pub const TWIN_SCENES: [TwinScene; 7] = [
     whole("simple-card", simple_card_showcase),
     whole("positioned-boxes", positioned_boxes_showcase),
     whole("item-list", item_list_showcase),
     whole("complex-chain", complex_chain_showcase),
     whole("modifier-order", modifier_order_probes),
     whole("text-fields", text_field_probes),
+    whole("text-selection", text_selection_probe),
 ];
 
 const fn whole(name: &'static str, content: fn()) -> TwinScene {
@@ -84,6 +90,7 @@ const fn whole(name: &'static str, content: fn()) -> TwinScene {
         content,
         cells: &[],
         tolerance: TwinTolerance::Edges,
+        density: 1.0,
     }
 }
 
@@ -117,24 +124,24 @@ thread_local! {
 }
 
 /// Shows the scene [`TWIN_SCENE_STATE`] names at the top left of the frame,
-/// laid out at density 1 as the Compose twin renders it, whatever the
-/// display's scale, so a half-pixel placement rounds the same on both sides.
+/// laid out at the scene's density as the Compose twin renders it, whatever
+/// the display's scale, so a half-pixel placement rounds the same on both
+/// sides.
 #[composable]
 pub fn ComposeTwinScreen() {
     let scene = rememberMutableStateOf(|| 0usize);
     TWIN_SCENE_STATE.with(|cell| *cell.borrow_mut() = Some(scene));
-    cranpose_ui::density::ProvideDensity(cranpose_ui::Density::new(1.0, 1.0), || {
+    let index = scene.get();
+    let Some(twin) = twin_scenes().nth(index) else {
+        return;
+    };
+    cranpose_ui::density::ProvideDensity(cranpose_ui::Density::new(twin.density, 1.0), || {
         cranpose_ui::Box(
             Modifier::empty()
                 .fill_max_size()
                 .background(TWIN_FRAME_COLOR),
             BoxSpec::default(),
-            move || {
-                let index = scene.get();
-                if let Some(twin) = twin_scenes().nth(index) {
-                    cranpose_core::with_key(&index, || (twin.content)());
-                }
-            },
+            move || cranpose_core::with_key(&index, || (twin.content)()),
         );
     });
 }
@@ -321,6 +328,44 @@ pub fn text_field_probes() {
                         );
                         inner.inner_text_field();
                     });
+                },
+            );
+        },
+    );
+}
+
+/// The accent a focused field tints its caret and selection with.
+const FIELD_ACCENT: Color = Color(0.30, 0.55, 0.90, 1.0);
+
+/// A focused field with its first word selected, padded unevenly: the
+/// highlight sits behind the word inside the padding, and no caret shows
+/// while a range is selected.
+#[composable]
+pub fn text_selection_probe() {
+    let state = cranpose_core::remember(|| {
+        let state = TextFieldState::new("Select some text");
+        state.set_selection(TextRange::new(0, 6));
+        state
+    })
+    .with(|state| *state);
+    let requester = cranpose_core::remember(FocusRequester::new).with(FocusRequester::clone);
+    let focus = requester.clone();
+    cranpose_core::LaunchedEffect((), move |_| {
+        let _ = focus.request_focus();
+    });
+    Column(
+        Modifier::empty().padding(16.0),
+        ColumnSpec::new(),
+        move || {
+            BasicTextFieldWithOptions(
+                state,
+                Modifier::empty()
+                    .focus_requester(&requester)
+                    .background(FIELD_FILL)
+                    .padding_each(10.0, 4.0, 6.0, 8.0),
+                BasicTextFieldOptions {
+                    cursor_color: FIELD_ACCENT,
+                    ..BasicTextFieldOptions::default()
                 },
             );
         },

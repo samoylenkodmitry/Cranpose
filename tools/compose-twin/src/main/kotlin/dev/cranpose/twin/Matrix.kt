@@ -31,37 +31,63 @@ private val Green = Color(0.35f, 0.8f, 0.45f, 1.0f)
 private val Gold = Color(0.95f, 0.75f, 0.25f, 1.0f)
 private val Dim = Color(0.22f, 0.24f, 0.3f, 1.0f)
 
-/** Every matrix frame, by name, in the order Cranpose captures them. */
-val MATRIX_FRAMES: List<Pair<String, @Composable () -> Unit>> = listOf(
-    "matrix-chains2-00" to { chains2_00() },
-    "matrix-chains2-01" to { chains2_01() },
-    "matrix-chains2-02" to { chains2_02() },
-    "matrix-chains2-03" to { chains2_03() },
-    "matrix-chains2-04" to { chains2_04() },
-    "matrix-chains2-05" to { chains2_05() },
-    "matrix-chains3-00" to { chains3_00() },
-    "matrix-chains3-01" to { chains3_01() },
-    "matrix-chains3-02" to { chains3_02() },
-    "matrix-chains3-03" to { chains3_03() },
-    "matrix-chains3-04" to { chains3_04() },
-    "matrix-chains3-05" to { chains3_05() },
-    "matrix-chains3-06" to { chains3_06() },
-    "matrix-chains3-07" to { chains3_07() },
-    "matrix-chains3-08" to { chains3_08() },
-    "matrix-chains3-09" to { chains3_09() },
-    "matrix-chains3-10" to { chains3_10() },
-    "matrix-chains3-11" to { chains3_11() },
-    "matrix-chains3-12" to { chains3_12() },
-    "matrix-chains3-13" to { chains3_13() },
-    "matrix-text2-00" to { text2_00() },
-    "matrix-text2-01" to { text2_01() },
-    "matrix-text2-02" to { text2_02() },
-    "matrix-rows-00" to { rows_00() },
-    "matrix-rows-01" to { rows_01() },
-    "matrix-columns-00" to { columns_00() },
-    "matrix-columns-01" to { columns_01() },
-    "matrix-boxes-00" to { boxes_00() },
-    "matrix-weights-00" to { weights_00() },
+/** Every matrix frame, in the order Cranpose captures them. */
+val MATRIX_FRAMES: List<TwinFrame> = listOf(
+    TwinFrame("matrix-chains2-00", 1.0f) { chains2_00() },
+    TwinFrame("matrix-chains2-00@2.625", 2.625f) { chains2_00() },
+    TwinFrame("matrix-chains2-01", 1.0f) { chains2_01() },
+    TwinFrame("matrix-chains2-01@2.625", 2.625f) { chains2_01() },
+    TwinFrame("matrix-chains2-02", 1.0f) { chains2_02() },
+    TwinFrame("matrix-chains2-02@2.625", 2.625f) { chains2_02() },
+    TwinFrame("matrix-chains2-03", 1.0f) { chains2_03() },
+    TwinFrame("matrix-chains2-03@2.625", 2.625f) { chains2_03() },
+    TwinFrame("matrix-chains2-04", 1.0f) { chains2_04() },
+    TwinFrame("matrix-chains2-04@2.625", 2.625f) { chains2_04() },
+    TwinFrame("matrix-chains2-05", 1.0f) { chains2_05() },
+    TwinFrame("matrix-chains2-05@2.625", 2.625f) { chains2_05() },
+    TwinFrame("matrix-chains3-00", 1.0f) { chains3_00() },
+    TwinFrame("matrix-chains3-00@2.625", 2.625f) { chains3_00() },
+    TwinFrame("matrix-chains3-01", 1.0f) { chains3_01() },
+    TwinFrame("matrix-chains3-01@2.625", 2.625f) { chains3_01() },
+    TwinFrame("matrix-chains3-02", 1.0f) { chains3_02() },
+    TwinFrame("matrix-chains3-02@2.625", 2.625f) { chains3_02() },
+    TwinFrame("matrix-chains3-03", 1.0f) { chains3_03() },
+    TwinFrame("matrix-chains3-03@2.625", 2.625f) { chains3_03() },
+    TwinFrame("matrix-chains3-04", 1.0f) { chains3_04() },
+    TwinFrame("matrix-chains3-04@2.625", 2.625f) { chains3_04() },
+    TwinFrame("matrix-chains3-05", 1.0f) { chains3_05() },
+    TwinFrame("matrix-chains3-05@2.625", 2.625f) { chains3_05() },
+    TwinFrame("matrix-chains3-06", 1.0f) { chains3_06() },
+    TwinFrame("matrix-chains3-06@2.625", 2.625f) { chains3_06() },
+    TwinFrame("matrix-chains3-07", 1.0f) { chains3_07() },
+    TwinFrame("matrix-chains3-07@2.625", 2.625f) { chains3_07() },
+    TwinFrame("matrix-chains3-08", 1.0f) { chains3_08() },
+    TwinFrame("matrix-chains3-08@2.625", 2.625f) { chains3_08() },
+    TwinFrame("matrix-chains3-09", 1.0f) { chains3_09() },
+    TwinFrame("matrix-chains3-09@2.625", 2.625f) { chains3_09() },
+    TwinFrame("matrix-chains3-10", 1.0f) { chains3_10() },
+    TwinFrame("matrix-chains3-10@2.625", 2.625f) { chains3_10() },
+    TwinFrame("matrix-chains3-11", 1.0f) { chains3_11() },
+    TwinFrame("matrix-chains3-11@2.625", 2.625f) { chains3_11() },
+    TwinFrame("matrix-chains3-12", 1.0f) { chains3_12() },
+    TwinFrame("matrix-chains3-12@2.625", 2.625f) { chains3_12() },
+    TwinFrame("matrix-chains3-13", 1.0f) { chains3_13() },
+    TwinFrame("matrix-chains3-13@2.625", 2.625f) { chains3_13() },
+    TwinFrame("matrix-text2-00", 1.0f) { text2_00() },
+    TwinFrame("matrix-text2-01", 1.0f) { text2_01() },
+    TwinFrame("matrix-text2-02", 1.0f) { text2_02() },
+    TwinFrame("matrix-rows-00", 1.0f) { rows_00() },
+    TwinFrame("matrix-rows-00@2.625", 2.625f) { rows_00() },
+    TwinFrame("matrix-rows-01", 1.0f) { rows_01() },
+    TwinFrame("matrix-rows-01@2.625", 2.625f) { rows_01() },
+    TwinFrame("matrix-columns-00", 1.0f) { columns_00() },
+    TwinFrame("matrix-columns-00@2.625", 2.625f) { columns_00() },
+    TwinFrame("matrix-columns-01", 1.0f) { columns_01() },
+    TwinFrame("matrix-columns-01@2.625", 2.625f) { columns_01() },
+    TwinFrame("matrix-boxes-00", 1.0f) { boxes_00() },
+    TwinFrame("matrix-boxes-00@2.625", 2.625f) { boxes_00() },
+    TwinFrame("matrix-weights-00", 1.0f) { weights_00() },
+    TwinFrame("matrix-weights-00@2.625", 2.625f) { weights_00() },
 )
 
 @Composable
@@ -115,28 +141,28 @@ private fun WeightsProbe(children: List<Pair<Float, Boolean>>) {
 private fun chains2_00() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).graphicsLayer { alpha = 0.5f }) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).graphicsLayer { alpha = 0.5f }) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).offset(7.dp, 5.dp)) }
         }
     }
 }
@@ -145,28 +171,28 @@ private fun chains2_00() {
 private fun chains2_01() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).graphicsLayer { alpha = 0.5f }) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).graphicsLayer { alpha = 0.5f }) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).graphicsLayer { alpha = 0.5f }) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).graphicsLayer { alpha = 0.5f }) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).width(52.dp)) }
         }
     }
 }
@@ -175,28 +201,28 @@ private fun chains2_01() {
 private fun chains2_02() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).graphicsLayer { alpha = 0.5f }) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).graphicsLayer { alpha = 0.5f }) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).graphicsLayer { alpha = 0.5f }) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.width(52.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.width(52.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.width(52.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).graphicsLayer { alpha = 0.5f }) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.width(52.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.width(52.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.width(52.dp).background(Red)) }
         }
     }
 }
@@ -205,28 +231,28 @@ private fun chains2_02() {
 private fun chains2_03() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.width(52.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.width(52.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.width(52.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.width(52.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.width(52.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.width(52.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.width(52.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.width(52.dp).offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.width(52.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.width(52.dp).graphicsLayer { alpha = 0.5f }) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.width(52.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.width(52.dp).graphicsLayer { alpha = 0.5f }) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().width(52.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().graphicsLayer { alpha = 0.5f }) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().graphicsLayer { alpha = 0.5f }) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp)) }
         }
     }
 }
@@ -235,28 +261,28 @@ private fun chains2_03() {
 private fun chains2_04() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).graphicsLayer { alpha = 0.5f }) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).graphicsLayer { alpha = 0.5f }) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp)) }
         }
     }
 }
@@ -265,20 +291,20 @@ private fun chains2_04() {
 private fun chains2_05() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().graphicsLayer { alpha = 0.5f }) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().graphicsLayer { alpha = 0.5f }) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.background(Red)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.fillMaxWidth()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.graphicsLayer { alpha = 0.5f }.clipToBounds()) }
         }
     }
 }
@@ -287,28 +313,28 @@ private fun chains2_05() {
 private fun chains3_00() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Red).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).fillMaxWidth()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).background(Blue).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).size(64.dp, 44.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().background(Red)) }
         }
     }
 }
@@ -317,28 +343,28 @@ private fun chains3_00() {
 private fun chains3_01() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).fillMaxWidth().clipToBounds()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).fillMaxWidth()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).offset(7.dp, 5.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().size(64.dp, 44.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.padding(6.dp).clipToBounds().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).size(64.dp, 44.dp)) }
         }
     }
 }
@@ -347,28 +373,28 @@ private fun chains3_01() {
 private fun chains3_02() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).padding(6.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).padding(6.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).background(Blue).clipToBounds()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).size(64.dp, 44.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().size(64.dp, 44.dp)) }
         }
     }
 }
@@ -377,28 +403,28 @@ private fun chains3_02() {
 private fun chains3_03() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).fillMaxWidth().clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).offset(7.dp, 5.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().padding(6.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Red).clipToBounds().offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).offset(7.dp, 5.dp)) }
         }
     }
 }
@@ -407,28 +433,28 @@ private fun chains3_03() {
 private fun chains3_04() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).padding(6.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).fillMaxWidth()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).background(Red).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).background(Red)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).size(64.dp, 44.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().padding(6.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).fillMaxWidth().clipToBounds()) }
         }
     }
 }
@@ -437,28 +463,28 @@ private fun chains3_04() {
 private fun chains3_05() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).fillMaxWidth()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).offset(7.dp, 5.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().size(64.dp, 44.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.background(Blue).clipToBounds().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).padding(6.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).padding(6.dp)) }
         }
     }
 }
@@ -467,28 +493,28 @@ private fun chains3_05() {
 private fun chains3_06() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Red).clipToBounds()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).background(Blue).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).fillMaxWidth().clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).background(Red)) }
         }
     }
 }
@@ -497,28 +523,28 @@ private fun chains3_06() {
 private fun chains3_07() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().padding(6.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.size(64.dp, 44.dp).clipToBounds().offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().padding(6.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).size(64.dp, 44.dp)) }
         }
     }
 }
@@ -527,28 +553,28 @@ private fun chains3_07() {
 private fun chains3_08() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Red).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).background(Red)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().background(Blue).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).padding(6.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().size(64.dp, 44.dp).clipToBounds()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
         }
     }
 }
@@ -557,28 +583,28 @@ private fun chains3_08() {
 private fun chains3_09() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().offset(7.dp, 5.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.fillMaxWidth().clipToBounds().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).padding(6.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).padding(6.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Red).clipToBounds()) }
         }
     }
 }
@@ -587,28 +613,28 @@ private fun chains3_09() {
 private fun chains3_10() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).fillMaxWidth()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).background(Blue).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).background(Blue)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp).clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().background(Red)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().clipToBounds()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).fillMaxWidth().clipToBounds()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().padding(6.dp)) }
         }
     }
 }
@@ -617,28 +643,28 @@ private fun chains3_10() {
 private fun chains3_11() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.offset(7.dp, 5.dp).clipToBounds().fillMaxWidth()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).fillMaxWidth()) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().padding(6.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).size(64.dp, 44.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Red).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).background(Red)) }
         }
     }
 }
@@ -647,28 +673,28 @@ private fun chains3_11() {
 private fun chains3_12() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().background(Blue).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).padding(6.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().background(Blue)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().size(64.dp, 44.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).background(Blue)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().fillMaxWidth().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).background(Blue)) }
         }
     }
 }
@@ -677,8 +703,8 @@ private fun chains3_12() {
 private fun chains3_13() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Probe(Modifier.clipToBounds().offset(7.dp, 5.dp).fillMaxWidth()) }
         }
     }
 }
@@ -687,28 +713,28 @@ private fun chains3_13() {
 private fun text2_00() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).width(52.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(6.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).background(Red)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp).offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).width(52.dp)) }
         }
     }
 }
@@ -717,28 +743,28 @@ private fun text2_00() {
 private fun text2_01() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.background(Red).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.size(64.dp, 44.dp).offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).size(64.dp, 44.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).fillMaxWidth()) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).offset(7.dp, 5.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.width(52.dp).offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
         }
     }
 }
@@ -747,20 +773,20 @@ private fun text2_01() {
 private fun text2_02() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().size(64.dp, 44.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().offset(7.dp, 5.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.fillMaxWidth().offset(7.dp, 5.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).padding(6.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).background(Red)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).padding(6.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).padding(start = 10.dp, top = 2.dp, end = 4.dp, bottom = 8.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).background(Red)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).size(64.dp, 44.dp)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).width(52.dp)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).fillMaxWidth()) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).width(52.dp)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { Text("Ag Text", Modifier.offset(7.dp, 5.dp).fillMaxWidth()) }
         }
     }
 }
@@ -769,28 +795,28 @@ private fun text2_02() {
 private fun rows_00() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.Start, Alignment.Top) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.Start, Alignment.CenterVertically) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.Start, Alignment.Bottom) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.End, Alignment.Top) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.Start, Alignment.Top) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.Start, Alignment.CenterVertically) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.Start, Alignment.Bottom) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.End, Alignment.Top) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.End, Alignment.CenterVertically) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.End, Alignment.Bottom) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.Center, Alignment.Top) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.Center, Alignment.CenterVertically) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.End, Alignment.CenterVertically) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.End, Alignment.Bottom) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.Center, Alignment.Top) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.Center, Alignment.CenterVertically) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.Center, Alignment.Bottom) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.SpaceBetween, Alignment.Top) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.SpaceBetween, Alignment.CenterVertically) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.SpaceBetween, Alignment.Bottom) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.Center, Alignment.Bottom) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.SpaceBetween, Alignment.Top) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.SpaceBetween, Alignment.CenterVertically) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.SpaceBetween, Alignment.Bottom) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.SpaceAround, Alignment.Top) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.SpaceAround, Alignment.CenterVertically) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.SpaceAround, Alignment.Bottom) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.SpaceEvenly, Alignment.Top) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.SpaceAround, Alignment.Top) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.SpaceAround, Alignment.CenterVertically) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.SpaceAround, Alignment.Bottom) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.SpaceEvenly, Alignment.Top) }
         }
     }
 }
@@ -799,13 +825,13 @@ private fun rows_00() {
 private fun rows_01() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.SpaceEvenly, Alignment.CenterVertically) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.SpaceEvenly, Alignment.Bottom) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.spacedBy(7.dp), Alignment.Top) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.spacedBy(7.dp), Alignment.CenterVertically) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.SpaceEvenly, Alignment.CenterVertically) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.SpaceEvenly, Alignment.Bottom) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.spacedBy(7.dp), Alignment.Top) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.spacedBy(7.dp), Alignment.CenterVertically) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { RowProbe(Arrangement.spacedBy(7.dp), Alignment.Bottom) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { RowProbe(Arrangement.spacedBy(7.dp), Alignment.Bottom) }
         }
     }
 }
@@ -814,28 +840,28 @@ private fun rows_01() {
 private fun columns_00() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.Top, Alignment.Start) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.Top, Alignment.CenterHorizontally) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.Top, Alignment.End) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.Bottom, Alignment.Start) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.Top, Alignment.Start) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.Top, Alignment.CenterHorizontally) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.Top, Alignment.End) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.Bottom, Alignment.Start) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.Bottom, Alignment.CenterHorizontally) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.Bottom, Alignment.End) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.Center, Alignment.Start) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.Center, Alignment.CenterHorizontally) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.Bottom, Alignment.CenterHorizontally) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.Bottom, Alignment.End) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.Center, Alignment.Start) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.Center, Alignment.CenterHorizontally) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.Center, Alignment.End) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceBetween, Alignment.Start) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceBetween, Alignment.CenterHorizontally) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceBetween, Alignment.End) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.Center, Alignment.End) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceBetween, Alignment.Start) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceBetween, Alignment.CenterHorizontally) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceBetween, Alignment.End) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceAround, Alignment.Start) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceAround, Alignment.CenterHorizontally) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceAround, Alignment.End) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceEvenly, Alignment.Start) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceAround, Alignment.Start) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceAround, Alignment.CenterHorizontally) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceAround, Alignment.End) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceEvenly, Alignment.Start) }
         }
     }
 }
@@ -844,13 +870,13 @@ private fun columns_00() {
 private fun columns_01() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceEvenly, Alignment.CenterHorizontally) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceEvenly, Alignment.End) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.spacedBy(7.dp), Alignment.Start) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.spacedBy(7.dp), Alignment.CenterHorizontally) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceEvenly, Alignment.CenterHorizontally) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.SpaceEvenly, Alignment.End) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.spacedBy(7.dp), Alignment.Start) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.spacedBy(7.dp), Alignment.CenterHorizontally) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { ColumnProbe(Arrangement.spacedBy(7.dp), Alignment.End) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { ColumnProbe(Arrangement.spacedBy(7.dp), Alignment.End) }
         }
     }
 }
@@ -859,19 +885,19 @@ private fun columns_01() {
 private fun boxes_00() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { BoxProbe(Alignment.TopStart) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { BoxProbe(Alignment.TopCenter) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { BoxProbe(Alignment.TopEnd) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { BoxProbe(Alignment.CenterStart) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { BoxProbe(Alignment.TopStart) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { BoxProbe(Alignment.TopCenter) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { BoxProbe(Alignment.TopEnd) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { BoxProbe(Alignment.CenterStart) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { BoxProbe(Alignment.Center) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { BoxProbe(Alignment.CenterEnd) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { BoxProbe(Alignment.BottomStart) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { BoxProbe(Alignment.BottomCenter) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { BoxProbe(Alignment.Center) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { BoxProbe(Alignment.CenterEnd) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { BoxProbe(Alignment.BottomStart) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { BoxProbe(Alignment.BottomCenter) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { BoxProbe(Alignment.BottomEnd) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { BoxProbe(Alignment.BottomEnd) }
         }
     }
 }
@@ -880,16 +906,16 @@ private fun boxes_00() {
 private fun weights_00() {
     Column(Modifier.padding(4.dp)) {
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 1.0f to true)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 2.0f to true)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 0.0f to true, 1.0f to true)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to false, 1.0f to true)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 1.0f to true)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 2.0f to true)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 0.0f to true, 1.0f to true)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to false, 1.0f to true)) }
         }
         Row {
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 1.0f to true, 1.0f to true)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { WeightsProbe(listOf(0.0f to true, 3.0f to true, 0.0f to true)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to false, 2.0f to false)) }
-            Box(Modifier.size(128.dp, 104.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 1.0f to true, 1.0f to true, 1.0f to true, 1.0f to true, 1.0f to true, 1.0f to true)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 1.0f to true, 1.0f to true)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { WeightsProbe(listOf(0.0f to true, 3.0f to true, 0.0f to true)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to false, 2.0f to false)) }
+            Box(Modifier.size(128.dp, 102.dp).clipToBounds()) { WeightsProbe(listOf(1.0f to true, 1.0f to true, 1.0f to true, 1.0f to true, 1.0f to true, 1.0f to true, 1.0f to true)) }
         }
     }
 }
