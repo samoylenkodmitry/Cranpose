@@ -665,7 +665,8 @@ fn shared_text_str(text: &str) -> Rc<str> {
 
     const POOL_CAPACITY: usize = 256;
     thread_local! {
-        static POOL: RefCell<HashMap<u64, Rc<str>>> = RefCell::new(HashMap::new());
+        static POOL: RefCell<HashMap<u64, Rc<str>, crate::FxBuildHasher>> =
+            RefCell::new(HashMap::default());
     }
 
     let mut hasher = crate::FxHasher::default();
@@ -1092,8 +1093,9 @@ pub struct DrawScopeDefault {
 const RECORDED_PRIMITIVE_COUNTS_LIMIT: usize = 64;
 
 thread_local! {
-    static RECORDED_PRIMITIVE_COUNTS: std::cell::RefCell<std::collections::HashMap<(u32, u32), usize>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static RECORDED_PRIMITIVE_COUNTS: std::cell::RefCell<
+        std::collections::HashMap<(u32, u32), usize, crate::FxBuildHasher>,
+    > = std::cell::RefCell::new(std::collections::HashMap::default());
 }
 
 fn recorded_primitive_capacity(size: Size) -> usize {

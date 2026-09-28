@@ -1,6 +1,9 @@
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::{MemoryApplier, Node, NodeId, collections::map::HashSet};
+use cranpose_core::{
+    MemoryApplier, Node, NodeId,
+    collections::map::{HashMap, HashSet},
+};
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect, Size,
     SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, text::TextStyle,
@@ -569,7 +572,7 @@ fn translated_container(
 struct TranslatedChildren {
     placed_fresh: SmallVec<[(NodeId, cranpose_ui::widgets::LayoutState); 8]>,
     children_unchanged: bool,
-    old_index_by_id: std::collections::HashMap<NodeId, usize>,
+    old_index_by_id: HashMap<NodeId, usize>,
 }
 
 fn translated_children(
@@ -602,9 +605,9 @@ fn translated_children(
                 matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(*id))
             });
     let old_index_by_id = if children_unchanged {
-        std::collections::HashMap::new()
+        HashMap::default()
     } else {
-        let Some(index): Option<std::collections::HashMap<NodeId, usize>> = container
+        let Some(index): Option<HashMap<NodeId, usize>> = container
             .children
             .iter()
             .enumerate()
@@ -637,7 +640,7 @@ fn check_retained_children(
     dirty_nodes: &HashSet<NodeId>,
     placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
     children_unchanged: bool,
-    old_index_by_id: &std::collections::HashMap<NodeId, usize>,
+    old_index_by_id: &HashMap<NodeId, usize>,
 ) -> Result<(), &'static str> {
     for (fresh_index, (child_id, state)) in placed_fresh.iter().enumerate() {
         let old_index = if children_unchanged {
@@ -705,14 +708,13 @@ fn build_entering_children(
     applier: &mut MemoryApplier,
     container: &LayerNode,
     placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
-    retained: (bool, &std::collections::HashMap<NodeId, usize>),
+    retained: (bool, &HashMap<NodeId, usize>),
     geometry: TranslateGeometry,
     inherited: (bool, bool),
-) -> std::collections::HashMap<NodeId, LayerNode> {
+) -> HashMap<NodeId, LayerNode> {
     let (children_unchanged, old_index_by_id) = retained;
     let (child_inherited_translated_content_context, children_ancestor_hashed) = inherited;
-    let mut entering: std::collections::HashMap<NodeId, LayerNode> =
-        std::collections::HashMap::new();
+    let mut entering: HashMap<NodeId, LayerNode> = HashMap::default();
     for (child_id, _) in placed_fresh {
         if children_unchanged || old_index_by_id.contains_key(child_id) {
             continue;
@@ -793,7 +795,7 @@ fn reconcile_translated_children(
     changed_nodes: &mut Vec<NodeId>,
     placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
     children_unchanged: bool,
-    entering: &mut std::collections::HashMap<NodeId, LayerNode>,
+    entering: &mut HashMap<NodeId, LayerNode>,
     geometry: TranslateGeometry,
 ) {
     if children_unchanged {
@@ -809,8 +811,7 @@ fn reconcile_translated_children(
         return;
     }
     let fresh_id_set: HashSet<NodeId> = placed_fresh.iter().map(|(id, _)| *id).collect();
-    let mut old_by_id: std::collections::HashMap<NodeId, Box<LayerNode>> =
-        std::collections::HashMap::new();
+    let mut old_by_id: HashMap<NodeId, Box<LayerNode>> = HashMap::default();
     for child in container.children.drain(..) {
         let RenderNode::Layer(layer) = child else {
             continue;

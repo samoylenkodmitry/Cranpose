@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::map::HashMap};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PointerId(pub u32);
@@ -16,7 +14,7 @@ pub struct HitPathTracker {
 impl HitPathTracker {
     pub fn new() -> Self {
         Self {
-            paths: HashMap::new(),
+            paths: HashMap::default(),
         }
     }
 
@@ -82,7 +80,7 @@ pub(crate) fn dispatch_order_for_paths(paths: &[Vec<NodeId>]) -> Vec<NodeId> {
     }
 
     let mut roots = Vec::new();
-    let mut tree: HashMap<NodeId, DispatchNode> = HashMap::new();
+    let mut tree: HashMap<NodeId, DispatchNode> = HashMap::default();
 
     for path in paths {
         let mut parent = None;

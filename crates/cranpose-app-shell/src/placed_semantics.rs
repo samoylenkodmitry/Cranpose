@@ -41,9 +41,7 @@
 //! one of them loses is lost by all of them. A caller cannot be handed bounds
 //! for a control the renderer never drew.
 
-use std::collections::HashMap;
-
-use cranpose_core::{MemoryApplier, NodeError, NodeId};
+use cranpose_core::{MemoryApplier, NodeError, NodeId, collections::map::HashMap};
 use cranpose_render_common::{
     Renderer,
     graph::{HitTestNode, ProjectiveTransform},
@@ -175,10 +173,10 @@ pub fn placed_semantics_from_applier(
         return Ok(None);
     };
 
-    let mut layout_bounds = HashMap::new();
+    let mut layout_bounds = HashMap::default();
     index_layout_bounds(layout.root(), &mut layout_bounds);
 
-    let mut touch_bounds = HashMap::new();
+    let mut touch_bounds = HashMap::default();
     if let Some(graph) = build_graph_from_applier(applier, root, 1.0) {
         let mut sink = TouchBoundsSink {
             bounds: &mut touch_bounds,
@@ -286,9 +284,9 @@ pub fn placed_semantics_from_trees(
     semantics: &SemanticsNode,
     layout: &LayoutTree,
 ) -> Result<PlacedSemanticsNode, NodeError> {
-    let mut layout_bounds = HashMap::new();
+    let mut layout_bounds = HashMap::default();
     index_layout_bounds(layout.root(), &mut layout_bounds);
-    join(semantics, &layout_bounds, &HashMap::new())
+    join(semantics, &layout_bounds, &HashMap::default())
 }
 
 /// The placed tree of what a shell shows right now. `None` before the first
