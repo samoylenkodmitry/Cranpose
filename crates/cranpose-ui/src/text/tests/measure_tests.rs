@@ -1375,7 +1375,7 @@ fn mixed_font_size_segments_wrap_without_truncation() {
 fn prepared_as(display: &str, width: f32, did_overflow: bool) -> PreparedTextLayout {
     PreparedTextLayout {
         text: Rc::new(crate::text::AnnotatedString::from(display)),
-        visual_style: TextStyle::default(),
+        visual_style: std::sync::Arc::new(TextStyle::default()),
         metrics: TextMetrics {
             width,
             height: 10.0,
@@ -1627,7 +1627,7 @@ fn fit_ellipsis_places_the_cut_from_prefix_widths() {
 fn a_prepared_layout_converts_its_render_text_once() {
     let layout = PreparedTextLayout {
         text: Rc::new(crate::text::AnnotatedString::from("shown")),
-        visual_style: TextStyle::default(),
+        visual_style: std::sync::Arc::new(TextStyle::default()),
         metrics: TextMetrics {
             width: 10.0,
             height: 10.0,
