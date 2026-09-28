@@ -348,3 +348,65 @@ fn dropped_app_context_unregisters_from_thread_lookup_registry() {
     );
     assert!(app_context_by_id(id).is_none());
 }
+
+/// Counts the layout passes it is told of; measures as [`TestTextMeasurer`].
+struct PassCountingMeasurer(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl TextMeasurer for PassCountingMeasurer {
+    fn measure(&self, text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
+        TestTextMeasurer.measure(text, style)
+    }
+
+    fn get_offset_for_position(
+        &self,
+        text: &AnnotatedString,
+        style: &TextStyle,
+        x: f32,
+        y: f32,
+    ) -> usize {
+        TestTextMeasurer.get_offset_for_position(text, style, x, y)
+    }
+
+    fn get_cursor_x_for_offset(
+        &self,
+        text: &AnnotatedString,
+        style: &TextStyle,
+        offset: usize,
+    ) -> f32 {
+        TestTextMeasurer.get_cursor_x_for_offset(text, style, offset)
+    }
+
+    fn layout(&self, text: &AnnotatedString, style: &TextStyle) -> TextLayoutResult {
+        TestTextMeasurer.layout(text, style)
+    }
+
+    fn begin_layout_pass(&self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+#[test]
+fn each_layout_pass_tells_the_text_measurer() {
+    begin_text_layout_pass();
+
+    let passes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counted = std::rc::Rc::clone(&passes);
+    let mut composition = crate::run_test_composition(|| {
+        crate::Text("pass", crate::Modifier::empty(), TextStyle::default());
+    });
+    crate::text::set_text_measurer(PassCountingMeasurer(counted));
+    let root = composition.root().expect("root");
+    let viewport = cranpose_ui_graphics::Size {
+        width: 100.0,
+        height: 100.0,
+    };
+    for _ in 0..2 {
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        crate::measure_layout(&mut applier, root, viewport).expect("layout");
+        applier.clear_runtime_handle();
+    }
+
+    assert_eq!(passes.get(), 2, "one call per layout pass");
+}

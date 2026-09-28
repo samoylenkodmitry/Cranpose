@@ -4,21 +4,17 @@
 //! one font-backed measurer plus its fallback-metrics path for when no font
 //! is installed.
 
-use std::{
-    borrow::Borrow,
-    hash::{Hash, Hasher},
-    rc::Rc,
-    sync::{Mutex, MutexGuard, PoisonError},
-};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use cranpose_ui::{TextMeasurer, TextMetrics, text_layout_result::TextLayoutResult};
 
 use crate::{
-    bounded_lru_cache::BoundedLruCache,
+    pass_aged_cache::PassAgedCache,
     software_text_raster::{
         SoftwareTextFont, SoftwareTextFontSet, cursor_x_for_offset_with_font,
         layout_text_with_font, measure_text_with_font, text_offset_for_position_with_font,
     },
+    text_cache_key::{TextCacheKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
 };
 
@@ -90,48 +86,23 @@ pub struct CachedFontTextMeasurer {
     hyphenation: HyphenationDictionaryStore,
 }
 
-#[derive(Clone)]
-struct TextKey {
-    text: Rc<str>,
-    font_size_bits: u32,
-    style_hash: u64,
-}
-
-impl PartialEq for TextKey {
-    fn eq(&self, other: &Self) -> bool {
-        (Rc::ptr_eq(&self.text, &other.text) || *self.text == *other.text)
-            && self.font_size_bits == other.font_size_bits
-            && self.style_hash == other.style_hash
-    }
-}
-
-impl Eq for TextKey {}
-
-impl Hash for TextKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.text.hash(state);
-        self.font_size_bits.hash(state);
-        self.style_hash.hash(state);
-    }
-}
-
-impl Borrow<str> for TextKey {
-    fn borrow(&self) -> &str {
-        &self.text
-    }
-}
+/// A measurement's parameters besides its text: the font size's bits and
+/// the style hash.
+type TextMetricsParams = (u32, u64);
 
 struct TextMetricsCache {
-    map: BoundedLruCache<TextKey, TextMetrics>,
+    map: PassAgedCache<TextCacheKey<TextMetricsParams>, TextMetrics>,
 }
 
 impl TextMetricsCache {
     fn new(capacity: usize) -> Self {
         Self {
-            map: BoundedLruCache::with_capacity_at_least_one(capacity),
+            map: PassAgedCache::with_capacity_at_least_one(capacity),
         }
     }
 
+    /// The cached metrics of `text`, measured by `measure` on a miss. A hit
+    /// borrows `text`; only a miss copies it into the key it stores.
     fn get_or_measure<F>(
         &mut self,
         text: &str,
@@ -142,18 +113,13 @@ impl TextMetricsCache {
     where
         F: FnOnce(&str, f32) -> TextMetrics,
     {
-        let key = TextKey {
-            text: Rc::from(text),
-            font_size_bits: font_size.to_bits(),
-            style_hash,
-        };
-
-        if let Some(metrics) = self.map.get(&key).copied() {
+        let probe = TextProbe::new(text, (font_size.to_bits(), style_hash));
+        if let Some(metrics) = self.map.get(probe.key()).copied() {
             return metrics;
         }
 
         let metrics = measure(text, font_size);
-        self.map.put(key, metrics);
+        self.map.push(probe.to_owned_key(), metrics);
         metrics
     }
 }
@@ -177,6 +143,10 @@ fn resolve_font_size(style: &cranpose_ui::text::TextStyle) -> f32 {
 }
 
 impl TextMeasurer for CachedFontTextMeasurer {
+    fn begin_layout_pass(&self) {
+        self.lock_cache().map.begin_pass(|_| {});
+    }
+
     fn glyph_line_box(&self, style: &cranpose_ui::text::TextStyle) -> Option<(f32, f32)> {
         let font = self.text_resources.fonts().resolve(style)?;
         Some(crate::software_text_raster::font_glyph_line_box(

@@ -409,6 +409,16 @@ pub(crate) fn with_text_measurer<R>(f: impl FnOnce(&dyn crate::text::TextMeasure
     context.text.with_measurer(f)
 }
 
+/// Tells the current app context's text measurer a layout pass starts.
+/// Outside an app context there is no measurer to tell.
+pub(crate) fn begin_text_layout_pass() {
+    if let Some(context) = current_app_context() {
+        context
+            .text
+            .with_measurer(crate::text::TextMeasurer::begin_layout_pass);
+    }
+}
+
 pub(crate) fn with_text_service<R>(f: impl FnOnce(&crate::text::measure::TextService) -> R) -> R {
     let context = require_current_app_context("text service access");
     f(&context.text)

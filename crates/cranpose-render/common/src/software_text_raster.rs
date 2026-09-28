@@ -35,6 +35,7 @@ use crate::{
     },
     font_tracking::FontTracking,
     gpos_kerning::KernedFont,
+    pass_aged_cache::PassAgedCache,
     text_cache_key::{TextCacheKey, TextKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
     text_mask_gamma::TextLuminance,
@@ -655,7 +656,7 @@ type TextMetricsParams = (u32, u64, u64);
 type LinePrefixWidthsParams = (usize, usize, u64, u64);
 
 struct SoftwareTextMetricsCache {
-    map: BoundedLruCache<TextCacheKey<TextMetricsParams>, TextMetrics>,
+    map: PassAgedCache<TextCacheKey<TextMetricsParams>, TextMetrics>,
     line_prefix_widths: LinePrefixWidthsCache,
     glyph_metrics: SoftwareTextGlyphMetricsCache,
 }
@@ -665,7 +666,7 @@ struct SoftwareTextMetricsCache {
 /// a character, so a list scrolling through long texts would otherwise keep
 /// every paragraph it ever measured up to the entry count.
 struct LinePrefixWidthsCache {
-    entries: BoundedLruCache<TextCacheKey<LinePrefixWidthsParams>, Rc<TextLinePrefixWidths>>,
+    entries: PassAgedCache<TextCacheKey<LinePrefixWidthsParams>, Rc<TextLinePrefixWidths>>,
     chars: usize,
     char_budget: usize,
 }
@@ -673,7 +674,7 @@ struct LinePrefixWidthsCache {
 impl LinePrefixWidthsCache {
     fn new(capacity: usize, char_budget: usize) -> Self {
         Self {
-            entries: BoundedLruCache::with_capacity_at_least_one(capacity),
+            entries: PassAgedCache::with_capacity_at_least_one(capacity),
             chars: 0,
             char_budget,
         }
@@ -698,12 +699,18 @@ impl LinePrefixWidthsCache {
             self.chars -= dropped.char_count();
         }
     }
+
+    fn begin_layout_pass(&mut self) {
+        let chars = &mut self.chars;
+        self.entries
+            .begin_pass(|dropped| *chars -= dropped.char_count());
+    }
 }
 
 impl SoftwareTextMetricsCache {
     fn new(capacity: usize) -> Self {
         Self {
-            map: BoundedLruCache::with_capacity_at_least_one(capacity),
+            map: PassAgedCache::with_capacity_at_least_one(capacity),
             line_prefix_widths: LinePrefixWidthsCache::new(
                 capacity.max(SOFTWARE_TEXT_PREFIX_WIDTH_CACHE_CAPACITY),
                 SOFTWARE_TEXT_PREFIX_WIDTH_CHAR_BUDGET,
@@ -733,8 +740,14 @@ impl SoftwareTextMetricsCache {
 
         let metrics =
             measure_annotated_text_with_font_set_cached(text, style, font_size, fonts, self);
-        self.map.put(probe.to_owned_key(), metrics);
+        self.map.push(probe.to_owned_key(), metrics);
         metrics
+    }
+
+    /// Drops the measurements the last layout passes did not use.
+    fn begin_layout_pass(&mut self) {
+        self.map.begin_pass(|_| {});
+        self.line_prefix_widths.begin_layout_pass();
     }
 
     fn get_or_measure_line_prefix_widths(
@@ -961,6 +974,10 @@ impl SoftwareTextMeasurer {
 impl TextMeasurer for SoftwareTextMeasurer {
     fn measure(&self, text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
         self.lock_cache().get_or_measure(&self.fonts, text, style)
+    }
+
+    fn begin_layout_pass(&self) {
+        self.lock_cache().begin_layout_pass();
     }
 
     fn measure_subsequence(
