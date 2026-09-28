@@ -317,9 +317,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
         android.buildTypes.getByName("release").ndk.abiFilters.addAll(releaseAbis)
     }
 
-    /** `CranposeActivity` extends `androidx.appcompat.app.AppCompatActivity`. */
     private fun addDependencies(project: Project, cranpose: CranposeExtension) {
-        project.dependencies.add("implementation", "androidx.appcompat:appcompat:1.7.1")
         for (service in requireKnownServices(cranpose)) {
             for (coordinate in SERVICE_DEPENDENCIES[service].orEmpty()) {
                 project.dependencies.add("implementation", coordinate)

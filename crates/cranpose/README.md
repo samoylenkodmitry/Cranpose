@@ -91,10 +91,10 @@ framework's tree.
 
 Every application gets `CranposeActivity` and the rest of the framework's
 Java, the activity declaration with its launcher entry and
-`android.app.lib_name` metadata, the provider that serves shared files, the
-`androidx.appcompat` dependency it needs, and the consumer ProGuard rules that
-keep the JNI surface. It gets no permission: the framework declares none, not
-even `INTERNET`. `cranpose { services.add(...) }` adds the code and components
+`android.app.lib_name` metadata, the provider that serves shared files, and
+the consumer ProGuard rules that keep the JNI surface. It gets no library
+dependency and no permission: the framework declares none, not even
+`INTERNET`. `cranpose { services.add(...) }` adds the code and components
 a service needs, and the application declares that service's permissions in
 its own manifest:
 
@@ -156,11 +156,6 @@ is its one declaration. From it the Android build writes
 when the `CAPABILITIES` the launcher receives hold the service. An application
 that does not declare it carries none of this code, and no other application
 can send an intent to the installer's receiver.
-
-One permission still arrives on its own: `androidx.core`, inside the
-`appcompat` dependency, declares
-`<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` for its own
-receivers. The application grants it to itself and no store listing shows it.
 
 ### Hardware features stay optional unless you ask
 
