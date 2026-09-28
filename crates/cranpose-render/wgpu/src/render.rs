@@ -1472,6 +1472,36 @@ fn clip_cuts(clip: Option<Rect>, rect: Rect) -> bool {
     clip.is_some_and(|clip| clip.intersect(rect) != Some(rect))
 }
 
+/// Where the glyph quads of a text drawn in `draw_rect` are cut to its
+/// `clip`, in the quads' own space; `None` when the clip leaves the text
+/// whole. Under a turned viewport the cut is the clip itself, before the
+/// turn, which no scissor can follow. Otherwise it is the pixel edges of the
+/// clip's `scissor`: cut there, the quads cover exactly the pixels the
+/// scissor would pass, with the same texels, so the text needs no scissor of
+/// its own and draws in one call with its neighbours.
+fn glyph_cut_edges(
+    clip: Option<Rect>,
+    draw_rect: Rect,
+    scissor: TargetRect,
+    viewport: ViewportUniformParams,
+    root_scale: f32,
+) -> Option<[f32; 4]> {
+    if !clip_cuts(clip, draw_rect) {
+        return None;
+    }
+    if !viewport.transform.is_identity() {
+        return clip.map(|clip| glyph_clip_edges(clip, root_scale));
+    }
+    let (x, y, width, height) = scissor;
+    let [offset_x, offset_y] = viewport.offset;
+    Some([
+        x as f32 + offset_x,
+        y as f32 + offset_y,
+        (x + width) as f32 + offset_x,
+        (y + height) as f32 + offset_y,
+    ])
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct Uniforms {
@@ -4322,18 +4352,13 @@ impl GpuRenderer {
         &mut self,
         source_raster_rect: Rect,
         quads: GlyphRunQuads<'_>,
-        clip: Option<Rect>,
+        (clip, cut): (Option<Rect>, Option<[f32; 4]>),
         viewport: ViewportUniformParams,
         root_scale: f32,
         glyph_instances: &mut Vec<GlyphInstance>,
         record_cached_hits: bool,
     ) -> usize {
         let start = glyph_instances.len();
-        // A turned viewport has no scissor for the clip: its quads are cut
-        // to it before the turn instead.
-        let turned_clip = clip
-            .filter(|_| !viewport.transform.is_identity())
-            .map(|clip| glyph_clip_edges(clip, root_scale));
         glyph_instances.extend(
             quads
                 .iter()
@@ -4347,7 +4372,7 @@ impl GpuRenderer {
                     )
                 })
                 .filter_map(|quad| cached_text_glyph_instance(source_raster_rect, &quad))
-                .filter_map(|glyph| match turned_clip {
+                .filter_map(|glyph| match cut {
                     Some(edges) => glyph.clipped_to(edges),
                     None => Some(glyph),
                 }),
@@ -4652,10 +4677,11 @@ impl GpuRenderer {
                 entries: &entries,
                 atlas_size: self.text_glyph_atlas.size(),
             };
+            let cut = glyph_cut_edges(source_draw.clip, draw_rect, scissor, viewport, root_scale);
             emitted_glyphs = emitted_glyphs.saturating_add(self.append_text_glyph_quad_run(
                 source_raster_rect,
                 quads,
-                source_draw.clip,
+                (source_draw.clip, cut),
                 viewport,
                 root_scale,
                 glyph_instances,

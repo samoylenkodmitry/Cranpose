@@ -526,6 +526,79 @@ pub fn warm_app_frame(
     Some((frame, stats))
 }
 
+/// Set to write golden fixtures instead of comparing captures with them.
+pub const WRITE_GOLDENS_ENV: &str = "CRANPOSE_WRITE_GOLDENS";
+/// Goldens are captured on Metal; other GPUs round anti-aliased edges a step
+/// differently. At a fractional root scale the arena run differs in 0.50% of
+/// its bytes on both Intel and NVIDIA Vulkan, each by one step (#859).
+const GOLDEN_MAX_SMALL_DIFF_FRACTION: f64 = 0.01;
+const GOLDEN_SMALL_DIFF: u8 = 2;
+
+/// Writes RGBA8 `pixels` of `width` x `height` as a PNG at `path`.
+pub fn write_png(path: &std::path::Path, width: u32, height: u32, pixels: &[u8]) {
+    let file = std::fs::File::create(path).expect("fixture file");
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().expect("png header");
+    writer.write_image_data(pixels).expect("png data");
+}
+
+/// The size and RGBA8 pixels of the PNG at `path`.
+pub fn read_png(path: &std::path::Path) -> (u32, u32, Vec<u8>) {
+    let file = std::fs::File::open(path)
+        .unwrap_or_else(|err| panic!("missing golden {}: {err}", path.display()));
+    let decoder = png::Decoder::new(std::io::BufReader::new(file));
+    let mut reader = decoder.read_info().expect("png info");
+    let mut buffer = vec![0; reader.output_buffer_size().expect("png size")];
+    let info = reader.next_frame(&mut buffer).expect("png frame");
+    buffer.truncate(info.buffer_size());
+    (info.width, info.height, buffer)
+}
+
+/// Checks `pixels` of `size` against the golden PNG at `path`, or writes it
+/// there when [`WRITE_GOLDENS_ENV`] is set. A byte may differ by a step or two
+/// in a small share of the image, the way other GPUs round edges; `what`
+/// says what a larger difference breaks.
+pub fn check_golden(
+    name: &str,
+    path: &std::path::Path,
+    (width, height): (u32, u32),
+    pixels: &[u8],
+    what: &str,
+) {
+    if std::env::var_os(WRITE_GOLDENS_ENV).is_some() {
+        write_png(path, width, height, pixels);
+        eprintln!("{name}: wrote {}", path.display());
+        return;
+    }
+    let (golden_width, golden_height, golden) = read_png(path);
+    assert_eq!(
+        (golden_width, golden_height),
+        (width, height),
+        "{name}: golden size"
+    );
+    let mut small = 0usize;
+    let mut large = 0usize;
+    let mut worst = 0u8;
+    for (a, b) in pixels.iter().zip(&golden) {
+        let diff = a.abs_diff(*b);
+        worst = worst.max(diff);
+        if diff > GOLDEN_SMALL_DIFF {
+            large += 1;
+        } else if diff > 0 {
+            small += 1;
+        }
+    }
+    let small_fraction = small as f64 / pixels.len() as f64;
+    eprintln!("{name}: small {small} ({small_fraction:.4}) large {large} worst {worst}");
+    assert!(
+        large == 0 && small_fraction <= GOLDEN_MAX_SMALL_DIFF_FRACTION,
+        "{name}: {large} bytes differ by more than {GOLDEN_SMALL_DIFF} (worst {worst}) and {small} \
+         by less ({small_fraction:.4} of the image, bound {GOLDEN_MAX_SMALL_DIFF_FRACTION}); {what}"
+    );
+}
+
 /// The pixels of two RGBA8 frames of `width` that differ: `(x, y, a, b)`.
 pub fn differing_pixels(width: u32, a: &[u8], b: &[u8]) -> Vec<(usize, usize, [u8; 4], [u8; 4])> {
     pixels_differing_beyond(width, a, b, 0)

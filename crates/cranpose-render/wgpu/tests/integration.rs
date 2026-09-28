@@ -16,6 +16,7 @@ mod blur_reference;
 mod cancellation_contract;
 mod capture_culling;
 mod clipped_out_layer;
+mod clipped_text_batching;
 mod device_error_survival;
 mod device_limits;
 mod direct_surface_root_parity;
