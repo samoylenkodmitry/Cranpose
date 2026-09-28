@@ -146,6 +146,9 @@ struct SnapshotStateObserverInner {
     weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
     frame_version: Cell<u64>,
     next_entry_id: Cell<usize>,
+    /// One `Rc` per type of callback that captures nothing: see
+    /// [`SnapshotStateObserverInner::capture_free_callback`].
+    capture_free_callbacks: RefCell<CaptureFreeCallbacks>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -155,6 +158,9 @@ struct OwnedScopeIndexKey {
 }
 
 type OwnedScopeBucket = SmallVec<[Rc<RefCell<ScopeEntry>>; 1]>;
+
+/// The shared `Rc` of each type of callback that captures nothing.
+type CaptureFreeCallbacks = SmallVec<[(TypeId, Rc<dyn ScopeChangedCallback>); 2]>;
 
 fn owned_scope_index_key<T>(scope: &T) -> OwnedScopeIndexKey
 where
@@ -200,6 +206,7 @@ impl SnapshotStateObserverInner {
             weak_self: RefCell::new(Weak::new()),
             frame_version: Cell::new(0),
             next_entry_id: Cell::new(0),
+            capture_free_callbacks: RefCell::new(SmallVec::new()),
         }
     }
 
@@ -232,6 +239,9 @@ impl SnapshotStateObserverInner {
                     on_value_changed_for_scope(typed);
                 }
             };
+            if std::mem::size_of_val(&callback) == 0 {
+                return self.capture_free_callback(callback);
+            }
             match existing_entry.as_ref() {
                 Some(entry) => entry.borrow_mut().callback_reusing(callback),
                 None => Rc::new(callback),
@@ -377,6 +387,23 @@ impl SnapshotStateObserverInner {
         }
 
         self.find_owned_scope_entry(scope)
+    }
+
+    /// The `Rc` of a callback that captures nothing. Every closure of such a
+    /// type does the same thing, as `RecomposeScope::invalidate` does for
+    /// every group, so one `Rc` serves all its scopes instead of one each.
+    fn capture_free_callback<F: Fn(&dyn Any) + 'static>(
+        &self,
+        callback: F,
+    ) -> Rc<dyn ScopeChangedCallback> {
+        let type_id = TypeId::of::<F>();
+        let mut shared = self.capture_free_callbacks.borrow_mut();
+        if let Some((_, callback)) = shared.iter().find(|(id, _)| *id == type_id) {
+            return Rc::clone(callback);
+        }
+        let callback: Rc<dyn ScopeChangedCallback> = Rc::new(callback);
+        shared.push((type_id, Rc::clone(&callback)));
+        callback
     }
 
     fn insert_scope_entry(
