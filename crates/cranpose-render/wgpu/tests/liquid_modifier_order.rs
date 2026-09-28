@@ -24,7 +24,12 @@ fn drawn(widget: impl Fn() + 'static) -> Option<CapturedFrame> {
         location_key(file!(), line!(), column!()),
         move || {
             let widget = std::rc::Rc::clone(&widget);
-            LiquidTheme(LiquidThemeSpec::default(), &mut move || {
+            // Light, whatever the machine's appearance: the surface is white.
+            let spec = LiquidThemeSpec {
+                scheme: SchemeMode::Light,
+                ..LiquidThemeSpec::default()
+            };
+            LiquidTheme(spec, &mut move || {
                 let widget = std::rc::Rc::clone(&widget);
                 Box(
                     Modifier::empty().fill_max_size().background(Color::BLACK),
