@@ -258,6 +258,54 @@ fn depth_one_credit_gates_publish_before_lowering() {
 }
 
 #[test]
+fn a_returned_frame_frees_a_credit_it_reports_until_drained() {
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
+        inline_runtime_or_skip!("returned credit");
+    let mut runtime = renderer.init_gpu_inline_for_tests(
+        device,
+        queue,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        backend,
+        downlevel,
+    );
+    let ack = renderer
+        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
+        .expect("inline runtime must accept controls");
+    runtime.pump();
+    ack.try_recv().expect("attach must ack after the pump");
+
+    renderer.scene_mut().graph = Some(direct_graph());
+    assert!(!renderer.frame_credit_returned(), "nothing published yet");
+    for _ in 0..2 {
+        assert_eq!(
+            renderer.publish_frame(WIDTH, HEIGHT),
+            PublishOutcome::Published
+        );
+    }
+    assert!(!renderer.has_frame_credit());
+    assert!(
+        !renderer.frame_credit_returned(),
+        "a packet not yet rendered holds its credit"
+    );
+
+    runtime.pump();
+    assert!(
+        !renderer.has_frame_credit(),
+        "a return frees its credit only once drained"
+    );
+    assert!(
+        renderer.frame_credit_returned(),
+        "the rendered packet's return is waiting to be drained"
+    );
+    assert!(renderer.drain_present_returns() >= 1);
+    assert!(renderer.has_frame_credit());
+    assert!(
+        !renderer.frame_credit_returned(),
+        "a drained return is no longer reported"
+    );
+}
+
+#[test]
 fn reconfigure_cancels_waiting_packet_before_ack() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
         inline_runtime_or_skip!("invalidation-before-ack");

@@ -27,6 +27,15 @@ pub(crate) fn refine_vsync_period(period_ns: i64, gap_ns: i64) -> i64 {
     }
 }
 
+/// The first vsync after `at_ns` on the grid of the vsync at `vsync_ns`,
+/// `period_ns` apart; `None` without a vsync or a period.
+pub(crate) fn next_vsync_ns(at_ns: i64, vsync_ns: i64, period_ns: i64) -> Option<i64> {
+    if vsync_ns <= 0 || period_ns <= 0 {
+        return None;
+    }
+    Some(at_ns + period_ns - (at_ns - vsync_ns).rem_euclid(period_ns))
+}
+
 #[cfg(test)]
 #[path = "tests/vsync_period_tests.rs"]
 mod tests;

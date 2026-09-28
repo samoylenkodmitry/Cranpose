@@ -37,7 +37,7 @@
 //! Until the display has reported a frame, and on a swapchain that never
 //! does, frames start as soon as the renderer takes them.
 
-use crate::frame_lead::FrameLead;
+use crate::{frame_lead::FrameLead, vsync_period::next_vsync_ns};
 
 /// Frames whose queue depths are compared before draining a paced queue.
 const HISTORY: usize = 3;
@@ -336,12 +336,11 @@ impl FramePacer {
         vsync_period_ns: i64,
     ) -> Option<i64> {
         let lead_ns = self.lead.lead_ns(vsync_period_ns);
-        if lead_ns == 0 || vsync_ns <= 0 || vsync_period_ns <= 0 || now_ns < vsync_ns {
+        if lead_ns == 0 || now_ns < vsync_ns {
             return None;
         }
-        let next_slot_ns =
-            vsync_ns + ((now_ns + lead_ns - vsync_ns) / vsync_period_ns + 1) * vsync_period_ns;
-        Some(next_slot_ns - lead_ns)
+        next_vsync_ns(now_ns + lead_ns, vsync_ns, vsync_period_ns)
+            .map(|next_slot_ns| next_slot_ns - lead_ns)
     }
 
     /// The level frames run at now, trying the level below once the hold

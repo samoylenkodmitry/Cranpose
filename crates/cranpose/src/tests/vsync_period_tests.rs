@@ -35,3 +35,26 @@ fn an_implausible_gap_leaves_the_period_alone() {
     assert_eq!(refine_vsync_period(VSYNC, 1_000_000), VSYNC);
     assert_eq!(refine_vsync_period(VSYNC, 10 * VSYNC), VSYNC);
 }
+
+#[test]
+fn the_next_vsync_is_the_first_on_the_grid_after_the_time_asked() {
+    let vsync = 1_000 * VSYNC;
+    assert_eq!(next_vsync_ns(vsync, vsync, VSYNC), Some(vsync + VSYNC));
+    assert_eq!(next_vsync_ns(vsync + 1, vsync, VSYNC), Some(vsync + VSYNC));
+    assert_eq!(
+        next_vsync_ns(vsync + 5 * VSYNC / 2, vsync, VSYNC),
+        Some(vsync + 3 * VSYNC),
+        "a stale vsync still fixes the grid"
+    );
+    assert_eq!(
+        next_vsync_ns(vsync - VSYNC / 2, vsync, VSYNC),
+        Some(vsync),
+        "a time before the vsync reaches it"
+    );
+}
+
+#[test]
+fn no_next_vsync_is_known_without_a_vsync_or_a_period() {
+    assert_eq!(next_vsync_ns(VSYNC, 0, VSYNC), None);
+    assert_eq!(next_vsync_ns(VSYNC, VSYNC, 0), None);
+}
