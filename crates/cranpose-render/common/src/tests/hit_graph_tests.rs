@@ -68,7 +68,6 @@ fn test_layer(node_id: NodeId, transform_to_parent: ProjectiveTransform) -> Laye
         hit_test: Some(HitTestNode {
             shape: None,
             handlers: handlers(clickable()),
-            clip: None,
         }),
         has_hit_targets: true,
         ..Default::default()
@@ -207,4 +206,32 @@ fn collect_hits_retains_transformed_clip_chain() {
 
     let (_, _, _, _, _, child_clip_count) = sink.hits[1];
     assert_eq!(child_clip_count, 2);
+}
+
+#[test]
+fn a_node_takes_hits_on_its_own_rect_where_its_layer_is_bounded_elsewhere() {
+    let clip = Rect {
+        x: -7.0,
+        y: -5.0,
+        width: 30.0,
+        height: 18.0,
+    };
+    let node = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 30.0,
+        height: 18.0,
+    };
+    let layer = LayerNode {
+        local_bounds: clip,
+        node_bounds: Some(node),
+        ..test_layer(3, ProjectiveTransform::identity())
+    };
+    let mut sink = TestSink::default();
+
+    collect_hits_from_graph(&layer, ProjectiveTransform::identity(), &mut sink, None);
+
+    let (_, _, rect, _, hit_clip, _) = &sink.hits[0];
+    assert_eq!(*rect, node, "the handlers sit on the node's rect");
+    assert_eq!(*hit_clip, Some(clip), "the layer's clip still cuts them");
 }

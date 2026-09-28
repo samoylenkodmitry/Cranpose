@@ -202,3 +202,64 @@ fn padding_size_and_offset_land_on_whole_device_pixels() {
     assert!((pixels(content_offset.x) - 8.0).abs() < 1e-3);
     assert!((pixels(position.x) - 3.0).abs() < 1e-3);
 }
+
+/// The child's layer bounds, from the modifier slices at its measured size.
+fn child_layer_bounds(modifier: Modifier) -> Rect {
+    with_measured_child(
+        move || {
+            crate::widgets::Layout(
+                modifier.clone(),
+                LeafMeasurePolicy::new(Size::new(10.0, 10.0)),
+                || {},
+            );
+        },
+        |node| {
+            let size = node.layout_state().size();
+            node.modifier_slices_snapshot().layer_bounds(size)
+        },
+    )
+}
+
+#[test]
+fn a_clip_before_an_offset_bounds_its_layer_where_the_offset_starts() {
+    assert_eq!(
+        child_layer_bounds(Modifier::empty().clip_to_bounds().offset(6.0, 2.0)),
+        Rect {
+            x: -6.0,
+            y: -2.0,
+            width: 10.0,
+            height: 10.0
+        }
+    );
+}
+
+#[test]
+fn a_clip_after_padding_bounds_its_layer_inside_the_padding() {
+    assert_eq!(
+        child_layer_bounds(Modifier::empty().padding(4.0).clip_to_bounds()),
+        Rect {
+            x: 4.0,
+            y: 4.0,
+            width: 10.0,
+            height: 10.0
+        }
+    );
+}
+
+#[test]
+fn a_node_whose_layer_wraps_its_outermost_coordinator_keeps_its_own_rect() {
+    let whole = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 18.0,
+        height: 18.0,
+    };
+    assert_eq!(
+        child_layer_bounds(Modifier::empty().clip_to_bounds().padding(4.0)),
+        whole
+    );
+    assert_eq!(
+        child_layer_bounds(Modifier::empty().padding(4.0).background(Color::WHITE)),
+        whole
+    );
+}

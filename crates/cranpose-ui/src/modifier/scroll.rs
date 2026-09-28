@@ -1510,11 +1510,14 @@ fn scroll_impl(
         overscroll,
     ));
 
+    // The clip wraps the scroll layout, as Compose's `scrollingContainer`
+    // clips before it scrolls: it cuts at the viewport, not at the content
+    // the layout moves.
     pointer_input
+        .clip_to_bounds()
         .then(motion_modifier)
         .then(translated_content_modifier)
         .then(layout_modifier)
-        .clip_to_bounds()
         .semantics(scroll_semantics(state, is_vertical, reverse_scrolling))
 }
 

@@ -1,24 +1,3 @@
 # Modifier-matrix cells known to differ from their Compose frame, one
 # `frame / cell` a line. robot_compose_twin_scenes fails on a cell that
 # differs and is not listed, and on a listed cell that matches again.
-
-# A clip or graphics layer followed by an offset. In Compose the layer wraps
-# the offset's coordinator, so the offset moves the content inside the layer
-# and the layer clips it (clipToBounds explicitly, alpha by compositing
-# offscreen at the layer's bounds). Cranpose bakes a node's offsets into its
-# position and bounds the layer at the node's rect, so the content moves
-# with its clip and nothing is cut. Tracked in issue #902.
-matrix-chains2-04 / clip offset
-matrix-chains2-05 / alpha offset
-matrix-chains3-01 / pad clip offset
-matrix-chains3-03 / bg clip offset
-matrix-chains3-05 / bg2 clip offset
-matrix-chains3-09 / fill clip offset
-matrix-chains3-11 / clip pad offset
-matrix-chains3-11 / clip bg offset
-matrix-chains3-12 / clip bg2 offset
-matrix-chains3-12 / clip fill offset
-matrix-chains3-12 / clip offset pad
-matrix-chains3-12 / clip offset bg
-matrix-chains3-12 / clip offset bg2
-matrix-chains3-13 / clip offset fill

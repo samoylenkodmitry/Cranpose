@@ -35,6 +35,9 @@ pub struct ModifierNodeSlices {
     pointer_input_sizes: Vec<Rc<std::cell::Cell<cranpose_ui_graphics::Size>>>,
     pointer_icon: Option<PointerIcon>,
     clip_to_bounds: bool,
+    /// Where the outermost clip or graphics layer of the chain sits: its
+    /// coordinator, which a later offset moves the content inside of.
+    layer_coordinator: Option<CoordinatorRect>,
     motion_context_animated: bool,
     translated_content_context: bool,
     translated_content_context_identity: Option<usize>,
@@ -87,6 +90,7 @@ impl Clone for ModifierNodeSlices {
             pointer_input_sizes: self.pointer_input_sizes.clone(),
             pointer_icon: self.pointer_icon.clone(),
             clip_to_bounds: self.clip_to_bounds,
+            layer_coordinator: self.layer_coordinator.clone(),
             motion_context_animated: self.motion_context_animated,
             translated_content_context: self.translated_content_context,
             translated_content_context_identity: self.translated_content_context_identity,
@@ -275,6 +279,17 @@ impl ModifierNodeSlices {
         self.clip_to_bounds
     }
 
+    /// The bounds of the node's layer in a node of `node_size`, where its
+    /// clip cuts and its transforms pivot: as in Compose, the rect of the
+    /// coordinator its outermost clip or graphics layer wraps, so an offset
+    /// declared after it moves the content inside the layer rather than the
+    /// layer. The node's own rect when it has neither.
+    pub fn layer_bounds(&self, node_size: Size) -> Rect {
+        self.layer_coordinator
+            .as_ref()
+            .map_or_else(|| Rect::from_size(node_size), |layer| layer.rect(node_size))
+    }
+
     pub fn motion_context_animated(&self) -> bool {
         self.motion_context_animated
     }
@@ -377,6 +392,14 @@ impl ModifierNodeSlices {
         self.corner_shape
     }
 
+    /// Records the layer's coordinator when this is the chain's outermost
+    /// clip or graphics layer.
+    fn enter_layer(&mut self, site: &DrawSite) {
+        if self.layer_coordinator.is_none() {
+            self.layer_coordinator = Some(site.coordinator.clone());
+        }
+    }
+
     fn push_graphics_layer(
         &mut self,
         layer: GraphicsLayer,
@@ -439,6 +462,7 @@ impl ModifierNodeSlices {
         self.pointer_input_sizes.clear();
         self.pointer_icon = None;
         self.clip_to_bounds = false;
+        self.layer_coordinator = None;
         self.motion_context_animated = false;
         self.translated_content_context = false;
         self.translated_content_context_identity = None;
@@ -783,11 +807,13 @@ fn collect_draw_node(
     if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
         slices.mark_layer_draw_boundary();
         slices.push_graphics_layer(layer_node.layer_snapshot(), layer_node.layer_resolver());
+        slices.enter_layer(site);
     }
 
     if any.is::<ClipToBoundsNode>() {
         slices.mark_layer_draw_boundary();
         slices.clip_to_bounds = true;
+        slices.enter_layer(site);
     }
 }
 

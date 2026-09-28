@@ -89,7 +89,7 @@ fn hash_layer_content<H: Hasher>(
 ) {
     layer.local_bounds.render_hash().hash(state);
     layer.translated_content_context.hash(state);
-    hash_optional_rect(layer.clip_rect(), state);
+    hash_optional_rect(layer.visual_clip_rect(), state);
     let local_layer = local_content_layer_for(&layer.graphics_layer);
     hash_f32_bits(local_layer.alpha, state);
     hash_optional_color_filter(local_layer.color_filter, state);

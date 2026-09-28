@@ -362,7 +362,7 @@ fn layer_admits_corners(
     let inherited_clip = resolve_clip(
         clip,
         layer
-            .clip_rect()
+            .visual_clip_rect()
             .map(|rect| rect.translate(offset.x, offset.y)),
     );
     let check = |rect: Rect, primitive_clip: Option<Rect>| -> bool {
@@ -548,7 +548,7 @@ fn push_backdrop_layer(
     let clip = resolve_clip(
         context.visual_clip,
         layer
-            .clip_rect()
+            .visual_clip_rect()
             .map(|clip| clip.translate(offset.x, offset.y)),
     );
     let rounded_clip = rounded_clip_for_layer(layer).map(|clip| LayerRoundedClip {
@@ -701,7 +701,7 @@ fn collect_into(
         .local_bounds
         .translate(context.offset.x, context.offset.y);
     let layer_clip = layer
-        .clip_rect()
+        .visual_clip_rect()
         .map(|clip| clip.translate(context.offset.x, context.offset.y));
     let visual_clip = resolve_clip(context.visual_clip, layer_clip);
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
@@ -728,7 +728,12 @@ fn collect_into(
             .flatten()
     });
     let content = ContentContext {
-        layer_bounds,
+        // The node's own draws and text sit in its local space, whose origin
+        // is the node's, even where its layer is bounded at a coordinator
+        // away from it.
+        layer_bounds: layer
+            .node_rect()
+            .translate(context.offset.x, context.offset.y),
         local_layer: &local_layer,
         visual_clip,
         anchor: layer_anchor,

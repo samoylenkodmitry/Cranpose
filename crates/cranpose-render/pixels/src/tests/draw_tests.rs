@@ -260,6 +260,7 @@ fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
     scene.graph = Some(RenderGraph::new(LayerNode {
         node_id: None,
         wraps: None,
+        node_bounds: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,

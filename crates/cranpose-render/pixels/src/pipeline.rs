@@ -709,6 +709,10 @@ impl RasterLayerBounds {
 #[derive(Clone)]
 struct RasterLayerMapping {
     layer_bounds: RasterLayerBounds,
+    /// Where the node's own draws and text sit: its rect, whose origin is
+    /// the node's even where its layer is bounded at a coordinator away
+    /// from it.
+    content_bounds: RasterLayerBounds,
     transformed_bounds: Rect,
     content_style: GraphicsLayer,
     raster_content_layer: GraphicsLayer,
@@ -742,6 +746,9 @@ fn raster_layer_mapping(
     );
     let layer_bounds =
         RasterLayerBounds::from_transformed_bounds(transformed_bounds, layer.local_bounds);
+    let node_rect = layer.node_rect();
+    let content_bounds =
+        RasterLayerBounds::from_transformed_bounds(transform.bounds_for_rect(node_rect), node_rect);
     let raster_content_layer = GraphicsLayer {
         alpha: content_style.alpha,
         color_filter: content_style.color_filter,
@@ -761,6 +768,7 @@ fn raster_layer_mapping(
 
     RasterLayerMapping {
         layer_bounds,
+        content_bounds,
         transformed_bounds,
         content_style,
         raster_content_layer,
@@ -782,10 +790,11 @@ fn populate_draws_from_graph(
         return;
     }
 
-    let content_clip_to_bounds = layer.clip_to_bounds || layer.graphics_layer.clip;
     let visual_clip = resolve_clip(
         context.parent_visual_clip,
-        content_clip_to_bounds.then_some(mapping.transformed_bounds),
+        layer
+            .visual_clip_rect()
+            .map(|clip| transform.bounds_for_rect(clip)),
     );
     let effective_translated_content_context =
         context.inherited_translated_content_context || layer.translated_content_context;
@@ -842,7 +851,7 @@ fn populate_draws_from_graph(
             RenderNode::Primitive(primitive) => match primitive.phase {
                 PrimitivePhase::BeforeChildren => {
                     let primitive_context = PrimitiveRenderContext {
-                        layer_bounds: mapping.layer_bounds,
+                        layer_bounds: mapping.content_bounds,
                         node_layer: &mapping.raster_content_layer,
                         visual_clip,
                         motion_context_animated: layer.motion_context_animated,
@@ -858,7 +867,7 @@ fn populate_draws_from_graph(
             RenderNode::DrawRun(run) => match run.phase {
                 PrimitivePhase::BeforeChildren => {
                     let primitive_context = PrimitiveRenderContext {
-                        layer_bounds: mapping.layer_bounds,
+                        layer_bounds: mapping.content_bounds,
                         node_layer: &mapping.raster_content_layer,
                         visual_clip,
                         motion_context_animated: layer.motion_context_animated,
@@ -890,7 +899,7 @@ fn populate_draws_from_graph(
 
     for child in deferred_draws {
         let primitive_context = PrimitiveRenderContext {
-            layer_bounds: mapping.layer_bounds,
+            layer_bounds: mapping.content_bounds,
             node_layer: &mapping.raster_content_layer,
             visual_clip,
             motion_context_animated: layer.motion_context_animated,

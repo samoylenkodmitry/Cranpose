@@ -48,6 +48,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
     let text_leaf = LayerNode {
         node_id: Some(77),
         wraps: None,
+        node_bounds: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -139,6 +140,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
     RenderGraph::new(LayerNode {
         node_id: None,
         wraps: None,
+        node_bounds: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -270,6 +272,7 @@ fn build_raster_scene_uses_graph_transform_to_parent() {
     let graph = RenderGraph::new(LayerNode {
         node_id: None,
         wraps: None,
+        node_bounds: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -296,6 +299,7 @@ fn build_raster_scene_uses_graph_transform_to_parent() {
         children: vec![RenderNode::Layer(Box::new(LayerNode {
             node_id: None,
             wraps: None,
+            node_bounds: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,
