@@ -1300,6 +1300,7 @@ pub fn measure_layout_with_options(
     options: MeasureLayoutOptions,
 ) -> Result<LayoutMeasurements, NodeError> {
     let telemetry_start = Instant::now();
+    crate::render_state::begin_text_layout_pass();
     process_pending_layout_repasses(applier, root)?;
     let after_repasses = Instant::now();
 

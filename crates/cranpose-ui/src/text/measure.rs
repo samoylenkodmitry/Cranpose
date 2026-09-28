@@ -157,6 +157,11 @@ impl TextLinePrefixWidths {
 pub trait TextMeasurer: 'static {
     fn measure(&self, text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics;
 
+    /// Called as each layout pass starts. A measurer that caches
+    /// measurements can age them by passes and drop the ones recent passes
+    /// did not use.
+    fn begin_layout_pass(&self) {}
+
     fn measure_for_node(
         &self,
         node_id: Option<NodeId>,
