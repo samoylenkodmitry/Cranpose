@@ -3131,6 +3131,46 @@ fn window_root_registers_while_attached_and_leaves_with_its_node() -> Result<(),
 }
 
 #[test]
+fn window_owners_are_looked_up_only_while_a_window_root_is_attached() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let registry_empty = || {
+        crate::render_state::current_app_context()
+            .expect("the test's app context")
+            .window_roots()
+            .is_empty()
+    };
+    let mut applier = MemoryApplier::new();
+    let child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size::new(10.0, 10.0))),
+    )));
+    let mut plain = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    plain.children.push(child);
+    let plain = applier.create(Box::new(plain));
+    applier.get_mut(child)?.on_attached_to_parent(plain);
+    assert!(registry_empty());
+    assert_eq!(
+        crate::nearest_window_roots(&mut applier, &[child, plain]),
+        vec![None, None],
+        "with no window root attached, every node belongs to the primary root"
+    );
+
+    let window = Rc::new(TestWindow {
+        size: Cell::new(Size::new(300.0, 200.0)),
+    });
+    let (root, window_node, content) = window_root_tree(&mut applier, window)?;
+    applier.get_mut(content)?.on_attached_to_parent(window_node);
+    applier.get_mut(window_node)?.on_attached_to_parent(root);
+    assert!(!registry_empty(), "the window root attached");
+    assert_eq!(
+        crate::nearest_window_roots(&mut applier, &[content, root, child]),
+        vec![Some(window_node), None, None],
+        "an attached window root owns its content and nothing else"
+    );
+    Ok(())
+}
+
+#[test]
 fn window_root_subtree_is_left_out_of_the_parent_layout_tree() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
