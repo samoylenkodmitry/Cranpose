@@ -76,6 +76,7 @@ fn workspace_path(path: &str) -> PathBuf {
 fn ci_architecture_budget_runs_required_gates() {
     let workflow = workspace_source(".github/workflows/rust.yml");
     let heavy_workflow = workspace_source(".github/workflows/heavy-selfhosted.yml");
+    let android_env = workspace_source("scripts/ci/android_env.sh");
     let release_workflow = workspace_source(".github/workflows/release.yml");
     let pages_workflow = workspace_source(".github/workflows/deploy-pages.yml");
     let nightly_workflow = workspace_source(".github/workflows/nightly.yml");
@@ -217,7 +218,8 @@ fn ci_architecture_budget_runs_required_gates() {
         "Android CI should install only required SDK packages instead of running the broad setup-android action"
     );
     assert!(
-        heavy_workflow.contains("ANDROID_NDK_HOME=$sdk_root/ndk/30.0.16248370")
+        heavy_workflow.contains("run: scripts/ci/android_env.sh")
+            && android_env.contains("ANDROID_NDK_HOME=$sdk_root/ndk/30.0.16248370")
             && heavy_workflow.contains("sdkmanager \"ndk;30.0.16248370\"")
             && heavy_workflow.contains("test -f \"$ANDROID_NDK_HOME/source.properties\"")
             && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 30.0.16248370"),
