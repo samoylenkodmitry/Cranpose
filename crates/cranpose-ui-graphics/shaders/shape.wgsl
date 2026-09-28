@@ -148,14 +148,17 @@ struct Placement {
     reserved: f32,
     color_matrix: mat4x4<f32>,
     color_offset: vec4<f32>,
+    // The turn of the layer the records draw in place under: `transform`
+    // (row-major 2x2) and `translation` carry their device space into the
+    // target's. Only a pipeline built with `SHAPE_TRANSFORMED` reads them,
+    // so records of layers turned differently share a draw.
+    transform: vec4<f32>,
+    translation: vec2<f32>,
+    transform_reserved: vec2<f32>,
 }
 
-// `transform` (row-major 2x2) and `translation` carry a segment's device
-// space into its target's; `inverse` is the 2x2 that maps back. Only a
-// pipeline built with `SHAPE_TRANSFORMED` reads them: every segment but a
-// layer drawn in place keeps the identity, and its pipelines compile the
-// untransformed arithmetic alone. `origin` is the glyph stage's; shapes
-// always draw with it zero.
+// The prefix the glyph stage shares. Shapes read neither the transform nor
+// `origin`: a turned record carries its turn in its placement.
 struct Uniforms {
     viewport: vec2<f32>,
     viewport_offset: vec2<f32>,
@@ -344,7 +347,7 @@ fn shape_output(
     position: vec2<f32>,
 ) -> VertexOutput {
     var output: VertexOutput;
-    output.clip_position = clip_position(position);
+    output.clip_position = clip_position(position, placement);
     output.color = paint(record.color, placement);
     output.world_pos = vec4<f32>(position, position - placement.dither_origin);
     output.rect = geometry.rect;
@@ -456,13 +459,13 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
     if (SHAPE_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
         let segments = 1u << ((record.flags >> RECORD_BAND_CLASS_SHIFT) & RECORD_BAND_CLASS_MASK);
         if (local >= segments * 2u + 2u) {
-            return pinned(band_position(record, placement, segments, 1u, segments));
+            return pinned(band_position(record, placement, segments, 1u, segments), placement);
         }
         let position = band_position(record, placement, local >> 1u, local & 1u, segments);
         return shape_output(record, placement, geometry, position);
     }
     if (local >= 4u) {
-        return pinned(geometry.rect.xy + geometry.rect.zw);
+        return pinned(geometry.rect.xy + geometry.rect.zw, placement);
     }
     let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
     if (SHAPE_TRANSFORMED) {
@@ -474,37 +477,34 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
     return shape_output(record, placement, geometry, position);
 }
 
-fn clip_position(drawn: vec2<f32>) -> vec4<f32> {
+fn clip_position(drawn: vec2<f32>, placement: Placement) -> vec4<f32> {
     var position = drawn;
     if (SHAPE_TRANSFORMED) {
         position = vec2<f32>(
-            uniforms.transform.x * position.x + uniforms.transform.y * position.y,
-            uniforms.transform.z * position.x + uniforms.transform.w * position.y,
-        ) + uniforms.translation;
+            placement.transform.x * position.x + placement.transform.y * position.y,
+            placement.transform.z * position.x + placement.transform.w * position.y,
+        ) + placement.translation;
     }
     let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
     let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
     return vec4<f32>(x, y, 0.0, 1.0);
 }
 
-// The segment device position a fragment shades: its target position, mapped
-// back through the segment's transform when it has one.
-fn segment_position(fragment_position: vec2<f32>) -> vec2<f32> {
+// The segment device position a fragment shades: its target position, or
+// under a turn the position before it, interpolated from the vertices; a
+// turn is affine, so that is exact.
+fn segment_position(fragment_position: vec2<f32>, world_pos: vec2<f32>) -> vec2<f32> {
     if (!SHAPE_TRANSFORMED) {
         return fragment_position + uniforms.viewport_offset;
     }
-    let placed = fragment_position + uniforms.viewport_offset - uniforms.translation;
-    return vec2<f32>(
-        uniforms.inverse.x * placed.x + uniforms.inverse.y * placed.y,
-        uniforms.inverse.z * placed.x + uniforms.inverse.w * placed.y,
-    );
+    return world_pos;
 }
 
 // A vertex past the record's own, at the device position of its last
 // one: nothing rasterizes between them.
-fn pinned(position: vec2<f32>) -> VertexOutput {
+fn pinned(position: vec2<f32>, placement: Placement) -> VertexOutput {
     var output: VertexOutput;
-    output.clip_position = clip_position(position);
+    output.clip_position = clip_position(position, placement);
     return output;
 }
 
@@ -599,7 +599,7 @@ fn vs_record_interior(
     }
     let local = min(vertex_idx, 3u);
     let corner = vec2<f32>(f32(local >> 1u), f32(local & 1u));
-    output.clip_position = clip_position(mix(interior.xy, interior.zw, corner));
+    output.clip_position = clip_position(mix(interior.xy, interior.zw, corner), placement);
     output.clip_position.z = depth;
     output.color = color;
     return output;
@@ -1001,7 +1001,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         discard;
     }
     let world_pos = input.world_pos.xy;
-    let rect_pos = segment_position(input.clip_position.xy);
+    let rect_pos = segment_position(input.clip_position.xy, world_pos);
 
     // Apply clipping: if clip_rect has non-zero size, clip to it
     let clip_w = input.clip_rect.z;
@@ -1119,7 +1119,7 @@ fn fragment(input: VertexOutput) -> vec4<f32> {
     // Re-derived rather than threaded out of the coverage pass: both are pure
     // functions of `input`, so the compiler folds them back together.
     let world_pos = input.world_pos.xy;
-    let rect_pos = segment_position(input.clip_position.xy);
+    let rect_pos = segment_position(input.clip_position.xy, world_pos);
 
     var color = input.color;
     var is_gradient = false;

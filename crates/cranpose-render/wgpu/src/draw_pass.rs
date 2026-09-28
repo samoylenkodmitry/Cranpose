@@ -266,11 +266,14 @@ impl GpuRenderer {
             pending_glyphs: PendingGlyphs::default(),
             depth,
             overlay_segment: None,
+            overlay_images: None,
             depth_seq: 0,
+            open: None,
         };
         let prepared = segments
             .iter()
             .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
+        prep.finish(self);
         let batches = prep.batches;
         let buffers = PassBuffers {
             images: match &prepared {
@@ -282,8 +285,14 @@ impl GpuRenderer {
                 _ => None,
             },
             glyphs: match &prepared {
-                Ok(()) if !scratch.glyph_instances.is_empty() => {
-                    Some(self.upload_glyph_instances(recorder, &scratch.glyph_instances))
+                Ok(()) if !scratch.glyph_instances.plain.is_empty() => {
+                    Some(self.upload_glyph_instances(recorder, &scratch.glyph_instances.plain))
+                }
+                _ => None,
+            },
+            turned_glyphs: match &prepared {
+                Ok(()) if !scratch.glyph_instances.turned.is_empty() => {
+                    Some(self.upload_turned_glyphs(recorder, &scratch.glyph_instances.turned))
                 }
                 _ => None,
             },
@@ -399,7 +408,7 @@ impl GpuRenderer {
                 } => {
                     self.draw_glyph_cmds(
                         pass,
-                        buffers.glyphs.as_ref(),
+                        (buffers.glyphs.as_ref(), buffers.turned_glyphs.as_ref()),
                         *uniform_slot,
                         &glyph_cmds[cmds.clone()],
                         *scissor,
@@ -685,13 +694,14 @@ fn unblurred_shadow_run(
 struct PassBuffers {
     images: Option<crate::render::ImageSlot>,
     glyphs: Option<crate::frame_graph::BufferUpload>,
+    turned_glyphs: Option<crate::frame_graph::BufferUpload>,
 }
 
 struct PassScratch {
     image_vertices: Vec<crate::render::Vertex>,
     image_indices: Vec<u32>,
     image_cmds: Vec<crate::render::ImageDrawCmd>,
-    glyph_instances: Vec<crate::render::GlyphInstance>,
+    glyph_instances: crate::render::GlyphInstances,
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
 }
 
@@ -773,11 +783,18 @@ struct PassPrep<'a, 's, C> {
     pending_glyphs: PendingGlyphs,
     /// Whether the pass has a depth buffer its opaque interiors fill first.
     depth: bool,
-    /// The segment slot of the last glyph or image batch pushed, which a
-    /// later draw of that segment may extend.
+    /// The binding slot of the last glyph batch pushed, which a later
+    /// draw under that binding may extend.
     overlay_segment: Option<usize>,
+    /// The viewport of the last image batch pushed, which a later image
+    /// draw under it may extend.
+    overlay_images: Option<ViewportUniformParams>,
     /// The pass-order index the next shape batch's records start at.
     depth_seq: u32,
+    /// What the open chunk and held glyphs draw with. Consecutive segments
+    /// that bind the same keep adding to them: layers drawn in place carry
+    /// their turns in their records and glyphs, not in what they bind.
+    open: Option<SegmentBinding>,
 }
 
 impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
@@ -804,7 +821,23 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             depth_base: 0.0,
         };
         let viewport_rect = segment_viewport_rect(self.target, segment);
-        let uniform_slot = renderer.claim_uniform_slot(viewport);
+        let bound = ViewportUniformParams {
+            transform: SegmentTransform::IDENTITY,
+            ..viewport
+        };
+        let binding = match self.open {
+            Some(open) if open.bound == bound && open.scissor == segment.scissor => open,
+            _ => {
+                self.finish(renderer);
+                let open = SegmentBinding {
+                    uniform_slot: renderer.claim_uniform_slot(bound),
+                    bound,
+                    scissor: segment.scissor,
+                };
+                self.open = Some(open);
+                open
+            }
+        };
         let mut items = merge_items(
             segment,
             viewport_rect,
@@ -815,7 +848,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         let run = SegmentRun {
             segment,
             viewport,
-            uniform_slot,
+            binding,
         };
         while let Some(item) = items.peek() {
             match item {
@@ -824,35 +857,42 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     continue;
                 }
                 Item::Image(_) => {
-                    self.flush(renderer, &run);
+                    self.flush(renderer, run.binding);
                     self.image_run(renderer, &mut items, &run, scratch)?;
                     continue;
                 }
                 Item::Text(text) => self.text_item(renderer, text, &run, scratch)?,
                 Item::Composite(composite) => {
-                    self.flush(renderer, &run);
+                    self.flush(renderer, run.binding);
                     self.composite_item(renderer, composite, &run)?;
                 }
             }
             items.next();
         }
-        self.flush(renderer, &run);
         Ok(())
     }
 
+    /// Draws what the open binding still holds; the next segment binds
+    /// afresh.
+    fn finish(&mut self, renderer: &mut GpuRenderer) {
+        if let Some(open) = self.open.take() {
+            self.flush(renderer, open);
+        }
+    }
+
     /// Closes the open arena chunk into a batch.
-    fn close_chunk(&mut self, renderer: &mut GpuRenderer, run: &SegmentRun<'s, '_>) {
+    fn close_chunk(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) {
         let Some(open) = self.chunk.take() else {
             return;
         };
         let draws = renderer.close_arena(open);
         if !draws.is_empty() {
-            let uniform_slot = self.depth_slot(renderer, run, &draws);
+            let uniform_slot = self.depth_slot(renderer, binding, &draws);
             self.batches.push(Batch::Arena {
                 chunk: open,
                 uniform_slot,
                 draws,
-                scissor: run.segment.scissor,
+                scissor: binding.scissor,
             });
         }
     }
@@ -863,33 +903,55 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
     fn depth_slot(
         &mut self,
         renderer: &mut GpuRenderer,
-        run: &SegmentRun<'s, '_>,
+        binding: SegmentBinding,
         draws: &[RunDrawCall],
     ) -> usize {
         if !self.depth {
-            return run.uniform_slot;
+            return binding.uniform_slot;
         }
         let base = self.take_depth_range(draws);
         renderer.claim_uniform_slot(ViewportUniformParams {
             depth_base: base,
-            ..run.viewport
+            ..binding.bound
         })
     }
 
-    /// The uniform slot a new glyph or image batch binds: the segment's, or
-    /// in a pass with a depth buffer one that places the batch next in the
-    /// pass's order, so later opaque interiors hide it and earlier ones do
-    /// not.
-    fn overlay_slot(&mut self, renderer: &mut GpuRenderer, run: &SegmentRun<'s, '_>) -> usize {
-        self.overlay_segment = Some(run.uniform_slot);
+    /// The uniform slot a new glyph batch binds: the binding's, or in a pass
+    /// with a depth buffer one that places the batch next in the pass's
+    /// order, so later opaque interiors hide it and earlier ones do not.
+    fn overlay_slot(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) -> usize {
+        self.overlay_segment = Some(binding.uniform_slot);
+        self.claim_overlay(renderer, binding.bound, binding.uniform_slot)
+    }
+
+    /// The uniform slot a new image batch binds: its segment's viewport,
+    /// turn included, since image quads carry none of their own.
+    fn image_slot(&mut self, renderer: &mut GpuRenderer, run: &SegmentRun<'s, '_>) -> usize {
+        self.overlay_images = Some(run.viewport);
+        let slot = if run.viewport == run.binding.bound {
+            run.binding.uniform_slot
+        } else {
+            renderer.claim_uniform_slot(run.viewport)
+        };
+        self.claim_overlay(renderer, run.viewport, slot)
+    }
+
+    /// `slot`, which binds `viewport`, or in a pass with a depth buffer a
+    /// slot binding it next in the pass's order.
+    fn claim_overlay(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        viewport: ViewportUniformParams,
+        slot: usize,
+    ) -> usize {
         if !self.depth {
-            return run.uniform_slot;
+            return slot;
         }
         let base = self.depth_seq;
         self.depth_seq = base.saturating_add(1);
         renderer.claim_uniform_slot(ViewportUniformParams {
             depth_base: base as f32,
-            ..run.viewport
+            ..viewport
         })
     }
 
@@ -923,22 +985,22 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
 
     /// Draws everything held: the open chunk's shapes, then the held glyphs
     /// above them.
-    fn flush(&mut self, renderer: &mut GpuRenderer, run: &SegmentRun<'s, '_>) {
-        self.close_chunk(renderer, run);
+    fn flush(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) {
+        self.close_chunk(renderer, binding);
         let Some(cmds) = self.pending_glyphs.take() else {
             return;
         };
-        let continues = self.overlay_segment == Some(run.uniform_slot);
+        let continues = self.overlay_segment == Some(binding.uniform_slot);
         match self.batches.last_mut() {
             Some(Batch::Glyphs { cmds: last, .. }) if last.end == cmds.start && continues => {
                 last.end = cmds.end;
             }
             _ => {
-                let uniform_slot = self.overlay_slot(renderer, run);
+                let uniform_slot = self.overlay_slot(renderer, binding);
                 self.batches.push(Batch::Glyphs {
                     cmds,
                     uniform_slot,
-                    scissor: run.segment.scissor,
+                    scissor: binding.scissor,
                 });
             }
         }
@@ -974,11 +1036,11 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 .run_target_bounds(draw, run)
                 .is_some_and(|bounds| self.pending_glyphs.overlaps(bounds))
             {
-                self.flush(renderer, run);
+                self.flush(renderer, run.binding);
             }
             let window = window.unwrap_or(0..u32::MAX);
             if renderer.run_is_stored(draw) {
-                self.close_chunk(renderer, run);
+                self.close_chunk(renderer, run.binding);
                 let viewport = ViewportUniformParams {
                     depth_base: self.depth_seq as f32,
                     ..run.viewport
@@ -1006,7 +1068,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         .chunk
                         .is_some_and(|open| !renderer.arena_accepts(open, draw))
                     {
-                        self.close_chunk(renderer, run);
+                        self.close_chunk(renderer, run.binding);
                     }
                     let open = *self.chunk.get_or_insert_with(|| renderer.open_arena());
                     let taken = renderer.append_arena_run(
@@ -1014,11 +1076,11 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         draw,
                         from..total,
                         run.segment.scale,
-                        !run.viewport.transform.is_identity(),
+                        run.viewport.transform,
                         self.depth,
                     );
                     if taken == 0 {
-                        self.close_chunk(renderer, run);
+                        self.close_chunk(renderer, run.binding);
                         continue;
                     }
                     from += taken;
@@ -1054,7 +1116,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             )?;
         }
         if cmd_start < scratch.image_cmds.len() {
-            let uniform_slot = self.overlay_slot(renderer, run);
+            let uniform_slot = self.image_slot(renderer, run);
             self.batches.push(Batch::Images {
                 cmds: cmd_start..scratch.image_cmds.len(),
                 blend_mode,
@@ -1087,7 +1149,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             let glyph_end = scratch.glyph_cmds.len();
             if glyph_start < glyph_end {
                 if self.pending_glyphs.full() {
-                    self.flush(renderer, run);
+                    self.flush(renderer, run.binding);
                 }
                 self.pending_glyphs.hold(
                     glyph_start..glyph_end,
@@ -1098,7 +1160,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             }
             return Ok(());
         }
-        self.flush(renderer, run);
+        self.flush(renderer, run.binding);
         let cmd_start = scratch.image_cmds.len();
         renderer.append_text_image_draw_cmds(
             std::iter::once(text),
@@ -1109,7 +1171,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             &mut scratch.image_cmds,
         )?;
         if cmd_start < scratch.image_cmds.len() {
-            let continues = self.overlay_segment == Some(run.uniform_slot);
+            let continues = self.overlay_images == Some(run.viewport);
             match self.batches.last_mut() {
                 Some(Batch::Images {
                     cmds, blend_mode, ..
@@ -1117,7 +1179,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     cmds.end = scratch.image_cmds.len();
                 }
                 _ => {
-                    let uniform_slot = self.overlay_slot(renderer, run);
+                    let uniform_slot = self.image_slot(renderer, run);
                     self.batches.push(Batch::Images {
                         cmds: cmd_start..scratch.image_cmds.len(),
                         blend_mode: BlendMode::SrcOver,
@@ -1233,11 +1295,22 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
     }
 }
 
-/// One segment's viewport and uniform slot while its items are batched.
+/// One segment's viewport, turn included, and what its shapes and glyphs
+/// bind while its items are batched.
 struct SegmentRun<'s, 'a> {
     segment: &'a PassSegment<'s>,
     viewport: ViewportUniformParams,
+    binding: SegmentBinding,
+}
+
+/// What a segment's shape and glyph batches bind: its viewport without its
+/// turn, which its records and glyphs carry, the slot claimed for that and
+/// its scissor.
+#[derive(Clone, Copy)]
+struct SegmentBinding {
     uniform_slot: usize,
+    bound: ViewportUniformParams,
+    scissor: Option<(u32, u32, u32, u32)>,
 }
 
 #[cfg(test)]

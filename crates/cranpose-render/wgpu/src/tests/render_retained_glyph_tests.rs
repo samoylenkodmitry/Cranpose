@@ -119,7 +119,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
         );
         renderer.draw_glyph_cmds(
             &mut pass,
-            None,
+            (None, None),
             0,
             commands,
             None,
@@ -483,15 +483,15 @@ fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
     let full = (0, 0, 8, 8);
     let half = (0, 0, 4, 8);
     let mut cmds = vec![
-        GlyphDrawCmd::shared(0..1, Some(full), full, Rc::clone(&texel)),
-        GlyphDrawCmd::shared(1..3, Some(full), full, Rc::clone(&texel)),
-        GlyphDrawCmd::shared(3..4, Some(half), half, Rc::clone(&texel)),
-        GlyphDrawCmd::shared(4..5, Some(half), half, Rc::clone(&filtered)),
-        GlyphDrawCmd::shared(6..7, Some(half), half, Rc::clone(&filtered)),
+        GlyphDrawCmd::shared((0..1, false), Some(full), full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared((1..3, false), Some(full), full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared((3..4, false), Some(half), half, Rc::clone(&texel)),
+        GlyphDrawCmd::shared((4..5, false), Some(half), half, Rc::clone(&filtered)),
+        GlyphDrawCmd::shared((6..7, false), Some(half), half, Rc::clone(&filtered)),
     ];
     queue_glyph(&mut renderer, 1, 0.0, &mut cmds);
     cmds.push(GlyphDrawCmd::shared(
-        7..8,
+        (7..8, false),
         Some(half),
         half,
         Rc::clone(&filtered),
@@ -499,7 +499,7 @@ fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
 
     let draws: Vec<_> = GlyphDraws::new(&cmds)
         .map(|draw| match draw.step {
-            GlyphDrawStep::Shared(instances) => (Some(instances), draw.scissor),
+            GlyphDrawStep::Shared(instances, _) => (Some(instances), draw.scissor),
             GlyphDrawStep::Retained { .. } => (None, draw.scissor),
         })
         .collect();

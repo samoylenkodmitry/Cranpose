@@ -180,15 +180,16 @@ pub(crate) fn bounded_scissor(
     (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
 }
 
-/// The scissor a shared glyph run needs and the target pixels it touches.
-/// A run whose quads all lie inside `scissor` needs none of its own, which
-/// lets it share a draw with its neighbours; a turned viewport keeps it.
+/// The scissor an unturned shared glyph run needs and the target pixels it
+/// touches. A run whose quads all lie inside `scissor` needs none of its own,
+/// which lets it share a draw with its neighbours. A turned run never needs
+/// one: its quads were cut to its clip before the turn.
 fn shared_glyph_clip(
     glyphs: &[GlyphInstance],
     scissor: TargetRect,
     viewport: ViewportUniformParams,
 ) -> (Option<TargetRect>, TargetRect) {
-    if !viewport.transform.is_identity() || glyphs.is_empty() {
+    if glyphs.is_empty() {
         return (Some(scissor), scissor);
     }
     let (mut left, mut top) = (f32::INFINITY, f32::INFINITY);
@@ -1314,7 +1315,7 @@ fn create_glyph_atlas_pipeline(
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
     image_layout: &wgpu::BindGroupLayout,
-    depth: bool,
+    (depth, turned): (bool, bool),
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Glyph Atlas Shader"),
@@ -1330,19 +1331,28 @@ fn create_glyph_atlas_pipeline(
     create_render_pipeline_logged(
         device,
         cache,
-        if depth {
-            "glyph-atlas depth"
-        } else {
-            "glyph-atlas"
+        match (depth, turned) {
+            (false, false) => "glyph-atlas",
+            (true, false) => "glyph-atlas depth",
+            (false, true) => "glyph-atlas turned",
+            (true, true) => "glyph-atlas turned depth",
         },
         wgpu::RenderPipelineDescriptor {
             label: Some("Glyph Atlas Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: Some("glyph_atlas_vs_main"),
+                entry_point: Some(if turned {
+                    "glyph_atlas_turned_vs_main"
+                } else {
+                    "glyph_atlas_vs_main"
+                }),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(GlyphInstance::desc())],
+                buffers: &[Some(if turned {
+                    TurnedGlyph::desc()
+                } else {
+                    GlyphInstance::desc()
+                })],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -1456,6 +1466,129 @@ impl GlyphInstance {
     }
 }
 
+/// Hands `sink` each quad of a glyph run at `source_raster_rect` that the
+/// viewport shows, as an instance cut to `cut` when the text is cut.
+#[inline]
+fn for_each_visible_glyph(
+    source_raster_rect: Rect,
+    quads: GlyphRunQuads<'_>,
+    (clip, cut): (Option<Rect>, Option<[f32; 4]>),
+    viewport: ViewportUniformParams,
+    root_scale: f32,
+    mut sink: impl FnMut(GlyphInstance),
+) {
+    for quad in quads.iter() {
+        if !cached_text_glyph_quad_is_visible_in_viewport(
+            source_raster_rect,
+            &quad,
+            clip,
+            viewport,
+            root_scale,
+        ) {
+            continue;
+        }
+        let Some(glyph) = cached_text_glyph_instance(source_raster_rect, &quad) else {
+            continue;
+        };
+        let glyph = match cut {
+            Some(edges) => glyph.clipped_to(edges),
+            None => Some(glyph),
+        };
+        if let Some(glyph) = glyph {
+            sink(glyph);
+        }
+    }
+}
+
+/// A glyph quad of a layer drawn in place under a turn, with the turn that
+/// places it: glyphs of layers turned differently then share a draw, and
+/// every other glyph keeps [`GlyphInstance`]'s smaller layout.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
+pub(crate) struct TurnedGlyph {
+    glyph: GlyphInstance,
+    /// The turn, row-major.
+    turn: [f32; 4],
+    /// The turn's translation in `xy`.
+    translation: [f32; 4],
+}
+
+impl TurnedGlyph {
+    const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+        0 => Float32x4,
+        1 => Float32x4,
+        2 => Float32x4,
+        3 => Float32x4,
+        4 => Float32x4,
+        5 => Float32x4
+    ];
+
+    pub(crate) fn new(glyph: GlyphInstance, turn: SegmentTransform) -> Self {
+        let (linear, [x, y], _) = turn.uniform_parts();
+        Self {
+            glyph,
+            turn: linear,
+            translation: [x, y, 0.0, 0.0],
+        }
+    }
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TurnedGlyph>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+/// The glyph quads a pass draws from its shared buffers: the plain ones and
+/// those of layers drawn in place under a turn.
+#[derive(Default)]
+pub(crate) struct GlyphInstances {
+    pub(crate) plain: Vec<GlyphInstance>,
+    pub(crate) turned: Vec<TurnedGlyph>,
+}
+
+impl GlyphInstances {
+    pub(crate) fn clear(&mut self) {
+        self.plain.clear();
+        self.turned.clear();
+    }
+
+    fn lens(&self) -> (usize, usize) {
+        (self.plain.len(), self.turned.len())
+    }
+
+    /// How many turned glyphs, or plain ones, the pass holds.
+    fn len_of(&self, turned: bool) -> usize {
+        if turned {
+            self.turned.len()
+        } else {
+            self.plain.len()
+        }
+    }
+
+    /// The scissor the glyphs at `range` need and the target pixels they
+    /// touch: see [`shared_glyph_clip`]; turned glyphs need none.
+    fn draw_clip(
+        &self,
+        (range, turned): (std::ops::Range<usize>, bool),
+        scissor: TargetRect,
+        viewport: ViewportUniformParams,
+    ) -> (Option<TargetRect>, TargetRect) {
+        if turned {
+            (None, scissor)
+        } else {
+            shared_glyph_clip(&self.plain[range], scissor, viewport)
+        }
+    }
+
+    fn truncate(&mut self, (plain, turned): (usize, usize)) {
+        self.plain.truncate(plain);
+        self.turned.truncate(turned);
+    }
+}
+
 /// A text clip's edges in device pixels of the space its glyph quads are
 /// laid out in, before a viewport transform moves them.
 fn glyph_clip_edges(clip: Rect, root_scale: f32) -> [f32; 4] {
@@ -1473,12 +1606,13 @@ fn clip_cuts(clip: Option<Rect>, rect: Rect) -> bool {
 }
 
 /// Where the glyph quads of a text drawn in `draw_rect` are cut to its
-/// `clip`, in the quads' own space; `None` when the clip leaves the text
-/// whole. Under a turned viewport the cut is the clip itself, before the
-/// turn, which no scissor can follow. Otherwise it is the pixel edges of the
-/// clip's `scissor`: cut there, the quads cover exactly the pixels the
-/// scissor would pass, with the same texels, so the text needs no scissor of
-/// its own and draws in one call with its neighbours.
+/// `clip`, in the quads' own space. Under a turned viewport the cut is the
+/// clip itself, before the turn, which no scissor can follow; the text then
+/// draws without one. Otherwise it is the pixel edges of the clip's
+/// `scissor`, `None` when the clip leaves the text whole: cut there, the
+/// quads cover exactly the pixels the scissor would pass, with the same
+/// texels, so the text needs no scissor of its own and draws in one call
+/// with its neighbours.
 fn glyph_cut_edges(
     clip: Option<Rect>,
     draw_rect: Rect,
@@ -1486,11 +1620,11 @@ fn glyph_cut_edges(
     viewport: ViewportUniformParams,
     root_scale: f32,
 ) -> Option<[f32; 4]> {
-    if !clip_cuts(clip, draw_rect) {
-        return None;
-    }
     if !viewport.transform.is_identity() {
         return clip.map(|clip| glyph_clip_edges(clip, root_scale));
+    }
+    if !clip_cuts(clip, draw_rect) {
+        return None;
     }
     let (x, y, width, height) = scissor;
     let [offset_x, offset_y] = viewport.offset;
@@ -1817,6 +1951,8 @@ enum GlyphDrawSource {
     Shared {
         instance_start: u32,
         instance_count: u32,
+        /// Whether the instances are [`TurnedGlyph`]s.
+        turned: bool,
     },
     Retained {
         run: Rc<CachedGpuTextGlyphRun>,
@@ -1843,7 +1979,8 @@ struct GlyphDraw<'a> {
 }
 
 enum GlyphDrawStep<'a> {
-    Shared(std::ops::Range<u32>),
+    /// A stretch of the shared instances: turned ones, or plain ones.
+    Shared(std::ops::Range<u32>, bool),
     Retained {
         run: &'a CachedGpuTextGlyphRun,
         uniform_slot: usize,
@@ -1877,6 +2014,7 @@ impl<'a> Iterator for GlyphDraws<'a> {
             GlyphDrawSource::Shared {
                 instance_start,
                 instance_count,
+                turned,
             } => {
                 let mut end = instance_start + instance_count;
                 while let Some((next, rest)) = self.cmds.split_first() {
@@ -1884,7 +2022,9 @@ impl<'a> Iterator for GlyphDraws<'a> {
                         GlyphDrawSource::Shared {
                             instance_start,
                             instance_count,
+                            turned: next_turned,
                         } if instance_start == end
+                            && next_turned == *turned
                             && next.scissor == first.scissor
                             && Rc::ptr_eq(&next.atlas, &first.atlas) =>
                         {
@@ -1894,7 +2034,7 @@ impl<'a> Iterator for GlyphDraws<'a> {
                         _ => break,
                     }
                 }
-                GlyphDrawStep::Shared(*instance_start..end)
+                GlyphDrawStep::Shared(*instance_start..end, *turned)
             }
         };
         Some(GlyphDraw {
@@ -1907,7 +2047,7 @@ impl<'a> Iterator for GlyphDraws<'a> {
 
 impl GlyphDrawCmd {
     fn shared(
-        instances: std::ops::Range<usize>,
+        (instances, turned): (std::ops::Range<usize>, bool),
         scissor: Option<(u32, u32, u32, u32)>,
         bounds: (u32, u32, u32, u32),
         atlas: Rc<wgpu::BindGroup>,
@@ -1919,6 +2059,7 @@ impl GlyphDrawCmd {
             source: GlyphDrawSource::Shared {
                 instance_start: start,
                 instance_count: end.saturating_sub(start),
+                turned,
             },
             scissor,
             bounds,
@@ -1972,6 +2113,13 @@ fn glyph_instance_spec() -> UploadAllocatorSpec {
     UploadAllocatorSpec::vertex(
         "Glyph Instance Buffer",
         std::mem::size_of::<GlyphInstance>() as u64,
+    )
+}
+
+fn turned_glyph_spec() -> UploadAllocatorSpec {
+    UploadAllocatorSpec::vertex(
+        "Turned Glyph Instance Buffer",
+        std::mem::size_of::<TurnedGlyph>() as u64,
     )
 }
 
@@ -2178,7 +2326,8 @@ pub struct GpuRenderer {
     /// Image and glyph pipelines for passes without and with a depth buffer.
     image_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
     image_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
-    glyph_atlas_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    /// Indexed by depth, then turned: see [`GpuRenderer::glyph_atlas_pipeline`].
+    glyph_atlas_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 4],
     /// Transient depth buffers by target size, for passes that lay opaque
     /// interiors down first.
     depth_targets: Vec<((u32, u32), wgpu::TextureView)>,
@@ -2201,7 +2350,7 @@ pub struct GpuRenderer {
     text_line_index_cache: TextLineIndexCache,
     pub(crate) scratch_image_vertices: Vec<Vertex>,
     pub(crate) scratch_image_indices: Vec<u32>,
-    pub(crate) scratch_glyph_instances: Vec<GlyphInstance>,
+    pub(crate) scratch_glyph_instances: GlyphInstances,
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
     pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
@@ -2429,6 +2578,8 @@ impl GpuRenderer {
             glyph_atlas_pipeline: [
                 LazyGpuResource::new("glyph/atlas"),
                 LazyGpuResource::new("glyph/atlas/depth"),
+                LazyGpuResource::new("glyph/atlas/turned"),
+                LazyGpuResource::new("glyph/atlas/turned/depth"),
             ],
             depth_targets: Vec::new(),
             uniform_bind_group_layout,
@@ -2460,7 +2611,7 @@ impl GpuRenderer {
             text_line_index_cache: TextLineIndexCache::new(MAX_TEXT_LINE_INDEX_CACHE_ITEMS),
             scratch_image_vertices: Vec::new(),
             scratch_image_indices: Vec::new(),
-            scratch_glyph_instances: Vec::new(),
+            scratch_glyph_instances: GlyphInstances::default(),
             scratch_image_cmds: Vec::new(),
             scratch_glyph_cmds: Vec::new(),
             scratch_text_glyph_run: Vec::new(),
@@ -2561,6 +2712,7 @@ impl GpuRenderer {
     fn glyph_atlas_pipeline_job(
         &self,
         depth: bool,
+        turned: bool,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = Arc::clone(&self.device);
         let cache = self.pipeline_cache.clone();
@@ -2574,15 +2726,18 @@ impl GpuRenderer {
                 format,
                 &uniform_layout,
                 &image_layout,
-                depth,
+                (depth, turned),
             )
         }
     }
 
-    fn glyph_atlas_pipeline(&self, depth: bool) -> &wgpu::RenderPipeline {
-        self.glyph_atlas_pipeline[usize::from(depth)].get_or_init(self.adapter_backend, || {
-            self.glyph_atlas_pipeline_job(depth)()
-        })
+    /// The glyph pipeline for a pass with a depth buffer or not, drawing
+    /// [`TurnedGlyph`]s or plain [`GlyphInstance`]s.
+    fn glyph_atlas_pipeline(&self, depth: bool, turned: bool) -> &wgpu::RenderPipeline {
+        self.glyph_atlas_pipeline[usize::from(depth) + 2 * usize::from(turned)]
+            .get_or_init(self.adapter_backend, || {
+                self.glyph_atlas_pipeline_job(depth, turned)()
+            })
     }
 
     /// The transient depth buffer for a target of `size`, created on first
@@ -3073,7 +3228,8 @@ impl GpuRenderer {
             scratch_image_vertices_cap: self.scratch_image_vertices.capacity(),
             scratch_image_indices_cap: self.scratch_image_indices.capacity(),
             scratch_image_cmds_cap: self.scratch_image_cmds.capacity(),
-            scratch_glyph_instances_cap: self.scratch_glyph_instances.capacity(),
+            scratch_glyph_instances_cap: self.scratch_glyph_instances.plain.capacity()
+                + self.scratch_glyph_instances.turned.capacity(),
             layer_cache_len: self.layer_cache.len(),
             layer_cache_bytes: self.layer_cache.bytes(),
         }
@@ -3798,7 +3954,10 @@ impl GpuRenderer {
         if let Some(fill) = fill {
             self.frame_stats.add_shape_fill(fill);
         }
-        let uniforms = Uniforms::of(viewport, PlacementData::of(&run.placement, root_scale));
+        let uniforms = Uniforms::of(
+            viewport,
+            PlacementData::of(&run.placement, root_scale, viewport.transform),
+        );
         let uniform_slot =
             self.viewport_uniforms
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
@@ -3833,28 +3992,29 @@ impl GpuRenderer {
         run: &RunDraw,
         window: std::ops::Range<u32>,
         root_scale: f32,
-        transformed: bool,
+        turn: SegmentTransform,
         depth: bool,
     ) -> u32 {
         let clipped = run.placement.clip.is_some();
         let ablation = self.ablation.shape;
+        let transformed = !turn.is_identity();
         let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
-        let taken = self
-            .run_store
-            .append_arena(chunk, run, window, root_scale, &mut |segment| {
-                let key = Self::run_pipeline_key(
-                    segment,
-                    clipped,
-                    RunTier::Arena,
-                    ablation,
-                    transformed,
-                    depth,
-                );
-                if !keys.contains(&key) {
-                    keys.push(key);
-                }
-                key
-            });
+        let taken =
+            self.run_store
+                .append_arena(chunk, run, window, (root_scale, turn), &mut |segment| {
+                    let key = Self::run_pipeline_key(
+                        segment,
+                        clipped,
+                        RunTier::Arena,
+                        ablation,
+                        transformed,
+                        depth,
+                    );
+                    if !keys.contains(&key) {
+                        keys.push(key);
+                    }
+                    key
+                });
         for key in keys {
             self.ensure_run_pipelines(key);
         }
@@ -4058,7 +4218,7 @@ impl GpuRenderer {
     pub(crate) fn draw_glyph_cmds(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
-        glyph_slot: Option<&BufferUpload>,
+        (glyph_slot, turned_slot): (Option<&BufferUpload>, Option<&BufferUpload>),
         uniform_slot: usize,
         cmds: &[GlyphDrawCmd],
         bound: Option<(u32, u32, u32, u32)>,
@@ -4069,9 +4229,11 @@ impl GpuRenderer {
         }
         let whole_target = frame.scissor(bound);
         self.frame_stats.bump_text();
-        pass.set_pipeline(self.glyph_atlas_pipeline(frame.depth));
         let mut bound_atlas = None;
-        let mut shared_bound = false;
+        // Which shared instances are bound, turned or plain, with their
+        // pipeline; retained runs draw with the plain one.
+        let mut shared_bound: Option<bool> = None;
+        let mut bound_pipeline: Option<bool> = None;
         let mut bound_run_instances: Option<&wgpu::Buffer> = None;
         let mut draws = 0u32;
         for draw in GlyphDraws::new(cmds) {
@@ -4089,14 +4251,19 @@ impl GpuRenderer {
             }
             draws += 1;
             match draw.step {
-                GlyphDrawStep::Shared(instances) => {
-                    if !shared_bound {
-                        let slot = glyph_slot.ok_or_else(|| {
-                            "shared glyph draw without glyph instances".to_string()
-                        })?;
+                GlyphDrawStep::Shared(instances, turned) => {
+                    if bound_pipeline != Some(turned) {
+                        pass.set_pipeline(self.glyph_atlas_pipeline(frame.depth, turned));
+                        bound_pipeline = Some(turned);
+                    }
+                    if shared_bound != Some(turned) {
+                        let slot =
+                            if turned { turned_slot } else { glyph_slot }.ok_or_else(|| {
+                                "shared glyph draw without glyph instances".to_string()
+                            })?;
                         self.viewport_uniforms.bind(pass, uniform_slot)?;
                         pass.set_vertex_buffer(0, slot.slice());
-                        shared_bound = true;
+                        shared_bound = Some(turned);
                         bound_run_instances = None;
                     }
                     pass.draw(0..GLYPH_QUAD_CORNERS, instances);
@@ -4105,7 +4272,11 @@ impl GpuRenderer {
                     run,
                     uniform_slot: retained_slot,
                 } => {
-                    shared_bound = false;
+                    if bound_pipeline != Some(false) {
+                        pass.set_pipeline(self.glyph_atlas_pipeline(frame.depth, false));
+                        bound_pipeline = Some(false);
+                    }
+                    shared_bound = None;
                     self.viewport_uniforms.bind(pass, retained_slot)?;
                     let instances = run.span.instance_buffer();
                     if bound_run_instances != Some(instances) {
@@ -4260,6 +4431,18 @@ impl GpuRenderer {
         )
     }
 
+    pub(crate) fn upload_turned_glyphs<C: FrameCommandRecorder>(
+        &self,
+        recorder: &mut C,
+        glyphs: &[TurnedGlyph],
+    ) -> BufferUpload {
+        recorder.upload_buffer(
+            turned_glyph_spec(),
+            &self.device,
+            bytemuck::cast_slice(glyphs),
+        )
+    }
+
     fn glyph_atlas_entry_for(
         &mut self,
         glyph: &SoftwareGlyphAtlasGlyph,
@@ -4355,29 +4538,34 @@ impl GpuRenderer {
         (clip, cut): (Option<Rect>, Option<[f32; 4]>),
         viewport: ViewportUniformParams,
         root_scale: f32,
-        glyph_instances: &mut Vec<GlyphInstance>,
+        glyph_instances: &mut GlyphInstances,
         record_cached_hits: bool,
     ) -> usize {
-        let start = glyph_instances.len();
-        glyph_instances.extend(
-            quads
-                .iter()
-                .filter(|quad| {
-                    cached_text_glyph_quad_is_visible_in_viewport(
-                        source_raster_rect,
-                        quad,
-                        clip,
-                        viewport,
-                        root_scale,
-                    )
-                })
-                .filter_map(|quad| cached_text_glyph_instance(source_raster_rect, &quad))
-                .filter_map(|glyph| match cut {
-                    Some(edges) => glyph.clipped_to(edges),
-                    None => Some(glyph),
-                }),
-        );
-        let appended = glyph_instances.len() - start;
+        let start = glyph_instances.lens();
+        if viewport.transform.is_identity() {
+            let plain = &mut glyph_instances.plain;
+            for_each_visible_glyph(
+                source_raster_rect,
+                quads,
+                (clip, cut),
+                viewport,
+                root_scale,
+                |glyph| plain.push(glyph),
+            );
+        } else {
+            let turn = viewport.transform;
+            let turned = &mut glyph_instances.turned;
+            for_each_visible_glyph(
+                source_raster_rect,
+                quads,
+                (clip, cut),
+                viewport,
+                root_scale,
+                |glyph| turned.push(TurnedGlyph::new(glyph, turn)),
+            );
+        }
+        let end = glyph_instances.lens();
+        let appended = (end.0 - start.0) + (end.1 - start.1);
         if record_cached_hits {
             self.frame_stats
                 .record_text_glyph_atlas_hits(u32::try_from(appended).unwrap_or(u32::MAX));
@@ -4514,14 +4702,14 @@ impl GpuRenderer {
         layer_texts: I,
         viewport: ViewportUniformParams,
         root_scale: f32,
-        glyph_instances: &mut Vec<GlyphInstance>,
+        glyph_instances: &mut GlyphInstances,
         glyph_cmds: &mut Vec<GlyphDrawCmd>,
     ) -> Result<bool, String>
     where
         I: IntoIterator<Item = &'a TextDraw>,
     {
         let append_start = Instant::now();
-        let initial_instance_len = glyph_instances.len();
+        let initial_instance_len = glyph_instances.lens();
         let initial_cmd_len = glyph_cmds.len();
         let mut collected_run = std::mem::take(&mut self.scratch_text_glyph_run);
         let mut generated_entries = std::mem::take(&mut self.scratch_text_glyph_entries);
@@ -4633,8 +4821,7 @@ impl GpuRenderer {
 
             // A retained run's quads are uploaded whole: under a turn only
             // the shared path cuts them to a clip.
-            let clip_needs_cut =
-                !viewport.transform.is_identity() && clip_cuts(source_draw.clip, draw_rect);
+            let clip_needs_cut = !viewport.transform.is_identity() && source_draw.clip.is_some();
             if let Some(entries) = cached_entries.as_ref()
                 && entries.len() >= RETAINED_TEXT_GLYPH_RUN_MIN_QUADS
                 && !clip_needs_cut
@@ -4655,7 +4842,8 @@ impl GpuRenderer {
                 continue;
             }
 
-            let instance_start = glyph_instances.len();
+            let turned = !viewport.transform.is_identity();
+            let instance_start = glyph_instances.len_of(turned);
             let (entries, cached) = match cached_entries {
                 Some(entries) => (entries, true),
                 None => {
@@ -4687,11 +4875,15 @@ impl GpuRenderer {
                 glyph_instances,
                 cached,
             ));
-            if glyph_instances.len() > instance_start {
-                let (clip, bounds) =
-                    shared_glyph_clip(&glyph_instances[instance_start..], scissor, viewport);
+            let instance_end = glyph_instances.len_of(turned);
+            if instance_end > instance_start {
+                let (clip, bounds) = glyph_instances.draw_clip(
+                    (instance_start..instance_end, turned),
+                    scissor,
+                    viewport,
+                );
                 glyph_cmds.push(GlyphDrawCmd::shared(
-                    instance_start..glyph_instances.len(),
+                    (instance_start..instance_end, turned),
                     clip,
                     bounds,
                     self.text_glyph_atlas.bind_group(viewport.transform),

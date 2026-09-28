@@ -7,7 +7,7 @@ use wgpu::util::DeviceExt;
 use crate::{record_columns, support};
 
 const SIDE: u32 = 160;
-const UNIFORM_FLOATS: usize = 52;
+const UNIFORM_FLOATS: usize = 60;
 
 fn arcs() -> CommandRecording {
     let mut scope = DrawScopeDefault::new(Size::new(SIDE as f32, SIDE as f32));
@@ -238,7 +238,7 @@ impl ArcRaster {
 
 /// The viewport uniform: the viewport and its offset, the identity segment
 /// transform (forward, translation, quad margin, inverse, vertex origin),
-/// then the placement.
+/// then the placement, its identity turn last.
 fn placement(scale: f32, offset: [f32; 2], clipped: bool) -> [f32; UNIFORM_FLOATS] {
     let mut values = [0.0f32; UNIFORM_FLOATS];
     values[..4].copy_from_slice(&[SIDE as f32, SIDE as f32, 4.125, 7.75]);
@@ -252,6 +252,7 @@ fn placement(scale: f32, offset: [f32; 2], clipped: bool) -> [f32; UNIFORM_FLOAT
     ]);
     values[24..28].copy_from_slice(&[17.25, 12.375, 125.0, 121.0]);
     values[30] = 1.0;
+    values[52..56].copy_from_slice(&[1.0, 0.0, 0.0, 1.0]);
     values
 }
 
