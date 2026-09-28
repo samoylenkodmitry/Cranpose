@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Keep worktree cargo target directories inside a free-disk budget.
+# Keep worktree build output -- cargo target directories and Gradle build
+# directories -- inside a free-disk budget.
 #
 # Every agent worktree builds its own complete `target/` for this workspace and
 # nothing ever collects them. On 2026-08-29 that filled a 926GB disk to 117MB
@@ -32,12 +33,14 @@
 #
 # Safety, in order of how much it matters:
 #
-#   1. The only thing this ever removes is a directory that cargo itself has
-#      marked as a cache. `CACHEDIR.TAG` carries a fixed signature written by
-#      cargo (bford.info/cachedir/); a directory without it is not touched, no
-#      matter what it is called. Source, git state, and uncommitted work live
-#      outside any such directory and are therefore unreachable from here.
-#      target/ is gitignored, so no edit, staged or not, can be lost.
+#   1. The only things this ever removes are build output its tool marked as
+#      such. A cargo target directory carries `CACHEDIR.TAG` with a fixed
+#      signature written by cargo (bford.info/cachedir/); a directory without
+#      it is not touched, no matter what it is called. A Gradle `build/` or
+#      `.gradle/` directory counts only when it sits beside the Gradle script
+#      that produces it (build.gradle[.kts], settings.gradle[.kts]) and git
+#      ignores it. Source, git state, and uncommitted work live outside any
+#      such directory and are therefore unreachable from here.
 #   2. A target written to in the last few minutes has a build in flight.
 #      Deleting under a running cargo produces confusing failures, so recent
 #      write activity protects a target absolutely -- it is never evicted, even
@@ -81,9 +84,10 @@ usage: target_gc.sh [options]
                       script: defaulting to wherever the caller happens to be
                       standing is fine for a human typing `just gc` and a loaded
                       gun for anything automated.
-  --root DIR          Also sweep cargo target dirs found under DIR. Repeatable.
+  --root DIR          Also sweep build output found under DIR. Repeatable.
                       Use for sibling checkouts that are not worktrees of this
-                      repository.
+                      repository; a primary checkout among them is protected
+                      as this repository's is.
   --include-locked    Also consider worktrees git reports as locked.
   --include-main      Also consider the repository's primary checkout. It is
                       protected by default: agent worktrees are disposable and
@@ -118,6 +122,48 @@ is_cargo_target_dir() {
     [ -d "$dir" ] || return 1
     [ -f "$dir/CACHEDIR.TAG" ] || return 1
     grep -qF "$CACHEDIR_SIGNATURE" "$dir/CACHEDIR.TAG" 2>/dev/null
+}
+
+# A Gradle output directory: `build/` beside a build script or `.gradle/` beside
+# a settings script, and ignored by git. Both conditions, because a directory
+# merely called `build` may be source in some repository.
+is_gradle_output_dir() {
+    local dir="$1" parent name
+    [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+    parent="$(dirname "$dir")"
+    name="$(basename "$dir")"
+    case "$name" in
+        build) [ -f "$parent/build.gradle" ] || [ -f "$parent/build.gradle.kts" ] || return 1 ;;
+        .gradle) [ -f "$parent/settings.gradle" ] || [ -f "$parent/settings.gradle.kts" ] || return 1 ;;
+        *) return 1 ;;
+    esac
+    git -C "$parent" check-ignore -q "$dir" 2>/dev/null
+}
+
+# Every build output directory under DIR, to DEPTH levels: cargo caches (by
+# their tag) and Gradle output. It does not descend into a directory it has
+# already found, nor into .git, node_modules or a staged removal.
+discover_build_output() {
+    local dir="$1" depth="$2" found
+    while IFS= read -r found; do
+        [ -n "$found" ] || continue
+        case "$(basename "$found")" in
+            CACHEDIR.TAG) found="$(dirname "$found")"; is_cargo_target_dir "$found" || continue ;;
+            *) is_gradle_output_dir "$found" || continue ;;
+        esac
+        printf '%s\n' "$found"
+    done < <(find "$dir" -maxdepth "$depth" \( -name .git -o -name node_modules -o -name '*.gc-[0-9]*' \) -prune \
+        -o \( -type f -name CACHEDIR.TAG -print \) \
+        -o \( -type d \( -name build -o -name .gradle \) -print -prune \) 2>/dev/null)
+}
+
+# Whether DIR is the primary checkout of its repository: its git dir is the
+# common one.
+is_primary_checkout() {
+    local dir="$1" git_dir common
+    git_dir="$(git -C "$dir" rev-parse --path-format=absolute --git-dir 2>/dev/null)" || return 1
+    common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+    [ -n "$git_dir" ] && [ "$git_dir" = "$common" ]
 }
 
 mtime_of() {
@@ -233,11 +279,13 @@ reap_orphans() {
     local wt staged reaped=0
     while IFS=$'\t' read -r wt _; do
         [ -n "$wt" ] && [ -d "$wt" ] || continue
-        for staged in "$wt"/target.gc-*; do
+        while IFS= read -r staged; do
             [ -d "$staged" ] || continue
             rm -rf "$staged"
             [ -d "$staged" ] || reaped=$((reaped + 1))
-        done
+        done < <(find "$wt" -maxdepth 6 \( -name .git -o -name node_modules \) -prune \
+            -o -type d \( -name 'target*.gc-[0-9]*' -o -name 'build.gc-[0-9]*' -o -name '.gradle.gc-[0-9]*' \) \
+            -print -prune 2>/dev/null)
     done <<EOF
 $(worktree_records)
 EOF
@@ -307,9 +355,10 @@ collect_candidates() {
 
     while IFS=$'\t' read -r wt locked; do
         [ -n "$wt" ] && [ -d "$wt" ] || continue
-        target="$wt/target"
-        is_cargo_target_dir "$target" || continue
-        emit_candidate "$target" "$wt" "$locked"
+        while IFS= read -r target; do
+            [ -n "$target" ] || continue
+            emit_candidate "$target" "$wt" "$locked"
+        done < <(discover_build_output "$wt" 6)
     done <<EOF
 $(worktree_records)
 EOF
@@ -318,10 +367,9 @@ EOF
         [ -d "$root" ] || continue
         while IFS= read -r target; do
             [ -n "$target" ] || continue
-            target="$(dirname "$target")"
-            is_cargo_target_dir "$target" || continue
-            emit_candidate "$target" "$(dirname "$target")" 0
-        done < <(find "$root" -maxdepth 3 -type f -name CACHEDIR.TAG 2>/dev/null)
+            wt="$(git -C "$(dirname "$target")" rev-parse --show-toplevel 2>/dev/null || dirname "$target")"
+            emit_candidate "$target" "$wt" 0
+        done < <(discover_build_output "$root" 7)
     done
 }
 
@@ -351,8 +399,8 @@ emit_candidate() {
         wt_real="$(cd "$wt" 2>/dev/null && pwd -P || echo "$wt")"
         if [ "$include_self" -eq 0 ] && [ "$wt_real" = "$self_root" ]; then
             protect="current worktree"
-        elif [ "$include_main" -eq 0 ] && [ -n "$main_worktree" ] \
-            && [ "$wt_real" = "$main_worktree" ]; then
+        elif [ "$include_main" -eq 0 ] && { { [ -n "$main_worktree" ] \
+            && [ "$wt_real" = "$main_worktree" ]; } || is_primary_checkout "$wt_real"; }; then
             protect="primary checkout (--include-main to override)"
         fi
     fi
@@ -390,18 +438,33 @@ collapse_candidates() {
     '
 }
 
-[ "$apply" -eq 1 ] && reap_orphans
+# A worktree whose directory is gone leaves its registration behind, and
+# `git worktree list` keeps reporting it. Pruning removes only those
+# registrations: git keeps one whose directory still exists.
+prune_dead_worktrees() {
+    local before after
+    before="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null | grep -c '^prunable' || true)"
+    [ "${before:-0}" -gt 0 ] || return 0
+    git -C "$repo_root" worktree prune 2>/dev/null || return 0
+    after="$(git -C "$repo_root" worktree list --porcelain 2>/dev/null | grep -c '^prunable' || true)"
+    echo "Pruned $(( before - ${after:-0} )) registration(s) of worktrees whose directories are gone."
+}
+
+if [ "$apply" -eq 1 ]; then
+    reap_orphans
+    prune_dead_worktrees
+fi
 
 candidates="$(collect_candidates | collapse_candidates | sort -n)"
 if [ -z "$candidates" ]; then
-    echo "No cargo target directories above ${min_size_mb}MB found."
+    echo "No build output above ${min_size_mb}MB found."
     exit 0
 fi
 
 start_free="$(free_gb "$self_root")"
 echo "Free disk: ${start_free}G. Target: ${min_free_gb}G."
 echo
-printf '%-38s %8s  %-14s %s\n' "TARGET DIR" "SIZE" "LAST BUILT" "DECISION"
+printf '%-38s %8s  %-14s %s\n' "BUILD OUTPUT" "SIZE" "LAST BUILT" "DECISION"
 
 reclaimed_mb=0
 would_mb=0
@@ -410,7 +473,7 @@ free_now="$start_free"
 
 while IFS=$'\t' read -r last size_mb protect target; do
     [ -n "$target" ] || continue
-    label="$(basename "$(dirname "$target")")"
+    label="$(basename "$(dirname "$target")")/$(basename "$target")"
     age_h=$(( (now - last) / 3600 ))
     if [ "$age_h" -lt 48 ]; then age="${age_h}h ago"; else age="$(( age_h / 24 ))d ago"; fi
 

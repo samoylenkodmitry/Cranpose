@@ -44,7 +44,8 @@ Read only the sections required by the current operation. These are project requ
 
 - Run each `rm` as a standalone command, then verify separately; never chain it with another operation or loop body.
 - Never run ad hoc complex shell commands or pipelines; write a reusable script for the job, keep it under `scripts/` when it serves the repository, and run that.
-- Reclaim build artifacts only with `just gc` and `just gc-apply`; never remove `target/`, `build/`, source or uncommitted work by hand.
+- Reclaim build artifacts only with `just gc` and `just gc-apply`: they sweep cargo target dirs and Gradle build dirs of this repository's worktrees and of the checkouts beside it, primary checkouts protected. Never remove `target/`, `build/`, source or uncommitted work by hand.
+- Finish with a worktree through `just worktree-done <path>`: it removes a linked worktree and its local branch only when nothing uncommitted remains, every commit is on a remote and no process uses it, and says why otherwise.
 - Use the exact CI recipes and shipped features; change checks in `justfile`, never inline in workflows.
 - `just web` always uses release mode; `just android` assembles the Android demo release; root `perf*.sh` scripts run performance checks.
 - Prefer SSH builds on `samarch-1` or `macm3`; see [host details](development_troubleshooting.md).
