@@ -18,10 +18,6 @@ them.
 [Releases](https://github.com/samoylenkodmitry/Cranpose/releases) ·
 [crates.io](https://crates.io/crates/cranpose)
 
-[v0.0.40.webm](https://github.com/user-attachments/assets/df50209b-abfd-426a-b79c-a51a9543b385)
-
-> Pre-alpha. The API changes without deprecation cycles, and versions are not
-> compatible with each other.
 
 ## Showcase Cranpose
 
