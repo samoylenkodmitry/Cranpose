@@ -12,37 +12,10 @@ use support::{SIZE, record_mixed_scene, record_solid_scene};
 
 use crate::{shared_test_support, support};
 
-const WRITE_ENV: &str = "CRANPOSE_WRITE_GOLDENS";
-/// The goldens are captured on Metal; other GPUs round anti-aliased edges a
-/// step differently. At a fractional root scale the arena run differs in 0.50%
-/// of its bytes on both Intel and NVIDIA Vulkan, each by one step (#859).
-const MAX_SMALL_DIFF_FRACTION: f64 = 0.01;
-const SMALL_DIFF: u8 = 2;
-
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/record_path")
         .join(format!("{name}.png"))
-}
-
-fn write_png(path: &PathBuf, width: u32, height: u32, pixels: &[u8]) {
-    let file = std::fs::File::create(path).expect("fixture file");
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().expect("png header");
-    writer.write_image_data(pixels).expect("png data");
-}
-
-fn read_png(path: &PathBuf) -> (u32, u32, Vec<u8>) {
-    let file = std::fs::File::open(path)
-        .unwrap_or_else(|err| panic!("missing golden {}: {err}", path.display()));
-    let decoder = png::Decoder::new(std::io::BufReader::new(file));
-    let mut reader = decoder.read_info().expect("png info");
-    let mut buffer = vec![0; reader.output_buffer_size().expect("png size")];
-    let info = reader.next_frame(&mut buffer).expect("png frame");
-    buffer.truncate(info.buffer_size());
-    (info.width, info.height, buffer)
 }
 
 fn scope(size: u32) -> DrawScopeDefault {
@@ -408,39 +381,18 @@ fn check(name: &str, graph: RenderGraph, size: u32, scale: f32) {
     if let Some(directory) = std::env::var_os("CRANPOSE_RECORD_CAPTURE_DIR") {
         let directory = PathBuf::from(directory);
         std::fs::create_dir_all(&directory).expect("capture output directory");
-        write_png(&directory.join(format!("{name}.png")), size, size, &pixels);
+        support::write_png(&directory.join(format!("{name}.png")), size, size, &pixels);
     }
     assert!(
         support::distinct_colors(&pixels) > 8,
         "{name}: the scene must draw something"
     );
-    let path = fixture_path(name);
-    if std::env::var_os(WRITE_ENV).is_some() {
-        write_png(&path, size, size, &pixels);
-        eprintln!("{name}: wrote {}", path.display());
-        return;
-    }
-    let (width, height, golden) = read_png(&path);
-    assert_eq!((width, height), (size, size), "{name}: golden size");
-    let mut small = 0usize;
-    let mut large = 0usize;
-    let mut worst = 0u8;
-    for (a, b) in pixels.iter().zip(&golden) {
-        let diff = a.abs_diff(*b);
-        worst = worst.max(diff);
-        if diff > SMALL_DIFF {
-            large += 1;
-        } else if diff > 0 {
-            small += 1;
-        }
-    }
-    let small_fraction = small as f64 / pixels.len() as f64;
-    eprintln!("{name}: small {small} ({small_fraction:.4}) large {large} worst {worst}");
-    assert!(
-        large == 0 && small_fraction <= MAX_SMALL_DIFF_FRACTION,
-        "{name}: {large} bytes differ by more than {SMALL_DIFF} (worst {worst}) and {small} by less \
-         ({small_fraction:.4} of the image, bound {MAX_SMALL_DIFF_FRACTION}); the record path must \
-         draw what the renderer drew before it"
+    support::check_golden(
+        name,
+        &fixture_path(name),
+        (size, size),
+        &pixels,
+        "the record path must draw what the renderer drew before it",
     );
 }
 

@@ -135,3 +135,87 @@ fn glyph_clip_edges_are_the_clip_in_device_pixels() {
     };
     assert_eq!(glyph_clip_edges(clip, 2.0), [3.0, 4.0, 23.0, 12.5]);
 }
+
+fn cut_viewport(transform: SegmentTransform) -> ViewportUniformParams {
+    ViewportUniformParams {
+        width: 200,
+        height: 100,
+        offset: [3.0, 5.0],
+        transform,
+        origin: [0.0, 0.0],
+        depth_base: 0.0,
+    }
+}
+
+#[test]
+fn a_text_its_clip_leaves_whole_is_not_cut() {
+    let draw_rect = Rect {
+        x: 10.0,
+        y: 10.0,
+        width: 40.0,
+        height: 20.0,
+    };
+    let viewport = cut_viewport(SegmentTransform::IDENTITY);
+    assert_eq!(
+        glyph_cut_edges(None, draw_rect, (7, 5, 40, 20), viewport, 1.0),
+        None
+    );
+    let around = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 100.0,
+    };
+    assert_eq!(
+        glyph_cut_edges(Some(around), draw_rect, (7, 5, 40, 20), viewport, 1.0),
+        None
+    );
+}
+
+#[test]
+fn an_unturned_text_is_cut_at_its_scissor_s_pixel_edges() {
+    let draw_rect = Rect {
+        x: 10.0,
+        y: 10.0,
+        width: 40.0,
+        height: 20.0,
+    };
+    let clip = Rect {
+        x: 10.0,
+        y: 10.0,
+        width: 40.0,
+        height: 12.3,
+    };
+    assert_eq!(
+        glyph_cut_edges(
+            Some(clip),
+            draw_rect,
+            (7, 5, 40, 13),
+            cut_viewport(SegmentTransform::IDENTITY),
+            1.0
+        ),
+        Some([10.0, 10.0, 50.0, 23.0]),
+        "the scissor's whole pixels, back in the quads' space by the viewport's offset"
+    );
+}
+
+#[test]
+fn a_turned_text_is_cut_at_its_clip_before_the_turn() {
+    let draw_rect = Rect {
+        x: 10.0,
+        y: 10.0,
+        width: 40.0,
+        height: 20.0,
+    };
+    let clip = Rect {
+        x: 10.0,
+        y: 10.0,
+        width: 40.0,
+        height: 12.25,
+    };
+    let turn = SegmentTransform::affine([0.0, -1.0, 1.0, 0.0], [0.0, 0.0]).expect("a quarter turn");
+    assert_eq!(
+        glyph_cut_edges(Some(clip), draw_rect, (0, 0, 1, 1), cut_viewport(turn), 2.0),
+        Some(glyph_clip_edges(clip, 2.0))
+    );
+}
