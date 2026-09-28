@@ -41,7 +41,7 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
         self.recorded.borrow_mut().push(node_id);
         crate::text::PreparedTextLayout {
             text: Rc::new(text.clone()),
-            visual_style: TextStyle::default(),
+            visual_style: std::sync::Arc::new(TextStyle::default()),
             metrics: crate::text::TextMetrics {
                 width: 12.0,
                 height: 18.0,
@@ -113,7 +113,7 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
         self.recorded.borrow_mut().push(size);
         crate::text::PreparedTextLayout {
             text: Rc::new(text.clone()),
-            visual_style: style.clone(),
+            visual_style: std::sync::Arc::new(style.clone()),
             metrics: crate::text::TextMetrics {
                 width: size,
                 height: size,
@@ -173,7 +173,7 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
     ) -> crate::text::PreparedTextLayout {
         crate::text::PreparedTextLayout {
             text: Rc::new(text.clone()),
-            visual_style: TextStyle::default(),
+            visual_style: std::sync::Arc::new(TextStyle::default()),
             metrics: crate::text::TextMetrics {
                 width: 24.0,
                 height: self.height,

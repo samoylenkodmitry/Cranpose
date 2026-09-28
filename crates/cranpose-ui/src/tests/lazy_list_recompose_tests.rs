@@ -50,7 +50,7 @@ impl TextMeasurer for CountingPreparedTextMeasurer {
         }
         PreparedTextLayout {
             text: Rc::new(text.clone()),
-            visual_style: style.clone(),
+            visual_style: std::sync::Arc::new(style.clone()),
             metrics: self.measure(text, style),
             did_overflow: false,
             render_text: Default::default(),
@@ -107,7 +107,7 @@ impl TextMeasurer for TallMultilineTextMeasurer {
     ) -> PreparedTextLayout {
         PreparedTextLayout {
             text: Rc::new(text.clone()),
-            visual_style: style.clone(),
+            visual_style: std::sync::Arc::new(style.clone()),
             metrics: self.measure(text, style),
             did_overflow: false,
             render_text: Default::default(),

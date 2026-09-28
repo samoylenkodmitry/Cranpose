@@ -1732,8 +1732,14 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         measured_layout,
     } = parts;
     let prepared = measured_layout?;
-    let default_text_style = TextStyle::default();
-    let text_style = text_style.cloned().unwrap_or(default_text_style);
+    let default_text_style;
+    let text_style = match text_style {
+        Some(style) => style,
+        None => {
+            default_text_style = TextStyle::default();
+            &default_text_style
+        }
+    };
     let options = text_layout_options.unwrap_or_default().normalized();
     let content_width = text_rect.width.max(0.0);
     if content_width <= 0.0 {
@@ -1745,7 +1751,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         .map_or(0.0, |resolve| resolve(content_width));
     let pans_horizontally = text_pan.is_some();
 
-    let visual_style = prepared.visual_style.clone();
+    let visual_style = &prepared.visual_style;
     let measured_draw_width = prepared.metrics.width.max(0.0);
     let draw_width = if options.overflow == TextOverflow::Visible || pans_horizontally {
         measured_draw_width
@@ -1753,7 +1759,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         measured_draw_width.min(content_width)
     };
     let alignment_offset = resolve_text_horizontal_offset(
-        &text_style,
+        text_style,
         prepared.text.text.as_str(),
         content_width,
         prepared.metrics.width,
@@ -1771,7 +1777,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     };
     let font_size = visual_style.resolve_font_size(14.0);
     let expanded_bounds =
-        expand_text_bounds_for_baseline_shift(text_bounds, &visual_style, font_size);
+        expand_text_bounds_for_baseline_shift(text_bounds, visual_style, font_size);
     let clip = if options.overflow == TextOverflow::Visible && !pans_horizontally {
         None
     } else {
@@ -1783,7 +1789,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         rect,
         text: Rc::clone(&prepared.text),
         render_text: prepared.render_text(),
-        text_style: std::sync::Arc::new(visual_style),
+        text_style: std::sync::Arc::clone(visual_style),
         font_size,
         layout_options: options,
         clip,

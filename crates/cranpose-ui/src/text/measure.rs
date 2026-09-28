@@ -50,7 +50,9 @@ pub struct TextMetrics {
 pub struct PreparedTextLayout {
     /// Shared display text after wrapping and overflow have been resolved.
     pub text: Rc<crate::text::AnnotatedString>,
-    pub visual_style: TextStyle,
+    /// The style the text draws in, shared with every render node drawn
+    /// from this layout.
+    pub visual_style: std::sync::Arc<TextStyle>,
     pub metrics: TextMetrics,
     pub did_overflow: bool,
     /// `text` as a renderer draws it, converted on first use: see
@@ -1090,7 +1092,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
         .unwrap_or_else(|| crate::text::LineBox::untrimmed(line_height, 0.0));
     let prepared = PreparedTextLayout {
         text: Rc::new(display_annotated),
-        visual_style: style.clone(),
+        visual_style: std::sync::Arc::new(style.clone()),
         metrics: TextMetrics {
             width,
             height: (layout_line_count as f32 * line_height - edges.trim_top - edges.trim_bottom)
