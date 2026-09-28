@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-
-use cranpose_core::NodeId;
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::{
     graph::{
         CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,

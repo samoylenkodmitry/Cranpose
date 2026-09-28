@@ -11,7 +11,7 @@
 
 use std::{cell::RefCell, cmp::Reverse, collections::BinaryHeap, rc::Rc};
 
-use cranpose_core::{MutableState, NodeId, StateId};
+use cranpose_core::{MutableState, NodeId, StateId, collections::map::HashMap};
 use cranpose_macros::composable;
 
 use super::{diagnostics, nearest_range::NearestRangeState};
@@ -266,7 +266,7 @@ struct LazyListStateInner {
     total_composed: usize,
     reuse_count: usize,
 
-    item_size_cache: std::collections::HashMap<usize, CachedItemSize>,
+    item_size_cache: HashMap<usize, CachedItemSize>,
     item_size_eviction_queue: BinaryHeap<Reverse<(u64, usize)>>,
     item_size_clock: u64,
 
@@ -360,7 +360,7 @@ impl LazyListState {
                     layout_invalidation_node_id: None,
                     total_composed: 0,
                     reuse_count: 0,
-                    item_size_cache: std::collections::HashMap::new(),
+                    item_size_cache: HashMap::default(),
                     item_size_eviction_queue: BinaryHeap::new(),
                     item_size_clock: 0,
                     average_item_size: super::DEFAULT_ITEM_SIZE_ESTIMATE,
