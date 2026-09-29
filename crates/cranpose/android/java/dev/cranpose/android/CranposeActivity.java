@@ -41,6 +41,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.text.BreakIterator;
 import java.util.ArrayList;
@@ -507,12 +509,11 @@ public class CranposeActivity extends NativeActivity {
      * controls that only moved; every other control keeps what it had.
      */
     public void cranposeUpdateAccessibilityElements(int[] order, byte[] records, int[] moves) {
-        // Decoded and parsed inside the posted task: the caller is the native
-        // frame loop, whose budget neither must consume; the UI thread is idle
-        // in this architecture.
+        // Read inside the posted task: the caller is the native frame loop,
+        // whose budget the reading must not consume; the UI thread is idle in
+        // this architecture.
         runOnUiThread(() -> {
-            final List<CranposeAccessibilityElement> updated = parseAccessibilityElements(
-                    new String(records, StandardCharsets.UTF_8));
+            final List<CranposeAccessibilityElement> updated = parseAccessibilityElements(records);
             View host = getWindow().getDecorView();
             if (cranposeAccessibilityProvider == null) {
                 cranposeAccessibilityProvider = new CranposeAccessibilityProvider(host);
@@ -531,12 +532,6 @@ public class CranposeActivity extends NativeActivity {
         });
     }
 
-    /** Field count of one accessibility record; see android_accessibility_wire.rs. */
-    private static final int ACCESSIBILITY_FIELDS = 41;
-
-    /** Separator packing a node's custom action labels into one field. */
-    private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
-
     /**
      * First id handed to a custom action. Custom action ids only have to avoid
      * the framework's standard actions, which are bit flags well below this;
@@ -545,58 +540,58 @@ public class CranposeActivity extends NativeActivity {
      */
     private static final int ACCESSIBILITY_CUSTOM_ACTION_BASE = 0x7f000000;
 
-    private static List<CranposeAccessibilityElement> parseAccessibilityElements(String payload) {
-        if (payload == null || payload.isEmpty()) return Collections.emptyList();
+    /**
+     * Reads the records android_accessibility_wire.rs writes back to back:
+     * numbers and flags as little-endian ints, fractions as little-endian
+     * floats, text as its UTF-8 length and bytes, and custom actions as their
+     * count and labels, in the order the element's constructor takes them. A
+     * payload cut short keeps the records read before it.
+     */
+    private static List<CranposeAccessibilityElement> parseAccessibilityElements(byte[] payload) {
+        if (payload == null || payload.length == 0) return Collections.emptyList();
+        ByteBuffer in = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
         ArrayList<CranposeAccessibilityElement> result = new ArrayList<>();
-        for (String record : payload.split("\n", -1)) {
-            String[] fields = record.split("\t", -1);
-            if (fields.length != ACCESSIBILITY_FIELDS) continue;
-            try {
+        try {
+            while (in.hasRemaining()) {
                 result.add(new CranposeAccessibilityElement(
-                        Integer.parseInt(fields[0]), Integer.parseInt(fields[1]),
-                        new Rect(Integer.parseInt(fields[2]), Integer.parseInt(fields[3]),
-                                Integer.parseInt(fields[4]), Integer.parseInt(fields[5])),
-                        Float.parseFloat(fields[6]), Float.parseFloat(fields[7]),
-                        "1".equals(fields[8]), unescapeAccessibility(fields[9]),
-                        unescapeAccessibility(fields[10]), unescapeAccessibility(fields[11]),
-                        unescapeAccessibility(fields[12]), Integer.parseInt(fields[13]),
-                        Integer.parseInt(fields[14]), "1".equals(fields[15]),
-                        parseAccessibilityActions(fields[16]), "1".equals(fields[17]),
-                        "1".equals(fields[18]), "1".equals(fields[19]),
-                        Float.parseFloat(fields[20]), Float.parseFloat(fields[21]),
-                        Float.parseFloat(fields[22]), "1".equals(fields[23]),
-                        "1".equals(fields[24]), "1".equals(fields[25]),
-                        Integer.parseInt(fields[26]), Integer.parseInt(fields[27]),
-                        Integer.parseInt(fields[28]), "1".equals(fields[29]),
-                        Integer.parseInt(fields[30]), Integer.parseInt(fields[31]),
-                        unescapeAccessibility(fields[32]), unescapeAccessibility(fields[33]),
-                        "1".equals(fields[34]), Integer.parseInt(fields[35]),
-                        unescapeAccessibility(fields[36]), "1".equals(fields[37]),
-                        "1".equals(fields[38]), Integer.parseInt(fields[39]),
-                        Integer.parseInt(fields[40])));
-            } catch (RuntimeException ignored) {
-                // A malformed record must not make the host Activity inaccessible.
+                        in.getInt(), in.getInt(),
+                        new Rect(in.getInt(), in.getInt(), in.getInt(), in.getInt()),
+                        in.getFloat(), in.getFloat(), flag(in), text(in), text(in), text(in),
+                        text(in), in.getInt(), in.getInt(), flag(in), actions(in), flag(in),
+                        flag(in), flag(in), in.getFloat(), in.getFloat(), in.getFloat(),
+                        flag(in), flag(in), flag(in), in.getInt(), in.getInt(), in.getInt(),
+                        flag(in), in.getInt(), in.getInt(), text(in), text(in), flag(in),
+                        in.getInt(), text(in), flag(in), flag(in), in.getInt(), in.getInt()));
             }
+        } catch (RuntimeException ignored) {
+            // A payload cut short must not make the host Activity inaccessible.
         }
         return result;
     }
 
-    private static String[] parseAccessibilityActions(String field) {
-        if (field.isEmpty()) return new String[0];
-        String[] parts = field.split(ACCESSIBILITY_ACTION_SEPARATOR, -1);
-        for (int i = 0; i < parts.length; i++) {
-            parts[i] = unescapeAccessibility(parts[i]);
-        }
-        return parts;
+    private static boolean flag(ByteBuffer in) {
+        return in.getInt() != 0;
     }
 
-    private static String unescapeAccessibility(String value) {
-        // %25 is undone last: it is the escape for the escape character, so
-        // undoing it first would let an app-authored literal "%09" decode into
-        // a tab.
-        return value.replace("%0D", "\r").replace("%0A", "\n")
-                .replace("%09", "\t").replace("%1F", ACCESSIBILITY_ACTION_SEPARATOR)
-                .replace("%25", "%");
+    private static String text(ByteBuffer in) {
+        int length = in.getInt();
+        if (length == 0) return "";
+        String text = new String(in.array(), in.arrayOffset() + in.position(), length,
+                StandardCharsets.UTF_8);
+        in.position(in.position() + length);
+        return text;
+    }
+
+    private static String[] actions(ByteBuffer in) {
+        int count = in.getInt();
+        if (count < 0 || count > in.remaining()) {
+            throw new IllegalArgumentException("action count " + count);
+        }
+        String[] labels = new String[count];
+        for (int i = 0; i < count; i++) {
+            labels[i] = text(in);
+        }
+        return labels;
     }
 
     private static final class CranposeAccessibilityElement {

@@ -1,19 +1,95 @@
 use super::*;
 
-/// The fields in one record, as `CranposeActivity.ACCESSIBILITY_FIELDS`
-/// parses them.
+/// The fields in one record, as `CranposeActivity.parseAccessibilityElements`
+/// reads them.
 const RECORD_FIELDS: usize = 41;
 
+/// Each field's kind in wire order: N a little-endian `i32`, F an `f32`, T
+/// UTF-8 text after its `u32` length, A a count of labels, then each.
+const FIELD_KINDS: &[u8; RECORD_FIELDS] = b"NNNNNNFFNTTTTNNNANNNFFFNNNNNNNNNTTNNTNNNN";
+
+/// Reads a payload the way the host does, field by field.
+struct PayloadReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl PayloadReader<'_> {
+    fn take(&mut self, length: usize) -> &[u8] {
+        let taken = &self.bytes[self.at..self.at + length];
+        self.at += length;
+        taken
+    }
+
+    fn word(&mut self) -> [u8; 4] {
+        self.take(4).try_into().expect("four bytes")
+    }
+
+    fn text(&mut self) -> String {
+        let length = u32::from_le_bytes(self.word()) as usize;
+        String::from_utf8(self.take(length).to_vec()).expect("UTF-8 text")
+    }
+}
+
+/// A fraction as the text wire wrote it: a whole one without a fraction.
+fn fraction(value: f32) -> String {
+    if value.fract() == 0.0 && value.abs() < 16_777_216.0 {
+        (value as i32).to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+/// Each record of `payload` as its fields: numbers in decimal, fractions as
+/// the text wire wrote them, text as sent, and custom actions joined by the
+/// action separator.
+fn fields(payload: &[u8]) -> Vec<Vec<String>> {
+    let mut reader = PayloadReader {
+        bytes: payload,
+        at: 0,
+    };
+    let mut records = Vec::new();
+    while reader.at < payload.len() {
+        let record = FIELD_KINDS
+            .iter()
+            .map(|kind| match kind {
+                b'N' => i32::from_le_bytes(reader.word()).to_string(),
+                b'F' => fraction(f32::from_le_bytes(reader.word())),
+                b'T' => reader.text(),
+                _ => {
+                    let count = u32::from_le_bytes(reader.word());
+                    (0..count)
+                        .map(|_| reader.text())
+                        .collect::<Vec<_>>()
+                        .join("\u{1f}")
+                }
+            })
+            .collect();
+        records.push(record);
+    }
+    records
+}
+
+/// `payload`'s records as lines of tab-separated fields, for records whose
+/// text holds neither.
+fn as_text(payload: &[u8]) -> String {
+    fields(payload)
+        .iter()
+        .map(|record| record.join("\t"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn encode_elements(elements: &[AccessibilityElement], density: f32) -> String {
-    encode_after(&[], elements, density)
+    as_text(&encode_payload(&[], elements, density))
 }
 
 /// The records of `elements` published after `before` at `density`.
-fn encode_after(
+fn encode_payload(
     before: &[AccessibilityElement],
     elements: &[AccessibilityElement],
     density: f32,
-) -> String {
+) -> Vec<u8> {
     let mut wire = AccessibilityWire::default();
     let mut snapshot = AccessibilitySnapshot::default();
     wire.publish(&mut snapshot, before.to_vec(), density)
@@ -21,6 +97,14 @@ fn encode_after(
     wire.publish(&mut snapshot, elements.to_vec(), density)
         .expect("unique identities")
         .records
+}
+
+fn encode_after(
+    before: &[AccessibilityElement],
+    elements: &[AccessibilityElement],
+    density: f32,
+) -> String {
+    as_text(&encode_payload(before, elements, density))
 }
 
 /// `element` as it read before it came to say what it says now.
@@ -41,17 +125,9 @@ fn published(elements: &[AccessibilityElement]) -> (AccessibilityWire, Accessibi
 }
 
 fn record_ids(update: &AccessibilityUpdate) -> Vec<i32> {
-    update
-        .records
-        .split('\n')
-        .filter(|record| !record.is_empty())
-        .map(|record| {
-            record
-                .split('\t')
-                .next()
-                .and_then(|id| id.parse().ok())
-                .expect("a record starts with its id")
-        })
+    fields(&update.records)
+        .iter()
+        .map(|record| record[0].parse().expect("a record starts with its id"))
         .collect()
 }
 
@@ -127,7 +203,7 @@ fn a_control_that_says_something_else_is_resent_in_full() {
         )
         .expect("unique identities");
     assert_eq!(record_ids(&update), vec![ids[1]]);
-    assert!(update.records.contains("Three"));
+    assert_eq!(fields(&update.records)[0][9], "Three");
     assert!(
         update.moves.is_empty(),
         "the record carries the new bounds itself"
@@ -146,7 +222,7 @@ fn a_spoken_change_is_resent_with_its_flag() {
         )
         .expect("unique identities");
     assert_eq!(record_ids(&update), vec![ids[1]]);
-    assert_eq!(update.records.split('\t').nth(29), Some("1"));
+    assert_eq!(fields(&update.records)[0][29], "1");
 }
 
 #[test]
@@ -224,22 +300,15 @@ fn a_forgotten_host_is_sent_every_control() {
 
 use crate::accessibility::{AccessibilityRect, AccessibilityRole, element_with};
 
-#[test]
-fn android_accessibility_wire_values_escape_record_delimiters() {
-    let mut out = String::from("kept|");
-    push_escaped_wire_field(
-        &mut out,
-        &format!("A%\tB\nC\r{ACTION_SEPARATOR}é"),
-        ACTION_SEPARATOR,
-    );
-    assert_eq!(out, "kept|A%25%09B%0AC%0D%1Fé");
+fn strings(fields: &[&str]) -> Vec<String> {
+    fields.iter().map(|field| (*field).to_string()).collect()
 }
 
-/// The records byte for byte as the encoder before direct writing produced
-/// them, escapes, fractions and the action separator included: Java parses
-/// this exact layout.
+/// The records field by field as Java reads them: numbers, fractions, text
+/// sent as written, tabs and newlines included, and the custom actions'
+/// labels.
 #[test]
-fn records_keep_the_layout_java_parses_byte_for_byte() {
+fn records_carry_every_field_java_reads() {
     let elements = vec![
         AccessibilityElement {
             node_id: 4,
@@ -251,7 +320,7 @@ fn records_keep_the_layout_java_parses_byte_for_byte() {
             role: AccessibilityRole::Switch,
             clickable: true,
             toggled: Some(true),
-            custom_actions: vec!["Pause".into(), format!("Re{ACTION_SEPARATOR}sume")],
+            custom_actions: vec!["Pause".into(), "Re\u{1f}sume".into()],
             pane_title: Some("Pane".into()),
             error: Some("Bad%".into()),
             long_click_label: Some("Hold".into()),
@@ -260,13 +329,59 @@ fn records_keep_the_layout_java_parses_byte_for_byte() {
         },
         element_with(5, Some(1)),
     ];
+    let payload = encode_payload(&[said_before(&elements[0])], &elements, 1.5);
     assert_eq!(
-        encode_after(&[said_before(&elements[0])], &elements, 1.5),
-        "1\t5\t2\t4\t47\t65\t16.25\t22.875\t1\tTab%09and%25\tline%0Anext%0D\tOn\tToggle\t-1\t1\t1\t\
-         Pause\u{1f}Re%1Fsume\t0\t0\t0\t0\t0\t0\t0\t0\t0\t-1\t0\t0\t1\t-1\t-1\tPane\tBad%25\t0\t0\t\
-         Hold\t0\t0\t-1\t-1\n\
-         2\t2\t0\t0\t15\t15\t5\t5\t0\tRow\t\t\t\t-1\t-1\t1\t\t0\t0\t0\t0\t0\t0\t0\t0\t0\t-1\t0\t0\t0\t\
-         -1\t-1\t\t\t0\t-1\t\t0\t0\t-1\t-1"
+        fields(&payload),
+        vec![
+            strings(&[
+                "1",
+                "5",
+                "2",
+                "4",
+                "47",
+                "65",
+                "16.25",
+                "22.875",
+                "1",
+                "Tab\tand%",
+                "line\nnext\r",
+                "On",
+                "Toggle",
+                "-1",
+                "1",
+                "1",
+                "Pause\u{1f}Re\u{1f}sume",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "-1",
+                "0",
+                "0",
+                "1",
+                "-1",
+                "-1",
+                "Pane",
+                "Bad%",
+                "0",
+                "0",
+                "Hold",
+                "0",
+                "0",
+                "-1",
+                "-1",
+            ]),
+            strings(&[
+                "2", "2", "0", "0", "15", "15", "5", "5", "0", "Row", "", "", "", "-1", "-1", "1",
+                "", "0", "0", "0", "0", "0", "0", "0", "0", "0", "-1", "0", "0", "0", "-1", "-1",
+                "", "", "0", "-1", "", "0", "0", "-1", "-1",
+            ]),
+        ]
     );
 }
 
@@ -315,7 +430,7 @@ fn every_encoded_record_carries_the_fields_java_parses() {
     assert_eq!(fields[13], "-1", "selected was never set");
     assert_eq!(fields[14], "1", "toggled on");
     assert_eq!(fields[15], "1", "enabled by default");
-    assert_eq!(fields[16], format!("Pause{ACTION_SEPARATOR}Resume"));
+    assert_eq!(fields[16], "Pause\u{1f}Resume");
     assert_eq!(fields[17], "0", "this element registered no focus target");
     assert_eq!(fields[18], "0", "and focus does not sit on it");
 }
@@ -674,28 +789,19 @@ fn the_record_says_whether_a_list_takes_a_row_number() {
 }
 
 #[test]
-fn numbers_are_written_as_display_writes_them() {
-    for value in [0, 7, -7, 10, 1_234_567, i32::MAX, i32::MIN] {
-        let mut out = String::new();
-        push_decimal(&mut out, value);
-        assert_eq!(out, value.to_string());
-    }
-    for value in [
-        0.0f32,
-        -0.0,
-        3.0,
-        -12.0,
-        12.5,
-        0.1,
-        16_777_216.0,
-        1e30,
-        f32::NAN,
-        f32::INFINITY,
-    ] {
-        let mut out = String::new();
-        RecordWriter(&mut out).float(value);
-        assert_eq!(out, format!("{value}\t"));
-    }
+fn fields_are_written_little_endian_and_text_after_its_length() {
+    let mut out = Vec::new();
+    let mut record = RecordWriter(&mut out);
+    record.number(-2);
+    record.float(12.5);
+    record.text("é");
+    record.actions(&["a".into(), String::new()]);
+    let mut expected = Vec::new();
+    expected.extend_from_slice(&(-2i32).to_le_bytes());
+    expected.extend_from_slice(&12.5f32.to_le_bytes());
+    expected.extend_from_slice(&[2, 0, 0, 0, 0xc3, 0xa9]);
+    expected.extend_from_slice(&[2, 0, 0, 0, 1, 0, 0, 0, b'a', 0, 0, 0, 0]);
+    assert_eq!(out, expected);
     assert_eq!(count(usize::MAX), i32::MAX);
     assert_eq!(count(12), 12);
 }
