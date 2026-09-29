@@ -835,7 +835,10 @@ size of the set.
 
 ## What a reader hears, end to end
 
-1. Layout builds the semantics tree, one node per control, with focus flags.
+1. Layout builds the semantics tree, one node per control, with focus flags,
+   and keeps it: an update merges again only the nodes that marked their own
+   semantics and the recorders that may read live state, and moves the rest
+   to their new bounds (`update_semantics_tree_from_applier`).
 2. `crates/cranpose/src/accessibility.rs` projects that tree onto flat elements
    with screen bounds: one platform-neutral shape, four bridges.
 3. Each bridge turns an element into the platform's own node, and turns the

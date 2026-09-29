@@ -1314,8 +1314,13 @@ impl SemanticsNode for TextFieldModifierNode {
         merge_text_field_semantics(self.state, self.line_limits, config);
     }
 
+    /// Neither modal nor hidden, but the field's text and selection are read
+    /// live from its state, which an app may set without touching the node.
     fn reach(&self) -> cranpose_foundation::SemanticsReach {
-        cranpose_foundation::SemanticsReach::default()
+        cranpose_foundation::SemanticsReach {
+            merges_live_state: true,
+            ..cranpose_foundation::SemanticsReach::default()
+        }
     }
 }
 

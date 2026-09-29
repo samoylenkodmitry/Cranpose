@@ -5,7 +5,7 @@ use cranpose_core::collections::map::HashMap;
 use crate::{
     accessibility::{
         AccessibilityElement, AccessibilityIdentityError, AccessibilityRect, AccessibilitySnapshot,
-        CollectionItem, checked_state, utf16_offset,
+        CollectionItem, checked_state, spoken_changes, utf16_offset,
     },
     android_wire_escape::push_escaped_wire_field,
 };
@@ -46,39 +46,30 @@ impl AccessibilityWire {
     }
 
     /// Moves `snapshot` on to `elements` and says what the host needs to
-    /// catch up. `changed` marks the controls that now say something else.
+    /// catch up, flagging the controls that now say something else.
     pub(crate) fn publish(
         &mut self,
         snapshot: &mut AccessibilitySnapshot,
         elements: Vec<AccessibilityElement>,
-        changed: &[bool],
         density: f32,
     ) -> Result<AccessibilityUpdate, AccessibilityIdentityError> {
         let density = density.max(f32::EPSILON);
-        let (mut previous, previous_ids) = snapshot.update(elements)?;
+        let mut replaced = snapshot.update(elements)?;
+        let changed = spoken_changes(&replaced.elements, &snapshot.elements, &replaced.was);
         let parents = scroll_parent_ids(&snapshot.elements, &snapshot.ids);
         let known = self.density == Some(density.to_bits());
-        let previous_index: HashMap<i32, usize> = match known {
-            true => previous_ids
-                .iter()
-                .enumerate()
-                .map(|(index, id)| (*id, index))
-                .collect(),
-            false => HashMap::default(),
-        };
         let mut records = String::new();
         let mut moves = Vec::new();
-        for (index, ((element, id), parent)) in snapshot
+        for (((element, id), parent), (spoken_change, was)) in snapshot
             .elements
             .iter()
             .zip(&snapshot.ids)
             .zip(&parents)
-            .enumerate()
+            .zip(changed.into_iter().zip(&replaced.was))
         {
-            let spoken_change = changed.get(index).copied().unwrap_or(false);
-            let published = match previous_index.get(id) {
-                Some(&old) if !spoken_change && self.parents.get(old) == Some(parent) => {
-                    previous.get_mut(old)
+            let published = match *was {
+                Some(old) if known && !spoken_change && self.parents.get(old) == Some(parent) => {
+                    replaced.elements.get_mut(old)
                 }
                 _ => None,
             };
@@ -100,7 +91,7 @@ impl AccessibilityWire {
                 }
             }
         }
-        let reordered = !known || snapshot.ids != previous_ids;
+        let reordered = !known || snapshot.ids != replaced.ids;
         self.density = Some(density.to_bits());
         self.parents = parents;
         Ok(AccessibilityUpdate {

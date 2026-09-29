@@ -280,6 +280,9 @@ pub struct LayoutNode {
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
     needs_semantics: Cell<bool>,
+    /// A node below this one needs semantics recomputation; this node's own
+    /// semantics are unchanged.
+    descendant_needs_semantics: Cell<bool>,
     /// The chain's modal and hidden flags, read by the modal count and the
     /// modal walk: dropped whenever the chain syncs or semantics are
     /// invalidated, the two ways its semantics change.
@@ -333,6 +336,7 @@ impl LayoutNode {
         shell.needs_measure.set(false);
         shell.needs_layout.set(false);
         shell.needs_semantics.set(false);
+        shell.descendant_needs_semantics.set(false);
         shell.needs_redraw.set(false);
         shell.needs_pointer_pass.set(false);
         shell.needs_focus_sync.set(false);
@@ -371,6 +375,7 @@ impl LayoutNode {
             needs_measure: Cell::new(true),
             needs_layout: Cell::new(true),
             needs_semantics: Cell::new(true),
+            descendant_needs_semantics: Cell::new(false),
             semantics_reach: Cell::new(None),
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
@@ -592,10 +597,18 @@ impl LayoutNode {
 
     pub(crate) fn clear_needs_semantics(&self) {
         self.needs_semantics.set(false);
+        self.descendant_needs_semantics.set(false);
     }
 
-    /// Returns true when semantics need to be recomputed.
+    /// Returns true when this node's semantics or a descendant's need to be
+    /// recomputed.
     pub fn needs_semantics(&self) -> bool {
+        self.needs_semantics.get() || self.descendant_needs_semantics.get()
+    }
+
+    /// Whether this node's own semantics changed since the tree last read
+    /// them, as opposed to only a descendant's.
+    pub(crate) fn semantics_changed(&self) -> bool {
         self.needs_semantics.get()
     }
 
@@ -847,6 +860,13 @@ impl LayoutNode {
 
     /// Whether this node's modifiers make it modal or hidden.
     pub fn semantics_reach(&self) -> cranpose_foundation::SemanticsReach {
+        // A chain without semantics reaches nothing, known without touching it.
+        if !self
+            .modifier_capabilities
+            .contains(NodeCapabilities::SEMANTICS)
+        {
+            return cranpose_foundation::SemanticsReach::default();
+        }
         if let Some(reach) = self.semantics_reach.get() {
             return reach;
         }
@@ -906,6 +926,7 @@ impl Clone for LayoutNode {
             needs_measure: Cell::new(self.needs_measure.get()),
             needs_layout: Cell::new(self.needs_layout.get()),
             needs_semantics: Cell::new(self.needs_semantics.get()),
+            descendant_needs_semantics: Cell::new(self.descendant_needs_semantics.get()),
             semantics_reach: Cell::new(None),
             needs_redraw: Cell::new(self.needs_redraw.get()),
             needs_pointer_pass: Cell::new(self.needs_pointer_pass.get()),
@@ -1032,8 +1053,12 @@ impl Node for LayoutNode {
         self.forget_semantics_reach();
     }
 
+    fn mark_descendant_needs_semantics(&self) {
+        self.descendant_needs_semantics.set(true);
+    }
+
     fn needs_semantics(&self) -> bool {
-        self.needs_semantics.get()
+        LayoutNode::needs_semantics(self)
     }
 
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
@@ -1067,6 +1092,7 @@ impl Node for LayoutNode {
         let needs_measure = previous.needs_measure.get();
         let needs_layout = previous.needs_layout.get();
         let needs_semantics = previous.needs_semantics.get();
+        let descendant_needs_semantics = previous.descendant_needs_semantics.get();
         let needs_redraw = previous.needs_redraw.get();
         let needs_pointer_pass = previous.needs_pointer_pass.get();
         let needs_focus_sync = previous.needs_focus_sync.get();
@@ -1093,6 +1119,9 @@ impl Node for LayoutNode {
         compact.needs_measure.set(needs_measure);
         compact.needs_layout.set(needs_layout);
         compact.needs_semantics.set(needs_semantics);
+        compact
+            .descendant_needs_semantics
+            .set(descendant_needs_semantics);
         compact.needs_redraw.set(needs_redraw);
         compact.needs_pointer_pass.set(needs_pointer_pass);
         compact.needs_focus_sync.set(needs_focus_sync);

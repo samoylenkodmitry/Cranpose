@@ -306,9 +306,8 @@ pub(crate) fn sync(
     let Some(elements) = elements else {
         return Ok(());
     };
-    let changed = accessibility::spoken_changes(&previous.elements, &elements);
     let update = wire
-        .publish(previous, elements, &changed, density)
+        .publish(previous, elements, density)
         .map_err(|error| error.to_string())?;
     if update.is_empty() {
         return Ok(());
@@ -322,20 +321,23 @@ fn publish(app: &android_activity::AndroidApp, update: &AccessibilityUpdate) -> 
     with_android_activity_env(app, |env, activity| {
         let order = int_array(env, &update.order)?;
         let moves = int_array(env, &update.moves)?;
-        let records = env.new_string(&update.records).map_err(|error| {
-            clear_pending_android_jni_exception(env);
-            format!("failed to encode Android accessibility records: {error}")
-        })?;
-        let records = JObject::from(records);
+        // UTF-8 bytes: the host decodes them on its UI thread, off this loop.
+        let records = env
+            .byte_array_from_slice(update.records.as_bytes())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                format!("failed to copy Android accessibility records: {error}")
+            })?;
+        let records: &JObject = records.as_ref();
         let order: &JObject = order.as_ref();
         let moves: &JObject = moves.as_ref();
         env.call_method(
             &activity,
             jni_str!("cranposeUpdateAccessibilityElements"),
-            jni_sig!("([ILjava/lang/String;[I)V"),
+            jni_sig!("([I[B[I)V"),
             &[
                 JValue::Object(order),
-                JValue::Object(&records),
+                JValue::Object(records),
                 JValue::Object(moves),
             ],
         )

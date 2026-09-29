@@ -54,6 +54,9 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) buffer_size: (u32, u32),
     pub(crate) layout_tree: Option<LayoutTree>,
     pub(crate) semantics_tree: Option<SemanticsTree>,
+    /// A layout pass ran since `semantics_tree` was brought up to date, so
+    /// its bounds may be out of date though no node marked its semantics.
+    semantics_moved: bool,
     pub(crate) modal_focus: Vec<(NodeId, Option<NodeId>)>,
     pub(crate) frame_rate_preference: FrameRatePreference,
     pub(crate) scene_dirty: bool,
@@ -93,6 +96,7 @@ impl<R: Renderer> RootSurface<R> {
             buffer_size,
             layout_tree: None,
             semantics_tree: None,
+            semantics_moved: false,
             modal_focus: Vec::new(),
             frame_rate_preference: FrameRatePreference::default(),
             scene_dirty: true,
@@ -166,9 +170,11 @@ impl<R: Renderer> RootSurface<R> {
         self.is_dirty = true;
     }
 
+    /// Drops the layout snapshot and marks the semantics tree for an update,
+    /// which keeps what did not change.
     pub(crate) fn forget_snapshots(&mut self) {
         self.layout_tree = None;
-        self.semantics_tree = None;
+        self.semantics_moved = true;
     }
 
     pub(crate) fn has_active_pointer_gesture(&self) -> bool {
@@ -276,11 +282,15 @@ impl<R: Renderer> RootSurface<R> {
                 true
             })
         };
-        if self.semantics_tree.is_none() || semantics_dirty {
+        if self.semantics_tree.is_none() || self.semantics_moved || semantics_dirty {
             let mut applier = app.composition.applier_mut();
-            match cranpose_ui::build_semantics_tree_from_applier(&mut applier, root) {
-                Ok(semantics_tree) => {
-                    self.semantics_tree = semantics_tree;
+            match cranpose_ui::update_semantics_tree_from_applier(
+                &mut applier,
+                root,
+                &mut self.semantics_tree,
+            ) {
+                Ok(()) => {
+                    self.semantics_moved = false;
                     app.semantics_snapshot_revision =
                         app.semantics_snapshot_revision.wrapping_add(1);
                 }

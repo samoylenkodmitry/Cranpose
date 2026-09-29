@@ -128,7 +128,7 @@ pub use layout::{
         VerticalAlignment,
     },
     measure_layout, measure_layout_with_options, top_modal_from_applier, tree_needs_layout,
-    tree_needs_semantics,
+    tree_needs_semantics, update_semantics_tree_from_applier,
 };
 pub use layout_direction::{
     LayoutDirection, ProvideLayoutDirection, layout_direction, local_layout_direction,

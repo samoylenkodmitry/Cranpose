@@ -41,6 +41,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.text.BreakIterator;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -505,12 +506,13 @@ public class CranposeActivity extends NativeActivity {
      * {@code moves} holds {@code id, left, top, right, bottom} runs for
      * controls that only moved; every other control keeps what it had.
      */
-    public void cranposeUpdateAccessibilityElements(int[] order, String records, int[] moves) {
-        // Parsed inside the posted task: the caller is the native frame loop,
-        // whose budget the parse must not consume; the UI thread is idle in
-        // this architecture.
+    public void cranposeUpdateAccessibilityElements(int[] order, byte[] records, int[] moves) {
+        // Decoded and parsed inside the posted task: the caller is the native
+        // frame loop, whose budget neither must consume; the UI thread is idle
+        // in this architecture.
         runOnUiThread(() -> {
-            final List<CranposeAccessibilityElement> updated = parseAccessibilityElements(records);
+            final List<CranposeAccessibilityElement> updated = parseAccessibilityElements(
+                    new String(records, StandardCharsets.UTF_8));
             View host = getWindow().getDecorView();
             if (cranposeAccessibilityProvider == null) {
                 cranposeAccessibilityProvider = new CranposeAccessibilityProvider(host);

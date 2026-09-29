@@ -1665,6 +1665,9 @@ fn speaks_the_same(was: &AccessibilityElement, now: &AccessibilityElement) -> bo
 /// For each element of `current`, whether it was published before and now
 /// says something else: a toggle that flipped, a counter that moved on, a
 /// value a reader just set. A reader speaks the one under its cursor again.
+/// `was` holds each element's index in `previous`, as
+/// [`AccessibilitySnapshot::update`](crate::accessibility_identity::AccessibilitySnapshot::update)
+/// reports it.
 #[cfg(any(
     test,
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
@@ -1673,17 +1676,13 @@ fn speaks_the_same(was: &AccessibilityElement, now: &AccessibilityElement) -> bo
 pub(crate) fn spoken_changes(
     previous: &[AccessibilityElement],
     current: &[AccessibilityElement],
+    was: &[Option<usize>],
 ) -> Vec<bool> {
-    let mut published: cranpose_core::collections::map::HashMap<_, &AccessibilityElement> =
-        Default::default();
-    for element in previous {
-        published.entry(element.identity_key()).or_insert(element);
-    }
     current
         .iter()
-        .map(|element| {
-            published
-                .get(&element.identity_key())
+        .zip(was)
+        .map(|(element, was)| {
+            was.and_then(|index| previous.get(index))
                 .is_some_and(|was| !speaks_the_same(was, element))
         })
         .collect()
