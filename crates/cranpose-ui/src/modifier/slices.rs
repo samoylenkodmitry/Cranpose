@@ -46,7 +46,9 @@ pub struct ModifierNodeSlices {
     text_coordinator: Option<CoordinatorRect>,
     text_window_origin: Option<Rc<std::cell::Cell<Point>>>,
     viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
-    graphics_layer: Option<GraphicsLayer>,
+    /// Boxed: few nodes carry a layer, and inline it took 240 bytes of
+    /// every node's slices.
+    graphics_layer: Option<Box<GraphicsLayer>>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     corner_shape: Option<RoundedCornerShape>,
     chain_guard: Option<Rc<ChainGuard>>,
@@ -396,7 +398,7 @@ impl ModifierNodeSlices {
         if let Some(resolve) = &self.graphics_layer_resolver {
             Some(resolve())
         } else {
-            self.graphics_layer.clone()
+            self.graphics_layer.as_deref().cloned()
         }
     }
 
@@ -417,14 +419,17 @@ impl ModifierNodeSlices {
         layer: GraphicsLayer,
         resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     ) {
-        let existing_snapshot = self.graphics_layer.clone();
+        let existing_snapshot = self.graphics_layer.as_deref().cloned();
         let next_snapshot = existing_snapshot.as_ref().map_or_else(
             || layer.clone(),
             |current| merge_graphics_layers(current.clone(), layer.clone()),
         );
         let existing_resolver = self.graphics_layer_resolver.clone();
 
-        self.graphics_layer = Some(next_snapshot);
+        match &mut self.graphics_layer {
+            Some(held) => **held = next_snapshot,
+            None => self.graphics_layer = Some(Box::new(next_snapshot)),
+        }
         self.graphics_layer_resolver = match (existing_resolver, resolver) {
             (None, None) => None,
             (Some(current_resolver), None) => Some(Rc::new(move || {
