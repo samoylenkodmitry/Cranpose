@@ -14,19 +14,28 @@ pub(crate) enum AccessibilityIdentityError {
 /// published before, and for each new element the index its control had
 /// among them.
 #[cfg_attr(
-    not(any(test, target_os = "android", target_os = "ios")),
+    not(any(
+        test,
+        target_os = "android",
+        target_os = "ios",
+        all(feature = "desktop-shell", feature = "renderer-wgpu")
+    )),
     allow(
         dead_code,
-        reason = "only the Android and iOS bridges diff against what an update replaced"
+        reason = "only the Android, iOS and desktop bridges diff against what an update replaced"
     )
 )]
 pub(crate) struct Replaced {
     pub(crate) elements: Vec<AccessibilityElement>,
     #[cfg_attr(
-        not(any(test, target_os = "android")),
+        not(any(
+            test,
+            target_os = "android",
+            all(feature = "desktop-shell", feature = "renderer-wgpu")
+        )),
         allow(
             dead_code,
-            reason = "only the Android wire resends an order that changed"
+            reason = "only the Android wire and the desktop tree read the ids an update replaced"
         )
     )]
     pub(crate) ids: Vec<i32>,
