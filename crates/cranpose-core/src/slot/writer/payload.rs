@@ -76,7 +76,7 @@ impl SlotWriteSession<'_> {
             self.discard_stale_value_slot_frames();
             return self.recover_value_slot_with_kind(kind, init);
         };
-        let (slot, deferred_drop, location_refresh) = self.table.use_value_payload_at_cursor(
+        let (slot, location_refresh) = self.table.use_value_payload_at_cursor(
             group_anchor,
             group_index,
             payload_cursor,
@@ -86,9 +86,6 @@ impl SlotWriteSession<'_> {
         if let Some(location_refresh) = location_refresh {
             self.state
                 .note_payload_location_refresh(location_refresh.owner, location_refresh.start);
-        }
-        if let Some(deferred_drop) = deferred_drop {
-            self.lifecycle.queue_drop(deferred_drop);
         }
         if slot.anchor() == PayloadAnchor::INVALID {
             log::error!(
