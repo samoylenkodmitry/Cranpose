@@ -251,7 +251,7 @@ impl SnapshotStateObserverInner {
         if let Some(entry) = existing_entry.as_ref() {
             let already_observed = {
                 let mut entry_mut = entry.borrow_mut();
-                entry_mut.update_scope(scope.clone());
+                entry_mut.update_scope(&scope);
                 has_frame_version && entry_mut.last_seen_version == frame_version
             };
             let callback = on_changed.clone();
@@ -262,10 +262,10 @@ impl SnapshotStateObserverInner {
         }
 
         let observed = self.active_read_targets.borrow_mut().push();
-        struct ActiveObservationGuard {
-            stack: Rc<RefCell<ReadObservationStack>>,
+        struct ActiveObservationGuard<'a> {
+            stack: &'a RefCell<ReadObservationStack>,
         }
-        impl Drop for ActiveObservationGuard {
+        impl Drop for ActiveObservationGuard<'_> {
             fn drop(&mut self) {
                 let target = self.stack.borrow_mut().pop();
                 let discarded = target.replace(ObservedIds::new());
@@ -273,7 +273,7 @@ impl SnapshotStateObserverInner {
             }
         }
         let _guard = ActiveObservationGuard {
-            stack: Rc::clone(&self.active_read_targets),
+            stack: &self.active_read_targets,
         };
 
         let result = self.run_with_read_observer(block);
@@ -289,12 +289,13 @@ impl SnapshotStateObserverInner {
             let mut observed = observed.borrow_mut();
             std::mem::replace(&mut *observed, ObservedIds::new())
         };
+        let callback = Rc::clone(&on_changed);
+        drop(on_changed);
         let entry = existing_entry
-            .clone()
-            .unwrap_or_else(|| self.insert_scope_entry(scope.clone(), on_changed.clone()));
+            .unwrap_or_else(|| self.insert_scope_entry(scope.clone(), Rc::clone(&callback)));
         {
             let mut entry_mut = entry.borrow_mut();
-            entry_mut.update(scope, Rc::clone(&on_changed));
+            entry_mut.update(&scope, callback);
             entry_mut.last_seen_version = if has_frame_version {
                 frame_version
             } else {
@@ -826,25 +827,35 @@ impl ScopeEntry {
         }
     }
 
-    fn update<T>(&mut self, new_scope: T, on_changed: Rc<dyn ScopeChangedCallback>)
+    fn update<T>(&mut self, new_scope: &T, on_changed: Rc<dyn ScopeChangedCallback>)
     where
-        T: Any + 'static,
+        T: Any + Clone + 'static,
     {
         self.update_scope(new_scope);
         self.on_changed = on_changed;
     }
 
-    fn update_scope<T>(&mut self, new_scope: T)
+    fn update_scope<T>(&mut self, new_scope: &T)
     where
-        T: Any + 'static,
+        T: Any + Clone + 'static,
     {
-        if let ScopeStorage::Owned(stored) = &mut self.scope
-            && let Some(stored) = stored.downcast_mut::<T>()
-        {
-            *stored = new_scope;
-        } else {
-            self.scope = ScopeStorage::from_value(new_scope);
+        match &mut self.scope {
+            ScopeStorage::Owned(stored) => {
+                if let Some(stored) = stored.downcast_mut::<T>() {
+                    stored.clone_from(new_scope);
+                    return;
+                }
+            }
+            ScopeStorage::RecomposeScope { weak, .. } => {
+                if (new_scope as &dyn Any)
+                    .downcast_ref::<RecomposeScope>()
+                    .is_some_and(|scope| Weak::as_ptr(weak) == Rc::as_ptr(&scope.inner))
+                {
+                    return;
+                }
+            }
         }
+        self.scope = ScopeStorage::from_value(new_scope.clone());
     }
 
     fn matches_scope<T>(&self, scope: &T) -> bool
