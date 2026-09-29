@@ -669,8 +669,9 @@ fn labels_between_shapes_they_do_not_touch_draw_in_one_batch() {
         "the second label shows over its card"
     );
     assert_eq!(
-        draws, 4,
-        "one interior pre-pass draw, one shape draw and one glyph draw for both cards, plus the clear"
+        draws, 3,
+        "one interior pre-pass draw, one shape draw and one glyph draw for both cards: \
+         a label's quads past its draw rect are cut, so it needs no scissor of its own"
     );
 }
 
