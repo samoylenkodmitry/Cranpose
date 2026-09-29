@@ -52,6 +52,7 @@ use crate::{
         scaled_quad, snap_delta_for_anchor, translate_quad,
         translation_stable_anchored_device_pixel_bounds,
     },
+    glyph_run::{RunGlyphScratch, RunGlyphs},
     glyph_run_arena::{GlyphRunArena, GlyphRunSpan},
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
@@ -315,7 +316,7 @@ struct CachedTextGlyphQuad {
 struct CachedTextGlyphRun {
     /// The run's glyphs that draw: zero-sized and transparent ones are left
     /// out when the run is collected.
-    glyphs: Rc<[SoftwareGlyphAtlasPlacement]>,
+    glyphs: RunGlyphs,
     bounds: GlyphRunBounds,
     /// Where each of `glyphs` sits in the atlas at `atlas_generation`. A
     /// glyph's quad is derived from the two as it is drawn, so no glyph is
@@ -330,7 +331,7 @@ struct CachedTextGlyphRun {
 /// quad derived as it is read.
 #[derive(Clone, Copy)]
 struct GlyphRunQuads<'a> {
-    glyphs: &'a [SoftwareGlyphAtlasPlacement],
+    glyphs: &'a RunGlyphs,
     entries: &'a [GlyphAtlasEntry],
     atlas_size: u32,
     bounds: GlyphRunBounds,
@@ -344,7 +345,7 @@ struct GlyphRunBounds {
 }
 
 impl GlyphRunBounds {
-    fn of(glyphs: &[SoftwareGlyphAtlasPlacement]) -> Self {
+    fn of(glyphs: impl IntoIterator<Item = SoftwareGlyphAtlasPlacement>) -> Self {
         let mut bounds = Self {
             min: [i32::MAX; 2],
             max: [i32::MIN; 2],
@@ -389,7 +390,7 @@ impl GlyphRunBounds {
 
 /// A text's glyph run as the frame found it.
 struct TextGlyphRunLookup {
-    glyphs: Rc<[SoftwareGlyphAtlasPlacement]>,
+    glyphs: RunGlyphs,
     bounds: GlyphRunBounds,
     /// Whether the run came from the cache rather than from this frame's
     /// collection.
@@ -434,7 +435,7 @@ impl GlyphRunQuads<'_> {
         self.glyphs
             .iter()
             .zip(self.entries)
-            .map(|(glyph, entry)| cached_text_glyph_quad(glyph, *entry, self.atlas_size))
+            .map(|(glyph, entry)| cached_text_glyph_quad(&glyph, *entry, self.atlas_size))
     }
 }
 
@@ -2593,6 +2594,7 @@ pub struct GpuRenderer {
     pub(crate) scratch_arena_draws: Vec<RunDrawCall>,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
     scratch_text_glyph_entries: Vec<GlyphAtlasEntry>,
+    run_glyph_scratch: RunGlyphScratch,
     frame_graph_executor: WgpuFrameGraphExecutor,
     deferred_offscreen_releases: Vec<OffscreenTarget>,
     pub(crate) effect_renderer: EffectRenderer,
@@ -2856,6 +2858,7 @@ impl GpuRenderer {
             scratch_arena_draws: Vec::new(),
             scratch_text_glyph_run: Vec::new(),
             scratch_text_glyph_entries: Vec::new(),
+            run_glyph_scratch: RunGlyphScratch::default(),
             frame_graph_executor,
             deferred_offscreen_releases: Vec::new(),
             effect_renderer,
@@ -4746,16 +4749,16 @@ impl GpuRenderer {
         &mut self,
         run_key: TextGlyphRunCacheKey,
         atlas_generation: u64,
-        cached_glyph_run: Option<&[SoftwareGlyphAtlasPlacement]>,
+        cached_glyph_run: Option<&RunGlyphs>,
         collected_run: &[SoftwareGlyphAtlasRunGlyph],
         entries: &mut Vec<GlyphAtlasEntry>,
     ) -> Result<Rc<[GlyphAtlasEntry]>, String> {
         entries.clear();
         let mut seen = RunAtlasEntries::new();
         if let Some(glyph_run) = cached_glyph_run {
-            for glyph in glyph_run {
-                entries.push(seen.entry(self, glyph, |renderer| {
-                    renderer.glyph_atlas_entry_for_placement(glyph)
+            for glyph in glyph_run.iter() {
+                entries.push(seen.entry(self, &glyph, |renderer| {
+                    renderer.glyph_atlas_entry_for_placement(&glyph)
                 })?);
             }
         } else {
@@ -5021,7 +5024,7 @@ impl GpuRenderer {
         if let Some(cached) = self.text_glyph_run_cache.get(&run_key) {
             cached.last_frame.set(frame);
             return Some(TextGlyphRunLookup {
-                glyphs: Rc::clone(&cached.glyphs),
+                glyphs: cached.glyphs.clone(),
                 bounds: cached.bounds,
                 cached: true,
                 entries: (cached.atlas_generation == atlas_generation)
@@ -5046,15 +5049,20 @@ impl GpuRenderer {
             log_text_atlas_fallback(text_draw);
             return None;
         }
-        let glyphs: Rc<[SoftwareGlyphAtlasPlacement]> = collected_run
-            .iter()
-            .map(SoftwareGlyphAtlasRunGlyph::placement)
-            .collect();
-        let bounds = GlyphRunBounds::of(&glyphs);
+        let Some(glyphs) = RunGlyphs::of(
+            collected_run
+                .iter()
+                .map(SoftwareGlyphAtlasRunGlyph::placement),
+            &mut self.run_glyph_scratch,
+        ) else {
+            log_text_atlas_fallback(text_draw);
+            return None;
+        };
+        let bounds = GlyphRunBounds::of(glyphs.iter());
         self.text_glyph_run_cache.put(
             run_key,
             CachedTextGlyphRun {
-                glyphs: Rc::clone(&glyphs),
+                glyphs: glyphs.clone(),
                 bounds,
                 atlas_entries: None,
                 atlas_generation: 0,
@@ -5132,7 +5140,7 @@ impl GpuRenderer {
                 let Ok(entries) = self.prepare_text_glyph_entries(
                     run_key,
                     self.text_glyph_atlas.generation(),
-                    run.cached.then_some(&*run.glyphs),
+                    run.cached.then_some(&run.glyphs),
                     collected_run,
                     generated_entries,
                 ) else {

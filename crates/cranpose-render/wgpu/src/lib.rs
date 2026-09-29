@@ -24,6 +24,7 @@ mod frame_graph;
 mod frame_packet;
 mod frontend;
 mod glass_split;
+mod glyph_run;
 mod glyph_run_arena;
 pub(crate) mod gpu_stats;
 mod initial_present;

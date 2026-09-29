@@ -53,7 +53,7 @@ fn line() -> Vec<SoftwareGlyphAtlasPlacement> {
 #[test]
 fn a_runs_bounds_are_the_box_its_glyphs_cover() {
     assert_eq!(
-        GlyphRunBounds::of(&line()),
+        GlyphRunBounds::of(line()),
         GlyphRunBounds {
             min: [0, -2],
             max: [20, 12],
@@ -63,7 +63,7 @@ fn a_runs_bounds_are_the_box_its_glyphs_cover() {
 
 #[test]
 fn a_run_lies_within_a_viewport_only_while_every_glyph_does() {
-    let bounds = GlyphRunBounds::of(&line());
+    let bounds = GlyphRunBounds::of(line());
     let view = viewport(100, 50, SegmentTransform::IDENTITY);
     assert!(bounds.within_viewport(at(10.0, 10.0), None, view, 1.0));
     // The tall glyph reaches above the viewport's top.
@@ -88,7 +88,12 @@ fn a_run_lies_within_a_viewport_only_while_every_glyph_does() {
 #[test]
 fn an_empty_run_never_skips_the_per_glyph_test() {
     let view = viewport(100, 50, SegmentTransform::IDENTITY);
-    assert!(!GlyphRunBounds::of(&[]).within_viewport(at(10.0, 10.0), None, view, 1.0));
+    assert!(!GlyphRunBounds::of(std::iter::empty()).within_viewport(
+        at(10.0, 10.0),
+        None,
+        view,
+        1.0
+    ));
 }
 
 #[test]
@@ -103,13 +108,15 @@ fn a_run_draws_the_same_glyphs_whether_or_not_its_bounds_answer_for_them() {
             height: 2,
         })
         .collect();
+    let run = RunGlyphs::of(glyphs.iter().copied(), &mut RunGlyphScratch::default())
+        .expect("the line has a compact form");
     let quads = |bounds| GlyphRunQuads {
-        glyphs: &glyphs,
+        glyphs: &run,
         entries: &entries,
         atlas_size: 64,
         bounds,
     };
-    let unknown = GlyphRunBounds::of(&[]);
+    let unknown = GlyphRunBounds::of(std::iter::empty());
     let clips = [
         None,
         Some(Rect {
@@ -141,7 +148,7 @@ fn a_run_draws_the_same_glyphs_whether_or_not_its_bounds_answer_for_them() {
                     drawn
                 };
                 assert_eq!(
-                    sink(GlyphRunBounds::of(&glyphs)),
+                    sink(GlyphRunBounds::of(glyphs.iter().copied())),
                     sink(unknown),
                     "raster {raster:?}, clip {clip:?}"
                 );
