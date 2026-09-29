@@ -75,6 +75,65 @@ fn full_output(solid: SolidOutput) -> VertexOutput {
     return output;
 }
 
+// What a solid fill batch's fragments need: `SolidOutput` with the fill's
+// interior carried as four half-float insets from the rect's sides in place
+// of a vector of its own. The fragments of many small fills are bound by the
+// varyings they read, and a fill carries no arc geometry to keep whole. Each
+// inset is rounded up before it is packed, so the interior only ever shrinks
+// and every pixel it lets skip the distance field is one the field would
+// cover whole.
+struct SolidFillOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(2) world_pos: vec4<f32>,
+    @location(3) @interpolate(flat) rect: vec4<f32>,
+    @location(4) @interpolate(flat) radii: vec4<f32>,
+    @location(5) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(6) @interpolate(flat) stroke_params: vec4<f32>,
+    @location(7) @interpolate(flat) interior_insets: vec2<u32>,
+}
+
+// How much further in an inset goes before it is packed, relatively and
+// absolutely: past half a half-float step, and past the rounding of the
+// single-float sum that unpacks it.
+const INSET_ROUND_UP: f32 = 0.0009765625;
+
+fn solid_fill_output(full: VertexOutput) -> SolidFillOutput {
+    var output: SolidFillOutput;
+    output.clip_position = full.clip_position;
+    output.color = full.color;
+    output.world_pos = full.world_pos;
+    output.rect = full.rect;
+    output.radii = full.radii;
+    output.clip_rect = full.clip_rect;
+    output.stroke_params = full.stroke_params;
+    let far = full.rect.xy + full.rect.zw;
+    let insets = vec4<f32>(full.arc_params.xy - full.rect.xy, far - full.arc_params.zw);
+    let packed = insets + (abs(insets) + 1.0) * INSET_ROUND_UP;
+    output.interior_insets = vec2<u32>(pack2x16float(packed.xy), pack2x16float(packed.zw));
+    return output;
+}
+
+fn full_from_solid_fill(fill: SolidFillOutput) -> VertexOutput {
+    var solid: SolidOutput;
+    solid.clip_position = fill.clip_position;
+    solid.color = fill.color;
+    solid.world_pos = fill.world_pos;
+    solid.rect = fill.rect;
+    solid.radii = fill.radii;
+    solid.clip_rect = fill.clip_rect;
+    solid.stroke_params = fill.stroke_params;
+    let insets = vec4<f32>(
+        unpack2x16float(fill.interior_insets.x),
+        unpack2x16float(fill.interior_insets.y),
+    );
+    solid.arc_params = vec4<f32>(
+        fill.rect.xy + insets.xy,
+        fill.rect.xy + fill.rect.zw - insets.zw,
+    );
+    return full_output(solid);
+}
+
 struct GradientFillOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_pos: vec4<f32>,
@@ -614,6 +673,15 @@ fn vs_record_solid(
     record: ShapeRecord,
 ) -> SolidOutput {
     return solid_output(placed_record_vertex(record, vertex_idx, instance));
+}
+
+@vertex
+fn vs_record_solid_fill(
+    @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
+    record: ShapeRecord,
+) -> SolidFillOutput {
+    return solid_fill_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
 @vertex
@@ -1178,6 +1246,11 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_solid(input: SolidOutput) -> @location(0) vec4<f32> {
     return fragment(full_output(input));
+}
+
+@fragment
+fn fs_solid_fill(input: SolidFillOutput) -> @location(0) vec4<f32> {
+    return fragment(full_from_solid_fill(input));
 }
 
 @fragment

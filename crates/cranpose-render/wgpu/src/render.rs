@@ -1103,9 +1103,12 @@ impl ShapeVariant {
     }
 
     fn entries(self) -> (&'static str, &'static str) {
-        if self.solid {
+        let fill = self.kind == Some(FRAGMENT_KIND_FILL as u8);
+        if self.solid && fill {
+            ("vs_record_solid_fill", "fs_solid_fill")
+        } else if self.solid {
             ("vs_record_solid", "fs_solid")
-        } else if self.kind == Some(FRAGMENT_KIND_FILL as u8) && !self.ablation.material {
+        } else if fill && !self.ablation.material {
             ("vs_record_gradient_fill", "fs_gradient_fill")
         } else {
             ("vs_record", "fs_main")

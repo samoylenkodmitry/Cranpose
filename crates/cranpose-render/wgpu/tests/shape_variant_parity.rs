@@ -3,7 +3,10 @@ use cranpose_render_common::graph::{
     RenderGraph, RenderNode,
 };
 use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, Rect};
-use support::{SIZE, record_gradient_fill_scene, record_mixed_scene, record_solid_scene};
+use support::{
+    SIZE, record_gradient_fill_scene, record_mixed_scene, record_solid_fill_scene,
+    record_solid_scene,
+};
 
 use crate::support;
 
@@ -100,6 +103,11 @@ fn assert_variants_match_general_under(
 #[test]
 fn solid_batches_shade_as_the_general_pipeline_does() {
     assert_variants_match_general("solid", graph_for(record_solid_scene, None));
+}
+
+#[test]
+fn solid_fill_batches_shade_as_the_general_pipeline_does() {
+    assert_variants_match_general("solid fill", graph_for(record_solid_fill_scene, None));
 }
 
 #[test]
