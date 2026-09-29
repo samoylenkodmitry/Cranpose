@@ -5,6 +5,7 @@ use std::{ops::AddAssign, rc::Rc};
 use crate::{
     ArcRecordArgs, Brush, Color, ColorFilter, CommandRecorder, CommandRecording, ImageBitmap,
     ImageSampling, normalized_band,
+    path::{DrawStyle, Path},
     stroke::{LineGeometry, Stroke},
     typography::{
         DrawTextMeasurer, DrawTextStyle, TextAlign, TextMeasurement, TextVerticalAlign,
@@ -953,6 +954,23 @@ pub trait DrawScope {
         blend_mode: BlendMode,
     );
 
+    /// Fills or strokes `path` with `brush`: Compose's
+    /// `drawPath(path, brush, style)`. A fill closes every contour and
+    /// rasterizes it as [`draw_vector_path`](Self::draw_vector_path) does. A
+    /// stroke draws each flattened edge as a line on the GPU, capped at an
+    /// open contour's ends and joined at its corners as
+    /// [`crate::for_each_stroke_line`] describes; a dashed stroke draws the
+    /// dashes its effect cuts. Where edges meet, a translucent stroke is
+    /// painted twice.
+    fn draw_path(&mut self, path: &Path, brush: Brush, style: DrawStyle);
+    fn draw_path_blend(
+        &mut self,
+        path: &Path,
+        brush: Brush,
+        style: DrawStyle,
+        blend_mode: BlendMode,
+    );
+
     /// Fills an annular sector — the region between `inner_radius` and
     /// `outer_radius`, limited to an angular sweep, with **flat radial ends**.
     ///
@@ -1275,6 +1293,102 @@ impl DrawScopeDefault {
         }
         self.recording.push_scope_arc(&args, &geometry);
     }
+
+    /// Rasterizes the fill of `path` into a cached coverage image and
+    /// records it, blended by `blend_mode`.
+    fn push_vector_path(&mut self, path: &crate::VectorPath, brush: &Brush, blend_mode: BlendMode) {
+        const SUPERSAMPLE: f32 = 2.0;
+        const MAX_MASK_PIXELS: f32 = 4096.0;
+
+        if path.is_empty() {
+            return;
+        }
+        let bounds = path.bounds();
+        if bounds.width <= 0.0 || bounds.height <= 0.0 {
+            return;
+        }
+
+        let color = match brush {
+            Brush::Solid(color) => *color,
+            Brush::LinearGradient { colors, .. }
+            | Brush::RadialGradient { colors, .. }
+            | Brush::SweepGradient { colors, .. } => match colors.first() {
+                Some(color) => *color,
+                None => return,
+            },
+        };
+        if color.3 <= 0.0 {
+            return;
+        }
+
+        let origin = Point::new(bounds.x.floor() - 1.0, bounds.y.floor() - 1.0);
+        let rect_width = (bounds.x + bounds.width).ceil() - origin.x + 1.0;
+        let rect_height = (bounds.y + bounds.height).ceil() - origin.y + 1.0;
+        let mask_width = (rect_width * SUPERSAMPLE)
+            .ceil()
+            .clamp(1.0, MAX_MASK_PIXELS) as usize;
+        let mask_height = (rect_height * SUPERSAMPLE)
+            .ceil()
+            .clamp(1.0, MAX_MASK_PIXELS) as usize;
+
+        let red = (color.0.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let green = (color.1.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let blue = (color.2.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let alpha = color.3.clamp(0.0, 1.0);
+        let key = vector_path_mask_key(
+            path,
+            origin,
+            (mask_width, mask_height),
+            [red, green, blue],
+            alpha,
+        );
+        let cached = vector_path_mask_cache_get(key);
+        let image = match cached {
+            Some(image) => image,
+            None => {
+                let mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE);
+                let mut pixels = Vec::with_capacity(mask.len() * 4);
+                for coverage in mask {
+                    pixels.extend_from_slice(&[
+                        red,
+                        green,
+                        blue,
+                        (alpha * coverage as f32 + 0.5) as u8,
+                    ]);
+                }
+                let Ok(image) =
+                    ImageBitmap::from_rgba8(mask_width as u32, mask_height as u32, pixels)
+                else {
+                    return;
+                };
+                vector_path_mask_cache_put(key, image.clone());
+                image
+            }
+        };
+
+        let image = DrawPrimitive::Image {
+            rect: Rect {
+                x: origin.x,
+                y: origin.y,
+                width: rect_width,
+                height: rect_height,
+            },
+            image,
+            alpha: 1.0,
+            color_filter: None,
+            sampling: ImageSampling::Linear,
+            src_rect: None,
+        };
+        self.recording
+            .push_other(if blend_mode == BlendMode::SrcOver {
+                image
+            } else {
+                DrawPrimitive::Blend {
+                    primitive: Box::new(image),
+                    blend_mode,
+                }
+            });
+    }
 }
 
 impl DrawScope for DrawScopeDefault {
@@ -1483,6 +1597,63 @@ impl DrawScope for DrawScopeDefault {
         self.recording.push_line(&line, &brush, stroke, blend_mode);
     }
 
+    fn draw_path(&mut self, path: &Path, brush: Brush, style: DrawStyle) {
+        self.draw_path_blend(path, brush, style, BlendMode::SrcOver);
+    }
+
+    fn draw_path_blend(
+        &mut self,
+        path: &Path,
+        brush: Brush,
+        style: DrawStyle,
+        blend_mode: BlendMode,
+    ) {
+        let (stroke, dash) = match style {
+            DrawStyle::Fill => {
+                self.push_vector_path(
+                    &path.to_vector_path(crate::PathFillRule::NonZero),
+                    &brush,
+                    blend_mode,
+                );
+                return;
+            }
+            DrawStyle::Stroke(stroke) => (stroke, None),
+            DrawStyle::DashedStroke(stroke, dash) => (stroke, Some(dash)),
+        };
+        if !stroke.is_visible() {
+            return;
+        }
+        let recording = &mut self.recording;
+        let mut push = |line: LineGeometry| {
+            if !line.is_degenerate() {
+                let stroke = Stroke {
+                    cap: line.cap,
+                    ..stroke
+                };
+                recording.push_line(&line, &brush, stroke, blend_mode);
+            }
+        };
+        for contour in path.contours() {
+            let Some(dash) = dash else {
+                crate::for_each_stroke_line(&contour.points, contour.closed, stroke, &mut push);
+                continue;
+            };
+            let closing = contour
+                .closed
+                .then(|| contour.points.first().copied())
+                .flatten();
+            let points: std::borrow::Cow<'_, [Point]> = match closing {
+                Some(first) => {
+                    std::borrow::Cow::Owned(contour.points.iter().copied().chain([first]).collect())
+                }
+                None => std::borrow::Cow::Borrowed(&contour.points),
+            };
+            dash.for_each_dash(&points, |piece| {
+                crate::for_each_stroke_line(piece, false, stroke, &mut push);
+            });
+        }
+    }
+
     fn draw_annular_sector(
         &mut self,
         brush: Brush,
@@ -1685,88 +1856,7 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_vector_path(&mut self, path: &crate::VectorPath, brush: Brush) {
-        const SUPERSAMPLE: f32 = 2.0;
-        const MAX_MASK_PIXELS: f32 = 4096.0;
-
-        if path.is_empty() {
-            return;
-        }
-        let bounds = path.bounds();
-        if bounds.width <= 0.0 || bounds.height <= 0.0 {
-            return;
-        }
-
-        let color = match &brush {
-            Brush::Solid(color) => *color,
-            Brush::LinearGradient { colors, .. }
-            | Brush::RadialGradient { colors, .. }
-            | Brush::SweepGradient { colors, .. } => match colors.first() {
-                Some(color) => *color,
-                None => return,
-            },
-        };
-        if color.3 <= 0.0 {
-            return;
-        }
-
-        let origin = Point::new(bounds.x.floor() - 1.0, bounds.y.floor() - 1.0);
-        let rect_width = (bounds.x + bounds.width).ceil() - origin.x + 1.0;
-        let rect_height = (bounds.y + bounds.height).ceil() - origin.y + 1.0;
-        let mask_width = (rect_width * SUPERSAMPLE)
-            .ceil()
-            .clamp(1.0, MAX_MASK_PIXELS) as usize;
-        let mask_height = (rect_height * SUPERSAMPLE)
-            .ceil()
-            .clamp(1.0, MAX_MASK_PIXELS) as usize;
-
-        let red = (color.0.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let green = (color.1.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let blue = (color.2.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let alpha = color.3.clamp(0.0, 1.0);
-        let key = vector_path_mask_key(
-            path,
-            origin,
-            (mask_width, mask_height),
-            [red, green, blue],
-            alpha,
-        );
-        let cached = vector_path_mask_cache_get(key);
-        let image = match cached {
-            Some(image) => image,
-            None => {
-                let mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE);
-                let mut pixels = Vec::with_capacity(mask.len() * 4);
-                for coverage in mask {
-                    pixels.extend_from_slice(&[
-                        red,
-                        green,
-                        blue,
-                        (alpha * coverage as f32 + 0.5) as u8,
-                    ]);
-                }
-                let Ok(image) =
-                    ImageBitmap::from_rgba8(mask_width as u32, mask_height as u32, pixels)
-                else {
-                    return;
-                };
-                vector_path_mask_cache_put(key, image.clone());
-                image
-            }
-        };
-
-        self.recording.push_other(DrawPrimitive::Image {
-            rect: Rect {
-                x: origin.x,
-                y: origin.y,
-                width: rect_width,
-                height: rect_height,
-            },
-            image,
-            alpha: 1.0,
-            color_filter: None,
-            sampling: ImageSampling::Linear,
-            src_rect: None,
-        });
+        self.push_vector_path(path, &brush, BlendMode::SrcOver);
     }
 
     fn measure_text(&self, text: &str, style: &DrawTextStyle) -> TextMeasurement {
