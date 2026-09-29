@@ -11294,3 +11294,62 @@ fn a_wait_without_a_deadline_prefetches_until_the_frame_can_start() {
         "one pass of one item ran before the frame could start"
     );
 }
+
+#[test]
+fn a_task_woken_between_frames_runs_when_the_loop_wakes_and_its_change_waits_for_a_frame() {
+    let _guard = test_guard();
+    let resumed = Rc::new(Cell::new(false));
+    let written = Rc::new(Cell::new(None::<MutableState<u32>>));
+    let content_resumed = Rc::clone(&resumed);
+    let content_written = Rc::clone(&written);
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let ticks = rememberMutableStateOf(|| 0u32);
+            content_written.set(Some(ticks));
+            let resumed = Rc::clone(&content_resumed);
+            launched_effect_async_impl(
+                location_key(file!(), line!(), column!()),
+                TaskSite::new(file!(), line!()),
+                (),
+                move |_| {
+                    Box::pin(async move {
+                        cranpose_core::delay(Duration::from_millis(1)).await;
+                        resumed.set(true);
+                        ticks.set_value(1);
+                    })
+                },
+            );
+            Text(
+                format!("{}", ticks.value()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+    shell.update();
+    assert!(
+        !resumed.get(),
+        "the delay has not run out on the first frame"
+    );
+
+    let waited = web_time::Instant::now();
+    while !shell.has_pending_ui() && waited.elapsed() < Duration::from_secs(5) {
+        std::thread::yield_now();
+    }
+    assert!(shell.has_pending_ui(), "the timer woke the task");
+    shell.run_pending_tasks();
+
+    assert!(
+        resumed.get(),
+        "the task resumed when the loop woke, without waiting for a frame"
+    );
+    assert!(!shell.has_pending_ui());
+    assert!(
+        shell.needs_update(),
+        "the state it wrote is drawn by the next frame"
+    );
+    shell.update();
+    assert_eq!(written.get().map(|ticks| ticks.get_non_reactive()), Some(1));
+}

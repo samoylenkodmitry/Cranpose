@@ -278,6 +278,9 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
     }
 
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        if let Some(shell) = self.shell.as_mut() {
+            shell.run_pending_tasks();
+        }
         if let Some(window) = &self.window {
             window.request_redraw();
         }
