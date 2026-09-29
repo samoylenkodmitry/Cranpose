@@ -1259,6 +1259,26 @@ fn every_desktop_window_paces_a_frame_its_surface_could_not_take() {
 }
 
 #[test]
+fn robot_input_redraws_on_the_frame_schedule_pointer_input_uses() {
+    let source = crate_source("src/desktop.rs");
+    let redraw = source
+        .split("if robot_visual_dirty {")
+        .nth(1)
+        .and_then(|body| body.split("\n            }\n").next())
+        .expect("the loop redraws for robot input in one place");
+    assert!(
+        redraw.contains("request_redraw_once("),
+        "robot input that changes the frame asks for a redraw: {redraw}"
+    );
+    assert!(
+        !redraw.contains("last_frame_start_time = None"),
+        "robot input redraws when the frame cap allows, as pointer input does; clearing the cap drew an \
+         extra frame whose present blocked the loop, and a paced hover run's quote stream fell from 60 \
+         to about 40 ticks a second: {redraw}"
+    );
+}
+
+#[test]
 fn desktop_bridge_builds_nothing_without_a_reader_and_publishes_on_androids_interval() {
     let desktop_source = crate_source("src/desktop_accessibility.rs");
     let sync = desktop_source
