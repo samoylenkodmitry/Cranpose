@@ -68,6 +68,7 @@ use crate::{
     },
     shaders,
     shape_pipelines::{ShapePipelineFactory, ShapePipelines},
+    shared_shader::SharedShader,
 };
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 const MAX_TRANSPARENT_SOURCES: usize = 16;
@@ -920,11 +921,12 @@ pub(crate) fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
         })
 }
 
-fn shape_shader_source(mode: RunBufferMode) -> Cow<'static, str> {
+/// The shape shader's source for `mode`, built when its module is parsed.
+fn shape_shader_source(mode: RunBufferMode) -> fn() -> Cow<'static, str> {
     if mode.storage {
-        Cow::Owned(shaders::storage_shape_shader())
+        || Cow::Owned(shaders::storage_shape_shader())
     } else {
-        Cow::Borrowed(shaders::SHADER)
+        || Cow::Borrowed(shaders::SHADER)
     }
 }
 
@@ -1286,8 +1288,7 @@ pub(crate) fn create_shape_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
-    uniform_layout: &wgpu::BindGroupLayout,
-    run_layout: &wgpu::BindGroupLayout,
+    shader: &SharedShader,
     key: ShapePipelineKey,
     mode: RunBufferMode,
 ) -> wgpu::RenderPipeline {
@@ -1317,16 +1318,7 @@ pub(crate) fn create_shape_pipeline(
     };
     let blend = (depth != ShapeDepth::Interior).then(|| blend_state_for_mode(blend_mode));
     let instance_layout = record_vertex_layouts().map(Some);
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Shape Shader"),
-        source: wgpu::ShaderSource::Wgsl(shape_shader_source(mode)),
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Shape Pipeline Layout"),
-        bind_group_layouts: &[Some(uniform_layout), Some(run_layout)],
-        immediate_size: 0,
-    });
+    let module = shader.module();
 
     create_render_pipeline_logged(
         device,
@@ -1336,9 +1328,9 @@ pub(crate) fn create_shape_pipeline(
         ),
         wgpu::RenderPipelineDescriptor {
             label: Some("Shape Pipeline"),
-            layout: Some(&pipeline_layout),
+            layout: Some(shader.layout()),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module,
                 entry_point: Some(vertex_entry),
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants: &constants,
@@ -1347,7 +1339,7 @@ pub(crate) fn create_shape_pipeline(
                 buffers: &instance_layout,
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module,
                 entry_point: Some(fragment_entry),
                 compilation_options: wgpu::PipelineCompilationOptions {
                     constants: &constants,
@@ -1379,37 +1371,26 @@ fn create_image_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
-    uniform_layout: &wgpu::BindGroupLayout,
-    image_layout: &wgpu::BindGroupLayout,
+    shader: &SharedShader,
     blend_mode: BlendMode,
     depth: bool,
 ) -> wgpu::RenderPipeline {
-    let image_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Image Shader"),
-        source: wgpu::ShaderSource::Wgsl(shaders::IMAGE_SHADER.into()),
-    });
-
-    let image_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Image Pipeline Layout"),
-        bind_group_layouts: &[Some(uniform_layout), Some(image_layout)],
-        immediate_size: 0,
-    });
-
+    let module = shader.module();
     create_render_pipeline_logged(
         device,
         cache,
         &format!("image blend={blend_mode:?} depth={depth}"),
         wgpu::RenderPipelineDescriptor {
             label: Some("Image Pipeline"),
-            layout: Some(&image_pipeline_layout),
+            layout: Some(shader.layout()),
             vertex: wgpu::VertexState {
-                module: &image_shader,
+                module,
                 entry_point: Some("image_vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[Some(Vertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &image_shader,
+                module,
                 entry_point: Some("image_fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -1439,21 +1420,10 @@ fn create_glyph_atlas_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
-    uniform_layout: &wgpu::BindGroupLayout,
-    image_layout: &wgpu::BindGroupLayout,
+    shader: &SharedShader,
     (depth, turned): (bool, bool),
 ) -> wgpu::RenderPipeline {
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Glyph Atlas Shader"),
-        source: wgpu::ShaderSource::Wgsl(shaders::GLYPH_ATLAS_SHADER.into()),
-    });
-
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Glyph Atlas Pipeline Layout"),
-        bind_group_layouts: &[Some(uniform_layout), Some(image_layout)],
-        immediate_size: 0,
-    });
-
+    let module = shader.module();
     create_render_pipeline_logged(
         device,
         cache,
@@ -1465,9 +1435,9 @@ fn create_glyph_atlas_pipeline(
         },
         wgpu::RenderPipelineDescriptor {
             label: Some("Glyph Atlas Pipeline"),
-            layout: Some(&pipeline_layout),
+            layout: Some(shader.layout()),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module,
                 entry_point: Some(if turned {
                     "glyph_atlas_turned_vs_main"
                 } else {
@@ -1481,7 +1451,7 @@ fn create_glyph_atlas_pipeline(
                 })],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module,
                 entry_point: Some("glyph_atlas_fs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
@@ -2565,6 +2535,8 @@ pub struct GpuRenderer {
     image_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
     /// Indexed by depth, then turned: see [`GpuRenderer::glyph_atlas_pipeline`].
     glyph_atlas_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 4],
+    image_shader: SharedShader,
+    glyph_atlas_shader: SharedShader,
     /// Transient depth buffers by target size, for passes that lay opaque
     /// interiors down first.
     depth_targets: Vec<((u32, u32), wgpu::TextureView)>,
@@ -2775,8 +2747,9 @@ impl GpuRenderer {
             composition_format,
             adapter_backend,
         );
-        let output_converter = OutputConverter::new(&device, display_format);
-        let screenshot_converter = OutputConverter::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+        let output_converter = OutputConverter::new(&device, adapter_backend, display_format);
+        let screenshot_converter =
+            OutputConverter::new(&device, adapter_backend, wgpu::TextureFormat::Rgba8Unorm);
         let effects_ms = instant_ms(effects_started, Instant::now());
         let mut frame_graph_executor = WgpuFrameGraphExecutor::new();
         frame_graph_executor.init_pass_timing(&device, &queue);
@@ -2785,12 +2758,35 @@ impl GpuRenderer {
                 device: Arc::clone(&device),
                 cache: pipeline_cache.clone(),
                 format: composition_format,
-                uniform_layout: uniform_bind_group_layout.clone(),
-                run_layout: run_store.layout().clone(),
+                shader: SharedShader::new(
+                    &device,
+                    adapter_backend,
+                    "Shape Shader",
+                    shape_shader_source(run_store.mode()),
+                    &[Some(&uniform_bind_group_layout), Some(run_store.layout())],
+                ),
                 mode: run_store.mode(),
             },
             adapter_backend,
             &pipeline_compiler,
+        );
+        let image_layouts = [
+            Some(&uniform_bind_group_layout),
+            Some(&image_bind_group_layout),
+        ];
+        let image_shader = SharedShader::new(
+            &device,
+            adapter_backend,
+            "Image Shader",
+            || shaders::IMAGE_SHADER.into(),
+            &image_layouts,
+        );
+        let glyph_atlas_shader = SharedShader::new(
+            &device,
+            adapter_backend,
+            "Glyph Atlas Shader",
+            || shaders::GLYPH_ATLAS_SHADER.into(),
+            &image_layouts,
         );
 
         let mut renderer = Self {
@@ -2821,6 +2817,8 @@ impl GpuRenderer {
                 LazyGpuResource::new("glyph/atlas/turned"),
                 LazyGpuResource::new("glyph/atlas/turned/depth"),
             ],
+            image_shader,
+            glyph_atlas_shader,
             depth_targets: Vec::new(),
             uniform_bind_group_layout,
             image_bind_group_layout,
@@ -2926,19 +2924,8 @@ impl GpuRenderer {
         let device = Arc::clone(&self.device);
         let cache = self.pipeline_cache.clone();
         let format = self.composition_format;
-        let uniform_layout = self.uniform_bind_group_layout.clone();
-        let image_layout = self.image_bind_group_layout.clone();
-        move || {
-            create_image_pipeline(
-                &device,
-                cache.as_ref(),
-                format,
-                &uniform_layout,
-                &image_layout,
-                blend_mode,
-                depth,
-            )
-        }
+        let shader = self.image_shader.clone();
+        move || create_image_pipeline(&device, cache.as_ref(), format, &shader, blend_mode, depth)
     }
 
     pub(crate) fn image_pipeline(
@@ -2960,17 +2947,9 @@ impl GpuRenderer {
         let device = Arc::clone(&self.device);
         let cache = self.pipeline_cache.clone();
         let format = self.composition_format;
-        let uniform_layout = self.uniform_bind_group_layout.clone();
-        let image_layout = self.image_bind_group_layout.clone();
+        let shader = self.glyph_atlas_shader.clone();
         move || {
-            create_glyph_atlas_pipeline(
-                &device,
-                cache.as_ref(),
-                format,
-                &uniform_layout,
-                &image_layout,
-                (depth, turned),
-            )
+            create_glyph_atlas_pipeline(&device, cache.as_ref(), format, &shader, (depth, turned))
         }
     }
 

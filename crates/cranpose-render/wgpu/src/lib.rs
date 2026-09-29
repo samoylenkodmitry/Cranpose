@@ -47,6 +47,7 @@ mod scene;
 mod shader_cache;
 mod shaders;
 mod shape_pipelines;
+mod shared_shader;
 #[cfg(test)]
 mod test_support;
 
