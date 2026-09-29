@@ -902,8 +902,23 @@ fn circles_plain_rects_and_strokes_leave_the_segment_unmarked() {
 }
 
 #[test]
-fn a_chip_whose_corners_take_most_of_it_leaves_the_segment_unmarked() {
+fn a_circle_whose_corners_take_all_of_it_leaves_the_segment_unmarked() {
     assert!(!only_segment_interiors(|recorder| {
+        recorder.push_round_rect(
+            rect(0.0, 0.0, 24.0, 24.0),
+            &solid(),
+            CornerRadii::uniform(12.0),
+            None,
+            BlendMode::SrcOver,
+        );
+    }));
+}
+
+#[test]
+fn a_chip_marks_the_segment_by_the_band_between_its_corners() {
+    // Inset by its corners on every side, the chip keeps 44 × 8 of its 60 × 24;
+    // the band between its left and right corners keeps 44 × 24.
+    assert!(only_segment_interiors(|recorder| {
         recorder.push_round_rect(
             rect(0.0, 0.0, 60.0, 24.0),
             &solid(),
@@ -912,6 +927,21 @@ fn a_chip_whose_corners_take_most_of_it_leaves_the_segment_unmarked() {
             BlendMode::SrcOver,
         );
     }));
+}
+
+#[test]
+fn a_fill_interior_is_the_larger_band_its_corners_leave_whole() {
+    assert_eq!(fill_interior_area(60.0, 24.0, [8.0; 4]), 44.0 * 24.0);
+    assert_eq!(fill_interior_area(24.0, 60.0, [8.0; 4]), 24.0 * 44.0);
+    // Top-left, top-right, bottom-right, bottom-left: the left side's larger
+    // corner and the right side's bound the band across.
+    assert_eq!(
+        fill_interior_area(100.0, 40.0, [4.0, 10.0, 2.0, 6.0]),
+        (100.0 - 6.0 - 10.0) * 40.0
+    );
+    assert_eq!(fill_interior_area(24.0, 24.0, [12.0; 4]), 0.0);
+    assert_eq!(fill_interior_area(30.0, 20.0, [0.0; 4]), 600.0);
+    assert_eq!(fill_interior_area(10.0, 10.0, [-3.0; 4]), 100.0);
 }
 
 #[test]

@@ -425,20 +425,36 @@ impl ShapeRecord {
     }
 }
 
-/// Whether a record is a rounded fill whose interior -- its rect inset by
-/// its largest corner radius -- covers at least half of the rect.
+/// The area of a fill's interior, where its coverage is 1, as the shape
+/// shader's `fill_interior` takes it: of the two bands its corners leave
+/// whole, the band between the left and right corners at full height or the
+/// one between the top and bottom corners at full width, the larger.
+/// `radii` is top-left, top-right, bottom-right, bottom-left, as recorded.
+fn fill_interior_area(width: f32, height: f32, radii: [f32; 4]) -> f32 {
+    let [top_left, top_right, bottom_right, bottom_left] =
+        radii.map(|radius| at_least(radius, 0.0));
+    let across = at_least(
+        width - top_left.max(bottom_left) - top_right.max(bottom_right),
+        0.0,
+    ) * at_least(height, 0.0);
+    let down = at_least(width, 0.0)
+        * at_least(
+            height - top_left.max(top_right) - bottom_left.max(bottom_right),
+            0.0,
+        );
+    across.max(down)
+}
+
+/// Whether a record is a rounded fill whose interior covers at least half
+/// of its rect: see [`fill_interior_area`].
 fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     if fragment_kind(body.flags) != FRAGMENT_KIND_FILL {
         return false;
     }
-    let corner = curve
-        .radii
-        .iter()
-        .fold(0.0, |corner, &radius| at_least(radius, corner));
+    let rounded = curve.radii.iter().any(|&radius| radius > 0.0);
     let [_, _, width, height] = body.rect;
     let area = width * height;
-    let interior = at_least(width - 2.0 * corner, 0.0) * at_least(height - 2.0 * corner, 0.0);
-    corner > 0.0 && area > 0.0 && interior * 2.0 >= area
+    rounded && area > 0.0 && fill_interior_area(width, height, curve.radii) * 2.0 >= area
 }
 
 /// The least interior, in square logical pixels, that a solid fill lays
@@ -452,12 +468,8 @@ fn interior_occludes(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     if fragment_kind(body.flags) != FRAGMENT_KIND_FILL || body.brush != 0 || body.color[3] < 1.0 {
         return false;
     }
-    let corner = curve
-        .radii
-        .iter()
-        .fold(0.0, |corner, &radius| at_least(radius, corner));
     let [_, _, width, height] = body.rect;
-    at_least(width - 2.0 * corner, 0.0) * at_least(height - 2.0 * corner, 0.0) >= OCCLUDER_MIN_AREA
+    fill_interior_area(width, height, curve.radii) >= OCCLUDER_MIN_AREA
 }
 
 fn fragment_kind(flags: u32) -> u32 {

@@ -355,14 +355,33 @@ fn resolved_radii(record: ShapeRecord, scale: f32) -> vec4<f32> {
     return clamp(stored, vec4<f32>(0.0), vec4<f32>(limit)) * scale;
 }
 
-// The part of a fill where coverage is exactly 1: its rect inset by its
-// largest corner radius and half a pixel. A fill carries it in `arc_params`,
-// which only arcs use, so it costs no varying vector of its own; on a tiling
-// GPU every vector is written and read back per vertex, and a scene of many
-// small shapes pays for it whether or not any pixel lies inside.
+// A part of a fill where coverage is exactly 1: of the two bands its
+// corners leave whole, the larger, half a pixel inside every edge. The band
+// between the left and right corners spans the full height, the one between
+// the top and bottom corners the full width, so a wide card keeps its long
+// edges out of the distance field. `radii` is top-left, top-right,
+// bottom-left, bottom-right. A fill carries it in `arc_params`, which only
+// arcs use, so it costs no varying vector of its own; on a tiling GPU every
+// vector is written and read back per vertex, and a scene of many small
+// shapes pays for it whether or not any pixel lies inside.
 fn fill_interior(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
-    let inset = max(max(radii.x, radii.y), max(radii.z, radii.w)) + 0.5;
-    return vec4<f32>(rect.x + inset, rect.y + inset, rect.x + rect.z - inset, rect.y + rect.w - inset);
+    let right = rect.x + rect.z;
+    let bottom = rect.y + rect.w;
+    let across = vec4<f32>(
+        rect.x + max(radii.x, radii.z) + 0.5,
+        rect.y + 0.5,
+        right - max(radii.y, radii.w) - 0.5,
+        bottom - 0.5,
+    );
+    let down = vec4<f32>(
+        rect.x + 0.5,
+        rect.y + max(radii.x, radii.y) + 0.5,
+        right - 0.5,
+        bottom - max(radii.z, radii.w) - 0.5,
+    );
+    let across_area = max(across.z - across.x, 0.0) * max(across.w - across.y, 0.0);
+    let down_area = max(down.z - down.x, 0.0) * max(down.w - down.y, 0.0);
+    return select(down, across, across_area >= down_area);
 }
 
 fn shape_output(
