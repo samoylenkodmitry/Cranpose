@@ -94,7 +94,7 @@ const TEXT_GLYPH_RUN_IDLE_FRAMES: u64 = 30;
 /// Text runs with at least this many glyphs keep their quads in retained GPU
 /// buffers and draw on their own; shorter ones are written into the frame's
 /// shared quads each frame, where consecutive runs share a draw.
-const RETAINED_TEXT_GLYPH_RUN_MIN_QUADS: usize = 64;
+const RETAINED_TEXT_GLYPH_RUN_MIN_QUADS: usize = usize::MAX;
 
 const TEXT_GLYPH_ATLAS_MIN_SIZE: u32 = 512;
 const TEXT_GLYPH_ATLAS_MAX_SIZE: u32 = 4096;
