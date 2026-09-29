@@ -202,6 +202,7 @@ impl SegmentItems for PayloadStore {
         self.order.len()
     }
 
+    #[cfg(any(test, debug_assertions))]
     fn item(&self, index: usize) -> Option<&PayloadRecord> {
         self.get(index)
     }

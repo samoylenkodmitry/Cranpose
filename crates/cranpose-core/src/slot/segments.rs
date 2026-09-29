@@ -9,6 +9,7 @@ pub(in crate::slot) trait SegmentItems {
     type Item;
 
     fn item_count(&self) -> usize;
+    #[cfg(any(test, debug_assertions))]
     fn item(&self, index: usize) -> Option<&Self::Item>;
     fn insert_item(&mut self, index: usize, item: Self::Item);
     fn remove_items(&mut self, range: Range<usize>) -> Vec<Self::Item>;
@@ -23,6 +24,7 @@ impl<T> SegmentItems for Vec<T> {
         self.len()
     }
 
+    #[cfg(any(test, debug_assertions))]
     fn item(&self, index: usize) -> Option<&T> {
         self.get(index)
     }

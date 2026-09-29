@@ -266,6 +266,7 @@ impl SlotTable {
         (payload_index < range.len()).then(|| range.start() + payload_index)
     }
 
+    #[cfg(any(test, debug_assertions))]
     pub(in crate::slot) fn group_payload_record_at(
         &self,
         group_index: usize,
