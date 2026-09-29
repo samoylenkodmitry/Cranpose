@@ -228,7 +228,7 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
         alpha: 0.5,
         color_filter: Some(ColorFilter::modulate(Color(0.5, 0.25, 1.0, 1.0))),
     };
-    let data = PlacementData::of(&placement, 2.0);
+    let data = PlacementData::of(&placement, 2.0, crate::geometry::SegmentTransform::IDENTITY);
     assert_eq!(
         data.flags,
         PLACEMENT_CANONICALIZE | PLACEMENT_CLIPPED | PLACEMENT_FILTERED | PLACEMENT_PAINTED
@@ -240,8 +240,22 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
     assert_eq!(data.color_matrix[0][0], 0.5);
     assert_eq!(data.color_matrix[1][1], 0.25);
     assert_eq!(data.color_offset, [0.0; 4]);
-    let plain = PlacementData::of(&Placement::at(Point::default(), None, None), 1.0);
+    let plain = PlacementData::of(
+        &Placement::at(Point::default(), None, None),
+        1.0,
+        crate::geometry::SegmentTransform::IDENTITY,
+    );
     assert_eq!(plain.flags, 0);
     assert_eq!(plain.color_matrix[2][2], 1.0);
-    assert_eq!(std::mem::size_of::<PlacementData>(), 128);
+    assert_eq!(plain.transform, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(plain.translation, [0.0, 0.0]);
+    let turn = crate::geometry::SegmentTransform::affine([0.0, -1.0, 1.0, 0.0], [5.0, 7.0])
+        .expect("a quarter turn");
+    let turned = PlacementData::of(&Placement::at(Point::default(), None, None), 1.0, turn);
+    assert_eq!(
+        (turned.transform, turned.translation),
+        ([0.0, -1.0, 1.0, 0.0], [5.0, 7.0]),
+        "the records of a layer drawn in place carry its turn"
+    );
+    assert_eq!(std::mem::size_of::<PlacementData>(), 160);
 }

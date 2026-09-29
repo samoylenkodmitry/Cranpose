@@ -5,6 +5,18 @@ struct GlyphInstance {
     @location(3) color: vec4<f32>,
 }
 
+// A glyph of a layer drawn in place under a turn: the quad in the layer's
+// device space, its turn (row-major) and the turn's translation in
+// `translation.xy`. Its batch binds the identity.
+struct TurnedGlyphInstance {
+    @location(0) rect: vec4<f32>,
+    @location(1) uv: vec4<f32>,
+    @location(2) uv_bounds: vec4<f32>,
+    @location(3) color: vec4<f32>,
+    @location(4) turn: vec4<f32>,
+    @location(5) translation: vec4<f32>,
+}
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
@@ -47,10 +59,11 @@ var glyph_sampler: sampler;
 // Each instance is one glyph quad drawn as a four-corner triangle strip:
 // corner 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right. `select`
 // picks each corner's coordinates exactly, as the quad's vertices held them.
-@vertex
-fn glyph_atlas_vs_main(
-    @builtin(vertex_index) corner: u32,
+fn glyph_vertex(
+    corner: u32,
     glyph: GlyphInstance,
+    turn: vec4<f32>,
+    translation: vec2<f32>,
 ) -> VertexOutput {
     var output: VertexOutput;
     let right = (corner & 1u) != 0u;
@@ -60,10 +73,14 @@ fn glyph_atlas_vs_main(
         select(glyph.rect.y, glyph.rect.w, bottom),
     );
     let position = corner_position + uniforms.origin;
-    let placed = vec2<f32>(
+    let segment = vec2<f32>(
         uniforms.transform.x * position.x + uniforms.transform.y * position.y,
         uniforms.transform.z * position.x + uniforms.transform.w * position.y,
     ) + uniforms.translation;
+    let placed = vec2<f32>(
+        turn.x * segment.x + turn.y * segment.y,
+        turn.z * segment.x + turn.w * segment.y,
+    ) + translation;
     let x = ((placed.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
     let y = 1.0 - ((placed.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
     output.clip_position = vec4<f32>(x, y, batch_depth(), 1.0);
@@ -74,6 +91,23 @@ fn glyph_atlas_vs_main(
     );
     output.uv_bounds = glyph.uv_bounds;
     return output;
+}
+
+@vertex
+fn glyph_atlas_vs_main(
+    @builtin(vertex_index) corner: u32,
+    glyph: GlyphInstance,
+) -> VertexOutput {
+    return glyph_vertex(corner, glyph, vec4<f32>(1.0, 0.0, 0.0, 1.0), vec2<f32>(0.0));
+}
+
+@vertex
+fn glyph_atlas_turned_vs_main(
+    @builtin(vertex_index) corner: u32,
+    turned: TurnedGlyphInstance,
+) -> VertexOutput {
+    let glyph = GlyphInstance(turned.rect, turned.uv, turned.uv_bounds, turned.color);
+    return glyph_vertex(corner, glyph, turned.turn, turned.translation.xy);
 }
 
 @fragment

@@ -13,7 +13,10 @@ use crate::{
     frame_graph::{
         FrameCommandRecorder, FrameCommandStats, UploadPlacement, place_upload, write_buffer,
     },
-    geometry::{canonicalized_scaled_rect, snap_delta_for_anchor, snapped_anchor_device_origin},
+    geometry::{
+        SegmentTransform, canonicalized_scaled_rect, snap_delta_for_anchor,
+        snapped_anchor_device_origin,
+    },
     run_geometry::ShapeFill,
     scene::{Placement, RunDraw},
 };
@@ -117,10 +120,15 @@ pub(crate) struct PlacementData {
     reserved: f32,
     color_matrix: [[f32; 4]; 4],
     color_offset: [f32; 4],
+    transform: [f32; 4],
+    translation: [f32; 2],
+    transform_reserved: [f32; 2],
 }
 
 impl PlacementData {
-    pub(crate) fn of(placement: &Placement, root_scale: f32) -> Self {
+    /// The placement data of `placement` at `root_scale`, drawn in place
+    /// under `turn`: the identity except for a layer that turns.
+    pub(crate) fn of(placement: &Placement, root_scale: f32, turn: SegmentTransform) -> Self {
         let snap_delta = placement
             .snap_anchor
             .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
@@ -154,6 +162,7 @@ impl PlacementData {
             .snap_anchor
             .map(|anchor| snapped_anchor_device_origin(anchor, root_scale))
             .unwrap_or_default();
+        let (transform, translation, _) = turn.uniform_parts();
         let (color_matrix, color_offset) = match placement.color_filter {
             Some(filter) => {
                 flags |= PLACEMENT_FILTERED;
@@ -187,6 +196,9 @@ impl PlacementData {
             reserved: 0.0,
             color_matrix,
             color_offset,
+            transform,
+            translation,
+            transform_reserved: [0.0; 2],
         }
     }
 }
@@ -1171,7 +1183,7 @@ impl RunStore {
         chunk: usize,
         run: &RunDraw,
         window: std::ops::Range<u32>,
-        root_scale: f32,
+        (root_scale, turn): (f32, SegmentTransform),
         key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
     ) -> u32 {
         let from = window.start;
@@ -1187,7 +1199,7 @@ impl RunStore {
         let placement_index = staging.placements.len() as u32;
         staging
             .placements
-            .push(PlacementData::of(&run.placement, root_scale));
+            .push(PlacementData::of(&run.placement, root_scale, turn));
         staging.brush_map.clear();
         staging.brush_map.resize(tables.brushes.len(), u32::MAX);
         let layer = paint_layer(&run.placement);
