@@ -4003,9 +4003,8 @@ fn every_platform_speaks_a_control_that_changed_under_the_cursor() {
     let ios_source = crate_source("src/ios_accessibility.rs");
     assert!(
         ios_source.contains("fn respeak_under_cursor(&self, changed: &[bool]) {")
-            && ios_source.contains(
-                "let changed = accessibility::spoken_changes(&self.snapshot.elements, &next);"
-            ),
+            && ios_source.contains("let changed = accessibility::spoken_changes(")
+            && ios_source.contains("&replaced.was,"),
         "VoiceOver reads the element under its cursor again when its words changed"
     );
 
@@ -4016,10 +4015,10 @@ fn every_platform_speaks_a_control_that_changed_under_the_cursor() {
         "TalkBack gets a content-changed event for a control that says something new"
     );
 
-    let bridge_source = crate_source("src/android_accessibility.rs");
+    let wire_source = crate_source("src/android_accessibility_wire.rs");
     assert!(
-        bridge_source.contains(
-            "let changed = accessibility::spoken_changes(&previous.elements, &elements);"
+        wire_source.contains(
+            "let changed = spoken_changes(&replaced.elements, &snapshot.elements, &replaced.was);"
         ),
         "the Android bridge marks the controls that changed"
     );
