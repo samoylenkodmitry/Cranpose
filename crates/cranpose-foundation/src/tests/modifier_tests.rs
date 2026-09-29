@@ -1941,6 +1941,15 @@ fn a_semantics_nodes_reach_reads_the_flags_it_merges() {
             ..SemanticsReach::default()
         }
     );
+    assert_eq!(
+        SemanticsReach::merged_by(&modal, false),
+        SemanticsReach {
+            is_modal: true,
+            hidden: false,
+            merges_live_state: false,
+        },
+        "a node that reports only what its updates bring says so"
+    );
 }
 
 #[test]

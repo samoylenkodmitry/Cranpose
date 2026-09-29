@@ -46,8 +46,8 @@ impl Modifier {
                 info.add_property("value", if toggled { "true" } else { "false" });
                 info.add_property("onValueChange", "provided");
             }))
-            .then(
-                Modifier::empty().semantics(move |config: &mut SemanticsConfiguration| {
+            .then(Modifier::empty().stable_semantics(
+                move |config: &mut SemanticsConfiguration| {
                     config.is_clickable = true;
                     config.toggled = Some(toggled);
                     if let Some(description) = &description {
@@ -56,8 +56,8 @@ impl Modifier {
                     if let Some(role) = role {
                         config.role = Some(role);
                     }
-                }),
-            );
+                },
+            ));
         self.then(modifier)
     }
 }

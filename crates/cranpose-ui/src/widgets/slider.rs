@@ -159,7 +159,7 @@ where
         let content = Rc::clone(&content);
         let input = Modifier::empty()
             .fill_max_size()
-            .semantics(move |config| {
+            .stable_semantics(move |config| {
                 slider_semantics(
                     config,
                     value,

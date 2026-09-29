@@ -622,13 +622,7 @@ pub trait SemanticsNode: ModifierNode {
     /// neither flag and reports only what its updates bring overrides it to
     /// skip that work.
     fn reach(&self) -> SemanticsReach {
-        let mut config = SemanticsConfiguration::default();
-        self.merge_semantics(&mut config);
-        SemanticsReach {
-            is_modal: config.is_modal,
-            hidden: config.hidden,
-            merges_live_state: true,
-        }
+        SemanticsReach::merged_by(self, true)
     }
 }
 
@@ -649,6 +643,18 @@ pub struct SemanticsReach {
 }
 
 impl SemanticsReach {
+    /// The modal and hidden flags `node` merges into a fresh configuration,
+    /// with whether what it merges can change without an invalidation.
+    pub fn merged_by(node: &(impl SemanticsNode + ?Sized), merges_live_state: bool) -> Self {
+        let mut config = SemanticsConfiguration::default();
+        node.merge_semantics(&mut config);
+        Self {
+            is_modal: config.is_modal,
+            hidden: config.hidden,
+            merges_live_state,
+        }
+    }
+
     /// Every flag of `self` and `other`.
     pub fn union(self, other: Self) -> Self {
         Self {

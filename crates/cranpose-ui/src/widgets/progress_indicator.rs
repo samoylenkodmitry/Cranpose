@@ -97,7 +97,7 @@ pub fn CircularProgressIndicator(modifier: Modifier, color: Color, stroke_width:
 
     let sized = modifier
         .size_points(CIRCULAR_INDICATOR_DIAMETER, CIRCULAR_INDICATOR_DIAMETER)
-        .semantics(busy_semantics);
+        .stable_semantics(busy_semantics);
     Canvas(sized, move |scope| {
         let size = scope.size();
         let start_angle = rotation.get() - 90.0;
@@ -143,7 +143,7 @@ pub fn LinearProgressIndicator(modifier: Modifier, color: Color) -> NodeId {
 
     let sized = modifier
         .size_points(LINEAR_INDICATOR_WIDTH, LINEAR_INDICATOR_HEIGHT)
-        .semantics(busy_semantics);
+        .stable_semantics(busy_semantics);
     Canvas(sized, move |scope| {
         let size = scope.size();
         let track = Color(color.0, color.1, color.2, color.3 * LINEAR_TRACK_ALPHA);

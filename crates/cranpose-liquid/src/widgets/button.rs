@@ -28,7 +28,7 @@ const ICON_BACKPLATE_GLYPH_RATIO: f32 = 0.28;
 const TAP_EXIT_SLOP: f32 = 12.0;
 
 fn with_button_semantics(modifier: Modifier) -> Modifier {
-    modifier.semantics(|config| {
+    modifier.stable_semantics(|config| {
         config.role = Some(SemanticsWidgetRole::Button);
         config.is_clickable = true;
     })
@@ -851,7 +851,7 @@ pub fn GlassIconButtonGroup(
                         },
                     ..Default::default()
                 })
-                .semantics(move |config| {
+                .stable_semantics(move |config| {
                     config.role = Some(SemanticsWidgetRole::Button);
                     config.is_clickable = true;
                     config.content_description = Some(description.clone());

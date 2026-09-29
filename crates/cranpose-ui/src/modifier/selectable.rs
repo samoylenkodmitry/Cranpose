@@ -30,7 +30,7 @@ impl Modifier {
                 info.add_property("selected", if selected { "true" } else { "false" });
                 info.add_property("onClick", "provided");
             }))
-            .then(Modifier::empty().semantics(selectable_semantics(selected, role)));
+            .then(Modifier::empty().stable_semantics(selectable_semantics(selected, role)));
         self.then(modifier)
     }
 }

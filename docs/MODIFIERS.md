@@ -656,10 +656,11 @@ topmost hit region wins, so a control's cursor beats its window's.
   the modifier's *shape* changes when a toggle flips, so without that the
   screen reader would keep reading the first frame's answer (regression test:
   `re_recording_semantics_reopens_the_snapshot`).
-- **Live state**: a recorder may read state it did not capture, so its reach
-  sets `merges_live_state` and every semantics tree update runs it again. A
-  node whose semantics come only from stable nodes, such as a `Text`, keeps its
-  report until it marks its semantics dirty.
+- **Live state**: a `semantics` recorder may read state it did not capture,
+  so its reach sets `merges_live_state` and every semantics tree update runs it
+  again. A `stable_semantics` recorder reads only what it captured, as the
+  built-in modifiers' recorders do; a node whose semantics come only from such
+  recorders or a `Text` keeps its report until it marks its semantics dirty.
 
 The vocabulary mirrors Jetpack Compose's `SemanticsProperties`:
 

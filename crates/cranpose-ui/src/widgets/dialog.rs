@@ -190,7 +190,7 @@ pub fn DialogWithScrim<C>(
                 })
                 .background(scrim)
                 .focus_target()
-                .semantics(move |config| {
+                .stable_semantics(move |config| {
                     config.role = Some(SemanticsWidgetRole::Dialog);
                     config.is_modal = true;
                 }),

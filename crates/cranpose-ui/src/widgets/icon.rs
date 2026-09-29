@@ -254,7 +254,7 @@ where
     let mut modifier = modifier
         .size(Size::new(target, target))
         .press_interaction_source(source)
-        .semantics(move |config| {
+        .stable_semantics(move |config| {
             config.content_description = Some(description.clone());
             config.role = Some(SemanticsWidgetRole::Button);
             config.enabled = enabled;

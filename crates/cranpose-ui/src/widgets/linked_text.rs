@@ -72,7 +72,7 @@ pub fn LinkedText(
     let text = Rc::new(text);
     let text_for_links = text.clone();
     let open_url: Rc<dyn Fn(&str)> = Rc::new(open_url);
-    let modifier = modifier.semantics(link_actions(Rc::clone(&text), Rc::clone(&open_url)));
+    let modifier = modifier.stable_semantics(link_actions(Rc::clone(&text), Rc::clone(&open_url)));
 
     ClickableText(text, modifier, style, move |offset| {
         for ann in text_for_links

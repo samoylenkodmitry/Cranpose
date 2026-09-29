@@ -197,6 +197,18 @@ fn a_chains_reach_joins_every_semantics_modifier_in_it() {
         }
     );
     assert_eq!(
+        chain_reach(
+            &Modifier::empty()
+                .stable_semantics(|config| config.is_modal = true)
+                .content_description("Dialog")
+        ),
+        cranpose_foundation::SemanticsReach {
+            is_modal: true,
+            ..cranpose_foundation::SemanticsReach::default()
+        },
+        "recorders that read only what they captured merge no live state"
+    );
+    assert_eq!(
         chain_reach(&Modifier::empty().padding(2.0)),
         cranpose_foundation::SemanticsReach::default()
     );
