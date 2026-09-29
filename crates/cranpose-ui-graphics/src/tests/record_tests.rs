@@ -1038,3 +1038,28 @@ fn only_a_gradient_or_translucent_fill_leaves_its_interior_bare() {
         "a gradient card's interior is shaded apart"
     );
 }
+
+#[test]
+fn a_segment_keeps_every_interior_flag_its_records_would_set() {
+    let card = |recorder: &mut ShapeRecorder, brush: &Brush| {
+        recorder.push_round_rect(
+            rect(0.0, 0.0, 200.0, 120.0),
+            brush,
+            CornerRadii::uniform(12.0),
+            None,
+            BlendMode::SrcOver,
+        );
+    };
+    let mut recorder = ShapeRecorder::default();
+    card(&mut recorder, &opaque());
+    card(&mut recorder, &opaque());
+    card(&mut recorder, &solid());
+    let segments = &recorder.tables().segments;
+    assert_eq!(segments.len(), 1, "one segment: {segments:?}");
+    let segment = &segments[0];
+    assert_eq!(
+        (segment.interiors, segment.occluders, segment.bare_interiors),
+        (true, true, true),
+        "a translucent card joining opaque ones still leaves its interior bare"
+    );
+}

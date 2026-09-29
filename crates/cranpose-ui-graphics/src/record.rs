@@ -1129,9 +1129,6 @@ impl ShapeRecorder {
                 index => self.tables.brushes[index as usize - 1].kind,
             };
         let kind_bit = 1u8 << fragment_kind(body.flags);
-        let interiors = interior_repays(&body, &curve);
-        let occluders = interior_occludes(&body, &curve);
-        let bare_interiors = interiors && (body.brush != 0 || body.color[3] < 1.0);
         let band_class = band_bucket.unwrap_or(0) as u8;
         body.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
         let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient)
@@ -1139,6 +1136,18 @@ impl ShapeRecorder {
         if !extend {
             self.segment_waste = 0;
         }
+        // A record joining a segment matters to its interior flags only
+        // where it could set one still clear, so its interior is measured
+        // only then: thousands of small shapes join a segment the first
+        // repaying one has already marked.
+        let joined = extend.then(|| self.tables.segments.last()).flatten();
+        let translucent = body.brush != 0 || body.color[3] < 1.0;
+        let interiors = !joined
+            .is_some_and(|segment| segment.interiors && (segment.bare_interiors || !translucent))
+            && interior_repays(&body, &curve);
+        let occluders =
+            !joined.is_some_and(|segment| segment.occluders) && interior_occludes(&body, &curve);
+        let bare_interiors = interiors && translucent;
         let tables = self.tables_mut();
         tables.shapes.push(body, curve, source);
         extend_segment_in(
