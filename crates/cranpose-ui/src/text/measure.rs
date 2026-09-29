@@ -638,6 +638,14 @@ impl TextService {
         if let Some(metrics) = self.options_metrics_cache.borrow_mut().get(&key).copied() {
             return metrics;
         }
+        // A text laid out at these options holds its metrics already.
+        let prepared_key = TextPreparedCacheKey {
+            base: key,
+            visual_hash: style.render_hash(),
+        };
+        if let Some(prepared) = self.prepared_cache.borrow_mut().get(&prepared_key) {
+            return prepared.metrics;
+        }
         let metrics = self.with_measurer(|m| {
             m.measure_with_options_for_node(node_id, text, style, options.normalized(), max_width)
         });
@@ -656,9 +664,8 @@ impl TextService {
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> Rc<PreparedTextLayout> {
-        let metrics_key = text_options_cache_key(text, style, options.normalized(), max_width);
         let key = TextPreparedCacheKey {
-            base: metrics_key,
+            base: text_options_cache_key(text, style, options.normalized(), max_width),
             visual_hash: style.render_hash(),
         };
         if let Some(prepared) = self.prepared_cache.borrow_mut().get(&key).map(Rc::clone) {
@@ -670,9 +677,6 @@ impl TextService {
         self.prepared_cache
             .borrow_mut()
             .push(key, Rc::clone(&prepared));
-        self.options_metrics_cache
-            .borrow_mut()
-            .push(metrics_key, prepared.metrics);
         prepared
     }
 

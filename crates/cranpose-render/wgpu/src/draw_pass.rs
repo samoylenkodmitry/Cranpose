@@ -791,6 +791,28 @@ fn target_rect_union(a: TargetRect, b: TargetRect) -> TargetRect {
     (left, top, right - left, bottom - top)
 }
 
+/// Log2 of the side, in target pixels, of the cells [`PendingGlyphs`] marks.
+const HELD_CELL_SHIFT: u32 = 6;
+
+/// The rows of cells `rect` touches and the mask of its columns in each,
+/// columns past the 63rd sharing the last bit. An empty side counts as one
+/// pixel: [`target_rects_overlap`] lets a rect that thin overlap one it lies
+/// inside, and the pixel it stands on is in that one too.
+fn held_cells(rect: TargetRect) -> (std::ops::Range<usize>, u64) {
+    let (x, y, width, height) = rect;
+    let last_column = (x.saturating_add(width.max(1) - 1) >> HELD_CELL_SHIFT).min(63);
+    let first_column = (x >> HELD_CELL_SHIFT).min(63);
+    let columns = last_column - first_column + 1;
+    let mask = if columns >= 64 {
+        u64::MAX
+    } else {
+        ((1_u64 << columns) - 1) << first_column
+    };
+    let first_row = (y >> HELD_CELL_SHIFT) as usize;
+    let last_row = (y.saturating_add(height.max(1) - 1) >> HELD_CELL_SHIFT) as usize;
+    (first_row..last_row + 1, mask)
+}
+
 /// Glyph draws held back so the shapes after them keep filling one arena
 /// chunk: the text of a card no longer splits the backgrounds around it
 /// into draws of their own. A shape that overlaps a held draw, or any draw
@@ -801,6 +823,11 @@ struct PendingGlyphs {
     cmds: Option<std::ops::Range<usize>>,
     bounds: Vec<TargetRect>,
     union: Option<TargetRect>,
+    /// Per band of cell rows, the cell columns a held draw touches. A shape
+    /// touching none of them overlaps no held draw, so only one that does is
+    /// checked against each: a list's cards held a few hundred glyph draws
+    /// that every background after them was checked against.
+    cells: Vec<u64>,
 }
 
 impl PendingGlyphs {
@@ -816,6 +843,13 @@ impl PendingGlyphs {
                     .map_or(rect, |union| target_rect_union(union, rect)),
             );
             self.bounds.push(rect);
+            let (rows, mask) = held_cells(rect);
+            if self.cells.len() < rows.end {
+                self.cells.resize(rows.end, 0);
+            }
+            for row in &mut self.cells[rows] {
+                *row |= mask;
+            }
         }
     }
 
@@ -823,10 +857,19 @@ impl PendingGlyphs {
     fn overlaps(&self, rect: TargetRect) -> bool {
         self.union
             .is_some_and(|union| target_rects_overlap(union, rect))
+            && self.cells_touched(rect)
             && self
                 .bounds
                 .iter()
                 .any(|held| target_rects_overlap(*held, rect))
+    }
+
+    /// Whether `rect` touches a cell a held draw touches.
+    fn cells_touched(&self, rect: TargetRect) -> bool {
+        let (rows, mask) = held_cells(rect);
+        let end = rows.end.min(self.cells.len());
+        let start = rows.start.min(end);
+        self.cells[start..end].iter().any(|row| row & mask != 0)
     }
 
     fn full(&self) -> bool {
@@ -835,6 +878,7 @@ impl PendingGlyphs {
 
     fn take(&mut self) -> Option<std::ops::Range<usize>> {
         self.bounds.clear();
+        self.cells.clear();
         self.union = None;
         self.cmds.take()
     }

@@ -362,6 +362,7 @@ where
             {
                 cranpose_ui::drain_lazy_prefetch_requests(cranpose_ui::schedule_measure_repass);
                 cranpose_ui::with_lazy_prefetch_pass(|| self.run_layout_phase_in_context());
+                cranpose_ui::warm_prefetched_slices(&mut self.app.composition.applier_mut());
                 passes += 1;
             }
             passes > 0
