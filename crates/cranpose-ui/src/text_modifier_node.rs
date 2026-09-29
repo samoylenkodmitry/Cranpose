@@ -104,10 +104,14 @@ impl TextPreparedLayoutOwner {
         }
     }
 
-    /// The layout at `max_width`, shared with the cache: measuring reads only
-    /// its size, and copying the whole layout on every measure cost a grid of
-    /// wrapping labels more than wrapping them.
-    fn prepare(&self, max_width: Option<f32>) -> Rc<crate::text::PreparedTextLayout> {
+    /// Reads the layout at `max_width` in place in the cache: measuring reads
+    /// only its size, and copying the whole layout on every measure cost a
+    /// grid of wrapping labels more than wrapping them.
+    fn with_prepared<R>(
+        &self,
+        max_width: Option<f32>,
+        read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
+    ) -> R {
         let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
         let text_generation = crate::text::measure::current_text_generation();
         let font_scale_fingerprint = crate::current_font_scale_curve().fingerprint();
@@ -119,9 +123,8 @@ impl TextPreparedLayoutOwner {
                     && entry.text_generation == text_generation
                     && entry.font_scale_fingerprint == font_scale_fingerprint
             }) {
-                let prepared = Rc::clone(&cache[index].layout);
                 cache[..=index].rotate_right(1);
-                return prepared;
+                return read(&cache[0].layout);
             }
         }
 
@@ -132,32 +135,32 @@ impl TextPreparedLayoutOwner {
             self.options,
             normalized_max_width,
         );
+        let widths = crate::text::measure::PreparedWidths::of(
+            self.text.as_ref(),
+            self.options,
+            normalized_max_width,
+            &prepared,
+        );
 
         let mut cache = self.cache.borrow_mut();
         cache.insert(
             0,
             TextPreparedLayoutCacheEntry {
-                widths: crate::text::measure::PreparedWidths::of(
-                    self.text.as_ref(),
-                    self.options,
-                    normalized_max_width,
-                    &prepared,
-                ),
+                widths,
                 text_generation,
                 font_scale_fingerprint,
-                layout: Rc::clone(&prepared),
+                layout: prepared,
             },
         );
         cache.truncate(PREPARED_LAYOUT_CACHE_CAPACITY);
-        prepared
+        read(&cache[0].layout)
     }
 
     fn measure_text_content(&self, max_width: Option<f32>) -> Size {
-        let prepared = self.prepare(max_width);
-        Size {
+        self.with_prepared(max_width, |prepared| Size {
             width: prepared.metrics.width,
             height: prepared.metrics.height,
-        }
+        })
     }
 
     fn measure_layout(&self, max_width: Option<f32>) -> Size {
@@ -168,7 +171,7 @@ impl TextPreparedLayoutOwner {
     fn measured_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
         self.measured_max_width
             .get()
-            .map(|max_width| self.prepare(max_width))
+            .map(|max_width| self.with_prepared(max_width, Rc::clone))
     }
 }
 
