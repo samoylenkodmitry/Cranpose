@@ -6,7 +6,7 @@ use cranpose_macros::composable;
 
 use crate::{
     Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, Modifier, Row, RowSpec,
-    Size, Spacer, Text, TextStyle,
+    Spacer, Text, TextStyle,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -122,10 +122,7 @@ fn async_runtime_full_layout(
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             let animation_snapshot = animation.get();
             let stats_snapshot = stats.get();
@@ -141,10 +138,7 @@ fn async_runtime_full_layout(
                         TextStyle::default(),
                     );
 
-                    Spacer(Size {
-                        width: 0.0,
-                        height: 8.0,
-                    });
+                    Spacer(Modifier::empty().size_points(0.0, 8.0));
 
                     Row(
                         Modifier::empty()
@@ -179,10 +173,7 @@ fn async_runtime_full_layout(
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 12.0));
 
             Text(
                 format!(
@@ -198,10 +189,7 @@ fn async_runtime_full_layout(
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             {
                 let is_running_for_button = is_running;

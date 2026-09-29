@@ -81,8 +81,8 @@ pub use cranpose_foundation::{
     text::{TextFieldBuffer, TextFieldLineLimits, TextFieldState, TextFieldValue, TextRange},
 };
 pub use cranpose_ui_graphics::{
-    BlurredEdgeTreatment, ColorFilter, CursorIcon, CustomPointerIcon, Dp, ImageBitmap,
-    ImageSampling, PointerIcon, PointerIconError,
+    BlurredEdgeTreatment, ColorFilter, CursorIcon, CustomPointerIcon, Dp, DrawScope, ImageBitmap,
+    ImageSampling, PointerIcon, PointerIconError, Stroke, StrokeCap, StrokeJoin,
 };
 pub use cranpose_ui_layout::IntrinsicSize;
 pub use cursor_animation::{

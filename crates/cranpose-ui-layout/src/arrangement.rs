@@ -1,6 +1,6 @@
 //! Arrangement strategies for distributing children along an axis
 
-use crate::round_to_px;
+use crate::{alignment::bias_offset, round_to_px};
 
 /// Trait implemented by arrangement strategies that distribute children on an axis.
 pub trait Arrangement {
@@ -27,6 +27,29 @@ pub enum LinearArrangement {
     SpaceEvenly,
     /// Insert a fixed amount of space between children.
     SpacedBy(f32),
+    /// Insert a fixed amount of space between children and place the block
+    /// they make at `bias` of the space left over: -1 the start, 0 the
+    /// middle, 1 the end.
+    SpacedByAligned { spacing: f32, bias: f32 },
+}
+
+/// An alignment along one axis, which places a block at a bias of the space
+/// left beside it.
+pub trait AxisAlignment {
+    /// -1 the start, 0 the middle, 1 the end.
+    fn bias(&self) -> f32;
+}
+
+impl AxisAlignment for crate::HorizontalAlignment {
+    fn bias(&self) -> f32 {
+        crate::HorizontalAlignment::bias(self)
+    }
+}
+
+impl AxisAlignment for crate::VerticalAlignment {
+    fn bias(&self) -> f32 {
+        crate::VerticalAlignment::bias(self)
+    }
 }
 
 impl LinearArrangement {
@@ -35,11 +58,30 @@ impl LinearArrangement {
         Self::SpacedBy(spacing)
     }
 
-    /// The space `SpacedBy` puts between children, on the device pixel grid
-    /// of `density` as Compose's `roundToPx` puts it; none for the others.
+    /// Compose's `Arrangement.spacedBy(space, alignment)`: `spacing` between
+    /// children, and the block they make placed by `alignment` in the space
+    /// left over, as when the numbers of a table cell keep to its end.
+    pub fn spaced_by_aligned(spacing: f32, alignment: impl AxisAlignment) -> Self {
+        Self::SpacedByAligned {
+            spacing,
+            bias: alignment.bias(),
+        }
+    }
+
+    /// Whether the arrangement puts a fixed spacing between children and
+    /// keeps them within the container on its own when they overflow it.
+    pub fn is_spaced(&self) -> bool {
+        matches!(self, Self::SpacedBy(_) | Self::SpacedByAligned { .. })
+    }
+
+    /// The space a spaced arrangement puts between children, on the device
+    /// pixel grid of `density` as Compose's `roundToPx` puts it; none for the
+    /// others.
     pub fn spacing(&self, density: f32) -> f32 {
         match *self {
-            Self::SpacedBy(spacing) => round_to_px(spacing.max(0.0), density),
+            Self::SpacedBy(spacing) | Self::SpacedByAligned { spacing, .. } => {
+                round_to_px(spacing.max(0.0), density)
+            }
             _ => 0.0,
         }
     }
@@ -109,6 +151,19 @@ impl Arrangement for LinearArrangement {
             }
             LinearArrangement::SpacedBy(_) => {
                 Self::spaced_positions(self.spacing(density), total_size, sizes, out_positions);
+            }
+            LinearArrangement::SpacedByAligned { bias, .. } => {
+                Self::spaced_positions(self.spacing(density), total_size, sizes, out_positions);
+                let (Some(&last), Some(&last_size)) = (out_positions.last(), sizes.last()) else {
+                    return;
+                };
+                let occupied = last + last_size;
+                if occupied < total_size {
+                    let shift = bias_offset(bias, total_size, occupied, density);
+                    for position in out_positions.iter_mut() {
+                        *position += shift;
+                    }
+                }
             }
         }
     }

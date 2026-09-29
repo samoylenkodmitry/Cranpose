@@ -5,7 +5,7 @@ use std::time::Duration;
 use cranpose::SemanticElement;
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::{
-    Button, ButtonSpec, Column, ColumnSpec, Modifier, Size, Spacer, Text, TextStyle,
+    Button, ButtonSpec, Column, ColumnSpec, Modifier, Spacer, Text, TextStyle,
 };
 use desktop_app::app::{AnimationState, AsyncRuntimeTabContent, FrameStats};
 
@@ -277,10 +277,7 @@ pub(crate) fn main() {
                         Text("Next", Modifier::empty().padding(4.0), TextStyle::default());
                     },
                 );
-                Spacer(Size {
-                    width: 0.0,
-                    height: 8.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 8.0));
                 AsyncRuntimeTabContent(animation, stats, is_running, reset_signal);
             },
         );

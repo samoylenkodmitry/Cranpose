@@ -427,7 +427,7 @@ fn a_button_composes_its_content() {
 #[test]
 fn a_spacer_reserves_the_size_it_is_given() {
     let mut composition = run_test_composition(|| {
-        cranpose_ui::widgets::spacer::Spacer(cranpose_ui_graphics::Size::new(16.0, 24.0));
+        cranpose_ui::widgets::spacer::Spacer(Modifier::empty().size_points(16.0, 24.0));
     });
     let root = composition
         .root()
@@ -636,9 +636,7 @@ fn a_lazy_column_subcomposes_its_visible_items_during_measurement() {
                 let counter = Rc::clone(&counter);
                 scope.items(20, move |_index| {
                     counter.set(counter.get() + 1);
-                    cranpose_ui::widgets::spacer::Spacer(cranpose_ui_graphics::Size::new(
-                        50.0, 20.0,
-                    ));
+                    cranpose_ui::widgets::spacer::Spacer(Modifier::empty().size_points(50.0, 20.0));
                 });
             },
         );
@@ -664,9 +662,7 @@ fn a_lazy_row_subcomposes_its_visible_items_during_measurement() {
                 let counter = Rc::clone(&counter);
                 scope.items(20, move |_index| {
                     counter.set(counter.get() + 1);
-                    cranpose_ui::widgets::spacer::Spacer(cranpose_ui_graphics::Size::new(
-                        50.0, 20.0,
-                    ));
+                    cranpose_ui::widgets::spacer::Spacer(Modifier::empty().size_points(50.0, 20.0));
                 });
             },
         );

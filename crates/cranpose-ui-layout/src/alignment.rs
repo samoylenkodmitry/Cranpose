@@ -31,10 +31,40 @@ impl Alignment {
     /// Align children to the top-start corner.
     pub const TOP_START: Self = Self::new(HorizontalAlignment::Start, VerticalAlignment::Top);
 
+    /// Align children to the middle of the top edge.
+    pub const TOP_CENTER: Self = Self::new(
+        HorizontalAlignment::CenterHorizontally,
+        VerticalAlignment::Top,
+    );
+
+    /// Align children to the top-end corner.
+    pub const TOP_END: Self = Self::new(HorizontalAlignment::End, VerticalAlignment::Top);
+
+    /// Align children to the middle of the start edge.
+    pub const CENTER_START: Self = Self::new(
+        HorizontalAlignment::Start,
+        VerticalAlignment::CenterVertically,
+    );
+
     /// Align children to the center of the parent.
     pub const CENTER: Self = Self::new(
         HorizontalAlignment::CenterHorizontally,
         VerticalAlignment::CenterVertically,
+    );
+
+    /// Align children to the middle of the end edge.
+    pub const CENTER_END: Self = Self::new(
+        HorizontalAlignment::End,
+        VerticalAlignment::CenterVertically,
+    );
+
+    /// Align children to the bottom-start corner.
+    pub const BOTTOM_START: Self = Self::new(HorizontalAlignment::Start, VerticalAlignment::Bottom);
+
+    /// Align children to the middle of the bottom edge.
+    pub const BOTTOM_CENTER: Self = Self::new(
+        HorizontalAlignment::CenterHorizontally,
+        VerticalAlignment::Bottom,
     );
 
     /// Align children to the bottom-end corner.

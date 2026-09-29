@@ -10,7 +10,7 @@ use cranpose_ui::{
         Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec, LazyColumn,
         LazyColumnSpec, Spacer, Text, PROGRESS_INDICATOR_COLOR,
     },
-    Modifier, Size, TextStyle,
+    Modifier, TextStyle,
 };
 
 pub(crate) fn main() {
@@ -73,10 +73,7 @@ fn probe_app() {
                                 4.0,
                             );
                         } else {
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 64.0,
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, 64.0));
                         }
                     });
                 },

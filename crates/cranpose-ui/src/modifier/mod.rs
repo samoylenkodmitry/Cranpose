@@ -17,6 +17,7 @@ use smallvec::SmallVec;
 mod alignment;
 mod background;
 mod blur;
+mod border;
 mod chain;
 mod clickable;
 mod coordinator_geometry;
