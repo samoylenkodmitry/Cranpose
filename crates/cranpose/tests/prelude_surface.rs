@@ -43,7 +43,7 @@ fn app_owned_list_data_composes_from_the_prelude_alone() {
             move |scope| {
                 scope.items(items.len(), move |index| {
                     let _label = items.get(index);
-                    Spacer(Size::new(50.0, 20.0));
+                    Spacer(Modifier::empty().size_points(50.0, 20.0));
                 });
             },
         );

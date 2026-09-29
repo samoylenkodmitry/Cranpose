@@ -58,7 +58,7 @@ pub(crate) fn images_tab() {
                 TextStyle::default(),
             );
 
-            Spacer(Size::new(0.0, 8.0));
+            Spacer(Modifier::empty().size_points(0.0, 8.0));
 
             Box(
                 Modifier::empty()

@@ -1,4 +1,4 @@
-use super::{HorizontalAlignment, VerticalAlignment, bias_offset};
+use super::{Alignment, HorizontalAlignment, VerticalAlignment, bias_offset};
 
 #[test]
 fn alignment_places_a_child_at_its_bias_on_a_device_pixel() {
@@ -29,4 +29,24 @@ fn a_child_larger_than_its_space_overflows_both_ends_when_centred() {
 fn a_bias_between_the_edges_is_rounded_half_up() {
     assert_eq!(bias_offset(-0.5, 101.0, 0.0, 1.0), 25.0);
     assert_eq!(bias_offset(0.0, 9.0, 10.0, 1.0), 0.0);
+}
+
+#[test]
+fn the_nine_alignments_pair_each_edge_with_each_edge() {
+    use HorizontalAlignment::{CenterHorizontally, End, Start};
+    use VerticalAlignment::{Bottom, CenterVertically, Top};
+    let expected = [
+        (Alignment::TOP_START, Start, Top),
+        (Alignment::TOP_CENTER, CenterHorizontally, Top),
+        (Alignment::TOP_END, End, Top),
+        (Alignment::CENTER_START, Start, CenterVertically),
+        (Alignment::CENTER, CenterHorizontally, CenterVertically),
+        (Alignment::CENTER_END, End, CenterVertically),
+        (Alignment::BOTTOM_START, Start, Bottom),
+        (Alignment::BOTTOM_CENTER, CenterHorizontally, Bottom),
+        (Alignment::BOTTOM_END, End, Bottom),
+    ];
+    for (alignment, horizontal, vertical) in expected {
+        assert_eq!(alignment, Alignment::new(horizontal, vertical));
+    }
 }

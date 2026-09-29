@@ -5688,10 +5688,7 @@ fn app_shell_lazy_carousel_probe() {
                                 Modifier::empty().width(160.0),
                                 TextStyle::default(),
                             );
-                            Spacer(Size {
-                                width: 600.0,
-                                height: 0.0,
-                            });
+                            Spacer(Modifier::empty().size_points(600.0, 0.0));
                             Text(
                                 "carousel end",
                                 Modifier::empty().width(160.0),
@@ -6998,10 +6995,7 @@ fn app_shell_wheel_scroll_probe() {
                 Modifier::empty(),
                 TextStyle::default(),
             );
-            Spacer(Size {
-                width: 0.0,
-                height: 900.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 900.0));
             Text(
                 "Wheel scroll probe bottom",
                 Modifier::empty(),
@@ -7046,10 +7040,7 @@ fn app_shell_tall_fling_scroll_probe() {
         ColumnSpec::default(),
         move || {
             Text("Fling probe top", Modifier::empty(), TextStyle::default());
-            Spacer(Size {
-                width: 0.0,
-                height: 60_000.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 60_000.0));
             Text(
                 "Fling probe bottom",
                 Modifier::empty(),
@@ -7103,10 +7094,7 @@ fn app_shell_consumed_child_drag_scroll_probe() {
                 BoxSpec::default(),
                 || {},
             );
-            Spacer(Size {
-                width: 0.0,
-                height: 900.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 900.0));
             Text(
                 "Consumed child drag bottom",
                 Modifier::empty(),
@@ -10063,10 +10051,7 @@ fn AppShellMovingLabel() {
     let gap = rememberMutableStateOf(|| 0.0f32);
     MOVING_LABEL_GAP.with(|slot| *slot.borrow_mut() = Some(gap));
     Column(Modifier::empty(), ColumnSpec::default(), move || {
-        Spacer(Size {
-            width: 1.0,
-            height: gap.get(),
-        });
+        Spacer(Modifier::empty().size_points(1.0, gap.get()));
         Text("Moving", Modifier::empty(), TextStyle::default());
     });
 }

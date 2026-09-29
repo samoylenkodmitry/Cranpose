@@ -10,13 +10,13 @@ use cranpose_foundation::{
     Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
     NodeState, PointerEvent, PointerEventKind, PointerInputNode, Size,
 };
-use cranpose_ui_graphics::PointerIcon;
+use cranpose_ui_graphics::{DrawScope, PointerIcon};
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 
 use crate::{
     draw::DrawCommand,
     modifier::{
-        BlendMode, Color, ColorFilter, CompositingStrategy, EdgeInsets, GraphicsLayer,
+        BlendMode, Brush, Color, ColorFilter, CompositingStrategy, EdgeInsets, GraphicsLayer,
         LayoutWeight, Point, RoundedCornerShape,
     },
 };
@@ -607,6 +607,99 @@ impl ModifierNodeElement for CornerShapeElement {
         if node.shape != self.shape {
             node.shape = self.shape;
         }
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::DRAW
+    }
+}
+
+/// Element that draws a stroke along the edge of a shape, over the content:
+/// Compose's `Modifier.border`. The stroke lies inside the node's bounds, its
+/// outer edge on the shape's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BorderElement {
+    width: f32,
+    brush: Brush,
+    shape: RoundedCornerShape,
+}
+
+impl BorderElement {
+    pub fn new(width: f32, brush: Brush, shape: RoundedCornerShape) -> Self {
+        Self {
+            width,
+            brush,
+            shape,
+        }
+    }
+
+    /// The draw command stroking the border over the content.
+    pub(crate) fn command(&self) -> DrawCommand {
+        let Self {
+            width,
+            brush,
+            shape,
+        } = self.clone();
+        DrawCommand::Overlay(Rc::new(move |scope| {
+            let size = scope.size();
+            if width <= 0.0 || size.width <= 0.0 || size.height <= 0.0 {
+                return;
+            }
+            let radii = shape.resolve(size.width, size.height);
+            let half = width / 2.0;
+            if width * 2.0 >= size.width.min(size.height) {
+                // A stroke as thick as half the node covers all of it.
+                scope.draw_round_rect(brush.clone(), radii);
+                return;
+            }
+            let inset = |radius: f32| (radius - half).max(0.0);
+            scope.draw_round_rect_at_stroked(
+                cranpose_ui_graphics::Rect {
+                    x: half,
+                    y: half,
+                    width: size.width - width,
+                    height: size.height - width,
+                },
+                brush.clone(),
+                cranpose_ui_graphics::CornerRadii {
+                    top_left: inset(radii.top_left),
+                    top_right: inset(radii.top_right),
+                    bottom_right: inset(radii.bottom_right),
+                    bottom_left: inset(radii.bottom_left),
+                },
+                cranpose_ui_graphics::Stroke::new(width),
+            );
+        }))
+    }
+}
+
+impl Hash for BorderElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_f32_value(state, self.width);
+        std::mem::discriminant(&self.brush).hash(state);
+        if let Brush::Solid(color) = self.brush {
+            hash_f32_value(state, color.0);
+            hash_f32_value(state, color.1);
+            hash_f32_value(state, color.2);
+            hash_f32_value(state, color.3);
+        }
+        let radii = self.shape.radii();
+        hash_f32_value(state, radii.top_left);
+        hash_f32_value(state, radii.top_right);
+        hash_f32_value(state, radii.bottom_right);
+        hash_f32_value(state, radii.bottom_left);
+    }
+}
+
+impl ModifierNodeElement for BorderElement {
+    type Node = DrawCommandNode;
+
+    fn create(&self) -> Self::Node {
+        DrawCommandNode::new(vec![self.command()])
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.commands = vec![self.command()];
     }
 
     fn capabilities(&self) -> NodeCapabilities {

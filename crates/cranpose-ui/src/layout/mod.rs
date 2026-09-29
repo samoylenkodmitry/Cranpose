@@ -864,6 +864,75 @@ pub fn build_layout_tree_from_applier(
         .map(|root| root.map(LayoutTree::new))
 }
 
+/// Whether any box placed under `root` has area, as
+/// [`build_layout_tree_from_applier`] would place it: the walk stops at the
+/// first such box and reads no node's modifiers or semantics.
+pub fn has_placed_content(applier: &mut MemoryApplier, root: NodeId) -> Result<bool, NodeError> {
+    walk_placed_boxes(applier, root, |_| std::ops::ControlFlow::Break(()))
+}
+
+/// The far right and bottom edges of the boxes with area placed under `root`,
+/// measured from the root's origin as [`build_layout_tree_from_applier`]
+/// places them, reading no node's modifiers or semantics. `None` while
+/// nothing under `root` has area.
+pub fn placed_content_extent(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+) -> Result<Option<Size>, NodeError> {
+    let mut extent: Option<Size> = None;
+    walk_placed_boxes(applier, root, |rect| {
+        let (right, bottom) = (rect.x + rect.width, rect.y + rect.height);
+        extent = Some(extent.map_or_else(
+            || Size::new(right, bottom),
+            |extent| Size::new(extent.width.max(right), extent.height.max(bottom)),
+        ));
+        std::ops::ControlFlow::Continue(())
+    })?;
+    Ok(extent)
+}
+
+/// Hands `visit` every box with area placed under `root`, the root left out,
+/// at the rect [`build_layout_tree_from_applier`] gives it, skipping a window
+/// root's subtree and an unplaced node's, until `visit` breaks. Answers
+/// whether it did.
+fn walk_placed_boxes(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+    mut visit: impl FnMut(GeometryRect) -> std::ops::ControlFlow<()>,
+) -> Result<bool, NodeError> {
+    let mut pending: Vec<(NodeId, Point)> = Vec::new();
+    let placed = read_layout_node(applier, root, |state, children| {
+        if state.is_placed() {
+            pending.extend(children.iter().map(|&child| (child, state.content_offset)));
+        }
+    })?;
+    if placed.is_none() {
+        return Ok(false);
+    }
+    while let Some((node_id, origin)) = pending.pop() {
+        if crate::modifier::is_window_root(applier, node_id) {
+            continue;
+        }
+        let rect = read_layout_node(applier, node_id, |state, children| {
+            if !state.is_placed() {
+                return None;
+            }
+            let (rect, content) = semantics_placement(&state, Some(origin));
+            pending.extend(children.iter().map(|&child| (child, content)));
+            Some(rect)
+        })?
+        .flatten();
+        if let Some(rect) = rect
+            && rect.width > 0.0
+            && rect.height > 0.0
+            && visit(rect).is_break()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn layout_tree_origin(root: Option<LayoutState>) -> Point {
     let Some(state) = root else {
         return Point::default();

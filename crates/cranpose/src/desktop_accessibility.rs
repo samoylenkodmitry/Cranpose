@@ -6,6 +6,7 @@ use std::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
+    time::Instant,
 };
 
 use accesskit::{
@@ -18,7 +19,10 @@ use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::{Announcement, LiveRegionMode};
 use winit::{event::WindowEvent, event_loop::EventLoopProxy, window::Window};
 
-use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
+use crate::{
+    accessibility::{self, AccessibilityElement, AccessibilityRole},
+    accessibility_publish_policy::AccessibilityPublishPolicy,
+};
 
 const ROOT_ID: NodeId = NodeId(u64::MAX);
 const ANNOUNCEMENT_ID: NodeId = NodeId(u64::MAX - 1);
@@ -27,20 +31,21 @@ const TEXT_RUN_BIT: u64 = 1 << 31;
 /// run in a byte, so a long line is broken into runs at a space.
 const TEXT_RUN_CHARS: usize = 200;
 
-/// The tree a reader gets when it connects, and the flag that says one did.
-#[derive(Clone)]
-struct InitialTree {
-    tree: Arc<Mutex<Option<TreeUpdate>>>,
+/// A reader asking for the tree. Nothing builds one while no reader holds it,
+/// so the request only says one is owed and wakes the loop: accesskit shows a
+/// placeholder until the loop's next sync sends the whole tree.
+struct Activation {
     reader_connected: Arc<AtomicBool>,
+    tree_owed: Arc<AtomicBool>,
+    wake: Box<dyn Fn() + Send>,
 }
 
-impl ActivationHandler for InitialTree {
+impl ActivationHandler for Activation {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         self.reader_connected.store(true, Ordering::Relaxed);
-        self.tree
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.tree_owed.store(true, Ordering::Relaxed);
+        (self.wake)();
+        None
     }
 }
 
@@ -71,9 +76,10 @@ impl DeactivationHandler for Deactivation {
 
 pub(crate) struct DesktopAccessibilityBridge {
     adapter: PlatformAdapter,
-    initial_tree: Arc<Mutex<Option<TreeUpdate>>>,
     actions: Arc<Mutex<Vec<ActionRequest>>>,
     reader_connected: Arc<AtomicBool>,
+    tree_owed: Arc<AtomicBool>,
+    policy: AccessibilityPublishPolicy,
     pending_custom_actions: Vec<(NodeId, usize)>,
     pending_focus: Vec<NodeId>,
     pending_values: Vec<(NodeId, f32)>,
@@ -94,15 +100,17 @@ pub(crate) struct DesktopAccessibilityBridge {
 
 impl DesktopAccessibilityBridge {
     pub(crate) fn new(window: &dyn Window, waker: EventLoopProxy, robot_drives: bool) -> Self {
-        let initial_tree = Arc::new(Mutex::new(None));
         let actions = Arc::new(Mutex::new(Vec::new()));
         let reader_connected = Arc::new(AtomicBool::new(false));
+        let tree_owed = Arc::new(AtomicBool::new(false));
         let options_waker = waker.clone();
+        let activation_waker = waker.clone();
         let adapter = PlatformAdapter::new(
             window,
-            InitialTree {
-                tree: Arc::clone(&initial_tree),
+            Activation {
                 reader_connected: Arc::clone(&reader_connected),
+                tree_owed: Arc::clone(&tree_owed),
+                wake: Box::new(move || activation_waker.wake_up()),
             },
             Actions {
                 queue: Arc::clone(&actions),
@@ -112,9 +120,10 @@ impl DesktopAccessibilityBridge {
         );
         Self {
             adapter,
-            initial_tree,
             actions,
             reader_connected,
+            tree_owed,
+            policy: AccessibilityPublishPolicy::new(),
             pending_custom_actions: Vec::new(),
             pending_focus: Vec::new(),
             pending_values: Vec::new(),
@@ -151,20 +160,37 @@ impl DesktopAccessibilityBridge {
         self.options.apply(shell)
     }
 
+    /// Publishes what changed to a connected reader: the whole tree when one
+    /// connects, then at most one snapshot per publish interval, as Android's
+    /// bridge and Compose do. With no reader connected nothing is built.
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
+        let reader_connected = self.reader_connected.load(Ordering::Relaxed);
         let reader_on = cranpose_services::AccessibilityState {
-            screen_reader_on: self.reader_connected.load(Ordering::Relaxed),
+            screen_reader_on: reader_connected,
         };
         if cranpose_services::set_platform_accessibility_state(reader_on) {
             shell.request_root_render();
         }
         let mut announcements = accessibility::drain_app_announcements();
-        let mut changed = std::mem::take(&mut self.geometry_changed);
-        if let Some(elements) = accessibility::snapshot_if_changed(
-            shell,
-            &mut self.seen_revision,
-            self.previous.elements.len(),
-        ) && elements != self.previous.elements
+        let tree_owed = self.tree_owed.swap(false, Ordering::Relaxed);
+        if self.policy.update_enabled(reader_connected) || tree_owed {
+            self.seen_revision = None;
+        }
+        if !reader_connected {
+            return;
+        }
+        let mut changed = std::mem::take(&mut self.geometry_changed) || tree_owed;
+        let elements = if tree_owed || self.policy.try_begin_publish(Instant::now()) {
+            accessibility::snapshot_if_changed(
+                shell,
+                &mut self.seen_revision,
+                self.previous.elements.len(),
+            )
+        } else {
+            None
+        };
+        if let Some(elements) = elements
+            && elements != self.previous.elements
         {
             announcements.extend(accessibility::pane_title_announcements(
                 &self.previous.elements,
@@ -191,11 +217,36 @@ impl DesktopAccessibilityBridge {
             self.scale_factor,
             &self.window_title,
         );
-        *self
-            .initial_tree
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(update.clone());
         self.adapter.update_if_active(|| update);
+    }
+
+    /// Runs what a reader asked of the app since the loop last looked, and
+    /// publishes a tree the reader is owed outside a frame: the whole tree it
+    /// asked for, or a change the publish interval held back. Returns whether
+    /// a request changed the app, so the window needs a frame.
+    pub(crate) fn serve(&mut self, shell: &mut AppShell<WgpuRenderer>, now: Instant) -> bool {
+        let mut activated = self.apply_platform_options(shell);
+        for (node_id, canvas_key) in self.drain_clicks() {
+            activated |= shell.accessibility_activate(node_id, canvas_key);
+        }
+        activated |= self.run_custom_actions(shell);
+        activated |= self.run_value_requests(shell);
+        activated |= self.run_scroll_requests(shell);
+        activated |= self.run_focus_requests(shell);
+        if self.tree_owed.load(Ordering::Relaxed)
+            || self
+                .policy
+                .wake_deadline()
+                .is_some_and(|deadline| deadline <= now)
+        {
+            self.sync(shell);
+        }
+        activated
+    }
+
+    /// When the loop must wake to publish a change the interval held back.
+    pub(crate) fn wake_deadline(&self) -> Option<Instant> {
+        self.policy.wake_deadline()
     }
 
     pub(crate) fn drain_clicks(&mut self) -> Vec<(cranpose_core::NodeId, Option<u64>)> {

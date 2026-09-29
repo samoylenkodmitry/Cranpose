@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use cranpose_app_shell::{AppShell, Modifiers};
 use cranpose_core::{location_key, remember};
 use cranpose_ui::{
-    BasicTextField, Box, BoxSpec, Column, ColumnSpec, Modifier, ScrollState, Size, Spacer,
+    BasicTextField, Box, BoxSpec, Column, ColumnSpec, Modifier, ScrollState, Spacer,
     TextFieldState, TextStyle, composable,
 };
 
@@ -39,10 +39,7 @@ fn input_probe() {
                 Modifier::empty().width(200.0).height(40.0),
                 TextStyle::default(),
             );
-            Spacer(Size {
-                width: 0.0,
-                height: 900.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 900.0));
         },
     );
 }

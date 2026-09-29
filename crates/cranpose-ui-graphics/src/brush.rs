@@ -36,6 +36,14 @@ fn split_color_stops(color_stops: Vec<(f32, Color)>) -> (Vec<Color>, Vec<f32>) {
     (colors, stops)
 }
 
+/// A colour paints as a solid brush wherever a brush is taken, as Compose
+/// takes a `Color` beside each `Brush` overload.
+impl From<Color> for Brush {
+    fn from(color: Color) -> Self {
+        Brush::Solid(color)
+    }
+}
+
 impl Brush {
     pub fn solid(color: Color) -> Self {
         Brush::Solid(color)

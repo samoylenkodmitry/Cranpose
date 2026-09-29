@@ -109,10 +109,7 @@ fn combined_switching_app(
                         },
                     );
 
-                    Spacer(Size {
-                        width: 8.0,
-                        height: 0.0,
-                    });
+                    Spacer(Modifier::empty().size_points(8.0, 0.0));
 
                     Button(
                         Modifier::empty().padding(10.0),
@@ -134,10 +131,7 @@ fn combined_switching_app(
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 12.0));
 
             if show_counter_inner.get() {
                 counter_view(counter1_inner, render_count1_inner);
@@ -816,17 +810,11 @@ fn test_composition_local_content(local_holder: cranpose_core::CompositionLocal<
         TextStyle::default(),
     );
 
-    Spacer(Size {
-        width: 0.0,
-        height: 8.0,
-    });
+    Spacer(Modifier::empty().size_points(0.0, 8.0));
 
     test_composition_local_content_inner(local_holder);
 
-    Spacer(Size {
-        width: 0.0,
-        height: 8.0,
-    });
+    Spacer(Modifier::empty().size_points(0.0, 8.0));
 
     Text(
         "NOT reading local",
@@ -850,10 +838,7 @@ fn test_composition_local_demo(
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 12.0));
 
             Text(
                 format!("Counter: {}", counter.get()),
@@ -861,10 +846,7 @@ fn test_composition_local_demo(
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 12.0));
 
             Button(
                 Modifier::empty().padding(10.0),
@@ -883,10 +865,7 @@ fn test_composition_local_demo(
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 12.0));
 
             let current_count = counter.get();
             CompositionLocalProvider([local_holder.provides(current_count)], {

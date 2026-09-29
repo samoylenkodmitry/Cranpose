@@ -477,9 +477,9 @@ fn LeetcodeDailyCodeScrollApp() {
                             move || {
                                 SummaryCard();
                                 WriteupCard();
-                                Spacer(Size::new(0.0, 70.0));
+                                Spacer(Modifier::empty().size_points(0.0, 70.0));
                                 CodeCard();
-                                Spacer(Size::new(0.0, 96.0));
+                                Spacer(Modifier::empty().size_points(0.0, 96.0));
                             },
                         );
                     }

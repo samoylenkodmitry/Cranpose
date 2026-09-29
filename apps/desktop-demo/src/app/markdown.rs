@@ -12,7 +12,7 @@ use cranpose_ui::{
     },
     Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, ContentScale,
     CornerRadii, Image, ImageBitmap, LazyColumn, LazyColumnSpec, LinearArrangement, LinkedText,
-    Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    Modifier, Row, RowSpec, Spacer, Text, TextStyle, VerticalAlignment,
 };
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
@@ -993,10 +993,7 @@ fn placeholder_text_style(color: Color) -> TextStyle {
 
 #[composable]
 fn render_rule() {
-    Spacer(Size {
-        width: 0.0,
-        height: 4.0,
-    });
+    Spacer(Modifier::empty().size_points(0.0, 4.0));
     cranpose_ui::Box(
         Modifier::empty()
             .fill_max_width()
@@ -1019,10 +1016,7 @@ fn render_rule() {
         cranpose_ui::BoxSpec::default(),
         || {},
     );
-    Spacer(Size {
-        width: 0.0,
-        height: 4.0,
-    });
+    Spacer(Modifier::empty().size_points(0.0, 4.0));
 }
 
 #[cfg(test)]
