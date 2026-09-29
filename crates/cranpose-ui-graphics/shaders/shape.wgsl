@@ -75,94 +75,53 @@ fn full_output(solid: SolidOutput) -> VertexOutput {
     return output;
 }
 
-// What a solid fill batch's fragments need: `SolidOutput` with the fill's
-// interior carried as four half-float insets from the rect's sides in place
-// of a vector of its own. The fragments of many small fills are bound by the
-// varyings they read, and a fill carries no arc geometry to keep whole. Each
-// inset is rounded up before it is packed, so the interior only ever shrinks
-// and every pixel it lets skip the distance field is one the field would
-// cover whole.
-struct SolidFillOutput {
+// What a solid fill drawn flat needs: `SolidOutput` without the position
+// its fragments read from the fragment coordinate instead, the stroke vector
+// whose only use for a fill is the turned flag, and the arc vector, which
+// carries a fill's interior only for a batch that tests it and a solid batch
+// never does (see `ShapeVariant::of_segment`). A tiling GPU stores every
+// vector a vertex writes, so the lean set saves the vertex stage those stores.
+struct ClippedFillOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(2) world_pos: vec4<f32>,
     @location(3) @interpolate(flat) rect: vec4<f32>,
     @location(4) @interpolate(flat) radii: vec4<f32>,
     @location(5) @interpolate(flat) clip_rect: vec4<f32>,
-    @location(6) @interpolate(flat) stroke_params: vec4<f32>,
-    @location(7) @interpolate(flat) interior_insets: vec2<u32>,
 }
 
-// How much further in an inset goes before it is packed, relatively and
-// absolutely: past half a half-float step, and past the rounding of the
-// single-float sum that unpacks it.
-const INSET_ROUND_UP: f32 = 0.0009765625;
-
-fn solid_fill_output(full: VertexOutput) -> SolidFillOutput {
-    var output: SolidFillOutput;
-    output.clip_position = full.clip_position;
-    output.color = full.color;
-    output.world_pos = full.world_pos;
-    output.rect = full.rect;
-    output.radii = full.radii;
-    output.clip_rect = full.clip_rect;
-    output.stroke_params = full.stroke_params;
-    let far = full.rect.xy + full.rect.zw;
-    let insets = vec4<f32>(full.arc_params.xy - full.rect.xy, far - full.arc_params.zw);
-    let packed = insets + (abs(insets) + 1.0) * INSET_ROUND_UP;
-    output.interior_insets = vec2<u32>(pack2x16float(packed.xy), pack2x16float(packed.zw));
-    return output;
+fn clipped_fill_output(full: VertexOutput) -> ClippedFillOutput {
+    return ClippedFillOutput(full.clip_position, full.color, full.rect, full.radii, full.clip_rect);
 }
 
-fn full_from_solid_fill(fill: SolidFillOutput) -> VertexOutput {
+fn full_from_clipped_fill(fill: ClippedFillOutput) -> VertexOutput {
     var solid: SolidOutput;
     solid.clip_position = fill.clip_position;
     solid.color = fill.color;
-    solid.world_pos = fill.world_pos;
+    solid.world_pos = vec4<f32>(0.0);
     solid.rect = fill.rect;
     solid.radii = fill.radii;
     solid.clip_rect = fill.clip_rect;
-    solid.stroke_params = fill.stroke_params;
-    let insets = vec4<f32>(
-        unpack2x16float(fill.interior_insets.x),
-        unpack2x16float(fill.interior_insets.y),
-    );
-    solid.arc_params = vec4<f32>(
-        fill.rect.xy + insets.xy,
-        fill.rect.xy + fill.rect.zw - insets.zw,
-    );
+    solid.stroke_params = vec4<f32>(0.0);
+    solid.arc_params = vec4<f32>(0.0);
     return full_output(solid);
 }
 
-// What an unclipped fill drawn flat needs: `SolidFillOutput` without the
-// position its fragments never read, the clip it has none of, and the
-// stroke vector whose only use for a fill is the turned flag. Every vertex
-// stores each vector its stage writes, so the lean set saves a quarter of
-// the vertex stage's stores.
+// `ClippedFillOutput` without the clip an unclipped fill has none of.
 struct PlainFillOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(3) @interpolate(flat) rect: vec4<f32>,
     @location(4) @interpolate(flat) radii: vec4<f32>,
-    @location(7) @interpolate(flat) interior_insets: vec2<u32>,
 }
 
 fn plain_fill_output(full: VertexOutput) -> PlainFillOutput {
-    let fill = solid_fill_output(full);
-    return PlainFillOutput(fill.clip_position, fill.color, fill.rect, fill.radii, fill.interior_insets);
+    return PlainFillOutput(full.clip_position, full.color, full.rect, full.radii);
 }
 
 fn full_from_plain_fill(plain: PlainFillOutput) -> VertexOutput {
-    var fill: SolidFillOutput;
-    fill.clip_position = plain.clip_position;
-    fill.color = plain.color;
-    fill.world_pos = vec4<f32>(0.0);
-    fill.rect = plain.rect;
-    fill.radii = plain.radii;
-    fill.clip_rect = vec4<f32>(0.0);
-    fill.stroke_params = vec4<f32>(0.0);
-    fill.interior_insets = plain.interior_insets;
-    return full_from_solid_fill(fill);
+    return full_from_clipped_fill(
+        ClippedFillOutput(plain.clip_position, plain.color, plain.rect, plain.radii, vec4<f32>(0.0)),
+    );
 }
 
 struct GradientFillOutput {
@@ -716,12 +675,12 @@ fn vs_record_plain_fill(
 }
 
 @vertex
-fn vs_record_solid_fill(
+fn vs_record_clipped_fill(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
     record: ShapeRecord,
-) -> SolidFillOutput {
-    return solid_fill_output(placed_record_vertex(record, vertex_idx, instance));
+) -> ClippedFillOutput {
+    return clipped_fill_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
 @vertex
@@ -865,8 +824,9 @@ const SHAPE_KIND_ARC: u32 = 2u;
 // so the general program and every specialised one shade one record alike.
 override SHAPE_KIND_FIXED: i32 = -1;
 override SHAPE_SOLID: bool = false;
-// Whether a fill's interior is shaded apart, off for a batch none of whose
-// rounded fills has an interior big enough to repay the test.
+// Whether a fill's interior is shaded apart, off for a solid batch and for
+// one none of whose rounded fills has an interior big enough to repay the
+// test.
 override SHAPE_INTERIOR: bool = true;
 override SHAPE_CLIPPED: bool = true;
 override SHAPE_FLAT: bool = false;
@@ -1289,8 +1249,8 @@ fn fs_solid(input: SolidOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_solid_fill(input: SolidFillOutput) -> @location(0) vec4<f32> {
-    return fragment(full_from_solid_fill(input));
+fn fs_clipped_fill(input: ClippedFillOutput) -> @location(0) vec4<f32> {
+    return fragment(full_from_clipped_fill(input));
 }
 
 @fragment

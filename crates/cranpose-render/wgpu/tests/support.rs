@@ -1026,8 +1026,6 @@ pub fn draw_node(primitive: DrawPrimitive, clip: Option<Rect>) -> RenderNode {
 pub const SIZE: u32 = 256;
 pub const CENTER: f32 = 128.0;
 
-/// A scene of solid arcs, discs, rounded rects and strokes, the shape of
-/// cranorbit's arena.
 /// The dark background every parity scene draws first.
 fn draw_scene_background(scope: &mut DrawScopeDefault) {
     scope.draw_rect_at(
@@ -1041,7 +1039,7 @@ fn draw_scene_background(scope: &mut DrawScopeDefault) {
     );
 }
 
-/// Only solid fills, so their batch takes the fill-only pipeline: circles
+/// Only solid fills, so their batch takes a fill-only pipeline: circles
 /// and rounded squares of many sizes at fractional positions, opaque and
 /// translucent, over a background.
 pub fn record_solid_fill_scene(scope: &mut DrawScopeDefault) {
@@ -1073,6 +1071,8 @@ pub fn record_solid_fill_scene(scope: &mut DrawScopeDefault) {
     }
 }
 
+/// A scene of solid arcs, discs, rounded rects and strokes, the shape of
+/// cranorbit's arena.
 pub fn record_solid_scene(scope: &mut DrawScopeDefault) {
     draw_scene_background(scope);
     for ring in 0..3u32 {

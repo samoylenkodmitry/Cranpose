@@ -1071,11 +1071,15 @@ impl ShapeVariant {
         },
     };
 
-    /// The variant `segment`'s records draw with, `clipped` or not. `laid`
-    /// says a depth pre-pass lays the opaque interiors of a segment holding
-    /// an occluder down ahead of its paint, so the depth test already skips
-    /// them and the interior's fast path would only cost its other
-    /// fragments a varying.
+    /// The variant `segment`'s records draw with, `clipped` or not. A solid
+    /// batch never tests a fill's interior: its fragments load every varying
+    /// ahead of their branches and are bound by those loads, so the test
+    /// saves arithmetic only and costs each fragment the interior's vector
+    /// (on Mali-G76, 1.5 varying cycles a fill fragment becomes 1.75–2.0).
+    /// `laid` says a depth pre-pass lays the opaque interiors of a segment
+    /// holding an occluder down ahead of its paint, so the depth test
+    /// already skips them and the interior's fast path would only cost its
+    /// other fragments a varying.
     pub(crate) fn of_segment(
         segment: &RecordSegment,
         clipped: bool,
@@ -1097,7 +1101,9 @@ impl ShapeVariant {
                 .map(|brush| brush as u8),
             solid: !segment.gradient,
             clipped,
-            interior: segment.interiors && !(laid && segment.occluders && !segment.bare_interiors),
+            interior: segment.gradient
+                && segment.interiors
+                && !(laid && segment.occluders && !segment.bare_interiors),
             ablation,
         }
     }
@@ -1106,10 +1112,10 @@ impl ShapeVariant {
     /// drawn `flat` (none of them turned).
     fn entries(self, flat: bool) -> (&'static str, &'static str) {
         let fill = self.kind == Some(FRAGMENT_KIND_FILL as u8);
-        if self.solid && fill && flat && !self.clipped {
+        if self.solid && fill && flat && self.clipped {
+            ("vs_record_clipped_fill", "fs_clipped_fill")
+        } else if self.solid && fill && flat {
             ("vs_record_plain_fill", "fs_plain_fill")
-        } else if self.solid && fill {
-            ("vs_record_solid_fill", "fs_solid_fill")
         } else if self.solid {
             ("vs_record_solid", "fs_solid")
         } else if fill && !self.ablation.material {
