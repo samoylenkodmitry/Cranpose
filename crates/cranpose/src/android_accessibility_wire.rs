@@ -1,16 +1,9 @@
-use std::fmt::Write;
-
 use cranpose_core::collections::map::HashMap;
 
-use crate::{
-    accessibility::{
-        AccessibilityElement, AccessibilityIdentityError, AccessibilityRect, AccessibilitySnapshot,
-        CollectionItem, checked_state, spoken_changes, utf16_offset,
-    },
-    android_wire_escape::push_escaped_wire_field,
+use crate::accessibility::{
+    AccessibilityElement, AccessibilityIdentityError, AccessibilityRect, AccessibilitySnapshot,
+    CollectionItem, checked_state, spoken_changes, utf16_offset,
 };
-
-const ACTION_SEPARATOR: char = '\u{1f}';
 
 /// What the host needs to show a new snapshot: every virtual id in order,
 /// full records for the controls it does not hold as they are now, and new
@@ -19,7 +12,8 @@ const ACTION_SEPARATOR: char = '\u{1f}';
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct AccessibilityUpdate {
     pub(crate) order: Vec<i32>,
-    pub(crate) records: String,
+    /// The records back to back, as [`RecordWriter`] writes them.
+    pub(crate) records: Vec<u8>,
     pub(crate) moves: Vec<i32>,
     reordered: bool,
 }
@@ -58,7 +52,7 @@ impl AccessibilityWire {
         let changed = spoken_changes(&replaced.elements, &snapshot.elements, &replaced.was);
         let parents = scroll_parent_ids(&snapshot.elements, &snapshot.ids);
         let known = self.density == Some(density.to_bits());
-        let mut records = String::new();
+        let mut records = Vec::new();
         let mut moves = Vec::new();
         for (((element, id), parent), (spoken_change, was)) in snapshot
             .elements
@@ -84,9 +78,6 @@ impl AccessibilityWire {
                     }
                 }
                 None => {
-                    if !records.is_empty() {
-                        records.push('\n');
-                    }
                     encode_record(&mut records, element, *id, *parent, spoken_change, density);
                 }
             }
@@ -122,9 +113,9 @@ fn pixel_bounds(bounds: AccessibilityRect, density: f32) -> [i32; 4] {
 }
 
 /// Appends one control's record to `out`: its fields in the order Java
-/// parses them, tab-separated, the strings escaped.
+/// reads them.
 fn encode_record(
-    out: &mut String,
+    out: &mut Vec<u8>,
     element: &AccessibilityElement,
     id: i32,
     parent: i32,
@@ -189,73 +180,41 @@ fn encode_record(
     record.number(i32::from(element.dismissable));
     record.number(i32::from(element.scroll_to_index));
     record.number(selection_start);
-    record.last_number(selection_end);
+    record.number(selection_end);
 }
 
-/// Appends `value` in decimal, as `Display` writes it, without the formatter.
-fn push_decimal(out: &mut String, value: i32) {
-    let mut digits = [0u8; 10];
-    let mut magnitude = value.unsigned_abs();
-    let mut start = digits.len();
-    loop {
-        start -= 1;
-        digits[start] = b'0' + (magnitude % 10) as u8;
-        magnitude /= 10;
-        if magnitude == 0 {
-            break;
-        }
-    }
-    if value < 0 {
-        out.push('-');
-    }
-    out.extend(digits[start..].iter().map(|&digit| char::from(digit)));
-}
-
-/// Writes a record's fields straight into the update, each followed by a
-/// tab but the last: no field is built as a string of its own.
-struct RecordWriter<'a>(&'a mut String);
+/// Writes a record's fields straight into the update, in the order the host
+/// reads them: numbers and flags as little-endian `i32`, fractions as
+/// little-endian `f32`, text as its UTF-8 length, a little-endian `u32`,
+/// then its bytes, and a list of labels as their count, then each label.
+/// The host reads them off a buffer; nothing is escaped or parsed.
+struct RecordWriter<'a>(&'a mut Vec<u8>);
 
 impl RecordWriter<'_> {
     fn number(&mut self, value: i32) {
-        self.last_number(value);
-        self.0.push('\t');
+        self.0.extend_from_slice(&value.to_le_bytes());
     }
 
-    fn last_number(&mut self, value: i32) {
-        push_decimal(self.0, value);
-    }
-
-    /// `value` as `Display` writes it: a whole number without a fraction
-    /// through the integer writer, any other through the formatter.
     fn float(&mut self, value: f32) {
-        const EXACT_INTEGERS: f32 = 16_777_216.0;
-        if value.fract() == 0.0
-            && value.abs() < EXACT_INTEGERS
-            && !(value == 0.0 && value.is_sign_negative())
-        {
-            push_decimal(self.0, value as i32);
-        } else {
-            // Writing to a String cannot fail.
-            let _ = write!(self.0, "{value}");
-        }
-        self.0.push('\t');
+        self.0.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn length(&mut self, length: usize) {
+        let length = u32::try_from(length).unwrap_or(u32::MAX);
+        self.0.extend_from_slice(&length.to_le_bytes());
     }
 
     fn text(&mut self, value: &str) {
-        push_escaped_wire_field(self.0, value, ACTION_SEPARATOR);
-        self.0.push('\t');
+        self.length(value.len());
+        self.0.extend_from_slice(value.as_bytes());
     }
 
-    /// The custom actions' labels, escaped and joined by the action
-    /// separator.
+    /// The custom actions' labels.
     fn actions(&mut self, labels: &[String]) {
-        for (index, label) in labels.iter().enumerate() {
-            if index > 0 {
-                self.0.push(ACTION_SEPARATOR);
-            }
-            push_escaped_wire_field(self.0, label, ACTION_SEPARATOR);
+        self.length(labels.len());
+        for label in labels {
+            self.text(label);
         }
-        self.0.push('\t');
     }
 }
 

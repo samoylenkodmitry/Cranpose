@@ -1043,36 +1043,58 @@ fn android_play_billing_reaches_the_purchase_registry() {
     );
 }
 
+/// The kinds of the fields `source` writes or reads between `start` and the
+/// first `end` after it, in order: N a number or flag, F a fraction, T text, A
+/// a list of labels.
+fn wire_kinds(source: &str, start: &str, end: &str, tokens: &[(&str, char)]) -> String {
+    let from = source.find(start).expect("the section starts");
+    let body = &source[from..];
+    let body = &body[..body.find(end).expect("the section ends")];
+    let mut found: Vec<(usize, char)> = tokens
+        .iter()
+        .flat_map(|(token, kind)| body.match_indices(token).map(move |(at, _)| (at, *kind)))
+        .collect();
+    found.sort_unstable();
+    found.into_iter().map(|(_, kind)| kind).collect()
+}
+
 #[test]
-fn android_accessibility_record_width_agrees_across_the_jni_boundary() {
-    // The encoder's tests pin the width it writes to this constant.
-    let wire_source = crate_source("src/tests/android_accessibility_wire.rs");
+fn android_accessibility_record_layout_agrees_across_the_jni_boundary() {
+    let wire_source = crate_source("src/android_accessibility_wire.rs");
+    let wire_tests = crate_source("src/tests/android_accessibility_wire.rs");
     let java_source =
         workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
 
-    let rust_fields = wire_source
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("const RECORD_FIELDS: usize = "))
-        .and_then(|value| value.trim_end_matches(';').parse::<usize>().ok())
-        .expect("the accessibility wire tests should declare the record width");
-    let java_fields = java_source
-        .lines()
-        .find(|line| line.contains("ACCESSIBILITY_FIELDS ="))
-        .and_then(|line| {
-            line.rsplit('=')
-                .next()
-                .map(|value| value.trim().trim_end_matches(';').to_string())
-        })
-        .and_then(|value| value.parse::<usize>().ok())
-        .expect("CranposeActivity should declare the accessibility record width");
-
+    let written = wire_kinds(
+        &wire_source,
+        "fn encode_record(",
+        "\n}\n",
+        &[
+            ("record.number(", 'N'),
+            ("record.float(", 'F'),
+            ("record.text(", 'T'),
+            ("record.actions(", 'A'),
+        ],
+    );
+    let read = wire_kinds(
+        &java_source,
+        "parseAccessibilityElements(byte[] payload)",
+        "return result;",
+        &[
+            ("in.getInt()", 'N'),
+            ("flag(in)", 'N'),
+            ("in.getFloat()", 'F'),
+            ("text(in)", 'T'),
+            ("actions(in)", 'A'),
+        ],
+    );
     assert_eq!(
-        rust_fields, java_fields,
-        "the encoder writes {rust_fields} fields but CranposeActivity parses {java_fields}"
+        written, read,
+        "the encoder writes fields the Android host does not read in that order"
     );
     assert!(
-        java_source.contains("if (fields.length != ACCESSIBILITY_FIELDS) continue;"),
-        "a record of the wrong width should be skipped, not indexed past its end"
+        wire_tests.contains(&format!("b\"{written}\"")),
+        "the wire tests decode the layout the encoder writes: {written}"
     );
 }
 
@@ -3976,7 +3998,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("private static final int ACCESSIBILITY_FIELDS = 41;"),
+            && java_source.contains("final int collectionRows;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }

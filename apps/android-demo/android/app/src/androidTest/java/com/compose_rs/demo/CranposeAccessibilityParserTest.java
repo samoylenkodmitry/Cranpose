@@ -14,6 +14,10 @@ import org.junit.Test;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Constructor;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -23,11 +27,11 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 public final class CranposeAccessibilityParserTest {
-    private static List<?> parse(String payload) throws Exception {
+    private static List<?> parse(byte[] payload) throws Exception {
         Method method = CranposeActivity.class.getDeclaredMethod(
-                "parseAccessibilityElements", String.class);
+                "parseAccessibilityElements", byte[].class);
         method.setAccessible(true);
-        return (List<?>) method.invoke(null, payload);
+        return (List<?>) method.invoke(null, (Object) payload);
     }
 
     private static Object field(Object element, String name) throws Exception {
@@ -36,18 +40,62 @@ public final class CranposeAccessibilityParserTest {
         return field.get(element);
     }
 
-    private static String record(String id, String label, String actions) {
-        return String.join("\t", id, "5", "2", "4", "62", "84", "16", "22",
-                "1", label, "", "On", "Toggle", "-1", "1", "1", actions,
-                "1", "0", "0", "0", "0", "0", "0", "0", "0", "-1", "0", "0", "0", "-1", "-1", "", "", "0", "-1",
-                "Remove receipt", "0", "0", "-1", "-1");
+    /**
+     * One control's record as android_accessibility_wire.rs writes it, its
+     * fields in wire order and set by index: N a little-endian int, F a
+     * float, T UTF-8 text after its length, A a count of labels, then each.
+     */
+    private static final class Record {
+        private static final String KINDS = "NNNNNNFFNTTTTNNNANNNFFFNNNNNNNNNTTNNTNNNN";
+        final Object[] fields;
+
+        Record(int id, String label, String... actions) {
+            fields = new Object[]{id, 5, 2, 4, 62, 84, 16f, 22f, 1, label, "", "On", "Toggle", -1,
+                    1, 1, actions, 1, 0, 0, 0f, 0f, 0f, 0, 0, 0, -1, 0, 0, 0, -1, -1, "", "", 0,
+                    -1, "Remove receipt", 0, 0, -1, -1};
+        }
+
+        Record set(int index, Object value) {
+            fields[index] = value;
+            return this;
+        }
+
+        void writeTo(ByteBuffer out) {
+            for (int i = 0; i < fields.length; i++) {
+                switch (KINDS.charAt(i)) {
+                    case 'N': out.putInt((Integer) fields[i]); break;
+                    case 'F': out.putFloat((Float) fields[i]); break;
+                    case 'T': text(out, (String) fields[i]); break;
+                    default:
+                        String[] labels = (String[]) fields[i];
+                        out.putInt(labels.length);
+                        for (String label : labels) text(out, label);
+                }
+            }
+        }
+
+        private static void text(ByteBuffer out, String value) {
+            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+            out.putInt(bytes.length);
+            out.put(bytes);
+        }
+    }
+
+    private static Record record(int id, String label, String... actions) {
+        return new Record(id, label, actions);
+    }
+
+    private static byte[] payload(Record... records) {
+        ByteBuffer out = ByteBuffer.allocate(1 << 16).order(ByteOrder.LITTLE_ENDIAN);
+        for (Record record : records) record.writeTo(out);
+        return Arrays.copyOf(out.array(), out.position());
     }
 
     @Test
-    public void preservesTrailingEmptyFieldsAndEscapedDelimiters() throws Exception {
-        String escaped = "A%2509%09B%0AC%0D%1F\uD83C\uDF17";
-        List<?> elements = parse(record("17", escaped, "Pause%1Finside\u001f")
-                + "\n" + record("18", "Empty actions", "") + "\n\n");
+    public void readsTextVerbatimAndEmptyFields() throws Exception {
+        List<?> elements = parse(payload(
+                record(17, "A%09\tB\nC\r\u001f\uD83C\uDF17", "Pause\u001finside", ""),
+                record(18, "Empty actions")));
         assertEquals(2, elements.size());
         Object first = elements.get(0);
         assertEquals(17, field(first, "id"));
@@ -71,10 +119,9 @@ public final class CranposeAccessibilityParserTest {
     }
 
     @Test
-    public void skipsMalformedRecordsWithoutDiscardingFollowingNodes() throws Exception {
-        List<?> elements = parse("short\trow\n" + record("bad id", "Invalid", "")
-                + "\n" + record("19", "Too many", "") + "\textra"
-                + "\n" + record("20", "Valid", ""));
+    public void aPayloadCutShortKeepsTheRecordsBeforeIt() throws Exception {
+        byte[] whole = payload(record(20, "Valid"), record(21, "Cut"));
+        List<?> elements = parse(Arrays.copyOf(whole, whole.length - 7));
         assertEquals(1, elements.size());
         assertEquals(20, field(elements.get(0), "id"));
         assertEquals("Valid", field(elements.get(0), "label"));
@@ -83,11 +130,10 @@ public final class CranposeAccessibilityParserTest {
     @Test
     public void emptyPayloadsHaveNoNodes() throws Exception {
         assertTrue(parse(null).isEmpty());
-        assertTrue(parse("").isEmpty());
-        assertTrue(parse("\n\n").isEmpty());
+        assertTrue(parse(new byte[0]).isEmpty());
     }
 
-    private static AccessibilityNodeProvider provider(String payload) throws Exception {
+    private static AccessibilityNodeProvider provider(byte[] payload) throws Exception {
         Class<?> type = Class.forName(CranposeActivity.class.getName() + "$CranposeAccessibilityProvider");
         Constructor<?> constructor = type.getDeclaredConstructor(View.class);
         constructor.setAccessible(true);
@@ -101,12 +147,8 @@ public final class CranposeAccessibilityParserTest {
 
     @Test
     public void progressIndicatorsReportTheirRangeWithoutOfferingAdjustment() throws Exception {
-        String[] fields = record("21", "Loading", "").split("\t", -1);
-        fields[1] = "15";
-        fields[20] = "40";
-        fields[21] = "0";
-        fields[22] = "100";
-        AccessibilityNodeInfo node = provider(String.join("\t", fields)).createAccessibilityNodeInfo(21);
+        Record loading = record(21, "Loading").set(1, 15).set(20, 40f).set(21, 0f).set(22, 100f);
+        AccessibilityNodeInfo node = provider(payload(loading)).createAccessibilityNodeInfo(21);
         assertEquals("android.widget.ProgressBar", node.getClassName());
         assertNotNull(node.getRangeInfo());
         assertEquals(40.0f, node.getRangeInfo().getCurrent(), 0.0f);
@@ -116,9 +158,8 @@ public final class CranposeAccessibilityParserTest {
 
     @Test
     public void disabledControlsRejectActionsButRemainDiscoverable() throws Exception {
-        String[] fields = record("22", "Disabled", "Remove").split("\t", -1);
-        fields[15] = "0";
-        AccessibilityNodeProvider provider = provider(String.join("\t", fields));
+        AccessibilityNodeProvider provider = provider(payload(
+                record(22, "Disabled", "Remove").set(15, 0)));
         AccessibilityNodeInfo node = provider.createAccessibilityNodeInfo(22);
         assertFalse(node.isEnabled());
         assertTrue(node.isVisibleToUser());
@@ -135,12 +176,9 @@ public final class CranposeAccessibilityParserTest {
 
     @Test
     public void textSearchMatchesNamesAndValuesWithinTheRequestedSubtree() throws Exception {
-        String[] child = record("32", "Title", "").split("\t", -1);
-        child[1] = "3";
-        child[10] = "Café notes";
-        child[26] = "31";
-        AccessibilityNodeProvider provider = provider(record("31", "Notebook", "")
-                + "\n" + String.join("\t", child) + "\n" + record("33", "Other notes", ""));
+        Record child = record(32, "Title").set(1, 3).set(10, "Café notes").set(26, 31);
+        AccessibilityNodeProvider provider = provider(payload(
+                record(31, "Notebook"), child, record(33, "Other notes")));
         assertEquals(2, provider.findAccessibilityNodeInfosByText("NOTES", -1).size());
         assertEquals(1, provider.findAccessibilityNodeInfosByText("notes", 31).size());
         assertEquals(1, provider.findAccessibilityNodeInfosByText("CAFÉ", 32).size());
@@ -150,7 +188,7 @@ public final class CranposeAccessibilityParserTest {
         assertTrue(provider.findAccessibilityNodeInfosByText("absent", -1).isEmpty());
     }
 
-    private static boolean update(AccessibilityNodeProvider provider, int[] order, String records,
+    private static boolean update(AccessibilityNodeProvider provider, int[] order, byte[] records,
             int[] moves) throws Exception {
         Method method = provider.getClass().getDeclaredMethod(
                 "update", int[].class, List.class, int[].class);
@@ -166,12 +204,11 @@ public final class CranposeAccessibilityParserTest {
 
     @Test
     public void updatesKeepUnsentControlsResendChangedOnesAndMoveBounds() throws Exception {
-        AccessibilityNodeProvider provider = provider("");
+        AccessibilityNodeProvider provider = provider(new byte[0]);
         assertTrue(update(provider, new int[]{41, 42, 43},
-                record("41", "One", "") + "\n" + record("42", "Two", "") + "\n"
-                        + record("43", "Three", ""), new int[0]));
+                payload(record(41, "One"), record(42, "Two"), record(43, "Three")), new int[0]));
 
-        assertTrue(update(provider, new int[]{43, 41}, record("43", "Renamed", ""),
+        assertTrue(update(provider, new int[]{43, 41}, payload(record(43, "Renamed")),
                 new int[]{41, 5, 6, 7, 8}));
 
         assertEquals("Renamed", provider.createAccessibilityNodeInfo(43).getContentDescription());
@@ -183,8 +220,8 @@ public final class CranposeAccessibilityParserTest {
 
     @Test
     public void anUpdateNamingAnUnknownControlAsksForEveryRecord() throws Exception {
-        AccessibilityNodeProvider provider = provider(record("51", "Kept", ""));
-        assertFalse(update(provider, new int[]{51, 52}, "", new int[0]));
+        AccessibilityNodeProvider provider = provider(payload(record(51, "Kept")));
+        assertFalse(update(provider, new int[]{51, 52}, new byte[0], new int[0]));
         assertEquals("Kept", provider.createAccessibilityNodeInfo(51).getContentDescription());
     }
 }

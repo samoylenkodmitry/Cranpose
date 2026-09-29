@@ -321,9 +321,10 @@ fn publish(app: &android_activity::AndroidApp, update: &AccessibilityUpdate) -> 
     with_android_activity_env(app, |env, activity| {
         let order = int_array(env, &update.order)?;
         let moves = int_array(env, &update.moves)?;
-        // UTF-8 bytes: the host decodes them on its UI thread, off this loop.
+        // The records' bytes: the host reads them on its UI thread, off this
+        // loop.
         let records = env
-            .byte_array_from_slice(update.records.as_bytes())
+            .byte_array_from_slice(&update.records)
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
                 format!("failed to copy Android accessibility records: {error}")
