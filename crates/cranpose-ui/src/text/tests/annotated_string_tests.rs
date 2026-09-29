@@ -228,3 +228,28 @@ fn a_render_string_keeps_the_hash_its_content_has() {
     );
     assert_eq!(render.subsequence(3..3), RenderString::default());
 }
+
+#[test]
+fn span_boundaries_are_sorted_unique_character_offsets_held_inline_for_few_spans() {
+    let span = |range: Range<usize>| RangeStyle {
+        item: SpanStyle::default(),
+        range,
+    };
+    let text = AnnotatedString {
+        text: "héllo world".to_string(),
+        span_styles: vec![span(6..12), span(2..40), span(2..3)],
+        ..Default::default()
+    };
+
+    let boundaries = text.span_boundaries();
+
+    // 2 is inside `é` and 40 is past the end: neither is a place styles
+    // can change.
+    assert_eq!(boundaries.as_slice(), &[0, 3, 6, 12]);
+    assert!(!boundaries.spilled());
+    assert_eq!(
+        text.render_string().span_boundaries().as_slice(),
+        boundaries.as_slice()
+    );
+    assert_eq!(AnnotatedString::from("").span_boundaries().as_slice(), &[0]);
+}

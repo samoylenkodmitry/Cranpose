@@ -1375,34 +1375,81 @@ fn software_text_prefix_widths_match_subsequence_measurement() {
 }
 
 #[test]
-fn software_text_line_width_and_prefix_width_share_cached_plan() {
+fn software_text_line_width_is_its_prefix_widths_full_range_bit_for_bit() {
     let measurer = SoftwareTextMeasurer::new(
         default_software_text_font().expect("bundled default test font"),
         8,
     );
-    let style = TextStyle::default();
-    let text = AnnotatedString::from("shared prefix plan ".repeat(32).as_str());
-    let line_range = 0..text.text.len();
-
-    let width = measurer
-        .measure_line_width(&text, line_range.clone(), &style)
-        .expect("software text should expose a line width");
-    let stats_after_width = {
-        let cache = measurer.lock_cache();
-        assert_eq!(cache.line_prefix_widths.entries.len(), 1);
-        cache.glyph_metrics.stats()
+    let sized = |size: f32| SpanStyle {
+        font_size: cranpose_ui::text::TextUnit::Sp(size),
+        ..Default::default()
     };
-
-    let widths = measurer
-        .measure_line_prefix_widths(&text, line_range, &style)
-        .expect("line width probe should cache the prefix plan");
-    let stats_after_prefix = measurer.lock_cache().glyph_metrics.stats();
-
-    assert_eq!(stats_after_prefix, stats_after_width);
-    assert!(
-        (width - widths.width_for_char_range(0, widths.char_count()).unwrap()).abs() < 0.01,
-        "cached line-width probe and prefix plan must agree"
-    );
+    let style = |span_style: SpanStyle| TextStyle {
+        span_style,
+        ..Default::default()
+    };
+    let kerned = AnnotatedString::from("AVATAR Toy Wave, LT yo");
+    let spanned = AnnotatedString {
+        text: "Tall Yard AV Tower".to_string(),
+        span_styles: vec![
+            RangeStyle {
+                item: sized(26.0),
+                range: 5..12,
+            },
+            RangeStyle {
+                item: SpanStyle {
+                    font_weight: Some(FontWeight::BOLD),
+                    ..Default::default()
+                },
+                range: 10..18,
+            },
+        ],
+        ..Default::default()
+    };
+    let cases = [
+        (&kerned, 0..kerned.text.len(), style(sized(18.0))),
+        (&kerned, 3..11, style(sized(18.0))),
+        (&kerned, 4..4, style(sized(18.0))),
+        (
+            &kerned,
+            0..kerned.text.len(),
+            style(SpanStyle {
+                letter_spacing: cranpose_ui::text::TextUnit::Sp(1.5),
+                ..sized(15.0)
+            }),
+        ),
+        (
+            &kerned,
+            0..kerned.text.len(),
+            style(SpanStyle {
+                font_weight: Some(FontWeight::BOLD),
+                ..sized(20.0)
+            }),
+        ),
+        (
+            &kerned,
+            0..kerned.text.len(),
+            style(SpanStyle {
+                font_style: Some(FontStyle::Italic),
+                ..sized(20.0)
+            }),
+        ),
+        (&spanned, 0..spanned.text.len(), style(sized(14.0))),
+        (&spanned, 7..16, style(sized(14.0))),
+    ];
+    for (text, range, style) in cases {
+        let width = measurer.measure_line_width(text, range.clone(), &style);
+        let from_prefixes = measurer
+            .measure_line_prefix_widths(text, range.clone(), &style)
+            .and_then(|widths| widths.width_for_char_range(0, widths.char_count()));
+        assert!(width.is_some(), "{:?} {range:?}", text.text);
+        assert_eq!(
+            width.map(f32::to_bits),
+            from_prefixes.map(f32::to_bits),
+            "{:?} {range:?}",
+            text.text
+        );
+    }
 }
 
 #[test]
@@ -1831,46 +1878,6 @@ fn font_bytes_keep_the_bytes_they_were_given() {
     let owned = FontBytes::from(vec![1, 2, 3]);
     assert!(matches!(owned, FontBytes::Owned(_)));
     assert_eq!(owned.as_slice(), &[1, 2, 3]);
-}
-
-fn prefix_widths_of(chars: usize) -> Rc<TextLinePrefixWidths> {
-    Rc::new(
-        TextLinePrefixWidths::from_parts(
-            (0..=chars).map(|index| index as f32).collect(),
-            vec![0.0; chars],
-            0.0,
-        )
-        .expect("monotonic prefix widths"),
-    )
-}
-
-fn prefix_key(text: &str) -> TextCacheKey<LinePrefixWidthsParams> {
-    TextCacheKey::new(text, (0, text.len(), 1, 2))
-}
-
-#[test]
-fn prefix_widths_past_their_character_budget_leave_least_recent_first() {
-    let mut cache = LinePrefixWidthsCache::new(64, 10);
-    cache.put(prefix_key("a"), prefix_widths_of(4));
-    cache.put(prefix_key("b"), prefix_widths_of(4));
-    assert_eq!(cache.chars, 8);
-    assert!(cache.get(TextProbe::new("a", (0, 1, 1, 2)).key()).is_some());
-    cache.put(prefix_key("c"), prefix_widths_of(4));
-    assert_eq!(
-        cache.chars, 8,
-        "the least recent line left to fit the budget"
-    );
-    assert!(cache.get(TextProbe::new("b", (0, 1, 1, 2)).key()).is_none());
-    assert!(cache.get(TextProbe::new("a", (0, 1, 1, 2)).key()).is_some());
-    cache.put(prefix_key("a"), prefix_widths_of(2));
-    assert_eq!(cache.chars, 6, "a replaced line gives its characters back");
-    cache.put(prefix_key("d"), prefix_widths_of(30));
-    assert_eq!(
-        cache.entries.len(),
-        1,
-        "a line longer than the budget stays alone rather than not at all"
-    );
-    assert_eq!(cache.chars, 30);
 }
 
 /// Collects the run of `text` drawn in `color` at 14 px.

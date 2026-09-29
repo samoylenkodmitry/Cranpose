@@ -175,7 +175,7 @@ impl RenderString {
     /// Returns a sorted list of unique byte indices where styles change.
     ///
     /// Mirrors [`AnnotatedString::span_boundaries`].
-    pub fn span_boundaries(&self) -> Vec<usize> {
+    pub fn span_boundaries(&self) -> SpanBoundaries {
         span_boundaries_impl(&self.text, &self.span_styles)
     }
 
@@ -225,18 +225,20 @@ fn clip_range_styles<T: Clone>(
     clipped
 }
 
-fn span_boundaries_impl(text: &str, span_styles: &[RangeStyle<SpanStyle>]) -> Vec<usize> {
-    let mut boundaries = vec![0, text.len()];
+/// Byte offsets where a string's styles change, held inline for the few
+/// spans most text carries.
+pub type SpanBoundaries = smallvec::SmallVec<[usize; 8]>;
+
+fn span_boundaries_impl(text: &str, span_styles: &[RangeStyle<SpanStyle>]) -> SpanBoundaries {
+    let mut boundaries: SpanBoundaries = smallvec::smallvec![0, text.len()];
     for span in span_styles {
         boundaries.push(span.range.start);
         boundaries.push(span.range.end);
     }
     boundaries.sort_unstable();
     boundaries.dedup();
+    boundaries.retain(|boundary| *boundary <= text.len() && text.is_char_boundary(*boundary));
     boundaries
-        .into_iter()
-        .filter(|&b| b <= text.len() && text.is_char_boundary(b))
-        .collect()
 }
 
 fn render_hash_impl(
@@ -376,7 +378,7 @@ impl AnnotatedString {
     }
 
     /// Returns a sorted list of unique byte indices where styles change.
-    pub fn span_boundaries(&self) -> Vec<usize> {
+    pub fn span_boundaries(&self) -> SpanBoundaries {
         span_boundaries_impl(&self.text, &self.span_styles)
     }
 

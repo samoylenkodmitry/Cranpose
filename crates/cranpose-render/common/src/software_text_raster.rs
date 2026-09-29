@@ -1,7 +1,6 @@
 use std::{
     hash::{Hash, Hasher},
     ops::ControlFlow,
-    rc::Rc,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 
@@ -39,7 +38,7 @@ use crate::{
     },
     font_tracking::FontTracking,
     gpos_kerning::KernedFont,
-    text_cache_key::{TextCacheKey, TextKey, TextProbe},
+    text_cache_key::{TextCacheKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
     text_mask_gamma::TextLuminance,
 };
@@ -53,8 +52,6 @@ const MAX_GAUSSIAN_KERNEL_HALF: i32 = 128;
 const SOFTWARE_TEXT_GLYPH_METRICS_SLOTS_LOG2: u32 = 11;
 /// Slots of the per-pair kerning cache, as a power of two.
 const SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2: u32 = 13;
-const SOFTWARE_TEXT_PREFIX_WIDTH_CACHE_CAPACITY: usize = 512;
-const SOFTWARE_TEXT_PREFIX_WIDTH_CHAR_BUDGET: usize = 1 << 18;
 #[cfg(feature = "embedded-default-font")]
 #[doc(hidden)]
 pub const DEFAULT_SOFTWARE_TEXT_FONT_BYTES: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
@@ -652,72 +649,15 @@ fn software_text_font_metadata(bytes: &[u8]) -> SoftwareTextFontMetadata {
 /// style hash and span styles hash.
 type TextMetricsParams = (u32, u64, u64);
 
-/// A line prefix widths lookup's parameters besides the line's own text: the
-/// line's range in its paragraph, the style hash and the paragraph's span
-/// styles hash. The widths depend only on the line's characters and the spans
-/// over them, so the key holds the line, not the whole paragraph.
-type LinePrefixWidthsParams = (usize, usize, u64, u64);
-
 struct SoftwareTextMetricsCache {
     map: PassAgedCache<TextCacheKey<TextMetricsParams>, TextMetrics>,
-    line_prefix_widths: LinePrefixWidthsCache,
     glyph_metrics: SoftwareTextGlyphMetricsCache,
-}
-
-/// Measured lines' prefix widths, least recently used out first once they
-/// hold more characters than a budget: a paragraph's widths take eight bytes
-/// a character, so a list scrolling through long texts would otherwise keep
-/// every paragraph it ever measured up to the entry count.
-struct LinePrefixWidthsCache {
-    entries: PassAgedCache<TextCacheKey<LinePrefixWidthsParams>, Rc<TextLinePrefixWidths>>,
-    chars: usize,
-    char_budget: usize,
-}
-
-impl LinePrefixWidthsCache {
-    fn new(capacity: usize, char_budget: usize) -> Self {
-        Self {
-            entries: PassAgedCache::with_capacity_at_least_one(capacity),
-            chars: 0,
-            char_budget,
-        }
-    }
-
-    fn get(
-        &mut self,
-        key: &(dyn TextKey<LinePrefixWidthsParams> + '_),
-    ) -> Option<&Rc<TextLinePrefixWidths>> {
-        self.entries.get(key)
-    }
-
-    fn put(&mut self, key: TextCacheKey<LinePrefixWidthsParams>, widths: Rc<TextLinePrefixWidths>) {
-        self.chars += widths.char_count();
-        if let Some((_, dropped)) = self.entries.push(key, widths) {
-            self.chars -= dropped.char_count();
-        }
-        while self.chars > self.char_budget && self.entries.len() > 1 {
-            let Some((_, dropped)) = self.entries.pop_lru() else {
-                break;
-            };
-            self.chars -= dropped.char_count();
-        }
-    }
-
-    fn begin_layout_pass(&mut self) {
-        let chars = &mut self.chars;
-        self.entries
-            .begin_pass(|dropped| *chars -= dropped.char_count());
-    }
 }
 
 impl SoftwareTextMetricsCache {
     fn new(capacity: usize) -> Self {
         Self {
             map: PassAgedCache::with_capacity_at_least_one(capacity),
-            line_prefix_widths: LinePrefixWidthsCache::new(
-                capacity.max(SOFTWARE_TEXT_PREFIX_WIDTH_CACHE_CAPACITY),
-                SOFTWARE_TEXT_PREFIX_WIDTH_CHAR_BUDGET,
-            ),
             glyph_metrics: SoftwareTextGlyphMetricsCache::new(),
         }
     }
@@ -750,75 +690,23 @@ impl SoftwareTextMetricsCache {
     /// Drops the measurements the last layout passes did not use.
     fn begin_layout_pass(&mut self) {
         self.map.begin_pass(|_| {});
-        self.line_prefix_widths.begin_layout_pass();
-    }
-
-    fn get_or_measure_line_prefix_widths(
-        &mut self,
-        fonts: &SoftwareTextFontSet,
-        text: &AnnotatedString,
-        line_range: std::ops::Range<usize>,
-        style: &TextStyle,
-    ) -> Option<Rc<TextLinePrefixWidths>> {
-        let probe = line_prefix_widths_probe(text, line_range.clone(), style)?;
-        if let Some(widths) = self.line_prefix_widths.get(probe.key()) {
-            return Some(Rc::clone(widths));
-        }
-
-        let widths = Rc::new(annotated_line_prefix_widths_with_font_set_cached(
-            text, line_range, style, fonts, self,
-        )?);
-        self.line_prefix_widths
-            .put(probe.to_owned_key(), Rc::clone(&widths));
-        Some(widths)
-    }
-
-    fn get_or_measure_line_width(
-        &mut self,
-        fonts: &SoftwareTextFontSet,
-        text: &AnnotatedString,
-        line_range: std::ops::Range<usize>,
-        style: &TextStyle,
-    ) -> Option<f32> {
-        let probe = line_prefix_widths_probe(text, line_range.clone(), style)?;
-        if let Some(widths) = self.line_prefix_widths.get(probe.key()) {
-            return widths.width_for_char_range(0, widths.char_count());
-        }
-
-        let widths = annotated_line_prefix_widths_with_font_set_cached(
-            text, line_range, style, fonts, self,
-        )?;
-        let width = widths.width_for_char_range(0, widths.char_count());
-        self.line_prefix_widths
-            .put(probe.to_owned_key(), Rc::new(widths));
-        width
     }
 }
 
-fn line_prefix_widths_probe<'a>(
-    text: &'a AnnotatedString,
-    line_range: std::ops::Range<usize>,
+/// Whether `line_range` is one line of `text` that prefix widths can
+/// measure: a range on character boundaries, without a line break, in a
+/// style shaped glyph by glyph.
+fn measures_line_prefixes(
+    text: &AnnotatedString,
+    line_range: &std::ops::Range<usize>,
     style: &TextStyle,
-) -> Option<TextProbe<'a, LinePrefixWidthsParams>> {
-    if !style_allows_prefix_widths(style)
-        || line_range.start > line_range.end
-        || line_range.end > text.text.len()
-        || !text.text.is_char_boundary(line_range.start)
-        || !text.text.is_char_boundary(line_range.end)
-        || text.text[line_range.clone()].contains('\n')
-    {
-        return None;
-    }
-
-    Some(TextProbe::new(
-        &text.text[line_range.clone()],
-        (
-            line_range.start,
-            line_range.end,
-            style.measurement_hash(),
-            text.span_styles_hash(),
-        ),
-    ))
+) -> bool {
+    style_allows_prefix_widths(style)
+        && line_range.start <= line_range.end
+        && line_range.end <= text.text.len()
+        && text.text.is_char_boundary(line_range.start)
+        && text.text.is_char_boundary(line_range.end)
+        && !text.text[line_range.clone()].contains('\n')
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1012,9 +900,25 @@ impl TextMeasurer for SoftwareTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         line_range: std::ops::Range<usize>,
         style: &TextStyle,
-    ) -> Option<Rc<TextLinePrefixWidths>> {
-        self.lock_cache()
-            .get_or_measure_line_prefix_widths(&self.fonts, text, line_range, style)
+    ) -> Option<TextLinePrefixWidths> {
+        if !measures_line_prefixes(text, &line_range, style) {
+            return None;
+        }
+        let char_count = text.text[line_range.clone()].chars().count();
+        let mut sink = PrefixWidthVecs {
+            prefix_widths: Vec::with_capacity(char_count + 1),
+            separator_before: Vec::with_capacity(char_count),
+        };
+        sink.prefix_widths.push(0.0);
+        let overhang = walk_line_prefix_widths(
+            text,
+            line_range,
+            style,
+            &self.fonts,
+            &mut self.lock_cache().glyph_metrics,
+            &mut sink,
+        );
+        TextLinePrefixWidths::from_parts(sink.prefix_widths, sink.separator_before, overhang)
     }
 
     fn measure_line_width(
@@ -1023,8 +927,19 @@ impl TextMeasurer for SoftwareTextMeasurer {
         line_range: std::ops::Range<usize>,
         style: &TextStyle,
     ) -> Option<f32> {
-        self.lock_cache()
-            .get_or_measure_line_width(&self.fonts, text, line_range, style)
+        if !measures_line_prefixes(text, &line_range, style) {
+            return None;
+        }
+        let mut sink = LineWidthSink::default();
+        let overhang = walk_line_prefix_widths(
+            text,
+            line_range,
+            style,
+            &self.fonts,
+            &mut self.lock_cache().glyph_metrics,
+            &mut sink,
+        );
+        sink.width(overhang)
     }
 
     fn line_height(&self, text: &cranpose_ui::text::AnnotatedString, style: &TextStyle) -> f32 {
@@ -3206,13 +3121,68 @@ fn cached_line_advance_width(
     width.max(0.0)
 }
 
-fn annotated_line_prefix_widths_with_font_set_cached(
+/// What a walk over a line reports for each character: the separator
+/// before it, which a range starting at it leaves out, and the line's width
+/// through it.
+trait PrefixWidthSink {
+    fn push(&mut self, separator: f32, prefix_width: f32);
+}
+
+/// Every prefix width and separator of a line, as
+/// [`TextLinePrefixWidths::from_parts`] takes them.
+struct PrefixWidthVecs {
+    prefix_widths: Vec<f32>,
+    separator_before: Vec<f32>,
+}
+
+impl PrefixWidthSink for PrefixWidthVecs {
+    fn push(&mut self, separator: f32, prefix_width: f32) {
+        self.separator_before.push(separator);
+        self.prefix_widths.push(prefix_width);
+    }
+}
+
+/// A line's whole width as its prefix widths would give it, kept without
+/// the widths themselves.
+#[derive(Default)]
+struct LineWidthSink {
+    first_separator: Option<f32>,
+    last_width: f32,
+    non_finite: bool,
+}
+
+impl PrefixWidthSink for LineWidthSink {
+    fn push(&mut self, separator: f32, prefix_width: f32) {
+        self.first_separator.get_or_insert(separator);
+        self.last_width = prefix_width;
+        self.non_finite |= !separator.is_finite() || !prefix_width.is_finite();
+    }
+}
+
+impl LineWidthSink {
+    /// [`TextLinePrefixWidths::width_for_char_range`] over every character,
+    /// or `None` where [`TextLinePrefixWidths::from_parts`] refuses the line.
+    fn width(&self, non_empty_overhang: f32) -> Option<f32> {
+        let overhang = non_empty_overhang.max(0.0);
+        if self.non_finite || !overhang.is_finite() {
+            return None;
+        }
+        Some(self.first_separator.map_or(0.0, |separator| {
+            (self.last_width - separator).max(0.0) + overhang
+        }))
+    }
+}
+
+/// Walks the characters of `line_range` span by span, reporting each to
+/// `sink`, and answers the widest visual overhang of its non-empty runs.
+fn walk_line_prefix_widths(
     text: &AnnotatedString,
     line_range: std::ops::Range<usize>,
     style: &TextStyle,
     fonts: &SoftwareTextFontSet,
-    cache: &mut SoftwareTextMetricsCache,
-) -> Option<TextLinePrefixWidths> {
+    glyph_metrics: &mut SoftwareTextGlyphMetricsCache,
+    sink: &mut impl PrefixWidthSink,
+) -> f32 {
     let mut boundaries = text.span_boundaries();
     boundaries.push(line_range.start);
     boundaries.push(line_range.end);
@@ -3224,48 +3194,44 @@ fn annotated_line_prefix_widths_with_font_set_cached(
             && text.text.is_char_boundary(*offset)
     });
 
-    let char_count = text.text[line_range.clone()].chars().count();
-    let mut prefix_widths = Vec::with_capacity(char_count + 1);
-    let mut separator_before = Vec::with_capacity(char_count);
-    let non_empty_overhang = {
-        let mut sink = PrefixWidthSegmentSink {
-            prefix_widths: &mut prefix_widths,
-            separator_before: &mut separator_before,
-            width: 0.0,
-            non_empty_overhang: 0.0,
-        };
-        sink.prefix_widths.push(sink.width);
-
-        for range in boundaries.windows(2) {
-            let start = range[0];
-            let end = range[1];
-            if start >= end {
-                continue;
-            }
-            let segment = &text.text[start..end];
-            let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
-            append_prefix_width_segment_cached(segment, &segment_style, fonts, cache, &mut sink);
-        }
-
-        sink.non_empty_overhang
+    let mut walk = PrefixWidthWalk {
+        sink,
+        width: 0.0,
+        non_empty_overhang: 0.0,
     };
-
-    TextLinePrefixWidths::from_parts(prefix_widths, separator_before, non_empty_overhang)
+    for range in boundaries.windows(2) {
+        let start = range[0];
+        let end = range[1];
+        if start >= end {
+            continue;
+        }
+        let segment = &text.text[start..end];
+        let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
+        append_prefix_width_segment(segment, &segment_style, fonts, glyph_metrics, &mut walk);
+    }
+    walk.non_empty_overhang
 }
 
-struct PrefixWidthSegmentSink<'a> {
-    prefix_widths: &'a mut Vec<f32>,
-    separator_before: &'a mut Vec<f32>,
+struct PrefixWidthWalk<'a, S> {
+    sink: &'a mut S,
     width: f32,
     non_empty_overhang: f32,
 }
 
-fn append_prefix_width_segment_cached(
+impl<S: PrefixWidthSink> PrefixWidthWalk<'_, S> {
+    /// Adds a character `step` wide, `separator` of it before the character.
+    fn advance(&mut self, separator: f32, step: f32) {
+        self.width += step;
+        self.sink.push(separator, self.width.max(0.0));
+    }
+}
+
+fn append_prefix_width_segment<S: PrefixWidthSink>(
     segment: &str,
     style: &TextStyle,
     fonts: &SoftwareTextFontSet,
-    cache: &mut SoftwareTextMetricsCache,
-    sink: &mut PrefixWidthSegmentSink<'_>,
+    glyph_metrics: &mut SoftwareTextGlyphMetricsCache,
+    walk: &mut PrefixWidthWalk<'_, S>,
 ) {
     if segment.is_empty() {
         return;
@@ -3273,26 +3239,30 @@ fn append_prefix_width_segment_cached(
 
     let font_size = resolve_font_size(style);
     if let Some(font) = fonts.resolve(style) {
-        append_font_prefix_width_segment_cached(segment, style, font_size, font, cache, sink);
+        append_font_prefix_width_segment(segment, style, font_size, font, glyph_metrics, walk);
     } else {
-        append_fallback_prefix_width_segment(segment, style, font_size, sink);
+        let char_width = fallback_char_width(font_size);
+        let letter_spacing = resolve_letter_spacing(style, font_size);
+        for _ in segment.chars() {
+            walk.advance(0.0, letter_spacing + char_width);
+        }
     }
 }
 
-fn append_font_prefix_width_segment_cached(
+fn append_font_prefix_width_segment<S: PrefixWidthSink>(
     segment: &str,
     style: &TextStyle,
     font_size: f32,
     font: &SoftwareTextFont,
-    cache: &mut SoftwareTextMetricsCache,
-    sink: &mut PrefixWidthSegmentSink<'_>,
+    glyph_metrics: &mut SoftwareTextGlyphMetricsCache,
+    walk: &mut PrefixWidthWalk<'_, S>,
 ) {
     let glyph_font_size = font.ab_glyph_px_size(font_size);
     let scaled_font = font.font.as_scaled(PxScale::from(glyph_font_size));
     let letter_spacing = font.metadata.tracking.resolve(style, font_size);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, 1.0);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, 1.0);
-    sink.non_empty_overhang = sink
+    walk.non_empty_overhang = walk
         .non_empty_overhang
         .max(style_synthesis.visual_overhang_px());
 
@@ -3300,40 +3270,24 @@ fn append_font_prefix_width_segment_cached(
     let h_scale = scaled_font.h_scale_factor();
 
     for (index, ch) in segment.chars().enumerate() {
-        let metrics = cache.glyph_metrics.glyph_metrics(font, &scaled_font, ch);
+        let metrics = glyph_metrics.glyph_metrics(font, &scaled_font, ch);
         let separator = if index == 0 {
             0.0
         } else {
             previous.map_or(0.0, |previous| {
                 weight_synthesis.apply_width(
-                    cache
-                        .glyph_metrics
-                        .kern(font, &scaled_font, previous, (ch, metrics.glyph_id))
+                    glyph_metrics.kern(font, &scaled_font, previous, (ch, metrics.glyph_id))
                         * h_scale,
                 )
             })
         };
-        sink.separator_before.push(separator);
-        sink.width += separator
-            + letter_spacing
-            + weight_synthesis.apply_width(metrics.advance_unscaled * h_scale);
-        sink.prefix_widths.push(sink.width.max(0.0));
+        walk.advance(
+            separator,
+            separator
+                + letter_spacing
+                + weight_synthesis.apply_width(metrics.advance_unscaled * h_scale),
+        );
         previous = Some((ch, metrics.glyph_id));
-    }
-}
-
-fn append_fallback_prefix_width_segment(
-    segment: &str,
-    style: &TextStyle,
-    font_size: f32,
-    sink: &mut PrefixWidthSegmentSink<'_>,
-) {
-    let char_width = fallback_char_width(font_size);
-    let letter_spacing = resolve_letter_spacing(style, font_size);
-    for _ in segment.chars() {
-        sink.separator_before.push(0.0);
-        sink.width += letter_spacing + char_width;
-        sink.prefix_widths.push(sink.width.max(0.0));
     }
 }
 
