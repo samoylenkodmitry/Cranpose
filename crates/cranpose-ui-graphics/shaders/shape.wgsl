@@ -1067,8 +1067,11 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         let clip_right = clip_left + clip_w;
         let clip_bottom = clip_top + clip_h;
 
-        if (world_pos.x < clip_left || world_pos.x > clip_right ||
-            world_pos.y < clip_top || world_pos.y > clip_bottom) {
+        // The fragment's own position, not the interpolated one: a flat
+        // pipeline reads it from the fragment coordinate, which saves the
+        // fragment a varying vector, and a turned one reads the same vector.
+        if (rect_pos.x < clip_left || rect_pos.x > clip_right ||
+            rect_pos.y < clip_top || rect_pos.y > clip_bottom) {
             discard;
         }
     }
