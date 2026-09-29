@@ -419,10 +419,12 @@ fn replace_dirty_layers_from_applier(
     if report.updated {
         parent.draws_within_bounds = parent.content_draws_within_bounds();
         parent.has_hit_targets = parent.hit_test.is_some()
-            || parent.children.iter().any(|child| match child {
-                RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
-            });
+            || any_child_layer(&parent.children, |child| child.has_hit_targets);
+        // A layer's own sinks are not kept apart from its children's, so a
+        // child that stopped publishing leaves the flag set, which only keeps
+        // the scroll fast path off; a child that started must set it.
+        parent.has_origin_sinks |=
+            any_child_layer(&parent.children, |child| child.has_origin_sinks);
         crate::graph_hash::refresh_layer_own_raster_cache_hashes(parent, ancestor_hashed);
         if let Some(node_id) = parent.node_id {
             changed_nodes.push(node_id);
@@ -430,6 +432,13 @@ fn replace_dirty_layers_from_applier(
     }
 
     Some(report)
+}
+
+/// Whether any layer among `children` has `flag`.
+fn any_child_layer(children: &[RenderNode], flag: impl Fn(&LayerNode) -> bool) -> bool {
+    children
+        .iter()
+        .any(|child| matches!(child, RenderNode::Layer(layer) if flag(layer)))
 }
 
 fn translate_bail(reason: &str) -> bool {

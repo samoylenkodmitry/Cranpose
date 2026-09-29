@@ -3912,3 +3912,98 @@ fn built_layers_know_whether_their_content_stays_inside() {
         "a child offset past the column's edge draws past it"
     );
 }
+
+#[test]
+fn a_dirty_child_that_starts_publishing_window_origins_marks_its_ancestors() {
+    let field_holder: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> =
+        Rc::new(RefCell::new(None));
+    let ids: Rc<RefCell<(Option<NodeId>, Option<NodeId>)>> = Rc::new(RefCell::new((None, None)));
+    let field_for_comp = field_holder.clone();
+    let ids_for_comp = ids.clone();
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let show_field = cranpose_core::rememberMutableStateOf(|| false);
+        *field_for_comp.borrow_mut() = Some(show_field);
+        let ids_for_outer = ids_for_comp.clone();
+        let outer = cranpose_ui::Box(
+            Modifier::empty().size_points(240.0, 80.0),
+            cranpose_ui::BoxSpec::default(),
+            move || {
+                let inner = cranpose_ui::Box(
+                    Modifier::empty().size_points(200.0, 40.0),
+                    cranpose_ui::BoxSpec::default(),
+                    move || {
+                        if show_field.get() {
+                            cranpose_ui::BasicTextField(
+                                cranpose_foundation::text::TextFieldState::new("field"),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        } else {
+                            Text("label", Modifier::empty(), TextStyle::default());
+                        }
+                    },
+                );
+                ids_for_outer.borrow_mut().1 = Some(inner);
+            },
+        );
+        ids_for_comp.borrow_mut().0 = Some(outer);
+    });
+    let root = composition.root().expect("composition root");
+    let viewport = Size {
+        width: 240.0,
+        height: 80.0,
+    };
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier
+        .compute_layout(root, viewport)
+        .expect("initial layout");
+    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    applier.clear_runtime_handle();
+    drop(applier);
+    let (outer, inner) = *ids.borrow();
+    let (outer, inner) = (outer.expect("outer id"), inner.expect("inner id"));
+    assert!(
+        !find_layer_by_node_id(&graph.root, outer)
+            .expect("outer layer")
+            .has_origin_sinks
+    );
+
+    field_holder
+        .borrow()
+        .as_ref()
+        .copied()
+        .expect("field switch")
+        .set_value(true);
+    composition
+        .process_invalid_scopes()
+        .expect("field recomposition");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier
+        .compute_layout(root, viewport)
+        .expect("updated layout");
+    assert!(update_graph_from_applier(
+        &mut applier,
+        &mut graph,
+        &[inner],
+        1.0
+    ));
+    let fresh = build_graph_from_applier(&mut applier, root, 1.0).expect("fresh graph");
+    applier.clear_runtime_handle();
+
+    assert!(
+        find_layer_by_node_id(&fresh.root, outer)
+            .expect("fresh outer layer")
+            .has_origin_sinks,
+        "a full build marks the field's ancestors"
+    );
+    assert!(
+        find_layer_by_node_id(&graph.root, outer)
+            .expect("patched outer layer")
+            .has_origin_sinks,
+        "the patched graph marks them too, or a later scroll skips republishing the field's origin"
+    );
+}
