@@ -14,7 +14,14 @@ fn tree_update(
     announcement: Option<&Announcement>,
     turn: bool,
 ) -> TreeUpdate {
-    super::tree_update(&published(elements), announcement, turn, 1.0, "CranScan")
+    super::tree_update(
+        &published(elements),
+        TreeScope::Whole,
+        announcement,
+        turn,
+        1.0,
+        "CranScan",
+    )
 }
 
 #[test]
@@ -28,7 +35,8 @@ fn desktop_tree_scales_logical_bounds_once_for_each_display_density() {
         ..Default::default()
     }]);
     for scale in [1.0, 1.25, 2.0, 3.0] {
-        let update = super::tree_update(&snapshot, None, false, scale, "CranScan");
+        let update =
+            super::tree_update(&snapshot, TreeScope::Whole, None, false, scale, "CranScan");
         let root = &update
             .nodes
             .iter()
@@ -103,7 +111,7 @@ fn long_multiline_text_keeps_every_run_and_the_end_selection_accessible() {
     field.multiline = true;
     let elements = vec![field];
     let snapshot = published(&elements);
-    let update = super::tree_update(&snapshot, None, false, 1.0, "CranScan");
+    let update = super::tree_update(&snapshot, TreeScope::Whole, None, false, 1.0, "CranScan");
     let input = &update.nodes[1].1;
     assert_eq!(input.children().len(), text_runs(&value).len());
     let selection = input.text_selection().expect("selection at end");
@@ -182,7 +190,7 @@ fn radio_selection_is_a_native_checked_state() {
 fn the_window_node_carries_the_window_title() {
     let snapshot = published(&[]);
     for (title, label) in [("CranScan", Some("CranScan")), ("", None)] {
-        let update = super::tree_update(&snapshot, None, false, 1.0, title);
+        let update = super::tree_update(&snapshot, TreeScope::Whole, None, false, 1.0, title);
         let root = &update
             .nodes
             .iter()
@@ -742,5 +750,105 @@ fn a_reader_asking_for_the_tree_is_owed_the_whole_tree_on_the_next_sync() {
     assert!(
         woken.load(Ordering::Relaxed),
         "the loop must wake to send the tree before the next display refresh"
+    );
+}
+
+fn button(node_id: cranpose_core::NodeId, label: &str) -> AccessibilityElement {
+    AccessibilityElement {
+        node_id,
+        label: label.into(),
+        role: AccessibilityRole::Button,
+        bounds: AccessibilityRect::new(0.0, node_id as f32 * 40.0, 120.0, 40.0),
+        ..Default::default()
+    }
+}
+
+fn sent_ids(update: &TreeUpdate) -> Vec<NodeId> {
+    update.nodes.iter().map(|(id, _)| *id).collect()
+}
+
+fn published_id(snapshot: &AccessibilitySnapshot, index: usize) -> NodeId {
+    NodeId(snapshot.ids[index] as u64)
+}
+
+#[test]
+fn a_publish_after_the_whole_tree_sends_only_the_nodes_that_changed() {
+    let mut snapshot = published(&[button(1, "Buy"), button(2, "Sell"), button(3, "Hold")]);
+    let replaced = snapshot
+        .update(vec![
+            button(1, "Buy"),
+            button(2, "Sell 12"),
+            button(4, "Alert"),
+        ])
+        .expect("unique identities");
+    let update = super::tree_update(
+        &snapshot,
+        TreeScope::Since(&replaced),
+        None,
+        false,
+        1.0,
+        "CranScan",
+    );
+    let [buy, sell, alert] = [0, 1, 2].map(|index| published_id(&snapshot, index));
+    assert_eq!(
+        sent_ids(&update),
+        [ROOT_ID, sell, alert],
+        "the unchanged button is not sent again, the changed and the new ones are"
+    );
+    assert_eq!(
+        update.nodes[0].1.children(),
+        [buy, sell, alert],
+        "the root names every button, so the removed one drops out of the tree"
+    );
+}
+
+#[test]
+fn a_container_whose_children_changed_is_sent_again() {
+    let list = || AccessibilityElement {
+        node_id: 10,
+        role: AccessibilityRole::List,
+        bounds: AccessibilityRect::new(0.0, 0.0, 120.0, 400.0),
+        ..Default::default()
+    };
+    let row = |node_id, label: &str| AccessibilityElement {
+        scroll_parent: Some(10),
+        ..button(node_id, label)
+    };
+    let mut snapshot = published(&[list(), row(11, "AAPL")]);
+    let replaced = snapshot
+        .update(vec![list(), row(11, "AAPL"), row(12, "MSFT")])
+        .expect("unique identities");
+    let update = super::tree_update(
+        &snapshot,
+        TreeScope::Since(&replaced),
+        None,
+        false,
+        1.0,
+        "CranScan",
+    );
+    let [container, first, second] = [0, 1, 2].map(|index| published_id(&snapshot, index));
+    assert_eq!(sent_ids(&update), [ROOT_ID, container, second]);
+    assert_eq!(update.nodes[1].1.children(), [first, second]);
+}
+
+#[test]
+fn a_root_publish_sends_the_root_and_the_announcement_only() {
+    let snapshot = published(&[button(1, "Buy")]);
+    let announcement = Announcement {
+        text: "Order filled".into(),
+        mode: LiveRegionMode::Polite,
+    };
+    let update = super::tree_update(
+        &snapshot,
+        TreeScope::Root,
+        Some(&announcement),
+        false,
+        2.0,
+        "CranScan",
+    );
+    assert_eq!(sent_ids(&update), [ROOT_ID, ANNOUNCEMENT_ID]);
+    assert_eq!(
+        update.nodes[0].1.children(),
+        [published_id(&snapshot, 0), ANNOUNCEMENT_ID]
     );
 }

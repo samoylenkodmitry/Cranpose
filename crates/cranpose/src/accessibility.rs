@@ -16,6 +16,8 @@ mod identity;
 ))]
 pub(crate) use identity::AccessibilityIdentityError;
 pub(crate) use identity::AccessibilitySnapshot;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+pub(crate) use identity::Replaced;
 
 #[cfg(any(
     test,
