@@ -2,27 +2,41 @@ use cranpose_ui_graphics::{BlendMode, ColorFilter, Point};
 
 use super::*;
 
-#[test]
-fn shared_pipelines_preserve_each_draws_strip_index_count() {
-    let segment = RecordSegment {
+/// A shape segment of one record: its kinds' bits, blend and interior flags.
+fn shape_segment(
+    kinds: u8,
+    blend: BlendMode,
+    (interiors, occluders, bare_interiors): (bool, bool, bool),
+) -> RecordSegment {
+    RecordSegment {
         lane: RecordLane::Shapes,
         start: 0,
         count: 1,
-        blend: BlendMode::SrcOver,
+        blend,
         gradient: false,
         brushes: 1,
-        kinds: 4,
+        kinds,
         band_class: 0,
-        interiors: false,
-        occluders: false,
-    };
-    let key = crate::render::ShapePipelineKey {
+        interiors,
+        occluders,
+        bare_interiors,
+    }
+}
+
+/// The arena pipeline `segment` draws with in a pass without depth.
+fn arena_key(segment: &RecordSegment) -> crate::render::ShapePipelineKey {
+    crate::render::ShapePipelineKey {
         blend_mode: segment.blend,
         tier: crate::render::RunTier::Arena,
-        variant: crate::render::ShapeVariant::of_segment(&segment, false, Default::default()),
+        variant: crate::render::ShapeVariant::of_segment(segment, false, Default::default(), false),
         turns: crate::render::ShapeTurns::None,
         depth: crate::render::ShapeDepth::Off,
-    };
+    }
+}
+
+#[test]
+fn shared_pipelines_preserve_each_draws_strip_index_count() {
+    let key = arena_key(&shape_segment(4, BlendMode::SrcOver, (false, false, false)));
     let mut staging = ArenaStaging::default();
     for (record, class) in [0, 0, 3, 3, 0].into_iter().enumerate() {
         staging.push_draw(key, class, record as u32, false);
@@ -36,25 +50,7 @@ fn shared_pipelines_preserve_each_draws_strip_index_count() {
 }
 
 fn fill_key(interiors: bool, blend: BlendMode) -> crate::render::ShapePipelineKey {
-    let segment = RecordSegment {
-        lane: RecordLane::Shapes,
-        start: 0,
-        count: 1,
-        blend,
-        gradient: false,
-        brushes: 1,
-        kinds: 1,
-        band_class: 0,
-        interiors,
-        occluders: false,
-    };
-    crate::render::ShapePipelineKey {
-        blend_mode: segment.blend,
-        tier: crate::render::RunTier::Arena,
-        variant: crate::render::ShapeVariant::of_segment(&segment, false, Default::default()),
-        turns: crate::render::ShapeTurns::None,
-        depth: crate::render::ShapeDepth::Off,
-    }
+    arena_key(&shape_segment(1, blend, (interiors, false, false)))
 }
 
 fn staged_draws(
@@ -275,4 +271,27 @@ fn shape_turns_follow_the_placement_unless_the_pass_mixes_flat_and_turned_record
         ShapeTurns::Mixed
     );
     assert_eq!(ShapeTurns::of(turned, true), ShapeTurns::Mixed);
+}
+
+#[test]
+fn a_segment_whose_interiors_a_pre_pass_lays_down_skips_the_interior_fast_path() {
+    use crate::render::ShapeVariant;
+    let segment = |occluders: bool, bare_interiors: bool| {
+        shape_segment(1, BlendMode::SrcOver, (true, occluders, bare_interiors))
+    };
+    // Whether a pre-pass laying interiors down changes the variant: only by
+    // dropping the interior's fast path, which the test cannot read apart.
+    let drops_fast_path = |segment: &RecordSegment| {
+        ShapeVariant::of_segment(segment, false, Default::default(), true)
+            != ShapeVariant::of_segment(segment, false, Default::default(), false)
+    };
+    assert!(drops_fast_path(&segment(true, false)), "laid down ahead");
+    assert!(
+        !drops_fast_path(&segment(true, true)),
+        "a translucent fill beside"
+    );
+    assert!(
+        !drops_fast_path(&segment(false, false)),
+        "no occluder, no span"
+    );
 }

@@ -573,6 +573,10 @@ pub struct RecordSegment {
     /// [`OCCLUDER_MIN_AREA`]: one a pass lays down ahead of its paint, so
     /// what it hides is never shaded.
     pub occluders: bool,
+    /// Whether a fill in the segment has an interior that repays shading
+    /// apart (see `interiors`) that no pass lays down ahead of its paint: a
+    /// gradient's or a translucent colour's.
+    pub bare_interiors: bool,
 }
 
 impl RecordSegment {
@@ -791,6 +795,7 @@ fn extend_segment_in(tables: &mut RecordTables, extend: bool, opened: RecordSegm
         last.band_class = last.band_class.max(opened.band_class);
         last.interiors |= opened.interiors;
         last.occluders |= opened.occluders;
+        last.bare_interiors |= opened.bare_interiors;
         return;
     }
     tables.segments.push(opened);
@@ -918,6 +923,7 @@ impl ShapeRecorder {
             band_class: 0,
             interiors: false,
             occluders: false,
+            bare_interiors: false,
         });
     }
 
@@ -1114,6 +1120,7 @@ impl ShapeRecorder {
         let kind_bit = 1u8 << fragment_kind(body.flags);
         let interiors = interior_repays(&body, &curve);
         let occluders = interior_occludes(&body, &curve);
+        let bare_interiors = interiors && (body.brush != 0 || body.color[3] < 1.0);
         let band_class = band_bucket.unwrap_or(0) as u8;
         body.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
         let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient)
@@ -1137,6 +1144,7 @@ impl ShapeRecorder {
                 band_class,
                 interiors,
                 occluders,
+                bare_interiors,
             },
         );
         coverage
@@ -1168,6 +1176,7 @@ impl ShapeRecorder {
                 band_class: 0,
                 interiors: false,
                 occluders: false,
+                bare_interiors: false,
             },
         );
     }
