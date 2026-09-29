@@ -4047,6 +4047,23 @@ fn every_platform_speaks_a_control_that_changed_under_the_cursor() {
 }
 
 #[test]
+fn android_sends_one_subtree_change_and_speaks_only_the_control_under_the_cursor() {
+    let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        java_source.contains(
+            "changed.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE);"
+        ) && java_source.contains("send(HOST_ID, changed);")
+            && java_source.contains("event.setSource(host);"),
+        "an update reaches services as one subtree change on the host, as a window coalesces its views' changes"
+    );
+    assert!(
+        java_source.contains("CranposeAccessibilityElement focused = find(focusedId);")
+            && java_source.contains("if (focused == null || !focused.changed) return;"),
+        "only the control under the reader's cursor gets an event of its own"
+    );
+}
+
+#[test]
 fn every_platform_says_which_tab_of_how_many() {
     let tab_bar = workspace_source("crates/cranpose-liquid/src/widgets/tab_bar.rs");
     assert!(

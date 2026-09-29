@@ -824,7 +824,12 @@ public class CranposeActivity extends NativeActivity {
         void setElements(List<CranposeAccessibilityElement> elements) {
             List<CranposeAccessibilityElement> previous = this.elements;
             this.elements = elements;
-            host.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+            // One event for the whole tree, as a window coalesces its views'
+            // changes: a service drops what it cached beneath the host and
+            // asks again for what it needs.
+            AccessibilityEvent changed = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+            changed.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE);
+            send(HOST_ID, changed);
             followAppFocus();
             announceChanges();
             announceTextChanges(previous);
@@ -906,19 +911,20 @@ public class CranposeActivity extends NativeActivity {
         }
 
         /**
-         * Tells TalkBack which controls now say something else, so the one
-         * under its cursor is spoken again: a toggle that flipped, a counter
-         * that moved on, a value a reader just set.
+         * Tells TalkBack the control under its cursor now says something
+         * else, so it is spoken again: a toggle that flipped, a counter that
+         * moved on, a value a reader just set. The other controls that
+         * changed reach every service through the subtree change on the
+         * host, one event instead of one each.
          */
         private void announceChanges() {
-            for (CranposeAccessibilityElement element : elements) {
-                if (!element.changed) continue;
-                AccessibilityEvent event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
-                event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_DESCRIPTION
-                        | AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT
-                        | AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);
-                send(element.id, event);
-            }
+            CranposeAccessibilityElement focused = find(focusedId);
+            if (focused == null || !focused.changed) return;
+            AccessibilityEvent event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+            event.setContentChangeTypes(AccessibilityEvent.CONTENT_CHANGE_TYPE_CONTENT_DESCRIPTION
+                    | AccessibilityEvent.CONTENT_CHANGE_TYPE_TEXT
+                    | AccessibilityEvent.CONTENT_CHANGE_TYPE_STATE_DESCRIPTION);
+            send(focused.id, event);
         }
 
         @Override
@@ -1361,10 +1367,19 @@ public class CranposeActivity extends NativeActivity {
             send(id, AccessibilityEvent.obtain(type));
         }
 
+        /**
+         * Sends `event` from the control `id`, or from the host itself for
+         * {@link #HOST_ID}: a service keys the host's own node by the view,
+         * not by a virtual id.
+         */
         private void send(int id, AccessibilityEvent event) {
             if (!host.isShown()) return;
             event.setPackageName(host.getContext().getPackageName());
-            event.setSource(host, id);
+            if (id == HOST_ID) {
+                event.setSource(host);
+            } else {
+                event.setSource(host, id);
+            }
             host.getParent().requestSendAccessibilityEvent(host, event);
         }
     }
