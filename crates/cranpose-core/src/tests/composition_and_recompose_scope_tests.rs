@@ -136,7 +136,7 @@ fn nested_providers_shadow_and_restore_the_locals_around_them() {
         .expect("compose readers");
 
     assert_eq!(
-        READS.with(|reads| reads.take()),
+        READS.with(std::cell::RefCell::take),
         [(3, 2), (3, 4), (3, 2), (0, 0)],
         "the last value for a local wins, an inner provider shadows only its own, \
          and each provider's end restores the locals around it"
