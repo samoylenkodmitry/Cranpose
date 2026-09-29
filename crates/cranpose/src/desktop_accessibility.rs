@@ -20,7 +20,7 @@ use cranpose_ui::{Announcement, LiveRegionMode};
 use winit::{event::WindowEvent, event_loop::EventLoopProxy, window::Window};
 
 use crate::{
-    accessibility::{self, AccessibilityElement, AccessibilityRole},
+    accessibility::{self, AccessibilityElement, AccessibilityRole, Replaced},
     accessibility_publish_policy::AccessibilityPublishPolicy,
 };
 
@@ -189,6 +189,7 @@ impl DesktopAccessibilityBridge {
         } else {
             None
         };
+        let mut replaced = None;
         if let Some(elements) = elements
             && elements != self.previous.elements
         {
@@ -196,9 +197,12 @@ impl DesktopAccessibilityBridge {
                 &self.previous.elements,
                 &elements,
             ));
-            if let Err(error) = self.previous.update(elements) {
-                log::error!("Could not publish accessibility tree: {error}");
-                return;
+            match self.previous.update(elements) {
+                Ok(was) => replaced = Some(was),
+                Err(error) => {
+                    log::error!("Could not publish accessibility tree: {error}");
+                    return;
+                }
             }
             changed = true;
         }
@@ -210,8 +214,14 @@ impl DesktopAccessibilityBridge {
         if !changed {
             return;
         }
+        let scope = match (&replaced, tree_owed) {
+            (_, true) => TreeScope::Whole,
+            (Some(replaced), false) => TreeScope::Since(replaced),
+            (None, false) => TreeScope::Root,
+        };
         let update = tree_update(
             &self.previous,
+            scope,
             self.announcement.as_ref(),
             self.announcement_turn,
             self.scale_factor,
@@ -445,8 +455,23 @@ impl DesktopAccessibilityBridge {
     }
 }
 
+/// Which nodes a publish sends. accesskit keeps a node it is not sent again
+/// and drops one no parent names, so after the whole tree a reader only needs
+/// the nodes that changed and the parents whose children changed.
+enum TreeScope<'a> {
+    /// Every node: a reader just connected.
+    Whole,
+    /// The nodes that are new or changed since the elements an update
+    /// replaced, or whose children changed.
+    Since(&'a Replaced),
+    /// Only the root: the elements are as published, and the root's scale or
+    /// announcement changed.
+    Root,
+}
+
 fn tree_update(
     snapshot: &accessibility::AccessibilitySnapshot,
+    scope: TreeScope<'_>,
     announcement: Option<&Announcement>,
     announcement_turn: bool,
     scale_factor: f64,
@@ -468,13 +493,38 @@ fn tree_update(
     }
     root.set_children(children);
     let mut nodes = vec![(ROOT_ID, root)];
-    for (id, element) in ids.iter().zip(elements) {
-        let mut node = accesskit_node(element);
+    let replaced = match scope {
+        TreeScope::Whole => None,
+        TreeScope::Since(replaced) => {
+            Some((replaced, nested_children(&replaced.ids, &replaced.elements)))
+        }
+        TreeScope::Root => {
+            nodes.extend(announcement.map(|announcement| {
+                (
+                    ANNOUNCEMENT_ID,
+                    announcement_node(announcement, announcement_turn),
+                )
+            }));
+            return tree_update_of(nodes, ids, elements);
+        }
+    };
+    for (index, (id, element)) in ids.iter().zip(elements).enumerate() {
         let mut below = if element.canvas_key.is_none() {
             nested.remove(&Some(element.node_id)).unwrap_or_default()
         } else {
             Vec::new()
         };
+        let unchanged = replaced.as_ref().is_some_and(|(replaced, old_nested)| {
+            replaced.was[index].is_some_and(|old| replaced.elements[old] == *element)
+                && old_nested
+                    .get(&Some(element.node_id))
+                    .filter(|_| element.canvas_key.is_none())
+                    .map_or(below.is_empty(), |old_below| *old_below == below)
+        });
+        if unchanged {
+            continue;
+        }
+        let mut node = accesskit_node(element);
         let runs = text_run_nodes(*id, element);
         below.extend(runs.iter().map(|(run_id, _)| *run_id));
         if !below.is_empty() {
@@ -484,12 +534,20 @@ fn tree_update(
         nodes.push((NodeId(*id as u64), node));
         nodes.extend(runs);
     }
-    if let Some(announcement) = announcement {
-        nodes.push((
+    nodes.extend(announcement.map(|announcement| {
+        (
             ANNOUNCEMENT_ID,
             announcement_node(announcement, announcement_turn),
-        ));
-    }
+        )
+    }));
+    tree_update_of(nodes, ids, elements)
+}
+
+fn tree_update_of(
+    nodes: Vec<(NodeId, Node)>,
+    ids: &[i32],
+    elements: &[AccessibilityElement],
+) -> TreeUpdate {
     let mut tree = TreeInfo::new(ROOT_ID);
     tree.toolkit_name = Some("Cranpose".into());
     TreeUpdate {
