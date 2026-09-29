@@ -1161,17 +1161,20 @@ impl SemanticsUpdate<'_> {
             if !state.is_placed() {
                 return None;
             }
-            let reach = layout.semantics_reach();
-            let merge = !same || layout.needs_semantics() || reach.merges_live_state;
-            let content = merge.then(|| {
-                (
+            // Only a node that may keep its report reads its reach: one
+            // merged again takes its modality from its configuration.
+            let reach = (same && !layout.needs_semantics()).then(|| layout.semantics_reach());
+            let content = match reach {
+                Some(reach) if !reach.merges_live_state => None,
+                _ => Some((
                     role_from_modifier_slices(&layout.modifier_slices_snapshot()),
                     layout.semantics_configuration(),
-                )
-            });
+                )),
+            };
             child_stack.extend_from_slice(&layout.children);
             layout.clear_needs_semantics();
-            Some((content, reach.is_modal, semantics_placement(&state, origin)))
+            let requests_modal = reach.is_some_and(|reach| reach.is_modal);
+            Some((content, requests_modal, semantics_placement(&state, origin)))
         }) {
             Ok(visit) => return Ok(visit),
             Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
@@ -1204,8 +1207,8 @@ impl SemanticsUpdate<'_> {
     /// Brings `children` up to date with the placed nodes a parent's visit
     /// pushed above `first_child`, matching each to what it reported last by
     /// id. Children stay where they are while they come in the order they
-    /// did, dropping any that left; from the first newcomer on, the rest are
-    /// moved into place.
+    /// did; from the first that does not, the rest are found by id and moved
+    /// into place, and those that left are dropped.
     fn children(
         &mut self,
         children: &mut Vec<SemanticsNode>,
@@ -1213,65 +1216,69 @@ impl SemanticsUpdate<'_> {
         content: Point,
     ) -> Result<(), NodeError> {
         let end = self.child_stack.len();
-        // The children last reported that the walk has not reached, last
-        // first, once one comes that was not there.
-        let mut rest: Option<Vec<SemanticsNode>> = None;
+        let mut held: Option<HeldChildren> = None;
         let mut kept = 0;
         for index in first_child..end {
             let child_id = self.child_stack[index];
             if crate::modifier::is_window_root(self.applier, child_id) {
                 continue;
             }
-            if let Some(rest) = rest.as_mut() {
-                self.moved_child(children, rest, child_id, content)?;
-                continue;
+            if held.is_none() {
+                if children
+                    .get(kept)
+                    .is_some_and(|child| child.node_id == child_id)
+                {
+                    if self.node(child_id, Some(content), &mut children[kept], true)? {
+                        kept += 1;
+                        continue;
+                    }
+                    children.remove(kept);
+                    continue;
+                }
+                held = Some(HeldChildren::new(children.split_off(kept)));
             }
-            let Some(offset) = children[kept..]
-                .iter()
-                .position(|child| child.node_id == child_id)
-            else {
-                let mut moved = children.split_off(kept);
-                moved.reverse();
-                self.moved_child(children, &mut moved, child_id, content)?;
-                rest = Some(moved);
-                continue;
-            };
-            children.drain(kept..kept + offset);
-            if self.node(child_id, Some(content), &mut children[kept], true)? {
-                kept += 1;
-            } else {
-                children.remove(kept);
+            if let Some(held) = held.as_mut() {
+                let taken = held.take(child_id);
+                let known = taken.is_some();
+                let mut child = taken.unwrap_or_default();
+                if self.node(child_id, Some(content), &mut child, known)? {
+                    children.push(child);
+                }
             }
         }
-        if rest.is_none() {
+        if held.is_none() {
             children.truncate(kept);
         }
         self.child_stack.truncate(first_child);
         Ok(())
     }
+}
 
-    /// Appends `child_id` to `children`, from what `rest` held for it when it
-    /// holds anything, dropping the children `rest` held before it.
-    fn moved_child(
-        &mut self,
-        children: &mut Vec<SemanticsNode>,
-        rest: &mut Vec<SemanticsNode>,
-        child_id: NodeId,
-        content: Point,
-    ) -> Result<(), NodeError> {
-        let held = rest
+/// The children a node reported last that an update has not reached yet,
+/// found by id.
+struct HeldChildren {
+    nodes: Vec<SemanticsNode>,
+    positions: cranpose_core::collections::map::HashMap<NodeId, usize>,
+}
+
+impl HeldChildren {
+    fn new(nodes: Vec<SemanticsNode>) -> Self {
+        let positions = nodes
             .iter()
-            .rposition(|child| child.node_id == child_id)
-            .and_then(|position| {
-                rest.truncate(position + 1);
-                rest.pop()
-            });
-        let known = held.is_some();
-        let mut child = held.unwrap_or_default();
-        if self.node(child_id, Some(content), &mut child, known)? {
-            children.push(child);
+            .enumerate()
+            .map(|(position, node)| (node.node_id, position))
+            .collect();
+        Self { nodes, positions }
+    }
+
+    /// Takes out what `node_id` reported last, if it was a child.
+    fn take(&mut self, node_id: NodeId) -> Option<SemanticsNode> {
+        let position = self.positions.remove(&node_id)?;
+        let node = self.nodes.swap_remove(position);
+        if let Some(moved) = self.nodes.get(position) {
+            self.positions.insert(moved.node_id, position);
         }
-        Ok(())
+        Some(node)
     }
 }
 

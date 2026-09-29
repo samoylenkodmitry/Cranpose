@@ -326,7 +326,7 @@ fn rows_that_come_and_go_are_matched_by_id() -> Result<(), NodeError> {
 
     scroller.set_children(&[appended, rows[3], prepended, rows[2], rows[1]])?;
     scroller.relayout()?;
-    scroller.update()?;
+    assert_eq!(scroller.update()?, 0, "reordered rows are found by id");
     assert_eq!(
         scroller
             .rows()
