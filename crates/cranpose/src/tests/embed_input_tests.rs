@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use cranpose_app_shell::{AppShell, Modifiers};
 use cranpose_core::{location_key, remember};
 use cranpose_ui::{
-    BasicTextField, Box, BoxSpec, Column, ColumnSpec, Modifier, ScrollState, Size, Spacer,
+    BasicTextField, Box, BoxSpec, Column, ColumnSpec, Modifier, ScrollState, Spacer,
     TextFieldState, TextStyle, composable,
 };
 

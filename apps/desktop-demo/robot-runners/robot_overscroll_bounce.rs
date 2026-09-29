@@ -11,7 +11,7 @@ use cranpose_ui::{
         Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row,
         RowSpec, Spacer, Text,
     },
-    Modifier, ScrollState, Size, TextStyle,
+    Modifier, ScrollState, TextStyle,
 };
 
 #[composable]

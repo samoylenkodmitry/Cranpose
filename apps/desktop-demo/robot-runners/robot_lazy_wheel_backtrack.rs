@@ -10,7 +10,7 @@ use cranpose_testing::find_element_by_text_exact;
 use cranpose_ui::{
     composable,
     widgets::{LazyColumn, LazyColumnSpec},
-    Color, Column, ColumnSpec, LinearArrangement, Modifier, Size, Spacer, Text, TextStyle,
+    Color, Column, ColumnSpec, LinearArrangement, Modifier, Spacer, Text, TextStyle,
 };
 
 fn collect_visible_items(robot: &cranpose::Robot) -> Vec<(usize, f32)> {

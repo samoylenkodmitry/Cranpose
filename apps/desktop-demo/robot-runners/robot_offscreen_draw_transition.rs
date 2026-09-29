@@ -10,7 +10,7 @@ use cranpose_ui::{
         Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec, LazyColumn,
         LazyColumnSpec, Spacer, Text, PROGRESS_INDICATOR_COLOR,
     },
-    Modifier, Size, TextStyle,
+    Modifier, TextStyle,
 };
 
 pub(crate) fn main() {
