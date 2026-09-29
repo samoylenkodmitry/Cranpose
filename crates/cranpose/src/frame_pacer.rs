@@ -312,10 +312,7 @@ impl FramePacer {
             until_ns,
         });
         self.misses.clear();
-        // A lead learned at one queue depth says nothing about another:
-        // frames at the new level start on their slot until a lead proves
-        // itself there.
-        self.lead.fall_back();
+        self.lead.new_level();
     }
 
     /// Records that a frame queued at `queued_ns` was shown at `shown_ns`,

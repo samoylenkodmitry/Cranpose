@@ -494,27 +494,39 @@ fn rising_a_level_drops_the_lead() {
 }
 
 #[test]
-fn stepping_down_a_level_learns_the_lead_anew() {
+fn stepping_down_a_level_keeps_the_lead_and_tries_the_others_soon() {
     use crate::frame_lead::{SETTLE, WINDOW};
 
     let mut pacer = buffered();
-    for frame in 0..WINDOW {
-        pacer.record_latency(STUFFED + frame, STUFFED + frame + 40_000_000);
-    }
-    for frame in 0..WINDOW + i64::from(SETTLE) {
-        pacer.record_latency(STUFFED + frame, STUFFED + frame + 30_000_000);
-    }
+    let mut shown = STUFFED;
+    let mut run = |pacer: &mut FramePacer, frames: i64, latency: i64| {
+        for _ in 0..frames {
+            shown += VSYNC;
+            pacer.record_latency(shown - latency, shown);
+        }
+    };
+    let settled_window = i64::from(SETTLE) + WINDOW;
+    run(&mut pacer, settled_window, 40_000_000);
+    run(&mut pacer, settled_window, 30_000_000);
+    let kept = pacer.current_lead_ns(VSYNC);
     assert!(
-        pacer.current_lead_ns(VSYNC) > 0,
+        kept > 0,
         "a lead that showed buffered frames sooner was kept"
     );
+
     assert_eq!(
         level(&mut pacer, STUFFED + FIRST_HOLD_NS),
         Some(Level::Shallow)
     );
     assert_eq!(
         pacer.current_lead_ns(VSYNC),
-        0,
-        "frames one level down start on their slot until a lead proves itself there"
+        kept,
+        "one level down, frames start at the lead learned so far"
+    );
+    run(&mut pacer, settled_window, 30_000_000);
+    assert_ne!(
+        pacer.current_lead_ns(VSYNC),
+        kept,
+        "and after one window there, another lead is tried"
     );
 }

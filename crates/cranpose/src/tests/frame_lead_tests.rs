@@ -53,18 +53,31 @@ fn a_trial_that_shows_frames_sooner_keeps_its_lead() {
 }
 
 #[test]
-fn a_failed_trial_reverts_and_doubles_the_hold_before_another_lead() {
+fn trials_follow_one_another_until_every_lead_is_tried_then_failures_double_the_hold() {
     let mut lead = in_trial(20_000_000);
     run_trial(&mut lead, 20_000_000 - MARGIN_NS / 2, 1);
     assert_eq!(lead.lead_ns(PERIOD), 0, "less than the margin is noise");
-    run_trial(&mut lead, 20_000_000, 1 + FIRST_HOLD_NS);
-    assert_eq!(lead.lead_ns(PERIOD), 0, "the failure doubled the hold");
-    run(&mut lead, WINDOW, 20_000_000, 1 + 2 * FIRST_HOLD_NS);
+    run(&mut lead, i64::from(SETTLE) + WINDOW, 20_000_000, 2);
     assert_eq!(
         lead.lead_ns(PERIOD),
         lead_at(2),
-        "the next trial takes the next lead"
+        "a lead not yet tried at this level follows the next window"
     );
+    run_trial(&mut lead, 20_000_000, 3);
+    assert_eq!(lead.lead_ns(PERIOD), 0);
+    run(
+        &mut lead,
+        i64::from(SETTLE) + WINDOW,
+        20_000_000,
+        3 + FIRST_HOLD_NS,
+    );
+    assert_eq!(
+        lead.lead_ns(PERIOD),
+        0,
+        "every lead tried, the failure doubled the hold"
+    );
+    run(&mut lead, WINDOW, 20_000_000, 3 + 2 * FIRST_HOLD_NS);
+    assert_eq!(lead.lead_ns(PERIOD), lead_at(1), "and the turn goes round");
 }
 
 #[test]
@@ -131,11 +144,11 @@ fn a_trial_far_behind_the_kept_lead_ends_after_its_first_frames() {
         1,
     );
     assert_eq!(lead.lead_ns(PERIOD), 0, "the kept lead is back");
-    run_trial(&mut lead, 20_000_000, 1 + FIRST_HOLD_NS);
+    run(&mut lead, i64::from(SETTLE) + WINDOW, 20_000_000, 2);
     assert_eq!(
         lead.lead_ns(PERIOD),
-        0,
-        "the early failure doubled the hold"
+        lead_at(2),
+        "the next untried lead follows a window of the kept one"
     );
 }
 

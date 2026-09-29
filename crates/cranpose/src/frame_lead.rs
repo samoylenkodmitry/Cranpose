@@ -65,6 +65,9 @@ pub(crate) struct FrameLead {
     baseline_ns: Option<i64>,
     next_trial_ns: Option<i64>,
     hold_ns: i64,
+    /// Leads other than the kept one not yet tried at this pacing level:
+    /// until each has been, trials follow one another, one window apart.
+    untried: usize,
 }
 
 impl Default for FrameLead {
@@ -92,6 +95,7 @@ impl FrameLead {
             baseline_ns: None,
             next_trial_ns: None,
             hold_ns: FIRST_HOLD_NS,
+            untried: LEADS_TENTHS.len() - 1,
         }
     }
 
@@ -138,14 +142,13 @@ impl FrameLead {
         self.baseline_ns = Some(mean_ns);
         if self.next_trial_ns.is_none_or(|at| now_ns >= at) {
             self.trial = Some(self.next_lead_to_try());
+            self.untried = self.untried.saturating_sub(1);
             self.settle = SETTLE;
         }
     }
 
     /// Keeps `trial`'s lead when its window's mean beat the kept lead's by
-    /// the margin. Every failed trial doubles the hold before the next: a
-    /// trial of a worse lead costs its window's frames, and a scene that has
-    /// settled on its lead should not keep paying for trials.
+    /// the margin.
     fn end_trial(&mut self, trial: usize, mean_ns: i64, now_ns: i64) {
         if self
             .baseline_ns
@@ -153,11 +156,28 @@ impl FrameLead {
         {
             self.kept = trial;
             self.baseline_ns = Some(mean_ns);
-            self.hold_ns = FIRST_HOLD_NS;
-            self.next_trial_ns = Some(now_ns + self.hold_ns);
+            self.schedule_next_trial(true, now_ns);
         } else {
             self.fail_trial(now_ns);
         }
+    }
+
+    /// When the next trial starts. While a level has leads left untried, the
+    /// next follows the window after this one. After that the kept lead
+    /// holds, and every failed trial doubles the hold before the next: a
+    /// trial of a worse lead costs its window's frames, and a scene that has
+    /// settled on its lead should not keep paying for trials.
+    fn schedule_next_trial(&mut self, won: bool, now_ns: i64) {
+        if self.untried > 0 {
+            self.next_trial_ns = None;
+            return;
+        }
+        self.hold_ns = if won {
+            FIRST_HOLD_NS
+        } else {
+            (self.hold_ns * 2).min(LONGEST_HOLD_NS)
+        };
+        self.next_trial_ns = Some(now_ns + self.hold_ns);
     }
 
     /// Whether the trial's frames so far reach the screen so much later than
@@ -170,8 +190,7 @@ impl FrameLead {
     /// Goes back to the kept lead after a trial that did not beat it.
     fn fail_trial(&mut self, now_ns: i64) {
         self.settle = SETTLE;
-        self.hold_ns = (self.hold_ns * 2).min(LONGEST_HOLD_NS);
-        self.next_trial_ns = Some(now_ns + self.hold_ns);
+        self.schedule_next_trial(false, now_ns);
     }
 
     /// The next lead other than the kept one, in turn after the last tried.
@@ -189,8 +208,17 @@ impl FrameLead {
     /// missed vsyncs, and missed vsyncs are what make the pacer rise a level.
     pub(crate) fn fall_back(&mut self) {
         self.kept = 0;
+        self.new_level();
+    }
+
+    /// Starts learning the lead at a new pacing level from the lead kept so
+    /// far: a lead learned at one queue depth may or may not suit another,
+    /// so every other lead is tried soon, one after another, before the
+    /// kept one settles in.
+    pub(crate) fn new_level(&mut self) {
         self.hold_ns = FIRST_HOLD_NS;
         self.next_trial_ns = None;
+        self.untried = LEADS_TENTHS.len() - 1;
         self.reset();
     }
 
