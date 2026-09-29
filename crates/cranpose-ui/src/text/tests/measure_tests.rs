@@ -1838,3 +1838,32 @@ fn a_greedily_wrapped_layout_holds_the_widths_that_break_it_the_same() {
     }
     assert!(!widths.hold(None), "unconstrained, it does not wrap");
 }
+
+#[test]
+fn metrics_at_options_a_text_was_laid_out_at_come_from_its_prepared_layout() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let measure_calls = Rc::new(Cell::new(0));
+    let layout_calls = Rc::new(Cell::new(0));
+    let service = TextService::from_measurer(Rc::new(CountingTextMeasurer::new(
+        Rc::clone(&measure_calls),
+        Rc::clone(&layout_calls),
+    )));
+    let text = crate::text::AnnotatedString::from("laid out once");
+    let style = TextStyle::default();
+    let options = TextLayoutOptions::default();
+
+    let prepared = service.prepare_with_options(Some(3), &text, &style, options, Some(90.0));
+    assert!(
+        service.options_metrics_cache.borrow().is_empty(),
+        "laying a text out keeps its metrics in the prepared layout only"
+    );
+    let calls = (measure_calls.get(), layout_calls.get());
+    let metrics = service.measure_with_options(Some(3), &text, &style, options, Some(90.0));
+
+    assert_eq!(metrics, prepared.metrics);
+    assert_eq!(
+        (measure_calls.get(), layout_calls.get()),
+        calls,
+        "the metrics were read from the prepared layout, not measured again"
+    );
+}
