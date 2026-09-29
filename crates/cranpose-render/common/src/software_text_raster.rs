@@ -878,6 +878,15 @@ impl SoftwareTextGlyphMetricsCache {
         F: Font,
         S: ScaleFont<F>,
     {
+        // The face's ASCII table answers, and the font was read at most
+        // once for it, so it counts as a hit.
+        if let Some((glyph_id, advance)) = font.font.ascii_glyph(ch) {
+            self.stats.glyph_hits = self.stats.glyph_hits.saturating_add(1);
+            return CachedGlyphMetrics {
+                glyph_id,
+                advance_unscaled: advance.max(0.0),
+            };
+        }
         let key = GlyphMetricsKey {
             font_hash: font.content_hash(),
             ch,
@@ -901,13 +910,18 @@ impl SoftwareTextGlyphMetricsCache {
         &mut self,
         font: &SoftwareTextFont,
         scaled_font: &S,
-        previous_id: GlyphId,
-        glyph_id: GlyphId,
+        previous: (char, GlyphId),
+        next: (char, GlyphId),
     ) -> f32
     where
         F: Font,
         S: ScaleFont<F>,
     {
+        if let Some(kern) = font.font.ascii_kern(previous, next) {
+            self.stats.kern_hits = self.stats.kern_hits.saturating_add(1);
+            return kern;
+        }
+        let ((_, previous_id), (_, glyph_id)) = (previous, next);
         let key = KernMetricsKey {
             font_hash: font.content_hash(),
             previous_id: previous_id.0.into(),
@@ -3175,12 +3189,12 @@ fn cached_line_advance_width(
 
     for ch in text.chars() {
         let metrics = glyph_metrics.glyph_metrics(font, &scaled_font, ch);
-        if let Some(previous_id) = previous {
+        if let Some(previous) = previous {
             width +=
-                glyph_metrics.kern(font, &scaled_font, previous_id, metrics.glyph_id) * h_scale;
+                glyph_metrics.kern(font, &scaled_font, previous, (ch, metrics.glyph_id)) * h_scale;
         }
         width += metrics.advance_unscaled * h_scale;
-        previous = Some(metrics.glyph_id);
+        previous = Some((ch, metrics.glyph_id));
     }
 
     width.max(0.0)
@@ -3284,11 +3298,11 @@ fn append_font_prefix_width_segment_cached(
         let separator = if index == 0 {
             0.0
         } else {
-            previous.map_or(0.0, |previous_id| {
+            previous.map_or(0.0, |previous| {
                 weight_synthesis.apply_width(
                     cache
                         .glyph_metrics
-                        .kern(font, &scaled_font, previous_id, metrics.glyph_id)
+                        .kern(font, &scaled_font, previous, (ch, metrics.glyph_id))
                         * h_scale,
                 )
             })
@@ -3298,7 +3312,7 @@ fn append_font_prefix_width_segment_cached(
             + letter_spacing
             + weight_synthesis.apply_width(metrics.advance_unscaled * h_scale);
         sink.prefix_widths.push(sink.width.max(0.0));
-        previous = Some(metrics.glyph_id);
+        previous = Some((ch, metrics.glyph_id));
     }
 }
 

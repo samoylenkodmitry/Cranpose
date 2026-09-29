@@ -499,10 +499,16 @@ impl KernedFont {
 
     /// The glyph of `ch` and its advance in font units.
     pub(crate) fn glyph_advance(&self, ch: char) -> (GlyphId, f32) {
-        self.ascii.glyph(self, ch).unwrap_or_else(|| {
+        self.ascii_glyph(ch).unwrap_or_else(|| {
             let id = self.glyph_id(ch);
             (id, self.h_advance_unscaled(id))
         })
+    }
+
+    /// The glyph of a printable ASCII `ch` and its advance in font units;
+    /// `None` for any other character, which the caller's own cache answers.
+    pub(crate) fn ascii_glyph(&self, ch: char) -> Option<(GlyphId, f32)> {
+        self.ascii.glyph(self, ch)
     }
 
     /// The kerning in font units between the glyphs of two consecutive
