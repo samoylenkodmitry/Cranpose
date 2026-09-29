@@ -43,6 +43,25 @@ from Cargo's JSON artifact stream, including custom target directories and
 dependency aliases. A library can expose its fixtures through a small example
 binary that links the library and launches `AppLauncher`.
 
+## Keep state across hot-patched edits
+
+The IDE's development runner hot-patches edits to function bodies into the
+running preview. When the application's Cranpose offers it (0.1.175 and later),
+the runner also enables the `cranpose/hot-reload` feature in its private debug
+build. Composition keys then follow source structure instead of absolute lines:
+
+- Branch groups (statements, `let` bindings, closures, `if`/`match` arms and
+  loops) are keyed by kind, a source name (callee, binding, condition or
+  pattern) and their order among same-named siblings in the enclosing group.
+- Call sites and `remember` are keyed by their line relative to the innermost
+  enclosing group, and composable definitions by module and name.
+
+An edit therefore keeps the state of everything it does not structurally
+touch, including state below the edit in the same composable. Renaming a
+binding, changing a condition or reordering same-named siblings starts those
+groups fresh. The feature is never part of the default set and must not be
+enabled in release builds; release keys are unchanged.
+
 ## Run the same application inside and outside the IDE
 
 When both `CRANPOSE_EMBED_ADDRESS` and `CRANPOSE_EMBED_TOKEN` are present,

@@ -6,13 +6,46 @@ use syn::{
     visit_mut::{self, VisitMut},
 };
 
+#[cfg(test)]
 pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) {
+    let scope = syn::Ident::new("Card", Span::call_site());
+    inject_branch_groups_with(core_path, block, &scope, false);
+}
+
+/// The development guard paths a body receives, in allocation order.
+#[cfg(test)]
+pub(crate) fn hot_guard_paths(block: &mut Block) -> Vec<String> {
+    let core_path = quote::quote!(::cranpose_core);
+    let mut injector = BranchGroupInjector {
+        core_path: &core_path,
+        next_branch: 0,
+        in_content_closure: false,
+        uses_composer_alias: false,
+        branch_depth: 0,
+        hot: HotPaths::new(true, "Card"),
+    };
+    injector.visit_block_mut(block);
+    injector.hot.allocated
+}
+
+/// Adds branch groups to a composable body. With `hot` (the development-only
+/// `hot-reload` feature) guard keys come from each guard's structural path in
+/// `scope` instead of its line, column and position among all guards, so a
+/// hot-patched edit keeps the state of unrelated groups. Release keys are
+/// unchanged.
+pub(crate) fn inject_branch_groups_with(
+    core_path: &TokenStream2,
+    block: &mut Block,
+    scope: &syn::Ident,
+    hot: bool,
+) {
     let mut injector = BranchGroupInjector {
         core_path,
         next_branch: 0,
         in_content_closure: false,
         uses_composer_alias: false,
         branch_depth: 0,
+        hot: HotPaths::new(hot, &scope.to_string()),
     };
     injector.visit_block_mut(block);
     if injector.uses_composer_alias {
@@ -109,21 +142,180 @@ struct BranchGroupInjector<'a> {
     in_content_closure: bool,
     uses_composer_alias: bool,
     branch_depth: u32,
+    hot: HotPaths,
+}
+
+/// Structural guard paths for hot-patched development builds.
+///
+/// Each guard is named by its kind, a source name (a callee, binding or
+/// condition) and its ordinal among same-named siblings in the enclosing
+/// guard's scope, allocated before its contents. Inserting a statement, call,
+/// closure or branch therefore only renames later siblings with the same name,
+/// never the enclosing groups or unrelated siblings.
+struct HotPaths {
+    enabled: bool,
+    scopes: Vec<(String, std::collections::HashMap<String, u32>)>,
+    #[cfg(test)]
+    allocated: Vec<String>,
+}
+
+impl HotPaths {
+    fn new(enabled: bool, scope: &str) -> Self {
+        Self {
+            enabled,
+            scopes: vec![(scope.to_owned(), Default::default())],
+            #[cfg(test)]
+            allocated: Vec::new(),
+        }
+    }
+
+    fn open(&mut self, kind: &str, name: &str) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
+        let label = if name.is_empty() {
+            kind.to_owned()
+        } else {
+            format!("{kind}:{name}")
+        };
+        let (parent, counts) = self.scopes.last_mut().expect("root hot scope");
+        let ordinal = counts.entry(label.clone()).or_default();
+        let path = format!("{parent}/{label}#{ordinal}");
+        *ordinal += 1;
+        self.scopes.push((path.clone(), Default::default()));
+        #[cfg(test)]
+        self.allocated.push(path.clone());
+        Some(path)
+    }
+
+    fn close(&mut self, opened: &Option<String>) {
+        if opened.is_some() {
+            self.scopes.pop();
+        }
+    }
+}
+
+/// Compact, whitespace-free source text used as a stable guard name.
+fn source_name(tokens: impl quote::ToTokens) -> String {
+    let mut name: String = tokens
+        .to_token_stream()
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if name.len() > 64 {
+        let mut end = 64;
+        while !name.is_char_boundary(end) {
+            end -= 1;
+        }
+        name.truncate(end);
+    }
+    name
+}
+
+/// The callee of an expression statement: the call path's last segment, the
+/// method name or the macro name.
+fn statement_name(expr: &Expr) -> String {
+    match expr {
+        Expr::Call(call) => match call.func.as_ref() {
+            Expr::Path(path) => path
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string())
+                .unwrap_or_default(),
+            other => source_name(other),
+        },
+        Expr::MethodCall(call) => call.method.to_string(),
+        Expr::Macro(mac) => source_name(&mac.mac.path),
+        Expr::Await(inner) => statement_name(&inner.base),
+        Expr::Try(inner) => statement_name(&inner.expr),
+        _ => String::new(),
+    }
+}
+
+fn sandwich_kind(stmt: &Stmt) -> (&'static str, String) {
+    match stmt {
+        Stmt::Local(local) => ("let", source_name(&local.pat)),
+        Stmt::Macro(invocation) => ("macro", source_name(&invocation.mac.path)),
+        _ => ("stmt", String::new()),
+    }
+}
+
+/// Marks `scope`'s definition as the origin for call-site keys in its body.
+pub(crate) fn hot_origin_stmt(
+    core_path: &TokenStream2,
+    scope: &syn::Ident,
+    end: Span,
+) -> TokenStream2 {
+    let origin = syn::Ident::new("__cranpose_hot_origin", Span::mixed_site());
+    let identity = syn::Ident::new("__CRANPOSE_HOT_ORIGIN", Span::mixed_site());
+    let (line, _) = line_range(scope.span());
+    let (_, end) = line_range(end);
+    let name = scope.to_string();
+    quote::quote! {
+        let #origin = {
+            const #identity: #core_path::Key =
+                #core_path::hot_definition_key(file!(), module_path!(), #name);
+            #core_path::hot_origin(file!(), #line, #end, #identity)
+        };
+    }
+}
+
+/// The first and last source lines a span covers. Outside a compiler
+/// expansion (unit tests) the range is left open.
+fn line_range(span: Span) -> (TokenStream2, TokenStream2) {
+    if proc_macro::is_available() {
+        let span = span.unwrap();
+        let (start, end) = (span.start().line() as u32, span.end().line() as u32);
+        (quote::quote!(#start), quote::quote!(#end))
+    } else {
+        (
+            quote::quote_spanned!(span=> line!()),
+            quote::quote!(::core::primitive::u32::MAX),
+        )
+    }
+}
+
+/// FNV-1a of a guard path, evaluated while expanding the macro.
+fn hot_path_hash(path: &str) -> u64 {
+    path.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 impl BranchGroupInjector<'_> {
-    fn wrap_block(&mut self, block: &mut Block) {
+    fn wrap_block(&mut self, block: &mut Block, kind: &str, name: &str) {
+        let hot = self.hot.open(kind, name);
         self.branch_depth += 1;
-        for stmt in &mut block.stmts {
-            self.visit_stmt_mut(stmt);
-        }
+        let sandwiches = self.visit_block_statements(block);
         self.branch_depth -= 1;
-        self.fold_local_statements(block);
-        let guard = self.branch_guard_stmt(block.brace_token.span.join());
+        self.fold_local_statements(block, sandwiches);
+        self.hot.close(&hot);
+        let guard = self.branch_guard_stmt(block.brace_token.span.join(), hot);
         block.stmts.insert(0, guard);
     }
 
-    fn fold_local_statements(&mut self, block: &mut Block) {
+    /// Visits statements in order. A statement that will be sandwiched in its
+    /// own group gets its development path before its contents are visited.
+    fn visit_block_statements(&mut self, block: &mut Block) -> Vec<Option<String>> {
+        let count = block.stmts.len();
+        let mut sandwiches = Vec::with_capacity(count);
+        for (index, stmt) in block.stmts.iter_mut().enumerate() {
+            let hot = if wants_sandwich(stmt, index + 1 == count) {
+                let (kind, name) = sandwich_kind(stmt);
+                self.hot.open(kind, &name)
+            } else {
+                None
+            };
+            self.visit_stmt_mut(stmt);
+            self.hot.close(&hot);
+            sandwiches.push(hot);
+        }
+        sandwiches
+    }
+
+    fn fold_local_statements(&mut self, block: &mut Block, mut sandwiches: Vec<Option<String>>) {
         let count = block.stmts.len();
         if !block
             .stmts
@@ -135,9 +327,10 @@ impl BranchGroupInjector<'_> {
         }
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
         let mut rebuilt = Vec::with_capacity(block.stmts.len());
-        for (index, stmt) in block.stmts.drain(..).enumerate() {
+        sandwiches.resize(count, None);
+        for (index, (stmt, hot)) in block.stmts.drain(..).zip(sandwiches).enumerate() {
             if wants_sandwich(&stmt, index + 1 == count) {
-                rebuilt.push(self.branch_guard_stmt(stmt.span()));
+                rebuilt.push(self.branch_guard_stmt(stmt.span(), hot));
                 rebuilt.push(stmt);
                 rebuilt.push(syn::parse_quote! { drop(#guard); });
             } else {
@@ -147,15 +340,17 @@ impl BranchGroupInjector<'_> {
         block.stmts = rebuilt;
     }
 
-    fn wrap_arm_body(&mut self, body: &mut Expr) {
+    fn wrap_arm_body(&mut self, body: &mut Expr, pattern: &str) {
         if let Expr::Block(block_expr) = body {
-            self.wrap_block(&mut block_expr.block);
+            self.wrap_block(&mut block_expr.block, "arm", pattern);
             return;
         }
+        let hot = self.hot.open("arm", pattern);
         self.branch_depth += 1;
         self.visit_expr_mut(body);
         self.branch_depth -= 1;
-        let guard = self.branch_guard_stmt(body.span());
+        self.hot.close(&hot);
+        let guard = self.branch_guard_stmt(body.span(), hot);
         let original = body.clone();
         *body = syn::parse_quote! {{
             #guard
@@ -184,11 +379,17 @@ impl BranchGroupInjector<'_> {
             }
             leaf => {
                 let needs_group = !expr_contains_let(leaf);
+                let hot = if needs_group {
+                    self.hot.open("cond", &source_name(&*leaf))
+                } else {
+                    None
+                };
                 self.visit_expr_mut(leaf);
+                self.hot.close(&hot);
                 if !needs_group {
                     return;
                 }
-                let guard_stmt = self.branch_guard_stmt(leaf.span());
+                let guard_stmt = self.branch_guard_stmt(leaf.span(), hot);
                 let original = leaf.clone();
                 *leaf = syn::parse_quote! {{
                     #guard_stmt
@@ -198,12 +399,15 @@ impl BranchGroupInjector<'_> {
         }
     }
 
-    fn branch_guard_stmt(&mut self, span: Span) -> Stmt {
+    fn branch_guard_stmt(&mut self, span: Span, hot: Option<String>) -> Stmt {
         let branch = self.next_branch;
         self.next_branch += 1;
         let core_path = self.core_path;
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
         let key = syn::Ident::new("__CRANPOSE_BRANCH_KEY", Span::mixed_site());
+        if let Some(path) = hot {
+            return self.hot_guard_stmt(span, &path);
+        }
         let cached_key = quote::quote! {{
             static #key: ::std::sync::OnceLock<#core_path::Key> = ::std::sync::OnceLock::new();
             #core_path::cached_branch_location_key(&#key, file!(), line!(), column!(), #branch)
@@ -218,6 +422,31 @@ impl BranchGroupInjector<'_> {
             syn::parse_quote_spanned! {span=>
                 let #guard = #composer.__branch_group_deferred(#cached_key);
             }
+        }
+    }
+
+    /// A development guard: a constant structural key (no static cache, whose
+    /// storage a hot patch would reuse for whichever guard now carries its
+    /// name), and a lexical origin so call sites inside the guarded source are
+    /// keyed by their line relative to it rather than to the file.
+    fn hot_guard_stmt(&mut self, span: Span, path: &str) -> Stmt {
+        let core_path = self.core_path;
+        let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
+        let key = syn::Ident::new("__CRANPOSE_BRANCH_KEY", Span::mixed_site());
+        let hash = hot_path_hash(path);
+        let (start, end) = line_range(span);
+        let group = if self.in_content_closure {
+            quote::quote!(#core_path::__branch_group_scope_deferred(#key))
+        } else {
+            self.uses_composer_alias = true;
+            let composer = composer_alias_ident();
+            quote::quote!(#composer.__branch_group_deferred(#key))
+        };
+        syn::parse_quote_spanned! {span=>
+            let #guard = {
+                const #key: #core_path::Key = #core_path::hot_branch_key(file!(), #hash);
+                (#core_path::hot_origin(file!(), #start, #end, #key), #group)
+            };
         }
     }
 
@@ -246,8 +475,10 @@ impl BranchGroupInjector<'_> {
     }
 
     fn wrap_value_part(&mut self, expr: &mut Expr) {
+        let hot = self.hot.open("value", &source_name(&*expr));
         self.visit_expr_mut(expr);
-        let guard_stmt = self.branch_guard_stmt(expr.span());
+        self.hot.close(&hot);
+        let guard_stmt = self.branch_guard_stmt(expr.span(), hot);
         let original = expr.clone();
         *expr = syn::parse_quote! {{
             #guard_stmt
@@ -264,7 +495,7 @@ impl BranchGroupInjector<'_> {
             self.instrument_nonsuspending_statements(block);
         } else {
             let previous = std::mem::replace(&mut self.in_content_closure, true);
-            self.wrap_block(block);
+            self.wrap_block(block, "block", "");
             self.in_content_closure = previous;
         }
     }
@@ -347,7 +578,8 @@ impl BranchGroupInjector<'_> {
                     if expr_contains_await(&arm.body) {
                         self.instrument_suspending_expr(&mut arm.body);
                     } else {
-                        self.wrap_arm_body(&mut arm.body);
+                        let pattern = source_name(&arm.pat);
+                        self.wrap_arm_body(&mut arm.body, &pattern);
                     }
                 }
             }
@@ -418,13 +650,24 @@ impl BranchGroupInjector<'_> {
                 rebuilt.push(stmt);
                 continue;
             }
+            let hot = if wants_sandwich(&stmt, index + 1 == count) {
+                let (kind, name) = sandwich_kind(&stmt);
+                self.hot.open(kind, &name)
+            } else if index + 1 == count
+                && let Stmt::Expr(expr, _) = &stmt
+            {
+                self.hot.open("tail", &statement_name(expr))
+            } else {
+                None
+            };
             self.visit_stmt_mut(&mut stmt);
+            self.hot.close(&hot);
             if wants_sandwich(&stmt, index + 1 == count) {
-                rebuilt.push(self.branch_guard_stmt(stmt.span()));
+                rebuilt.push(self.branch_guard_stmt(stmt.span(), hot));
                 rebuilt.push(stmt);
                 rebuilt.push(syn::parse_quote! { drop(#guard); });
             } else if index + 1 == count && matches!(&stmt, Stmt::Expr(_, None)) {
-                rebuilt.push(self.branch_guard_stmt(stmt.span()));
+                rebuilt.push(self.branch_guard_stmt(stmt.span(), hot));
                 rebuilt.push(stmt);
             } else {
                 rebuilt.push(stmt);
@@ -459,18 +702,55 @@ impl BranchGroupInjector<'_> {
             if expands_itself {
                 return;
             }
+            let hot = self.hot.open("fn", &signature.ident.to_string());
             if signature.asyncness.is_some() {
                 self.instrument_block_by_suspension(block);
             } else {
                 self.instrument_sync_interiors_block(block);
             }
+            self.hot.close(&hot);
             return;
         }
         let previous = std::mem::replace(&mut self.in_content_closure, true);
+        let hot = self.hot.open("fn", &signature.ident.to_string());
         self.visit_block_mut(block);
-        let guard = self.branch_guard_stmt(block.brace_token.span.join());
+        self.hot.close(&hot);
+        let guard = self.branch_guard_stmt(block.brace_token.span.join(), hot);
         block.stmts.insert(0, guard);
         self.in_content_closure = previous;
+    }
+}
+
+impl BranchGroupInjector<'_> {
+    fn open_fold(&mut self, expr: &Expr, folds_whole_statement: bool) -> Option<String> {
+        if folds_whole_statement {
+            self.hot.open("fold", &fold_name(expr))
+        } else {
+            None
+        }
+    }
+
+    fn wrap_closure(&mut self, closure: &mut syn::ExprClosure) {
+        let previous = std::mem::replace(&mut self.in_content_closure, true);
+        let hot = self.hot.open("closure", "");
+        self.visit_expr_mut(&mut closure.body);
+        self.hot.close(&hot);
+        let guard = self.branch_guard_stmt(closure.span(), hot);
+        let original = closure.body.clone();
+        closure.body = syn::parse_quote! {{
+            #guard
+            #original
+        }};
+        self.in_content_closure = previous;
+    }
+}
+
+fn fold_name(expr: &Expr) -> String {
+    match expr {
+        Expr::If(expr_if) => source_name(&expr_if.cond),
+        Expr::While(while_loop) => source_name(&while_loop.cond),
+        Expr::ForLoop(for_loop) => source_name(&for_loop.pat),
+        _ => String::new(),
     }
 }
 
@@ -482,6 +762,7 @@ impl VisitMut for BranchGroupInjector<'_> {
             Expr::ForLoop(_) => true,
             _ => false,
         };
+        let fold = self.open_fold(expr, folds_whole_statement);
         match expr {
             Expr::Closure(closure) => {
                 if closure.asyncness.is_some() && expr_contains_await(&closure.body) {
@@ -490,15 +771,7 @@ impl VisitMut for BranchGroupInjector<'_> {
                     self.in_content_closure = previous;
                     return;
                 }
-                let previous = std::mem::replace(&mut self.in_content_closure, true);
-                self.visit_expr_mut(&mut closure.body);
-                let guard = self.branch_guard_stmt(closure.span());
-                let original = closure.body.clone();
-                closure.body = syn::parse_quote! {{
-                    #guard
-                    #original
-                }};
-                self.in_content_closure = previous;
+                self.wrap_closure(closure);
             }
             Expr::Async(async_block) => {
                 self.instrument_block_by_suspension(&mut async_block.block);
@@ -507,12 +780,15 @@ impl VisitMut for BranchGroupInjector<'_> {
                 self.instrument_sync_interiors_block(&mut const_block.block);
             }
             Expr::If(expr_if) => {
+                let condition = source_name(&expr_if.cond);
                 self.wrap_condition(&mut expr_if.cond);
-                self.wrap_block(&mut expr_if.then_branch);
+                self.wrap_block(&mut expr_if.then_branch, "then", &condition);
                 if let Some((_, else_expr)) = &mut expr_if.else_branch {
                     match else_expr.as_mut() {
                         Expr::If(_) => self.visit_expr_mut(else_expr),
-                        Expr::Block(block_expr) => self.wrap_block(&mut block_expr.block),
+                        Expr::Block(block_expr) => {
+                            self.wrap_block(&mut block_expr.block, "else", &condition);
+                        }
                         other => self.visit_expr_mut(other),
                     }
                 }
@@ -520,28 +796,32 @@ impl VisitMut for BranchGroupInjector<'_> {
             Expr::Match(expr_match) => {
                 self.visit_expr_mut(&mut expr_match.expr);
                 for arm in &mut expr_match.arms {
+                    let pattern = source_name(&arm.pat);
                     if let Pat::Guard(pat_guard) = &mut arm.pat {
                         self.wrap_condition(&mut pat_guard.guard);
                     }
-                    self.wrap_arm_body(&mut arm.body);
+                    self.wrap_arm_body(&mut arm.body, &pattern);
                 }
             }
             Expr::ForLoop(for_loop) => {
+                let pattern = source_name(&for_loop.pat);
                 self.visit_expr_mut(&mut for_loop.expr);
-                self.wrap_block(&mut for_loop.body);
+                self.wrap_block(&mut for_loop.body, "for", &pattern);
             }
             Expr::While(while_loop) => {
+                let condition = source_name(&while_loop.cond);
                 self.wrap_condition(&mut while_loop.cond);
-                self.wrap_block(&mut while_loop.body);
+                self.wrap_block(&mut while_loop.body, "while", &condition);
             }
             Expr::Loop(loop_expr) => {
-                self.wrap_block(&mut loop_expr.body);
+                self.wrap_block(&mut loop_expr.body, "loop", "");
             }
             Expr::Repeat(repeat) => self.visit_expr_mut(&mut repeat.expr),
             _ => visit_mut::visit_expr_mut(self, expr),
         }
+        self.hot.close(&fold);
         if folds_whole_statement {
-            let guard = self.branch_guard_stmt(expr.span());
+            let guard = self.branch_guard_stmt(expr.span(), fold);
             let original = expr.clone();
             *expr = syn::parse_quote! {{
                 #guard
@@ -551,16 +831,19 @@ impl VisitMut for BranchGroupInjector<'_> {
     }
 
     fn visit_block_mut(&mut self, block: &mut Block) {
-        for stmt in &mut block.stmts {
-            self.visit_stmt_mut(stmt);
-        }
-        self.fold_local_statements(block);
+        let sandwiches = self.visit_block_statements(block);
+        self.fold_local_statements(block, sandwiches);
     }
 
     fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
+        let hot = match &*stmt {
+            Stmt::Expr(expr, Some(_)) => self.hot.open("stmt", &statement_name(expr)),
+            _ => None,
+        };
         visit_mut::visit_stmt_mut(self, stmt);
+        self.hot.close(&hot);
         if let Stmt::Expr(expr, Some(semi)) = stmt {
-            let guard = self.branch_guard_stmt(expr.span());
+            let guard = self.branch_guard_stmt(expr.span(), hot);
             let original = expr.clone();
             let semi = *semi;
             *stmt = Stmt::Expr(
@@ -580,7 +863,7 @@ impl VisitMut for BranchGroupInjector<'_> {
         self.visit_expr_mut(&mut init.expr);
         if let Some((_, diverge)) = &mut init.diverge {
             if let Expr::Block(block_expr) = diverge.as_mut() {
-                self.wrap_block(&mut block_expr.block);
+                self.wrap_block(&mut block_expr.block, "diverge", "");
             } else {
                 self.visit_expr_mut(diverge);
             }

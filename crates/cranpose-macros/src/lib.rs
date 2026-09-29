@@ -245,7 +245,23 @@ fn core_crate_path() -> TokenStream2 {
     }
 }
 
-fn definition_key_stmt(core_path: &TokenStream2, caller_key_ident: &Ident) -> TokenStream2 {
+fn definition_key_stmt(
+    core_path: &TokenStream2,
+    caller_key_ident: &Ident,
+    name: &Ident,
+) -> TokenStream2 {
+    if cfg!(feature = "hot-reload") {
+        // A hot patch moves definitions and may reuse a static cache for a
+        // different item. Development keys name the definition instead.
+        let name = name.to_string();
+        return quote! {
+            let #caller_key_ident = #core_path::composable_identity_key({
+                const __CRANPOSE_DEFINITION_KEY: #core_path::Key =
+                    #core_path::hot_definition_key(file!(), module_path!(), #name);
+                __CRANPOSE_DEFINITION_KEY
+            });
+        };
+    }
     quote! {
         let #caller_key_ident = #core_path::composable_identity_key({
             struct __CranposeDefinitionMarker;
@@ -351,7 +367,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
-    branch_groups::inject_branch_groups(&core_path, &mut func.block);
+    inject_groups(&core_path, &mut func);
     let has_rust_abi = match &func.sig.abi {
         None => true,
         Some(abi) => abi.name.as_ref().is_some_and(|name| name.value() == "Rust"),
@@ -363,6 +379,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let scope_label_ident = func.sig.ident.clone();
     let original_block = func.block.clone();
+    let body_end = func.block.brace_token.span.close();
     let composer_ident = Ident::new("__composer", Span::mixed_site());
     let outer_composer_ident = Ident::new("__outer_composer", Span::mixed_site());
     let caller_key_ident = Ident::new("__cranpose_caller_key", Span::mixed_site());
@@ -372,7 +389,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let result_ident = Ident::new("__result", Span::mixed_site());
     let value_ident = Ident::new("__value", Span::mixed_site());
     let key_expr = quote! { #caller_key_ident };
-    let caller_key_stmt = definition_key_stmt(&core_path, &caller_key_ident);
+    let caller_key_stmt = definition_key_stmt(&core_path, &caller_key_ident, &scope_label_ident);
 
     let rebinds_for_no_skip: Vec<_> = param_info
         .iter()
@@ -771,11 +788,13 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         };
 
+        let slot_origin = hot_slot_origin(&core_path, &func.sig.ident, body_end);
         let recompose_fn = quote! {
             #[allow(non_snake_case)]
             fn #recompose_fn_ident #impl_generics (
                 #composer_ident: &#core_path::Composer
             ) -> #return_ty #where_clause {
+                #slot_origin
                 #recompose_fn_body
             }
         };
@@ -786,6 +805,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #composer_ident: &#core_path::Composer
                 #(, #helper_inputs)*
             ) -> #return_ty #where_clause {
+                #slot_origin
                 #helper_body
             }
         };
@@ -851,6 +871,36 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
         *func.block = syn::parse2(wrapped).expect("failed to build block");
         TokenStream::from(quote! { #func })
+    }
+}
+
+/// Adds branch groups; with the development-only `hot-reload` feature the
+/// body also marks its definition as the origin for call-site keys.
+fn inject_groups(core_path: &TokenStream2, func: &mut ItemFn) {
+    let hot_reload = cfg!(feature = "hot-reload");
+    branch_groups::inject_branch_groups_with(
+        core_path,
+        &mut func.block,
+        &func.sig.ident,
+        hot_reload,
+    );
+    if hot_reload {
+        let end = func.block.brace_token.span.close();
+        let origin = branch_groups::hot_origin_stmt(core_path, &func.sig.ident, end);
+        func.block
+            .stmts
+            .insert(0, syn::parse2(origin).expect("hot origin statement"));
+    }
+}
+
+/// Parameter and return slots are keyed by call sites in generated code. With
+/// hot reload those keys follow the current origin, so the first composition
+/// and an independent recomposition both set the composable's own origin.
+fn hot_slot_origin(core_path: &TokenStream2, name: &Ident, end: Span) -> TokenStream2 {
+    if cfg!(feature = "hot-reload") {
+        branch_groups::hot_origin_stmt(core_path, name, end)
+    } else {
+        TokenStream2::new()
     }
 }
 
