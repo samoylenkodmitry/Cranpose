@@ -97,35 +97,6 @@ fn a_glyph_quad_inside_its_clip_is_left_alone_and_one_outside_it_is_dropped() {
 }
 
 #[test]
-fn a_text_clip_cuts_only_what_it_leaves_out() {
-    let rect = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: 40.0,
-        height: 20.0,
-    };
-    assert!(!clip_cuts(None, rect));
-    assert!(!clip_cuts(
-        Some(Rect {
-            x: -5.0,
-            y: -5.0,
-            width: 60.0,
-            height: 40.0
-        }),
-        rect
-    ));
-    assert!(clip_cuts(
-        Some(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 40.0,
-            height: 12.0
-        }),
-        rect
-    ));
-}
-
-#[test]
 fn glyph_clip_edges_are_the_clip_in_device_pixels() {
     let clip = Rect {
         x: 1.5,
@@ -148,38 +119,28 @@ fn cut_viewport(transform: SegmentTransform) -> ViewportUniformParams {
 }
 
 #[test]
-fn a_text_its_clip_leaves_whole_is_not_cut() {
-    let draw_rect = Rect {
-        x: 10.0,
-        y: 10.0,
-        width: 40.0,
-        height: 20.0,
-    };
+fn a_text_its_clip_leaves_whole_is_cut_at_its_own_scissor() {
+    // Its scissor is its draw rect: a last line's descenders past it are cut
+    // as the scissor would cut them, so the text needs no scissor to draw.
     let viewport = cut_viewport(SegmentTransform::IDENTITY);
-    assert_eq!(
-        glyph_cut_edges(None, draw_rect, (7, 5, 40, 20), viewport, 1.0),
-        None
-    );
-    let around = Rect {
-        x: 0.0,
-        y: 0.0,
-        width: 100.0,
-        height: 100.0,
-    };
-    assert_eq!(
-        glyph_cut_edges(Some(around), draw_rect, (7, 5, 40, 20), viewport, 1.0),
-        None
-    );
+    for clip in [
+        None,
+        Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        }),
+    ] {
+        assert_eq!(
+            glyph_cut_edges(clip, (7, 5, 40, 20), viewport, 1.0),
+            Some([10.0, 10.0, 50.0, 30.0])
+        );
+    }
 }
 
 #[test]
 fn an_unturned_text_is_cut_at_its_scissor_s_pixel_edges() {
-    let draw_rect = Rect {
-        x: 10.0,
-        y: 10.0,
-        width: 40.0,
-        height: 20.0,
-    };
     let clip = Rect {
         x: 10.0,
         y: 10.0,
@@ -189,7 +150,6 @@ fn an_unturned_text_is_cut_at_its_scissor_s_pixel_edges() {
     assert_eq!(
         glyph_cut_edges(
             Some(clip),
-            draw_rect,
             (7, 5, 40, 13),
             cut_viewport(SegmentTransform::IDENTITY),
             1.0
@@ -201,12 +161,6 @@ fn an_unturned_text_is_cut_at_its_scissor_s_pixel_edges() {
 
 #[test]
 fn a_turned_text_is_cut_at_its_clip_before_the_turn() {
-    let draw_rect = Rect {
-        x: 10.0,
-        y: 10.0,
-        width: 40.0,
-        height: 20.0,
-    };
     let clip = Rect {
         x: 10.0,
         y: 10.0,
@@ -215,7 +169,7 @@ fn a_turned_text_is_cut_at_its_clip_before_the_turn() {
     };
     let turn = SegmentTransform::affine([0.0, -1.0, 1.0, 0.0], [0.0, 0.0]).expect("a quarter turn");
     assert_eq!(
-        glyph_cut_edges(Some(clip), draw_rect, (0, 0, 1, 1), cut_viewport(turn), 2.0),
+        glyph_cut_edges(Some(clip), (0, 0, 1, 1), cut_viewport(turn), 2.0),
         Some(glyph_clip_edges(clip, 2.0))
     );
 }
