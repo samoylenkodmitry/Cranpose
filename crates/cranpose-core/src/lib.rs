@@ -372,12 +372,111 @@ fn avalanche_location_key(mut value: u64) -> u64 {
 pub fn caller_location_key() -> Key {
     let caller = std::panic::Location::caller();
     let file = caller.file();
+    if cfg!(feature = "hot-reload")
+        && let Some(key) = hot_call_site_key(file, caller.line(), caller.column())
+    {
+        return key;
+    }
     registered_location_key(
         static_file_location_hash(file),
         file,
         caller.line(),
         caller.column(),
     )
+}
+
+#[derive(Clone, Copy)]
+struct HotOrigin {
+    file: &'static str,
+    line: u32,
+    end: u32,
+    identity: Key,
+}
+
+thread_local! {
+    static HOT_ORIGIN: std::cell::Cell<HotOrigin> = const {
+        std::cell::Cell::new(HotOrigin { file: "", line: 0, end: 0, identity: 0 })
+    };
+}
+
+/// Restores the previous hot-reload origin when a composable body or closure ends.
+#[doc(hidden)]
+pub struct HotOriginGuard {
+    previous: HotOrigin,
+}
+
+impl Drop for HotOriginGuard {
+    fn drop(&mut self) {
+        let previous = self.previous;
+        HOT_ORIGIN.with(|origin| origin.set(previous));
+    }
+}
+
+/// Marks the lexically enclosing composable definition for the
+/// development-only `hot-reload` expansion. Call sites inside its source,
+/// lines `line..=end` of `file`, are keyed by the definition's identity and
+/// their line relative to it, so code moved by an edit elsewhere in the file
+/// keeps its identity after a hot patch. Other call sites keep absolute keys.
+/// Within one build the keys are as distinct as absolute locations.
+#[doc(hidden)]
+pub fn hot_origin(file: &'static str, line: u32, end: u32, identity: Key) -> HotOriginGuard {
+    let next = HotOrigin {
+        file,
+        line,
+        end,
+        identity,
+    };
+    HotOriginGuard {
+        previous: HOT_ORIGIN.with(|origin| origin.replace(next)),
+    }
+}
+
+fn hot_call_site_key(file: &str, line: u32, column: u32) -> Option<Key> {
+    let origin = HOT_ORIGIN.with(std::cell::Cell::get);
+    if origin.file.is_empty() || !(origin.line..=origin.end).contains(&line) || origin.file != file
+    {
+        return None;
+    }
+    let relative = line.wrapping_sub(origin.line);
+    let hash = hot_key_hash(origin.identity, &relative.to_le_bytes());
+    Some(hot_avalanche(hot_key_hash(
+        hash ^ 0xfc,
+        &column.to_le_bytes(),
+    )))
+}
+
+const fn hot_key_hash(mut hash: u64, bytes: &[u8]) -> u64 {
+    let mut index = 0;
+    while index < bytes.len() {
+        hash = (hash ^ bytes[index] as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        index += 1;
+    }
+    hash
+}
+
+const fn hot_avalanche(mut value: u64) -> u64 {
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    value ^= value >> 33;
+    value = value.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    value ^ (value >> 33)
+}
+
+/// Branch group key for the development-only `hot-reload` expansion: the
+/// file and a hash of the guard's structural path, independent of lines.
+#[doc(hidden)]
+pub const fn hot_branch_key(file: &str, path_hash: u64) -> Key {
+    let hash = hot_key_hash(0xcbf2_9ce4_8422_2325, file.as_bytes());
+    hot_avalanche(hot_key_hash(hash ^ 0xfd, &path_hash.to_le_bytes()))
+}
+
+/// Composable definition key for the development-only `hot-reload`
+/// expansion: the file, module and function name, independent of lines.
+#[doc(hidden)]
+pub const fn hot_definition_key(file: &str, module: &str, name: &str) -> Key {
+    let mut hash = hot_key_hash(0xcbf2_9ce4_8422_2325, file.as_bytes());
+    hash = hot_key_hash(hash ^ 0xfe, module.as_bytes());
+    hot_avalanche(hot_key_hash(hash ^ 0xff, name.as_bytes()))
 }
 
 #[doc(hidden)]

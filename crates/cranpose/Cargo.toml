@@ -169,6 +169,10 @@ storekit = ["dep:cranpose-storekit"]
 # whole backend is Android-only and compiles away.
 playbilling = []
 preview = ["embed", "dep:inventory", "cranpose-ui/inspection"]
+# Development-only structural keys for hot-patched previews; the plugin's
+# development runner enables it for private debug builds. Release builds and
+# the default feature set are unaffected.
+hot-reload = ["cranpose-core/hot-reload", "cranpose-macros/hot-reload"]
 
 [dependencies]
 cranpose-app-shell = { workspace = true }

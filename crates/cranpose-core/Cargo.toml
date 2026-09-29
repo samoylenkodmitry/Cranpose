@@ -29,6 +29,9 @@ web-time = { workspace = true }
 
 [features]
 default = []
+# Development builds that hot-patch code: call-site and definition keys ignore
+# line and column positions. Never enable in release builds.
+hot-reload = []
 std-hash = []
 internal = []
 inspection = []

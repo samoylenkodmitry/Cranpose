@@ -15,6 +15,11 @@ description = "Procedural macros for Cranpose"
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[features]
+# Development builds that hot-patch code: group keys follow source structure
+# rather than line numbers. Never enable in release builds.
+hot-reload = []
+
 [lints]
 workspace = true
 

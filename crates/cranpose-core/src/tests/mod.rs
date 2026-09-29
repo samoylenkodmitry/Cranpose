@@ -794,3 +794,48 @@ mod snapshot_observer_nesting_tests;
 mod snapshot_state_tests;
 mod state_and_effect_tests;
 mod state_holder_tests;
+
+#[test]
+fn hot_keys_follow_structure_not_absolute_lines() {
+    // A definition moved by an edit elsewhere keeps its call-site keys when
+    // they are measured from the definition's own line.
+    let identity = hot_definition_key("src/app.rs", "app::screens", "Card");
+    let key_at = |origin: u32, line: u32, column: u32| {
+        let _origin = hot_origin("src/app.rs", origin, origin + 20, identity);
+        hot_call_site_key("src/app.rs", line, column)
+    };
+    assert_eq!(key_at(10, 15, 9), key_at(110, 115, 9));
+    assert_ne!(key_at(10, 15, 9), key_at(10, 16, 9));
+    assert_ne!(key_at(10, 15, 9), key_at(10, 15, 13));
+    // Outside the definition, or in another file, keys stay absolute.
+    assert_eq!(key_at(10, 40, 9), None);
+    let other = {
+        let _origin = hot_origin("src/app.rs", 10, 30, identity);
+        hot_call_site_key("src/other.rs", 15, 9)
+    };
+    assert_eq!(other, None);
+    // Different definitions never share call-site keys.
+    let sibling = hot_definition_key("src/app.rs", "app::screens", "Tile");
+    let tile = {
+        let _origin = hot_origin("src/app.rs", 10, 30, sibling);
+        hot_call_site_key("src/app.rs", 15, 9)
+    };
+    assert_ne!(key_at(10, 15, 9), tile);
+    // Guards restore the enclosing origin.
+    {
+        let _outer = hot_origin("src/app.rs", 10, 30, identity);
+        {
+            let _inner = hot_origin("src/app.rs", 50, 60, sibling);
+        }
+        assert!(hot_call_site_key("src/app.rs", 15, 9).is_some());
+    }
+    assert_eq!(hot_call_site_key("src/app.rs", 15, 9), None);
+    assert_ne!(
+        hot_branch_key("src/app.rs", 1),
+        hot_branch_key("src/app.rs", 2)
+    );
+    assert_ne!(
+        hot_branch_key("src/app.rs", 1),
+        hot_branch_key("src/other.rs", 1)
+    );
+}
