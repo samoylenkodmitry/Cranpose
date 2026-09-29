@@ -1,11 +1,13 @@
 use std::{
     cell::{Cell, RefCell},
     cmp::Reverse,
-    collections::HashMap,
     rc::Rc,
 };
 
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashSet};
+use cranpose_core::{
+    MemoryApplier, NodeId,
+    collections::map::{HashMap, HashSet},
+};
 use cranpose_foundation::{MINIMUM_TOUCH_TARGET_SIZE, PointerEvent, PointerEventKind};
 use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape};
@@ -328,7 +330,7 @@ impl Scene {
             hits: Vec::new(),
             hit_buffers: Vec::new(),
             next_hit_z: 0,
-            node_index: HashMap::new(),
+            node_index: HashMap::default(),
             diagnostics: Rc::new(RenderDiagnostics::new()),
         }
     }

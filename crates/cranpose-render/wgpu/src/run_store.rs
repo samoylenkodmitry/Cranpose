@@ -1,6 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
+use cranpose_core::collections::map::HashMap;
 use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_color};
 use cranpose_ui_graphics::{
     ARC_BUCKETS, BrushRecord, Color, GradientStopRecord, GraphicsLayer, RecordLane, RecordSegment,
@@ -861,7 +862,7 @@ impl RunStore {
         Self {
             mode,
             layout,
-            stored: HashMap::new(),
+            stored: HashMap::default(),
             arena: ArenaTables::new(mode, alignment),
             fill_stats: false,
             scratch_stops: Vec::new(),

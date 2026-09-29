@@ -1,6 +1,6 @@
-use std::{collections::HashMap, rc::Rc};
+use std::rc::Rc;
 
-use cranpose_core::collections::bounded_lru::BoundedLruCache;
+use cranpose_core::collections::{bounded_lru::BoundedLruCache, map::HashMap};
 use cranpose_render_common::raster_cache::LayerRasterCacheKey;
 
 use crate::{

@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     cell::Cell,
-    collections::HashMap,
     hash::{Hash, Hasher},
     rc::Rc,
     sync::{Arc, mpsc},
@@ -10,7 +9,9 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::{
-    NodeId, collections::bounded_lru::BoundedLruCache, hash::default as default_hash,
+    NodeId,
+    collections::{bounded_lru::BoundedLruCache, map::HashMap},
+    hash::default as default_hash,
 };
 use cranpose_render_common::{
     geometry::blur_reach,
@@ -2626,11 +2627,11 @@ impl GpuRenderer {
             ablation: Ablation::default(),
             ablation_frames: 0,
             nesting_overflow_reported: false,
-            backdrop_gates: HashMap::new(),
-            fill_gates: HashMap::new(),
-            effect_gates: HashMap::new(),
-            source_gates: HashMap::new(),
-            transparent_sources: HashMap::new(),
+            backdrop_gates: HashMap::default(),
+            fill_gates: HashMap::default(),
+            effect_gates: HashMap::default(),
+            source_gates: HashMap::default(),
+            transparent_sources: HashMap::default(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
             ),
