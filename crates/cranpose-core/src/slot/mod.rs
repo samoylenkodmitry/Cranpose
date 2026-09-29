@@ -52,11 +52,11 @@ pub use table::SlotTable;
 pub(crate) use table::SlotWriteSession;
 #[cfg(test)]
 pub(crate) use table::ValueSlotError;
-pub(in crate::slot) use types::collect_root_node_ids_from_records_into;
+pub(in crate::slot) use types::root_node_ids;
 pub(crate) use types::{
     ActiveGroupId, ActiveSubtreeRoot, BRANCH_PATH_ROOT, ChildCursor, DetachedSubtree,
     FinishGroupResult, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, NodeLifecycle,
-    NodeSlotUpdate, PayloadAnchor, PayloadKind, SlotPassMode, ValueSlotId,
+    NodeSlotUpdate, PayloadAnchor, PayloadKind, RootNodeIds, SlotPassMode, ValueSlotId,
 };
 use types::{NodeRecord, PayloadRecord};
 #[cfg(any(test, debug_assertions))]

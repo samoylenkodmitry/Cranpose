@@ -778,15 +778,60 @@ fn a_child_drawn_in_place_turns_and_moves_by_its_transform_at_the_page_scale() {
     )
     .then(ProjectiveTransform::translation(3.0, 4.0));
     let child = child_layer(quarter_turn, scene_of(&[], Vec::new()));
-    let (linear, translation, inverse) = in_place_transform(&child, 2.0)
-        .expect("a turn is invertible")
-        .uniform_parts();
+    let (transform, content_scale) = in_place_transform(&child, 2.0).expect("a turn is invertible");
+    assert_eq!(content_scale, 2.0, "a turn draws at the page's scale");
+    let (linear, translation, inverse) = transform.uniform_parts();
     let near = |a: [f32; 4], b: [f32; 4]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5);
     assert!(near(linear, [0.0, -1.0, 1.0, 0.0]), "{linear:?}");
     assert!(near(inverse, [0.0, 1.0, -1.0, 0.0]), "{inverse:?}");
     assert!(
         (translation[0] - 86.0).abs() < 1e-4 && (translation[1] - 8.0).abs() < 1e-4,
         "{translation:?}"
+    );
+}
+
+#[test]
+fn a_scaled_child_drawn_in_place_draws_at_its_parent_s_scale_times_its_own() {
+    let scaled = |z_index, scale: f32, children| ChildLayer {
+        surface_scale: scale,
+        ..in_place_child(
+            z_index,
+            ProjectiveTransform::uniform_scale(scale)
+                .then(ProjectiveTransform::translation(5.0, 0.0)),
+            &[0],
+            children,
+        )
+    };
+    let child = scaled(1, 0.5, vec![scaled(2, 0.8, Vec::new())]);
+    let mut parts = Vec::new();
+    assert!(push_in_place(
+        &mut parts,
+        &child,
+        SegmentTransform::IDENTITY,
+        2.0,
+        None,
+        0,
+    ));
+    let drawn: Vec<(f32, [f32; 4], [f32; 2])> = parts
+        .iter()
+        .filter_map(|part| match part {
+            FlushPart::InPlace {
+                transform, scale, ..
+            } => {
+                let (linear, translation, _) = transform.uniform_parts();
+                Some((*scale, linear, translation))
+            }
+            FlushPart::Page { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        drawn,
+        [
+            (1.0, [1.0, 0.0, 0.0, 1.0], [10.0, 0.0]),
+            (0.8, [1.0, 0.0, 0.0, 1.0], [15.0, 0.0]),
+        ],
+        "each draws at its parent's content scale times its own, moved by its offset at its \
+         parent's content scale"
     );
 }
 
