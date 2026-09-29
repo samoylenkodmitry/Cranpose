@@ -200,8 +200,14 @@ composites the resolved textures.
   and the interior itself is not shaded twice. Glyph and image batches
   take their own place in that order and test the same way: a flushed
   glyph batch the next index, a retained glyph run the index where its
-  text was held. Nested backgrounds (deep) took the Mali from ~277 MHz to
-  its 139 MHz floor. Contract
+  text was held. Held glyphs a shape covers draw without closing the open
+  arena chunk: its draws so far paint, the glyphs take the index of its
+  next record, and at close the interiors of all its records go down in
+  one draw, so text between stacked cards no longer splits them into a
+  chunk and an interior draw per card (`chunk_across_glyphs.rs`). Fills of
+  a layer drawn in place under a turn lay interiors down too, mapped
+  through the turn their placements carry. Nested backgrounds (deep) took
+  the Mali from ~277 MHz to its 139 MHz floor. Contract
   `opaque_interiors.rs` (pixels equal with and without;
   `CRANPOSE_NO_INTERIORS_FIRST=1`, `debug.cranpose.no_interiors_first`,
   turns it off).
