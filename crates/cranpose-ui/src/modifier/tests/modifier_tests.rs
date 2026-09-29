@@ -287,6 +287,32 @@ fn required_size_sets_explicit_constraints() {
 }
 
 #[test]
+fn required_width_and_height_each_pin_one_axis() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let props = Modifier::empty()
+        .required_width(48.0)
+        .resolved_modifiers()
+        .layout_properties();
+    assert_eq!(props.width(), DimensionConstraint::Points(48.0));
+    assert_eq!(
+        (props.min_width(), props.max_width()),
+        (Some(48.0), Some(48.0))
+    );
+    assert_eq!(props.height(), DimensionConstraint::Unspecified);
+    assert_eq!((props.min_height(), props.max_height()), (None, None));
+    let props = Modifier::empty()
+        .required_height(12.0)
+        .resolved_modifiers()
+        .layout_properties();
+    assert_eq!(props.height(), DimensionConstraint::Points(12.0));
+    assert_eq!(
+        (props.min_height(), props.max_height()),
+        (Some(12.0), Some(12.0))
+    );
+    assert_eq!(props.width(), DimensionConstraint::Unspecified);
+}
+
+#[test]
 fn alignment_modifiers_record_values() {
     let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty()

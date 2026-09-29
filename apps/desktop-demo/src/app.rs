@@ -856,10 +856,7 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                     } else {
                         TabBarHorizontal(active_tab);
 
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 12.0,
-                        });
+                        Spacer(Modifier::empty().size_points(0.0, 12.0));
                     }
 
                     if is_compact && picker_open.get() {
@@ -1160,10 +1157,7 @@ fn text_input_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 24.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 24.0));
 
             Text(
                 "Basic Text Field:",
@@ -1171,10 +1165,7 @@ fn text_input_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 8.0));
 
             BasicTextField(
                 text_state1,
@@ -1187,10 +1178,7 @@ fn text_input_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             {
                 let current_text = text_state1.text();
@@ -1204,10 +1192,7 @@ fn text_input_example() {
                 );
             }
 
-            Spacer(Size {
-                width: 0.0,
-                height: 24.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 24.0));
 
             Text(
                 "Empty Text Field:",
@@ -1215,10 +1200,7 @@ fn text_input_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 8.0));
 
             BasicTextField(
                 text_state2,
@@ -1244,10 +1226,7 @@ fn text_input_example() {
                 );
             }
 
-            Spacer(Size {
-                width: 0.0,
-                height: 24.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 24.0));
 
             Text(
                 "Programmatic Actions:",
@@ -1255,10 +1234,7 @@ fn text_input_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 8.0));
 
             Row(
                 Modifier::empty().fill_max_width(),
@@ -1380,10 +1356,7 @@ fn text_input_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 8.0));
 
             {
                 let state = cranpose_core::remember(|| {
@@ -1411,10 +1384,7 @@ fn text_input_example() {
                 );
             }
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             Text(
                 "On a light surface (double-tap — the glass ink flips dark):",
@@ -1422,10 +1392,7 @@ fn text_input_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 8.0));
 
             cranpose_core::CompositionLocalProvider(
                 [cranpose_ui::local_on_light_surface().provides(true)],
@@ -1457,10 +1424,7 @@ fn text_input_example() {
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
         },
     );
 }
@@ -1489,10 +1453,7 @@ fn recursive_layout_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             Row(
                 Modifier::empty().fill_max_width().padding(8.0),
@@ -1560,10 +1521,7 @@ fn recursive_layout_example() {
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             let depth = depth_state.get().max(1);
             Column(
@@ -1679,10 +1637,7 @@ pub fn composition_local_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             Text(
                 format!("Counter: {}", counter.get()),
@@ -1693,10 +1648,7 @@ pub fn composition_local_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 12.0));
 
             Button(
                 Modifier::empty()
@@ -1724,10 +1676,7 @@ pub fn composition_local_example() {
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             let local = local_holder();
             let count = counter.get();
@@ -1750,17 +1699,11 @@ fn composition_local_content() {
         TextStyle::default(),
     );
 
-    Spacer(Size {
-        width: 0.0,
-        height: 8.0,
-    });
+    Spacer(Modifier::empty().size_points(0.0, 8.0));
 
     composition_local_content_inner();
 
-    Spacer(Size {
-        width: 0.0,
-        height: 8.0,
-    });
+    Spacer(Modifier::empty().size_points(0.0, 8.0));
 
     Text(
         format!("NOT reading local: rand={}", random()),
@@ -1815,10 +1758,7 @@ pub fn AsyncRuntimeTabContent(
                     TextStyle::default(),
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 16.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 16.0));
 
                 let animation_snapshot = animation.get();
                 let stats_snapshot = stats.get();
@@ -1839,10 +1779,7 @@ pub fn AsyncRuntimeTabContent(
                                 TextStyle::default(),
                             );
 
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 8.0,
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, 8.0));
 
                             Row(
                                 Modifier::empty()
@@ -1890,10 +1827,7 @@ pub fn AsyncRuntimeTabContent(
                     },
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 12.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 12.0));
 
                 Text(
                     format!(
@@ -1913,10 +1847,7 @@ pub fn AsyncRuntimeTabContent(
                     TextStyle::default(),
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 16.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 16.0));
 
                 Row(
                     Modifier::empty().fill_max_width().padding(4.0),
@@ -2181,10 +2112,7 @@ fn counter_app() {
                     TextStyle::default(),
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 12.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 12.0));
 
                 Row(
                     Modifier::empty().fill_max_width().padding(8.0),
@@ -2220,10 +2148,7 @@ fn counter_app() {
                     },
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 16.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 16.0));
 
                 Column(
                     Modifier::empty()
@@ -2295,10 +2220,7 @@ fn counter_app() {
                             TextStyle::default(),
                         );
 
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 16.0,
-                        });
+                        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
                         Row(
                             Modifier::empty()
@@ -2381,10 +2303,7 @@ fn counter_app() {
                             },
                         );
 
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 16.0,
-                        });
+                        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
                         Row(
                             Modifier::empty().padding(8.0),
@@ -2442,10 +2361,7 @@ fn counter_app() {
                             },
                         );
 
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 20.0,
-                        });
+                        Spacer(Modifier::empty().size_points(0.0, 20.0));
 
                         Text(
                             async_message.get(),
@@ -2456,10 +2372,7 @@ fn counter_app() {
                             TextStyle::default(),
                         );
 
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 12.0,
-                        });
+                        Spacer(Modifier::empty().size_points(0.0, 12.0));
 
                         Button(
                             Modifier::empty()
@@ -2558,10 +2471,7 @@ fn modifier_showcase_tab() {
                         TextStyle::default(),
                     );
 
-                    Spacer(Size {
-                        width: 0.0,
-                        height: 8.0,
-                    });
+                    Spacer(Modifier::empty().size_points(0.0, 8.0));
 
                     let showcase_types = [
                         ShowcaseType::SimpleCard,
@@ -2648,10 +2558,7 @@ pub fn simple_card_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         cranpose_ui::Box(
             Modifier::empty()
@@ -2681,10 +2588,7 @@ pub fn simple_card_showcase() {
                                     TextStyle::default(),
                                 );
 
-                                Spacer(Size {
-                                    width: 0.0,
-                                    height: 8.0,
-                                });
+                                Spacer(Modifier::empty().size_points(0.0, 8.0));
 
                                 Text(
                                     "Card content goes here with padding",
@@ -2692,10 +2596,7 @@ pub fn simple_card_showcase() {
                                     TextStyle::default(),
                                 );
 
-                                Spacer(Size {
-                                    width: 0.0,
-                                    height: 12.0,
-                                });
+                                Spacer(Modifier::empty().size_points(0.0, 12.0));
 
                                 Row(Modifier::empty(), RowSpec::default(), || {
                                     Text(
@@ -2707,10 +2608,7 @@ pub fn simple_card_showcase() {
                                         TextStyle::default(),
                                     );
 
-                                    Spacer(Size {
-                                        width: 8.0,
-                                        height: 0.0,
-                                    });
+                                    Spacer(Modifier::empty().size_points(8.0, 0.0));
 
                                     Text(
                                         "Action 2",
@@ -2742,10 +2640,7 @@ pub fn positioned_boxes_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         cranpose_ui::Box(
             Modifier::empty()
@@ -2834,10 +2729,7 @@ pub fn item_list_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         Column(
             Modifier::empty().padding(16.0),
@@ -2879,10 +2771,7 @@ pub fn item_list_showcase() {
                                         TextStyle::default(),
                                     );
 
-                                    Spacer(Size {
-                                        width: 0.0,
-                                        height: 0.0,
-                                    });
+                                    Spacer(Modifier::empty().size_points(0.0, 0.0));
 
                                     let status_color = if i % 3 == 0 {
                                         Color(0.2, 0.8, 0.3, 0.9)
@@ -2922,10 +2811,7 @@ pub fn complex_chain_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         Text(
             "Nested: Red → Green → Blue layers",
@@ -2933,10 +2819,7 @@ pub fn complex_chain_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 12.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 12.0));
 
         cranpose_ui::Box(
             Modifier::empty()
@@ -2967,10 +2850,7 @@ pub fn complex_chain_showcase() {
             },
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         Text(
             "Chain: offset + size + multiple backgrounds",
@@ -2978,10 +2858,7 @@ pub fn complex_chain_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 12.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 12.0));
 
         cranpose_ui::Box(
             Modifier::empty()
@@ -3021,10 +2898,7 @@ pub fn dynamic_modifiers_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         let current_frame = frame.get();
         let x = (current_frame as f32 * 10.0) % 200.0;
@@ -3055,10 +2929,7 @@ pub fn dynamic_modifiers_showcase() {
             },
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         Text(
             format!("Frame: {current_frame}, X: {x:.1}"),
@@ -3069,10 +2940,7 @@ pub fn dynamic_modifiers_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 12.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 12.0));
 
         Button(
             Modifier::empty()
@@ -3111,10 +2979,7 @@ pub fn long_list_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         Column(
             Modifier::empty().padding(16.0),

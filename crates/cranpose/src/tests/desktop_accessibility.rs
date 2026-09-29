@@ -720,3 +720,27 @@ fn rows_sit_under_their_list_in_the_desktop_tree() {
         "the list holds its row"
     );
 }
+
+#[test]
+fn a_reader_asking_for_the_tree_is_owed_the_whole_tree_on_the_next_sync() {
+    let reader_connected = Arc::new(AtomicBool::new(false));
+    let tree_owed = Arc::new(AtomicBool::new(false));
+    let woken = Arc::new(AtomicBool::new(false));
+    let wake_flag = Arc::clone(&woken);
+    let mut activation = Activation {
+        reader_connected: Arc::clone(&reader_connected),
+        tree_owed: Arc::clone(&tree_owed),
+        wake: Box::new(move || wake_flag.store(true, Ordering::Relaxed)),
+    };
+
+    assert!(
+        activation.request_initial_tree().is_none(),
+        "nothing is built ahead of a reader, so accesskit shows its placeholder until the sync"
+    );
+    assert!(reader_connected.load(Ordering::Relaxed));
+    assert!(tree_owed.load(Ordering::Relaxed));
+    assert!(
+        woken.load(Ordering::Relaxed),
+        "the loop must wake to send the tree before the next display refresh"
+    );
+}

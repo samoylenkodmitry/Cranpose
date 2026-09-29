@@ -22,7 +22,8 @@ pub use android_file_picker::open_content_uri;
 mod accessibility;
 #[cfg(any(
     test,
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "desktop-shell", feature = "renderer-wgpu")
 ))]
 mod accessibility_publish_policy;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]

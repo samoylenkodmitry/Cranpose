@@ -5,7 +5,7 @@ use cranpose_core::location_key;
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
-    Color, Modifier, Size,
+    Color, Modifier,
     round_scaling_list::CentreAnchor,
     widgets::{
         Box, BoxSpec, Spacer,
@@ -91,10 +91,7 @@ fn render_faded_rows(fill: (f32, f32, f32)) -> Option<Probe> {
                                 )),
                             BoxSpec::default(),
                             || {
-                                Spacer(Size {
-                                    width: 0.0,
-                                    height: ROW,
-                                });
+                                Spacer(Modifier::empty().size_points(0.0, ROW));
                             },
                         );
                     },

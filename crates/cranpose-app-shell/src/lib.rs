@@ -759,12 +759,8 @@ where
     /// while this is false, because every visible node is then in a window
     /// of its own.
     pub fn primary_has_content(&mut self) -> bool {
-        let app_context = Rc::clone(&self.app.app_context);
-        app_context.enter(|| {
-            self.surfaces[0]
-                .layout_tree_in_context(&mut self.app)
-                .is_some_and(|tree| tree.root().children.iter().any(layout_has_area))
-        })
+        self.read_primary_boxes(cranpose_ui::has_placed_content)
+            .unwrap_or(false)
     }
 
     /// The extent of what the primary root lays out: the far right and
@@ -773,17 +769,24 @@ where
     /// out nothing. A platform whose primary window wraps its content sizes
     /// the window to this after every update.
     pub fn primary_content_size(&mut self) -> Option<Size> {
+        self.read_primary_boxes(cranpose_ui::placed_content_extent)
+            .flatten()
+    }
+
+    /// Reads the boxes placed under the primary root with `read`, straight
+    /// off the applier: these run after every update, so they build no
+    /// layout snapshot.
+    fn read_primary_boxes<T>(
+        &mut self,
+        read: impl FnOnce(&mut MemoryApplier, NodeId) -> Result<T, NodeError>,
+    ) -> Option<T> {
         let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(|| {
-            self.surfaces[0]
-                .layout_tree_in_context(&mut self.app)
-                .and_then(|tree| {
-                    tree.root()
-                        .children
-                        .iter()
-                        .filter_map(layout_extent)
-                        .reduce(farther_extent)
-                })
+            let root = self.surfaces[0].root_node(&self.app)?;
+            let mut applier = self.app.composition.applier_mut();
+            read(&mut applier, root)
+                .inspect_err(|err| log::debug!("failed to read the primary root's boxes: {err}"))
+                .ok()
         })
     }
 
@@ -1338,30 +1341,6 @@ where
     fn drop(&mut self) {
         self.app.runtime.clear_frame_waker();
     }
-}
-
-fn layout_has_area(layout: &cranpose_ui::LayoutBox) -> bool {
-    (layout.rect.width > 0.0 && layout.rect.height > 0.0)
-        || layout.children.iter().any(layout_has_area)
-}
-
-fn layout_extent(layout: &cranpose_ui::LayoutBox) -> Option<Size> {
-    let own = (layout.rect.width > 0.0 && layout.rect.height > 0.0).then(|| {
-        Size::new(
-            layout.rect.x + layout.rect.width,
-            layout.rect.y + layout.rect.height,
-        )
-    });
-    layout
-        .children
-        .iter()
-        .filter_map(layout_extent)
-        .chain(own)
-        .reduce(farther_extent)
-}
-
-fn farther_extent(a: Size, b: Size) -> Size {
-    Size::new(a.width.max(b.width), a.height.max(b.height))
 }
 
 pub fn default_root_key() -> Key {

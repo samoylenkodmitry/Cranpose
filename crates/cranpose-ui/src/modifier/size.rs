@@ -104,6 +104,36 @@ impl Modifier {
         self.then(modifier)
     }
 
+    /// Declare the width of the content to be exactly `width`, ignoring
+    /// incoming constraints; the height follows them.
+    ///
+    /// Matches Kotlin: `Modifier.requiredWidth(width: Dp)`
+    pub fn required_width(self, width: f32) -> Self {
+        let modifier = Self::with_element(SizeElement::with_constraints(
+            Some(width),
+            Some(width),
+            None,
+            None,
+            false,
+        ));
+        self.then(modifier)
+    }
+
+    /// Declare the height of the content to be exactly `height`, ignoring
+    /// incoming constraints; the width follows them.
+    ///
+    /// Matches Kotlin: `Modifier.requiredHeight(height: Dp)`
+    pub fn required_height(self, height: f32) -> Self {
+        let modifier = Self::with_element(SizeElement::with_constraints(
+            None,
+            None,
+            Some(height),
+            Some(height),
+            false,
+        ));
+        self.then(modifier)
+    }
+
     /// Keep the width of the content between `min` and `max`, as far as the
     /// incoming constraints allow. `f32::INFINITY` leaves the upper side open.
     ///

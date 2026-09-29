@@ -86,7 +86,7 @@ fn a_widget_that_is_one_layout_composes_as_few_groups_as_a_bare_layout() {
             Box(Modifier::empty(), BoxSpec::default(), || {});
         }),
         groups_composed_by(|| {
-            Spacer(crate::modifier::Size::default());
+            Spacer(Modifier::empty().size_points(0.0, 0.0));
         }),
     ];
     assert_eq!(

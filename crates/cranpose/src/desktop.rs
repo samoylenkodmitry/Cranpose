@@ -5881,18 +5881,10 @@ impl ApplicationHandler for App {
         let Some(window) = self.window.clone() else {
             return;
         };
-        if let Some(accessibility) = &mut self.accessibility {
-            let mut activated = accessibility.apply_platform_options(app);
-            for (node_id, canvas_key) in accessibility.drain_clicks() {
-                activated |= app.accessibility_activate(node_id, canvas_key);
-            }
-            activated |= accessibility.run_custom_actions(app);
-            activated |= accessibility.run_value_requests(app);
-            activated |= accessibility.run_scroll_requests(app);
-            activated |= accessibility.run_focus_requests(app);
-            if activated {
-                request_redraw_once(&window, &mut self.primary_redraw_pending);
-            }
+        if let Some(accessibility) = &mut self.accessibility
+            && accessibility.serve(app, now)
+        {
+            request_redraw_once(&window, &mut self.primary_redraw_pending);
         }
 
         if initial_present_redraw_needed(
@@ -6748,10 +6740,16 @@ impl ApplicationHandler for App {
                 .flatten()
                 .min(),
                 has_active_animations,
-                next_event_time: [primary_next_event_time, native_next_event_time]
-                    .into_iter()
-                    .flatten()
-                    .min(),
+                next_event_time: [
+                    primary_next_event_time,
+                    native_next_event_time,
+                    self.accessibility.as_ref().and_then(
+                        crate::desktop_accessibility::DesktopAccessibilityBridge::wake_deadline,
+                    ),
+                ]
+                .into_iter()
+                .flatten()
+                .min(),
             },
         );
 

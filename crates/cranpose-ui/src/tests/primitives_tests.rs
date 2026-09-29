@@ -607,10 +607,7 @@ fn layout_column_produces_expected_measurements() {
                 move || {
                     let id = Text("Hello", Modifier::empty(), TextStyle::default());
                     *text_id_capture.borrow_mut() = Some(id);
-                    Spacer(Size {
-                        width: 0.0,
-                        height: 30.0,
-                    });
+                    Spacer(Modifier::empty().size_points(0.0, 30.0));
                 },
             );
         })
@@ -1610,14 +1607,8 @@ fn fill_max_width_tracks_bounded_parent_width() {
                                 Modifier::empty().fill_max_width(),
                                 RowSpec::default(),
                                 move || {
-                                    Spacer(Size {
-                                        width: 100.0,
-                                        height: 20.0,
-                                    });
-                                    Spacer(Size {
-                                        width: 100.0,
-                                        height: 20.0,
-                                    });
+                                    Spacer(Modifier::empty().size_points(100.0, 20.0));
+                                    Spacer(Modifier::empty().size_points(100.0, 20.0));
                                 },
                             ));
                         },
@@ -1716,14 +1707,10 @@ fn wrap_column_with_fill_child_uses_bounded_width() {
                         Modifier::empty().fill_max_width(),
                         RowSpec::default(),
                         move || {
-                            *first_inner.borrow_mut() = Some(Spacer(Size {
-                                width: 80.0,
-                                height: 24.0,
-                            }));
-                            *second_inner.borrow_mut() = Some(Spacer(Size {
-                                width: 40.0,
-                                height: 24.0,
-                            }));
+                            *first_inner.borrow_mut() =
+                                Some(Spacer(Modifier::empty().size_points(80.0, 24.0)));
+                            *second_inner.borrow_mut() =
+                                Some(Spacer(Modifier::empty().size_points(40.0, 24.0)));
                         },
                     ));
                 },
@@ -1830,14 +1817,8 @@ fn fill_child_respects_explicit_parent_width() {
                         Modifier::empty().fill_max_width(),
                         RowSpec::default(),
                         move || {
-                            Spacer(Size {
-                                width: 60.0,
-                                height: 32.0,
-                            });
-                            Spacer(Size {
-                                width: 40.0,
-                                height: 32.0,
-                            });
+                            Spacer(Modifier::empty().size_points(60.0, 32.0));
+                            Spacer(Modifier::empty().size_points(40.0, 32.0));
                         },
                     ));
                 },
@@ -1920,10 +1901,8 @@ fn fill_max_height_child_clamps_to_parent() {
                         Modifier::empty().fill_max_height(),
                         ColumnSpec::default(),
                         move || {
-                            *leaf_inner.borrow_mut() = Some(Spacer(Size {
-                                width: 60.0,
-                                height: 40.0,
-                            }));
+                            *leaf_inner.borrow_mut() =
+                                Some(Spacer(Modifier::empty().size_points(60.0, 40.0)));
                         },
                     ));
                 },
@@ -2045,10 +2024,7 @@ fn modifier_chain_size_enforcement() {
                 }),
                 BoxSpec::default(),
                 || {
-                    Spacer(Size {
-                        width: 100.0,
-                        height: 100.0,
-                    });
+                    Spacer(Modifier::empty().size_points(100.0, 100.0));
                 },
             ));
         })
@@ -2101,10 +2077,7 @@ fn modifier_chain_padding_then_size() {
                 }),
                 BoxSpec::default(),
                 || {
-                    Spacer(Size {
-                        width: 200.0,
-                        height: 150.0,
-                    });
+                    Spacer(Modifier::empty().size_points(200.0, 150.0));
                 },
             ));
         })
@@ -2158,10 +2131,7 @@ fn modifier_chain_size_then_padding() {
                     .padding(10.0),
                 BoxSpec::default(),
                 || {
-                    Spacer(Size {
-                        width: 200.0,
-                        height: 150.0,
-                    });
+                    Spacer(Modifier::empty().size_points(200.0, 150.0));
                 },
             ));
         })
@@ -2230,9 +2200,9 @@ fn flow_row_widget_wraps_spacers_and_applies_spacing() {
                 move || {
                     let mut ids = children_capture.borrow_mut();
                     ids.clear();
-                    ids.push(Spacer(Size::new(40.0, 20.0)));
-                    ids.push(Spacer(Size::new(40.0, 30.0)));
-                    ids.push(Spacer(Size::new(40.0, 20.0)));
+                    ids.push(Spacer(Modifier::empty().size_points(40.0, 20.0)));
+                    ids.push(Spacer(Modifier::empty().size_points(40.0, 30.0)));
+                    ids.push(Spacer(Modifier::empty().size_points(40.0, 20.0)));
                 },
             ));
         })

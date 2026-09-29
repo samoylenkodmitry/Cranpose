@@ -8,7 +8,7 @@ use cranpose_ui::{
     composable,
     widgets::{LazyColumn, LazyColumnSpec},
     Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii,
-    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    LinearArrangement, Modifier, Row, RowSpec, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Default, PartialEq)]
@@ -181,10 +181,7 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
                         Color(0.9, 0.3, 0.9, 1.0),
                     ];
                     for i in 0..box_count {
-                        Spacer(Size {
-                            width: 12.0,
-                            height: 12.0,
-                        });
+                        Spacer(Modifier::empty().size_points(12.0, 12.0));
                         let color = colors[i % colors.len()];
                         Text(
                             "■",
@@ -238,10 +235,7 @@ pub fn lazy_list_example() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             let count = clamp_demo_item_count(item_count.get());
             Row(
@@ -359,10 +353,7 @@ pub fn lazy_list_example() {
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             let count = clamp_demo_item_count(item_count.get());
             let list_container_modifier = Modifier::empty()

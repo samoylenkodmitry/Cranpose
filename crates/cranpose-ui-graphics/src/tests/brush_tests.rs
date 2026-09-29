@@ -219,3 +219,9 @@ fn gradient_color_stops_are_stored() {
         _ => panic!("expected LinearGradient"),
     }
 }
+
+#[test]
+fn a_colour_converts_into_a_solid_brush() {
+    let color = Color(0.1, 0.2, 0.3, 0.4);
+    assert_eq!(Brush::from(color), Brush::solid(color));
+}

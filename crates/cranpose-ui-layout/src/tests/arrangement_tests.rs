@@ -95,3 +95,34 @@ fn spaced_by_keeps_every_child_inside_the_container() {
         [0.0, 100.0]
     );
 }
+
+#[test]
+fn spaced_by_aligned_places_the_spaced_block_by_its_alignment() {
+    let arrange = |arrangement: LinearArrangement, total: f32| {
+        let mut positions = [0.0; 3];
+        arrangement.arrange(1.0, total, &[10.0, 20.0, 5.0], &mut positions);
+        positions
+    };
+    // 10 + 4 + 20 + 4 + 5 = 43 of 100: 57 left over.
+    let end = LinearArrangement::spaced_by_aligned(4.0, crate::HorizontalAlignment::End);
+    assert_eq!(arrange(end, 100.0), [57.0, 71.0, 95.0]);
+    let center =
+        LinearArrangement::spaced_by_aligned(4.0, crate::VerticalAlignment::CenterVertically);
+    assert_eq!(
+        arrange(center, 100.0),
+        [29.0, 43.0, 67.0],
+        "57 / 2 rounds half up"
+    );
+    let start = LinearArrangement::spaced_by_aligned(4.0, crate::HorizontalAlignment::Start);
+    assert_eq!(
+        arrange(start, 100.0),
+        arrange(LinearArrangement::spaced_by(4.0), 100.0)
+    );
+    // A block that overflows is placed as plain spacing places it.
+    assert_eq!(
+        arrange(end, 30.0),
+        arrange(LinearArrangement::spaced_by(4.0), 30.0)
+    );
+    assert!(end.is_spaced());
+    assert_eq!(end.spacing(2.0), 4.0);
+}
