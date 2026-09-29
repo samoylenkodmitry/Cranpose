@@ -69,7 +69,7 @@ impl VectorPath {
         Ok(Self::from_subpaths(subpaths, fill_rule))
     }
 
-    fn from_subpaths(subpaths: Vec<Vec<Point>>, fill_rule: PathFillRule) -> Self {
+    pub(crate) fn from_subpaths(subpaths: Vec<Vec<Point>>, fill_rule: PathFillRule) -> Self {
         let mut min = Point::new(f32::INFINITY, f32::INFINITY);
         let mut max = Point::new(f32::NEG_INFINITY, f32::NEG_INFINITY);
         for point in subpaths.iter().flatten() {
@@ -427,11 +427,18 @@ impl PathBuilder {
     }
 
     fn line_to(&mut self, point: Point) {
+        self.begin_segment();
+        self.current.push(point);
+        self.position = point;
+    }
+
+    /// Starts the current polyline at the pen if nothing has, and returns
+    /// where the next segment starts.
+    fn begin_segment(&mut self) -> Point {
         if self.current.is_empty() {
             self.current.push(self.position);
         }
-        self.current.push(point);
-        self.position = point;
+        self.position
     }
 
     fn close(&mut self) {
@@ -581,39 +588,53 @@ fn reflect(origin: Point, point: Point) -> Point {
 }
 
 fn emit_cubic(builder: &mut PathBuilder, c1: Point, c2: Point, end: Point) {
-    let start = builder.position;
-    flatten_cubic(builder, start, c1, c2, end, 0);
+    let start = builder.begin_segment();
+    flatten_cubic_into(&mut builder.current, start, c1, c2, end);
     builder.position = end;
     builder.last_cubic_control = Some(c2);
     builder.last_quad_control = None;
 }
 
 fn emit_quad(builder: &mut PathBuilder, control: Point, end: Point) {
-    let start = builder.position;
-    let c1 = Point::new(
-        start.x + 2.0 / 3.0 * (control.x - start.x),
-        start.y + 2.0 / 3.0 * (control.y - start.y),
-    );
-    let c2 = Point::new(
-        end.x + 2.0 / 3.0 * (control.x - end.x),
-        end.y + 2.0 / 3.0 * (control.y - end.y),
-    );
-    flatten_cubic(builder, start, c1, c2, end, 0);
+    let start = builder.begin_segment();
+    let (c1, c2) = quad_as_cubic(start, control, end);
+    flatten_cubic_into(&mut builder.current, start, c1, c2, end);
     builder.position = end;
     builder.last_quad_control = Some(control);
     builder.last_cubic_control = None;
 }
 
-fn flatten_cubic(
-    builder: &mut PathBuilder,
+/// The cubic controls that trace the quadratic curve from `start` through
+/// `control` to `end`.
+pub(crate) fn quad_as_cubic(start: Point, control: Point, end: Point) -> (Point, Point) {
+    (
+        Point::new(
+            start.x + 2.0 / 3.0 * (control.x - start.x),
+            start.y + 2.0 / 3.0 * (control.y - start.y),
+        ),
+        Point::new(
+            end.x + 2.0 / 3.0 * (control.x - end.x),
+            end.y + 2.0 / 3.0 * (control.y - end.y),
+        ),
+    )
+}
+
+/// Appends the cubic from `p0` to `p3` to `points` as a polyline within
+/// [`FLATTEN_TOLERANCE`] of the curve, `p0` left out: the caller's polyline
+/// already ends there.
+pub(crate) fn flatten_cubic_into(
+    points: &mut Vec<Point>,
     p0: Point,
     p1: Point,
     p2: Point,
     p3: Point,
-    depth: u32,
 ) {
+    flatten_cubic(points, p0, p1, p2, p3, 0);
+}
+
+fn flatten_cubic(points: &mut Vec<Point>, p0: Point, p1: Point, p2: Point, p3: Point, depth: u32) {
     if depth >= MAX_FLATTEN_DEPTH || cubic_is_flat(p0, p1, p2, p3) {
-        builder.line_to(p3);
+        points.push(p3);
         return;
     }
 
@@ -625,8 +646,8 @@ fn flatten_cubic(
     let p123 = mid(p12, p23);
     let p0123 = mid(p012, p123);
 
-    flatten_cubic(builder, p0, p01, p012, p0123, depth + 1);
-    flatten_cubic(builder, p0123, p123, p23, p3, depth + 1);
+    flatten_cubic(points, p0, p01, p012, p0123, depth + 1);
+    flatten_cubic(points, p0123, p123, p23, p3, depth + 1);
 }
 
 /// Flatness test: both control points close enough to the chord.
