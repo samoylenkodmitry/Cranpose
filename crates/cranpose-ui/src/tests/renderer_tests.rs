@@ -149,7 +149,9 @@ fn renderer_translates_draw_commands() {
                     saw_translated = true;
                 }
             }
-            DrawPrimitive::Image { rect, .. } | DrawPrimitive::Arc { rect, .. } => {
+            DrawPrimitive::Image { rect, .. }
+            | DrawPrimitive::Arc { rect, .. }
+            | DrawPrimitive::Line { rect, .. } => {
                 if rect.x >= 10.0 && rect.y >= 10.0 {
                     saw_translated = true;
                 }
@@ -163,7 +165,8 @@ fn renderer_translates_draw_commands() {
                 DrawPrimitive::Rect { rect, .. }
                 | DrawPrimitive::RoundRect { rect, .. }
                 | DrawPrimitive::Image { rect, .. }
-                | DrawPrimitive::Arc { rect, .. } => {
+                | DrawPrimitive::Arc { rect, .. }
+                | DrawPrimitive::Line { rect, .. } => {
                     if rect.x >= 10.0 && rect.y >= 10.0 {
                         saw_translated = true;
                     }
@@ -199,7 +202,8 @@ fn renderer_translates_draw_commands() {
             DrawPrimitive::Rect { rect, .. }
             | DrawPrimitive::RoundRect { rect, .. }
             | DrawPrimitive::Image { rect, .. }
-            | DrawPrimitive::Arc { rect, .. } => {
+            | DrawPrimitive::Arc { rect, .. }
+            | DrawPrimitive::Line { rect, .. } => {
                 assert!(rect.x >= 10.0);
                 assert!(rect.y >= 10.0);
             }
@@ -211,7 +215,8 @@ fn renderer_translates_draw_commands() {
                 DrawPrimitive::Rect { rect, .. }
                 | DrawPrimitive::RoundRect { rect, .. }
                 | DrawPrimitive::Image { rect, .. }
-                | DrawPrimitive::Arc { rect, .. } => {
+                | DrawPrimitive::Arc { rect, .. }
+                | DrawPrimitive::Line { rect, .. } => {
                     assert!(rect.x >= 10.0);
                     assert!(rect.y >= 10.0);
                 }

@@ -346,6 +346,20 @@ fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
             hash_optional_stroke(*stroke, state);
             hash_f32_bits(*inner_radius, state);
         }
+        DrawPrimitive::Line {
+            rect,
+            brush,
+            start,
+            end,
+            stroke,
+        } => {
+            9u8.hash(state);
+            hash_rect(*rect, state);
+            hash_brush(brush, state);
+            hash_point(*start, state);
+            hash_point(*end, state);
+            hash_optional_stroke(Some(*stroke), state);
+        }
         DrawPrimitive::Image {
             rect,
             image,

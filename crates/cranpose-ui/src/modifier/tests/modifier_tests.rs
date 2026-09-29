@@ -978,7 +978,8 @@ fn primitive_rect(primitive: &DrawPrimitive) -> Option<cranpose_ui_graphics::Rec
         DrawPrimitive::Rect { rect, .. }
         | DrawPrimitive::RoundRect { rect, .. }
         | DrawPrimitive::Image { rect, .. }
-        | DrawPrimitive::Arc { rect, .. } => Some(*rect),
+        | DrawPrimitive::Arc { rect, .. }
+        | DrawPrimitive::Line { rect, .. } => Some(*rect),
         DrawPrimitive::Text(text) => Some(text.rect),
         DrawPrimitive::Blend { primitive, .. } => primitive_rect(primitive),
         DrawPrimitive::Shadow(ShadowPrimitive::Drop { shape, .. }) => primitive_rect(shape),

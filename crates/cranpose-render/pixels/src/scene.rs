@@ -2,10 +2,11 @@ use std::rc::Rc;
 
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
+use cranpose_render_common::primitive_emit::ShapeDrawParams;
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
-    ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect,
-    RoundedCornerShape, Stroke,
+    ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, LineGeometry,
+    Point, Rect, RoundedCornerShape, Stroke,
 };
 
 #[derive(Clone)]
@@ -17,6 +18,7 @@ pub(crate) struct DrawShape {
     pub shape: Option<RoundedCornerShape>,
     pub stroke: Option<Stroke>,
     pub arc: Option<ArcGeometry>,
+    pub line: Option<LineGeometry>,
     pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
@@ -86,6 +88,7 @@ impl RasterScene {
             shape,
             stroke: None,
             arc: None,
+            line: None,
             z_index,
             clip,
             blend_mode,
@@ -110,36 +113,30 @@ impl RasterScene {
             shape,
             stroke: None,
             arc: None,
+            line: None,
             z_index,
             clip,
             blend_mode,
         });
     }
 
-    #[expect(clippy::too_many_arguments)]
-    pub fn push_shape_with_stroke_and_arc(
-        &mut self,
-        rect: Rect,
-        brush: Brush,
-        shape: Option<RoundedCornerShape>,
-        stroke: Option<Stroke>,
-        arc: Option<ArcGeometry>,
-        clip: Option<Rect>,
-        blend_mode: BlendMode,
-    ) {
+    /// Queues a shape an emitted primitive resolved: a rect, rounded rect,
+    /// stroke, arc band or line segment.
+    pub fn push_shape_params(&mut self, params: ShapeDrawParams) {
         let z_index = self.next_z;
         self.next_z += 1;
         self.shapes.push(DrawShape {
-            rect,
+            rect: params.rect,
             snap_anchor: None,
             snap_to_pixel_grid: false,
-            brush,
-            shape,
-            stroke,
-            arc,
+            brush: params.brush.into_brush(),
+            shape: params.shape,
+            stroke: params.stroke,
+            arc: params.arc,
+            line: params.line,
             z_index,
-            clip,
-            blend_mode,
+            clip: params.clip,
+            blend_mode: params.blend_mode,
         });
     }
 

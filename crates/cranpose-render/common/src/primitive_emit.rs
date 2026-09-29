@@ -5,8 +5,8 @@ use cranpose_ui::text::{
 };
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, GraphicsLayer,
-    ImageBitmap, ImageSampling, Point, Rect, RoundedCornerShape, ShadowPrimitive, Stroke,
-    TextPrimitive, arc_band, inflate_rect,
+    ImageBitmap, ImageSampling, LineGeometry, Point, Rect, RoundedCornerShape, ShadowPrimitive,
+    Stroke, TextPrimitive, arc_band, inflate_rect,
 };
 
 use crate::{
@@ -44,6 +44,9 @@ pub struct ShapeDrawParams {
     /// `Some` replaces the rect geometry entirely with a circular band. The
     /// center and radii are in `local_rect` units.
     pub arc: Option<ArcGeometry>,
+    /// `Some` replaces the rect geometry entirely with a stroked segment, its
+    /// ends and width in `local_rect` units.
+    pub line: Option<LineGeometry>,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
     pub motion_context_animated: bool,
@@ -233,6 +236,7 @@ pub fn rect_shape_params(
         shape: None,
         stroke,
         arc: None,
+        line: None,
         clip,
         blend_mode,
         motion_context_animated,
@@ -266,6 +270,7 @@ pub fn round_rect_shape_params(
         shape: Some(shape),
         stroke,
         arc: None,
+        line: None,
         clip,
         blend_mode,
         motion_context_animated,
@@ -319,6 +324,50 @@ pub fn arc_shape_params(
         shape: None,
         stroke: None,
         arc: Some(arc.scaled_about(arc_center, scale)),
+        line: None,
+        clip,
+        blend_mode,
+        motion_context_animated,
+    })
+}
+
+/// The [`DrawPrimitive::Line`] arm of [`emit_draw_primitive`]: the segment's
+/// ends placed by the layer's transform, its width scaled by the layer's
+/// uniform scale; see [`rect_shape_params`].
+#[expect(clippy::too_many_arguments)]
+pub fn line_shape_params(
+    brush: &Brush,
+    start: Point,
+    end: Point,
+    stroke: Stroke,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+    blend_mode: BlendMode,
+    motion_context_animated: bool,
+) -> Option<ShapeDrawParams> {
+    let line = LineGeometry::new(start, end, stroke);
+    if line.is_degenerate() {
+        return None;
+    }
+    let place = |point: Point| {
+        apply_layer_affine_to_point(
+            Point::new(point.x + layer_bounds.x, point.y + layer_bounds.y),
+            layer_bounds,
+            layer,
+        )
+    };
+    let draw_rect = line.bounds().translate(layer_bounds.x, layer_bounds.y);
+    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+    Some(ShapeDrawParams {
+        rect: quad_bounds(quad),
+        local_rect: apply_layer_affine_to_rect(draw_rect, layer_bounds, layer),
+        quad,
+        brush: resolve_layer_brush(brush, layer),
+        shape: None,
+        stroke: None,
+        arc: None,
+        line: Some(line.placed(place(start), place(end), layer_uniform_scale(layer))),
         clip,
         blend_mode,
         motion_context_animated,
@@ -405,6 +454,27 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 *sweep_angle,
                 *stroke,
                 *inner_radius,
+                layer_bounds,
+                layer,
+                clip,
+                blend_mode.unwrap_or(BlendMode::SrcOver),
+                motion_context_animated,
+            ) {
+                sink.push_shape(params);
+            }
+        }
+        DrawPrimitive::Line {
+            brush,
+            start,
+            end,
+            stroke,
+            ..
+        } => {
+            if let Some(params) = line_shape_params(
+                brush,
+                *start,
+                *end,
+                *stroke,
                 layer_bounds,
                 layer,
                 clip,

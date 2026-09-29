@@ -55,6 +55,7 @@ pub(crate) fn apply_draw_commands(
             shape_primitive @ (DrawPrimitive::Rect { .. }
             | DrawPrimitive::RoundRect { .. }
             | DrawPrimitive::Arc { .. }
+            | DrawPrimitive::Line { .. }
             | DrawPrimitive::Text(_)) => {
                 super::push_draw_primitive(
                     &shape_primitive,

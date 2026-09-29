@@ -510,3 +510,129 @@ fn angles_told_normal_by_their_bits_come_out_as_the_float_compares_leave_them() 
         assert_eq!(fast.cap, compared.cap);
     }
 }
+
+fn line(start: (f32, f32), end: (f32, f32), width: f32, cap: StrokeCap) -> LineGeometry {
+    LineGeometry::new(
+        Point::new(start.0, start.1),
+        Point::new(end.0, end.1),
+        Stroke {
+            width,
+            cap,
+            join: StrokeJoin::Miter,
+        },
+    )
+}
+
+#[test]
+fn a_line_draws_nothing_without_width_finite_ends_or_length_between_butt_caps() {
+    assert!(line((0.0, 0.0), (10.0, 0.0), 0.0, StrokeCap::Butt).is_degenerate());
+    assert!(line((0.0, 0.0), (f32::NAN, 0.0), 2.0, StrokeCap::Butt).is_degenerate());
+    assert!(line((4.0, 4.0), (4.0, 4.0), 2.0, StrokeCap::Butt).is_degenerate());
+    assert!(
+        !line((4.0, 4.0), (4.0, 4.0), 2.0, StrokeCap::Round).is_degenerate(),
+        "a round cap draws a dot where the segment has no length"
+    );
+    assert!(!line((0.0, 0.0), (10.0, 0.0), 2.0, StrokeCap::Butt).is_degenerate());
+}
+
+#[test]
+fn a_line_frame_is_its_midpoint_direction_and_half_length() {
+    let frame = line((2.0, 3.0), (8.0, 11.0), 2.0, StrokeCap::Butt).frame();
+    assert_eq!(frame.center, Point::new(5.0, 7.0));
+    assert_eq!(frame.direction, Point::new(0.6, 0.8));
+    assert_eq!(frame.half_length, 5.0);
+    assert_eq!(
+        line((0.0, 0.0), (9.0, 0.0), 6.0, StrokeCap::Butt).cap_reach(),
+        0.0
+    );
+    assert_eq!(
+        line((0.0, 0.0), (9.0, 0.0), 6.0, StrokeCap::Square).cap_reach(),
+        3.0
+    );
+    assert_eq!(
+        line((0.0, 0.0), (9.0, 0.0), 6.0, StrokeCap::Round).cap_reach(),
+        3.0
+    );
+    let dot = line((4.0, 4.0), (4.0, 4.0), 2.0, StrokeCap::Round).frame();
+    assert_eq!(
+        (dot.direction, dot.half_length),
+        (Point::new(1.0, 0.0), 0.0)
+    );
+}
+
+#[test]
+fn a_slanted_square_end_reaches_past_half_the_width_and_a_round_one_does_not() {
+    let (start, end) = ((0.0, 0.0), (30.0, 40.0));
+    let square = line(start, end, 10.0, StrokeCap::Square);
+    let reach = square.reach();
+    assert!((reach.x - (0.6 * 5.0 + 0.8 * 5.0)).abs() < 1e-5);
+    assert!((reach.y - (0.8 * 5.0 + 0.6 * 5.0)).abs() < 1e-5);
+    let round = line(start, end, 10.0, StrokeCap::Round);
+    assert_eq!(round.reach(), Point::new(5.0, 5.0));
+    let butt = line(start, end, 10.0, StrokeCap::Butt);
+    assert!((butt.reach().x - 0.8 * 5.0).abs() < 1e-5);
+    assert_eq!(
+        line((0.0, 5.0), (20.0, 5.0), 4.0, StrokeCap::Butt).bounds(),
+        Rect {
+            x: 0.0,
+            y: 3.0,
+            width: 20.0,
+            height: 4.0,
+        }
+    );
+}
+
+#[test]
+fn a_line_covers_whole_pixels_inside_half_at_its_edges_and_none_past_them() {
+    let level = line((10.0, 10.0), (20.0, 10.0), 2.0, StrokeCap::Butt);
+    assert_eq!(level.coverage(Point::new(15.0, 10.0)), 1.0);
+    assert_eq!(
+        level.coverage(Point::new(15.0, 11.0)),
+        0.5,
+        "a pixel centred on the edge is half covered"
+    );
+    assert_eq!(level.coverage(Point::new(15.0, 12.0)), 0.0);
+    assert_eq!(level.coverage(Point::new(20.0, 10.0)), 0.5, "the butt end");
+    assert_eq!(level.coverage(Point::new(21.0, 10.0)), 0.0);
+    let square = line((10.0, 10.0), (20.0, 10.0), 2.0, StrokeCap::Square);
+    assert_eq!(square.coverage(Point::new(20.5, 10.0)), 1.0);
+    assert_eq!(
+        square.coverage(Point::new(21.0, 10.0)),
+        0.5,
+        "a square end reaches past"
+    );
+    let round = line((10.0, 10.0), (20.0, 10.0), 4.0, StrokeCap::Round);
+    assert_eq!(
+        round.coverage(Point::new(21.0, 10.0)),
+        1.0,
+        "inside the disc"
+    );
+    assert_eq!(
+        round.coverage(Point::new(22.0, 10.0)),
+        0.5,
+        "on the disc's edge"
+    );
+    assert_eq!(
+        round.coverage(Point::new(21.5, 11.5)),
+        (0.5 - (1.5f32 * 1.5 * 2.0).sqrt() + 2.0).clamp(0.0, 1.0),
+        "off the axis the disc is round"
+    );
+}
+
+#[test]
+fn a_placed_line_moves_its_ends_and_scales_its_width() {
+    let placed = line((0.0, 0.0), (10.0, 0.0), 2.0, StrokeCap::Round).placed(
+        Point::new(5.0, 5.0),
+        Point::new(5.0, 25.0),
+        3.0,
+    );
+    assert_eq!(
+        (placed.start, placed.end, placed.half_width, placed.cap),
+        (
+            Point::new(5.0, 5.0),
+            Point::new(5.0, 25.0),
+            3.0,
+            StrokeCap::Round
+        )
+    );
+}

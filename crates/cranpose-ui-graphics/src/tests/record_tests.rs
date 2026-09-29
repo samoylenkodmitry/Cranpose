@@ -219,6 +219,24 @@ fn every_primitive() -> Vec<DrawPrimitive> {
             brush: solid(),
             stroke: None,
         },
+        DrawPrimitive::Line {
+            rect: rect(1.0, 2.0, 10.0, 5.0),
+            brush: linear_explicit(),
+            start: Point::new(1.0, 2.0),
+            end: Point::new(11.0, 7.0),
+            stroke: Stroke {
+                width: 4.0,
+                cap: StrokeCap::Square,
+                join: StrokeJoin::Miter,
+            },
+        },
+        DrawPrimitive::Line {
+            rect: rect(3.0, 3.0, 0.0, 0.0),
+            brush: solid(),
+            start: Point::new(3.0, 3.0),
+            end: Point::new(3.0, 3.0),
+            stroke: Stroke::new(2.0),
+        },
     ]
 }
 
@@ -242,8 +260,8 @@ fn shapes_and_blended_shapes_are_records_everything_else_is_not() {
     let recording = CommandRecording::from_primitives(every_primitive());
     assert_eq!(
         recording.shapes().len(),
-        8,
-        "six shapes, one blended, one after content"
+        10,
+        "six shapes and one blended, then a rect and two lines after content"
     );
     assert_eq!(
         recording.others().len(),
@@ -251,7 +269,7 @@ fn shapes_and_blended_shapes_are_records_everything_else_is_not() {
         "a nested blend, a blended image, an image, a text and a shadow"
     );
     assert_eq!(recording.content_markers(), 1);
-    assert_eq!(recording.len(), 14);
+    assert_eq!(recording.len(), 16);
 }
 
 #[test]
@@ -1075,5 +1093,74 @@ fn a_segment_keeps_every_interior_flag_its_records_would_set() {
         (segment.interiors, segment.occluders, segment.bare_interiors),
         (true, true, true),
         "a translucent card joining opaque ones still leaves its interior bare"
+    );
+}
+
+#[test]
+fn a_drawn_line_records_as_a_line_and_its_slanted_square_ends_widen_the_bounds() {
+    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0));
+    let stroke = Stroke {
+        width: 10.0,
+        cap: StrokeCap::Square,
+        join: StrokeJoin::Miter,
+    };
+    let (start, end) = (Point::new(20.0, 20.0), Point::new(50.0, 60.0));
+    scope.draw_line(solid(), start, end, stroke);
+    let line = crate::LineGeometry::new(start, end, stroke);
+    assert_eq!(
+        scope.into_primitives(),
+        vec![DrawPrimitive::Line {
+            rect: line.end_bounds(),
+            brush: solid(),
+            start,
+            end,
+            stroke,
+        }]
+    );
+
+    let mut recorder = ShapeRecorder::default();
+    let coverage = recorder.push_line(&line, &solid(), stroke, BlendMode::SrcOver);
+    assert_eq!(coverage, line.bounds());
+    assert!(
+        coverage.x < line.end_bounds().x - stroke.width * 0.5,
+        "a square end on a slant reaches past half the width"
+    );
+    assert_eq!(recorder.bounds(), Some(line.bounds()));
+    let record = recorder.tables().shapes.get(0).expect("the line's record");
+    assert_eq!(record.fragment_kind(), FRAGMENT_KIND_LINE);
+    assert_eq!(record.line_geometry(), Some(line));
+    assert_eq!(record.coverage_rect(), line.bounds());
+}
+
+#[test]
+fn a_draw_scope_skips_a_line_that_covers_nothing() {
+    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0));
+    let point = Point::new(8.0, 8.0);
+    scope.draw_line(solid(), point, point, Stroke::new(4.0));
+    scope.draw_line(solid(), point, Point::new(20.0, 8.0), Stroke::new(0.0));
+    assert!(scope.into_primitives().is_empty());
+}
+
+#[test]
+fn a_blended_line_keeps_its_blend_mode() {
+    let mut scope = crate::DrawScopeDefault::new(crate::Size::new(64.0, 64.0));
+    let (start, end, stroke) = (
+        Point::new(4.0, 4.0),
+        Point::new(40.0, 4.0),
+        Stroke::new(2.0),
+    );
+    scope.draw_line_blend(solid(), start, end, stroke, BlendMode::Plus);
+    assert_eq!(
+        scope.into_primitives(),
+        vec![DrawPrimitive::Blend {
+            primitive: Box::new(DrawPrimitive::Line {
+                rect: crate::LineGeometry::new(start, end, stroke).end_bounds(),
+                brush: solid(),
+                start,
+                end,
+                stroke,
+            }),
+            blend_mode: BlendMode::Plus,
+        }]
     );
 }

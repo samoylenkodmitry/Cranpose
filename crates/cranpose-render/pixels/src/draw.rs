@@ -10,7 +10,9 @@ use cranpose_render_common::{
     software_text_raster::rasterize_text_to_image, text_measure::SoftwareTextResources,
 };
 use cranpose_ui::text::TextMotion;
-use cranpose_ui_graphics::{BlendMode, ColorFilter, Point, Rect};
+use cranpose_ui_graphics::{
+    ArcGeometry, BlendMode, ColorFilter, CornerRadii, LineGeometry, Point, Rect, StrokeJoin,
+};
 
 use crate::{
     pipeline,
@@ -207,34 +209,12 @@ fn draw_shape(
     } else {
         rect
     };
-    if draw.arc.is_some_and(|arc| arc.is_degenerate())
-        || draw.stroke.is_some_and(|stroke| !stroke.is_visible())
-    {
+    let Some(coverage) = ShapeCoverage::of(draw, rect, snap_delta) else {
         return;
-    }
-
+    };
     let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, width, height) else {
         return;
     };
-    let Rect {
-        width: rect_width,
-        height: rect_height,
-        ..
-    } = rect;
-
-    let arc = draw.arc.map(|mut arc| {
-        arc.center.x += snap_delta.x;
-        arc.center.y += snap_delta.y;
-        arc
-    });
-    let stroke = draw.stroke;
-    let stroke_outset = stroke.map_or(0.0, |stroke| stroke.half_width());
-    let resolved_shape = draw.shape.map(|shape| {
-        shape.resolve(
-            (rect_width - stroke_outset * 2.0).max(0.0),
-            (rect_height - stroke_outset * 2.0).max(0.0),
-        )
-    });
 
     for py in clip_bounds.min_y..clip_bounds.max_y {
         if py < 0 || py >= height as i32 {
@@ -246,25 +226,7 @@ fn draw_shape(
             }
             let center_x = px as f32 + 0.5;
             let center_y = py as f32 + 0.5;
-
-            let coverage = if let Some(arc) = arc.as_ref() {
-                shape_sdf::arc_coverage(Point::new(center_x, center_y), arc)
-            } else if let Some(stroke) = stroke {
-                shape_sdf::stroked_rect_coverage(
-                    Point::new(center_x, center_y),
-                    rect,
-                    resolved_shape,
-                    stroke.half_width(),
-                    stroke.join,
-                )
-            } else {
-                if let Some(ref radii) = resolved_shape
-                    && !point_in_resolved_rounded_rect(center_x, center_y, rect, radii)
-                {
-                    continue;
-                }
-                1.0
-            };
+            let coverage = coverage.at(Point::new(center_x, center_y));
             if coverage <= 0.0 {
                 continue;
             }
@@ -283,6 +245,79 @@ fn draw_shape(
                 draw.blend_mode,
                 diagnostics,
             );
+        }
+    }
+}
+
+/// How much of a pixel a shape covers, decided once per shape: a line, an
+/// arc band, a stroked outline or a fill, placed where its snap moved it.
+enum ShapeCoverage {
+    Line(LineGeometry),
+    Arc(ArcGeometry),
+    Stroke {
+        rect: Rect,
+        radii: Option<CornerRadii>,
+        half_width: f32,
+        join: StrokeJoin,
+    },
+    Fill {
+        rect: Rect,
+        radii: Option<CornerRadii>,
+    },
+}
+
+impl ShapeCoverage {
+    /// The coverage of `draw` laid at `rect`, its line or arc moved by
+    /// `snap_delta` as the rect was; `None` when it covers nothing.
+    fn of(draw: &crate::scene::DrawShape, rect: Rect, snap_delta: Point) -> Option<Self> {
+        let shift = |point: Point| Point::new(point.x + snap_delta.x, point.y + snap_delta.y);
+        if let Some(line) = draw.line {
+            return (!line.is_degenerate())
+                .then(|| Self::Line(line.placed(shift(line.start), shift(line.end), 1.0)));
+        }
+        if let Some(arc) = draw.arc {
+            return (!arc.is_degenerate()).then(|| {
+                Self::Arc(ArcGeometry {
+                    center: shift(arc.center),
+                    ..arc
+                })
+            });
+        }
+        let outset = draw.stroke.map_or(0.0, |stroke| stroke.half_width());
+        let radii = draw.shape.map(|shape| {
+            shape.resolve(
+                (rect.width - outset * 2.0).max(0.0),
+                (rect.height - outset * 2.0).max(0.0),
+            )
+        });
+        match draw.stroke {
+            Some(stroke) if !stroke.is_visible() => None,
+            Some(stroke) => Some(Self::Stroke {
+                rect,
+                radii,
+                half_width: stroke.half_width(),
+                join: stroke.join,
+            }),
+            None => Some(Self::Fill { rect, radii }),
+        }
+    }
+
+    fn at(&self, point: Point) -> f32 {
+        match self {
+            Self::Line(line) => line.coverage(point),
+            Self::Arc(arc) => shape_sdf::arc_coverage(point, arc),
+            Self::Stroke {
+                rect,
+                radii,
+                half_width,
+                join,
+            } => shape_sdf::stroked_rect_coverage(point, *rect, *radii, *half_width, *join),
+            Self::Fill { rect, radii } => match radii {
+                Some(radii) if !point_in_resolved_rounded_rect(point.x, point.y, *rect, radii) => {
+                    0.0
+                }
+                _ => 1.0,
+            },
         }
     }
 }
