@@ -14,7 +14,7 @@ impl Modifier {
             info.add_property("width", format!("{width}"));
             info.add_property("brush", format!("{brush:?}"));
         });
-        let modifier = Self::with_element(BorderElement::new(width, brush.clone(), shape))
+        let modifier = Self::with_element(BorderElement::new(width, brush, shape))
             .with_inspector_metadata(metadata);
         self.then(modifier)
     }
