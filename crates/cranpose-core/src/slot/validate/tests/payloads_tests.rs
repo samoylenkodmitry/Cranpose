@@ -3,7 +3,7 @@ use std::any::TypeId;
 use super::*;
 use crate::{
     AnchorId,
-    slot::{GroupKey, PayloadAnchor, PayloadKind},
+    slot::{GroupKey, PayloadAnchor, PayloadKind, segments::SegmentItems},
 };
 
 fn one_payload_table() -> (SlotTable, AnchorId, PayloadAnchor) {
@@ -24,16 +24,19 @@ fn one_payload_table() -> (SlotTable, AnchorId, PayloadAnchor) {
         anchor: owner,
         scope_id: None,
     });
-    table.payloads.push(PayloadRecord {
-        owner,
-        anchor: payload_anchor,
-        type_id: TypeId::of::<i32>(),
-        type_name: std::any::type_name::<i32>(),
-        source: crate::slot::BRANCH_PATH_ROOT,
-        kind: PayloadKind::Internal,
-        value: Box::new(0_i32),
-        fresh: None,
-    });
+    table.payloads.insert_item(
+        table.payloads.len(),
+        PayloadRecord {
+            owner,
+            anchor: payload_anchor,
+            type_id: TypeId::of::<i32>(),
+            type_name: std::any::type_name::<i32>(),
+            source: crate::slot::BRANCH_PATH_ROOT,
+            kind: PayloadKind::Internal,
+            value: Box::new(0_i32),
+            fresh: None,
+        },
+    );
     table.anchors.set_active(owner, 0);
     table.payload_anchors.set_active(payload_anchor, owner, 0);
     (table, owner, payload_anchor)

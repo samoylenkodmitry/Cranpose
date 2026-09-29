@@ -158,6 +158,9 @@ pub struct SlotTableMutationDebugStats {
     pub segment_range_update_count: usize,
     pub segment_range_update_group_count: usize,
     pub segment_range_update_max_span: usize,
+    /// Bytes the payload storage moved to insert, remove, detach, restore or
+    /// reorder payloads.
+    pub payload_shift_bytes: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

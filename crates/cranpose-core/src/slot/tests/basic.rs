@@ -92,7 +92,10 @@ fn first_composition_records_group_value_and_node() {
     assert_eq!(harness.table.groups[0].node_len, 1);
     assert_eq!(harness.table.groups[0].subtree_len, 1);
     assert_eq!(harness.table.groups[0].subtree_node_count, 1);
-    let payload = harness.table.group_payload_record_at(0, 0);
+    let payload = harness
+        .table
+        .group_payload_record_at(0, 0)
+        .expect("test payload should resolve");
     assert_eq!(payload.type_id, TypeId::of::<i32>());
     assert_eq!(
         harness.table.group_node_record_at(0, 0).lifecycle,
@@ -350,7 +353,7 @@ fn take_all_drops_reserves_only_payload_count() {
     assert_eq!(drops.len(), 1);
     assert_eq!(drops.capacity(), drops.len());
     assert!(table.groups.is_empty());
-    assert!(table.payloads.is_empty());
+    assert_eq!(table.payloads.len(), 0);
     assert!(table.nodes.is_empty());
 }
 

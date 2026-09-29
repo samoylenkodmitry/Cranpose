@@ -63,6 +63,7 @@ impl SlotTable {
     }
 
     pub(crate) fn validate(&self) -> Result<(), SlotInvariantError> {
+        self.payloads.validate_integrity()?;
         let mut checks = ActiveSlotTreeChecks::new(self);
         validate_slot_tree(
             SlotTreeView {

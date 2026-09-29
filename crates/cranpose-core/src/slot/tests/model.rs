@@ -658,7 +658,7 @@ fn assert_model_matches_slot_table(
         let payload = harness
             .table
             .group_payload_records_at(group.index)
-            .first()
+            .next()
             .expect("model child payload must exist");
         let expected_payload = expected.payload();
         assert_eq!(

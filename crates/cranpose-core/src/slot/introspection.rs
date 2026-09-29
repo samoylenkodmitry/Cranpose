@@ -3,6 +3,7 @@ use std::mem;
 use super::{
     GroupRecord, SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup,
     SlotDebugScope, SlotDebugSnapshot, SlotTable, SlotTableLocalDebugStats,
+    SlotTableMutationDebugStats,
 };
 use crate::{Key, ScopeId};
 
@@ -13,7 +14,7 @@ impl SlotTable {
 
     pub fn heap_bytes(&self) -> usize {
         self.group_heap_bytes()
-            + self.payload_heap_bytes()
+            + self.payloads.heap_bytes()
             + self.node_heap_bytes()
             + self.anchors.heap_bytes()
             + self.payload_anchors.heap_bytes()
@@ -27,7 +28,7 @@ impl SlotTable {
             group_record_size: mem::size_of::<GroupRecord>(),
             group_heap_bytes: self.group_heap_bytes(),
             payload_count: self.total_payload_count(),
-            payload_capacity: self.payload_debug_capacity(),
+            payload_capacity: self.payloads.capacity(),
             active_payload_anchor_count: self.payload_anchors.active_len(),
             payload_anchor_slot_count: self.payload_anchors.slot_len(),
             detached_payload_anchor_count: self.payload_anchors.detached_len(),
@@ -47,7 +48,10 @@ impl SlotTable {
             anchor_heap_bytes: self.anchors.heap_bytes(),
             scope_index_count: self.scope_index.len(),
             scope_index_capacity: self.scope_index.capacity(),
-            mutation: self.diagnostics.mutation(),
+            mutation: SlotTableMutationDebugStats {
+                payload_shift_bytes: self.payloads.shift_bytes(),
+                ..self.diagnostics.mutation()
+            },
         }
     }
 
@@ -145,11 +149,7 @@ impl SlotTable {
             });
         }
         for (group_index, _) in self.groups.iter().enumerate() {
-            for (payload_index, payload) in self
-                .group_payload_records_at(group_index)
-                .iter()
-                .enumerate()
-            {
+            for (payload_index, payload) in self.group_payload_records_at(group_index).enumerate() {
                 rows.push(SlotDebugEntry {
                     kind: SlotDebugEntryKind::Payload,
                     path: format!("group[{group_index}].payload[{payload_index}]"),

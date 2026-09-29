@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, MovableIndex, NodeRecord, PayloadAnchorRegistry,
-    PayloadRecord, ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState,
-    debug::SlotTableDiagnostics,
+    ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState, debug::SlotTableDiagnostics,
+    payload_store::PayloadStore,
 };
 
 mod metadata;
@@ -34,7 +34,7 @@ pub(crate) struct SlotWriteSession<'a> {
 pub struct SlotTable {
     storage_id: SlotStorageIdentity,
     pub(super) groups: Vec<GroupRecord>,
-    pub(super) payloads: Vec<PayloadRecord>,
+    pub(super) payloads: PayloadStore,
     pub(super) nodes: Vec<NodeRecord>,
     pub(super) anchors: AnchorRegistry,
     pub(super) payload_anchors: PayloadAnchorRegistry,
@@ -49,7 +49,7 @@ impl SlotTable {
         Self {
             storage_id: SlotStorageIdentity::new(),
             groups: Vec::new(),
-            payloads: Vec::new(),
+            payloads: PayloadStore::default(),
             nodes: Vec::new(),
             anchors: AnchorRegistry::new(),
             payload_anchors: PayloadAnchorRegistry::new(),
@@ -93,7 +93,7 @@ impl SlotTable {
 
     pub(crate) fn compact_storage(&mut self) {
         self.groups.shrink_to_fit();
-        self.payloads.shrink_to_fit();
+        self.payloads.compact();
         self.nodes.shrink_to_fit();
         self.anchors.shrink_to_fit();
         self.payload_anchors.shrink_to_fit();
@@ -103,22 +103,19 @@ impl SlotTable {
 
     pub(crate) fn take_effect_drops(&mut self) -> Vec<DeferredDrop> {
         let mut drops = Vec::new();
-        for payload in &mut self.payloads {
-            let Some(fresh) = payload.fresh else {
-                continue;
-            };
-            let old = std::mem::replace(&mut payload.value, fresh());
-            drops.push(DeferredDrop::payload(old));
-        }
+        self.payloads.for_each_mut(|payload| {
+            if let Some(fresh) = payload.fresh {
+                let old = std::mem::replace(&mut payload.value, fresh());
+                drops.push(DeferredDrop::payload(old));
+            }
+        });
         drops
     }
 
     pub(crate) fn take_all_drops(&mut self) -> Vec<DeferredDrop> {
-        let payload_count = self.payloads.len();
-        let mut drops = Vec::with_capacity(payload_count);
-        for payload in self.payloads.drain(..).rev() {
-            drops.push(payload.into_deferred_drop());
-        }
+        let mut drops = Vec::with_capacity(self.payloads.len());
+        self.payloads
+            .drain_rev(|payload| drops.push(payload.into_deferred_drop()));
         self.groups.clear();
         self.nodes.clear();
         self.anchors.clear();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::slot::segments::SegmentItems;
 
 #[test]
 fn fast_integrity_rejects_active_anchor_count_mismatch() {
@@ -224,8 +225,14 @@ fn validate_reports_bad_depth_structurally() {
 #[test]
 fn validate_reports_payload_owner_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(478);
-    let payload_anchor = table.group_payload_record_at(0, 0).anchor;
-    table.group_payload_record_at_mut(0, 0).owner = AnchorId::INVALID;
+    let payload_anchor = table
+        .group_payload_record_at(0, 0)
+        .expect("test payload should resolve")
+        .anchor;
+    table
+        .group_payload_record_at_mut(0, 0)
+        .expect("test payload should resolve")
+        .owner = AnchorId::INVALID;
 
     assert_eq!(
         table.validate(),
@@ -261,8 +268,16 @@ fn validate_reports_duplicate_payload_anchor_structurally() {
     });
     harness.finish_pass();
 
-    let duplicate_anchor = harness.table.group_payload_record_at(0, 0).anchor;
-    harness.table.group_payload_record_at_mut(0, 1).anchor = duplicate_anchor;
+    let duplicate_anchor = harness
+        .table
+        .group_payload_record_at(0, 0)
+        .expect("test payload should resolve")
+        .anchor;
+    harness
+        .table
+        .group_payload_record_at_mut(0, 1)
+        .expect("test payload should resolve")
+        .anchor = duplicate_anchor;
 
     assert_eq!(
         harness.table.validate(),
@@ -312,16 +327,19 @@ fn validate_reports_payload_count_mismatch_structurally() {
     let owner = table.groups[0].anchor;
     let extra_anchor = table.payload_anchors.allocate();
 
-    table.payloads.push(super::PayloadRecord {
-        owner,
-        anchor: extra_anchor,
-        type_id: TypeId::of::<i32>(),
-        type_name: std::any::type_name::<i32>(),
-        source: crate::slot::BRANCH_PATH_ROOT,
-        kind: super::PayloadKind::Internal,
-        value: Box::new(0_i32),
-        fresh: None,
-    });
+    table.payloads.insert_item(
+        table.payloads.len(),
+        super::PayloadRecord {
+            owner,
+            anchor: extra_anchor,
+            type_id: TypeId::of::<i32>(),
+            type_name: std::any::type_name::<i32>(),
+            source: crate::slot::BRANCH_PATH_ROOT,
+            kind: super::PayloadKind::Internal,
+            value: Box::new(0_i32),
+            fresh: None,
+        },
+    );
     table.payload_anchors.set_active(extra_anchor, owner, 1);
 
     assert_eq!(
@@ -337,12 +355,18 @@ fn validate_reports_payload_count_mismatch_structurally() {
 #[test]
 fn validate_reports_payload_anchor_registry_mismatch_structurally() {
     let mut table = composed_group_with_value_and_node_table(482);
-    let stale_payload_anchor = table.group_payload_record_at(0, 0).anchor;
+    let stale_payload_anchor = table
+        .group_payload_record_at(0, 0)
+        .expect("test payload should resolve")
+        .anchor;
     let mismatched_payload_anchor = PayloadAnchor::new(
         stale_payload_anchor.id() + 1,
         stale_payload_anchor.generation(),
     );
-    table.group_payload_record_at_mut(0, 0).anchor = mismatched_payload_anchor;
+    table
+        .group_payload_record_at_mut(0, 0)
+        .expect("test payload should resolve")
+        .anchor = mismatched_payload_anchor;
 
     assert_eq!(
         table.validate(),
@@ -359,10 +383,16 @@ fn validate_reports_payload_anchor_registry_stale_owner_structurally() {
     let mut table = composed_group_with_value_and_node_table(491);
     let old_anchor = table.groups[0].anchor;
     let new_anchor = table.anchors.allocate();
-    let payload_anchor = table.group_payload_record_at(0, 0).anchor;
+    let payload_anchor = table
+        .group_payload_record_at(0, 0)
+        .expect("test payload should resolve")
+        .anchor;
 
     table.groups[0].anchor = new_anchor;
-    table.group_payload_record_at_mut(0, 0).owner = new_anchor;
+    table
+        .group_payload_record_at_mut(0, 0)
+        .expect("test payload should resolve")
+        .owner = new_anchor;
     table.anchors.mark_detached(old_anchor);
     table.anchors.set_active(new_anchor, 0);
 
@@ -397,7 +427,10 @@ fn validate_reports_payload_anchor_registry_count_mismatch_structurally() {
 fn compact_storage_preserves_removed_payload_anchor_registry_integrity() {
     let mut table = composed_group_with_value_and_node_table(601);
     let owner = table.groups[0].anchor;
-    let payload_anchor = table.group_payload_record_at(0, 0).anchor;
+    let payload_anchor = table
+        .group_payload_record_at(0, 0)
+        .expect("test payload should resolve")
+        .anchor;
 
     let payload_range = table.group_payload_subrange_at(0, 0, 1);
     let removed = table.remove_payload_range(owner, payload_range);
@@ -545,7 +578,11 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
 
     assert_eq!(harness.table.groups[1].parent_anchor, parent_anchor);
     assert_eq!(
-        harness.table.group_payload_record_at(1, 0).owner,
+        harness
+            .table
+            .group_payload_record_at(1, 0)
+            .expect("test payload should resolve")
+            .owner,
         child_anchor
     );
     assert_eq!(harness.table.group_node_record_at(1, 0).owner, child_anchor);

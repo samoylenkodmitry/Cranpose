@@ -11,6 +11,7 @@ mod movable;
 mod nodes;
 mod payload;
 mod payload_anchors;
+mod payload_store;
 mod ranges;
 mod scope_index;
 mod segments;

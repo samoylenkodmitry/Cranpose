@@ -1,6 +1,9 @@
 use std::fmt;
 
-use super::{super::ValueSlotId, SlotTable};
+use super::{
+    super::{PayloadRecord, ValueSlotId},
+    SlotTable,
+};
 use crate::{AnchorId, slot::PayloadAnchor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +104,10 @@ struct CheckedValueSlot {
 }
 
 impl SlotTable {
-    fn checked_value_slot(&self, slot: ValueSlotId) -> Result<CheckedValueSlot, ValueSlotError> {
+    fn checked_value_slot(
+        &self,
+        slot: ValueSlotId,
+    ) -> Result<(CheckedValueSlot, &PayloadRecord), ValueSlotError> {
         if slot.storage_id() != self.storage_id() {
             return Err(ValueSlotError::ForeignTable {
                 table_storage_id: self.storage_id(),
@@ -152,21 +158,23 @@ impl SlotTable {
                 actual: record.anchor,
             });
         }
-        Ok(CheckedValueSlot {
-            #[cfg(test)]
-            group_index,
-            #[cfg(test)]
-            payload_index,
-            absolute_payload_index,
-        })
+        Ok((
+            CheckedValueSlot {
+                #[cfg(test)]
+                group_index,
+                #[cfg(test)]
+                payload_index,
+                absolute_payload_index,
+            },
+            record,
+        ))
     }
 
     pub(crate) fn try_read_value<T: 'static>(
         &self,
         slot: ValueSlotId,
     ) -> Result<&T, ValueSlotError> {
-        let checked = self.checked_value_slot(slot)?;
-        let record = &self.payloads[checked.absolute_payload_index];
+        let (_, record) = self.checked_value_slot(slot)?;
         record
             .value
             .downcast_ref::<T>()
@@ -186,8 +194,13 @@ impl SlotTable {
         &mut self,
         slot: ValueSlotId,
     ) -> Result<&mut T, ValueSlotError> {
-        let checked = self.checked_value_slot(slot)?;
-        let record = &mut self.payloads[checked.absolute_payload_index];
+        let (checked, _) = self.checked_value_slot(slot)?;
+        let record = self
+            .payloads
+            .get_mut(checked.absolute_payload_index)
+            .ok_or_else(|| ValueSlotError::InactiveAnchor {
+                anchor: slot.anchor(),
+            })?;
         record
             .value
             .downcast_mut::<T>()
@@ -209,8 +222,8 @@ impl SlotTable {
         slot: ValueSlotId,
         value: T,
     ) -> Result<(), ValueSlotError> {
-        let checked = self.checked_value_slot(slot)?;
-        let kind = self.payloads[checked.absolute_payload_index].kind;
+        let (checked, record) = self.checked_value_slot(slot)?;
+        let kind = record.kind;
         drop(self.replace_payload_value(checked.group_index, checked.payload_index, kind, value));
         Ok(())
     }

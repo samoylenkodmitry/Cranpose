@@ -72,7 +72,6 @@ fn payload_records_store_semantic_payload_kinds() {
     let payload_kinds = harness
         .table
         .group_payload_records_at(0)
-        .iter()
         .map(|payload| payload.kind)
         .collect::<Vec<_>>();
 
@@ -168,7 +167,7 @@ fn value_payload_insertion_rejects_exhausted_anchor_ids_without_mutating() {
         .insert_value_payload(owner, 0, PayloadKind::Internal, 17_i32);
 
     assert_eq!(payload, PayloadAnchor::INVALID);
-    assert!(harness.table.group_payload_records_at(0).is_empty());
+    assert!(harness.table.group_payload_records_at(0).next().is_none());
     assert_eq!(harness.table.total_payload_count(), 0);
     let result = harness.session(|session| {
         let result = session.finish_group_body();
@@ -311,7 +310,7 @@ fn payload_location_refresh_ignores_corrupt_group_payload_range() {
     harness
         .table
         .refresh_group_payload_anchor_locations(owner, 0);
-    assert!(harness.table.group_payload_records_at(0).is_empty());
+    assert!(harness.table.group_payload_records_at(0).next().is_none());
     assert_eq!(harness.table.total_payload_count(), 1);
 }
 
@@ -579,7 +578,11 @@ fn payload_kind_updates_when_same_type_slot_changes_semantics() {
     });
     harness.finish_pass();
     assert_eq!(
-        harness.table.group_payload_record_at(0, 0).kind,
+        harness
+            .table
+            .group_payload_record_at(0, 0)
+            .expect("test payload should resolve")
+            .kind,
         super::PayloadKind::Param
     );
 
@@ -600,7 +603,11 @@ fn payload_kind_updates_when_same_type_slot_changes_semantics() {
 
     assert_eq!(first_slot, second_slot);
     assert_eq!(
-        harness.table.group_payload_record_at(0, 0).kind,
+        harness
+            .table
+            .group_payload_record_at(0, 0)
+            .expect("test payload should resolve")
+            .kind,
         super::PayloadKind::Return
     );
     assert_eq!(*harness.table.read_value::<i32>(second_slot), 7);
@@ -1046,4 +1053,17 @@ fn a_slot_reused_from_a_different_source_location_reinitializes() {
         43,
         "a same-typed slot recorded at another source must not be adopted"
     );
+}
+
+#[test]
+fn group_payload_record_lookup_returns_none_outside_the_group() {
+    let mut table = composed_group_with_value_and_node_table(55);
+
+    assert!(table.group_payload_record_at(0, 0).is_some());
+    assert!(table.group_payload_record_at(0, 1).is_none());
+    assert!(table.group_payload_record_at(1, 0).is_none());
+    assert!(table.group_payload_record_at_mut(0, 1).is_none());
+    assert!(table.group_payload_record_at_mut(1, 0).is_none());
+    assert_eq!(table.group_payload_records_at(0).count(), 1);
+    assert_eq!(table.group_payload_records_at(1).count(), 0);
 }
