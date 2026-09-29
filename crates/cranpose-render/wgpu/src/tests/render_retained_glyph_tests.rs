@@ -66,18 +66,28 @@ fn test_run(x: i32) -> TestRun {
     )
 }
 
-fn run_quads<'a>(renderer: &GpuRenderer, run: &'a TestRun) -> GlyphRunQuads<'a> {
+fn run_glyphs(run: &TestRun) -> RunGlyphs {
+    RunGlyphs::of(run.0.iter().copied(), &mut RunGlyphScratch::default())
+        .expect("a test run has a compact form")
+}
+
+fn run_quads<'a>(
+    renderer: &GpuRenderer,
+    glyphs: &'a RunGlyphs,
+    run: &'a TestRun,
+) -> GlyphRunQuads<'a> {
     GlyphRunQuads {
-        glyphs: &run.0,
+        glyphs,
         entries: &run.1,
         atlas_size: renderer.text_glyph_atlas.size(),
-        bounds: GlyphRunBounds::of(&run.0),
+        bounds: GlyphRunBounds::of(run.0),
     }
 }
 
 fn queue_glyph(renderer: &mut GpuRenderer, key: u64, x: f32, commands: &mut Vec<GlyphDrawCmd>) {
     let run = test_run(0);
-    let quads = run_quads(renderer, &run);
+    let glyphs = run_glyphs(&run);
+    let quads = run_quads(renderer, &glyphs, &run);
     assert!(renderer.emit_retained_text_glyph_run_if_ready(
         TextGlyphRunCacheKey(key),
         quads,
@@ -217,7 +227,8 @@ fn queued_glyph_draw_keeps_its_quads_after_cache_eviction() {
     let mut commands = Vec::new();
     queue_glyph(&mut renderer, 1, 0.0, &mut commands);
     let moved = test_run(4);
-    let quads = run_quads(&renderer, &moved);
+    let glyphs = run_glyphs(&moved);
+    let quads = run_quads(&renderer, &glyphs, &moved);
     assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), quads));
     assert!(
         renderer
@@ -384,8 +395,9 @@ fn a_draw_samples_as_it_asks_on_the_pixel_grid_and_filtered_off_it() {
 fn a_glyph_run_no_frame_draws_leaves_the_cpu_cache() {
     let (_lock, mut renderer) = test_renderer();
     let run = |renderer: &GpuRenderer| CachedTextGlyphRun {
-        glyphs: Rc::from(Vec::new()),
-        bounds: GlyphRunBounds::of(&[]),
+        glyphs: RunGlyphs::of(std::iter::empty(), &mut RunGlyphScratch::default())
+            .expect("an empty run has a compact form"),
+        bounds: GlyphRunBounds::of(std::iter::empty()),
         atlas_entries: None,
         atlas_generation: 0,
         last_frame: Cell::new(renderer.text_glyph_run_frame),
@@ -432,7 +444,8 @@ fn a_glyph_run_no_frame_draws_leaves_the_cpu_cache() {
 fn a_retained_run_no_frame_draws_gives_its_quads_back() {
     let (_lock, mut renderer) = test_renderer();
     let run = test_run(0);
-    let quads = run_quads(&renderer, &run);
+    let glyphs = run_glyphs(&run);
+    let quads = run_quads(&renderer, &glyphs, &run);
     assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(1), quads));
     assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), quads));
     for _ in 0..TEXT_GLYPH_RUN_IDLE_FRAMES {
@@ -754,7 +767,8 @@ fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
         height: 8,
     };
     let run = (glyphs, entries);
-    let quads = run_quads(&renderer, &run);
+    let glyphs = run_glyphs(&run);
+    let quads = run_quads(&renderer, &glyphs, &run);
     let atlas_size = renderer.text_glyph_atlas.size();
 
     let derived: Vec<_> = quads.iter().collect();
