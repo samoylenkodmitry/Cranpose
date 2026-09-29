@@ -1030,6 +1030,22 @@ where
         app_context.enter(|| self.app.composition.runtime_handle().has_pending_ui())
     }
 
+    /// Runs the tasks woken since they last ran, now rather than at the next
+    /// frame. A coroutine whose `delay` ran out resumes when its timer fires,
+    /// as Compose's main dispatcher resumes one, and the next frame draws what
+    /// it changed. Waiting for the frame instead would resume a 16 ms delay
+    /// only every other frame, whenever the timer fires just after one starts.
+    /// A platform calls this whenever its loop wakes.
+    pub fn run_pending_tasks(&mut self) {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| {
+            let runtime_handle = self.app.composition.runtime_handle();
+            if runtime_handle.has_pending_ui() {
+                runtime_handle.with_deferred_state_releases(|| runtime_handle.drain_ui());
+            }
+        });
+    }
+
     /// Returns true if the primary surface owes the display a frame: stale
     /// pixels, or a renderer that has not warmed its swapchain yet.
     ///

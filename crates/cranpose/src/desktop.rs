@@ -1325,6 +1325,23 @@ impl App {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// Serves what the app asked of the host since the loop last looked: the
+    /// window size it requested, and the tasks woken since they last ran,
+    /// which run now rather than at the next frame.
+    fn serve_app_requests(&mut self) {
+        if let Some((width, height)) = crate::desktop_host_surface::take_requested_size()
+            && let Some(window) = self.window.as_ref()
+        {
+            let _ = window.request_surface_size(
+                winit::dpi::LogicalSize::new(width as f64, height as f64).into(),
+            );
+        }
+        let registry = Rc::clone(&self.native_window_registry);
+        if let Some(app) = &mut self.app {
+            native_window::with_native_window_registry(&registry, || app.run_pending_tasks());
+        }
+    }
+
     fn sync_primary_visibility(&mut self) {
         let (Some(window), Some(app)) = (self.window.clone(), self.app.as_mut()) else {
             return;
@@ -5838,13 +5855,7 @@ impl ApplicationHandler for App {
             event_loop.exit();
             return;
         }
-        if let Some((width, height)) = crate::desktop_host_surface::take_requested_size()
-            && let Some(window) = self.window.as_ref()
-        {
-            let _ = window.request_surface_size(
-                winit::dpi::LogicalSize::new(width as f64, height as f64).into(),
-            );
-        }
+        self.serve_app_requests();
         let now = Instant::now();
         if self.poll_native_window_global_primary_press() {
             self.refresh_native_window_requests();
