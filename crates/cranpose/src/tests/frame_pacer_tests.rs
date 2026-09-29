@@ -492,3 +492,29 @@ fn rising_a_level_drops_the_lead() {
         "the missed vsyncs that made the pacer rise drop the lead"
     );
 }
+
+#[test]
+fn stepping_down_a_level_learns_the_lead_anew() {
+    use crate::frame_lead::{SETTLE, WINDOW};
+
+    let mut pacer = buffered();
+    for frame in 0..WINDOW {
+        pacer.record_latency(STUFFED + frame, STUFFED + frame + 40_000_000);
+    }
+    for frame in 0..WINDOW + i64::from(SETTLE) {
+        pacer.record_latency(STUFFED + frame, STUFFED + frame + 30_000_000);
+    }
+    assert!(
+        pacer.current_lead_ns(VSYNC) > 0,
+        "a lead that showed buffered frames sooner was kept"
+    );
+    assert_eq!(
+        level(&mut pacer, STUFFED + FIRST_HOLD_NS),
+        Some(Level::Shallow)
+    );
+    assert_eq!(
+        pacer.current_lead_ns(VSYNC),
+        0,
+        "frames one level down start on their slot until a lead proves itself there"
+    );
+}

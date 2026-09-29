@@ -120,3 +120,37 @@ fn falling_back_starts_frames_on_their_slot_again() {
         "the next window is followed by a trial straight away"
     );
 }
+
+#[test]
+fn a_trial_far_behind_the_kept_lead_ends_after_its_first_frames() {
+    let mut lead = in_trial(20_000_000);
+    run(
+        &mut lead,
+        i64::from(SETTLE) + EARLY_FRAMES,
+        20_000_000 + EARLY_MARGIN_NS + 1_000_000,
+        1,
+    );
+    assert_eq!(lead.lead_ns(PERIOD), 0, "the kept lead is back");
+    run_trial(&mut lead, 20_000_000, 1 + FIRST_HOLD_NS);
+    assert_eq!(
+        lead.lead_ns(PERIOD),
+        0,
+        "the early failure doubled the hold"
+    );
+}
+
+#[test]
+fn a_trial_close_behind_the_kept_lead_runs_its_whole_window() {
+    let mut lead = in_trial(20_000_000);
+    run(
+        &mut lead,
+        i64::from(SETTLE) + EARLY_FRAMES,
+        20_000_000 + EARLY_MARGIN_NS - 1_000_000,
+        1,
+    );
+    assert_eq!(
+        lead.lead_ns(PERIOD),
+        lead_at(1),
+        "a short sample this close may still win"
+    );
+}

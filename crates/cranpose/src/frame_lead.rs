@@ -23,6 +23,17 @@ pub(crate) const SETTLE: u32 = 6;
 /// its lead to be kept: less is noise.
 const MARGIN_NS: i64 = 1_000_000;
 
+/// Frames into a trial at which it ends early when they already reach the
+/// screen much later than the kept lead's: a lead that misses the refresh
+/// the kept one makes shows it within a few frames, and running its whole
+/// window only adds late frames.
+pub(crate) const EARLY_FRAMES: i64 = 30;
+
+/// How much later, on average, a trial's first [`EARLY_FRAMES`] must reach
+/// the screen for it to end early: well past [`MARGIN_NS`], so noise in a
+/// short sample does not end a trial that might win.
+const EARLY_MARGIN_NS: i64 = 3_000_000;
+
 /// The leads a frame may start at, in tenths of the refresh period. A short
 /// frame on the Pixel 9 Pro needs 0.3; on the Mate 20 X a ticker frame
 /// needs 0.3 too, while grid frames, whose GPU work runs 6 ms past their
@@ -83,6 +94,13 @@ impl FrameLead {
         }
         self.sum_ns = self.sum_ns.saturating_add(latency_ns);
         self.count += 1;
+        if self.count == EARLY_FRAMES && self.trial.is_some() && self.trial_far_behind() {
+            self.trial = None;
+            self.sum_ns = 0;
+            self.count = 0;
+            self.fail_trial(now_ns);
+            return;
+        }
         if self.count < WINDOW {
             return;
         }
@@ -112,10 +130,23 @@ impl FrameLead {
             self.kept = trial;
             self.baseline_ns = Some(mean_ns);
             self.hold_ns = FIRST_HOLD_NS;
+            self.next_trial_ns = Some(now_ns + self.hold_ns);
         } else {
-            self.settle = SETTLE;
-            self.hold_ns = (self.hold_ns * 2).min(LONGEST_HOLD_NS);
+            self.fail_trial(now_ns);
         }
+    }
+
+    /// Whether the trial's frames so far reach the screen so much later than
+    /// the kept lead's that the rest of its window cannot make it win.
+    fn trial_far_behind(&self) -> bool {
+        self.baseline_ns
+            .is_some_and(|baseline| self.sum_ns / self.count > baseline + EARLY_MARGIN_NS)
+    }
+
+    /// Goes back to the kept lead after a trial that did not beat it.
+    fn fail_trial(&mut self, now_ns: i64) {
+        self.settle = SETTLE;
+        self.hold_ns = (self.hold_ns * 2).min(LONGEST_HOLD_NS);
         self.next_trial_ns = Some(now_ns + self.hold_ns);
     }
 
