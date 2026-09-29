@@ -1393,12 +1393,12 @@ impl Composer {
         key: crate::slot::GroupKeySeed,
         f: &mut dyn FnMut(&Composer),
     ) {
-        struct GroupGuard {
-            composer: Composer,
+        struct GroupGuard<'a> {
+            composer: &'a Composer,
             scope: RecomposeScope,
         }
 
-        impl Drop for GroupGuard {
+        impl Drop for GroupGuard<'_> {
             fn drop(&mut self) {
                 self.composer
                     .close_current_group_body_for_scope(&self.scope);
@@ -1460,13 +1460,13 @@ impl Composer {
         }
 
         let guard = GroupGuard {
-            composer: self.clone(),
-            scope: scope_ref.clone(),
+            composer: self,
+            scope: scope_ref,
         };
         if placeholder_for.is_none() {
-            self.observe_scope(&scope_ref, || f(self));
+            self.observe_scope(&guard.scope, || f(self));
         }
-        scope_ref.mark_composed_once();
+        guard.scope.mark_composed_once();
         drop(guard);
     }
 

@@ -23,13 +23,28 @@ impl CoordinatorGeometry {
     /// any of them: a layer bounded by an inner coordinator changes when that
     /// coordinator does, though the node's own size may not.
     pub(crate) fn replace(&self, rects: impl IntoIterator<Item = Rect>) -> bool {
-        let rects: SmallVec<[Rect; 4]> = rects.into_iter().collect();
         let mut stored = self.rects.borrow_mut();
-        if *stored == rects {
-            return false;
+        let mut len = 0;
+        let mut moved = false;
+        for rect in rects {
+            match stored.get_mut(len) {
+                Some(slot) if *slot == rect => {}
+                Some(slot) => {
+                    *slot = rect;
+                    moved = true;
+                }
+                None => {
+                    stored.push(rect);
+                    moved = true;
+                }
+            }
+            len += 1;
         }
-        *stored = rects;
-        true
+        if stored.len() != len {
+            stored.truncate(len);
+            moved = true;
+        }
+        moved
     }
 
     fn rect(&self, ordinal: usize) -> Option<Rect> {

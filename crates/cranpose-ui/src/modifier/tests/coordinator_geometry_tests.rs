@@ -88,3 +88,29 @@ fn a_default_coordinator_fills_its_node() {
     assert_eq!(coordinator.insets(NODE), EdgeInsets::default());
     assert_eq!(coordinator.origin(), Point::default());
 }
+
+#[test]
+fn replacing_rects_reports_only_a_change() {
+    let geometry = CoordinatorGeometry::default();
+    let outer = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: NODE.width,
+        height: NODE.height,
+    };
+    let inner = Rect {
+        x: 3.0,
+        y: 3.0,
+        width: 44.0,
+        height: 34.0,
+    };
+    assert!(geometry.replace([outer, inner]));
+    assert!(!geometry.replace([outer, inner]));
+    assert!(geometry.replace([outer, outer]));
+    assert_eq!(geometry.rect(1), Some(outer));
+    assert!(geometry.replace([outer]));
+    assert_eq!(geometry.rect(1), None);
+    assert!(geometry.replace([outer, inner, inner]));
+    assert_eq!(geometry.rect(2), Some(inner));
+    assert!(!geometry.replace([outer, inner, inner]));
+}
