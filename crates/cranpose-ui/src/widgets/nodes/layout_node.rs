@@ -860,6 +860,13 @@ impl LayoutNode {
 
     /// Whether this node's modifiers make it modal or hidden.
     pub fn semantics_reach(&self) -> cranpose_foundation::SemanticsReach {
+        // A chain without semantics reaches nothing, known without touching it.
+        if !self
+            .modifier_capabilities
+            .contains(NodeCapabilities::SEMANTICS)
+        {
+            return cranpose_foundation::SemanticsReach::default();
+        }
         if let Some(reach) = self.semantics_reach.get() {
             return reach;
         }

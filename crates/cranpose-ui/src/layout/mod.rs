@@ -1207,8 +1207,9 @@ impl SemanticsUpdate<'_> {
     /// Brings `children` up to date with the placed nodes a parent's visit
     /// pushed above `first_child`, matching each to what it reported last by
     /// id. Children stay where they are while they come in the order they
-    /// did; from the first that does not, the rest are found by id and moved
-    /// into place, and those that left are dropped.
+    /// did, those skipped over set aside; from the first that is not ahead,
+    /// the rest are found by id and moved into place. Whatever is left over
+    /// left the parent and is dropped.
     fn children(
         &mut self,
         children: &mut Vec<SemanticsNode>,
@@ -1216,37 +1217,38 @@ impl SemanticsUpdate<'_> {
         content: Point,
     ) -> Result<(), NodeError> {
         let end = self.child_stack.len();
-        let mut held: Option<HeldChildren> = None;
+        let mut held = HeldChildren::default();
+        let mut in_place = true;
         let mut kept = 0;
         for index in first_child..end {
             let child_id = self.child_stack[index];
             if crate::modifier::is_window_root(self.applier, child_id) {
                 continue;
             }
-            if held.is_none() {
-                if children
-                    .get(kept)
-                    .is_some_and(|child| child.node_id == child_id)
+            if in_place {
+                if let Some(offset) = children[kept..]
+                    .iter()
+                    .position(|child| child.node_id == child_id)
                 {
+                    held.extend(children.drain(kept..kept + offset));
                     if self.node(child_id, Some(content), &mut children[kept], true)? {
                         kept += 1;
-                        continue;
+                    } else {
+                        children.remove(kept);
                     }
-                    children.remove(kept);
                     continue;
                 }
-                held = Some(HeldChildren::new(children.split_off(kept)));
+                held.extend(children.drain(kept..));
+                in_place = false;
             }
-            if let Some(held) = held.as_mut() {
-                let taken = held.take(child_id);
-                let known = taken.is_some();
-                let mut child = taken.unwrap_or_default();
-                if self.node(child_id, Some(content), &mut child, known)? {
-                    children.push(child);
-                }
+            let taken = held.take(child_id);
+            let known = taken.is_some();
+            let mut child = taken.unwrap_or_default();
+            if self.node(child_id, Some(content), &mut child, known)? {
+                children.push(child);
             }
         }
-        if held.is_none() {
+        if in_place {
             children.truncate(kept);
         }
         self.child_stack.truncate(first_child);
@@ -1254,24 +1256,23 @@ impl SemanticsUpdate<'_> {
     }
 }
 
-/// The children a node reported last that an update has not reached yet,
-/// found by id.
+/// The children a node reported last that an update skipped over or has not
+/// reached yet, found by id.
+#[derive(Default)]
 struct HeldChildren {
     nodes: Vec<SemanticsNode>,
     positions: cranpose_core::collections::map::HashMap<NodeId, usize>,
 }
 
 impl HeldChildren {
-    fn new(nodes: Vec<SemanticsNode>) -> Self {
-        let positions = nodes
-            .iter()
-            .enumerate()
-            .map(|(position, node)| (node.node_id, position))
-            .collect();
-        Self { nodes, positions }
+    fn extend(&mut self, nodes: impl Iterator<Item = SemanticsNode>) {
+        for node in nodes {
+            self.positions.insert(node.node_id, self.nodes.len());
+            self.nodes.push(node);
+        }
     }
 
-    /// Takes out what `node_id` reported last, if it was a child.
+    /// Takes out what `node_id` reported last, if it was held.
     fn take(&mut self, node_id: NodeId) -> Option<SemanticsNode> {
         let position = self.positions.remove(&node_id)?;
         let node = self.nodes.swap_remove(position);
