@@ -8,8 +8,10 @@
 //! application never keeps its own task list or its own "is this still alive"
 //! flag.
 
+#[cfg(not(any(target_arch = "wasm32", target_vendor = "apple")))]
+use std::sync::Condvar;
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::{Condvar, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 use std::{
     cell::{Cell, RefCell},
     future::Future,
@@ -176,7 +178,7 @@ pub async fn interval(period: Duration, mut tick: impl FnMut()) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_vendor = "apple")))]
 struct Alarm {
     deadline: Instant,
     waker: Waker,
@@ -184,9 +186,9 @@ struct Alarm {
 }
 
 struct Timer {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_vendor = "apple")))]
     alarms: Mutex<Vec<Alarm>>,
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_vendor = "apple")))]
     wake: Condvar,
 }
 
@@ -199,7 +201,7 @@ fn timer() -> &'static Timer {
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(any(target_arch = "wasm32", target_vendor = "apple")))]
 impl Timer {
     fn new() -> Self {
         Self {
@@ -265,6 +267,39 @@ impl Timer {
             fired,
         });
         self.wake.notify_one();
+    }
+}
+
+/// Apple platforms hand each deadline to Grand Central Dispatch on the
+/// user-interactive queue. A thread sleeping on a condition variable at the
+/// default quality of service wakes about 8 ms late there, as macOS coalesces
+/// its timers, so a one-frame `delay` often missed its frame; GCD at
+/// user-interactive quality of service wakes within a millisecond.
+#[cfg(target_vendor = "apple")]
+impl Timer {
+    fn new() -> Self {
+        Self {}
+    }
+
+    fn start(&'static self) {}
+
+    fn arm(&self, deadline: Instant, waker: Waker, fired: Arc<AtomicBool>) {
+        use dispatch2::{DispatchQoS, DispatchQueue, DispatchTime, GlobalQueueIdentifier};
+
+        let nanos = deadline
+            .saturating_duration_since(Instant::now())
+            .as_nanos()
+            .min(i64::MAX as u128) as i64;
+        let queue = DispatchQueue::global_queue(GlobalQueueIdentifier::QualityOfService(
+            DispatchQoS::UserInteractive,
+        ));
+        let fire = move || {
+            fired.store(true, Ordering::Release);
+            waker.wake();
+        };
+        if queue.after(DispatchTime::NOW.time(nanos), fire).is_err() {
+            log::error!("cranpose: GCD refused a timer; the delay never resolves");
+        }
     }
 }
 
