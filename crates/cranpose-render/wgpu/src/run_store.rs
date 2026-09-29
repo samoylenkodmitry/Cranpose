@@ -140,7 +140,7 @@ impl PlacementData {
         if canonicalize {
             flags |= PLACEMENT_CANONICALIZE;
         }
-        if placement.alpha != 1.0 || placement.color_filter.is_some() {
+        if placement.paints() {
             flags |= PLACEMENT_PAINTED;
         }
         let clip = match placement.clip {

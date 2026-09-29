@@ -990,3 +990,37 @@ fn arc_trig_is_the_mid_and_half_sweep_trig_with_the_full_circle_sentinel() {
         );
     }
 }
+
+fn only_segment_flags(brush: &Brush) -> (bool, bool, bool) {
+    let mut recorder = ShapeRecorder::default();
+    recorder.push_round_rect(
+        rect(0.0, 0.0, 200.0, 120.0),
+        brush,
+        CornerRadii::uniform(12.0),
+        None,
+        BlendMode::SrcOver,
+    );
+    let segments = &recorder.tables().segments;
+    assert_eq!(segments.len(), 1, "one segment: {segments:?}");
+    let segment = &segments[0];
+    (segment.interiors, segment.occluders, segment.bare_interiors)
+}
+
+#[test]
+fn only_a_gradient_or_translucent_fill_leaves_its_interior_bare() {
+    assert_eq!(
+        only_segment_flags(&opaque()),
+        (true, true, false),
+        "an opaque card's interior is laid down ahead"
+    );
+    assert_eq!(
+        only_segment_flags(&solid()),
+        (true, false, true),
+        "a translucent card's interior is shaded apart"
+    );
+    assert_eq!(
+        only_segment_flags(&linear_explicit()),
+        (true, false, true),
+        "a gradient card's interior is shaded apart"
+    );
+}

@@ -40,6 +40,12 @@ pub(crate) struct Placement {
 }
 
 impl Placement {
+    /// Whether the placement paints its records: an alpha or a colour
+    /// filter, which may leave an opaque colour translucent.
+    pub(crate) fn paints(&self) -> bool {
+        self.alpha != 1.0 || self.color_filter.is_some()
+    }
+
     pub(crate) fn at(offset: Point, snap_anchor: Option<SnapAnchor>, clip: Option<Rect>) -> Self {
         Self {
             offset,

@@ -982,10 +982,16 @@ impl ShapeVariant {
         },
     };
 
+    /// The variant `segment`'s records draw with, `clipped` or not. `laid`
+    /// says a depth pre-pass lays the opaque interiors of a segment holding
+    /// an occluder down ahead of its paint, so the depth test already skips
+    /// them and the interior's fast path would only cost its other
+    /// fragments a varying.
     pub(crate) fn of_segment(
         segment: &RecordSegment,
         clipped: bool,
         ablation: ShapeAblation,
+        laid: bool,
     ) -> Self {
         if !shape_variants_enabled() {
             return Self {
@@ -1002,7 +1008,7 @@ impl ShapeVariant {
                 .map(|brush| brush as u8),
             solid: !segment.gradient,
             clipped,
-            interior: segment.interiors,
+            interior: segment.interiors && !(laid && segment.occluders && !segment.bare_interiors),
             ablation,
         }
     }
@@ -3981,16 +3987,22 @@ impl GpuRenderer {
 
     fn run_pipeline_key(
         segment: &RecordSegment,
-        clipped: bool,
+        placement: &crate::scene::Placement,
         tier: RunTier,
         ablation: ShapeAblation,
         turns: ShapeTurns,
         depth: bool,
     ) -> ShapePipelineKey {
+        let blend_mode = supported_blend_mode(segment.blend);
+        let laid = depth
+            && blend_mode == BlendMode::SrcOver
+            && !placement.paints()
+            && !ablation.material
+            && !ablation.fill;
         ShapePipelineKey {
-            blend_mode: supported_blend_mode(segment.blend),
+            blend_mode,
             tier,
-            variant: ShapeVariant::of_segment(segment, clipped, ablation),
+            variant: ShapeVariant::of_segment(segment, placement.clip.is_some(), ablation, laid),
             turns,
             depth: if depth {
                 ShapeDepth::Tested
@@ -4021,7 +4033,7 @@ impl GpuRenderer {
         depth: bool,
     ) -> StoreRunBatch {
         let command = run.command.expect("a stored run has a command");
-        let clipped = run.placement.clip.is_some();
+        let placement = &run.placement;
         let ablation = self.ablation.shape;
         let turns = ShapeTurns::of(viewport.transform, false);
         let mut draws = SmallVec::new();
@@ -4029,7 +4041,7 @@ impl GpuRenderer {
             &self.device,
             run,
             &mut |segment| {
-                Self::run_pipeline_key(segment, clipped, RunTier::Store, ablation, turns, depth)
+                Self::run_pipeline_key(segment, placement, RunTier::Store, ablation, turns, depth)
             },
             &mut draws,
         );
@@ -4093,7 +4105,7 @@ impl GpuRenderer {
         mixed_turns: bool,
         depth: bool,
     ) -> u32 {
-        let clipped = run.placement.clip.is_some();
+        let placement = &run.placement;
         let ablation = self.ablation.shape;
         let turns = ShapeTurns::of(turn, mixed_turns);
         let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
@@ -4102,7 +4114,7 @@ impl GpuRenderer {
                 .append_arena(chunk, run, window, (root_scale, turn), &mut |segment| {
                     let key = Self::run_pipeline_key(
                         segment,
-                        clipped,
+                        placement,
                         RunTier::Arena,
                         ablation,
                         turns,
