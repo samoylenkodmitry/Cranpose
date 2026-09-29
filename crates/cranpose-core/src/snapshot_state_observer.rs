@@ -176,6 +176,12 @@ where
 
 impl SnapshotStateObserverInner {
     const MIN_RETAINED_SCOPE_CAPACITY: usize = 256;
+    /// Frames between sweeps for the entries of dropped scopes. A dead entry
+    /// costs only a failed weak upgrade when one of its states changes, and a
+    /// scope that takes a dropped one's address takes over its entry, so a
+    /// sweep every frame walked every observed scope to bound memory that a
+    /// sweep every 64th frame bounds as well.
+    const DEAD_SCOPE_SWEEP_FRAMES: u64 = 64;
 
     fn new(on_changed_executor: impl Fn(Box<dyn FnOnce() + 'static>) + 'static) -> Self {
         let pause_count = Rc::new(Cell::new(0));
@@ -217,7 +223,9 @@ impl SnapshotStateObserverInner {
     fn begin_frame(&self) {
         let next = self.frame_version.get().wrapping_add(1);
         self.frame_version.set(next);
-        self.prune_dead_scopes();
+        if next.is_multiple_of(Self::DEAD_SCOPE_SWEEP_FRAMES) {
+            self.prune_dead_scopes();
+        }
     }
 
     fn observe_reads<T, R>(
