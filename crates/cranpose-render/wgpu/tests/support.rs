@@ -1026,9 +1026,8 @@ pub fn draw_node(primitive: DrawPrimitive, clip: Option<Rect>) -> RenderNode {
 pub const SIZE: u32 = 256;
 pub const CENTER: f32 = 128.0;
 
-/// A scene of solid arcs, discs, rounded rects and strokes, the shape of
-/// cranorbit's arena.
-pub fn record_solid_scene(scope: &mut DrawScopeDefault) {
+/// The dark background every parity scene draws first.
+fn draw_scene_background(scope: &mut DrawScopeDefault) {
     scope.draw_rect_at(
         Rect {
             x: 0.0,
@@ -1038,6 +1037,44 @@ pub fn record_solid_scene(scope: &mut DrawScopeDefault) {
         },
         Brush::solid(Color(0.02, 0.02, 0.05, 1.0)),
     );
+}
+
+/// Only solid fills, so their batch takes a fill-only pipeline: circles
+/// and rounded squares of many sizes at fractional positions, opaque and
+/// translucent, over a background.
+pub fn record_solid_fill_scene(scope: &mut DrawScopeDefault) {
+    draw_scene_background(scope);
+    for index in 0..48u32 {
+        let x = (index % 8) as f32 * 31.3 + 3.37;
+        let y = (index / 8) as f32 * 41.7 + 2.61;
+        let size = 6.0 + (index * 7 % 29) as f32;
+        let alpha = if index % 3 == 0 { 1.0 } else { 0.85 };
+        let brush = Brush::solid(Color(0.3 + (index % 4) as f32 * 0.15, 0.8, 0.5, alpha));
+        if index % 2 == 0 {
+            scope.draw_circle(
+                brush,
+                Point::new(x + size / 2.0, y + size / 2.0),
+                size / 2.0,
+            );
+        } else {
+            scope.draw_round_rect_at(
+                Rect {
+                    x,
+                    y,
+                    width: size,
+                    height: size * 1.3,
+                },
+                brush,
+                cranpose_ui_graphics::CornerRadii::uniform(3.0 + (index % 5) as f32),
+            );
+        }
+    }
+}
+
+/// A scene of solid arcs, discs, rounded rects and strokes, the shape of
+/// cranorbit's arena.
+pub fn record_solid_scene(scope: &mut DrawScopeDefault) {
+    draw_scene_background(scope);
     for ring in 0..3u32 {
         let radius = 40.0 + ring as f32 * 28.0;
         let count = 48;

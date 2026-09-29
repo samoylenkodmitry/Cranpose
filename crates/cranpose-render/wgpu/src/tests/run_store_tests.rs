@@ -49,8 +49,13 @@ fn shared_pipelines_preserve_each_draws_strip_index_count() {
     assert_eq!(draws, [(0..2, 0..6), (2..4, 0..48), (4..5, 0..6)]);
 }
 
+/// The arena key of a one-record gradient fill segment: only a gradient
+/// batch tests fill interiors.
 fn fill_key(interiors: bool, blend: BlendMode) -> crate::render::ShapePipelineKey {
-    arena_key(&shape_segment(1, blend, (interiors, false, false)))
+    arena_key(&RecordSegment {
+        gradient: true,
+        ..shape_segment(1, blend, (interiors, false, false))
+    })
 }
 
 fn staged_draws(
@@ -274,10 +279,23 @@ fn shape_turns_follow_the_placement_unless_the_pass_mixes_flat_and_turned_record
 }
 
 #[test]
+fn a_solid_segment_never_tests_its_interiors() {
+    use crate::render::ShapeVariant;
+    for clipped in [false, true] {
+        let variant = |interiors: bool| {
+            let segment = shape_segment(1, BlendMode::SrcOver, (interiors, false, false));
+            ShapeVariant::of_segment(&segment, clipped, Default::default(), false)
+        };
+        assert_eq!(variant(true), variant(false), "clipped: {clipped}");
+    }
+}
+
+#[test]
 fn a_segment_whose_interiors_a_pre_pass_lays_down_skips_the_interior_fast_path() {
     use crate::render::ShapeVariant;
-    let segment = |occluders: bool, bare_interiors: bool| {
-        shape_segment(1, BlendMode::SrcOver, (true, occluders, bare_interiors))
+    let segment = |occluders: bool, bare_interiors: bool| RecordSegment {
+        gradient: true,
+        ..shape_segment(1, BlendMode::SrcOver, (true, occluders, bare_interiors))
     };
     // Whether a pre-pass laying interiors down changes the variant: only by
     // dropping the interior's fast path, which the test cannot read apart.

@@ -265,7 +265,13 @@ fn fragment_input_locations(source: &str, entry_point: &str) -> Vec<u32> {
 
 #[test]
 fn shape_fragment_inputs_fit_the_gles_varying_floor() {
-    for entry_point in ["fs_main", "fs_solid", "fs_gradient_fill"] {
+    for entry_point in [
+        "fs_main",
+        "fs_solid",
+        "fs_clipped_fill",
+        "fs_plain_fill",
+        "fs_gradient_fill",
+    ] {
         let locations = fragment_input_locations(super::SHADER, entry_point);
         let highest = locations.last().copied().expect("fragment inputs");
         assert!(
@@ -283,6 +289,16 @@ fn shape_fragment_inputs_fit_the_gles_varying_floor() {
         7,
         "a solid batch carries the coverage vectors, a fill's interior inside its arc vector, \
          and nothing of the brush"
+    );
+    assert_eq!(
+        fragment_input_locations(super::SHADER, "fs_clipped_fill").len(),
+        4,
+        "a clipped fill drawn flat carries its colour, rect, radii and clip"
+    );
+    assert_eq!(
+        fragment_input_locations(super::SHADER, "fs_plain_fill").len(),
+        3,
+        "an unclipped fill drawn flat carries its colour, rect and radii"
     );
     assert_eq!(
         fragment_input_locations(super::SHADER, "fs_gradient_fill").len(),
