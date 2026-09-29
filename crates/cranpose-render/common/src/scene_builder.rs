@@ -166,6 +166,7 @@ pub fn update_graph_from_applier_report_into(
         scale,
         changed_nodes,
     );
+    crate::layer_recycling::release();
     if let GraphUpdate::NeedsRebuild(reason) = report.update
         && cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG")
     {
@@ -236,6 +237,8 @@ fn update_graph_from_applier_report_into_inner(
                 hit_graph_dirty: true,
             };
         }
+        collect_layer_node_ids(&graph.root, changed_nodes);
+        crate::layer_recycling::recycle_children(&mut graph.root);
         let Some(root) = build_layer_node_from_applier(applier, root_id, scale, false) else {
             return GraphUpdateReport {
                 update: GraphUpdate::NeedsRebuild(GraphRebuildReason::RootLayerUnavailable),
@@ -243,7 +246,6 @@ fn update_graph_from_applier_report_into_inner(
             };
         };
         let hit_graph_dirty = layer_hit_graph_state_dirty(&graph.root, &root);
-        collect_layer_node_ids(&graph.root, changed_nodes);
         graph.root = root;
         graph.root.recompute_raster_cache_hashes();
         collect_layer_node_ids(&graph.root, changed_nodes);
@@ -354,6 +356,8 @@ fn replace_dirty_layers_from_applier(
                 report.hit_graph_dirty |= child_report.hit_graph_dirty;
                 continue;
             }
+            collect_layer_node_ids(child_layer, changed_nodes);
+            crate::layer_recycling::recycle_children(child_layer);
             let mut replacement = build_layer_node_from_applier_internal(
                 applier,
                 layer_identity(child_layer).expect("dirty layer must have a node id"),
@@ -372,7 +376,6 @@ fn replace_dirty_layers_from_applier(
             }
             report.hit_graph_dirty |= layer_hit_graph_state_dirty(child_layer, &replacement);
             remove_dirty_descendants(&replacement, dirty_nodes);
-            collect_layer_node_ids(child_layer, changed_nodes);
             **child_layer = replacement;
             collect_layer_node_ids(child_layer, changed_nodes);
             crate::graph_hash::recompute_layer_raster_cache_hashes_under(
@@ -1074,7 +1077,7 @@ fn build_layer_node_internal(
     }) {
         children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(text)),
+            node: PrimitiveNode::Text(crate::layer_recycling::boxed_text(text)),
         }));
     }
     let child_motion_context_animated = node_motion_context_animated;
@@ -1367,7 +1370,7 @@ fn build_layer_node_from_data(
         layout_state.size(),
     );
     let layer_draw_commands = &modifier_slices.draw_commands()[outer_draw_command_count..];
-    let mut render_children = Vec::with_capacity(layer_node_capacity(
+    let mut render_children = crate::layer_recycling::child_list(layer_node_capacity(
         layer_draw_commands,
         children.len(),
         modifier_slices.annotated_text().is_some(),
@@ -1391,7 +1394,7 @@ fn build_layer_node_from_data(
     }) {
         render_children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
-            node: PrimitiveNode::Text(Box::new(text)),
+            node: PrimitiveNode::Text(crate::layer_recycling::boxed_text(text)),
         }));
     }
     let child_motion_context_animated = node_motion_context_animated;
@@ -1414,7 +1417,9 @@ fn build_layer_node_from_data(
                         layout_state.content_offset.y,
                     ));
         }
-        render_children.push(RenderNode::Layer(Box::new(child_layer)));
+        render_children.push(RenderNode::Layer(crate::layer_recycling::boxed(
+            child_layer,
+        )));
     }
     append_draw_nodes(
         &mut render_children,
@@ -1470,6 +1475,9 @@ fn build_layer_node_from_data(
 struct RecorderSlot {
     generation: u64,
     handles: [Option<Rc<CommandRecording>>; 2],
+    /// The allocation of a handle whose recording `acquire_storage` took,
+    /// which the next recording the slot publishes moves into.
+    spare: Option<Rc<CommandRecording>>,
 }
 
 thread_local! {
@@ -1505,32 +1513,41 @@ fn acquire_storage(id: DrawCommandId) -> CommandRecording {
             return CommandRecording::default();
         };
         for handle in &mut slot.handles {
-            if handle
-                .as_ref()
-                .is_some_and(|shared| Rc::strong_count(shared) == 1)
-            {
-                let shared = handle.take().expect("checked some above");
-                return Rc::try_unwrap(shared).expect("sole owner checked above");
-            }
+            let Some(recording) = handle.as_mut().and_then(Rc::get_mut) else {
+                continue;
+            };
+            let storage = std::mem::take(recording);
+            slot.spare = handle.take();
+            return storage;
         }
         CommandRecording::default()
     })
 }
 
 fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<CommandRecording> {
-    let shared = Rc::new(recording);
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let generation = RECORDING_GENERATION.with(Cell::get);
         let slot = map.entry(id).or_insert_with(|| RecorderSlot {
             generation,
             handles: [None, None],
+            spare: None,
         });
+        let shared = match slot.spare.take() {
+            Some(mut spare) => match Rc::get_mut(&mut spare) {
+                Some(storage) => {
+                    *storage = recording;
+                    spare
+                }
+                None => Rc::new(recording),
+            },
+            None => Rc::new(recording),
+        };
         slot.generation = generation;
         slot.handles[1] = slot.handles[0].take();
-        slot.handles[0] = Some(shared.clone());
-    });
-    shared
+        slot.handles[0] = Some(Rc::clone(&shared));
+        shared
+    })
 }
 
 fn layer_node_capacity(commands: &[DrawCommand], children: usize, has_text: bool) -> usize {
@@ -1551,7 +1568,7 @@ fn draw_nodes(
     size: Size,
     phase: PrimitivePhase,
 ) -> Vec<RenderNode> {
-    let mut nodes = Vec::new();
+    let mut nodes = crate::layer_recycling::child_list(commands.len());
     append_draw_nodes(
         &mut nodes,
         node_id,
@@ -1698,9 +1715,14 @@ fn wrap_layer_with_outer_draws(
         has_origin_sinks: layer.has_origin_sinks,
         ..Default::default()
     };
-    let mut children = outer.behind;
-    children.push(RenderNode::Layer(Box::new(layer)));
-    children.extend(outer.overlay);
+    let OuterDraws {
+        behind: mut children,
+        mut overlay,
+    } = outer;
+    children.reserve(1 + overlay.len());
+    children.push(RenderNode::Layer(crate::layer_recycling::boxed(layer)));
+    children.append(&mut overlay);
+    crate::layer_recycling::recycle_list(overlay);
     let mut wrapper = LayerNode {
         children,
         ..wrapper

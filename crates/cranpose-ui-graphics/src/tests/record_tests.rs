@@ -704,6 +704,53 @@ fn publishing_and_unique_reuse_move_the_shape_columns() {
 }
 
 #[test]
+fn a_recording_nothing_else_holds_is_recorded_again_in_its_own_allocation() {
+    let first = CommandRecording::from_primitives(every_primitive());
+    let allocation = Arc::as_ptr(first.shape_recorder());
+    let mut reused = CommandRecorder::reusing(first);
+    reused.push_primitive(every_primitive().remove(0));
+    let again = reused.finish();
+    assert_eq!(Arc::as_ptr(again.shape_recorder()), allocation);
+    assert_eq!(again.len(), 1);
+
+    let edited = again.into_recorder().finish();
+    assert_eq!(Arc::as_ptr(edited.shape_recorder()), allocation);
+    assert_eq!(edited.len(), 1);
+}
+
+#[test]
+fn a_recording_a_reader_still_holds_keeps_its_shapes() {
+    let first = CommandRecording::from_primitives(every_primitive());
+    let held = first.clone();
+    let mut reused = CommandRecorder::reusing(first);
+    reused.push_primitive(every_primitive().remove(0));
+    let again = reused.finish();
+    assert!(!Arc::ptr_eq(again.shape_recorder(), held.shape_recorder()));
+    assert_eq!(held, CommandRecording::from_primitives(every_primitive()));
+    assert_eq!(again.len(), 1);
+
+    let recorder = CommandRecorder::reusing(again.clone());
+    let copy = recorder.clone();
+    assert!(!Arc::ptr_eq(
+        recorder.finish().shape_recorder(),
+        again.shape_recorder()
+    ));
+    assert!(!Arc::ptr_eq(
+        copy.finish().shape_recorder(),
+        again.shape_recorder()
+    ));
+}
+
+#[test]
+fn empty_recordings_share_their_shapes() {
+    let first = CommandRecording::default();
+    let second = CommandRecording::default();
+    assert!(Arc::ptr_eq(first.shape_recorder(), second.shape_recorder()));
+    assert!(first.is_empty());
+    assert_eq!(first, CommandRecorder::default().finish());
+}
+
+#[test]
 fn the_record_is_seven_rows() {
     assert_eq!(std::mem::size_of::<ShapeRecord>(), 112);
     assert_eq!(std::mem::size_of::<BrushRecord>(), 48);

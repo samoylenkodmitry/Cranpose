@@ -1342,9 +1342,19 @@ impl Default for RecordingContent {
     }
 }
 
+thread_local! {
+    /// The shapes every empty recording shares, so making one allocates
+    /// nothing.
+    static NO_SHAPES: Arc<ShapeRecorder> = Arc::new(ShapeRecorder::default());
+}
+
 impl Default for CommandRecording {
     fn default() -> Self {
-        CommandRecorder::default().finish()
+        Self {
+            shapes: NO_SHAPES.with(Arc::clone),
+            content: RecordingContent::default(),
+            fingerprint: OnceCell::new(),
+        }
     }
 }
 
@@ -1360,9 +1370,11 @@ impl CommandRecording {
     /// Returns owned command data for further recording.
     /// Shape data is copied only when a retained reader still shares it.
     pub fn into_recorder(self) -> CommandRecorder {
+        let (shapes, vessel) = take_shapes(self.shapes, ShapeRecorder::clone);
         CommandRecorder {
-            shapes: Arc::unwrap_or_clone(self.shapes),
+            shapes,
             content: self.content,
+            vessel,
         }
     }
 
@@ -1673,10 +1685,49 @@ impl CommandRecording {
 
 /// Mutable command data owned exclusively while a draw scope records it.
 /// Publishing with [`Self::finish`] shares the completed shape data without copying it.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct CommandRecorder {
     shapes: ShapeRecorder,
     content: RecordingContent,
+    /// The emptied shape allocation of the recording this recorder took its
+    /// data from, which [`Self::finish`] fills again instead of allocating.
+    vessel: Option<Arc<ShapeRecorder>>,
+}
+
+impl Clone for CommandRecorder {
+    fn clone(&self) -> Self {
+        Self {
+            shapes: self.shapes.clone(),
+            content: self.content.clone(),
+            vessel: None,
+        }
+    }
+}
+
+/// The shapes `shared` holds and, when nothing else holds it, its emptied
+/// allocation; otherwise `copy` of them, for a retained reader keeps its own.
+fn take_shapes(
+    mut shared: Arc<ShapeRecorder>,
+    copy: impl FnOnce(&ShapeRecorder) -> ShapeRecorder,
+) -> (ShapeRecorder, Option<Arc<ShapeRecorder>>) {
+    match Arc::get_mut(&mut shared) {
+        Some(shapes) => (std::mem::take(shapes), Some(shared)),
+        None => (copy(&shared), None),
+    }
+}
+
+/// `shapes` shared, in `vessel` when it is still the only handle to it.
+fn fill_vessel(vessel: Option<Arc<ShapeRecorder>>, shapes: ShapeRecorder) -> Arc<ShapeRecorder> {
+    let Some(mut vessel) = vessel else {
+        return Arc::new(shapes);
+    };
+    match Arc::get_mut(&mut vessel) {
+        Some(slot) => {
+            *slot = shapes;
+            vessel
+        }
+        None => Arc::new(shapes),
+    }
 }
 
 impl CommandRecorder {
@@ -1692,13 +1743,14 @@ impl CommandRecorder {
     /// Reuses a completed command's buffer capacities for an empty recording.
     /// Retained readers keep their original shape data.
     pub fn reusing(recording: CommandRecording) -> Self {
-        let shapes = Arc::try_unwrap(recording.shapes).unwrap_or_else(|shared| ShapeRecorder {
+        let (shapes, vessel) = take_shapes(recording.shapes, |shared| ShapeRecorder {
             tables: shared.tables.with_capacity_of(),
             ..ShapeRecorder::default()
         });
         let mut recorder = Self {
             shapes,
             content: recording.content,
+            vessel,
         };
         recorder.clear();
         recorder
@@ -1707,7 +1759,7 @@ impl CommandRecorder {
     /// Publishes completed command data without copying its shape columns.
     pub fn finish(self) -> CommandRecording {
         CommandRecording {
-            shapes: Arc::new(self.shapes),
+            shapes: fill_vessel(self.vessel, self.shapes),
             content: self.content,
             fingerprint: OnceCell::new(),
         }
