@@ -178,14 +178,11 @@ fn log_node_measure_telemetry(
     kind: &'static str,
     node_id: NodeId,
     constraints: Constraints,
-    size: Size,
-    children: usize,
-    start: Instant,
+    measured: &MeasuredNode,
+    (threshold_ms, start): (f64, Instant),
 ) {
-    let Some(threshold_ms) = layout_measure_telemetry_threshold_ms() else {
-        return;
-    };
-
+    let size = measured.size;
+    let children = measured.children.len();
     let total_ms = start.elapsed().as_secs_f64() * 1000.0;
     if total_ms < threshold_ms {
         return;
@@ -251,17 +248,21 @@ impl Drop for ApplierSlotGuard<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ModifierChainInputs {
+    density: crate::density::Density,
+    window_root: bool,
+    offset: Point,
+    uses_chain: bool,
+}
+
 struct ModifierChainMeasurement {
     size: Size,
     content_offset: Point,
     offset: Point,
     window_root: bool,
+    uses_chain: bool,
 }
-
-type LayoutModifierNodeData = (
-    usize,
-    Rc<RefCell<Box<dyn cranpose_foundation::ModifierNode>>>,
-);
 
 struct ScratchVecPool<T> {
     available: Vec<Vec<T>>,
@@ -293,9 +294,7 @@ impl<T> Default for ScratchVecPool<T> {
 
 #[derive(Default)]
 pub(crate) struct FrameLayoutArena {
-    tmp_records: ScratchVecPool<(NodeId, ChildRecord)>,
     tmp_child_ids: ScratchVecPool<NodeId>,
-    tmp_layout_node_data: ScratchVecPool<LayoutModifierNodeData>,
     tmp_placements: ScratchVecPool<Placement>,
 }
 
@@ -1352,19 +1351,6 @@ impl HeldChildren {
     }
 }
 
-/// Writes a node's coordinator geometry with `write`, and reports the node
-/// to the scene when a coordinator moved: a layer bounded by an inner
-/// coordinator moves with it, though the node's own size may not.
-fn write_node_geometry(
-    geometry: Option<&crate::modifier::CoordinatorGeometry>,
-    node_id: NodeId,
-    write: impl FnOnce(&crate::modifier::CoordinatorGeometry) -> bool,
-) {
-    if geometry.is_some_and(write) {
-        crate::render_state::record_geometry_scene_node(node_id);
-    }
-}
-
 /// The modal the semantics tree of `root` would be rooted at, found without
 /// building the tree: the topmost placed, visible modal that takes space,
 /// or `None` when no modal is open. Unlike a tree build, it leaves the
@@ -1570,7 +1556,7 @@ pub fn measure_layout_with_options(
     let after_guard = Instant::now();
 
     let frame_arena = crate::render_state::take_layout_frame_arena();
-    let mut builder = LayoutBuilder::new_with_epoch(
+    let builder = LayoutBuilder::new_with_epoch(
         Rc::clone(&applier_host),
         epoch,
         Rc::clone(&slots_handle),
@@ -1578,7 +1564,9 @@ pub fn measure_layout_with_options(
     );
     let after_builder = Instant::now();
 
-    let measured = builder.measure_node(root, normalize_constraints(constraints))?;
+    let measured = builder
+        .state
+        .measure_node(root, normalize_constraints(constraints))?;
     let after_measure = Instant::now();
 
     if let Ok(mut applier) = applier_host.try_borrow_typed()
@@ -1670,7 +1658,7 @@ fn process_pending_layout_repasses(
 }
 
 struct LayoutBuilder {
-    state: Rc<RefCell<LayoutBuilderState>>,
+    state: Rc<LayoutBuilderState>,
 }
 
 impl LayoutBuilder {
@@ -1681,25 +1669,13 @@ impl LayoutBuilder {
         frame_arena: FrameLayoutArena,
     ) -> Self {
         Self {
-            state: Rc::new(RefCell::new(LayoutBuilderState::new_with_epoch(
+            state: Rc::new(LayoutBuilderState::new_with_epoch(
                 applier,
                 epoch,
                 slots,
                 frame_arena,
-            ))),
+            )),
         }
-    }
-
-    fn measure_node(
-        &mut self,
-        node_id: NodeId,
-        constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
-        LayoutBuilderState::measure_node(Rc::clone(&self.state), node_id, constraints)
-    }
-
-    fn set_runtime_handle(&mut self, handle: Option<RuntimeHandle>) {
-        self.state.borrow_mut().runtime_handle = handle;
     }
 }
 
@@ -1708,36 +1684,41 @@ impl Drop for LayoutBuilder {
         if Rc::strong_count(&self.state) != 1 {
             return;
         }
-        let Ok(mut state) = self.state.try_borrow_mut() else {
+        let Ok(mut frame_arena) = self.state.frame_arena.try_borrow_mut() else {
             return;
         };
-        crate::render_state::replace_layout_frame_arena(std::mem::take(&mut state.frame_arena));
+        crate::render_state::replace_layout_frame_arena(std::mem::take(&mut *frame_arena));
     }
 }
 
 struct LayoutBuilderState {
     applier: Rc<ConcreteApplierHost<MemoryApplier>>,
-    runtime_handle: Option<RuntimeHandle>,
+    runtime_handle: RefCell<Option<RuntimeHandle>>,
     slots: Rc<RefCell<SlotTable>>,
     cache_epoch: u64,
     cache_floor: u64,
-    frame_arena: FrameLayoutArena,
+    frame_arena: RefCell<FrameLayoutArena>,
 }
 
-struct LayoutRuntimeFrameBindingCleanup {
-    state: Rc<RefCell<LayoutRuntimeState>>,
+struct LayoutRuntimeFrameBindingCleanup<'a> {
+    state: &'a RefCell<LayoutRuntimeState>,
 }
 
-impl LayoutRuntimeFrameBindingCleanup {
-    fn new(state: Rc<RefCell<LayoutRuntimeState>>) -> Self {
-        Self { state }
-    }
-}
-
-impl Drop for LayoutRuntimeFrameBindingCleanup {
+impl Drop for LayoutRuntimeFrameBindingCleanup<'_> {
     fn drop(&mut self) {
-        self.state.borrow().clear_frame_bindings();
+        self.state.borrow().frame.unbind();
     }
+}
+
+enum LayoutNodeVisit<'a> {
+    Cached(Rc<MeasuredNode>),
+    Measure(LayoutNodeMeasure<'a>),
+}
+
+struct LayoutNodeMeasure<'a> {
+    runtime_state: Rc<RefCell<LayoutRuntimeState>>,
+    chain: ModifierChainInputs,
+    pools: VecPools<'a>,
 }
 
 impl LayoutBuilderState {
@@ -1751,122 +1732,64 @@ impl LayoutBuilderState {
 
         Self {
             applier,
-            runtime_handle,
+            runtime_handle: RefCell::new(runtime_handle),
             slots,
             cache_epoch: epoch,
             cache_floor: crate::render_state::layout_cache_floor(),
-            frame_arena,
+            frame_arena: RefCell::new(frame_arena),
         }
-    }
-
-    fn try_with_applier_result<R>(
-        state_rc: &Rc<RefCell<Self>>,
-        f: impl FnOnce(&mut MemoryApplier) -> Result<R, NodeError>,
-    ) -> Option<Result<R, NodeError>> {
-        let host = {
-            let state = state_rc.borrow();
-            Rc::clone(&state.applier)
-        };
-
-        let Ok(mut applier) = host.try_borrow_typed() else {
-            return None;
-        };
-
-        Some(f(&mut applier))
     }
 
     fn with_applier_result<R>(
-        state_rc: &Rc<RefCell<Self>>,
+        &self,
         f: impl FnOnce(&mut MemoryApplier) -> Result<R, NodeError>,
     ) -> Result<R, NodeError> {
-        Self::try_with_applier_result(state_rc, f).unwrap_or_else(|| {
-            Err(NodeError::MissingContext {
+        let Ok(mut applier) = self.applier.try_borrow_typed() else {
+            return Err(NodeError::MissingContext {
                 id: NodeId::default(),
                 reason: "applier already borrowed",
-            })
-        })
+            });
+        };
+        f(&mut applier)
     }
 
-    fn clear_node_placed(state_rc: &Rc<RefCell<Self>>, node_id: NodeId) {
-        let host = {
-            let state = state_rc.borrow();
-            Rc::clone(&state.applier)
-        };
-        let Ok(mut applier) = host.try_borrow_typed() else {
+    fn clear_subcompose_placed(&self, node_id: NodeId) {
+        let Ok(mut applier) = self.applier.try_borrow_typed() else {
             return;
         };
-        if applier
-            .with_node::<LayoutNode, _>(node_id, |node| {
-                node.clear_placed();
-            })
-            .is_err()
-        {
-            let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                node.clear_placed();
-            });
-        }
+        let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+            node.clear_placed();
+        });
     }
 
     fn measure_node(
-        state_rc: Rc<RefCell<Self>>,
+        self: &Rc<Self>,
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<Rc<MeasuredNode>, NodeError> {
-        let telemetry_start = Instant::now();
-        Self::clear_node_placed(&state_rc, node_id);
-
-        if let Some(subcompose) =
-            Self::try_measure_subcompose(Rc::clone(&state_rc), node_id, constraints)?
-        {
-            log_node_measure_telemetry(
-                "subcompose",
-                node_id,
-                constraints,
-                subcompose.size,
-                subcompose.children.len(),
-                telemetry_start,
-            );
-            return Ok(subcompose);
+        let telemetry = layout_measure_telemetry_threshold_ms().map(|ms| (ms, Instant::now()));
+        let (kind, measured) =
+            if let Some(measured) = self.measure_layout_node(node_id, constraints)? {
+                ("layout", measured)
+            } else {
+                self.clear_subcompose_placed(node_id);
+                match self.try_measure_subcompose(node_id, constraints)? {
+                    Some(measured) => ("subcompose", measured),
+                    None => (
+                        "fallback",
+                        Rc::new(MeasuredNode::new(
+                            node_id,
+                            Size::default(),
+                            Point { x: 0.0, y: 0.0 },
+                            Point::default(),
+                            Vec::new(),
+                        )),
+                    ),
+                }
+            };
+        if let Some(telemetry) = telemetry {
+            log_node_measure_telemetry(kind, node_id, constraints, &measured, telemetry);
         }
-
-        if let Some(result) = Self::try_with_applier_result(&state_rc, |applier| {
-            match applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                LayoutNodeSnapshot::from_layout_node(layout_node)
-            }) {
-                Ok(snapshot) => Ok(Some(snapshot)),
-                Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-                Err(err) => Err(err),
-            }
-        }) && let Some(snapshot) = result?
-        {
-            let measured =
-                Self::measure_layout_node(Rc::clone(&state_rc), node_id, snapshot, constraints)?;
-            log_node_measure_telemetry(
-                "layout",
-                node_id,
-                constraints,
-                measured.size,
-                measured.children.len(),
-                telemetry_start,
-            );
-            return Ok(measured);
-        }
-
-        let measured = Rc::new(MeasuredNode::new(
-            node_id,
-            Size::default(),
-            Point { x: 0.0, y: 0.0 },
-            Point::default(),
-            Vec::new(),
-        ));
-        log_node_measure_telemetry(
-            "fallback",
-            node_id,
-            constraints,
-            measured.size,
-            measured.children.len(),
-            telemetry_start,
-        );
         Ok(measured)
     }
 
@@ -1875,45 +1798,55 @@ impl LayoutBuilderState {
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
-        let Some(data) = Self::layout_child_measure_data(applier, node_id)? else {
-            return Ok(None);
-        };
-        if data.needs_measure
-            || data.needs_layout
-            || data.cache.epoch() == 0
-            || data.cache.epoch() != crate::render_state::current_layout_cache_epoch()
-        {
-            return Ok(None);
+        fn served(
+            cache: &LayoutNodeCacheHandles,
+            dirty: bool,
+            constraints: Constraints,
+        ) -> Option<Rc<MeasuredNode>> {
+            let epoch = cache.epoch();
+            if dirty || epoch == 0 || epoch != crate::render_state::current_layout_cache_epoch() {
+                return None;
+            }
+            cache.get_measurement(constraints)
         }
 
-        let Some(measured) = data.cache.get_measurement(constraints) else {
-            return Ok(None);
-        };
-
-        if let Some(layout_state) = data.layout_state {
-            let mut layout_state = layout_state.borrow_mut();
-            layout_state.set_size(measured.size);
-        } else {
-            let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                node.set_measured_size(measured.size);
-            });
+        match applier.with_node::<LayoutNode, _>(node_id, |node| {
+            let measured = served(
+                node.cache_handles(),
+                node.needs_measure() || node.needs_layout(),
+                constraints,
+            )?;
+            node.set_measured_size(measured.size);
+            Some(measured)
+        }) {
+            Ok(measured) => Ok(measured),
+            Err(NodeError::TypeMismatch { .. }) => {
+                match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                    let measured = served(
+                        node.cache_handles(),
+                        node.needs_measure() || node.needs_layout(),
+                        constraints,
+                    )?;
+                    node.set_measured_size(measured.size);
+                    Some(measured)
+                }) {
+                    Ok(measured) => Ok(measured),
+                    Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
+                    Err(err) => Err(err),
+                }
+            }
+            Err(NodeError::Missing { .. }) => Ok(None),
+            Err(err) => Err(err),
         }
-
-        Ok(Some(measured))
     }
 
     fn try_measure_subcompose(
-        state_rc: Rc<RefCell<Self>>,
+        self: &Rc<Self>,
         node_id: NodeId,
         constraints: Constraints,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
-        let applier_host = {
-            let state = state_rc.borrow();
-            Rc::clone(&state.applier)
-        };
-
         let (node_handle, resolved_modifiers) = {
-            let Ok(mut applier) = applier_host.try_borrow_typed() else {
+            let Ok(mut applier) = self.applier.try_borrow_typed() else {
                 return Ok(None);
             };
             let node = match applier.get_mut(node_id) {
@@ -1936,19 +1869,16 @@ impl LayoutBuilderState {
         };
 
         let runtime_handle = {
-            let mut state = state_rc.borrow_mut();
-            if state.runtime_handle.is_none()
-                && let Ok(applier) = applier_host.try_borrow_typed()
+            let mut runtime_handle = self.runtime_handle.borrow_mut();
+            if runtime_handle.is_none()
+                && let Ok(applier) = self.applier.try_borrow_typed()
             {
-                state.runtime_handle = applier.runtime_handle();
+                *runtime_handle = applier.runtime_handle();
             }
-            state
-                .runtime_handle
-                .clone()
-                .ok_or(NodeError::MissingContext {
-                    id: node_id,
-                    reason: "runtime handle required for subcomposition",
-                })?
+            runtime_handle.clone().ok_or(NodeError::MissingContext {
+                id: node_id,
+                reason: "runtime handle required for subcomposition",
+            })?
         };
 
         let props = resolved_modifiers.layout_properties();
@@ -1967,9 +1897,9 @@ impl LayoutBuilderState {
             inner_constraints.min_height = inner_constraints.min_height.min(constrained_height);
         }
 
-        let mut slots_guard = SlotsGuard::take(Rc::clone(&state_rc));
+        let mut slots_guard = SlotsGuard::take(&self.slots);
         let slots_host = slots_guard.host();
-        let applier_host_dyn: Rc<dyn ApplierHost> = applier_host.clone();
+        let applier_host_dyn: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
         let observer = SnapshotStateObserver::new(|callback| callback());
         let composer = Composer::new(
             Rc::clone(&slots_host),
@@ -1980,62 +1910,43 @@ impl LayoutBuilderState {
         );
         composer.enter_phase(Phase::Measure);
 
-        let state_rc_clone = Rc::clone(&state_rc);
         let measure_error = RefCell::new(None);
-        let state_rc_for_subcompose = Rc::clone(&state_rc_clone);
-        let error_for_subcompose = &measure_error;
         let measured_children = node_handle.measured_children_scratch();
-        let measured_children_for_subcompose = Rc::clone(&measured_children);
-        let state_rc_for_cached = Rc::clone(&state_rc_clone);
-        let error_for_cached = &measure_error;
-        let measured_children_for_cached = Rc::clone(&measured_children);
-        let measured_children_for_lookup = Rc::clone(&measured_children);
-        let measured_children_for_retained = Rc::clone(&measured_children);
 
         let measure_result = node_handle.measure_with_cached_batch(
             &composer,
             node_id,
             inner_constraints,
             CachedBatchMeasureInputs {
-                measurer: Box::new(
-                    move |child_id: NodeId, child_constraints: Constraints| -> Size {
-                        match Self::measure_node(
-                            Rc::clone(&state_rc_for_subcompose),
-                            child_id,
-                            child_constraints,
-                        ) {
-                            Ok(measured) => {
-                                measured_children_for_subcompose
-                                    .borrow_mut()
-                                    .insert(child_id, Rc::clone(&measured));
-                                measured.size
-                            }
-                            Err(err) => {
-                                let mut slot = error_for_subcompose.borrow_mut();
-                                if slot.is_none() {
-                                    *slot = Some(err);
-                                }
-                                Size::default()
-                            }
+                measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| -> Size {
+                    match self.measure_node(child_id, child_constraints) {
+                        Ok(measured) => {
+                            measured_children
+                                .borrow_mut()
+                                .insert(child_id, Rc::clone(&measured));
+                            measured.size
                         }
-                    },
-                ),
+                        Err(err) => {
+                            let mut slot = measure_error.borrow_mut();
+                            if slot.is_none() {
+                                *slot = Some(err);
+                            }
+                            Size::default()
+                        }
+                    }
+                }),
                 cached_measure_batch_registrar: Box::new(
-                    move |child_ids: &[NodeId],
-                          child_constraints: Constraints,
-                          out: &mut Vec<Option<Size>>| {
+                    |child_ids: &[NodeId],
+                     child_constraints: Constraints,
+                     out: &mut Vec<Option<Size>>| {
                         out.clear();
                         out.resize(child_ids.len(), None);
 
-                        let applier_host = {
-                            let state = state_rc_for_cached.borrow();
-                            Rc::clone(&state.applier)
-                        };
-                        let Ok(mut applier) = applier_host.try_borrow_typed() else {
+                        let Ok(mut applier) = self.applier.try_borrow_typed() else {
                             return;
                         };
 
-                        let mut measured_children = measured_children_for_cached.borrow_mut();
+                        let mut measured_children = measured_children.borrow_mut();
                         for (index, &child_id) in child_ids.iter().enumerate() {
                             match Self::cached_measure_node_with_applier(
                                 &mut applier,
@@ -2048,7 +1959,7 @@ impl LayoutBuilderState {
                                 }
                                 Ok(None) => {}
                                 Err(err) => {
-                                    let mut slot = error_for_cached.borrow_mut();
+                                    let mut slot = measure_error.borrow_mut();
                                     if slot.is_none() {
                                         *slot = Some(err);
                                     }
@@ -2058,14 +1969,11 @@ impl LayoutBuilderState {
                         }
                     },
                 ),
-                retained_measure_lookup: Box::new(move |child_id| {
-                    measured_children_for_lookup
-                        .borrow()
-                        .get(&child_id)
-                        .cloned()
+                retained_measure_lookup: Box::new(|child_id| {
+                    measured_children.borrow().get(&child_id).cloned()
                 }),
-                retained_measure_registrar: Box::new(move |measurements| {
-                    let mut measured_children = measured_children_for_retained.borrow_mut();
+                retained_measure_registrar: Box::new(|measurements| {
+                    let mut measured_children = measured_children.borrow_mut();
                     for measured in measurements {
                         measured_children.insert(measured.node_id(), Rc::clone(measured));
                     }
@@ -2108,7 +2016,7 @@ impl LayoutBuilderState {
         let mut children = Vec::with_capacity(placements.len());
         let mut measured_children_by_id = measured_children.borrow_mut();
 
-        if let Ok(mut applier) = applier_host.try_borrow_typed() {
+        if let Ok(mut applier) = self.applier.try_borrow_typed() {
             let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |parent_node| {
                 parent_node.set_measured_size(Size { width, height });
                 parent_node.clear_needs_measure();
@@ -2120,7 +2028,7 @@ impl LayoutBuilderState {
             let child = if let Some(measured) = measured_children_by_id.remove(&placement.node_id) {
                 measured
             } else {
-                Self::measure_node(Rc::clone(&state_rc), placement.node_id, inner_constraints)?
+                self.measure_node(placement.node_id, inner_constraints)?
             };
             let policy_position = Point {
                 x: padding.left + placement.x,
@@ -2131,7 +2039,7 @@ impl LayoutBuilderState {
                 y: policy_position.y + child.offset.y,
             };
 
-            if let Ok(mut applier) = applier_host.try_borrow_typed()
+            if let Ok(mut applier) = self.applier.try_borrow_typed()
                 && applier
                     .with_node::<LayoutNode, _>(placement.node_id, |node| {
                         node.set_position(retained_position);
@@ -2160,123 +2068,211 @@ impl LayoutBuilderState {
             children,
         ))))
     }
-    fn measure_through_modifier_chain(
-        state_rc: &Rc<RefCell<Self>>,
+
+    fn measure_layout_node(
+        self: &Rc<Self>,
         node_id: NodeId,
-        runtime_state: &mut LayoutRuntimeState,
-        measure_policy: &Rc<dyn MeasurePolicy>,
         constraints: Constraints,
-        layout_node_data: &mut Vec<LayoutModifierNodeData>,
-        placements: &mut Vec<Placement>,
-    ) -> ModifierChainMeasurement {
-        use cranpose_foundation::NodeCapabilities;
-
-        layout_node_data.clear();
-        let mut offset = Point::default();
-        let mut density = crate::density::Density::default();
-        let mut window_root = false;
-        let mut geometry = None;
-
+    ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
+        let Ok(mut applier) = self.applier.try_borrow_typed() else {
+            return Ok(None);
+        };
+        let LayoutNodeMeasure {
+            runtime_state,
+            chain,
+            mut pools,
+        } = match applier
+            .with_node::<LayoutNode, _>(node_id, |node| self.visit_layout_node(node, constraints))
         {
-            let state = state_rc.borrow();
-            let mut applier = state.applier.borrow_typed();
+            Ok(LayoutNodeVisit::Measure(measure)) => measure,
+            Ok(LayoutNodeVisit::Cached(measured)) => return Ok(Some(measured)),
+            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => return Ok(None),
+            Err(err) => return Err(err),
+        };
 
-            let _ = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
-                density = layout_node.density();
-                window_root = layout_node.is_window_root();
-                geometry = Some(layout_node.coordinator_geometry());
-                let chain_handle = layout_node.modifier_chain();
+        let _frame_binding_cleanup = LayoutRuntimeFrameBindingCleanup {
+            state: &runtime_state,
+        };
+        self.bind_layout_children(&mut applier, &runtime_state, &pools.child_ids)?;
+        drop(applier);
 
-                if !chain_handle.has_layout_nodes() {
-                    return;
-                }
+        let runtime_state = runtime_state.borrow();
+        let measurement = self.measure_through_modifier_chain(
+            node_id,
+            &runtime_state,
+            chain,
+            constraints,
+            &mut pools.placements,
+        );
 
-                chain_handle.chain().for_each_forward_matching(
-                    NodeCapabilities::LAYOUT,
-                    |node_ref| {
-                        if let Some(index) = node_ref.entry_index() {
-                            if let Some(node_rc) = chain_handle.chain().get_node_rc(index) {
-                                layout_node_data.push((index, Rc::clone(&node_rc)));
-                            }
-
-                            node_ref.with_node(|node| {
-                                if let Some(offset_node) =
-                                    node.as_any()
-                                        .downcast_ref::<crate::modifier_nodes::OffsetNode>()
-                                {
-                                    let delta = offset_node.device_offset(density.density());
-                                    offset.x += delta.x;
-                                    offset.y += delta.y;
-                                }
-                            });
-                        }
-                    },
-                );
-            });
+        if let Some(err) = runtime_state.frame.error.borrow_mut().take() {
+            for child_state in &runtime_state.child_states {
+                child_state.measured.borrow_mut().take();
+            }
+            self.with_applier_result(|applier| {
+                applier.with_node::<LayoutNode, _>(node_id, |node| {
+                    runtime_state.write_node_geometry(node_id, node, &measurement);
+                })
+            })
+            .ok();
+            return Err(err);
         }
 
-        let scope = crate::density::DensityMeasureScope::new(density);
+        let measured = Rc::new(
+            MeasuredNode::new(
+                node_id,
+                measurement.size,
+                measurement.offset,
+                measurement.content_offset,
+                runtime_state.measured_children(&pools.placements, measurement.content_offset),
+            )
+            .with_window_root(measurement.window_root),
+        );
 
-        if layout_node_data.is_empty() {
-            let final_size = measure_policy.measure_into(
+        self.with_applier_result(|applier| {
+            applier.with_node::<LayoutNode, _>(node_id, |node| {
+                node.cache_handles()
+                    .store_measurement(constraints, Rc::clone(&measured));
+                runtime_state.write_node_geometry(node_id, node, &measurement);
+                node.clear_needs_measure();
+                node.clear_needs_layout();
+                node.set_measured_size(measurement.size);
+                node.set_content_offset(measurement.content_offset);
+            })
+        })
+        .ok();
+
+        Ok(Some(measured))
+    }
+
+    fn visit_layout_node(
+        &self,
+        node: &mut LayoutNode,
+        constraints: Constraints,
+    ) -> LayoutNodeVisit<'_> {
+        node.clear_placed();
+        let cache = node.cache_handles();
+        cache.activate(self.cache_epoch);
+        if !node.needs_measure()
+            && !node.needs_layout()
+            && let Some(cached) = cache.get_measurement(constraints)
+        {
+            node.clear_needs_measure();
+            node.clear_needs_layout();
+            return LayoutNodeVisit::Cached(cached);
+        }
+
+        let runtime_state = node.layout_runtime_state_handle();
+        let chain = runtime_state.borrow_mut().bind_node(node);
+        let mut pools = VecPools::acquire(&self.frame_arena);
+        pools.child_ids.extend_from_slice(&node.children);
+        LayoutNodeVisit::Measure(LayoutNodeMeasure {
+            runtime_state,
+            chain,
+            pools,
+        })
+    }
+
+    fn bind_layout_children(
+        self: &Rc<Self>,
+        applier: &mut MemoryApplier,
+        runtime_state: &RefCell<LayoutRuntimeState>,
+        child_ids: &[NodeId],
+    ) -> Result<(), NodeError> {
+        let mut runtime_state = runtime_state.borrow_mut();
+        runtime_state.frame.bind(self);
+        let mut bound = 0;
+        for &child_id in child_ids {
+            if self.bind_layout_child(applier, &mut runtime_state, bound, child_id)? {
+                bound += 1;
+            }
+        }
+        runtime_state.truncate_children(bound);
+        Ok(())
+    }
+
+    fn bind_layout_child(
+        &self,
+        applier: &mut MemoryApplier,
+        runtime_state: &mut LayoutRuntimeState,
+        position: usize,
+        child_id: NodeId,
+    ) -> Result<bool, NodeError> {
+        let bound = applier.with_node::<LayoutNode, _>(child_id, |child| {
+            runtime_state.child_state_at(position, child_id).bind(
+                LayoutChildBinding {
+                    cache: child.cache_handles(),
+                    layout_state: Some(child.layout_state_handle()),
+                    parent_data: Some(parent_data_of(child)),
+                    dirty: child.needs_layout() || child.needs_measure(),
+                },
+                self,
+            );
+        });
+        match bound {
+            Ok(()) => Ok(true),
+            Err(NodeError::TypeMismatch { .. }) => {
+                match applier.with_node::<SubcomposeLayoutNode, _>(child_id, |child| {
+                    runtime_state.child_state_at(position, child_id).bind(
+                        LayoutChildBinding {
+                            cache: child.cache_handles(),
+                            layout_state: None,
+                            parent_data: None,
+                            dirty: child.needs_layout() || child.needs_measure(),
+                        },
+                        self,
+                    );
+                }) {
+                    Ok(()) => Ok(true),
+                    Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(false),
+                    Err(err) => Err(err),
+                }
+            }
+            Err(NodeError::Missing { .. }) => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn measure_through_modifier_chain(
+        &self,
+        node_id: NodeId,
+        runtime_state: &LayoutRuntimeState,
+        chain: ModifierChainInputs,
+        constraints: Constraints,
+        placements: &mut Vec<Placement>,
+    ) -> ModifierChainMeasurement {
+        let scope = crate::density::DensityMeasureScope::new(chain.density);
+
+        if !chain.uses_chain {
+            let size = runtime_state.measure_policy.measure_into(
                 &scope,
-                runtime_state.child_measurables(),
+                runtime_state.child_measurables.as_slice(),
                 constraints,
                 placements,
             );
-            write_node_geometry(geometry.as_deref(), node_id, |geometry| {
-                geometry.replace([GeometryRect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: final_size.width,
-                    height: final_size.height,
-                }])
-            });
-
             return ModifierChainMeasurement {
-                size: final_size,
+                size,
                 content_offset: Point::default(),
-                offset,
-                window_root,
+                offset: chain.offset,
+                window_root: chain.window_root,
+                uses_chain: false,
             };
         }
 
-        runtime_state.reconcile_coordinator_chain(layout_node_data.as_slice());
         let frame = CoordinatorFrame::new(
-            measure_policy,
+            &runtime_state.measure_policy,
             &scope,
-            runtime_state.child_measurables(),
+            runtime_state.child_measurables.as_slice(),
             placements,
         );
-
         let placeable = runtime_state
-            .coordinator_chain()
+            .coordinator_chain
             .measure_from(0, &frame, constraints);
-        let final_size = Size {
-            width: placeable.width(),
-            height: placeable.height(),
-        };
-
-        write_node_geometry(geometry.as_deref(), node_id, |geometry| {
-            runtime_state
-                .coordinator_chain()
-                .write_geometry(geometry, offset)
-        });
-
-        let content_offset = placeable.content_offset();
-        let all_placement_offset = Point {
-            x: content_offset.0,
-            y: content_offset.1,
-        };
-
-        let content_offset = Point {
-            x: all_placement_offset.x - offset.x,
-            y: all_placement_offset.y - offset.y,
-        };
+        let (content_x, content_y) = placeable.content_offset();
 
         let invalidations = frame.take_invalidations();
         if !invalidations.is_empty() {
-            Self::with_applier_result(state_rc, |applier| {
+            self.with_applier_result(|applier| {
                 applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
                     for kind in invalidations {
                         match kind {
@@ -2293,347 +2289,62 @@ impl LayoutBuilderState {
         }
 
         ModifierChainMeasurement {
-            size: final_size,
-            content_offset,
-            offset,
-            window_root,
-        }
-    }
-
-    fn layout_child_measure_data(
-        applier: &mut MemoryApplier,
-        child_id: NodeId,
-    ) -> Result<Option<LayoutChildMeasureData>, NodeError> {
-        match applier.with_node::<LayoutNode, _>(child_id, |n| LayoutChildMeasureData {
-            cache: n.cache_handles(),
-            layout_state: Some(n.layout_state_handle()),
-            needs_layout: n.needs_layout(),
-            needs_measure: n.needs_measure(),
-        }) {
-            Ok(data) => Ok(Some(data)),
-            Err(NodeError::TypeMismatch { .. }) => {
-                match applier.with_node::<SubcomposeLayoutNode, _>(child_id, |n| {
-                    LayoutChildMeasureData {
-                        cache: n.cache_handles(),
-                        layout_state: None,
-                        needs_layout: n.needs_layout(),
-                        needs_measure: n.needs_measure(),
-                    }
-                }) {
-                    Ok(data) => Ok(Some(data)),
-                    Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-                    Err(err) => Err(err),
-                }
-            }
-            Err(NodeError::Missing { .. }) => Ok(None),
-            Err(err) => Err(err),
-        }
-    }
-
-    fn measure_layout_node(
-        state_rc: Rc<RefCell<Self>>,
-        node_id: NodeId,
-        snapshot: LayoutNodeSnapshot,
-        constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
-        let (cache_epoch, cache_floor) = {
-            let state = state_rc.borrow();
-            (state.cache_epoch, state.cache_floor)
-        };
-        let LayoutNodeSnapshot {
-            measure_policy,
-            cache,
-            layout_runtime_state,
-            needs_layout,
-            needs_measure,
-        } = snapshot;
-        cache.activate(cache_epoch);
-
-        if !needs_measure
-            && !needs_layout
-            && let Some(cached) = cache.get_measurement(constraints)
-        {
-            Self::with_applier_result(&state_rc, |applier| {
-                applier.with_node::<LayoutNode, _>(node_id, |node| {
-                    node.clear_needs_measure();
-                    node.clear_needs_layout();
-                })
-            })
-            .ok();
-            return Ok(cached);
-        }
-
-        let (runtime_handle, applier_host) = {
-            let state = state_rc.borrow();
-            (state.runtime_handle.clone(), Rc::clone(&state.applier))
-        };
-
-        let measure_handle = LayoutMeasureHandle::new(Rc::clone(&state_rc));
-        let error = Rc::clone(&layout_runtime_state.borrow().error);
-        error.borrow_mut().take();
-        let mut pools = VecPools::acquire(Rc::clone(&state_rc));
-        let (records, child_ids, layout_node_data, placements) = pools.parts();
-
-        applier_host
-            .borrow_typed()
-            .with_node::<LayoutNode, _>(node_id, |node| {
-                child_ids.extend_from_slice(&node.children);
-            })?;
-
-        let mut valid_child_count = 0;
-        for index in 0..child_ids.len() {
-            let child_id = child_ids[index];
-            let child_exists = {
-                let mut applier = applier_host.borrow_typed();
-                Self::layout_child_measure_data(&mut applier, child_id)?.is_some()
-            };
-            if child_exists {
-                child_ids[valid_child_count] = child_id;
-                valid_child_count += 1;
-            }
-        }
-        child_ids.truncate(valid_child_count);
-
-        let _frame_binding_cleanup =
-            LayoutRuntimeFrameBindingCleanup::new(Rc::clone(&layout_runtime_state));
-
-        {
-            let mut runtime_state = layout_runtime_state.borrow_mut();
-            runtime_state.reconcile_child_measurables(child_ids.as_slice());
-
-            for (index, &child_id) in child_ids.iter().enumerate() {
-                let data = {
-                    let mut applier = applier_host.borrow_typed();
-                    Self::layout_child_measure_data(&mut applier, child_id)?
-                };
-                let Some(data) = data else {
-                    continue;
-                };
-
-                let child_is_stale = data.is_stale(cache_floor);
-                let child_cache_epoch = if child_is_stale {
-                    cache_epoch
-                } else {
-                    data.cache.epoch()
-                };
-                let child_state = runtime_state.child_state(index);
-                child_state.configure(LayoutChildMeasureConfig {
-                    applier: Rc::clone(&applier_host),
-                    node_id: child_id,
-                    error: Rc::clone(&error),
-                    runtime_handle: runtime_handle.clone(),
-                    cache: data.cache,
-                    cache_epoch: child_cache_epoch,
-                    force_remeasure: child_is_stale,
-                    measure_handle: Some(measure_handle.clone()),
-                    layout_state: data.layout_state,
-                });
-                records.push((child_id, ChildRecord { state: child_state }));
-            }
-        }
-
-        let chain_constraints = constraints;
-
-        let modifier_chain_result = {
-            let mut runtime_state = layout_runtime_state.borrow_mut();
-            Self::measure_through_modifier_chain(
-                &state_rc,
-                node_id,
-                &mut runtime_state,
-                &measure_policy,
-                chain_constraints,
-                layout_node_data,
-                placements,
-            )
-        };
-
-        let (width, height, content_offset, offset, window_root) = {
-            let result = modifier_chain_result;
-            if let Some(err) = error.borrow_mut().take() {
-                return Err(err);
-            }
-
-            (
-                result.size.width,
-                result.size.height,
-                result.content_offset,
-                result.offset,
-                result.window_root,
-            )
-        };
-
-        let mut measured_children = Vec::with_capacity(records.len());
-        for (child_id, record) in records.iter() {
-            if let Some(measured) = record.state.take_measured() {
-                let placed = placements
-                    .iter()
-                    .find(|placement| placement.node_id == *child_id)
-                    .map(|placement| Point {
-                        x: placement.x,
-                        y: placement.y,
-                    });
-                if let Some(raw) = placed {
-                    record.state.place_retained(Point {
-                        x: raw.x + measured.offset.x,
-                        y: raw.y + measured.offset.y,
-                    });
-                }
-                let base_position = placed
-                    .or_else(|| record.state.last_position())
-                    .unwrap_or(Point { x: 0.0, y: 0.0 });
-                let position = Point {
-                    x: content_offset.x + base_position.x,
-                    y: content_offset.y + base_position.y,
-                };
-                measured_children.push(MeasuredChild {
-                    node: measured,
-                    offset: position,
-                });
-            }
-        }
-
-        let measured = Rc::new(
-            MeasuredNode::new(
-                node_id,
-                Size { width, height },
-                offset,
-                content_offset,
-                measured_children,
-            )
-            .with_window_root(window_root),
-        );
-
-        cache.store_measurement(constraints, Rc::clone(&measured));
-
-        Self::with_applier_result(&state_rc, |applier| {
-            applier.with_node::<LayoutNode, _>(node_id, |node| {
-                node.clear_needs_measure();
-                node.clear_needs_layout();
-                node.set_measured_size(Size { width, height });
-                node.set_content_offset(content_offset);
-            })
-        })
-        .ok();
-
-        Ok(measured)
-    }
-}
-
-struct LayoutChildMeasureData {
-    cache: LayoutNodeCacheHandles,
-    layout_state: Option<Rc<RefCell<LayoutState>>>,
-    needs_layout: bool,
-    needs_measure: bool,
-}
-
-impl LayoutChildMeasureData {
-    fn is_stale(&self, cache_floor: u64) -> bool {
-        self.needs_layout || self.needs_measure || self.cache.epoch() < cache_floor
-    }
-}
-
-struct LayoutNodeSnapshot {
-    measure_policy: Rc<dyn MeasurePolicy>,
-    cache: LayoutNodeCacheHandles,
-    layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
-    needs_layout: bool,
-    needs_measure: bool,
-}
-
-impl LayoutNodeSnapshot {
-    fn from_layout_node(node: &LayoutNode) -> Self {
-        Self {
-            measure_policy: Rc::clone(&node.measure_policy),
-            cache: node.cache_handles(),
-            layout_runtime_state: node.layout_runtime_state_handle(),
-            needs_layout: node.needs_layout(),
-            needs_measure: node.needs_measure(),
+            size: Size {
+                width: placeable.width(),
+                height: placeable.height(),
+            },
+            content_offset: Point {
+                x: content_x - chain.offset.x,
+                y: content_y - chain.offset.y,
+            },
+            offset: chain.offset,
+            window_root: chain.window_root,
+            uses_chain: true,
         }
     }
 }
 
-struct VecPools {
-    state: Rc<RefCell<LayoutBuilderState>>,
-    records: Vec<(NodeId, ChildRecord)>,
+struct VecPools<'a> {
+    arena: &'a RefCell<FrameLayoutArena>,
     child_ids: Vec<NodeId>,
-    layout_node_data: Vec<LayoutModifierNodeData>,
     placements: Vec<Placement>,
 }
 
-impl VecPools {
-    fn acquire(state: Rc<RefCell<LayoutBuilderState>>) -> Self {
-        let (records, child_ids, layout_node_data, placements) = {
-            let mut state_mut = state.borrow_mut();
-            (
-                state_mut.frame_arena.tmp_records.acquire(),
-                state_mut.frame_arena.tmp_child_ids.acquire(),
-                state_mut.frame_arena.tmp_layout_node_data.acquire(),
-                state_mut.frame_arena.tmp_placements.acquire(),
-            )
-        };
+impl<'a> VecPools<'a> {
+    fn acquire(arena: &'a RefCell<FrameLayoutArena>) -> Self {
+        let mut pools = arena.borrow_mut();
+        let child_ids = pools.tmp_child_ids.acquire();
+        let placements = pools.tmp_placements.acquire();
         Self {
-            state,
-            records,
+            arena,
             child_ids,
-            layout_node_data,
             placements,
         }
     }
-
-    #[expect(clippy::type_complexity)]
-    fn parts(
-        &mut self,
-    ) -> (
-        &mut Vec<(NodeId, ChildRecord)>,
-        &mut Vec<NodeId>,
-        &mut Vec<LayoutModifierNodeData>,
-        &mut Vec<Placement>,
-    ) {
-        (
-            &mut self.records,
-            &mut self.child_ids,
-            &mut self.layout_node_data,
-            &mut self.placements,
-        )
-    }
 }
 
-impl Drop for VecPools {
+impl Drop for VecPools<'_> {
     fn drop(&mut self) {
-        let mut state = self.state.borrow_mut();
-        state
-            .frame_arena
-            .tmp_records
-            .release(std::mem::take(&mut self.records));
-        state
-            .frame_arena
+        let mut pools = self.arena.borrow_mut();
+        pools
             .tmp_child_ids
             .release(std::mem::take(&mut self.child_ids));
-        state
-            .frame_arena
-            .tmp_layout_node_data
-            .release(std::mem::take(&mut self.layout_node_data));
-        state
-            .frame_arena
+        pools
             .tmp_placements
             .release(std::mem::take(&mut self.placements));
     }
 }
 
-struct SlotsGuard {
-    state: Rc<RefCell<LayoutBuilderState>>,
+struct SlotsGuard<'a> {
+    table: &'a RefCell<SlotTable>,
     slots: Option<SlotTable>,
 }
 
-impl SlotsGuard {
-    fn take(state: Rc<RefCell<LayoutBuilderState>>) -> Self {
-        let slots = {
-            let state_ref = state.borrow();
-            let mut slots_ref = state_ref.slots.borrow_mut();
-            std::mem::take(&mut *slots_ref)
-        };
+impl<'a> SlotsGuard<'a> {
+    fn take(table: &'a RefCell<SlotTable>) -> Self {
+        let slots = std::mem::take(&mut *table.borrow_mut());
         Self {
-            state,
+            table,
             slots: Some(slots),
         }
     }
@@ -2649,31 +2360,11 @@ impl SlotsGuard {
     }
 }
 
-impl Drop for SlotsGuard {
+impl Drop for SlotsGuard<'_> {
     fn drop(&mut self) {
         if let Some(slots) = self.slots.take() {
-            let state_ref = self.state.borrow();
-            *state_ref.slots.borrow_mut() = slots;
+            *self.table.borrow_mut() = slots;
         }
-    }
-}
-
-#[derive(Clone)]
-struct LayoutMeasureHandle {
-    state: Rc<RefCell<LayoutBuilderState>>,
-}
-
-impl LayoutMeasureHandle {
-    fn new(state: Rc<RefCell<LayoutBuilderState>>) -> Self {
-        Self { state }
-    }
-
-    fn measure(
-        &self,
-        node_id: NodeId,
-        constraints: Constraints,
-    ) -> Result<Rc<MeasuredNode>, NodeError> {
-        LayoutBuilderState::measure_node(Rc::clone(&self.state), node_id, constraints)
     }
 }
 
@@ -2742,10 +2433,6 @@ impl MeasuredNode {
 struct MeasuredChild {
     node: Rc<MeasuredNode>,
     offset: Point,
-}
-
-struct ChildRecord {
-    state: Rc<LayoutChildMeasureState>,
 }
 
 struct CoordinatorFrame<'a> {
@@ -2851,34 +2538,73 @@ struct CoordinatorChain {
 }
 
 impl CoordinatorChain {
-    fn reconcile(&mut self, layout_node_data: &[LayoutModifierNodeData]) {
-        if self.matches(layout_node_data) {
-            return;
+    fn sync(&mut self, node: &LayoutNode) -> ModifierChainInputs {
+        let density = node.density();
+        let mut inputs = ModifierChainInputs {
+            density,
+            window_root: node.is_window_root(),
+            offset: Point::default(),
+            uses_chain: false,
+        };
+        let chain_handle = node.modifier_chain();
+        if !chain_handle.has_layout_nodes() {
+            return inputs;
         }
 
-        let mut previous_nodes = std::mem::take(&mut self.nodes);
-        self.nodes.reserve(layout_node_data.len());
-
-        for (modifier_index, node) in layout_node_data {
-            if let Some(position) = previous_nodes
-                .iter()
-                .position(|candidate| candidate.matches(*modifier_index, node))
-            {
-                self.nodes.push(previous_nodes.swap_remove(position));
-            } else {
-                self.nodes
-                    .push(CoordinatorNode::new(*modifier_index, Rc::clone(node)));
+        let chain = chain_handle.chain();
+        let mut len = 0;
+        let mut matches = true;
+        chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
+            let Some(index) = node_ref.entry_index() else {
+                return;
+            };
+            if let Some(node) = chain.get_node_rc(index) {
+                matches = matches
+                    && self
+                        .nodes
+                        .get(len)
+                        .is_some_and(|candidate| candidate.matches(index, node));
+                len += 1;
             }
+            node_ref.with_node(|node| {
+                if let Some(offset_node) = node
+                    .as_any()
+                    .downcast_ref::<crate::modifier_nodes::OffsetNode>()
+                {
+                    let delta = offset_node.device_offset(density.density());
+                    inputs.offset.x += delta.x;
+                    inputs.offset.y += delta.y;
+                }
+            });
+        });
+
+        inputs.uses_chain = len > 0;
+        if inputs.uses_chain && !(matches && len == self.nodes.len()) {
+            self.rebuild(chain, len);
         }
+        inputs
     }
 
-    fn matches(&self, layout_node_data: &[LayoutModifierNodeData]) -> bool {
-        self.nodes.len() == layout_node_data.len()
-            && self
-                .nodes
+    fn rebuild(&mut self, chain: &cranpose_foundation::ModifierNodeChain, len: usize) {
+        let mut previous_nodes = std::mem::take(&mut self.nodes);
+        self.nodes.reserve(len);
+        chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
+            let Some((index, node)) = node_ref
+                .entry_index()
+                .and_then(|index| chain.get_node_rc(index).map(|node| (index, node)))
+            else {
+                return;
+            };
+            match previous_nodes
                 .iter()
-                .zip(layout_node_data.iter())
-                .all(|(node, (modifier_index, node_rc))| node.matches(*modifier_index, node_rc))
+                .position(|candidate| candidate.matches(index, node))
+            {
+                Some(position) => self.nodes.push(previous_nodes.swap_remove(position)),
+                None => self
+                    .nodes
+                    .push(CoordinatorNode::new(index, Rc::clone(node))),
+            }
+        });
     }
 
     fn measure_from(
@@ -3087,67 +2813,120 @@ impl CoordinatorChain {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct LayoutRuntimeState {
     child_ids: Vec<NodeId>,
     child_states: Vec<Rc<LayoutChildMeasureState>>,
     child_measurables: Vec<Box<dyn Measurable>>,
     coordinator_chain: CoordinatorChain,
-    /// Where the node's children report an error while it measures them,
-    /// kept with the node rather than made for every measure.
-    error: Rc<RefCell<Option<NodeError>>>,
+    measure_policy: Rc<dyn MeasurePolicy>,
+    frame: Rc<LayoutChildFrame>,
 }
 
 impl LayoutRuntimeState {
-    fn reconcile_child_measurables(&mut self, child_ids: &[NodeId]) {
-        if self.child_ids == child_ids {
-            return;
-        }
-
-        let mut previous_ids = std::mem::take(&mut self.child_ids);
-        let mut previous_states = std::mem::take(&mut self.child_states);
-        let mut previous_measurables = std::mem::take(&mut self.child_measurables);
-
-        self.child_ids.reserve(child_ids.len());
-        self.child_states.reserve(child_ids.len());
-        self.child_measurables.reserve(child_ids.len());
-
-        for &child_id in child_ids {
-            if let Some(position) = previous_ids.iter().position(|&id| id == child_id) {
-                self.child_ids.push(previous_ids.swap_remove(position));
-                self.child_states
-                    .push(previous_states.swap_remove(position));
-                self.child_measurables
-                    .push(previous_measurables.swap_remove(position));
-            } else {
-                let state = LayoutChildMeasureState::new(child_id);
-                self.child_ids.push(child_id);
-                self.child_states.push(Rc::clone(&state));
-                self.child_measurables
-                    .push(Box::new(LayoutChildMeasurable::new(state)));
-            }
+    pub(crate) fn new(measure_policy: Rc<dyn MeasurePolicy>) -> Self {
+        Self {
+            child_ids: Vec::new(),
+            child_states: Vec::new(),
+            child_measurables: Vec::new(),
+            coordinator_chain: CoordinatorChain::default(),
+            measure_policy,
+            frame: Rc::default(),
         }
     }
 
-    fn child_state(&self, index: usize) -> Rc<LayoutChildMeasureState> {
-        Rc::clone(&self.child_states[index])
+    fn bind_node(&mut self, node: &LayoutNode) -> ModifierChainInputs {
+        if !Rc::ptr_eq(&self.measure_policy, &node.measure_policy) {
+            self.measure_policy = Rc::clone(&node.measure_policy);
+        }
+        self.coordinator_chain.sync(node)
     }
 
-    fn child_measurables(&self) -> &[Box<dyn Measurable>] {
-        self.child_measurables.as_slice()
+    fn child_state_at(&mut self, position: usize, child_id: NodeId) -> &LayoutChildMeasureState {
+        if self.child_ids.get(position) != Some(&child_id) {
+            let from = match self.child_ids[position..]
+                .iter()
+                .position(|&id| id == child_id)
+            {
+                Some(offset) => position + offset,
+                None => {
+                    let state = LayoutChildMeasureState::new(child_id, Rc::clone(&self.frame));
+                    self.child_ids.push(child_id);
+                    self.child_states.push(Rc::clone(&state));
+                    self.child_measurables
+                        .push(Box::new(LayoutChildMeasurable::new(state)));
+                    self.child_ids.len() - 1
+                }
+            };
+            self.child_ids.swap(position, from);
+            self.child_states.swap(position, from);
+            self.child_measurables.swap(position, from);
+        }
+        &self.child_states[position]
     }
 
-    fn reconcile_coordinator_chain(&mut self, layout_node_data: &[LayoutModifierNodeData]) {
-        self.coordinator_chain.reconcile(layout_node_data);
+    fn truncate_children(&mut self, len: usize) {
+        self.child_ids.truncate(len);
+        self.child_states.truncate(len);
+        self.child_measurables.truncate(len);
     }
 
-    fn coordinator_chain(&self) -> &CoordinatorChain {
-        &self.coordinator_chain
-    }
-
-    fn clear_frame_bindings(&self) {
+    fn measured_children(
+        &self,
+        placements: &[Placement],
+        content_offset: Point,
+    ) -> Vec<MeasuredChild> {
+        let mut measured_children = Vec::with_capacity(self.child_states.len());
         for child_state in &self.child_states {
-            child_state.clear_frame_bindings();
+            let Some(measured) = child_state.measured.borrow_mut().take() else {
+                continue;
+            };
+            let placed = placements
+                .iter()
+                .find(|placement| placement.node_id == child_state.node_id)
+                .map(|placement| Point {
+                    x: placement.x,
+                    y: placement.y,
+                });
+            if let Some(raw) = placed {
+                child_state.place_retained(Point {
+                    x: raw.x + measured.offset.x,
+                    y: raw.y + measured.offset.y,
+                });
+            }
+            let base_position = placed
+                .or_else(|| child_state.last_position.get())
+                .unwrap_or(Point { x: 0.0, y: 0.0 });
+            measured_children.push(MeasuredChild {
+                node: measured,
+                offset: Point {
+                    x: content_offset.x + base_position.x,
+                    y: content_offset.y + base_position.y,
+                },
+            });
+        }
+        measured_children
+    }
+
+    fn write_node_geometry(
+        &self,
+        node_id: NodeId,
+        node: &LayoutNode,
+        measurement: &ModifierChainMeasurement,
+    ) {
+        let geometry = node.coordinator_geometry();
+        let moved = if measurement.uses_chain {
+            self.coordinator_chain
+                .write_geometry(geometry, measurement.offset)
+        } else {
+            geometry.replace([GeometryRect {
+                x: 0.0,
+                y: 0.0,
+                width: measurement.size.width,
+                height: measurement.size.height,
+            }])
+        };
+        if moved {
+            crate::render_state::record_geometry_scene_node(node_id);
         }
     }
 
@@ -3185,160 +2964,129 @@ pub(crate) struct LayoutRuntimeDebugStats {
     pub(crate) coordinator_node_count: usize,
 }
 
-struct LayoutChildMeasureConfig {
-    applier: Rc<ConcreteApplierHost<MemoryApplier>>,
-    node_id: NodeId,
-    error: Rc<RefCell<Option<NodeError>>>,
-    runtime_handle: Option<RuntimeHandle>,
-    cache: LayoutNodeCacheHandles,
-    cache_epoch: u64,
-    force_remeasure: bool,
-    measure_handle: Option<LayoutMeasureHandle>,
-    layout_state: Option<Rc<RefCell<LayoutState>>>,
+#[derive(Default)]
+struct LayoutChildFrame {
+    builder: RefCell<Option<Rc<LayoutBuilderState>>>,
+    error: RefCell<Option<NodeError>>,
 }
 
-struct LayoutChildMeasureState {
-    applier: RefCell<Option<Rc<ConcreteApplierHost<MemoryApplier>>>>,
-    node_id: Cell<NodeId>,
-    measured: RefCell<Option<Rc<MeasuredNode>>>,
-    last_position: Cell<Option<Point>>,
-    error: RefCell<Option<Rc<RefCell<Option<NodeError>>>>>,
-    runtime_handle: RefCell<Option<RuntimeHandle>>,
-    cache: RefCell<LayoutNodeCacheHandles>,
-    cache_epoch: Cell<u64>,
-    force_remeasure: Cell<bool>,
-    measure_handle: RefCell<Option<LayoutMeasureHandle>>,
-    layout_state: RefCell<Option<Rc<RefCell<LayoutState>>>>,
-}
-
-impl LayoutChildMeasureState {
-    fn new(node_id: NodeId) -> Rc<Self> {
-        Rc::new(Self {
-            applier: RefCell::new(None),
-            node_id: Cell::new(node_id),
-            measured: RefCell::new(None),
-            last_position: Cell::new(None),
-            error: RefCell::new(None),
-            runtime_handle: RefCell::new(None),
-            cache: RefCell::new(LayoutNodeCacheHandles::default()),
-            cache_epoch: Cell::new(0),
-            force_remeasure: Cell::new(true),
-            measure_handle: RefCell::new(None),
-            layout_state: RefCell::new(None),
-        })
+impl LayoutChildFrame {
+    fn bind(&self, builder: &Rc<LayoutBuilderState>) {
+        self.error.borrow_mut().take();
+        *self.builder.borrow_mut() = Some(Rc::clone(builder));
     }
 
-    fn configure(&self, config: LayoutChildMeasureConfig) {
-        config.cache.activate(config.cache_epoch);
-        *self.applier.borrow_mut() = Some(config.applier);
-        self.node_id.set(config.node_id);
-        self.measured.borrow_mut().take();
-        self.last_position.set(None);
-        *self.error.borrow_mut() = Some(config.error);
-        *self.runtime_handle.borrow_mut() = config.runtime_handle;
-        *self.cache.borrow_mut() = config.cache;
-        self.cache_epoch.set(config.cache_epoch);
-        self.force_remeasure.set(config.force_remeasure);
-        *self.measure_handle.borrow_mut() = config.measure_handle;
-        *self.layout_state.borrow_mut() = config.layout_state;
-    }
-
-    fn clear_frame_bindings(&self) {
-        self.measured.borrow_mut().take();
-        *self.applier.borrow_mut() = None;
-        *self.error.borrow_mut() = None;
-        *self.runtime_handle.borrow_mut() = None;
-        *self.measure_handle.borrow_mut() = None;
-        *self.layout_state.borrow_mut() = None;
-    }
-
-    fn node_id(&self) -> NodeId {
-        self.node_id.get()
-    }
-
-    fn cache(&self) -> LayoutNodeCacheHandles {
-        self.cache.borrow().clone()
-    }
-
-    fn applier(&self) -> Option<Rc<ConcreteApplierHost<MemoryApplier>>> {
-        self.applier.borrow().clone()
-    }
-
-    fn layout_state(&self) -> Option<Rc<RefCell<LayoutState>>> {
-        self.layout_state.borrow().clone()
-    }
-
-    fn take_measured(&self) -> Option<Rc<MeasuredNode>> {
-        self.measured.borrow_mut().take()
-    }
-
-    fn last_position(&self) -> Option<Point> {
-        self.last_position.get()
-    }
-
-    fn set_last_position(&self, position: Point) {
-        self.last_position.set(Some(position));
-    }
-
-    fn place_retained(&self, position: Point) {
-        self.set_last_position(position);
-        if let Some(layout_state) = self.layout_state() {
-            layout_state.borrow_mut().place(position);
-            return;
-        }
-        let Some(applier) = self.applier() else {
-            return;
-        };
-        let Ok(mut applier) = applier.try_borrow_typed() else {
-            return;
-        };
-        let node_id = self.node_id();
-        if applier
-            .with_node::<LayoutNode, _>(node_id, |node| {
-                node.set_position(position);
-            })
-            .is_err()
-        {
-            let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                node.set_position(position);
-            });
-        }
-    }
-
-    fn set_measured(&self, measured: Option<Rc<MeasuredNode>>) {
-        *self.measured.borrow_mut() = measured;
+    fn unbind(&self) {
+        self.builder.borrow_mut().take();
     }
 
     fn record_error(&self, err: NodeError) {
-        let Some(error) = self.error.borrow().clone() else {
+        if self.builder.borrow().is_none() {
             return;
-        };
-        let mut slot = error.borrow_mut();
+        }
+        let mut slot = self.error.borrow_mut();
         if slot.is_none() {
             *slot = Some(err);
         }
     }
+}
 
-    fn perform_measure(&self, constraints: Constraints) -> Result<Rc<MeasuredNode>, NodeError> {
-        let node_id = self.node_id();
-        if let Some(handle) = self.measure_handle.borrow().clone() {
-            return handle.measure(node_id, constraints);
-        }
-        let applier = self.applier().ok_or(NodeError::MissingContext {
-            id: node_id,
-            reason: "layout child applier not configured",
-        })?;
-        measure_node_with_host(
-            applier,
-            self.runtime_handle.borrow().clone(),
+struct LayoutChildBinding<'a> {
+    cache: &'a LayoutNodeCacheHandles,
+    layout_state: Option<&'a Rc<RefCell<LayoutState>>>,
+    parent_data: Option<cranpose_ui_layout::ParentData>,
+    dirty: bool,
+}
+
+fn parent_data_of(node: &LayoutNode) -> cranpose_ui_layout::ParentData {
+    let props = node.resolved_modifiers().layout_properties();
+    let weight = props.weight().unwrap_or_default();
+    cranpose_ui_layout::ParentData {
+        weight: weight.weight,
+        fill: weight.fill,
+        box_alignment: props.box_alignment(),
+        row_alignment: props.row_alignment(),
+        column_alignment: props.column_alignment(),
+    }
+}
+
+struct LayoutChildMeasureState {
+    node_id: NodeId,
+    frame: Rc<LayoutChildFrame>,
+    cache: RefCell<LayoutNodeCacheHandles>,
+    cache_epoch: Cell<u64>,
+    force_remeasure: Cell<bool>,
+    parent_data: Cell<Option<cranpose_ui_layout::ParentData>>,
+    measured: RefCell<Option<Rc<MeasuredNode>>>,
+    last_position: Cell<Option<Point>>,
+    layout_state: RefCell<Option<Rc<RefCell<LayoutState>>>>,
+}
+
+impl LayoutChildMeasureState {
+    fn new(node_id: NodeId, frame: Rc<LayoutChildFrame>) -> Rc<Self> {
+        Rc::new(Self {
             node_id,
-            constraints,
-            self.cache_epoch.get(),
-        )
+            frame,
+            cache: RefCell::new(LayoutNodeCacheHandles::default()),
+            cache_epoch: Cell::new(0),
+            force_remeasure: Cell::new(true),
+            parent_data: Cell::new(None),
+            measured: RefCell::new(None),
+            last_position: Cell::new(None),
+            layout_state: RefCell::new(None),
+        })
     }
 
-    fn intrinsic_measure(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
-        let cache = self.cache();
+    fn bind(&self, binding: LayoutChildBinding<'_>, pass: &LayoutBuilderState) {
+        let child_epoch = binding.cache.epoch();
+        let stale = binding.dirty || child_epoch < pass.cache_floor;
+        let cache_epoch = if stale { pass.cache_epoch } else { child_epoch };
+        binding.cache.activate(cache_epoch);
+        self.measured.borrow_mut().take();
+        self.last_position.set(None);
+        self.cache.borrow_mut().clone_from(binding.cache);
+        self.cache_epoch.set(cache_epoch);
+        self.force_remeasure.set(stale);
+        self.parent_data.set(binding.parent_data);
+        let mut layout_state = self.layout_state.borrow_mut();
+        let shared = layout_state
+            .as_ref()
+            .zip(binding.layout_state)
+            .is_some_and(|(current, bound)| Rc::ptr_eq(current, bound));
+        if !shared {
+            *layout_state = binding.layout_state.cloned();
+        }
+    }
+
+    fn place_retained(&self, position: Point) {
+        self.last_position.set(Some(position));
+        let builder = self.frame.builder.borrow();
+        let Some(builder) = builder.as_ref() else {
+            return;
+        };
+        if let Some(layout_state) = self.layout_state.borrow().as_ref() {
+            layout_state.borrow_mut().place(position);
+            return;
+        }
+        let Ok(mut applier) = builder.applier.try_borrow_typed() else {
+            return;
+        };
+        let _ = applier.with_node::<SubcomposeLayoutNode, _>(self.node_id, |node| {
+            node.set_position(position);
+        });
+    }
+
+    fn perform_measure(&self, constraints: Constraints) -> Result<Rc<MeasuredNode>, NodeError> {
+        let builder = self.frame.builder.borrow();
+        let builder = builder.as_ref().ok_or(NodeError::MissingContext {
+            id: self.node_id,
+            reason: "layout child applier not configured",
+        })?;
+        builder.measure_node(self.node_id, constraints)
+    }
+
+    fn measure_cached(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
+        let cache = self.cache.borrow();
         cache.activate(self.cache_epoch.get());
         if !self.force_remeasure.get()
             && let Some(cached) = cache.get_measurement(constraints)
@@ -3353,7 +3101,7 @@ impl LayoutChildMeasureState {
                 Some(measured)
             }
             Err(err) => {
-                self.record_error(err);
+                self.frame.record_error(err);
                 None
             }
         }
@@ -3370,25 +3118,32 @@ impl LayoutChildMeasurable {
     }
 
     fn resolved_parent_data(&self) -> Option<cranpose_ui_layout::ParentData> {
-        let applier = self.state.applier()?;
-        let node_id = self.state.node_id();
-        let Ok(mut applier) = applier.try_borrow_typed() else {
+        if self.state.frame.builder.borrow().is_none() {
             return None;
-        };
+        }
+        self.state.parent_data.get()
+    }
 
-        applier
-            .with_node::<LayoutNode, _>(node_id, |layout_node| {
-                let props = layout_node.resolved_modifiers().layout_properties();
-                let weight = props.weight().unwrap_or_default();
-                cranpose_ui_layout::ParentData {
-                    weight: weight.weight,
-                    fill: weight.fill,
-                    box_alignment: props.box_alignment(),
-                    row_alignment: props.row_alignment(),
-                    column_alignment: props.column_alignment(),
-                }
-            })
-            .ok()
+    fn intrinsic(
+        &self,
+        kind: IntrinsicKind,
+        constraints: Constraints,
+        extent: fn(Size) -> f32,
+    ) -> f32 {
+        let state = &self.state;
+        let cache = state.cache.borrow();
+        cache.activate(state.cache_epoch.get());
+        if !state.force_remeasure.get()
+            && let Some(value) = cache.get_intrinsic(&kind)
+        {
+            return value;
+        }
+        let Some(node) = state.measure_cached(constraints) else {
+            return 0.0;
+        };
+        let value = extent(node.size_for_parent());
+        cache.store_intrinsic(kind, value);
+        value
     }
 }
 
@@ -3410,174 +3165,83 @@ impl PlaceTarget for LayoutChildMeasureState {
 impl Measurable for LayoutChildMeasurable {
     fn measure(&self, constraints: Constraints) -> Placeable {
         let state = &self.state;
-        let cache = state.cache();
-        cache.activate(state.cache_epoch.get());
-        let measured_size;
-        if !state.force_remeasure.get() {
-            if let Some(cached) = cache.get_measurement(constraints) {
-                measured_size = cached.size;
-                state.set_measured(Some(Rc::clone(&cached)));
-            } else {
-                match state.perform_measure(constraints) {
-                    Ok(measured) => {
-                        state.force_remeasure.set(false);
-                        measured_size = measured.size;
-                        cache.store_measurement(constraints, Rc::clone(&measured));
-                        state.set_measured(Some(measured));
-                    }
-                    Err(err) => {
-                        state.record_error(err);
-                        state.set_measured(None);
-                        measured_size = Size {
-                            width: 0.0,
-                            height: 0.0,
-                        };
-                    }
-                }
-            }
-        } else {
-            match state.perform_measure(constraints) {
-                Ok(measured) => {
-                    state.force_remeasure.set(false);
-                    measured_size = measured.size;
-                    cache.store_measurement(constraints, Rc::clone(&measured));
-                    state.set_measured(Some(measured));
-                }
-                Err(err) => {
-                    state.record_error(err);
-                    state.set_measured(None);
-                    measured_size = Size {
-                        width: 0.0,
-                        height: 0.0,
-                    };
-                }
-            }
+        let measured = state.measure_cached(constraints);
+        let (measured_size, size_for_parent) = measured.as_ref().map_or(
+            (
+                Size {
+                    width: 0.0,
+                    height: 0.0,
+                },
+                Size {
+                    width: 0.0,
+                    height: 0.0,
+                },
+            ),
+            |measured| (measured.size, measured.size_for_parent()),
+        );
+        if let Some(layout_state) = state.layout_state.borrow().as_ref() {
+            layout_state.borrow_mut().set_size(measured_size);
         }
-
-        if let Some(layout_state) = state.layout_state() {
-            let mut layout_state = layout_state.borrow_mut();
-            layout_state.set_size(measured_size);
-        } else if let Some(applier) = state.applier() {
-            let Ok(mut applier) = applier.try_borrow_typed() else {
-                return Placeable::value(
-                    measured_size.width,
-                    measured_size.height,
-                    state.node_id(),
-                );
-            };
-            let _ = applier.with_node::<LayoutNode, _>(state.node_id(), |node| {
-                node.set_measured_size(measured_size);
-            });
-        }
-
-        let size_for_parent = state
-            .measured
-            .borrow()
-            .as_ref()
-            .map_or(measured_size, |measured| measured.size_for_parent());
+        *state.measured.borrow_mut() = measured;
 
         Placeable::with_place_target(
             size_for_parent.width,
             size_for_parent.height,
-            state.node_id(),
+            state.node_id,
             Rc::clone(&self.state) as Rc<dyn PlaceTarget>,
         )
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
-        let kind = IntrinsicKind::MinWidth(height);
-        let cache = self.state.cache();
-        cache.activate(self.state.cache_epoch.get());
-        if !self.state.force_remeasure.get()
-            && let Some(value) = cache.get_intrinsic(&kind)
-        {
-            return value;
-        }
-        let constraints = Constraints {
-            min_width: 0.0,
-            max_width: f32::INFINITY,
-            min_height: height,
-            max_height: height,
-        };
-        if let Some(node) = self.state.intrinsic_measure(constraints) {
-            let value = node.size_for_parent().width;
-            cache.store_intrinsic(kind, value);
-            value
-        } else {
-            0.0
-        }
+        self.intrinsic(
+            IntrinsicKind::MinWidth(height),
+            Constraints {
+                min_width: 0.0,
+                max_width: f32::INFINITY,
+                min_height: height,
+                max_height: height,
+            },
+            |size| size.width,
+        )
     }
 
     fn max_intrinsic_width(&self, height: f32) -> f32 {
-        let kind = IntrinsicKind::MaxWidth(height);
-        let cache = self.state.cache();
-        cache.activate(self.state.cache_epoch.get());
-        if !self.state.force_remeasure.get()
-            && let Some(value) = cache.get_intrinsic(&kind)
-        {
-            return value;
-        }
-        let constraints = Constraints {
-            min_width: 0.0,
-            max_width: f32::INFINITY,
-            min_height: 0.0,
-            max_height: height,
-        };
-        if let Some(node) = self.state.intrinsic_measure(constraints) {
-            let value = node.size_for_parent().width;
-            cache.store_intrinsic(kind, value);
-            value
-        } else {
-            0.0
-        }
+        self.intrinsic(
+            IntrinsicKind::MaxWidth(height),
+            Constraints {
+                min_width: 0.0,
+                max_width: f32::INFINITY,
+                min_height: 0.0,
+                max_height: height,
+            },
+            |size| size.width,
+        )
     }
 
     fn min_intrinsic_height(&self, width: f32) -> f32 {
-        let kind = IntrinsicKind::MinHeight(width);
-        let cache = self.state.cache();
-        cache.activate(self.state.cache_epoch.get());
-        if !self.state.force_remeasure.get()
-            && let Some(value) = cache.get_intrinsic(&kind)
-        {
-            return value;
-        }
-        let constraints = Constraints {
-            min_width: width,
-            max_width: width,
-            min_height: 0.0,
-            max_height: f32::INFINITY,
-        };
-        if let Some(node) = self.state.intrinsic_measure(constraints) {
-            let value = node.size_for_parent().height;
-            cache.store_intrinsic(kind, value);
-            value
-        } else {
-            0.0
-        }
+        self.intrinsic(
+            IntrinsicKind::MinHeight(width),
+            Constraints {
+                min_width: width,
+                max_width: width,
+                min_height: 0.0,
+                max_height: f32::INFINITY,
+            },
+            |size| size.height,
+        )
     }
 
     fn max_intrinsic_height(&self, width: f32) -> f32 {
-        let kind = IntrinsicKind::MaxHeight(width);
-        let cache = self.state.cache();
-        cache.activate(self.state.cache_epoch.get());
-        if !self.state.force_remeasure.get()
-            && let Some(value) = cache.get_intrinsic(&kind)
-        {
-            return value;
-        }
-        let constraints = Constraints {
-            min_width: 0.0,
-            max_width: width,
-            min_height: 0.0,
-            max_height: f32::INFINITY,
-        };
-        if let Some(node) = self.state.intrinsic_measure(constraints) {
-            let value = node.size_for_parent().height;
-            cache.store_intrinsic(kind, value);
-            value
-        } else {
-            0.0
-        }
+        self.intrinsic(
+            IntrinsicKind::MaxHeight(width),
+            Constraints {
+                min_width: 0.0,
+                max_width: width,
+                min_height: 0.0,
+                max_height: f32::INFINITY,
+            },
+            |size| size.height,
+        )
     }
 
     fn flex_parent_data(&self) -> Option<cranpose_ui_layout::FlexParentData> {
@@ -3594,27 +3258,6 @@ impl Measurable for LayoutChildMeasurable {
     fn parent_data(&self) -> cranpose_ui_layout::ParentData {
         self.resolved_parent_data().unwrap_or_default()
     }
-}
-
-fn measure_node_with_host(
-    applier: Rc<ConcreteApplierHost<MemoryApplier>>,
-    runtime_handle: Option<RuntimeHandle>,
-    node_id: NodeId,
-    constraints: Constraints,
-    epoch: u64,
-) -> Result<Rc<MeasuredNode>, NodeError> {
-    let runtime_handle = match runtime_handle {
-        Some(handle) => Some(handle),
-        None => applier.borrow_typed().runtime_handle(),
-    };
-    let mut builder = LayoutBuilder::new_with_epoch(
-        applier,
-        epoch,
-        Rc::new(RefCell::new(SlotTable::default())),
-        FrameLayoutArena::default(),
-    );
-    builder.set_runtime_handle(runtime_handle);
-    builder.measure_node(node_id, constraints)
 }
 
 #[derive(Clone)]

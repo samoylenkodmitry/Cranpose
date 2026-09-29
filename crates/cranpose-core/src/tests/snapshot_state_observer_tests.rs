@@ -43,7 +43,7 @@ fn scope_update_reuses_storage_and_replaces_payload_and_callback() {
     let address = stored.downcast_ref::<Rc<String>>().unwrap() as *const Rc<String>;
     let received = delivered.clone();
     entry.update(
-        second.clone(),
+        &second,
         Rc::new(move |scope| {
             received.borrow_mut().push(
                 scope
@@ -632,6 +632,26 @@ fn shared_state_notifies_scopes_in_registration_order() {
 
     assert_eq!(notifications.borrow().as_slice(), &["first", "second"]);
     observer.stop();
+}
+
+#[test]
+fn updating_a_recompose_scope_entry_keeps_its_scope_or_takes_the_new_one() {
+    let _guard = reset_runtime_for_tests();
+    let runtime = crate::TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    let other = RecomposeScope::new_for_test(runtime.handle());
+    let mut entry = ScopeEntry::new(0, scope.clone(), Rc::new(|_| {}));
+    let weak_count = Rc::weak_count(&scope.inner);
+
+    entry.update_scope(&scope);
+    assert_eq!(Rc::strong_count(&scope.inner), 1);
+    assert_eq!(Rc::weak_count(&scope.inner), weak_count);
+    assert!(entry.matches_scope(&scope));
+
+    entry.update_scope(&other);
+    assert!(entry.matches_scope(&other));
+    assert!(!entry.matches_scope(&scope));
+    assert_eq!(Rc::weak_count(&scope.inner), weak_count - 1);
 }
 
 #[test]
