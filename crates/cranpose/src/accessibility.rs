@@ -441,6 +441,7 @@ impl Default for AccessibilityElement {
 pub(crate) fn snapshot_if_changed<R>(
     shell: &mut AppShell<R>,
     seen_revision: &mut Option<u64>,
+    capacity: usize,
 ) -> Option<Vec<AccessibilityElement>>
 where
     R: Renderer,
@@ -450,13 +451,16 @@ where
     if *seen_revision == Some(revision) {
         return None;
     }
-    let next = snapshot(shell);
+    let next = snapshot(shell, capacity);
     *seen_revision = Some(shell.semantics_snapshot_revision());
     Some(next)
 }
 
+/// The elements a reader reaches, with room for `capacity` of them up front:
+/// as many as the snapshot published last held, so the list is allocated
+/// once rather than grown.
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) fn snapshot<R>(shell: &mut AppShell<R>) -> Vec<AccessibilityElement>
+pub(crate) fn snapshot<R>(shell: &mut AppShell<R>, capacity: usize) -> Vec<AccessibilityElement>
 where
     R: Renderer,
     R::Error: Debug,
@@ -467,7 +471,9 @@ where
     let Some(semantics_tree) = shell.semantics_tree() else {
         return Vec::new();
     };
-    project_semantics(semantics_tree.root())
+    let mut elements = Vec::with_capacity(capacity);
+    project_node(semantics_tree.root(), false, None, None, &mut elements);
+    elements
 }
 
 fn project_semantics(root: &SemanticsNode) -> Vec<AccessibilityElement> {
@@ -1838,7 +1844,7 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    snapshot(shell)
+    snapshot(shell, 0)
         .iter()
         .map(spoken_line)
         .filter(|line| !line.is_empty())

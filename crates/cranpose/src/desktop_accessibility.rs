@@ -160,8 +160,11 @@ impl DesktopAccessibilityBridge {
         }
         let mut announcements = accessibility::drain_app_announcements();
         let mut changed = std::mem::take(&mut self.geometry_changed);
-        if let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
-            && elements != self.previous.elements
+        if let Some(elements) = accessibility::snapshot_if_changed(
+            shell,
+            &mut self.seen_revision,
+            self.previous.elements.len(),
+        ) && elements != self.previous.elements
         {
             announcements.extend(accessibility::pane_title_announcements(
                 &self.previous.elements,
