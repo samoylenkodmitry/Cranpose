@@ -365,7 +365,7 @@ fn cached_visible_text_glyph_runs_promote_large_runs_to_retained_buffers() {
         "the visible cached glyph path should use retained-buffer promotion"
     );
     let cached_branch_start = render_source
-        .find("if let Some(entries) = cached_entries.as_ref()")
+        .find("if let Some(entries) = run.entries.as_ref()")
         .expect("cached visible glyph branch exists");
     let cached_branch_end = render_source[cached_branch_start..]
         .find("let instance_start = glyph_instances.len_of(turned);")

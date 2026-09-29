@@ -71,6 +71,7 @@ fn run_quads<'a>(renderer: &GpuRenderer, run: &'a TestRun) -> GlyphRunQuads<'a> 
         glyphs: &run.0,
         entries: &run.1,
         atlas_size: renderer.text_glyph_atlas.size(),
+        bounds: GlyphRunBounds::of(&run.0),
     }
 }
 
@@ -384,6 +385,7 @@ fn a_glyph_run_no_frame_draws_leaves_the_cpu_cache() {
     let (_lock, mut renderer) = test_renderer();
     let run = |renderer: &GpuRenderer| CachedTextGlyphRun {
         glyphs: Rc::from(Vec::new()),
+        bounds: GlyphRunBounds::of(&[]),
         atlas_entries: None,
         atlas_generation: 0,
         last_frame: Cell::new(renderer.text_glyph_run_frame),
