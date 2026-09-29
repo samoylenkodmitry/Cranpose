@@ -769,3 +769,91 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
     );
     assert_eq!(harness.table.validate(), Ok(()));
 }
+
+const SHIFT_PARENT_KEY: Key = 8_300;
+const SHIFT_SECTION_KEY: Key = 8_310;
+const SHIFT_ROW_KEY: Key = 8_320;
+const SHIFT_ROW_COUNT: Key = 1_000;
+const SHIFT_PAYLOADS_PER_ROW: usize = 3;
+const SHIFT_LATER_PAYLOADS: usize = SHIFT_ROW_COUNT as usize * SHIFT_PAYLOADS_PER_ROW;
+
+fn compose_shift_sections(harness: &mut SlotHarness, sections: &[&[Key]]) -> Vec<DetachedSubtree> {
+    harness.begin_pass(SlotPassMode::Compose);
+    let detached = harness.session(|session| {
+        let mut detached = Vec::new();
+        begin_unkeyed(session, SHIFT_PARENT_KEY, None);
+        for (section_index, row_keys) in sections.iter().enumerate() {
+            begin_unkeyed(session, SHIFT_SECTION_KEY + section_index as Key, None);
+            for &row_key in *row_keys {
+                begin_keyed(session, SHIFT_ROW_KEY, row_key, None);
+                for source in 0..SHIFT_PAYLOADS_PER_ROW {
+                    let _ =
+                        session
+                            .value_slot_with_kind(PayloadKind::Remember, source as Key, || row_key);
+                }
+                let result = session.finish_group_body();
+                assert!(result.detached_children.is_empty());
+                session.end_group();
+            }
+            detached.extend(session.finish_group_body().detached_children);
+            session.end_group();
+        }
+        detached.extend(session.finish_group_body().detached_children);
+        session.end_group();
+        detached
+    });
+    harness.finish_pass();
+    detached
+}
+
+fn payload_shift_bytes(harness: &SlotHarness) -> usize {
+    harness.table.debug_stats().mutation.payload_shift_bytes
+}
+
+#[test]
+fn perf_keyed_insert_near_top_shifts_only_order_entries() {
+    let rows = (0..SHIFT_ROW_COUNT).collect::<Vec<_>>();
+    let rows_with_new_top = std::iter::once(SHIFT_ROW_COUNT)
+        .chain(0..SHIFT_ROW_COUNT)
+        .collect::<Vec<_>>();
+    let mut harness = SlotHarness::new();
+    assert!(compose_shift_sections(&mut harness, &[&rows]).is_empty());
+    let before = payload_shift_bytes(&harness);
+
+    assert!(compose_shift_sections(&mut harness, &[&rows_with_new_top]).is_empty());
+
+    assert_eq!(
+        harness.table.total_payload_count(),
+        SHIFT_LATER_PAYLOADS + SHIFT_PAYLOADS_PER_ROW
+    );
+    assert_eq!(
+        payload_shift_bytes(&harness) - before,
+        SHIFT_PAYLOADS_PER_ROW * SHIFT_LATER_PAYLOADS * mem::size_of::<u32>(),
+        "each payload inserted above {SHIFT_LATER_PAYLOADS} payloads must move one u32 order entry per later payload, not a payload record"
+    );
+    assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn perf_removal_near_top_shifts_only_order_entries() {
+    let rows = (0..SHIFT_ROW_COUNT).collect::<Vec<_>>();
+    let mut harness = SlotHarness::new();
+    assert!(compose_shift_sections(&mut harness, &[&[SHIFT_ROW_COUNT], &rows]).is_empty());
+    let before = payload_shift_bytes(&harness);
+
+    let detached = compose_shift_sections(&mut harness, &[&[], &rows]);
+
+    assert_eq!(detached.len(), 1);
+    assert_eq!(detached[0].payload_count(), SHIFT_PAYLOADS_PER_ROW);
+    assert_eq!(
+        payload_shift_bytes(&harness) - before,
+        SHIFT_LATER_PAYLOADS * mem::size_of::<u32>(),
+        "removing a row above {SHIFT_LATER_PAYLOADS} payloads must move one u32 order entry per later payload, not a payload record"
+    );
+    for subtree in detached {
+        harness.table.invalidate_detached_subtree_anchors(&subtree);
+        harness.lifecycle.queue_subtree_disposal(subtree);
+    }
+    harness.lifecycle.flush_pending_drops();
+    assert_eq!(harness.table.validate(), Ok(()));
+}

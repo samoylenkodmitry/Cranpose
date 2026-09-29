@@ -22,16 +22,24 @@ pub(super) fn validate_group_payloads(
 
     let payload_len = group.payload_len as usize;
     let payload_end = payload_start.saturating_add(payload_len);
-    if payload_end > view.payloads.len() {
+    if payload_end > view.payloads.item_count() {
         return Err(view.payload_out_of_range(
             group_index,
             payload_start,
             payload_len,
-            view.payloads.len(),
+            view.payloads.item_count(),
         ));
     }
 
-    for (payload_index, payload) in view.payloads[payload_start..payload_end].iter().enumerate() {
+    for payload_index in 0..payload_len {
+        let Some(payload) = view.payloads.item(payload_start + payload_index) else {
+            return Err(view.payload_out_of_range(
+                group_index,
+                payload_start,
+                payload_len,
+                view.payloads.item_count(),
+            ));
+        };
         if payload.owner != group.anchor {
             return Err(view.payload_owner_mismatch(
                 payload.anchor.id(),
@@ -96,8 +104,7 @@ pub(super) fn validate_payload_anchor_registry(
             });
         };
         let actual = table
-            .group_payload_records_at(group_index)
-            .get(payload_index)
+            .group_payload_record_at(group_index, payload_index)
             .map(|payload| PayloadAnchorRecord {
                 owner: payload.owner,
                 payload_anchor: payload.anchor,
