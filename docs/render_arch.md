@@ -99,11 +99,15 @@ composites the resolved textures.
   has held still for `IN_PLACE_PATIENCE` frames: content that holds still
   then composites its cached surface, which costs the GPU less than drawing
   it again, while content that changes, or only pauses at the turn of its
-  motion, never renders a surface at all. The viewport uniform carries the transform; only shape pipelines
-  built `SHAPE_TRANSFORMED` read it, growing each quad half a pixel so a
-  turned edge anti-aliases on both sides and mapping each fragment back to
-  evaluate its distance field, so untransformed pipelines compile the
-  arithmetic they always had. Glyphs under a transform sample the atlas
+  motion, never renders a surface at all. A record's placement carries its
+  turn and flags it `PLACEMENT_TURNED`. A turned record's quad grows half a
+  pixel, so a turned edge anti-aliases on both sides, and each of its
+  fragments maps back to evaluate its distance field. `SHAPE_TURNS` picks
+  the path per pipeline: flat and turned pipelines compile only their own,
+  and a pass that changes between flat and turned segments at least
+  `MIXED_TURN_CHANGES` times, a grid of tilted cells with some untilted,
+  draws both with one pipeline that reads the flag, rather than a draw per
+  change (`opaque_interiors.rs`). Glyphs under a transform sample the atlas
   filtered, a scissor is the bounds of what it cuts, and a retained glyph
   run adds its raster origin on the GPU as the shared path adds it on the
   CPU, so the two draw one picture. Forty nested turned levels laid out

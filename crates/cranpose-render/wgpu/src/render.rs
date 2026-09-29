@@ -1095,15 +1095,46 @@ fn overlay_depth_state(depth: bool) -> Option<wgpu::DepthStencilState> {
     }
 }
 
-/// A shape pipeline: its blend, tier and variant, whether it draws a
-/// segment under a transform, and its depth use. Falling back to the
-/// general variant keeps the blend, tier, transform and depth.
+/// Which records a shape pipeline draws turned, as `SHAPE_TURNS` in the
+/// shape shader: none, every one, or each as its placement says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum ShapeTurns {
+    None,
+    All,
+    Mixed,
+}
+
+impl ShapeTurns {
+    /// The turns of records placed under `turn`, in a pass whose flat and
+    /// turned records alternate often when `mixed`.
+    pub(crate) fn of(turn: SegmentTransform, mixed: bool) -> Self {
+        if mixed {
+            Self::Mixed
+        } else if turn.is_identity() {
+            Self::None
+        } else {
+            Self::All
+        }
+    }
+
+    fn constant(self) -> f64 {
+        match self {
+            Self::None => 0.0,
+            Self::All => 1.0,
+            Self::Mixed => 2.0,
+        }
+    }
+}
+
+/// A shape pipeline: its blend, tier and variant, the records it draws
+/// turned, and its depth use. Falling back to the general variant keeps the
+/// blend, tier, turns and depth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapePipelineKey {
     pub(crate) blend_mode: BlendMode,
     pub(crate) tier: RunTier,
     pub(crate) variant: ShapeVariant,
-    pub(crate) transformed: bool,
+    pub(crate) turns: ShapeTurns,
     pub(crate) depth: ShapeDepth,
 }
 
@@ -1114,15 +1145,15 @@ impl ShapePipelineKey {
             blend_mode,
             tier,
             variant: ShapeVariant::GENERAL,
-            transformed: false,
+            turns: ShapeTurns::None,
             depth: ShapeDepth::Off,
         }
     }
 
     /// The pipeline that lays down the opaque interiors of this key's
-    /// draws, if they have any: plain source-over draws. A transformed
-    /// draw's layer draws in place only under a rigid transform, which keeps
-    /// the interior's half-pixel inset from the fill's edge exact.
+    /// draws, if they have any: plain source-over draws. A turned record's
+    /// layer draws in place only under a rigid turn, which keeps the
+    /// interior's half-pixel inset from the fill's edge exact.
     pub(crate) fn interior(self) -> Option<Self> {
         (self.depth == ShapeDepth::Tested
             && self.blend_mode == BlendMode::SrcOver
@@ -1171,7 +1202,7 @@ pub(crate) fn create_shape_pipeline(
         blend_mode,
         tier,
         variant,
-        transformed,
+        turns,
         depth,
     } = key;
     let constants = [
@@ -1180,11 +1211,11 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_SOLID", f64::from(u8::from(variant.solid))),
         ("SHAPE_CLIPPED", f64::from(u8::from(variant.clipped))),
         ("SHAPE_INTERIOR", f64::from(u8::from(variant.interior))),
+        ("SHAPE_TURNS", turns.constant()),
         ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
         ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
         ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
-        ("SHAPE_TRANSFORMED", f64::from(u8::from(transformed))),
     ];
     let (vertex_entry, fragment_entry) = if depth == ShapeDepth::Interior {
         ("vs_record_interior", "fs_interior")
@@ -1208,7 +1239,7 @@ pub(crate) fn create_shape_pipeline(
         device,
         cache,
         &format!(
-            "shape blend={blend_mode:?} tier={tier:?} variant={variant:?} transformed={transformed} depth={depth:?}"
+            "shape blend={blend_mode:?} tier={tier:?} variant={variant:?} turns={turns:?} depth={depth:?}"
         ),
         wgpu::RenderPipelineDescriptor {
             label: Some("Shape Pipeline"),
@@ -3886,14 +3917,14 @@ impl GpuRenderer {
         clipped: bool,
         tier: RunTier,
         ablation: ShapeAblation,
-        transformed: bool,
+        turns: ShapeTurns,
         depth: bool,
     ) -> ShapePipelineKey {
         ShapePipelineKey {
             blend_mode: supported_blend_mode(segment.blend),
             tier,
             variant: ShapeVariant::of_segment(segment, clipped, ablation),
-            transformed,
+            turns,
             depth: if depth {
                 ShapeDepth::Tested
             } else {
@@ -3925,20 +3956,13 @@ impl GpuRenderer {
         let command = run.command.expect("a stored run has a command");
         let clipped = run.placement.clip.is_some();
         let ablation = self.ablation.shape;
-        let transformed = !viewport.transform.is_identity();
+        let turns = ShapeTurns::of(viewport.transform, false);
         let mut draws = SmallVec::new();
         self.run_store.stored_run_draws(
             &self.device,
             run,
             &mut |segment| {
-                Self::run_pipeline_key(
-                    segment,
-                    clipped,
-                    RunTier::Store,
-                    ablation,
-                    transformed,
-                    depth,
-                )
+                Self::run_pipeline_key(segment, clipped, RunTier::Store, ablation, turns, depth)
             },
             &mut draws,
         );
@@ -3988,8 +4012,10 @@ impl GpuRenderer {
         self.run_store.arena_accepts(chunk, run)
     }
 
-    /// Appends `window` of `run`'s records to the open arena chunk, keyed
-    /// for pipelines that draw under a transform when `transformed`.
+    /// Appends `window` of `run`'s records to the open arena chunk, their
+    /// placement under `turn`, keyed for a pass whose flat and turned
+    /// records alternate often when `mixed_turns`.
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn append_arena_run(
         &mut self,
         chunk: usize,
@@ -3997,11 +4023,12 @@ impl GpuRenderer {
         window: std::ops::Range<u32>,
         root_scale: f32,
         turn: SegmentTransform,
+        mixed_turns: bool,
         depth: bool,
     ) -> u32 {
         let clipped = run.placement.clip.is_some();
         let ablation = self.ablation.shape;
-        let transformed = !turn.is_identity();
+        let turns = ShapeTurns::of(turn, mixed_turns);
         let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
         let taken =
             self.run_store
@@ -4011,7 +4038,7 @@ impl GpuRenderer {
                         clipped,
                         RunTier::Arena,
                         ablation,
-                        transformed,
+                        turns,
                         depth,
                     );
                     if !keys.contains(&key) {

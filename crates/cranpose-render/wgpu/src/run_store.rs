@@ -47,6 +47,7 @@ mod uniform_placement_chunks;
 const PLACEMENT_CLIPPED: u32 = 2;
 const PLACEMENT_FILTERED: u32 = 4;
 const PLACEMENT_PAINTED: u32 = 8;
+const PLACEMENT_TURNED: u32 = 16;
 
 /// The run-table binding mode the device supports: storage buffers hold a
 /// recording whole and draw wide arcs as bands; the uniform fallback (the
@@ -163,6 +164,9 @@ impl PlacementData {
             .snap_anchor
             .map(|anchor| snapped_anchor_device_origin(anchor, root_scale))
             .unwrap_or_default();
+        if !turn.is_identity() {
+            flags |= PLACEMENT_TURNED;
+        }
         let (transform, translation, _) = turn.uniform_parts();
         let (color_matrix, color_offset) = match placement.color_filter {
             Some(filter) => {

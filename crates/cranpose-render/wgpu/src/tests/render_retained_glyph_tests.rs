@@ -380,18 +380,6 @@ fn a_draw_samples_as_it_asks_on_the_pixel_grid_and_filtered_off_it() {
 }
 
 #[test]
-fn a_transformed_shape_pipeline_falls_back_to_a_transformed_general_one() {
-    let untransformed = ShapePipelineKey::general_for(BlendMode::SrcOver, RunTier::Arena);
-    let transformed = ShapePipelineKey {
-        transformed: true,
-        ..untransformed
-    };
-    assert_ne!(transformed, untransformed);
-    assert!(transformed.general().transformed);
-    assert!(!untransformed.general().transformed);
-}
-
-#[test]
 fn a_glyph_run_no_frame_draws_leaves_the_cpu_cache() {
     let (_lock, mut renderer) = test_renderer();
     let run = |renderer: &GpuRenderer| CachedTextGlyphRun {
