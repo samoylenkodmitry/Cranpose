@@ -42,3 +42,13 @@ fn every_key_of_a_full_cache_is_found_while_their_slots_differ() {
         "64 keys in 1024 slots almost never collide, found {found}"
     );
 }
+
+#[test]
+fn a_cache_takes_its_slots_with_its_first_entry() {
+    let mut cache = DirectMappedCache::with_slots_log2(10);
+    assert_eq!(cache.get(&3u64), None);
+    assert!(cache.slots.is_empty(), "a lookup allocates nothing");
+    cache.insert(3u64, 9u64);
+    assert_eq!(cache.slots.len(), 1024);
+    assert_eq!(cache.get(&3), Some(9));
+}
