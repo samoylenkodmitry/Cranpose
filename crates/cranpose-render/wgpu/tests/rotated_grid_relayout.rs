@@ -408,3 +408,27 @@ fn offscreen_rotated_cells_resized_a_pixel_at_a_time_are_not_copied_every_hold()
         "{new_textures} new textures for {cells} cells over {FULL_PERIOD} frames"
     );
 }
+
+/// Draws a settled frame of the grid drawn in place, one cell in seven upright among
+/// turned ones, may take: the labels of both kinds of cell share pixels
+/// with none of the other kind, so each kind draws its labels together.
+const IN_PLACE_MAX_DRAWS: u32 = 6;
+
+#[test]
+fn labels_of_upright_cells_among_turned_ones_draw_together() {
+    let Some((_lock, mut harness)) = harness(false) else {
+        return;
+    };
+    let mut stats = None;
+    for frame in 0..WARMUP_FRAMES + MEASURED_FRAMES {
+        stats = Some(harness.frame(width_fraction(frame)).0);
+    }
+    let Some(stats) = stats else {
+        return;
+    };
+    assert!(
+        stats.draw_calls <= IN_PLACE_MAX_DRAWS,
+        "the settled grid drew in {} draws: {stats:?}",
+        stats.draw_calls
+    );
+}
