@@ -99,3 +99,69 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
         assert!(visible.next().is_none());
     }
 }
+
+/// A small deterministic generator for the held-glyph property test.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self, below: u32) -> u32 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((self.0 >> 33) % u64::from(below)) as u32
+    }
+
+    fn rect(&mut self, extent: u32) -> TargetRect {
+        (
+            self.next(extent),
+            self.next(extent),
+            self.next(300),
+            self.next(300),
+        )
+    }
+}
+
+#[test]
+fn held_glyph_cells_answer_as_checking_every_held_draw() {
+    let mut random = Lcg(7);
+    // Past 64 cell columns the last bit is shared, so wide targets are
+    // covered too.
+    for extent in [300, 2_200, 6_000] {
+        for _ in 0..200 {
+            let mut pending = PendingGlyphs::default();
+            let held: Vec<TargetRect> = (0..random.next(40)).map(|_| random.rect(extent)).collect();
+            pending.hold(0..1, held.iter().copied());
+            for _ in 0..20 {
+                let query = random.rect(extent);
+                let expected = held.iter().any(|rect| target_rects_overlap(*rect, query));
+                assert_eq!(
+                    pending.overlaps(query),
+                    expected,
+                    "{held:?} against {query:?}"
+                );
+            }
+            assert!(pending.take().is_some());
+            assert!(
+                !pending.overlaps((0, 0, extent, extent)),
+                "taking forgets every cell"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_held_draw_marks_every_cell_it_touches() {
+    assert_eq!(
+        held_cells((70, 0, 0, 10)),
+        (0..1, 0b10),
+        "an empty side counts as the pixel it stands on"
+    );
+    assert_eq!(held_cells((63, 64, 2, 1)), (1..2, 0b11));
+    assert_eq!(held_cells((0, 0, 64 * 64 + 1, 1)), (0..1, u64::MAX));
+    assert_eq!(
+        held_cells((5_000, 0, 10, 10)),
+        (0..1, 1 << 63),
+        "columns past the last share its bit"
+    );
+}
