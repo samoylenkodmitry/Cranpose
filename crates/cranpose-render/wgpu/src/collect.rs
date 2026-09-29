@@ -114,7 +114,7 @@ impl LayerScene {
 /// rendered into its own texture, then drawn with `transform`, `alpha`,
 /// `blend_mode` and the optional rounded mask. A child `in_place` can do
 /// without the texture: its content can draw straight into its parent's pass
-/// under its rigid transform.
+/// at its raster scale, under the turn and move its transform leaves.
 pub(crate) struct ChildLayer {
     pub(crate) z_index: usize,
     pub(crate) node_id: Option<NodeId>,
@@ -421,28 +421,49 @@ fn child_needs_surface(layer: &LayerNode) -> bool {
         || layer_requires_isolation(graphics)
 }
 
-/// Whether `transform` only turns and moves: affine, with an orthonormal
-/// linear part, so drawing under it resamples nothing.
-fn is_rigid(transform: ProjectiveTransform) -> bool {
+/// The scale of a `transform` that only scales evenly, turns and moves:
+/// affine, with a linear part that is an orthonormal one times the scale.
+/// Content drawn at that scale under the rest of the transform resamples
+/// nothing.
+pub(crate) fn similarity_scale(transform: ProjectiveTransform) -> Option<f32> {
     let [[a, b, _], [c, d, _], perspective] = transform.matrix();
     let near = |value: f32, target: f32| (value - target).abs() <= AFFINE_TOLERANCE;
-    near(perspective[0], 0.0)
+    let squared = a * a + c * c;
+    (near(perspective[0], 0.0)
         && near(perspective[1], 0.0)
         && near(perspective[2], 1.0)
-        && near(a * a + c * c, 1.0)
-        && near(b * b + d * d, 1.0)
-        && near(a * b + c * d, 0.0)
+        && squared.is_normal()
+        && near((b * b + d * d) / squared, 1.0)
+        && near((a * b + c * d) / squared, 0.0))
+    .then(|| squared.sqrt())
+}
+
+/// The scale a layer whose transform scales by `scale` draws its content at
+/// in place, against its parent's, for a layer rasterized at `raster_scale`:
+/// one that keeps content's size draws it at the parent's scale, and one
+/// that scales at the scale its surface would raster. `None` while its scale
+/// moves within a raster it holds, which it keeps compositing.
+pub(crate) fn in_place_content_scale(scale: f32, raster_scale: f32) -> Option<f32> {
+    if (scale - 1.0).abs() <= AFFINE_TOLERANCE {
+        Some(1.0)
+    } else {
+        ((scale - raster_scale).abs() <= AFFINE_TOLERANCE).then_some(raster_scale)
+    }
 }
 
 /// Whether an isolated layer can draw its content straight into its parent's
-/// pass: its transform only turns and moves it, nothing else about it needs
-/// a surface, and its content draws the same under a transform.
+/// pass: its transform only scales evenly at its raster scale, turns and
+/// moves it, nothing else about it needs a surface, and its content draws
+/// the same under a transform.
 fn can_draw_in_place(
     layer: &LayerNode,
     transform: ProjectiveTransform,
+    raster_scale: f32,
     content: &LayerScene,
 ) -> bool {
-    is_rigid(transform)
+    similarity_scale(transform)
+        .and_then(|scale| in_place_content_scale(scale, raster_scale))
+        .is_some()
         && !child_needs_surface(layer)
         && layer.backdrop().is_none()
         && rounded_clip_for_layer(layer).is_none()
@@ -618,7 +639,7 @@ fn isolated_child(
         content_hash,
         cacheable,
     );
-    let in_place = can_draw_in_place(layer, transform, &content);
+    let in_place = can_draw_in_place(layer, transform, surface_scale, &content);
     ChildLayer {
         z_index: parent_scene.next_z(),
         node_id: layer.node_id,

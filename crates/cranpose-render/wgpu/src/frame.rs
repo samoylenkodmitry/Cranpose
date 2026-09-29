@@ -21,7 +21,9 @@ use smallvec::{SmallVec, smallvec};
 use crate::{
     ablation::Ablation,
     capture_hash::{CaptureWindow, capture_hasher, hash_capture_composites, hash_capture_ops},
-    collect::{ChildLayer, LayerScene, uniform_scale_translation},
+    collect::{
+        ChildLayer, LayerScene, in_place_content_scale, similarity_scale, uniform_scale_translation,
+    },
     debug_toggles::DebugToggle,
     draw_pass::{
         PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent,
@@ -2164,8 +2166,8 @@ struct InPlaceTarget {
 }
 
 /// A stretch of a flush drawn as one segment: the page's own ops and
-/// composites in a z range, or ops of a child drawn in place, under the
-/// transform composed down to it and its clip's scissor.
+/// composites in a z range, or ops of a child drawn in place at its scale,
+/// under the transform composed down to it and its clip's scissor.
 enum FlushPart<'s> {
     Page {
         ops: Range<usize>,
@@ -2175,6 +2177,7 @@ enum FlushPart<'s> {
         scene: &'s CompositorScene,
         ops: &'s [DrawOp],
         transform: SegmentTransform,
+        scale: f32,
         scissor: Option<(u32, u32, u32, u32)>,
     },
 }
@@ -2267,6 +2270,7 @@ fn flush_segments<'a>(
                 scene,
                 ops,
                 transform,
+                scale,
                 scissor,
             } => PassSegment {
                 scene,
@@ -2276,7 +2280,7 @@ fn flush_segments<'a>(
                 scissor: *scissor,
                 first_run_window: None,
                 transform: *transform,
-                scale,
+                scale: *scale,
             },
         })
         .collect()
@@ -2288,10 +2292,10 @@ fn push_page_part(parts: &mut Vec<FlushPart<'_>>, ops: Range<usize>, composites:
     }
 }
 
-/// Adds a child drawn in place to a flush: its ops, split around its
-/// children (which draw in place too), under its transform composed onto
-/// `outer`. `false` when the nesting passes the resolve depth and the
-/// layers below it are left out.
+/// Adds a child drawn in place into a target at `scale` to a flush: its ops,
+/// split around its children (which draw in place too), at its own scale
+/// under its transform composed onto `outer`. `false` when the nesting
+/// passes the resolve depth and the layers below it are left out.
 fn push_in_place<'s>(
     parts: &mut Vec<FlushPart<'s>>,
     child: &'s ChildLayer,
@@ -2303,7 +2307,7 @@ fn push_in_place<'s>(
     if depth >= MAX_RESOLVE_DEPTH {
         return false;
     }
-    let Some(transform) = in_place_transform(child, scale) else {
+    let Some((transform, content_scale)) = in_place_transform(child, scale) else {
         return true;
     };
     let transform = transform.then(outer);
@@ -2315,6 +2319,7 @@ fn push_in_place<'s>(
                 scene,
                 ops,
                 transform,
+                scale: content_scale,
                 scissor,
             });
         }
@@ -2326,20 +2331,34 @@ fn push_in_place<'s>(
             .partition_point(|op| op.z_index < grandchild.z_index)
             .max(start);
         push_ops(parts, &ops[start..end]);
-        complete &= push_in_place(parts, grandchild, transform, scale, scissor, depth + 1);
+        complete &= push_in_place(
+            parts,
+            grandchild,
+            transform,
+            content_scale,
+            scissor,
+            depth + 1,
+        );
         start = end;
     }
     push_ops(parts, &ops[start..]);
     complete
 }
 
-/// The map from a child's device space into its parent's that it draws in
-/// place under: the one a projective composite of its surface applies, less
-/// the perspective row a child drawn in place carries only as rounding.
-fn in_place_transform(child: &ChildLayer, scale: f32) -> Option<SegmentTransform> {
+/// The scale a child drawn in place into a target at `scale` draws its
+/// content at, and the map from that content's device space into the
+/// target's: the turn and move a projective composite of its surface
+/// applies, its even scale taken into the content's scale, as Skia redraws a
+/// scaled render node, so glyphs and edges raster at the size they show.
+/// `None` for a transform that does more than scale evenly, turn and move.
+fn in_place_transform(child: &ChildLayer, scale: f32) -> Option<(SegmentTransform, f32)> {
     let snap = child_snap(child, scale);
+    let content = similarity_scale(child.transform)
+        .and_then(|uniform| in_place_content_scale(uniform, child.surface_scale))?;
     let [[a, b, x], [c, d, y], _] = child.transform.matrix();
-    SegmentTransform::affine([a, b, c, d], [(x + snap.x) * scale, (y + snap.y) * scale])
+    let turn = [a / content, b / content, c / content, d / content];
+    SegmentTransform::affine(turn, [(x + snap.x) * scale, (y + snap.y) * scale])
+        .map(|transform| (transform, scale * content))
 }
 
 impl ChildFrame {
