@@ -12,6 +12,9 @@ pub(crate) struct LazyPrefetchState {
     requests: RefCell<Vec<NodeId>>,
     idle_pass: Cell<bool>,
     item_cost_nanos: Cell<u64>,
+    /// Root nodes of the items idle prefetch passes composed, whose modifier
+    /// slices [`warm_prefetched_slices`] builds.
+    prefetched: RefCell<Vec<NodeId>>,
 }
 
 impl LazyPrefetchState {
@@ -48,6 +51,46 @@ pub(crate) fn record_lazy_item_cost(cost: Duration) {
             previous.saturating_mul(3).saturating_add(sample) / 4
         };
         state.item_cost_nanos.set(blended);
+    });
+}
+
+/// Notes the root nodes of an item an idle prefetch pass composed.
+pub(crate) fn note_prefetched_item(nodes: &[u64]) {
+    with_state(|state| {
+        state
+            .prefetched
+            .borrow_mut()
+            .extend(nodes.iter().filter_map(|&node| NodeId::try_from(node).ok()));
+    });
+}
+
+/// Builds the modifier slices of the items idle prefetch passes composed
+/// since the last call, and of every node under them. A node's slices are
+/// built the first time a frame draws it, which for a list's rows put that
+/// work in the frame each row entered the screen. Call it after an idle
+/// prefetch pass, while waiting for the next frame.
+pub fn warm_prefetched_slices(applier: &mut cranpose_core::MemoryApplier) {
+    let mut stack = with_state(|state| std::mem::take(&mut *state.prefetched.borrow_mut()));
+    while let Some(id) = stack.pop() {
+        let layout = applier.with_node::<crate::widgets::nodes::LayoutNode, _>(id, |node| {
+            let _ = node.modifier_slices_snapshot();
+            stack.extend_from_slice(&node.children);
+        });
+        if layout.is_err() {
+            let _ = applier.with_node::<crate::subcompose_layout::SubcomposeLayoutNode, _>(
+                id,
+                |node| {
+                    let _ = node.modifier_slices_snapshot();
+                    node.with_active_children(|children| stack.extend_from_slice(children));
+                },
+            );
+        }
+    }
+    with_state(|state| {
+        let mut prefetched = state.prefetched.borrow_mut();
+        if prefetched.is_empty() {
+            *prefetched = stack;
+        }
     });
 }
 
