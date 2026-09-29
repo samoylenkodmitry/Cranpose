@@ -43,6 +43,7 @@ mod slices;
 mod toggleable;
 mod weight;
 mod window_root;
+mod wrap_content;
 
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub(crate) use coordinator_geometry::{CoordinatorGeometry, CoordinatorRect};
