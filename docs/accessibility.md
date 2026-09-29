@@ -715,7 +715,7 @@ something else is marked as changed.
 | --- | --- |
 | accesskit | The tree update carries the new value; the reader speaks it on its own. |
 | iOS | A layout change names the element under the VoiceOver cursor, which reads it again. |
-| Android | A content-changed event with the text, description and state change types goes out for the control, and TalkBack speaks the one under its cursor. |
+| Android | One subtree content change goes out on the host, as a window coalesces its views' changes, so every service drops what it cached beneath it. The control under TalkBack's cursor also gets a content-changed event with the text, description and state change types, and TalkBack speaks it again. |
 | Web | The mirror node keeps its focus and takes the new label; a reader speaks it on the next move. Text that has to be heard at once is a live region. |
 
 ## 8. Where a reader is
