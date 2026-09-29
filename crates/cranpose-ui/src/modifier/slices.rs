@@ -42,12 +42,8 @@ pub struct ModifierNodeSlices {
     translated_content_context: bool,
     translated_content_context_identity: Option<usize>,
     translated_content_offset_reader: Option<Rc<dyn Fn() -> Point>>,
-    text_content: Option<Rc<crate::text::AnnotatedString>>,
+    text: Option<SliceText>,
     text_coordinator: Option<CoordinatorRect>,
-    text_style: Option<TextStyle>,
-    text_layout_options: Option<TextLayoutOptions>,
-    prepared_text_layout: Option<MeasuredTextLayoutSource>,
-    text_pan: Option<TextPanResolver>,
     text_window_origin: Option<Rc<std::cell::Cell<Point>>>,
     viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
     graphics_layer: Option<GraphicsLayer>,
@@ -60,10 +56,20 @@ struct ChainGuard {
     _handle: ModifierChainHandle,
 }
 
+/// The text a node shows. A `Text`'s string, style and options are its
+/// prepared layout's, read from there rather than copied into every
+/// rebuild of the slices; a text field's are held here.
 #[derive(Clone)]
-enum MeasuredTextLayoutSource {
+enum SliceText {
     Text(TextPreparedLayoutHandle),
-    TextField(TextFieldLayoutHandle),
+    Field(Rc<FieldText>),
+}
+
+struct FieldText {
+    content: Rc<crate::text::AnnotatedString>,
+    style: TextStyle,
+    layout: TextFieldLayoutHandle,
+    pan: Option<TextPanResolver>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -95,12 +101,8 @@ impl Clone for ModifierNodeSlices {
             translated_content_context: self.translated_content_context,
             translated_content_context_identity: self.translated_content_context_identity,
             translated_content_offset_reader: self.translated_content_offset_reader.clone(),
-            text_content: self.text_content.clone(),
+            text: self.text.clone(),
             text_coordinator: self.text_coordinator.clone(),
-            text_style: self.text_style.clone(),
-            text_layout_options: self.text_layout_options,
-            prepared_text_layout: self.prepared_text_layout.clone(),
-            text_pan: self.text_pan.clone(),
             text_window_origin: self.text_window_origin.clone(),
             viewport_window_rect: self.viewport_window_rect.clone(),
             graphics_layer: self.graphics_layer.clone(),
@@ -309,11 +311,14 @@ impl ModifierNodeSlices {
     }
 
     pub fn text_content(&self) -> Option<&str> {
-        self.text_content.as_ref().map(|a| a.text.as_str())
+        self.annotated_text().map(|text| text.text.as_str())
     }
 
     pub fn annotated_text(&self) -> Option<&Rc<crate::text::AnnotatedString>> {
-        self.text_content.as_ref()
+        match self.text.as_ref()? {
+            SliceText::Text(layout) => Some(layout.annotated_text()),
+            SliceText::Field(field) => Some(&field.content),
+        }
     }
 
     /// Where the text draws in a node of `node_size`: the rect its layout put
@@ -331,11 +336,17 @@ impl ModifierNodeSlices {
     }
 
     pub fn text_style(&self) -> Option<&TextStyle> {
-        self.text_style.as_ref()
+        match self.text.as_ref()? {
+            SliceText::Text(layout) => Some(layout.style()),
+            SliceText::Field(field) => Some(&field.style),
+        }
     }
 
     pub fn text_layout_options(&self) -> Option<TextLayoutOptions> {
-        self.text_layout_options
+        match self.text.as_ref()? {
+            SliceText::Text(layout) => Some(layout.options()),
+            SliceText::Field(_) => Some(TextLayoutOptions::default()),
+        }
     }
 
     /// Returns the horizontal pan resolver for single-line text fields.
@@ -345,7 +356,10 @@ impl ModifierNodeSlices {
     /// subtract this offset from the text origin so the glyphs pan together
     /// with the cursor and selection.
     pub fn text_pan_resolver(&self) -> Option<TextPanResolver> {
-        self.text_pan.clone()
+        match self.text.as_ref()? {
+            SliceText::Field(field) => field.pan.clone(),
+            SliceText::Text(_) => None,
+        }
     }
 
     /// The write target for the composited window origin of the text this
@@ -372,11 +386,9 @@ impl ModifierNodeSlices {
     /// caret and selection are placed on. `None` when the node carries no text,
     /// or carries a `Text` that has not been measured yet.
     pub fn measured_text_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
-        match self.prepared_text_layout.as_ref()? {
-            MeasuredTextLayoutSource::Text(handle) => handle.measured_layout(),
-            MeasuredTextLayoutSource::TextField(handle) => {
-                Some(handle.measured_layout(self.text_style.as_ref()?))
-            }
+        match self.text.as_ref()? {
+            SliceText::Text(layout) => layout.measured_layout(),
+            SliceText::Field(field) => Some(field.layout.measured_layout(&field.style)),
         }
     }
 
@@ -444,10 +456,10 @@ impl ModifierNodeSlices {
             draw_command_capacity: self.draw_commands.capacity(),
             pointer_input_count: self.pointer_inputs.len(),
             pointer_input_capacity: self.pointer_inputs.capacity(),
-            has_text_content: self.text_content.is_some(),
-            has_text_style: self.text_style.is_some(),
-            has_text_layout_options: self.text_layout_options.is_some(),
-            has_prepared_text_layout: self.prepared_text_layout.is_some(),
+            has_text_content: self.text.is_some(),
+            has_text_style: self.text.is_some(),
+            has_text_layout_options: self.text.is_some(),
+            has_prepared_text_layout: self.text.is_some(),
             has_graphics_layer: self.graphics_layer.is_some(),
             has_graphics_layer_resolver: self.graphics_layer_resolver.is_some(),
             heap_bytes: draw_command_bytes + pointer_input_bytes,
@@ -467,12 +479,10 @@ impl ModifierNodeSlices {
         self.translated_content_context = false;
         self.translated_content_context_identity = None;
         self.translated_content_offset_reader = None;
-        self.text_content = None;
+        self.text = None;
         self.text_coordinator = None;
-        self.text_style = None;
-        self.text_layout_options = None;
-        self.prepared_text_layout = None;
-        self.text_pan = None;
+        self.text_window_origin = None;
+        self.viewport_window_rect = None;
         self.graphics_layer = None;
         self.graphics_layer_resolver = None;
         self.corner_shape = None;
@@ -500,10 +510,9 @@ impl fmt::Debug for ModifierNodeSlices {
                 "translated_content_offset",
                 &self.translated_content_offset(),
             )
-            .field("text_content", &self.text_content)
-            .field("text_style", &self.text_style)
-            .field("text_layout_options", &self.text_layout_options)
-            .field("prepared_text_layout", &self.prepared_text_layout.is_some())
+            .field("text_content", &self.annotated_text())
+            .field("text_style", &self.text_style())
+            .field("text_layout_options", &self.text_layout_options())
             .field("graphics_layer", &self.graphics_layer)
             .field(
                 "graphics_layer_resolver",
@@ -636,25 +645,20 @@ fn collect_modifier_slices_into(
                 }
 
                 if let Some(text_node) = any.downcast_ref::<TextModifierNode>() {
-                    slices.text_content = Some(text_node.annotated_text());
                     slices.text_coordinator =
                         Some(CoordinatorRect::new(geometry, layout_ordinal, padding));
-                    slices.text_style = Some(text_node.style().clone());
-                    slices.text_layout_options = Some(text_node.options());
-                    slices.prepared_text_layout = Some(MeasuredTextLayoutSource::Text(
-                        text_node.prepared_layout_handle(),
-                    ));
+                    slices.text = Some(SliceText::Text(text_node.prepared_layout_handle()));
                 }
 
                 if let Some(text_field_node) = any.downcast_ref::<TextFieldModifierNode>() {
-                    let text = text_field_node.text();
-                    slices.text_content = Some(Rc::new(crate::text::AnnotatedString::from(text)));
-                    slices.text_style = Some(text_field_node.style().clone());
-                    slices.text_layout_options = Some(TextLayoutOptions::default());
-                    slices.prepared_text_layout = Some(MeasuredTextLayoutSource::TextField(
-                        text_field_node.layout_handle(),
-                    ));
-                    slices.text_pan = text_field_node.text_pan_resolver();
+                    slices.text = Some(SliceText::Field(Rc::new(FieldText {
+                        content: Rc::new(crate::text::AnnotatedString::from(
+                            text_field_node.text(),
+                        )),
+                        style: text_field_node.style().clone(),
+                        layout: text_field_node.layout_handle(),
+                        pan: text_field_node.text_pan_resolver(),
+                    })));
                     slices.text_window_origin = Some(text_field_node.window_origin_sink());
 
                     let coordinator = CoordinatorRect::new(geometry, layout_ordinal, padding);

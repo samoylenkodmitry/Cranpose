@@ -177,6 +177,18 @@ impl TextPreparedLayoutHandle {
         Self { owner }
     }
 
+    pub(crate) fn annotated_text(&self) -> &Rc<AnnotatedString> {
+        &self.owner.text
+    }
+
+    pub(crate) fn style(&self) -> &TextStyle {
+        self.owner.style()
+    }
+
+    pub(crate) fn options(&self) -> TextLayoutOptions {
+        self.owner.options()
+    }
+
     pub(crate) fn measured_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
         self.owner.measured_layout()
     }
