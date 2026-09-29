@@ -1213,6 +1213,7 @@ dependencies = [
  "hyphenation",
  "log",
  "smallvec",
+ "stats_alloc",
  "thiserror 2.0.20",
  "tiny-skia",
  "ttf-parser",

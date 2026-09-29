@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
-    Brush,
+    Brush, RenderScene,
     graph::{
         LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
         RenderNode, TextPrimitiveNode,
@@ -652,10 +652,14 @@ fn resolve_text_horizontal_offset(
     }
 }
 
+/// Replaces `scene` with `root`'s graph, built in the allocations of the
+/// graph it held.
 pub(crate) fn render_from_applier(applier: &mut MemoryApplier, root: NodeId, scene: &mut Scene) {
-    let Some(graph) =
-        cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
-    else {
+    let previous = scene.graph.take();
+    scene.clear();
+    let Some(graph) = cranpose_render_common::scene_builder::rebuild_graph_from_applier(
+        applier, root, 1.0, previous,
+    ) else {
         return;
     };
     collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);

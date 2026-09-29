@@ -20,6 +20,7 @@ pub mod graph_scene;
 pub mod hit_graph;
 pub mod image_compare;
 pub mod layer_composition;
+mod layer_recycling;
 pub mod layer_shadow;
 pub mod layer_transform;
 pub mod primitive_emit;
