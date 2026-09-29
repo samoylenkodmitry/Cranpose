@@ -472,6 +472,11 @@ mod frame_pacer;
     allow(dead_code)
 )]
 pub(crate) mod gpu_limits;
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+mod unpaced_hold;
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod vsync_period;
 
