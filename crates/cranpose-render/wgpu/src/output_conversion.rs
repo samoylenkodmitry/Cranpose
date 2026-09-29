@@ -1,6 +1,6 @@
 use crate::{
     frame_graph::FrameCommandRecorder, lazy_resource::LazyGpuResource,
-    pipeline_compiler::CompilerSend,
+    pipeline_compiler::CompilerSend, shared_shader::SharedShader,
 };
 
 const OUTPUT_CONVERSION_SHADER: &str = r"
@@ -41,13 +41,16 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
 pub(crate) struct OutputConverter {
     bind_group_layout: wgpu::BindGroupLayout,
     pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    shader: wgpu::ShaderModule,
-    pipeline_layout: wgpu::PipelineLayout,
+    shader: SharedShader,
     format: wgpu::TextureFormat,
 }
 
 impl OutputConverter {
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        backend: wgpu::Backend,
+        format: wgpu::TextureFormat,
+    ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Output Conversion Bind Group Layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -61,20 +64,17 @@ impl OutputConverter {
                 count: None,
             }],
         });
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Output Conversion Shader"),
-            source: wgpu::ShaderSource::Wgsl(OUTPUT_CONVERSION_SHADER.into()),
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Output Conversion Pipeline Layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
+        let shader = SharedShader::new(
+            device,
+            backend,
+            "Output Conversion Shader",
+            || OUTPUT_CONVERSION_SHADER.into(),
+            &[Some(&bind_group_layout)],
+        );
         Self {
             bind_group_layout,
             pipeline: LazyGpuResource::new("output-conversion"),
             shader,
-            pipeline_layout,
             format,
         }
     }
@@ -84,21 +84,21 @@ impl OutputConverter {
         device: &wgpu::Device,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = device.clone();
-        let layout = self.pipeline_layout.clone();
         let shader = self.shader.clone();
         let format = self.format;
         move || {
+            let module = shader.module();
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Output Conversion Pipeline"),
-                layout: Some(&layout),
+                layout: Some(shader.layout()),
                 vertex: wgpu::VertexState {
-                    module: &shader,
+                    module,
                     entry_point: Some("vs_main"),
                     buffers: &[],
                     compilation_options: Default::default(),
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &shader,
+                    module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,

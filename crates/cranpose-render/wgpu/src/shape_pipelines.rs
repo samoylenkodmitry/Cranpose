@@ -6,6 +6,7 @@ use crate::{
     pipeline_compiler::PipelineCompiler,
     render::{ShapePipelineKey, create_shape_pipeline},
     run_store::RunBufferMode,
+    shared_shader::SharedShader,
 };
 
 #[derive(Clone)]
@@ -13,8 +14,7 @@ pub(crate) struct ShapePipelineFactory {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) cache: Option<wgpu::PipelineCache>,
     pub(crate) format: wgpu::TextureFormat,
-    pub(crate) uniform_layout: wgpu::BindGroupLayout,
-    pub(crate) run_layout: wgpu::BindGroupLayout,
+    pub(crate) shader: SharedShader,
     pub(crate) mode: RunBufferMode,
 }
 
@@ -24,8 +24,7 @@ impl ShapePipelineFactory {
             &self.device,
             self.cache.as_ref(),
             self.format,
-            &self.uniform_layout,
-            &self.run_layout,
+            &self.shader,
             key,
             self.mode,
         )
