@@ -171,7 +171,7 @@ fn slot_write_session_exposes_semantic_operations() {
         session.skip_group();
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
-        assert_eq!(result.root_nodes, vec![55]);
+        assert_eq!(result.root_nodes.as_slice(), [55]);
         assert!(result.was_skipped);
         session.end_recompose();
     });

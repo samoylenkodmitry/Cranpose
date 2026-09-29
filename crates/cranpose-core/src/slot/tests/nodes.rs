@@ -260,7 +260,7 @@ fn collecting_root_nodes_repairs_corrupt_subtree_span_and_node_count() {
 
     let root_nodes = harness.table.collect_subtree_root_node_ids(parent_anchor);
 
-    assert_eq!(root_nodes, vec![10]);
+    assert_eq!(root_nodes.as_slice(), [10]);
     assert_eq!(
         harness.table.groups[0].subtree_len, 2,
         "root-node collection should repair subtree span before iterating"
@@ -423,4 +423,40 @@ fn record_node_reports_explicit_generation_replacement() {
 
     assert_eq!(harness.table.group_node_record_at(0, 0).id, 11);
     assert_eq!(harness.table.group_node_record_at(0, 0).generation, 2);
+}
+
+fn node_record(id: NodeId, parent_id: Option<NodeId>) -> NodeRecord {
+    NodeRecord {
+        owner: AnchorId::INVALID,
+        id,
+        parent_id,
+        generation: 0,
+        source: crate::slot::BRANCH_PATH_ROOT,
+        lifecycle: NodeLifecycle::Active,
+    }
+}
+
+#[test]
+fn root_node_ids_are_the_records_whose_parent_is_outside_them_in_order() {
+    // Chains of three under outside parents: a root, its child and its
+    // grandchild, repeated until the records pass the scan limit.
+    for chains in [1, 2, 10] {
+        let records: Vec<NodeRecord> = (0..chains)
+            .flat_map(|chain| {
+                let root = 100 + chain * 3;
+                [
+                    node_record(root, (chain % 2 == 0).then_some(1)),
+                    node_record(root + 1, Some(root)),
+                    node_record(root + 2, Some(root + 1)),
+                ]
+            })
+            .collect();
+        let expected: Vec<NodeId> = (0..chains).map(|chain| 100 + chain * 3).collect();
+        assert_eq!(
+            crate::slot::root_node_ids(&records).collect::<Vec<_>>(),
+            expected,
+            "{} records",
+            records.len()
+        );
+    }
 }

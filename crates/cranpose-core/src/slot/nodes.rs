@@ -13,7 +13,7 @@ use super::{
 use crate::{AnchorId, NodeId};
 
 impl SlotTable {
-    fn group_node_start_at(&self, group_index: usize) -> usize {
+    pub(in crate::slot) fn group_node_start_at(&self, group_index: usize) -> usize {
         group_segment_start::<NodeSegment>(&self.groups, group_index)
     }
 
