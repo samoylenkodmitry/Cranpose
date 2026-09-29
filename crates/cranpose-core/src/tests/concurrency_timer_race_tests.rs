@@ -1,3 +1,6 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Condvar;
+
 use super::*;
 
 #[test]
