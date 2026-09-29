@@ -332,14 +332,21 @@ impl IosAccessibilityBridge {
         accessibility::log_spoken_tree(&next);
         let structure_changed = input_changed
             || !accessibility::voiceover_same_structure(&self.snapshot.elements, &next);
-        let changed = accessibility::spoken_changes(&self.snapshot.elements, &next);
         let opened = accessibility::opened_dialog(&self.snapshot.elements, &next);
         let mut next_snapshot = std::mem::take(&mut self.snapshot);
-        if let Err(error) = next_snapshot.update(next) {
-            self.snapshot = next_snapshot;
-            log::error!("Could not publish accessibility tree: {error}");
-            return;
-        }
+        let replaced = match next_snapshot.update(next) {
+            Ok(replaced) => replaced,
+            Err(error) => {
+                self.snapshot = next_snapshot;
+                log::error!("Could not publish accessibility tree: {error}");
+                return;
+            }
+        };
+        let changed = accessibility::spoken_changes(
+            &replaced.elements,
+            &next_snapshot.elements,
+            &replaced.was,
+        );
         let next = &next_snapshot.elements;
         let next_ids = &next_snapshot.ids;
         self.requests.screen_action.set(

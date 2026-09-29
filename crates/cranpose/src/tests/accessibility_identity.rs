@@ -46,7 +46,14 @@ fn recycled_generation_updates_structure_and_announcements() {
     assert_eq!(opened_dialog(&previous, &current), Some(7));
     assert_eq!(live_region_announcements(&previous, &current).len(), 1);
     assert_eq!(pane_title_announcements(&previous, &current).len(), 1);
-    assert_eq!(spoken_changes(&previous, &current), vec![false]);
+    let mut snapshot = AccessibilitySnapshot::default();
+    snapshot.update(previous.to_vec()).expect("initial control");
+    let replaced = snapshot.update(current.to_vec()).expect("recycled control");
+    assert_eq!(replaced.was, vec![None], "a recycled control is a new one");
+    assert_eq!(
+        spoken_changes(&replaced.elements, &snapshot.elements, &replaced.was),
+        vec![false]
+    );
 }
 
 #[test]
@@ -173,10 +180,15 @@ fn an_update_hands_back_the_snapshot_it_replaced() {
         .update(vec![element_with(7, None)])
         .expect("unique identity");
     let first = snapshot.ids.clone();
-    let (elements, ids) = snapshot
-        .update(vec![element_with(8, None)])
+    let replaced = snapshot
+        .update(vec![element_with(8, None), element_with(7, None)])
         .expect("unique identity");
-    assert_eq!(ids, first);
-    assert_eq!(elements, vec![element_with(7, None)]);
-    assert_ne!(snapshot.ids, first);
+    assert_eq!(replaced.ids, first);
+    assert_eq!(replaced.elements, vec![element_with(7, None)]);
+    assert_eq!(
+        replaced.was,
+        vec![None, Some(0)],
+        "each new control says where it was, if it was there"
+    );
+    assert_eq!(snapshot.ids[1], first[0]);
 }

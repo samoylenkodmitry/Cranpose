@@ -1074,13 +1074,21 @@ fn the_first_publish_keeps_pane_titles_quiet() {
     assert!(pane_title_announcements(&[], &[pane(1, "Library")]).is_empty());
 }
 
+/// The spoken changes of `after` published over `before`.
+fn spoken(before: &[AccessibilityElement], after: &[AccessibilityElement]) -> Vec<bool> {
+    let mut snapshot = AccessibilitySnapshot::default();
+    snapshot.update(before.to_vec()).expect("unique identities");
+    let replaced = snapshot.update(after.to_vec()).expect("unique identities");
+    spoken_changes(&replaced.elements, &snapshot.elements, &replaced.was)
+}
+
 #[test]
 fn a_toggle_that_flipped_is_a_spoken_change() {
     let mut before = live_text(1, "Dark theme");
     before.toggled = Some(false);
     let mut after = before.clone();
     after.toggled = Some(true);
-    assert_eq!(spoken_changes(&[before], &[after]), vec![true]);
+    assert_eq!(spoken(&[before], &[after]), vec![true]);
 }
 
 #[test]
@@ -1088,10 +1096,7 @@ fn an_element_that_kept_its_words_is_not_a_spoken_change() {
     let before = live_text(1, "Dark theme");
     let after = live_text(1, "Dark theme");
     let fresh = live_text(2, "Fresh");
-    assert_eq!(
-        spoken_changes(&[before], &[after, fresh]),
-        vec![false, false]
-    );
+    assert_eq!(spoken(&[before], &[after, fresh]), vec![false, false]);
 }
 
 #[test]
@@ -1099,7 +1104,7 @@ fn a_new_error_is_a_spoken_change() {
     let before = live_text(1, "Amount");
     let mut after = live_text(1, "Amount");
     after.error = Some("needs a number".into());
-    assert_eq!(spoken_changes(&[before], &[after.clone()]), vec![true]);
+    assert_eq!(spoken(&[before], &[after.clone()]), vec![true]);
     assert_eq!(
         state_with_error(&after).as_deref(),
         Some("invalid, needs a number")

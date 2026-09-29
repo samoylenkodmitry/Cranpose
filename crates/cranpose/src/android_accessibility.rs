@@ -306,9 +306,8 @@ pub(crate) fn sync(
     let Some(elements) = elements else {
         return Ok(());
     };
-    let changed = accessibility::spoken_changes(&previous.elements, &elements);
     let update = wire
-        .publish(previous, elements, &changed, density)
+        .publish(previous, elements, density)
         .map_err(|error| error.to_string())?;
     if update.is_empty() {
         return Ok(());
