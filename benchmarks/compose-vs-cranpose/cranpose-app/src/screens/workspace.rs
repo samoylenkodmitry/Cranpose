@@ -31,6 +31,7 @@ use cranpose::{LazyItems, prelude::*};
 use cranpose_core::{MutableState, delay, key, mutableStateOf};
 use cranpose_foundation::lazy::{LazyListState, rememberLazyListState};
 use cranpose_ui::{
+    DashPathEffect, DrawStyle, Path,
     text::{FontWeight, ParagraphStyle, SpanStyle, TextUnit},
     widgets::{FlowRow, FlowRowSpec},
 };
@@ -1408,28 +1409,17 @@ fn SortArrows(sorted_down: bool) {
         Modifier::empty()
             .size_points(6.0, 12.0)
             .draw_behind(move |scope| {
-                let up = Brush::solid(BORDER);
-                let down = Brush::solid(if sorted_down { FOREGROUND } else { BORDER });
-                // A triangle, three rows of pixels narrowing to its tip.
-                for (row, inset) in [(0.0, 2.0), (1.0, 1.0), (2.0, 0.0)] {
-                    scope.draw_rect_at(
-                        Rect {
-                            x: inset,
-                            y: 2.0 + row,
-                            width: 6.0 - inset * 2.0,
-                            height: 1.0,
-                        },
-                        up.clone(),
-                    );
-                    scope.draw_rect_at(
-                        Rect {
-                            x: inset,
-                            y: 9.0 - row,
-                            width: 6.0 - inset * 2.0,
-                            height: 1.0,
-                        },
-                        down.clone(),
-                    );
+                let (width, middle) = (scope.size().width, scope.size().height / 2.0);
+                for up in [true, false] {
+                    let base = middle + if up { -1.0 } else { 1.0 };
+                    let tip = if up { base - 4.0 } else { base + 4.0 };
+                    let mut path = Path::new();
+                    path.move_to(Point::new(0.0, base));
+                    path.line_to(Point::new(width, base));
+                    path.line_to(Point::new(width / 2.0, tip));
+                    path.close();
+                    let color = if !up && sorted_down { FOREGROUND } else { BORDER };
+                    scope.draw_path(&path, Brush::solid(color), DrawStyle::Fill);
                 }
             }),
         BoxSpec::default(),
@@ -1607,7 +1597,7 @@ fn WatchlistRow(market: Rc<Market>, ix: usize) {
     );
 }
 
-/// A symbol's day as a stepped line over a faint fill.
+/// A symbol's day as a line over a faint fill.
 fn draw_spark(scope: &mut dyn DrawScope, points: &[f32], baseline: f32, color: Color) {
     let size = scope.size();
     let (low, high) = points
@@ -1618,30 +1608,22 @@ fn draw_spark(scope: &mut dyn DrawScope, points: &[f32], baseline: f32, color: C
     let span = (high - low).max(0.0001);
     let step = size.width / (points.len() - 1) as f32;
     let y = |value: f32| size.height * ((high - value) / span);
-    let fill = Brush::solid(faded(color, 0.12));
-    let line = Brush::solid(color);
-    for (ix, pair) in points.windows(2).enumerate() {
-        let (from, to) = (y(pair[0]), y(pair[1]));
-        let x = step * ix as f32;
-        scope.draw_rect_at(
-            Rect {
-                x,
-                y: to,
-                width: step,
-                height: size.height - to,
-            },
-            fill.clone(),
-        );
-        scope.draw_rect_at(
-            Rect {
-                x,
-                y: from.min(to),
-                width: step.max(1.0),
-                height: (from - to).abs().max(1.0),
-            },
-            line.clone(),
-        );
+    let mut area = Path::new();
+    area.move_to(Point::new(0.0, size.height));
+    let mut line = Path::new();
+    for (ix, value) in points.iter().enumerate() {
+        let point = Point::new(step * ix as f32, y(*value));
+        area.line_to(point);
+        if ix == 0 {
+            line.move_to(point);
+        } else {
+            line.line_to(point);
+        }
     }
+    area.line_to(Point::new(size.width, size.height));
+    area.close();
+    scope.draw_path(&area, Brush::solid(faded(color, 0.12)), DrawStyle::Fill);
+    scope.draw_path(&line, Brush::solid(color), DrawStyle::Stroke(Stroke::new(1.0)));
 }
 
 #[composable]
@@ -1989,48 +1971,28 @@ fn draw_chart(
         );
     }
     for (average, (period, color)) in averages.iter().zip(AVERAGES.into_iter().zip(SERIES)) {
-        let brush = Brush::solid(color);
-        for (ix, pair) in average.windows(2).enumerate() {
-            let (from, to) = (y(pair[0]), y(pair[1]));
-            scope.draw_rect_at(
-                Rect {
-                    x: x(ix + period - 1),
-                    y: from.min(to),
-                    width: step,
-                    height: (from - to).abs().max(1.2),
-                },
-                brush.clone(),
-            );
+        let mut path = Path::new();
+        for (ix, value) in average.iter().enumerate() {
+            let point = Point::new(x(ix + period - 1), y(*value));
+            if ix == 0 {
+                path.move_to(point);
+            } else {
+                path.line_to(point);
+            }
         }
+        scope.draw_path(&path, Brush::solid(color), DrawStyle::Stroke(Stroke::new(1.2)));
     }
     let close_y = y(candles[candles.len() - 1].close);
-    let dash = Brush::solid(MUTED_FOREGROUND);
-    let mut dash_x = 0.0;
-    while dash_x < plot.width {
-        scope.draw_rect_at(
-            Rect {
-                x: dash_x,
-                y: close_y,
-                width: 3.0,
-                height: 1.0,
-            },
-            dash.clone(),
-        );
-        dash_x += 6.0;
-    }
     let last_x = x(candles.len() - 1);
-    let mut dash_y = 0.0;
-    while dash_y < plot.height {
-        scope.draw_rect_at(
-            Rect {
-                x: last_x,
-                y: dash_y,
-                width: 1.0,
-                height: 3.0,
-            },
-            dash.clone(),
-        );
-        dash_y += 6.0;
+    let dashed = DrawStyle::DashedStroke(Stroke::new(1.0), DashPathEffect::new(&[3.0, 3.0], 0.0));
+    for (start, end) in [
+        (Point::new(0.0, close_y), Point::new(plot.width, close_y)),
+        (Point::new(last_x, 0.0), Point::new(last_x, plot.height)),
+    ] {
+        let mut guide = Path::new();
+        guide.move_to(start);
+        guide.line_to(end);
+        scope.draw_path(&guide, Brush::solid(MUTED_FOREGROUND), dashed);
     }
 }
 
