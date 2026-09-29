@@ -1,13 +1,14 @@
-use std::{any::TypeId, mem};
+use std::any::TypeId;
 
 use super::{
-    DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadAnchor, PayloadKind,
-    PayloadRange, PayloadRecord, SlotTable, SlotWriteSessionState, ValueSlotId,
+    GroupPayloadRange, GroupRange, GroupRecord, PayloadAnchor, PayloadKind, PayloadRange,
+    PayloadRecord, SlotTable, SlotWriteSessionState, ValueSlotId,
     segments::{
-        PayloadSegment, extract_subtree_segment, group_segment_len, group_segment_range_checked,
-        group_segment_start, group_segment_subrange_at, insert_group_segment_item,
-        move_subtree_segment_to_earlier_group, remove_group_segment_range,
-        repair_group_segment_start_and_len_to_storage, restore_subtree_segment,
+        PayloadSegment, SegmentItems, extract_subtree_segment, group_segment_len,
+        group_segment_range_checked, group_segment_start, group_segment_subrange_at,
+        insert_group_segment_item, move_subtree_segment_to_earlier_group,
+        remove_group_segment_range, repair_group_segment_start_and_len_to_storage,
+        restore_subtree_segment,
     },
 };
 use crate::{AnchorId, retention::RetentionManager};
@@ -71,7 +72,7 @@ fn replace_payload_record(
     kind: PayloadKind,
     init: &mut PayloadInit<'_>,
 ) -> Box<dyn std::any::Any> {
-    let old_value = mem::replace(&mut record.value, init.make_value());
+    let old_value = std::mem::replace(&mut record.value, init.make_value());
     record.type_id = init.type_id;
     record.type_name = init.type_name;
     record.source = init.source;
@@ -202,50 +203,33 @@ impl SlotTable {
         self.payload_anchors.try_allocate()
     }
 
-    pub(in crate::slot) fn group_payload_records_at(&self, group_index: usize) -> &[PayloadRecord] {
+    pub(in crate::slot) fn group_payload_records_at(
+        &self,
+        group_index: usize,
+    ) -> impl Iterator<Item = &PayloadRecord> + '_ {
         let Some(range) = self.group_payload_range_checked_at(group_index) else {
             log::error!(
                 "slot table ignored payload record read for corrupt payload segment at group index {group_index}"
             );
-            return &[];
+            return self.payloads.range(0..0);
         };
-        &self.payloads[range.as_range()]
+        self.payloads.range(range.as_range())
     }
+
+    #[cfg(test)]
     pub(super) fn payload_anchor_at(
         &self,
         group_index: usize,
         payload_index: usize,
     ) -> PayloadAnchor {
         self.group_payload_record_at(group_index, payload_index)
-            .anchor
+            .map_or(PayloadAnchor::INVALID, |payload| payload.anchor)
     }
 
     #[cfg(test)]
     pub(super) fn payload_owner_at(&self, group_index: usize, payload_index: usize) -> AnchorId {
         self.group_payload_record_at(group_index, payload_index)
-            .owner
-    }
-
-    fn payload_value_type_matches(
-        &self,
-        group_index: usize,
-        payload_index: usize,
-        type_id: TypeId,
-    ) -> bool {
-        self.group_payload_record_at(group_index, payload_index)
-            .type_id
-            == type_id
-    }
-
-    fn payload_value_source_matches(
-        &self,
-        group_index: usize,
-        payload_index: usize,
-        source: crate::Key,
-    ) -> bool {
-        self.group_payload_record_at(group_index, payload_index)
-            .source
-            == source
+            .map_or(AnchorId::INVALID, |payload| payload.owner)
     }
 
     fn find_matching_payload_from(
@@ -253,12 +237,13 @@ impl SlotTable {
         group_index: usize,
         from_index: usize,
         payload_len: usize,
-        type_id: TypeId,
-        source: crate::Key,
+        init: &PayloadInit<'_>,
     ) -> Option<usize> {
-        let records = self.group_payload_records_at(group_index);
-        (from_index..payload_len)
-            .find(|&index| records[index].type_id == type_id && records[index].source == source)
+        let start = self.group_payload_start_at(group_index);
+        self.payloads
+            .range(start + from_index..start + payload_len)
+            .position(|payload| payload.type_id == init.type_id && payload.source == init.source)
+            .map(|offset| from_index + offset)
     }
 
     fn rotate_payload_record_to_cursor(
@@ -268,44 +253,55 @@ impl SlotTable {
         cursor_index: usize,
     ) {
         let start = self.group_payload_start_at(group_index);
-        self.payloads[start + cursor_index..=start + found_index].rotate_right(1);
+        self.payloads
+            .rotate_items_right(start + cursor_index..start + found_index + 1, 1);
     }
 
+    fn group_payload_absolute_index(
+        &self,
+        group_index: usize,
+        payload_index: usize,
+    ) -> Option<usize> {
+        let range = self.group_payload_range_checked_at(group_index)?;
+        (payload_index < range.len()).then(|| range.start() + payload_index)
+    }
+
+    #[cfg(any(test, debug_assertions))]
     pub(in crate::slot) fn group_payload_record_at(
         &self,
         group_index: usize,
         payload_index: usize,
-    ) -> &PayloadRecord {
-        self.group_payload_records_at(group_index)
-            .get(payload_index)
-            .expect("payload index should resolve")
-    }
-
-    fn payload_slot_identity_at(&self, group_index: usize, payload_index: usize) -> PayloadAnchor {
-        self.payload_anchor_at(group_index, payload_index)
+    ) -> Option<&PayloadRecord> {
+        self.payloads
+            .get(self.group_payload_absolute_index(group_index, payload_index)?)
     }
 
     pub(in crate::slot) fn group_payload_record_at_mut(
         &mut self,
         group_index: usize,
         payload_index: usize,
-    ) -> &mut PayloadRecord {
-        let payload_start = self.group_payload_start_at(group_index);
-        self.payloads
-            .get_mut(payload_start + payload_index)
-            .expect("payload index should resolve")
+    ) -> Option<&mut PayloadRecord> {
+        let index = self.group_payload_absolute_index(group_index, payload_index)?;
+        self.payloads.get_mut(index)
+    }
+
+    fn reuse_payload_at(
+        &mut self,
+        group_index: usize,
+        payload_index: usize,
+        kind: PayloadKind,
+        init: &PayloadInit<'_>,
+    ) -> Option<PayloadAnchor> {
+        let payload = self.group_payload_record_at_mut(group_index, payload_index)?;
+        if payload.type_id != init.type_id || payload.source != init.source {
+            return None;
+        }
+        payload.kind = kind;
+        Some(payload.anchor)
     }
 
     pub(in crate::slot) fn total_payload_count(&self) -> usize {
         self.payloads.len()
-    }
-
-    pub(super) fn payload_heap_bytes(&self) -> usize {
-        self.payloads.capacity() * mem::size_of::<PayloadRecord>()
-    }
-
-    pub(super) fn payload_debug_capacity(&self) -> usize {
-        self.payloads.capacity()
     }
 
     fn insert_value_payload_internal(
@@ -378,13 +374,10 @@ impl SlotTable {
         let mut make =
             move || -> Box<dyn std::any::Any> { Box::new(value.take().expect("value once")) };
         let mut init = PayloadInit::new::<T>(source, &mut make);
-        let record = self.group_payload_record_at_mut(group_index, payload_index);
+        let record = self
+            .group_payload_record_at_mut(group_index, payload_index)
+            .expect("test payload index should resolve");
         replace_payload_record(record, kind, &mut init)
-    }
-
-    fn update_payload_kind(&mut self, group_index: usize, payload_index: usize, kind: PayloadKind) {
-        self.group_payload_record_at_mut(group_index, payload_index)
-            .kind = kind;
     }
 
     pub(super) fn use_value_payload_at_cursor(
@@ -394,11 +387,7 @@ impl SlotTable {
         payload_index: usize,
         kind: PayloadKind,
         init: &mut PayloadInit<'_>,
-    ) -> (
-        ValueSlotId,
-        Option<DeferredDrop>,
-        Option<PayloadLocationRefresh>,
-    ) {
+    ) -> (ValueSlotId, Option<PayloadLocationRefresh>) {
         let payload_len =
             self.repair_group_payload_len_to_storage(group_index, "value payload cursor");
         let payload_index = if payload_index > payload_len {
@@ -411,25 +400,16 @@ impl SlotTable {
         };
         let mut location_refresh = None;
 
-        let (anchor, deferred_drop) = if payload_index < payload_len {
-            if self.payload_value_type_matches(group_index, payload_index, init.type_id)
-                && self.payload_value_source_matches(group_index, payload_index, init.source)
+        let anchor = if payload_index < payload_len {
+            if let Some(anchor) = self.reuse_payload_at(group_index, payload_index, kind, init) {
+                anchor
+            } else if let Some(found) =
+                self.find_matching_payload_from(group_index, payload_index + 1, payload_len, init)
             {
-                let anchor = self.payload_slot_identity_at(group_index, payload_index);
-                self.update_payload_kind(group_index, payload_index, kind);
-                (anchor, None)
-            } else if let Some(found) = self.find_matching_payload_from(
-                group_index,
-                payload_index + 1,
-                payload_len,
-                init.type_id,
-                init.source,
-            ) {
                 self.rotate_payload_record_to_cursor(group_index, found, payload_index);
                 self.refresh_group_payload_anchor_locations(owner, payload_index);
-                let anchor = self.payload_slot_identity_at(group_index, payload_index);
-                self.update_payload_kind(group_index, payload_index, kind);
-                (anchor, None)
+                self.reuse_payload_at(group_index, payload_index, kind, init)
+                    .unwrap_or(PayloadAnchor::INVALID)
             } else {
                 match self.insert_value_payload_internal(
                     owner,
@@ -441,9 +421,9 @@ impl SlotTable {
                 ) {
                     Some(anchor) => {
                         self.refresh_group_payload_anchor_locations(owner, payload_index);
-                        (anchor, None)
+                        anchor
                     }
-                    None => (PayloadAnchor::INVALID, None),
+                    None => PayloadAnchor::INVALID,
                 }
             }
         } else {
@@ -458,19 +438,17 @@ impl SlotTable {
                 return (
                     ValueSlotId::new_for_table(PayloadAnchor::INVALID, self.storage_id()),
                     None,
-                    None,
                 );
             };
             location_refresh = Some(PayloadLocationRefresh {
                 owner,
                 start: payload_index,
             });
-            (anchor, None)
+            anchor
         };
 
         (
             ValueSlotId::new_for_table(anchor, self.storage_id()),
-            deferred_drop,
             location_refresh,
         )
     }
@@ -526,10 +504,13 @@ impl SlotTable {
         if payload_span == 0 {
             return;
         }
-        for index in start..range.len() {
-            let payload_anchor = self.payloads[range.start() + index].anchor;
+        for (offset, payload) in self
+            .payloads
+            .range(range.start() + start..range.as_range().end)
+            .enumerate()
+        {
             self.payload_anchors
-                .set_active(payload_anchor, owner, index);
+                .set_active(payload.anchor, owner, start + offset);
         }
         self.diagnostics
             .record_payload_location_refresh(payload_span);
@@ -565,10 +546,9 @@ impl SlotTable {
                 continue;
             };
             payload_span += range.len();
-            for index in 0..range.len() {
-                let payload_anchor = self.payloads[range.start() + index].anchor;
+            for (index, payload) in self.payloads.range(range.as_range()).enumerate() {
                 self.payload_anchors
-                    .set_active(payload_anchor, owner, index);
+                    .set_active(payload.anchor, owner, index);
             }
         }
         self.diagnostics
