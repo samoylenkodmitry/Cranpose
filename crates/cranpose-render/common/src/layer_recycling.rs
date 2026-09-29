@@ -25,14 +25,16 @@ thread_local! {
 }
 
 impl Pool {
+    fn recycle_layer(&mut self, mut layer: Box<LayerNode>) {
+        let replaced = std::mem::take(layer.as_mut());
+        self.recycle_list(replaced.children);
+        self.layers.push(layer);
+    }
+
     fn recycle_list(&mut self, mut list: Vec<RenderNode>) {
         for child in list.drain(..) {
             match child {
-                RenderNode::Layer(mut layer) => {
-                    let replaced = std::mem::take(layer.as_mut());
-                    self.recycle_list(replaced.children);
-                    self.layers.push(layer);
-                }
+                RenderNode::Layer(layer) => self.recycle_layer(layer),
                 RenderNode::Primitive(PrimitiveEntry {
                     node: PrimitiveNode::Text(text),
                     ..
@@ -51,6 +53,12 @@ impl Pool {
 pub(crate) fn recycle_children(layer: &mut LayerNode) {
     let children = std::mem::take(&mut layer.children);
     POOL.with(|pool| pool.borrow_mut().recycle_list(children));
+}
+
+/// Moves `layer`'s box, and every layer box and child list beneath it,
+/// into the pool.
+pub(crate) fn recycle(layer: Box<LayerNode>) {
+    POOL.with(|pool| pool.borrow_mut().recycle_layer(layer));
 }
 
 /// Moves an emptied child list into the pool.

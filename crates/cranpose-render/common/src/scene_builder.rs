@@ -588,19 +588,40 @@ fn translated_container(
     })
 }
 
-struct TranslatedChildren {
-    placed_fresh: SmallVec<[(NodeId, cranpose_ui::widgets::LayoutState); 8]>,
-    children_unchanged: bool,
+/// What a scroll step reconciles a container's children in, kept between
+/// steps so a step allocates nothing of its own. Every list is empty
+/// between steps, so it holds no layer.
+#[derive(Default)]
+struct TranslateScratch {
+    /// The placed children, in their new order.
+    placed_fresh: Vec<(NodeId, cranpose_ui::widgets::LayoutState)>,
     old_index_by_id: HashMap<NodeId, usize>,
+    /// The container's previous children by their index, until each is
+    /// kept or recycled.
+    retained: Vec<Option<Box<LayerNode>>>,
+    /// The previous children that stay, in their new order; `None` where a
+    /// child enters.
+    kept: Vec<Option<Box<LayerNode>>>,
+    /// The children built for the step, in their new order.
+    entering: Vec<(NodeId, Box<LayerNode>)>,
 }
 
+thread_local! {
+    static TRANSLATE_SCRATCH: Cell<TranslateScratch> = Cell::new(TranslateScratch::default());
+}
+
+/// Fills `scratch` with `container`'s placed children and the index of its
+/// previous ones, and returns whether they are the same children in the
+/// same order.
 fn translated_children(
     applier: &mut MemoryApplier,
     container: &LayerNode,
     dirty_nodes: &HashSet<NodeId>,
     fresh_children: &[NodeId],
-) -> Result<TranslatedChildren, &'static str> {
-    let mut placed_fresh = SmallVec::<[_; 8]>::with_capacity(fresh_children.len());
+    scratch: &mut TranslateScratch,
+) -> Result<bool, &'static str> {
+    let placed_fresh = &mut scratch.placed_fresh;
+    placed_fresh.clear();
     for child_id in fresh_children {
         let state = applier
             .with_node::<LayoutNode, _>(*child_id, |node| node.layout_state())
@@ -619,39 +640,31 @@ fn translated_children(
         && container
             .children
             .iter()
-            .zip(&placed_fresh)
+            .zip(placed_fresh.iter())
             .all(|(child, (id, _))| {
                 matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(*id))
             });
-    let old_index_by_id = if children_unchanged {
-        HashMap::default()
-    } else {
-        let Some(index): Option<HashMap<NodeId, usize>> = container
-            .children
-            .iter()
-            .enumerate()
-            .map(|(index, child)| match child {
-                RenderNode::Layer(layer) => layer_identity(layer).map(|id| (id, index)),
-                _ => None,
-            })
-            .collect()
-        else {
-            return Err("child without node id");
-        };
-        index
-    };
+    let old_index_by_id = &mut scratch.old_index_by_id;
+    old_index_by_id.clear();
+    if !children_unchanged {
+        for (index, child) in container.children.iter().enumerate() {
+            let RenderNode::Layer(layer) = child else {
+                return Err("child without node id");
+            };
+            let Some(id) = layer_identity(layer) else {
+                return Err("child without node id");
+            };
+            old_index_by_id.insert(id, index);
+        }
+    }
     check_retained_children(
         container,
         dirty_nodes,
-        &placed_fresh,
+        &scratch.placed_fresh,
         children_unchanged,
-        &old_index_by_id,
+        &scratch.old_index_by_id,
     )?;
-    Ok(TranslatedChildren {
-        placed_fresh,
-        children_unchanged,
-        old_index_by_id,
-    })
+    Ok(children_unchanged)
 }
 
 fn check_retained_children(
@@ -723,19 +736,50 @@ impl TranslateGeometry {
     }
 }
 
+/// Moves `container`'s previous children that stay into `scratch.kept`, in
+/// their new order, and the subtrees of those that leave into the layer
+/// pool, so the entering children are built in their allocations.
+fn recycle_leaving_children(
+    container: &mut LayerNode,
+    scratch: &mut TranslateScratch,
+    changed_nodes: &mut Vec<NodeId>,
+) {
+    let TranslateScratch {
+        placed_fresh,
+        old_index_by_id,
+        retained,
+        kept,
+        ..
+    } = scratch;
+    retained.clear();
+    retained.extend(container.children.drain(..).map(|child| match child {
+        RenderNode::Layer(layer) => Some(layer),
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
+    }));
+    kept.clear();
+    kept.extend(placed_fresh.iter().map(|(child_id, _)| {
+        old_index_by_id
+            .get(child_id)
+            .and_then(|index| retained[*index].take())
+    }));
+    for leaving in retained.drain(..).flatten() {
+        collect_layer_node_ids(&leaving, changed_nodes);
+        crate::layer_recycling::recycle(leaving);
+    }
+}
+
 fn build_entering_children(
     applier: &mut MemoryApplier,
     container: &LayerNode,
-    placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
-    retained: (bool, &HashMap<NodeId, usize>),
+    scratch: &mut TranslateScratch,
     geometry: TranslateGeometry,
     inherited: (bool, bool),
-) -> HashMap<NodeId, LayerNode> {
-    let (children_unchanged, old_index_by_id) = retained;
+) {
     let (child_inherited_translated_content_context, children_ancestor_hashed) = inherited;
-    let mut entering: HashMap<NodeId, LayerNode> = HashMap::default();
-    for (child_id, _) in placed_fresh {
-        if children_unchanged || old_index_by_id.contains_key(child_id) {
+    let entering = &mut scratch.entering;
+    entering.clear();
+    for (child_id, _) in &scratch.placed_fresh {
+        if scratch.old_index_by_id.contains_key(child_id) {
             continue;
         }
         let Some(mut lowered) = build_layer_node_from_applier_internal(
@@ -763,9 +807,8 @@ fn build_entering_children(
             &mut lowered,
             children_ancestor_hashed,
         );
-        entering.insert(*child_id, lowered);
+        entering.push((*child_id, crate::layer_recycling::boxed(lowered)));
     }
-    entering
 }
 
 fn apply_translated_container_state(
@@ -812,13 +855,12 @@ fn reconcile_translated_children(
     container: &mut LayerNode,
     dirty_nodes: &mut HashSet<NodeId>,
     changed_nodes: &mut Vec<NodeId>,
-    placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
+    scratch: &mut TranslateScratch,
     children_unchanged: bool,
-    entering: &mut HashMap<NodeId, LayerNode>,
     geometry: TranslateGeometry,
 ) {
     if children_unchanged {
-        for (child, (child_id, state)) in container.children.iter_mut().zip(placed_fresh) {
+        for (child, (child_id, state)) in container.children.iter_mut().zip(&scratch.placed_fresh) {
             let RenderNode::Layer(layer) = child else {
                 unreachable!("retained child identities were checked");
             };
@@ -829,35 +871,21 @@ fn reconcile_translated_children(
         }
         return;
     }
-    let fresh_id_set: HashSet<NodeId> = placed_fresh.iter().map(|(id, _)| *id).collect();
-    let mut old_by_id: HashMap<NodeId, Box<LayerNode>> = HashMap::default();
-    for child in container.children.drain(..) {
-        let RenderNode::Layer(layer) = child else {
-            continue;
-        };
-        let child_id = layer_identity(&layer).expect("checked above");
-        if fresh_id_set.contains(&child_id) {
-            old_by_id.insert(child_id, layer);
-        } else {
-            collect_layer_node_ids(&layer, changed_nodes);
-        }
-    }
-    let mut new_children = Vec::with_capacity(placed_fresh.len());
-    for (child_id, state) in placed_fresh {
-        if let Some(mut layer) = old_by_id.remove(child_id) {
+    let mut entering = scratch.entering.drain(..).peekable();
+    for ((child_id, state), kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
+        if let Some(mut layer) = kept {
             if !dirty_nodes.contains(child_id) {
                 translate_retained_child(&mut layer, state, geometry.content_offset);
                 changed_nodes.push(*child_id);
             }
-            new_children.push(RenderNode::Layer(layer));
-        } else if let Some(lowered) = entering.remove(child_id) {
+            container.children.push(RenderNode::Layer(layer));
+        } else if let Some((_, lowered)) = entering.next_if(|(id, _)| id == child_id) {
             dirty_nodes.remove(child_id);
             remove_dirty_descendants(&lowered, dirty_nodes);
             collect_layer_node_ids(&lowered, changed_nodes);
-            new_children.push(RenderNode::Layer(Box::new(lowered)));
+            container.children.push(RenderNode::Layer(lowered));
         }
     }
-    container.children = new_children;
 }
 
 fn translate_layer_from_data(
@@ -901,32 +929,39 @@ fn translate_layer_from_data(
         node_id,
         graphics_layer,
     } = container_plan;
-    let child_plan = match translated_children(applier, container, dirty_nodes, &fresh_children) {
-        Ok(plan) => plan,
-        Err(reason) => return translate_bail(reason),
+    let mut scratch = TRANSLATE_SCRATCH.take();
+    let children_unchanged = match translated_children(
+        applier,
+        container,
+        dirty_nodes,
+        &fresh_children,
+        &mut scratch,
+    ) {
+        Ok(unchanged) => unchanged,
+        Err(reason) => {
+            TRANSLATE_SCRATCH.set(scratch);
+            return translate_bail(reason);
+        }
     };
-    let TranslatedChildren {
-        placed_fresh,
-        children_unchanged,
-        old_index_by_id,
-    } = child_plan;
 
     let geometry = TranslateGeometry::new(&layout_state, &graphics_layer, parent_abs);
     let child_inherited_translated_content_context =
         inherited_translated_content_context || container.translated_content_context;
     let children_ancestor_hashed =
         crate::graph_hash::layer_children_ancestor_hashed(container, container_ancestor_hashed);
-    let mut entering = build_entering_children(
-        applier,
-        container,
-        &placed_fresh,
-        (children_unchanged, &old_index_by_id),
-        geometry,
-        (
-            child_inherited_translated_content_context,
-            children_ancestor_hashed,
-        ),
-    );
+    if !children_unchanged {
+        recycle_leaving_children(container, &mut scratch, changed_nodes);
+        build_entering_children(
+            applier,
+            container,
+            &mut scratch,
+            geometry,
+            (
+                child_inherited_translated_content_context,
+                children_ancestor_hashed,
+            ),
+        );
+    }
 
     apply_translated_container_state(
         container,
@@ -941,11 +976,11 @@ fn translate_layer_from_data(
         container,
         dirty_nodes,
         changed_nodes,
-        &placed_fresh,
+        &mut scratch,
         children_unchanged,
-        &mut entering,
         geometry,
     );
+    TRANSLATE_SCRATCH.set(scratch);
     modifier_slices.publish_pointer_input_size(layout_state.size());
     container.hit_test = hit_test_from_slices(&modifier_slices);
 

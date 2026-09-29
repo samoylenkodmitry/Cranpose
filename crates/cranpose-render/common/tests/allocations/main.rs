@@ -1,8 +1,9 @@
 #![cfg(feature = "embedded-default-font")]
 
-use std::alloc::System;
+use std::{alloc::System, cell::RefCell, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_render_common::{
     graph::{LayerNode, RenderGraph, RenderNode},
     scene_builder::{
@@ -10,7 +11,8 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui::{
-    Color, GraphicsLayer, LayoutEngine, Modifier, Size, Text, TextStyle,
+    Color, GraphicsLayer, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Size, Text,
+    TextStyle,
     widgets::{Box, BoxSpec, Column, ColumnSpec},
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
@@ -125,10 +127,93 @@ fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
     );
 }
 
+const ROW_HEIGHT: f32 = 40.0;
+
+/// Allocations of each scene update that scrolls a lazy column of filled,
+/// labelled rows by one row, the scroll and its layout left out.
+fn scroll_step_allocations() -> usize {
+    let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::default();
+    let holder = Rc::clone(&state_holder);
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        let list_state = rememberLazyListState();
+        *holder.borrow_mut() = Some(list_state);
+        LazyColumn(
+            Modifier::empty().size(Size::new(240.0, 320.0)),
+            list_state,
+            LazyColumnSpec::default(),
+            |scope| {
+                scope.items(400, |index| {
+                    Box(
+                        Modifier::empty()
+                            .size(Size::new(240.0, ROW_HEIGHT))
+                            .background(Color::RED)
+                            .rounded_corners(3.0),
+                        BoxSpec::default(),
+                        move || {
+                            Text(
+                                format!("row {index}"),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                });
+            },
+        );
+    });
+    let root = composition.root().expect("a composed root");
+    let viewport = Size::new(240.0, 320.0);
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    applier.compute_layout(root, viewport).expect("layout");
+    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+    let _ = applier.take_structural_change_parents_attached_to(root);
+    applier.clear_runtime_handle();
+    drop(applier);
+    let list_state = (*state_holder.borrow()).expect("the list state");
+    let mut step = || {
+        assert_ne!(list_state.dispatch_scroll_delta(-ROW_HEIGHT), 0.0);
+        let mut dirty = cranpose_ui::pending_layout_repass_nodes_snapshot();
+        dirty.extend(cranpose_ui::pending_measure_repass_nodes_snapshot());
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier.compute_layout(root, viewport).expect("layout");
+        dirty.extend(applier.take_structural_change_parents_attached_to(root));
+        dirty.sort_unstable();
+        dirty.dedup();
+        let region = Region::new(GLOBAL);
+        assert!(
+            update_graph_from_applier(&mut applier, &mut graph, &dirty, 1.0),
+            "the scroll updates the scene in place"
+        );
+        let allocations = region.change().allocations;
+        applier.clear_runtime_handle();
+        allocations
+    };
+    for _ in 0..3 {
+        step();
+    }
+    (0..PASSES).map(|_| step()).sum::<usize>() / PASSES
+}
+
+/// A row scrolling in takes the allocations of the row that scrolled out:
+/// what it allocates is its own draw recording.
+fn a_row_scrolling_in_reuses_the_row_that_scrolled_out() {
+    let allocations = scroll_step_allocations();
+    println!("allocations per one-row scroll step: {allocations}");
+    assert!(
+        allocations <= 6,
+        "{allocations} allocations per scroll step"
+    );
+}
+
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 #[test]
 fn scene_rebuilds_stay_within_their_allocation_budgets() {
     rebuilding_a_cell_reuses_the_cell_it_replaces();
     rebuilding_the_graph_reuses_the_graph_it_replaces();
+    a_row_scrolling_in_reuses_the_row_that_scrolled_out();
 }
