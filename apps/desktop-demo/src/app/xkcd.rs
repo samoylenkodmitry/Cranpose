@@ -1,7 +1,7 @@
 use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef, HttpError};
 use cranpose_ui::{
     composable, Alignment, Box, BoxSpec, ButtonSpec, Color, Column, ColumnSpec, ContentScale,
-    Image, ImageBitmap, LinearArrangement, Modifier, Row, RowSpec, ScrollState, Size, Spacer, Text,
+    Image, ImageBitmap, LinearArrangement, Modifier, Row, RowSpec, ScrollState, Spacer, Text,
     TextStyle, VerticalAlignment,
 };
 use serde::Deserialize;
@@ -230,7 +230,7 @@ pub(crate) fn xkcd_tab() {
                         );
                     }
 
-                    Spacer(Size::new(0.0, 4.0));
+                    Spacer(Modifier::empty().size_points(0.0, 4.0));
                     Text(
                         loaded.comic.alt,
                         Modifier::empty()

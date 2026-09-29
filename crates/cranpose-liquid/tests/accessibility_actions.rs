@@ -20,7 +20,7 @@ fn reader_activates_a_glass_button_beyond_the_scroll_viewport() {
                     .vertical_scroll(scroll, false),
                 cranpose_ui::ColumnSpec::default(),
                 move || {
-                    cranpose_ui::Spacer(cranpose_ui::Size::new(1.0, 600.0));
+                    cranpose_ui::Spacer(Modifier::empty().size_points(1.0, 600.0));
                     let recorded = std::rc::Rc::clone(&recorded);
                     GlassButton(
                         Modifier::empty().fill_max_width(),

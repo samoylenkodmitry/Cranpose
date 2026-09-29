@@ -169,10 +169,7 @@ fn lazy_edge_drag_updates_shared_effect() {
                 LazyColumnSpec::default(),
                 |scope| {
                     scope.items(40, |_| {
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 48.0,
-                        });
+                        Spacer(Modifier::empty().size_points(0.0, 48.0));
                     });
                 },
             );
@@ -891,10 +888,7 @@ fn lazy_wheel_scroll_preserves_input_delta_after_viewport_measurement() {
                     LazyColumnSpec::default(),
                     |scope| {
                         scope.items(100, |_| {
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 48.0,
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, 48.0));
                         });
                     },
                 );
@@ -1448,18 +1442,19 @@ fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
         let scroll_state = ScrollState::new(0.0);
         let scroll_state_for_content = scroll_state;
         let mut composition = crate::run_test_composition(move || {
-            Column(
-                Modifier::empty().vertical_scroll(scroll_state_for_content, false),
-                ColumnSpec::default(),
-                move || {
-                    for _ in 0..item_count {
-                        Spacer(Size {
-                            width: 100.0,
-                            height: item_dp,
-                        });
-                    }
-                },
-            );
+            // Every item is a whole 177 px at the density: the spacers snap
+            // to device pixels as Compose's `roundToPx` does.
+            crate::density::ProvideDensity(crate::density::Density::new(density, 1.0), || {
+                Column(
+                    Modifier::empty().vertical_scroll(scroll_state_for_content, false),
+                    ColumnSpec::default(),
+                    move || {
+                        for _ in 0..item_count {
+                            Spacer(Modifier::empty().size_points(100.0, item_dp));
+                        }
+                    },
+                );
+            });
         });
 
         let root = composition.root().expect("scroll column root");

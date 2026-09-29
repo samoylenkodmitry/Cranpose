@@ -39,10 +39,7 @@ fn input_probe() {
                 Modifier::empty().width(200.0).height(40.0),
                 TextStyle::default(),
             );
-            Spacer(Size {
-                width: 0.0,
-                height: 900.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 900.0));
         },
     );
 }

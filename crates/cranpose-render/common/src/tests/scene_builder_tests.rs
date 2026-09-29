@@ -1072,10 +1072,7 @@ fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
                 }),
             ColumnSpec::default(),
             move || {
-                Spacer(Size {
-                    width: 200.0,
-                    height: spacer_before,
-                });
+                Spacer(Modifier::empty().size_points(200.0, spacer_before));
                 Box(
                     Modifier::empty()
                         .size_points(200.0, 50.0)
@@ -1222,10 +1219,7 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
             ColumnSpec::default(),
             || {
                 Text("scroll top", Modifier::empty(), TextStyle::default());
-                Spacer(Size {
-                    width: 0.0,
-                    height: 160.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 160.0));
                 Text("scroll target", Modifier::empty(), TextStyle::default());
             },
         );
@@ -1869,16 +1863,10 @@ fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child(
                 .vertical_scroll(scroll_state, false),
             ColumnSpec::default(),
             move || {
-                Spacer(Size {
-                    width: 0.0,
-                    height: 24.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 24.0));
                 let child_id = Text(label, Modifier::empty(), TextStyle::default());
                 *child_id_holder_for_content.borrow_mut() = Some(child_id);
-                Spacer(Size {
-                    width: 0.0,
-                    height: 220.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 220.0));
             },
         );
     });
@@ -1985,10 +1973,7 @@ fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
                 .vertical_scroll(scroll_state, false),
             ColumnSpec::default(),
             move || {
-                Spacer(Size {
-                    width: 0.0,
-                    height: 180.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 180.0));
                 cranpose_ui::Box(
                     Modifier::empty().size_points(188.0, 88.0),
                     cranpose_ui::BoxSpec::default(),
@@ -2028,10 +2013,7 @@ fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
                         }
                     },
                 );
-                Spacer(Size {
-                    width: 0.0,
-                    height: 280.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 280.0));
             },
         );
     });
@@ -3745,20 +3727,14 @@ fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origi
                 .vertical_scroll(scroll_state, false),
             ColumnSpec::default(),
             move || {
-                Spacer(Size {
-                    width: 0.0,
-                    height: 24.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 24.0));
                 let field = cranpose_ui::BasicTextField(
                     cranpose_foundation::text::TextFieldState::new("field"),
                     Modifier::empty(),
                     TextStyle::default(),
                 );
                 *field_for_content.borrow_mut() = Some(field);
-                Spacer(Size {
-                    width: 0.0,
-                    height: 220.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 220.0));
             },
         );
     });

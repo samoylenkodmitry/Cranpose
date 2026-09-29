@@ -17,10 +17,7 @@ fn lazy_column_unbounded_height_matches_effective_viewport() {
             LazyColumnSpec::default(),
             |scope| {
                 scope.items(100, |_| {
-                    Spacer(Size {
-                        width: 0.0,
-                        height: 100.0,
-                    });
+                    Spacer(Modifier::empty().size_points(0.0, 100.0));
                 });
             },
         );
@@ -685,10 +682,7 @@ fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -
             LazyColumnSpec::default(),
             move |scope| {
                 scope.items(item_heights.len(), move |index| {
-                    Spacer(Size {
-                        width: 100.0,
-                        height: item_heights[index],
-                    });
+                    Spacer(Modifier::empty().size_points(100.0, item_heights[index]));
                 });
             },
         );
@@ -763,10 +757,7 @@ fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
             LazyColumnSpec::default(),
             move |scope| {
                 scope.items(heights.len(), move |index| {
-                    Spacer(Size {
-                        width: 100.0,
-                        height: heights[index],
-                    });
+                    Spacer(Modifier::empty().size_points(100.0, heights[index]));
                 });
             },
         );
@@ -814,10 +805,7 @@ fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
             LazyColumnSpec::default(),
             move |scope| {
                 scope.items(heights.len(), move |index| {
-                    Spacer(Size {
-                        width: 100.0,
-                        height: heights[index],
-                    });
+                    Spacer(Modifier::empty().size_points(100.0, heights[index]));
                 });
             },
         );

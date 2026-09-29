@@ -35,10 +35,7 @@ fn overscroll_reproduction() {
                         ColumnSpec::default(),
                         || {
                             Text("Overscroll Marker", Modifier::empty(), TextStyle::default());
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 1_200.0,
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, 1_200.0));
                         },
                     );
                 },
@@ -56,10 +53,7 @@ fn overscroll_reproduction() {
                                 TextStyle::default(),
                             );
                         } else {
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 48.0,
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, 48.0));
                         }
                     });
                 },
@@ -94,10 +88,7 @@ fn overscroll_reproduction() {
                                     .vertical_scroll(inner_state, false),
                                 ColumnSpec::default(),
                                 || {
-                                    Spacer(Size {
-                                        width: 0.0,
-                                        height: 700.0,
-                                    });
+                                    Spacer(Modifier::empty().size_points(0.0, 700.0));
                                     Text(
                                         "Nested Inner Marker",
                                         Modifier::empty(),
@@ -105,10 +96,7 @@ fn overscroll_reproduction() {
                                     );
                                 },
                             );
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 800.0,
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, 800.0));
                         },
                     );
                 },

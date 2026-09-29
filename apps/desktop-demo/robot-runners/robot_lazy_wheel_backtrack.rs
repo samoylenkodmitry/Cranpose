@@ -84,10 +84,7 @@ fn VariableHeightWheelReproScreen() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 12.0));
 
             LazyColumn(
                 Modifier::empty()
@@ -132,10 +129,7 @@ fn VariableHeightWheelReproScreen() {
                                         Modifier::empty(),
                                         TextStyle::default(),
                                     );
-                                    Spacer(Size {
-                                        width: 0.0,
-                                        height: 4.0,
-                                    });
+                                    Spacer(Modifier::empty().size_points(0.0, 4.0));
                                     Text(body.clone(), Modifier::empty(), TextStyle::default());
                                 },
                             );

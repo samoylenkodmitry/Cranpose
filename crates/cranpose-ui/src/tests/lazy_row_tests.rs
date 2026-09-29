@@ -24,10 +24,7 @@ fn lazy_row_unbounded_width_matches_effective_viewport() {
                 LazyRowSpec::default(),
                 |scope| {
                     scope.items(100, |_| {
-                        Spacer(Size {
-                            width: 100.0,
-                            height: 0.0,
-                        });
+                        Spacer(Modifier::empty().size_points(100.0, 0.0));
                     });
                 },
             );

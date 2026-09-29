@@ -8,7 +8,7 @@ use cranpose_ui::{
         TextGeometricTransform, TextIndent, TextMotion, TextOverflow, TextUnit,
     },
     BasicText, Box, BoxSpec, Brush, Color, Column, ColumnSpec, LinearArrangement, Modifier, Point,
-    Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    Row, RowSpec, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 const OVERFLOW_SAMPLE: &str =
@@ -397,10 +397,7 @@ pub(crate) fn TextShowcaseTab() {
                                             },
                                         },
                                     );
-                                    Spacer(Size {
-                                        width: 0.0,
-                                        height: 4.0,
-                                    });
+                                    Spacer(Modifier::empty().size_points(0.0, 4.0));
                                     Text(
                                         "Start + RTL (aligns right)",
                                         Modifier::empty().fill_max_width(),
@@ -460,10 +457,7 @@ pub(crate) fn TextShowcaseTab() {
                                 1,
                             );
 
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 4.0,
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, 4.0));
                             style_chip_label(
                                 "Worldwide Hyphenation Dictionaries (fr-FR, de-DE, es-ES locales)",
                             );

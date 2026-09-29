@@ -73,10 +73,7 @@ fn probe_app() {
                                 4.0,
                             );
                         } else {
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 64.0,
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, 64.0));
                         }
                     });
                 },

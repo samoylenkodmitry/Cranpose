@@ -3,9 +3,7 @@
 use cranpose_core::NodeId;
 
 use crate::{
-    composable,
-    layout::policies::LeafMeasurePolicy,
-    modifier::{Modifier, Size},
+    composable, layout::policies::EmptyMeasurePolicy, modifier::Modifier,
     widgets::layout::compose_layout,
 };
 
@@ -17,18 +15,19 @@ use crate::{
 ///
 /// # Arguments
 ///
-/// * `size` - The explicit size of the spacer.
+/// * `modifier` - What sizes the space: it has no size of its own, as
+///   Compose's `Spacer(modifier)` has none.
 ///
 /// # Example
 ///
 /// ```rust,ignore
 /// Row(..., || {
 ///     Text("Left", Modifier::empty());
-///     Spacer(Size::new(16.0, 0.0)); // 16dp gap
+///     Spacer(Modifier::empty().width(16.0)); // 16dp gap
 ///     Text("Right", Modifier::empty());
 /// });
 /// ```
 #[composable]
-pub fn Spacer(size: Size) -> NodeId {
-    compose_layout(Modifier::empty(), LeafMeasurePolicy::new(size), || {})
+pub fn Spacer(modifier: Modifier) -> NodeId {
+    compose_layout(modifier, EmptyMeasurePolicy, || {})
 }

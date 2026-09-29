@@ -446,10 +446,7 @@ fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         let current_frame = frame.get();
         let x = (current_frame as f32 * 10.0) % 200.0;
@@ -480,10 +477,7 @@ fn dynamic_modifiers_showcase_with_frame(frame: MutableState<i32>) {
             },
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         Text(
             format!("Frame: {current_frame}, X: {x:.1}"),
