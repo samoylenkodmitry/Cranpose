@@ -6462,7 +6462,6 @@ impl ApplicationHandler for App {
             if robot_visual_dirty {
                 self.robot_visible_surface_dirty = true;
                 if primary_surface_redraw_drives_app(primary_visible, self.settings.headless) {
-                    self.last_frame_start_time = None;
                     request_redraw_once(&window, &mut self.primary_redraw_pending);
                 }
             }
