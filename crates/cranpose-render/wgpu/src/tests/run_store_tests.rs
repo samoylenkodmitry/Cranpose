@@ -20,7 +20,7 @@ fn shared_pipelines_preserve_each_draws_strip_index_count() {
         blend_mode: segment.blend,
         tier: crate::render::RunTier::Arena,
         variant: crate::render::ShapeVariant::of_segment(&segment, false, Default::default()),
-        transformed: false,
+        turns: crate::render::ShapeTurns::None,
         depth: crate::render::ShapeDepth::Off,
     };
     let mut staging = ArenaStaging::default();
@@ -52,7 +52,7 @@ fn fill_key(interiors: bool, blend: BlendMode) -> crate::render::ShapePipelineKe
         blend_mode: segment.blend,
         tier: crate::render::RunTier::Arena,
         variant: crate::render::ShapeVariant::of_segment(&segment, false, Default::default()),
-        transformed: false,
+        turns: crate::render::ShapeTurns::None,
         depth: crate::render::ShapeDepth::Off,
     }
 }
@@ -134,15 +134,6 @@ fn only_plain_source_over_draws_in_a_depth_pass_lay_interiors_down() {
         ..fill_key(false, BlendMode::Multiply)
     };
     assert_eq!(multiply.interior(), None);
-    let turned = crate::render::ShapePipelineKey {
-        transformed: true,
-        ..tested
-    };
-    assert_eq!(
-        turned.interior().map(|interior| interior.transformed),
-        Some(true),
-        "a fill drawn in place under its layer's rigid turn lays its interior down under it"
-    );
 }
 
 #[test]
@@ -261,5 +252,27 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
         ([0.0, -1.0, 1.0, 0.0], [5.0, 7.0]),
         "the records of a layer drawn in place carry its turn"
     );
+    assert_eq!(
+        turned.flags, PLACEMENT_TURNED,
+        "and say so, so the one pipeline draws them turned"
+    );
     assert_eq!(std::mem::size_of::<PlacementData>(), 160);
+}
+
+#[test]
+fn shape_turns_follow_the_placement_unless_the_pass_mixes_flat_and_turned_records() {
+    use crate::{geometry::SegmentTransform, render::ShapeTurns};
+    let Some(turned) = SegmentTransform::affine([0.0, -1.0, 1.0, 0.0], [4.0, 2.0]) else {
+        panic!("a quarter turn is invertible");
+    };
+    assert_eq!(
+        ShapeTurns::of(SegmentTransform::IDENTITY, false),
+        ShapeTurns::None
+    );
+    assert_eq!(ShapeTurns::of(turned, false), ShapeTurns::All);
+    assert_eq!(
+        ShapeTurns::of(SegmentTransform::IDENTITY, true),
+        ShapeTurns::Mixed
+    );
+    assert_eq!(ShapeTurns::of(turned, true), ShapeTurns::Mixed);
 }

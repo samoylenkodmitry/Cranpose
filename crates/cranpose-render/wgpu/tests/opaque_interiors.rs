@@ -323,14 +323,105 @@ fn turned_levels(level: usize) -> RenderNode {
 
 #[test]
 fn turned_opaque_fills_lay_their_interiors_down_and_draw_the_same_pixels() {
+    let alone = || {
+        RenderGraph::new(shared_test_support::layer_node(
+            rect(0.0, 0.0, FRAME as f32, FRAME as f32),
+            ProjectiveTransform::identity(),
+            GraphicsLayer::default(),
+            vec![turned_levels(0)],
+        ))
+    };
+    let Some((alone, _)) = capture_both_ways(alone) else {
+        return;
+    };
+    assert_eq!(
+        alone.interior_draws, 1,
+        "the turned levels lay their interiors down, in the one draw they share"
+    );
     let Some((with, without)) = capture_both_ways(|| frame_of(vec![turned_levels(0)])) else {
         return;
     };
-    assert!(
-        with.interior_draws > 1,
-        "the turned levels lay their interiors down besides the page's, in the draw they share: {}",
-        with.interior_draws
+    assert_eq!(
+        with.interior_draws, 2,
+        "the flat page and the turned levels, turned but once, keep their own pipelines"
     );
     assert_eq!(without.interior_draws, 0);
     assert_same_pixels(&with.pixels, &without.pixels);
+}
+
+/// Cells in rows, every other one turned a little in place, or only the
+/// flat ones when `turned` is false: enough changes between flat and turned
+/// for the pass to draw both with the pipeline telling them apart.
+fn alternating_cells(turned: bool) -> RenderGraph {
+    let palette = [
+        Color::from_rgb_u8(230, 80, 60),
+        Color::from_rgb_u8(60, 170, 90),
+    ];
+    let cells = (0..CELLS)
+        .filter(|index| turned || index % 2 == 0)
+        .map(|index| {
+            let area = cell_area(index);
+            let cell = fill(area, palette[index % 2], 3.0, None);
+            if index % 2 == 0 {
+                return cell;
+            }
+            RenderNode::Layer(Box::new(shared_test_support::layer_node(
+                rect(0.0, 0.0, FRAME as f32, FRAME as f32),
+                turned_about_centre(area, 3.0),
+                GraphicsLayer::default(),
+                vec![cell],
+            )))
+        })
+        .collect();
+    frame_of(cells)
+}
+
+const CELLS: usize = 16;
+
+fn cell_area(index: usize) -> Rect {
+    rect(
+        10.25 + 24.0 * (index % 8) as f32,
+        40.5 + 32.0 * (index / 8) as f32,
+        16.0,
+        16.0,
+    )
+}
+
+#[test]
+fn turned_cells_among_flat_ones_add_no_draws_and_leave_the_flat_pixels_alone() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping mixed turns: {err}");
+            return;
+        }
+    };
+    let mut capture = |turned: bool| {
+        renderer.scene_mut().graph = Some(alternating_cells(turned));
+        let frame = renderer
+            .capture_frame(FRAME, FRAME)
+            .expect("capture should succeed");
+        let stats = renderer.last_frame_stats().expect("stats");
+        (frame.pixels, stats.draw_calls)
+    };
+    let (mixed, mixed_draws) = capture(true);
+    let (flat, flat_draws) = capture(false);
+    assert_eq!(
+        mixed_draws, flat_draws,
+        "turned records share the flat ones' pipeline, so interleaving them splits no draw"
+    );
+    let row = FRAME as usize * 4;
+    for index in (0..CELLS).step_by(2) {
+        let area = cell_area(index);
+        let left = area.x as usize - 1;
+        let top = area.y as usize - 1;
+        for y in top..top + 20 {
+            let span = y * row + left * 4..y * row + (left + 19) * 4;
+            assert_eq!(
+                mixed[span.clone()],
+                flat[span],
+                "flat cell {index} draws as it does alone, at row {y}"
+            );
+        }
+    }
 }

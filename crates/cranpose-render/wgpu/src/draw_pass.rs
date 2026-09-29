@@ -269,6 +269,7 @@ impl GpuRenderer {
             chunk: None,
             pending_glyphs: PendingGlyphs::default(),
             depth,
+            mixed_turns: turns_mixed(segments),
             overlay_segment: None,
             overlay_images: None,
             depth_seq: 0,
@@ -511,6 +512,22 @@ impl GpuRenderer {
             recorder.begin_color_pass(label, target.view, load_op)
         }
     }
+}
+
+/// Changes between flat and turned segments a pass takes before its shapes
+/// draw with the pipeline that tells them apart per record: below it, a draw
+/// per change costs less than the flag test every fragment pays there.
+const MIXED_TURN_CHANGES: usize = 8;
+
+/// Whether the flat and turned segments of a pass alternate at least
+/// `MIXED_TURN_CHANGES` times, as a grid of cells tilted by turns does when
+/// some cells are not tilted.
+fn turns_mixed(segments: &[PassSegment<'_>]) -> bool {
+    segments
+        .windows(2)
+        .filter(|pair| pair[0].transform.is_identity() != pair[1].transform.is_identity())
+        .count()
+        >= MIXED_TURN_CHANGES
 }
 
 static NO_INTERIORS_FIRST: crate::debug_toggles::DebugToggle =
@@ -818,6 +835,9 @@ struct PassPrep<'a, 's, C> {
     pending_glyphs: PendingGlyphs,
     /// Whether the pass has a depth buffer its opaque interiors fill first.
     depth: bool,
+    /// Whether the pass's flat and turned segments alternate often enough
+    /// that its shapes draw with the pipeline telling them apart per record.
+    mixed_turns: bool,
     /// The binding slot of the last glyph batch pushed, which a later
     /// draw under that binding may extend.
     overlay_segment: Option<usize>,
@@ -1189,6 +1209,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         from..total,
                         run.segment.scale,
                         run.viewport.transform,
+                        self.mixed_turns,
                         self.depth,
                     );
                     if taken == 0 {

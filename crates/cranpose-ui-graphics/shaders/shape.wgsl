@@ -99,6 +99,9 @@ fn gradient_fill_output(full: VertexOutput) -> GradientFillOutput {
     output.clip_rect = full.clip_rect;
     output.gradient_params = full.gradient_params;
     output.brush = full.brush;
+    if (SHAPE_TURNS == TURNS_MIXED && fragment_turned(full)) {
+        output.brush.w = output.brush.w | BRUSH_TURNED;
+    }
     output.stop_offsets = full.stop_offsets;
     output.stop_color0 = full.stop_color0;
     output.stop_color1 = full.stop_color1;
@@ -116,9 +119,10 @@ fn full_from_gradient_fill(fill: GradientFillOutput) -> VertexOutput {
     output.radii = fill.radii;
     output.gradient_params = fill.gradient_params;
     output.clip_rect = fill.clip_rect;
-    output.stroke_params = vec4<f32>(0.0);
+    let turned = SHAPE_TURNS == TURNS_MIXED && (fill.brush.w & BRUSH_TURNED) != 0u;
+    output.stroke_params = vec4<f32>(0.0, select(0.0, f32(SHAPE_FLAG_TURNED), turned), 0.0, 0.0);
     output.arc_params = select(vec4<f32>(0.0), fill_interior(fill.rect, fill.radii), SHAPE_INTERIOR);
-    output.brush = fill.brush;
+    output.brush = select(fill.brush, vec4<u32>(fill.brush.xyz, fill.brush.w & ~BRUSH_TURNED), SHAPE_TURNS == TURNS_MIXED);
     output.stop_offsets = fill.stop_offsets;
     output.stop_color0 = fill.stop_color0;
     output.stop_color1 = fill.stop_color1;
@@ -138,6 +142,7 @@ fn full_from_gradient_fill(fill: GradientFillOutput) -> VertexOutput {
 //   flags bit 3  painted: the layer's alpha or filter applies, so a solid
 //                colour is quantized to 8-bit sRGB first, as the CPU
 //                brush resolution did; an unpainted colour passes as is
+//   flags bit 4  turned: `transform` and `translation` apply
 struct Placement {
     offset: vec2<f32>,
     root_scale: f32,
@@ -150,7 +155,7 @@ struct Placement {
     color_offset: vec4<f32>,
     // The turn of the layer the records draw in place under: `transform`
     // (row-major 2x2) and `translation` carry their device space into the
-    // target's. Only a pipeline built with `SHAPE_TRANSFORMED` reads them,
+    // target's. Only a placement flagged `PLACEMENT_TURNED` applies them,
     // so records of layers turned differently share a draw.
     transform: vec4<f32>,
     translation: vec2<f32>,
@@ -230,6 +235,7 @@ const PLACEMENT_CANONICALIZE: u32 = 1u;
 const PLACEMENT_CLIPPED: u32 = 2u;
 const PLACEMENT_FILTERED: u32 = 4u;
 const PLACEMENT_PAINTED: u32 = 8u;
+const PLACEMENT_TURNED: u32 = 16u;
 
 // A band's slack beyond its ring, in device pixels, so every pixel the
 // fragment stage anti-aliases lies inside the strip.
@@ -246,11 +252,30 @@ override TIER_ARENA: bool = false;
 // Whether banded arcs draw as strips on this tier; false on the uniform
 // floor, which draws every record as its quad.
 override SHAPE_BANDS: bool = true;
-// Whether the pipeline draws a segment under a transform: a layer drawn in
-// place, turned. Its quads grow by `BAND_QUAD_MARGIN`, so the pixels a
-// turned edge crosses outside the rect are shaded too, and its fragments
-// map back through the inverse to evaluate their distance fields.
-override SHAPE_TRANSFORMED: bool = false;
+// Which records the pipeline draws turned: a layer drawn in place under a
+// turn grows its quads by `BAND_QUAD_MARGIN`, so the pixels a turned edge
+// crosses outside the rect are shaded too, and its fragments evaluate their
+// distance fields at the position before the turn. 0 draws none turned and
+// 1 draws every record turned, each compiling only its own path; 2 reads
+// each placement's `PLACEMENT_TURNED` and takes the path it names, so a pass
+// that alternates between flat and turned records does not split its draws
+// at every change, for a flag test per fragment.
+override SHAPE_TURNS: u32 = 0u;
+const TURNS_NONE: u32 = 0u;
+const TURNS_ALL: u32 = 1u;
+const TURNS_MIXED: u32 = 2u;
+
+fn placement_turned(placement: Placement) -> bool {
+    return SHAPE_TURNS == TURNS_ALL
+        || (SHAPE_TURNS == TURNS_MIXED && (placement.flags & PLACEMENT_TURNED) != 0u);
+}
+
+// The bit of `stroke_params.y` that tells the fragment stage its record is
+// turned; the shape kind, cap and join take the six below it.
+const SHAPE_FLAG_TURNED: u32 = 64u;
+// Where a gradient fill, which carries no stroke parameters, keeps that bit:
+// the top of `brush.w`, above the tile mode.
+const BRUSH_TURNED: u32 = 0x80000000u;
 fn record_placement(record: ShapeRecord) -> Placement {
     if (TIER_ARENA) {
         return placements[record.placement];
@@ -394,6 +419,9 @@ fn shape_output(
             output.arc_params = vec4<f32>(0.0);
         }
     }
+    if (SHAPE_TURNS == TURNS_MIXED && placement_turned(placement)) {
+        output.stroke_params.y = f32(u32(output.stroke_params.y) | SHAPE_FLAG_TURNED);
+    }
 
     if (SHAPE_CLIPPED && (placement.flags & PLACEMENT_CLIPPED) != 0u) {
         output.clip_rect = placement.clip;
@@ -468,7 +496,7 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
         return pinned(geometry.rect.xy + geometry.rect.zw, placement);
     }
     let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
-    if (SHAPE_TRANSFORMED) {
+    if (placement_turned(placement)) {
         let margin = BAND_QUAD_MARGIN;
         let grown = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
         return shape_output(record, placement, geometry, grown);
@@ -479,7 +507,7 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
 
 fn clip_position(drawn: vec2<f32>, placement: Placement) -> vec4<f32> {
     var position = drawn;
-    if (SHAPE_TRANSFORMED) {
+    if (placement_turned(placement)) {
         position = vec2<f32>(
             placement.transform.x * position.x + placement.transform.y * position.y,
             placement.transform.z * position.x + placement.transform.w * position.y,
@@ -493,11 +521,18 @@ fn clip_position(drawn: vec2<f32>, placement: Placement) -> vec4<f32> {
 // The segment device position a fragment shades: its target position, or
 // under a turn the position before it, interpolated from the vertices; a
 // turn is affine, so that is exact.
-fn segment_position(fragment_position: vec2<f32>, world_pos: vec2<f32>) -> vec2<f32> {
-    if (!SHAPE_TRANSFORMED) {
+fn segment_position(fragment_position: vec2<f32>, world_pos: vec2<f32>, turned: bool) -> vec2<f32> {
+    if (!turned) {
         return fragment_position + uniforms.viewport_offset;
     }
     return world_pos;
+}
+
+// Whether the record a fragment belongs to is turned.
+fn fragment_turned(input: VertexOutput) -> bool {
+    return SHAPE_TURNS == TURNS_ALL
+        || (SHAPE_TURNS == TURNS_MIXED
+            && (u32(max(input.stroke_params.y, 0.0)) & SHAPE_FLAG_TURNED) != 0u);
 }
 
 // A vertex past the record's own, at the device position of its last
@@ -665,11 +700,12 @@ fn band_position(
 
 // Fragment shader
 //
-// `stroke_params.y` packs three 2-bit fields:
+// `stroke_params.y` packs three 2-bit fields and a flag:
 //
 //   bits 0-1  shape kind : 0 = fill, 1 = stroked rect/round-rect, 2 = arc band
 //   bits 2-3  stroke cap : 0 = butt, 1 = round, 2 = square   (arcs only)
 //   bits 4-5  stroke join: 0 = miter, 1 = round, 2 = bevel   (rects only)
+//   bit  6    turned     : `SHAPE_FLAG_TURNED`, under `TURNS_MIXED` only
 //
 // Angle convention for arcs: radians, 0 = +X, increasing CLOCKWISE on screen
 // (y-down device space) — the same convention the sweep-gradient branch below
@@ -1001,7 +1037,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         discard;
     }
     let world_pos = input.world_pos.xy;
-    let rect_pos = segment_position(input.clip_position.xy, world_pos);
+    let rect_pos = segment_position(input.clip_position.xy, world_pos, fragment_turned(input));
 
     // Apply clipping: if clip_rect has non-zero size, clip to it
     let clip_w = input.clip_rect.z;
@@ -1034,7 +1070,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
         return 1.0;
     }
 
-    if (SHAPE_BANDS && !SHAPE_TRANSFORMED) {
+    if (SHAPE_BANDS && !fragment_turned(input)) {
         if (rect_pos.x < input.rect.x || rect_pos.x > input.rect.x + input.rect.z ||
             rect_pos.y < input.rect.y || rect_pos.y > input.rect.y + input.rect.w) {
             discard;
@@ -1119,7 +1155,7 @@ fn fragment(input: VertexOutput) -> vec4<f32> {
     // Re-derived rather than threaded out of the coverage pass: both are pure
     // functions of `input`, so the compiler folds them back together.
     let world_pos = input.world_pos.xy;
-    let rect_pos = segment_position(input.clip_position.xy, world_pos);
+    let rect_pos = segment_position(input.clip_position.xy, world_pos, fragment_turned(input));
 
     var color = input.color;
     var is_gradient = false;
