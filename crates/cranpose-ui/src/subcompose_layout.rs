@@ -973,8 +973,8 @@ impl SubcomposeLayoutNode {
         self.layout_state.borrow().clone()
     }
 
-    pub(crate) fn cache_handles(&self) -> LayoutNodeCacheHandles {
-        self.cache_handles.clone()
+    pub(crate) fn cache_handles(&self) -> &LayoutNodeCacheHandles {
+        &self.cache_handles
     }
 
     /// Updates the position of this node. Called during placement.
