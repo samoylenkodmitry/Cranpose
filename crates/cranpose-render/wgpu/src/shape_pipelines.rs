@@ -34,6 +34,9 @@ impl ShapePipelineFactory {
 pub(crate) struct ShapePipelines {
     factory: ShapePipelineFactory,
     ready: HashMap<ShapePipelineKey, wgpu::RenderPipeline>,
+    // DIAGNOSTIC (scratch): frame each general pipeline last served a draw.
+    general_used: std::cell::RefCell<HashMap<ShapePipelineKey, u64>>,
+    frame: u64,
     #[cfg(not(target_arch = "wasm32"))]
     compiler: Option<background::Compiler<wgpu::RenderPipeline>>,
 }
@@ -58,6 +61,8 @@ impl ShapePipelines {
         Self {
             factory,
             ready: HashMap::default(),
+            general_used: std::cell::RefCell::new(HashMap::default()),
+            frame: 0,
             #[cfg(not(target_arch = "wasm32"))]
             compiler,
         }
@@ -87,6 +92,17 @@ impl ShapePipelines {
                 self.ready.insert(key, pipeline);
             });
         }
+        // DIAGNOSTIC (scratch): drop general pipelines no draw used for 300 frames.
+        self.frame += 1;
+        let frame = self.frame;
+        let used = self.general_used.borrow();
+        let before = self.ready.len();
+        self.ready.retain(|key, _| {
+            !key.is_general() || used.get(key).is_none_or(|last| frame - last < 300)
+        });
+        if self.ready.len() != before {
+            log::warn!("[diag-general] dropped {} general pipelines, {} left", before - self.ready.len(), self.ready.len());
+        }
     }
 
     pub(crate) fn ensure(&mut self, key: ShapePipelineKey) {
@@ -105,14 +121,19 @@ impl ShapePipelines {
     }
 
     pub(crate) fn get(&self, key: ShapePipelineKey) -> Option<(&wgpu::RenderPipeline, bool)> {
-        self.ready
+        let found = self
+            .ready
             .get(&key)
             .map(|pipeline| (pipeline, false))
             .or_else(|| {
                 self.ready
                     .get(&key.general())
                     .map(|pipeline| (pipeline, true))
-            })
+            });
+        if found.is_some_and(|(_, fallback)| fallback) || key.is_general() {
+            self.general_used.borrow_mut().insert(key.general(), self.frame);
+        }
+        found
     }
 }
 
