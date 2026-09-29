@@ -71,6 +71,7 @@ fn run_quads<'a>(renderer: &GpuRenderer, run: &'a TestRun) -> GlyphRunQuads<'a> 
         glyphs: &run.0,
         entries: &run.1,
         atlas_size: renderer.text_glyph_atlas.size(),
+        bounds: GlyphRunBounds::of(&run.0),
     }
 }
 
@@ -384,6 +385,7 @@ fn a_glyph_run_no_frame_draws_leaves_the_cpu_cache() {
     let (_lock, mut renderer) = test_renderer();
     let run = |renderer: &GpuRenderer| CachedTextGlyphRun {
         glyphs: Rc::from(Vec::new()),
+        bounds: GlyphRunBounds::of(&[]),
         atlas_entries: None,
         atlas_generation: 0,
         last_frame: Cell::new(renderer.text_glyph_run_frame),
@@ -767,23 +769,4 @@ fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
     assert_eq!(quad.uv.min, expected.uv.min);
     assert_eq!(quad.uv.max, expected.uv.max);
     assert_eq!(quad.uv.sample_bounds, expected.uv.sample_bounds);
-}
-
-#[test]
-fn only_a_glyph_with_area_and_colour_draws() {
-    let (glyphs, _) = test_run(0);
-    let glyph = glyphs[0];
-    assert!(glyph_draws(&glyph));
-    assert!(!glyph_draws(&SoftwareGlyphAtlasPlacement {
-        width: 0,
-        ..glyph
-    }));
-    assert!(!glyph_draws(&SoftwareGlyphAtlasPlacement {
-        height: 0,
-        ..glyph
-    }));
-    assert!(!glyph_draws(&SoftwareGlyphAtlasPlacement {
-        color: Color(1.0, 1.0, 1.0, 0.0),
-        ..glyph
-    }));
 }

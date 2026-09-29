@@ -1290,12 +1290,12 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
     ) -> Result<(), String> {
         let glyph_start = scratch.glyph_cmds.len();
         let drew_glyphs = renderer.append_text_glyph_draws(
-            std::iter::once(text),
+            text,
             self.text_viewport(renderer, run),
             run.segment.scale,
             &mut scratch.glyph_instances,
             &mut scratch.glyph_cmds,
-        )?;
+        );
         if drew_glyphs {
             let glyph_end = scratch.glyph_cmds.len();
             if glyph_start < glyph_end {
@@ -1314,7 +1314,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         self.flush(renderer, run.binding);
         let cmd_start = scratch.image_cmds.len();
         renderer.append_text_image_draw_cmds(
-            std::iter::once(text),
+            text,
             run.viewport,
             run.segment.scale,
             &mut scratch.image_vertices,

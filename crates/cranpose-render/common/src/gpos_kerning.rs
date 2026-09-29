@@ -33,6 +33,8 @@ use std::sync::Arc;
 use ab_glyph::{CodepointIdIter, Font, FontArc, GlyphId, GlyphSvg, Outline, v2};
 use ttf_parser::{Face, NormalizedCoordinate, Tag};
 
+use crate::ascii_glyphs::AsciiGlyphs;
+
 const VALUE_FIELDS: [u16; 8] = [
     0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
 ];
@@ -483,11 +485,41 @@ fn class_def(gpos: &[u8], offset: usize) -> Option<ClassDef> {
 pub struct KernedFont {
     font: FontArc,
     kerning: Option<Arc<GposKerning>>,
+    ascii: Arc<AsciiGlyphs>,
 }
 
 impl KernedFont {
     pub fn new(font: FontArc, kerning: Option<Arc<GposKerning>>) -> Self {
-        Self { font, kerning }
+        Self {
+            font,
+            kerning,
+            ascii: Arc::new(AsciiGlyphs::new()),
+        }
+    }
+
+    /// The glyph of `ch` and its advance in font units.
+    pub(crate) fn glyph_advance(&self, ch: char) -> (GlyphId, f32) {
+        self.ascii_glyph(ch).unwrap_or_else(|| {
+            let id = self.glyph_id(ch);
+            (id, self.h_advance_unscaled(id))
+        })
+    }
+
+    /// The glyph of a printable ASCII `ch` and its advance in font units;
+    /// `None` for any other character, which the caller's own cache answers.
+    pub(crate) fn ascii_glyph(&self, ch: char) -> Option<(GlyphId, f32)> {
+        self.ascii.glyph(self, ch)
+    }
+
+    /// The kerning in font units between the glyphs of two consecutive
+    /// printable ASCII characters; `None` for any other pair, which the
+    /// caller's own cache answers.
+    pub(crate) fn ascii_kern(
+        &self,
+        previous: (char, GlyphId),
+        next: (char, GlyphId),
+    ) -> Option<f32> {
+        self.ascii.kern(self, previous, next)
     }
 
     /// Reads the GPOS pair kerning for a face instanced at `variations`.

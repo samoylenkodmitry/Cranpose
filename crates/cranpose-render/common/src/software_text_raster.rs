@@ -1,5 +1,6 @@
 use std::{
     hash::{Hash, Hasher},
+    ops::ControlFlow,
     rc::Rc,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
@@ -29,6 +30,7 @@ use crate::font_layout::layout_line_glyphs;
 use crate::text_hyphenation::HyphenationDictionaryError;
 use crate::{
     Brush,
+    ascii_glyphs::{ASCII_COUNT, ascii_slot},
     brush_sampling::{color_to_rgba, sample_brush_rgba},
     direct_mapped_cache::DirectMappedCache,
     font_layout::{
@@ -876,6 +878,15 @@ impl SoftwareTextGlyphMetricsCache {
         F: Font,
         S: ScaleFont<F>,
     {
+        // The face's ASCII table answers, and the font was read at most
+        // once for it, so it counts as a hit.
+        if let Some((glyph_id, advance)) = font.font.ascii_glyph(ch) {
+            self.stats.glyph_hits = self.stats.glyph_hits.saturating_add(1);
+            return CachedGlyphMetrics {
+                glyph_id,
+                advance_unscaled: advance.max(0.0),
+            };
+        }
         let key = GlyphMetricsKey {
             font_hash: font.content_hash(),
             ch,
@@ -899,13 +910,18 @@ impl SoftwareTextGlyphMetricsCache {
         &mut self,
         font: &SoftwareTextFont,
         scaled_font: &S,
-        previous_id: GlyphId,
-        glyph_id: GlyphId,
+        previous: (char, GlyphId),
+        next: (char, GlyphId),
     ) -> f32
     where
         F: Font,
         S: ScaleFont<F>,
     {
+        if let Some(kern) = font.font.ascii_kern(previous, next) {
+            self.stats.kern_hits = self.stats.kern_hits.saturating_add(1);
+            return kern;
+        }
+        let ((_, previous_id), (_, glyph_id)) = (previous, next);
         let key = KernMetricsKey {
             font_hash: font.content_hash(),
             previous_id: previous_id.0.into(),
@@ -1171,7 +1187,45 @@ pub struct SoftwareGlyphRasterCacheStats {
     pub misses: u64,
 }
 
-const RUN_GLYPH_METRICS_CACHE_LIMIT: usize = 64;
+/// Atlas metrics of the glyphs a segment's walk has met, by printable ASCII
+/// character: a segment repeats its letters, and the mask cache answers each
+/// lookup with a hash and a recency update. Valid for one segment, whose
+/// glyphs share a face, size and synthesis.
+struct SegmentGlyphMetrics {
+    /// Per character, its index in `metrics` plus one; 0 while unmet.
+    slots: [u8; ASCII_COUNT],
+    metrics: Vec<CachedAtlasGlyphMetrics>,
+}
+
+impl SegmentGlyphMetrics {
+    fn new() -> Self {
+        Self {
+            slots: [0; ASCII_COUNT],
+            metrics: Vec::new(),
+        }
+    }
+
+    fn clear(&mut self) {
+        self.slots.fill(0);
+        self.metrics.clear();
+    }
+
+    fn get(&self, ch: char) -> Option<CachedAtlasGlyphMetrics> {
+        let index = usize::from(self.slots[ascii_slot(ch)?]).checked_sub(1)?;
+        self.metrics.get(index).copied()
+    }
+
+    fn insert(&mut self, ch: char, metrics: CachedAtlasGlyphMetrics) {
+        let Some(slot) = ascii_slot(ch) else {
+            return;
+        };
+        let Ok(index) = u8::try_from(self.metrics.len() + 1) else {
+            return;
+        };
+        self.slots[slot] = index;
+        self.metrics.push(metrics);
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum GlyphRasterStyleKey {
@@ -1280,6 +1334,7 @@ impl CachedAtlasGlyphMetrics {
 pub struct SoftwareGlyphRasterCache {
     masks: BoundedLruCache<GlyphMaskCacheKey, CachedGlyphMask>,
     kerns: DirectMappedCache<KernMetricsKey, f32>,
+    segment_metrics: SegmentGlyphMetrics,
     hits: u64,
     misses: u64,
 }
@@ -1289,6 +1344,7 @@ impl SoftwareGlyphRasterCache {
         Self {
             masks: BoundedLruCache::with_capacity_at_least_one(capacity),
             kerns: DirectMappedCache::with_slots_log2(SOFTWARE_TEXT_KERN_METRICS_SLOTS_LOG2),
+            segment_metrics: SegmentGlyphMetrics::new(),
             hits: 0,
             misses: 0,
         }
@@ -2014,6 +2070,8 @@ pub fn collect_cached_solid_text_atlas_placements(
     )
 }
 
+/// Appends the glyphs of `text` that put pixels down to `out`: each either
+/// placed from the mask cache or rasterized into it.
 #[expect(clippy::too_many_arguments)]
 pub fn collect_solid_text_atlas_run<'a>(
     text: impl Into<StyledTextRef<'a>>,
@@ -2586,41 +2644,32 @@ fn collect_text_segment_solid_atlas_glyphs(
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasGlyph>,
 ) -> Option<f32> {
-    if text_render_request_is_degenerate(text.is_empty(), local_rect, font_size, scale) {
-        return Some(0.0);
-    }
-    if !text_segment_supports_solid_atlas(style) {
-        return None;
-    }
-
-    let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
-    let origin_x = local_rect.x.round();
-    let initial_len = out.len();
-
-    let advance = visit_text_glyph_masks_with_key(
+    let request = AtlasSegmentRequest {
         text,
-        &font.font,
-        font.content_hash(),
-        m.font_px_size,
-        m.line_height,
-        m.first_baseline_y,
-        origin_x,
-        0.0,
-        m.letter_spacing,
-        m.align_fraction,
-        true,
-        GlyphRasterStyle::Fill,
-        m.weight_synthesis,
-        m.style_synthesis,
-        Some(glyph_cache),
-        |key, mask| {
-            if mask.width == 0 || mask.height == 0 {
-                return;
+        local_rect,
+        style,
+        font_size,
+        scale,
+        font,
+    };
+    collect_atlas_segment(request, glyph_cache, out, |cache, glyph, out| {
+        let mask = match cache.get(&glyph.key, &glyph.glyph) {
+            Some(mask) => mask,
+            None => {
+                let Some(mask) = glyph.build_mask() else {
+                    return ControlFlow::Continue(());
+                };
+                cache.put(glyph.key, &glyph.glyph, mask)
             }
+        };
+        if let Some(key) = glyph_atlas_key_from_mask_key(glyph.key)
+            && mask.width != 0
+            && mask.height != 0
+        {
             out.push(SoftwareGlyphAtlasGlyph {
                 key,
                 mask: SoftwareGlyphAtlasMask {
-                    alpha: Arc::clone(&mask.alpha),
+                    alpha: mask.alpha,
                     width: mask.width,
                     height: mask.height,
                 },
@@ -2628,15 +2677,9 @@ fn collect_text_segment_solid_atlas_glyphs(
                 y: mask.origin_y,
                 color,
             });
-        },
-    );
-
-    if advance.is_finite() {
-        Some(advance)
-    } else {
-        out.truncate(initial_len);
-        None
-    }
+        }
+        ControlFlow::Continue(())
+    })
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -2651,46 +2694,37 @@ fn collect_text_segment_cached_solid_atlas_placements(
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasPlacement>,
 ) -> Option<f32> {
-    if text_render_request_is_degenerate(text.is_empty(), local_rect, font_size, scale) {
-        return Some(0.0);
-    }
-    if !text_segment_supports_solid_atlas(style) {
-        return None;
-    }
-
-    let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
-    let origin_x = local_rect.x.round();
-    let initial_len = out.len();
-
-    let advance = visit_cached_text_glyph_atlas_placements(
+    let request = AtlasSegmentRequest {
         text,
-        &font.font,
-        font.content_hash(),
-        m.font_px_size,
-        m.line_height,
-        m.first_baseline_y,
-        origin_x,
-        0.0,
-        m.letter_spacing,
-        m.align_fraction,
-        GlyphRasterStyle::Fill,
-        m.weight_synthesis,
-        m.style_synthesis,
-        glyph_cache,
-        |placement| {
-            if placement.width == 0 || placement.height == 0 {
-                return;
-            }
-            out.push(SoftwareGlyphAtlasPlacement { color, ..placement });
-        },
-    );
-
-    if advance.is_finite() {
-        Some(advance)
-    } else {
-        out.truncate(initial_len);
-        None
-    }
+        local_rect,
+        style,
+        font_size,
+        scale,
+        font,
+    };
+    collect_atlas_segment(request, glyph_cache, out, |cache, glyph, out| {
+        let Some((key, x, y, width, height)) = cache.get_atlas_placement(&glyph.key, &glyph.glyph)
+        else {
+            // A glyph with an outline but no cached mask cannot be placed
+            // without rasterizing it, which this walk does not do.
+            return if glyph.has_outline() {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            };
+        };
+        if width != 0 && height != 0 {
+            out.push(SoftwareGlyphAtlasPlacement {
+                key,
+                x,
+                y,
+                width,
+                height,
+                color,
+            });
+        }
+        ControlFlow::Continue(())
+    })
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -2705,6 +2739,146 @@ fn collect_text_segment_solid_atlas_run(
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
 ) -> Option<f32> {
+    let request = AtlasSegmentRequest {
+        text,
+        local_rect,
+        style,
+        font_size,
+        scale,
+        font,
+    };
+    glyph_cache.segment_metrics.clear();
+    let transparent = color.3 <= 0.0;
+    collect_atlas_segment(request, glyph_cache, out, |cache, glyph, out| {
+        if transparent {
+            return ControlFlow::Continue(());
+        }
+        let metrics = match cache.segment_metrics.get(glyph.ch) {
+            Some(metrics) => metrics,
+            None => match cache.get_atlas_metrics(&glyph.key) {
+                Some(metrics) => {
+                    cache.segment_metrics.insert(glyph.ch, metrics);
+                    metrics
+                }
+                None => {
+                    if let Some(new) = rasterize_atlas_run_glyph(cache, glyph)
+                        && new.mask.width != 0
+                        && new.mask.height != 0
+                    {
+                        out.push(SoftwareGlyphAtlasRunGlyph::New(SoftwareGlyphAtlasGlyph {
+                            color,
+                            ..new
+                        }));
+                    }
+                    return ControlFlow::Continue(());
+                }
+            },
+        };
+        if metrics.width != 0 && metrics.height != 0 {
+            out.push(SoftwareGlyphAtlasRunGlyph::Cached(
+                metrics.placement(&glyph.glyph, color),
+            ));
+        }
+        ControlFlow::Continue(())
+    })
+}
+
+/// Rasterizes a glyph no cache holds yet into the mask cache and the
+/// segment's metrics; `None` for a glyph that draws nothing.
+fn rasterize_atlas_run_glyph(
+    cache: &mut SoftwareGlyphRasterCache,
+    glyph: &AtlasSegmentGlyph<'_>,
+) -> Option<SoftwareGlyphAtlasGlyph> {
+    if !glyph.has_outline() {
+        return None;
+    }
+    let mask = glyph.build_mask()?;
+    let mask = cache.put(glyph.key, &glyph.glyph, mask);
+    let key = glyph_atlas_key_from_mask_key(glyph.key)?;
+    let (glyph_x, glyph_y) = static_glyph_pixel_origin(&glyph.glyph);
+    cache.segment_metrics.insert(
+        glyph.ch,
+        CachedAtlasGlyphMetrics {
+            key,
+            width: mask.width,
+            height: mask.height,
+            origin_offset_x: mask.origin_x - glyph_x,
+            origin_offset_y: mask.origin_y - glyph_y,
+        },
+    );
+    Some(SoftwareGlyphAtlasGlyph {
+        key,
+        mask: SoftwareGlyphAtlasMask {
+            alpha: mask.alpha,
+            width: mask.width,
+            height: mask.height,
+        },
+        x: mask.origin_x,
+        y: mask.origin_y,
+        color: Color::WHITE,
+    })
+}
+
+/// One styled segment of a text, laid out for the solid glyph atlas.
+#[derive(Clone, Copy)]
+struct AtlasSegmentRequest<'a> {
+    text: &'a str,
+    local_rect: Rect,
+    style: &'a TextStyle,
+    font_size: f32,
+    scale: f32,
+    font: &'a SoftwareTextFont,
+}
+
+/// A glyph of a segment walked for the solid glyph atlas: where it draws
+/// and its mask's cache key.
+struct AtlasSegmentGlyph<'a> {
+    ch: char,
+    glyph: Glyph,
+    key: GlyphMaskCacheKey,
+    font: &'a KernedFont,
+    metrics: &'a TextSegmentMetrics,
+}
+
+impl AtlasSegmentGlyph<'_> {
+    fn has_outline(&self) -> bool {
+        self.font.outline(self.glyph.id).is_some()
+    }
+
+    fn build_mask(&self) -> Option<GlyphMask> {
+        build_complete_glyph_mask(
+            self.font,
+            &self.glyph,
+            GlyphRasterStyle::Fill,
+            self.metrics.weight_synthesis,
+            self.metrics.style_synthesis,
+        )
+    }
+}
+
+/// Walks a segment's glyphs where they draw, handing each to `visit` with
+/// `out`: each line from its aligned start, each glyph on the pixel grid
+/// after the previous one's advance, kerning and letter spacing. The widest
+/// line's advance, or `None` with `out` as it was when the style cannot draw
+/// from the atlas or `visit` breaks.
+fn collect_atlas_segment<T>(
+    request: AtlasSegmentRequest<'_>,
+    glyph_cache: &mut SoftwareGlyphRasterCache,
+    out: &mut Vec<T>,
+    mut visit: impl FnMut(
+        &mut SoftwareGlyphRasterCache,
+        &AtlasSegmentGlyph<'_>,
+        &mut Vec<T>,
+    ) -> ControlFlow<()>,
+) -> Option<f32> {
+    let AtlasSegmentRequest {
+        text,
+        local_rect,
+        style,
+        font_size,
+        scale,
+        font,
+    } = request;
     if text_render_request_is_degenerate(text.is_empty(), local_rect, font_size, scale) {
         return Some(0.0);
     }
@@ -2713,51 +2887,56 @@ fn collect_text_segment_solid_atlas_run(
     }
 
     let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
+    let font_hash = font.content_hash();
+    let kerned = &font.font;
     let origin_x = local_rect.x.round();
     let initial_len = out.len();
-
-    let advance = visit_text_glyph_atlas_run(
-        text,
-        &font.font,
-        font.content_hash(),
-        m.font_px_size,
-        m.line_height,
-        m.first_baseline_y,
-        origin_x,
-        0.0,
-        m.letter_spacing,
-        m.align_fraction,
-        GlyphRasterStyle::Fill,
-        m.weight_synthesis,
-        m.style_synthesis,
-        glyph_cache,
-        |run_glyph| {
-            let run_glyph = match run_glyph {
-                SoftwareGlyphAtlasRunGlyph::Cached(mut placement) => {
-                    if placement.width == 0 || placement.height == 0 {
-                        return;
-                    }
-                    placement.color = color;
-                    SoftwareGlyphAtlasRunGlyph::Cached(placement)
-                }
-                SoftwareGlyphAtlasRunGlyph::New(mut glyph) => {
-                    if glyph.mask.width == 0 || glyph.mask.height == 0 {
-                        return;
-                    }
-                    glyph.color = color;
-                    SoftwareGlyphAtlasRunGlyph::New(glyph)
-                }
+    let px_scale = PxScale::from(m.font_px_size);
+    let scaled_font = kerned.as_scaled(px_scale);
+    let h_scale = scaled_font.h_scale_factor();
+    let line_offsets =
+        line_alignment_offsets(&scaled_font, text, m.letter_spacing, m.align_fraction);
+    let mut max_advance = 0.0f32;
+    for (line_idx, line) in text.split('\n').enumerate() {
+        let baseline_y = m.first_baseline_y + line_idx as f32 * m.line_height;
+        let lead_in = run_lead_in(line, m.letter_spacing);
+        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
+        let mut previous: Option<(char, GlyphId)> = None;
+        for ch in line.chars() {
+            let (glyph_id, advance) = kerned.glyph_advance(ch);
+            if let Some(previous) = previous {
+                let kern = kerned
+                    .ascii_kern(previous, (ch, glyph_id))
+                    .unwrap_or_else(|| {
+                        glyph_cache.kern_unscaled(font_hash, kerned, previous.1, glyph_id)
+                    });
+                caret_x += kern * h_scale + m.letter_spacing;
+            }
+            let glyph = glyph_id.with_scale_and_position(px_scale, point(caret_x, baseline_y));
+            caret_x += advance * h_scale;
+            previous = Some((ch, glyph_id));
+            let glyph = align_glyph_for_text_motion(glyph, true);
+            let segment_glyph = AtlasSegmentGlyph {
+                ch,
+                key: glyph_mask_cache_key(
+                    font_hash,
+                    &glyph,
+                    GlyphRasterStyle::Fill,
+                    m.weight_synthesis,
+                    m.style_synthesis,
+                ),
+                glyph,
+                font: kerned,
+                metrics: &m,
             };
-            out.push(run_glyph);
-        },
-    );
-
-    if advance.is_finite() {
-        Some(advance)
-    } else {
-        out.truncate(initial_len);
-        None
+            if visit(glyph_cache, &segment_glyph, out).is_break() {
+                out.truncate(initial_len);
+                return None;
+            }
+        }
+        max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
     }
+    Some(max_advance)
 }
 
 fn resolve_font_size(style: &TextStyle) -> f32 {
@@ -2841,8 +3020,8 @@ fn run_tracking(char_count: usize, letter_spacing: f32) -> f32 {
     char_count as f32 * letter_spacing
 }
 
-fn run_lead_in(char_count: usize, letter_spacing: f32) -> f32 {
-    if char_count == 0 {
+fn run_lead_in(line: &str, letter_spacing: f32) -> f32 {
+    if line.is_empty() {
         0.0
     } else {
         letter_spacing * 0.5
@@ -3016,12 +3195,12 @@ fn cached_line_advance_width(
 
     for ch in text.chars() {
         let metrics = glyph_metrics.glyph_metrics(font, &scaled_font, ch);
-        if let Some(previous_id) = previous {
+        if let Some(previous) = previous {
             width +=
-                glyph_metrics.kern(font, &scaled_font, previous_id, metrics.glyph_id) * h_scale;
+                glyph_metrics.kern(font, &scaled_font, previous, (ch, metrics.glyph_id)) * h_scale;
         }
         width += metrics.advance_unscaled * h_scale;
-        previous = Some(metrics.glyph_id);
+        previous = Some((ch, metrics.glyph_id));
     }
 
     width.max(0.0)
@@ -3125,11 +3304,11 @@ fn append_font_prefix_width_segment_cached(
         let separator = if index == 0 {
             0.0
         } else {
-            previous.map_or(0.0, |previous_id| {
+            previous.map_or(0.0, |previous| {
                 weight_synthesis.apply_width(
                     cache
                         .glyph_metrics
-                        .kern(font, &scaled_font, previous_id, metrics.glyph_id)
+                        .kern(font, &scaled_font, previous, (ch, metrics.glyph_id))
                         * h_scale,
                 )
             })
@@ -3139,7 +3318,7 @@ fn append_font_prefix_width_segment_cached(
             + letter_spacing
             + weight_synthesis.apply_width(metrics.advance_unscaled * h_scale);
         sink.prefix_widths.push(sink.width.max(0.0));
-        previous = Some(metrics.glyph_id);
+        previous = Some((ch, metrics.glyph_id));
     }
 }
 
@@ -3677,7 +3856,7 @@ fn visit_text_glyph_masks(
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let lead_in = run_lead_in(line.chars().count(), letter_spacing);
+        let lead_in = run_lead_in(line, letter_spacing);
         let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
         for ch in line.chars() {
@@ -3722,262 +3901,6 @@ fn visit_text_glyph_masks(
                 continue;
             };
             visit(&mask);
-        }
-        max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
-    }
-    max_advance
-}
-
-#[expect(clippy::too_many_arguments)]
-fn visit_text_glyph_masks_with_key(
-    text: &str,
-    font: &impl Font,
-    font_hash: u64,
-    font_px_size: f32,
-    line_height: f32,
-    first_baseline_y: f32,
-    origin_x: f32,
-    origin_y: f32,
-    letter_spacing: f32,
-    align_fraction: f32,
-    static_text_motion: bool,
-    raster_style: GlyphRasterStyle,
-    weight_synthesis: TextWeightSynthesis,
-    style_synthesis: TextStyleSynthesis,
-    mut glyph_cache: Option<&mut SoftwareGlyphRasterCache>,
-    mut visit: impl FnMut(SoftwareGlyphAtlasKey, &GlyphMask),
-) -> f32 {
-    if !static_text_motion {
-        return 0.0;
-    }
-
-    let scale = PxScale::from(font_px_size);
-    let scaled_font = font.as_scaled(scale);
-    let line_offsets = line_alignment_offsets(&scaled_font, text, letter_spacing, align_fraction);
-    let mut max_advance = 0.0f32;
-    for (line_idx, line) in text.split('\n').enumerate() {
-        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let lead_in = run_lead_in(line.chars().count(), letter_spacing);
-        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
-        let mut previous = None;
-        for ch in line.chars() {
-            let glyph_id = scaled_font.glyph_id(ch);
-            if let Some(previous_id) = previous {
-                caret_x += cached_kern(
-                    glyph_cache.as_deref_mut(),
-                    font_hash,
-                    &scaled_font,
-                    previous_id,
-                    glyph_id,
-                ) + letter_spacing;
-            }
-            let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
-            caret_x += scaled_font.h_advance(glyph_id);
-            previous = Some(glyph_id);
-            let glyph = align_glyph_for_text_motion(glyph, true);
-            let Some((cache_key, mask)) = glyph_cache.as_deref_mut().and_then(|cache| {
-                cached_static_glyph_mask_with_key(
-                    cache,
-                    font_hash,
-                    font,
-                    &glyph,
-                    raster_style,
-                    weight_synthesis,
-                    style_synthesis,
-                )
-            }) else {
-                continue;
-            };
-            let Some(atlas_key) = glyph_atlas_key_from_mask_key(cache_key) else {
-                continue;
-            };
-            visit(atlas_key, &mask);
-        }
-        max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
-    }
-    max_advance
-}
-
-#[expect(clippy::too_many_arguments)]
-fn visit_cached_text_glyph_atlas_placements(
-    text: &str,
-    font: &impl Font,
-    font_hash: u64,
-    font_px_size: f32,
-    line_height: f32,
-    first_baseline_y: f32,
-    origin_x: f32,
-    origin_y: f32,
-    letter_spacing: f32,
-    align_fraction: f32,
-    raster_style: GlyphRasterStyle,
-    weight_synthesis: TextWeightSynthesis,
-    style_synthesis: TextStyleSynthesis,
-    glyph_cache: &mut SoftwareGlyphRasterCache,
-    mut visit: impl FnMut(SoftwareGlyphAtlasPlacement),
-) -> f32 {
-    let scale = PxScale::from(font_px_size);
-    let scaled_font = font.as_scaled(scale);
-    let line_offsets = line_alignment_offsets(&scaled_font, text, letter_spacing, align_fraction);
-    let mut max_advance = 0.0f32;
-    for (line_idx, line) in text.split('\n').enumerate() {
-        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let lead_in = run_lead_in(line.chars().count(), letter_spacing);
-        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
-        let mut previous = None;
-        for ch in line.chars() {
-            let glyph_id = scaled_font.glyph_id(ch);
-            if let Some(previous_id) = previous {
-                caret_x += cached_kern(
-                    Some(&mut *glyph_cache),
-                    font_hash,
-                    &scaled_font,
-                    previous_id,
-                    glyph_id,
-                ) + letter_spacing;
-            }
-            let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
-            caret_x += scaled_font.h_advance(glyph_id);
-            previous = Some(glyph_id);
-            let glyph = align_glyph_for_text_motion(glyph, true);
-            let cache_key = glyph_mask_cache_key(
-                font_hash,
-                &glyph,
-                raster_style,
-                weight_synthesis,
-                style_synthesis,
-            );
-            let Some((key, x, y, width, height)) =
-                glyph_cache.get_atlas_placement(&cache_key, &glyph)
-            else {
-                if font.outline(glyph.id).is_none() {
-                    continue;
-                }
-                return f32::NAN;
-            };
-            visit(SoftwareGlyphAtlasPlacement {
-                key,
-                x,
-                y,
-                width,
-                height,
-                color: Color::WHITE,
-            });
-        }
-        max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
-    }
-    max_advance
-}
-
-#[expect(clippy::too_many_arguments)]
-fn visit_text_glyph_atlas_run(
-    text: &str,
-    font: &impl Font,
-    font_hash: u64,
-    font_px_size: f32,
-    line_height: f32,
-    first_baseline_y: f32,
-    origin_x: f32,
-    origin_y: f32,
-    letter_spacing: f32,
-    align_fraction: f32,
-    raster_style: GlyphRasterStyle,
-    weight_synthesis: TextWeightSynthesis,
-    style_synthesis: TextStyleSynthesis,
-    glyph_cache: &mut SoftwareGlyphRasterCache,
-    mut visit: impl FnMut(SoftwareGlyphAtlasRunGlyph),
-) -> f32 {
-    let scale = PxScale::from(font_px_size);
-    let scaled_font = font.as_scaled(scale);
-    let line_offsets = line_alignment_offsets(&scaled_font, text, letter_spacing, align_fraction);
-    let mut max_advance = 0.0f32;
-    let mut run_metrics_cache: Vec<(GlyphMaskCacheKey, CachedAtlasGlyphMetrics)> = Vec::new();
-    for (line_idx, line) in text.split('\n').enumerate() {
-        let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let lead_in = run_lead_in(line.chars().count(), letter_spacing);
-        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
-        let mut previous = None;
-        for ch in line.chars() {
-            let glyph_id = scaled_font.glyph_id(ch);
-            if let Some(previous_id) = previous {
-                caret_x += cached_kern(
-                    Some(&mut *glyph_cache),
-                    font_hash,
-                    &scaled_font,
-                    previous_id,
-                    glyph_id,
-                ) + letter_spacing;
-            }
-            let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
-            caret_x += scaled_font.h_advance(glyph_id);
-            previous = Some(glyph_id);
-            let glyph = align_glyph_for_text_motion(glyph, true);
-            let cache_key = glyph_mask_cache_key(
-                font_hash,
-                &glyph,
-                raster_style,
-                weight_synthesis,
-                style_synthesis,
-            );
-            if let Some((_, metrics)) = run_metrics_cache
-                .iter()
-                .find(|(cached_key, _)| *cached_key == cache_key)
-            {
-                visit(SoftwareGlyphAtlasRunGlyph::Cached(
-                    metrics.placement(&glyph, Color::WHITE),
-                ));
-                continue;
-            }
-            if let Some(metrics) = glyph_cache.get_atlas_metrics(&cache_key) {
-                if run_metrics_cache.len() < RUN_GLYPH_METRICS_CACHE_LIMIT {
-                    run_metrics_cache.push((cache_key, metrics));
-                }
-                visit(SoftwareGlyphAtlasRunGlyph::Cached(
-                    metrics.placement(&glyph, Color::WHITE),
-                ));
-                continue;
-            }
-
-            if font.outline(glyph.id).is_none() {
-                continue;
-            }
-            let Some(mask) = build_complete_glyph_mask(
-                font,
-                &glyph,
-                raster_style,
-                weight_synthesis,
-                style_synthesis,
-            ) else {
-                continue;
-            };
-            let mask = glyph_cache.put(cache_key, &glyph, mask);
-            let Some(key) = glyph_atlas_key_from_mask_key(cache_key) else {
-                continue;
-            };
-            let (glyph_x, glyph_y) = static_glyph_pixel_origin(&glyph);
-            if run_metrics_cache.len() < RUN_GLYPH_METRICS_CACHE_LIMIT {
-                run_metrics_cache.push((
-                    cache_key,
-                    CachedAtlasGlyphMetrics {
-                        key,
-                        width: mask.width,
-                        height: mask.height,
-                        origin_offset_x: mask.origin_x - glyph_x,
-                        origin_offset_y: mask.origin_y - glyph_y,
-                    },
-                ));
-            }
-            visit(SoftwareGlyphAtlasRunGlyph::New(SoftwareGlyphAtlasGlyph {
-                key,
-                mask: SoftwareGlyphAtlasMask {
-                    alpha: Arc::clone(&mask.alpha),
-                    width: mask.width,
-                    height: mask.height,
-                },
-                x: mask.origin_x,
-                y: mask.origin_y,
-                color: Color::WHITE,
-            }));
         }
         max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
     }
