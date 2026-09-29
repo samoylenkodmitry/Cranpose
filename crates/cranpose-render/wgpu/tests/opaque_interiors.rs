@@ -264,7 +264,50 @@ fn a_pass_of_small_shapes_alone_lays_no_interiors_down() {
     };
     assert_eq!(
         with.interior_draws, 0,
-        "circles have no interior worth a pre-pass"
+        "a small circle's inset square is under the least an occluder takes"
+    );
+    assert_same_pixels(&with.pixels, &without.pixels);
+}
+
+#[test]
+fn opaque_circles_lay_their_inset_squares_down_and_draw_the_same_pixels() {
+    // Stripes beneath show through any pixel of a circle's inset square
+    // that its fill does not cover whole: laying the square down first
+    // would hide them there.
+    let graph = || {
+        let stripes = (0..10u8).map(|band| {
+            fill(
+                rect(0.0, f32::from(band) * 20.0, FRAME as f32, 10.0),
+                Color::from_rgb_u8(200, 60 + band * 15, 90),
+                0.0,
+                None,
+            )
+        });
+        let circles = [50.0f32, 63.3, 80.7, 97.1, 120.0]
+            .into_iter()
+            .enumerate()
+            .map(|(index, diameter)| {
+                let offset = index as f32 * 13.37;
+                fill(
+                    rect(
+                        offset % 80.0 + 0.3,
+                        (offset * 1.7) % 80.0 + 0.6,
+                        diameter,
+                        diameter,
+                    ),
+                    Color::from_rgb_u8(40, 180, 220),
+                    diameter / 2.0,
+                    None,
+                )
+            });
+        frame_of(stripes.chain(circles).collect())
+    };
+    let Some((with, without)) = capture_both_ways(graph) else {
+        return;
+    };
+    assert!(
+        with.interior_draws > 0,
+        "the circles lay their inset squares down first"
     );
     assert_same_pixels(&with.pixels, &without.pixels);
 }

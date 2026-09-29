@@ -793,17 +793,8 @@ fn opaque_backgrounds_and_cards_mark_their_segment_as_occluding() {
 type Recording = Box<dyn FnOnce(&mut ShapeRecorder)>;
 
 #[test]
-fn circles_chips_translucent_gradient_and_stroked_fills_occlude_nothing() {
-    let unmarked: [Recording; 5] = [
-        Box::new(|recorder| {
-            recorder.push_round_rect(
-                rect(0.0, 0.0, 200.0, 200.0),
-                &opaque(),
-                CornerRadii::uniform(100.0),
-                None,
-                BlendMode::SrcOver,
-            );
-        }),
+fn chips_translucent_gradient_and_stroked_fills_occlude_nothing() {
+    let unmarked: [Recording; 4] = [
         Box::new(|recorder| {
             recorder.push_round_rect(
                 rect(0.0, 0.0, 50.0, 20.0),
@@ -869,16 +860,26 @@ fn a_card_with_a_large_interior_marks_its_segment() {
 }
 
 #[test]
-fn circles_plain_rects_and_strokes_leave_the_segment_unmarked() {
-    assert!(!only_segment_interiors(|recorder| {
-        recorder.push_round_rect(
-            rect(0.0, 0.0, 40.0, 40.0),
-            &solid(),
-            CornerRadii::uniform(20.0),
-            None,
-            BlendMode::SrcOver,
-        );
-    }));
+fn an_opaque_circle_occludes_by_its_inset_square_once_that_is_large() {
+    let circle = |diameter: f32| {
+        move |recorder: &mut ShapeRecorder| {
+            recorder.push_round_rect(
+                rect(0.0, 0.0, diameter, diameter),
+                &opaque(),
+                CornerRadii::uniform(diameter / 2.0),
+                None,
+                BlendMode::SrcOver,
+            );
+        }
+    };
+    // Half of a 200 × 200 circle's rect lies inside its inset square; half
+    // of a 40 × 40 one is under the least an occluder takes.
+    assert!(only_segment_occluders(circle(200.0)));
+    assert!(!only_segment_occluders(circle(40.0)));
+}
+
+#[test]
+fn plain_rects_and_strokes_leave_the_segment_unmarked() {
     assert!(!only_segment_interiors(|recorder| {
         recorder.push_rect(
             rect(0.0, 0.0, 300.0, 200.0),
@@ -902,8 +903,9 @@ fn circles_plain_rects_and_strokes_leave_the_segment_unmarked() {
 }
 
 #[test]
-fn a_circle_whose_corners_take_all_of_it_leaves_the_segment_unmarked() {
-    assert!(!only_segment_interiors(|recorder| {
+fn a_circle_marks_the_segment_by_its_inset_square() {
+    // Its bands are empty; the square inside its arc keeps half its rect.
+    assert!(only_segment_interiors(|recorder| {
         recorder.push_round_rect(
             rect(0.0, 0.0, 24.0, 24.0),
             &solid(),
@@ -915,9 +917,9 @@ fn a_circle_whose_corners_take_all_of_it_leaves_the_segment_unmarked() {
 }
 
 #[test]
-fn a_chip_marks_the_segment_by_the_band_between_its_corners() {
-    // Inset by its corners on every side, the chip keeps 44 × 8 of its 60 × 24;
-    // the band between its left and right corners keeps 44 × 24.
+fn a_chip_marks_the_segment_by_its_interior() {
+    // The band between its left and right corners keeps 44 × 24 of its
+    // 60 × 24; inset past its corners' arcs on every side, it keeps more.
     assert!(only_segment_interiors(|recorder| {
         recorder.push_round_rect(
             rect(0.0, 0.0, 60.0, 24.0),
@@ -929,17 +931,29 @@ fn a_chip_marks_the_segment_by_the_band_between_its_corners() {
     }));
 }
 
+/// How far in from each side a corner of `radius` leaves the inset rect.
+fn arc_inset(radius: f32) -> f32 {
+    radius * (1.0 - std::f32::consts::FRAC_1_SQRT_2)
+}
+
 #[test]
-fn a_fill_interior_is_the_larger_band_its_corners_leave_whole() {
-    assert_eq!(fill_interior_area(60.0, 24.0, [8.0; 4]), 44.0 * 24.0);
-    assert_eq!(fill_interior_area(24.0, 60.0, [8.0; 4]), 24.0 * 44.0);
+fn a_fill_interior_is_the_largest_of_its_two_bands_and_its_inset_rect() {
+    // A long pill keeps its band: its corners take a whole height's worth
+    // off either end, but only a little off every side of the inset rect.
+    assert_eq!(fill_interior_area(200.0, 40.0, [20.0; 4]), 160.0 * 40.0);
+    assert_eq!(fill_interior_area(40.0, 200.0, [20.0; 4]), 40.0 * 160.0);
     // Top-left, top-right, bottom-right, bottom-left: the left side's larger
     // corner and the right side's bound the band across.
     assert_eq!(
-        fill_interior_area(100.0, 40.0, [4.0, 10.0, 2.0, 6.0]),
-        (100.0 - 6.0 - 10.0) * 40.0
+        fill_interior_area(200.0, 60.0, [20.0, 30.0, 10.0, 16.0]),
+        (200.0 - 20.0 - 30.0) * 60.0
     );
-    assert_eq!(fill_interior_area(24.0, 24.0, [12.0; 4]), 0.0);
+    // A card whose corners are small next to it keeps the inset rect.
+    let card = (60.0 - 2.0 * arc_inset(8.0)) * (24.0 - 2.0 * arc_inset(8.0));
+    assert!((fill_interior_area(60.0, 24.0, [8.0; 4]) - card).abs() < 1e-3);
+    assert!(card > 44.0 * 24.0);
+    // A circle's bands are empty; its inset square is half its rect.
+    assert!((fill_interior_area(24.0, 24.0, [12.0; 4]) - 288.0).abs() < 1e-3);
     assert_eq!(fill_interior_area(30.0, 20.0, [0.0; 4]), 600.0);
     assert_eq!(fill_interior_area(10.0, 10.0, [-3.0; 4]), 100.0);
 }

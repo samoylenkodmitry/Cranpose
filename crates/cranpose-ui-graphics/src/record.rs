@@ -426,27 +426,36 @@ impl ShapeRecord {
 }
 
 /// The area of a fill's interior, where its coverage is 1, as the shape
-/// shader's `fill_interior` takes it: of the two bands its corners leave
-/// whole, the band between the left and right corners at full height or the
-/// one between the top and bottom corners at full width, the larger.
+/// shader's `fill_interior` takes it: the largest of the band between the
+/// left and right corners at full height, the one between the top and bottom
+/// corners at full width, and the rect inset past every corner's arc, whose
+/// corner a corner of radius `r` reaches `r (1 - 1/√2)` in from each side.
 /// `radii` is top-left, top-right, bottom-right, bottom-left, as recorded.
 fn fill_interior_area(width: f32, height: f32, radii: [f32; 4]) -> f32 {
     let [top_left, top_right, bottom_right, bottom_left] =
         radii.map(|radius| at_least(radius, 0.0));
-    let across = at_least(
-        width - top_left.max(bottom_left) - top_right.max(bottom_right),
-        0.0,
-    ) * at_least(height, 0.0);
-    let down = at_least(width, 0.0)
-        * at_least(
-            height - top_left.max(top_right) - bottom_left.max(bottom_right),
-            0.0,
-        );
-    across.max(down)
+    let band = |less_width: f32, less_height: f32| {
+        at_least(width - less_width, 0.0) * at_least(height - less_height, 0.0)
+    };
+    let across = band(top_left.max(bottom_left) + top_right.max(bottom_right), 0.0);
+    let down = band(0.0, top_left.max(top_right) + bottom_left.max(bottom_right));
+    let [top_left, top_right, bottom_right, bottom_left] =
+        [top_left, top_right, bottom_right, bottom_left]
+            .map(|radius| radius * (1.0 - std::f32::consts::FRAC_1_SQRT_2));
+    let inset = band(
+        top_left.max(bottom_left) + top_right.max(bottom_right),
+        top_left.max(top_right) + bottom_left.max(bottom_right),
+    );
+    across.max(down).max(inset)
 }
 
-/// Whether a record is a rounded fill whose interior covers at least half
-/// of its rect: see [`fill_interior_area`].
+/// The share of its rect a rounded fill's interior covers at least for the
+/// interior test to repay: half, less a little for rounding, since a
+/// circle's inset square is exactly half.
+const INTERIOR_REPAYS: f32 = 0.5 - 1.0 / 1024.0;
+
+/// Whether a record is a rounded fill whose interior covers at least
+/// [`INTERIOR_REPAYS`] of its rect: see [`fill_interior_area`].
 fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     if fragment_kind(body.flags) != FRAGMENT_KIND_FILL {
         return false;
@@ -454,7 +463,9 @@ fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     let rounded = curve.radii.iter().any(|&radius| radius > 0.0);
     let [_, _, width, height] = body.rect;
     let area = width * height;
-    rounded && area > 0.0 && fill_interior_area(width, height, curve.radii) * 2.0 >= area
+    rounded
+        && area > 0.0
+        && fill_interior_area(width, height, curve.radii) >= area * INTERIOR_REPAYS
 }
 
 /// The least interior, in square logical pixels, that a solid fill lays
