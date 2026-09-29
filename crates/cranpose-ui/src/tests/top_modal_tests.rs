@@ -193,6 +193,7 @@ fn a_chains_reach_joins_every_semantics_modifier_in_it() {
         cranpose_foundation::SemanticsReach {
             is_modal: true,
             hidden: true,
+            merges_live_state: true,
         }
     );
     assert_eq!(

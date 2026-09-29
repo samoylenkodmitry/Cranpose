@@ -540,20 +540,27 @@ impl Default for SemanticsNode {
 /// Rooted semantics tree extracted after layout.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticsTree {
-    root: SemanticsNode,
+    /// Every placed node under the surface root, kept whole so the next
+    /// update can reuse what did not change.
+    full: SemanticsNode,
+    /// Child indices from `full` down to the top visible modal, when one is
+    /// open.
+    modal: Option<Vec<usize>>,
 }
 
 impl SemanticsTree {
-    fn new(mut root: SemanticsNode) -> Self {
-        if let Some(modal) = take_top_modal(&mut root) {
-            root = modal;
-        }
-        Self { root }
+    fn new(full: SemanticsNode) -> Self {
+        let modal = top_modal_path(&full);
+        Self { full, modal }
     }
 
     /// Returns the top visible modal subtree, or the full root when no modal is open.
     pub fn root(&self) -> &SemanticsNode {
-        &self.root
+        self.modal.as_deref().map_or(&self.full, |path| {
+            path.iter()
+                .try_fold(&self.full, |node, &index| node.children.get(index))
+                .unwrap_or(&self.full)
+        })
     }
 }
 
@@ -562,16 +569,24 @@ fn modal_takes_space(size: Size) -> bool {
     size.width > 0.0 && size.height > 0.0 && size.width.is_finite() && size.height.is_finite()
 }
 
-fn take_top_modal(node: &mut SemanticsNode) -> Option<SemanticsNode> {
-    if node.hidden {
-        return None;
-    }
-    for child in node.children.iter_mut().rev() {
-        if let Some(modal) = take_top_modal(child) {
-            return Some(modal);
+/// The path to the modal drawn on top: the last visible modal in document
+/// order, a modal inside another preferred to it.
+fn top_modal_path(root: &SemanticsNode) -> Option<Vec<usize>> {
+    fn search(node: &SemanticsNode, path: &mut Vec<usize>) -> bool {
+        if node.hidden {
+            return false;
         }
+        for (index, child) in node.children.iter().enumerate().rev() {
+            path.push(index);
+            if search(child, path) {
+                return true;
+            }
+            path.pop();
+        }
+        node.is_modal
     }
-    node.is_modal.then(|| std::mem::take(node))
+    let mut path = Vec::new();
+    search(root, &mut path).then_some(path)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1032,96 +1047,231 @@ pub fn build_semantics_tree_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
 ) -> Result<Option<SemanticsTree>, NodeError> {
-    let mut child_stack = Vec::new();
-    semantics_node_from_applier(applier, root, None, &mut child_stack)
-        .map(|root| root.map(SemanticsTree::new))
+    let mut tree = None;
+    update_semantics_tree_from_applier(applier, root, &mut tree)?;
+    Ok(tree)
 }
 
-/// Builds the semantics nodes of the children a node pushed onto
-/// `child_stack` above `first_child`, then pops them. The stack is shared
-/// by the whole walk, so no node's child list is copied out of the applier.
-fn semantics_children_from_applier(
+/// Brings `tree` up to date with the placed nodes under `root`, as
+/// [`build_semantics_tree_from_applier`] would build it, reusing what `tree`
+/// held. A node that is still the same node, has not marked its semantics
+/// dirty and merges no live state keeps what it reported and only takes its
+/// new bounds, so a pass that only moved nodes merges only live semantics.
+/// `tree` is `None` afterwards when `root` is not placed.
+pub fn update_semantics_tree_from_applier(
     applier: &mut MemoryApplier,
-    child_stack: &mut Vec<NodeId>,
-    first_child: usize,
-    content: Point,
-) -> Result<Vec<SemanticsNode>, NodeError> {
-    let end = child_stack.len();
-    let mut children = Vec::with_capacity(end - first_child);
-    for index in first_child..end {
-        let child_id = child_stack[index];
-        if crate::modifier::is_window_root(applier, child_id) {
-            continue;
+    root: NodeId,
+    tree: &mut Option<SemanticsTree>,
+) -> Result<(), NodeError> {
+    let (mut node, known) = match tree.take() {
+        Some(tree) => {
+            let known = tree.full.node_id == root;
+            (tree.full, known)
         }
-        if let Some(child) =
-            semantics_node_from_applier(applier, child_id, Some(content), child_stack)?
-        {
+        None => (SemanticsNode::default(), false),
+    };
+    let mut update = SemanticsUpdate {
+        applier,
+        child_stack: Vec::new(),
+        saw_modal: false,
+    };
+    if update.node(root, None, &mut node, known)? {
+        let modal = if update.saw_modal {
+            top_modal_path(&node)
+        } else {
+            None
+        };
+        *tree = Some(SemanticsTree { full: node, modal });
+    }
+    Ok(())
+}
+
+/// One walk of [`update_semantics_tree_from_applier`].
+struct SemanticsUpdate<'a> {
+    applier: &'a mut MemoryApplier,
+    /// The children of every node on the walk's path, each node's above its
+    /// parent's, so no node's child list is copied out of the applier.
+    child_stack: Vec<NodeId>,
+    /// Whether any node of the tree is modal, so the top one is looked for.
+    saw_modal: bool,
+}
+
+/// What a visit reads off a placed node: its role and configuration when
+/// they are merged again, whether it asks to be modal, and its placement.
+type SemanticsVisit = (
+    Option<(SemanticsRole, Option<SemanticsConfiguration>)>,
+    bool,
+    (GeometryRect, Point),
+);
+
+impl SemanticsUpdate<'_> {
+    /// Brings `node` up to date with `node_id` placed under `origin`, where
+    /// `known` says `node` holds what `node_id` reported last. Answers
+    /// whether `node_id` is placed.
+    fn node(
+        &mut self,
+        node_id: NodeId,
+        origin: Option<Point>,
+        node: &mut SemanticsNode,
+        known: bool,
+    ) -> Result<bool, NodeError> {
+        let generation = self.applier.node_generation(node_id);
+        let same = known && node.node_generation == generation;
+        let first_child = self.child_stack.len();
+        let Some((content, requests_modal, (bounds, content_origin))) =
+            self.visit(node_id, origin, same)?
+        else {
+            return Ok(false);
+        };
+        match content {
+            Some((role, config)) => {
+                let mut children = std::mem::take(&mut node.children);
+                if !same {
+                    children.clear();
+                }
+                *node =
+                    semantics_node_from_parts(node_id, generation, role, config, children, bounds);
+            }
+            None => {
+                node.is_modal = requests_modal
+                    && modal_takes_space(Size {
+                        width: bounds.width,
+                        height: bounds.height,
+                    });
+                node.bounds = bounds;
+            }
+        }
+        self.saw_modal |= node.is_modal;
+        self.children(&mut node.children, first_child, content_origin)?;
+        Ok(true)
+    }
+
+    /// Reads a placed node and pushes its children onto the stack, merging
+    /// its semantics again unless `same` says the tree holds its last report
+    /// and nothing since could have changed it.
+    fn visit(
+        &mut self,
+        node_id: NodeId,
+        origin: Option<Point>,
+        same: bool,
+    ) -> Result<Option<SemanticsVisit>, NodeError> {
+        let child_stack = &mut self.child_stack;
+        match self.applier.with_node::<LayoutNode, _>(node_id, |layout| {
+            let state = layout.layout_state();
+            if !state.is_placed() {
+                return None;
+            }
+            let reach = layout.semantics_reach();
+            let merge = !same || layout.needs_semantics() || reach.merges_live_state;
+            let content = merge.then(|| {
+                (
+                    role_from_modifier_slices(&layout.modifier_slices_snapshot()),
+                    layout.semantics_configuration(),
+                )
+            });
+            child_stack.extend_from_slice(&layout.children);
+            layout.clear_needs_semantics();
+            Some((content, reach.is_modal, semantics_placement(&state, origin)))
+        }) {
+            Ok(visit) => return Ok(visit),
+            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
+            Err(err) => return Err(err),
+        }
+        // A subcompose node merges again on every update: lists and
+        // constraint readers are few, and their semantics follow live state.
+        match self
+            .applier
+            .with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
+                let state = subcompose.layout_state();
+                if !state.is_placed() {
+                    return None;
+                }
+                let config = subcompose.semantics_configuration();
+                subcompose.with_active_children(|children| child_stack.extend_from_slice(children));
+                subcompose.clear_needs_semantics();
+                Some((
+                    Some((SemanticsRole::Subcompose, config)),
+                    false,
+                    semantics_placement(&state, origin),
+                ))
+            }) {
+            Ok(visit) => Ok(visit),
+            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Brings `children` up to date with the placed nodes a parent's visit
+    /// pushed above `first_child`, matching each to what it reported last by
+    /// id. Children stay where they are while they come in the order they
+    /// did, dropping any that left; from the first newcomer on, the rest are
+    /// moved into place.
+    fn children(
+        &mut self,
+        children: &mut Vec<SemanticsNode>,
+        first_child: usize,
+        content: Point,
+    ) -> Result<(), NodeError> {
+        let end = self.child_stack.len();
+        // The children last reported that the walk has not reached, last
+        // first, once one comes that was not there.
+        let mut rest: Option<Vec<SemanticsNode>> = None;
+        let mut kept = 0;
+        for index in first_child..end {
+            let child_id = self.child_stack[index];
+            if crate::modifier::is_window_root(self.applier, child_id) {
+                continue;
+            }
+            if let Some(rest) = rest.as_mut() {
+                self.moved_child(children, rest, child_id, content)?;
+                continue;
+            }
+            let Some(offset) = children[kept..]
+                .iter()
+                .position(|child| child.node_id == child_id)
+            else {
+                let mut moved = children.split_off(kept);
+                moved.reverse();
+                self.moved_child(children, &mut moved, child_id, content)?;
+                rest = Some(moved);
+                continue;
+            };
+            children.drain(kept..kept + offset);
+            if self.node(child_id, Some(content), &mut children[kept], true)? {
+                kept += 1;
+            } else {
+                children.remove(kept);
+            }
+        }
+        if rest.is_none() {
+            children.truncate(kept);
+        }
+        self.child_stack.truncate(first_child);
+        Ok(())
+    }
+
+    /// Appends `child_id` to `children`, from what `rest` held for it when it
+    /// holds anything, dropping the children `rest` held before it.
+    fn moved_child(
+        &mut self,
+        children: &mut Vec<SemanticsNode>,
+        rest: &mut Vec<SemanticsNode>,
+        child_id: NodeId,
+        content: Point,
+    ) -> Result<(), NodeError> {
+        let held = rest
+            .iter()
+            .rposition(|child| child.node_id == child_id)
+            .and_then(|position| {
+                rest.truncate(position + 1);
+                rest.pop()
+            });
+        let known = held.is_some();
+        let mut child = held.unwrap_or_default();
+        if self.node(child_id, Some(content), &mut child, known)? {
             children.push(child);
         }
-    }
-    child_stack.truncate(first_child);
-    Ok(children)
-}
-
-fn semantics_node_from_applier(
-    applier: &mut MemoryApplier,
-    node_id: NodeId,
-    origin: Option<Point>,
-    child_stack: &mut Vec<NodeId>,
-) -> Result<Option<SemanticsNode>, NodeError> {
-    let first_child = child_stack.len();
-    match applier.with_node::<LayoutNode, _>(node_id, |layout| {
-        let state = layout.layout_state();
-        if !state.is_placed() {
-            return None;
-        }
-        let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
-        let config = layout.semantics_configuration();
-        child_stack.extend_from_slice(&layout.children);
-        layout.clear_needs_semantics();
-        Some((role, config, semantics_placement(&state, origin)))
-    }) {
-        Ok(Some((role, config, (bounds, content)))) => {
-            let children =
-                semantics_children_from_applier(applier, child_stack, first_child, content)?;
-            return Ok(Some(semantics_node_from_parts(
-                node_id,
-                applier.node_generation(node_id),
-                role,
-                config,
-                children,
-                bounds,
-            )));
-        }
-        Ok(None) => return Ok(None),
-        Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
-        Err(err) => return Err(err),
-    }
-
-    match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
-        let state = subcompose.layout_state();
-        if !state.is_placed() {
-            return None;
-        }
-        let config = subcompose.semantics_configuration();
-        subcompose.with_active_children(|children| child_stack.extend_from_slice(children));
-        subcompose.clear_needs_semantics();
-        Some((config, semantics_placement(&state, origin)))
-    }) {
-        Ok(Some((config, (bounds, content)))) => {
-            let children =
-                semantics_children_from_applier(applier, child_stack, first_child, content)?;
-            Ok(Some(semantics_node_from_parts(
-                node_id,
-                applier.node_generation(node_id),
-                SemanticsRole::Subcompose,
-                config,
-                children,
-                bounds,
-            )))
-        }
-        Ok(None) | Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-        Err(err) => Err(err),
+        Ok(())
     }
 }
 
@@ -3874,6 +4024,10 @@ fn normalize_constraints(mut constraints: Constraints) -> Constraints {
 #[cfg(test)]
 #[path = "tests/layout_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/semantics_update_tests.rs"]
+mod semantics_update_tests;
 
 #[cfg(test)]
 #[path = "tests/coordinator_geometry_tests.rs"]

@@ -55,8 +55,14 @@ impl FocusInvalidationManager {
         self.active_focus_target
     }
 
+    /// Registers a target on `node_id`; a node's first target makes it
+    /// focusable, which its semantics report.
     fn register_focus_target(&mut self, node_id: NodeId, handle: Rc<dyn FocusTargetHandle>) {
-        self.focus_targets.entry(node_id).or_default().push(handle);
+        let handles = self.focus_targets.entry(node_id).or_default();
+        if handles.is_empty() {
+            crate::semantics_dispatch::schedule_semantics_invalidation(node_id);
+        }
+        handles.push(handle);
     }
 
     fn unregister_focus_target(&mut self, node_id: NodeId, handle: &Rc<dyn FocusTargetHandle>) {
@@ -66,6 +72,7 @@ impl FocusInvalidationManager {
         handles.retain(|existing| !Rc::ptr_eq(existing, handle));
         if handles.is_empty() {
             self.focus_targets.remove(&node_id);
+            crate::semantics_dispatch::schedule_semantics_invalidation(node_id);
             if self.active_focus_target == Some(node_id) {
                 self.set_active_focus_target(None);
             }

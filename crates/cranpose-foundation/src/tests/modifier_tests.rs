@@ -1931,11 +1931,15 @@ fn a_semantics_nodes_reach_reads_the_flags_it_merges() {
         SemanticsReach {
             is_modal: true,
             hidden: false,
+            merges_live_state: true,
         }
     );
     assert_eq!(
         DelegatedSemanticsNode::new("label").reach(),
-        SemanticsReach::default()
+        SemanticsReach {
+            merges_live_state: true,
+            ..SemanticsReach::default()
+        }
     );
 }
 
@@ -1943,17 +1947,22 @@ fn a_semantics_nodes_reach_reads_the_flags_it_merges() {
 fn semantics_reaches_union_flag_by_flag() {
     let modal = SemanticsReach {
         is_modal: true,
-        hidden: false,
+        ..SemanticsReach::default()
     };
     let hidden = SemanticsReach {
-        is_modal: false,
         hidden: true,
+        ..SemanticsReach::default()
+    };
+    let live = SemanticsReach {
+        merges_live_state: true,
+        ..SemanticsReach::default()
     };
     assert_eq!(
-        modal.union(hidden),
+        modal.union(hidden).union(live),
         SemanticsReach {
             is_modal: true,
             hidden: true,
+            merges_live_state: true,
         }
     );
     assert_eq!(SemanticsReach::default().union(modal), modal);
