@@ -903,9 +903,9 @@ fn plain_rects_and_strokes_leave_the_segment_unmarked() {
 }
 
 #[test]
-fn a_circle_marks_the_segment_by_its_inset_square() {
-    // Its bands are empty; the square inside its arc keeps half its rect.
-    assert!(only_segment_interiors(|recorder| {
+fn a_circle_whose_corners_take_all_of_it_leaves_the_segment_unmarked() {
+    // Its bands are empty: a gradient batch would test nothing.
+    assert!(!only_segment_interiors(|recorder| {
         recorder.push_round_rect(
             rect(0.0, 0.0, 24.0, 24.0),
             &solid(),
@@ -917,9 +917,9 @@ fn a_circle_marks_the_segment_by_its_inset_square() {
 }
 
 #[test]
-fn a_chip_marks_the_segment_by_its_interior() {
-    // The band between its left and right corners keeps 44 × 24 of its
-    // 60 × 24; inset past its corners' arcs on every side, it keeps more.
+fn a_chip_marks_the_segment_by_the_band_between_its_corners() {
+    // Inset by its corners on every side, the chip keeps 44 × 8 of its 60 × 24;
+    // the band between its left and right corners keeps 44 × 24.
     assert!(only_segment_interiors(|recorder| {
         recorder.push_round_rect(
             rect(0.0, 0.0, 60.0, 24.0),
@@ -934,6 +934,20 @@ fn a_chip_marks_the_segment_by_its_interior() {
 /// How far in from each side a corner of `radius` leaves the inset rect.
 fn arc_inset(radius: f32) -> f32 {
     radius * (1.0 - std::f32::consts::FRAC_1_SQRT_2)
+}
+
+#[test]
+fn a_fill_band_is_the_larger_one_its_corners_leave_whole() {
+    assert_eq!(band_interior_area(60.0, 24.0, [8.0; 4]), 44.0 * 24.0);
+    assert_eq!(band_interior_area(24.0, 60.0, [8.0; 4]), 24.0 * 44.0);
+    // Top-left, top-right, bottom-right, bottom-left: the left side's larger
+    // corner and the right side's bound the band across.
+    assert_eq!(
+        band_interior_area(100.0, 40.0, [4.0, 10.0, 2.0, 6.0]),
+        (100.0 - 6.0 - 10.0) * 40.0
+    );
+    assert_eq!(band_interior_area(24.0, 24.0, [12.0; 4]), 0.0);
+    assert_eq!(band_interior_area(10.0, 10.0, [-3.0; 4]), 100.0);
 }
 
 #[test]

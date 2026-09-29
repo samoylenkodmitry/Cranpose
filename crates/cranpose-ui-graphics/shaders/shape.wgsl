@@ -170,7 +170,7 @@ fn full_from_gradient_fill(fill: GradientFillOutput) -> VertexOutput {
     output.clip_rect = fill.clip_rect;
     let turned = SHAPE_TURNS == TURNS_MIXED && (fill.brush.w & BRUSH_TURNED) != 0u;
     output.stroke_params = vec4<f32>(0.0, select(0.0, f32(SHAPE_FLAG_TURNED), turned), 0.0, 0.0);
-    output.arc_params = select(vec4<f32>(0.0), fill_interior(fill.rect, fill.radii), SHAPE_INTERIOR);
+    output.arc_params = select(vec4<f32>(0.0), fill_bands(fill.rect, fill.radii), SHAPE_INTERIOR);
     output.brush = select(fill.brush, vec4<u32>(fill.brush.xyz, fill.brush.w & ~BRUSH_TURNED), SHAPE_TURNS == TURNS_MIXED);
     output.stop_offsets = fill.stop_offsets;
     output.stop_color0 = fill.stop_color0;
@@ -404,20 +404,14 @@ fn resolved_radii(record: ShapeRecord, scale: f32) -> vec4<f32> {
     return clamp(stored, vec4<f32>(0.0), vec4<f32>(limit)) * scale;
 }
 
-// A part of a fill where coverage is exactly 1, the largest of three rects:
-// the two bands its corners leave whole, half a pixel inside every edge, and
-// the rect inset past every corner's arc. The band between the left and right
-// corners spans the full height, the one between the top and bottom corners
-// the full width, so a wide card keeps its long edges out of the distance
-// field; the inset rect keeps half of a circle's quad and most of a small
-// rounded square, whose bands are empty. A corner of radius r leaves its
-// pixels at full coverage up to r - 0.5 from its centre, where the inset
-// rect's corner sits. `radii` is top-left, top-right, bottom-left,
-// bottom-right. A fill carries it in `arc_params`, which only arcs use, so it
-// costs no varying vector of its own; on a tiling GPU every vector is written
-// and read back per vertex, and a scene of many small shapes pays for it
-// whether or not any pixel lies inside.
-fn fill_interior(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
+// Of the two bands a fill's corners leave whole, half a pixel inside every
+// edge, the larger: the band between the left and right corners spans the
+// full height, the one between the top and bottom corners the full width, so
+// a wide card keeps its long edges out of the distance field. `radii` is
+// top-left, top-right, bottom-left, bottom-right. A gradient fill derives its
+// interior per fragment from these alone: the inset rect `fill_interior`
+// weighs too would cost every fragment more arithmetic than its pixels save.
+fn fill_bands(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
     let right = rect.x + rect.z;
     let bottom = rect.y + rect.w;
     let across = vec4<f32>(
@@ -432,18 +426,32 @@ fn fill_interior(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
         right - 0.5,
         bottom - max(radii.z, radii.w) - 0.5,
     );
+    return select(down, across, rect_area(across) >= rect_area(down));
+}
+
+fn rect_area(edges: vec4<f32>) -> f32 {
+    return max(edges.z - edges.x, 0.0) * max(edges.w - edges.y, 0.0);
+}
+
+// A part of a fill where coverage is exactly 1: the larger of its bands (see
+// `fill_bands`) and the rect inset past every corner's arc, which keeps half
+// of a circle's quad and most of a small rounded square, whose bands are
+// empty. A corner of radius r leaves its pixels at full coverage up to
+// r - 0.5 from its centre, where the inset rect's corner sits. A fill carries
+// it in `arc_params`, which only arcs use, so it costs no varying vector of
+// its own; on a tiling GPU every vector is written and read back per vertex,
+// and a scene of many small shapes pays for it whether or not any pixel lies
+// inside.
+fn fill_interior(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
+    let band = fill_bands(rect, radii);
     let arc = max(radii - (radii - 0.5) * INV_SQRT2, vec4<f32>(0.5)) + ARC_INSET_SLACK;
     let inset = vec4<f32>(
         rect.x + max(arc.x, arc.z),
         rect.y + max(arc.x, arc.y),
-        right - max(arc.y, arc.w),
-        bottom - max(arc.z, arc.w),
+        rect.x + rect.z - max(arc.y, arc.w),
+        rect.y + rect.w - max(arc.z, arc.w),
     );
-    let across_area = max(across.z - across.x, 0.0) * max(across.w - across.y, 0.0);
-    let down_area = max(down.z - down.x, 0.0) * max(down.w - down.y, 0.0);
-    let inset_area = max(inset.z - inset.x, 0.0) * max(inset.w - inset.y, 0.0);
-    let band = select(down, across, across_area >= down_area);
-    return select(band, inset, inset_area > max(across_area, down_area));
+    return select(band, inset, rect_area(inset) > rect_area(band));
 }
 
 // How far past the exact inset the inset rect stays, so rounding at its
