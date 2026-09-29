@@ -1767,15 +1767,19 @@ fn resolve_text_horizontal_offset(
     }
 }
 
+/// Replaces `scene` with `root`'s graph, built in the allocations of the
+/// graph it held.
 pub(crate) fn render_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
     scene: &mut Scene,
     scale: f32,
 ) {
-    let Some(mut graph) =
-        cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, scale)
-    else {
+    let previous = scene.graph.take();
+    scene.clear();
+    let Some(mut graph) = cranpose_render_common::scene_builder::rebuild_graph_from_applier(
+        applier, root, scale, previous,
+    ) else {
         return;
     };
     graph.root.recompute_raster_cache_hashes();
@@ -1812,12 +1816,10 @@ pub(crate) fn update_from_applier(
             changed_nodes,
         )
     }) else {
-        scene.clear();
         render_from_applier(applier, root, scene, scale);
         return SceneUpdateOutcome::Rebuilt;
     };
     if !update_report.applied() {
-        scene.clear();
         render_from_applier(applier, root, scene, scale);
         return SceneUpdateOutcome::Rebuilt;
     }

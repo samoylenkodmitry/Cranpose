@@ -1123,7 +1123,6 @@ impl Renderer for WgpuRenderer {
         root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.frontend.scene.clear();
         self.frontend.clear_fps_overlay();
         pipeline::render_from_applier(applier, root, &mut self.frontend.scene, 1.0);
         Ok(())

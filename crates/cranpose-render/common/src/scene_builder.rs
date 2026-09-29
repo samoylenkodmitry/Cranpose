@@ -133,6 +133,22 @@ pub fn build_graph_from_applier(
     })
 }
 
+/// Builds `root`'s graph again, its layers taking the allocations of
+/// `previous`, the graph it replaces.
+pub fn rebuild_graph_from_applier(
+    applier: &mut MemoryApplier,
+    root: NodeId,
+    scale: f32,
+    previous: Option<RenderGraph>,
+) -> Option<RenderGraph> {
+    if let Some(mut previous) = previous {
+        crate::layer_recycling::recycle_children(&mut previous.root);
+    }
+    let graph = build_graph_from_applier(applier, root, scale);
+    crate::layer_recycling::release();
+    graph
+}
+
 pub fn update_graph_from_applier(
     applier: &mut MemoryApplier,
     graph: &mut RenderGraph,

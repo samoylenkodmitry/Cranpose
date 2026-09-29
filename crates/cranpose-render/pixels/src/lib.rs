@@ -82,7 +82,6 @@ impl Renderer for PixelsRenderer {
         root: cranpose_core::NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.clear();
         pipeline::render_from_applier(applier, root, &mut self.scene);
         Ok(())
     }
