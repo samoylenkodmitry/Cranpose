@@ -598,6 +598,21 @@ fn measure_lazy_viewport(
     if idle_pass {
         inputs.state.hold_scroll_window();
     }
+    // An item an idle pass composes afresh has its modifier slices built
+    // before the frame it enters the screen in.
+    let mut measure_item = |index: usize| {
+        let fresh = idle_pass
+            && !inputs.measured_item_cache.borrow().has_candidate(
+                index,
+                inputs.content.get_key(index).to_slot_id(),
+                inputs.content.get_content_type(index),
+            );
+        let item = measure_item(index);
+        if fresh {
+            crate::lazy_prefetch::note_prefetched_item(&item.node_ids);
+        }
+        item
+    };
     let mut policy = BeyondBoundsComposition::new(idle_pass);
     let result = measure_lazy_list_with_beyond_bounds_policy(
         items_count,
@@ -605,7 +620,7 @@ fn measure_lazy_viewport(
         viewport_size,
         inputs.cross_axis_size,
         config,
-        measure_item,
+        &mut measure_item,
         |index| {
             let key_slot_id = inputs.content.get_key(index).to_slot_id();
             let content_type = inputs.content.get_content_type(index);

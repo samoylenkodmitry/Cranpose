@@ -459,6 +459,12 @@ impl LayoutNode {
         self.modifier_slices_dirty.set(false);
     }
 
+    /// Whether the modifier slices are built and current.
+    #[cfg(test)]
+    pub(crate) fn modifier_slices_ready(&self) -> bool {
+        !self.modifier_slices_dirty.get()
+    }
+
     pub(crate) fn mark_modifier_slices_dirty(&self) {
         self.modifier_slices_dirty.set(true);
     }

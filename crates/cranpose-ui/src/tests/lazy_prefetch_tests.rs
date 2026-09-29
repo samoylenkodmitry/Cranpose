@@ -41,3 +41,46 @@ fn a_prefetch_pass_is_one_only_while_it_runs() {
     assert!(with_lazy_prefetch_pass(in_lazy_prefetch_pass));
     assert!(!in_lazy_prefetch_pass());
 }
+
+#[test]
+fn warming_builds_the_slices_of_every_node_under_a_prefetched_item() {
+    use cranpose_core::Applier as _;
+
+    use crate::{layout::policies::EmptyMeasurePolicy, widgets::nodes::LayoutNode};
+
+    let _scope = app_context_test_scope();
+    let mut applier = cranpose_core::MemoryApplier::new();
+    let node = || {
+        LayoutNode::new(
+            crate::Modifier::empty().padding(2.0),
+            std::rc::Rc::new(EmptyMeasurePolicy),
+        )
+    };
+    let leaf = applier.create(Box::new(node()));
+    let mut row = node();
+    row.children.push(leaf);
+    let row = applier.create(Box::new(row));
+    let outside = applier.create(Box::new(node()));
+    let dirty = |applier: &mut cranpose_core::MemoryApplier, id| {
+        applier
+            .with_node::<LayoutNode, _>(id, |node| !node.modifier_slices_ready())
+            .expect("a layout node")
+    };
+    assert!(dirty(&mut applier, row) && dirty(&mut applier, leaf));
+
+    note_prefetched_item(&[row as u64]);
+    warm_prefetched_slices(&mut applier);
+
+    assert!(!dirty(&mut applier, row), "the item's root is warm");
+    assert!(!dirty(&mut applier, leaf), "and so is every node under it");
+    assert!(
+        dirty(&mut applier, outside),
+        "nodes outside it are left alone"
+    );
+    note_prefetched_item(&[]);
+    warm_prefetched_slices(&mut applier);
+    assert!(
+        dirty(&mut applier, outside),
+        "a warmed item is not warmed again"
+    );
+}
