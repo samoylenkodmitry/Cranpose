@@ -111,6 +111,20 @@ fn solid_fill_batches_shade_as_the_general_pipeline_does() {
 }
 
 #[test]
+fn clipped_solid_fill_batches_shade_as_the_general_pipeline_does() {
+    let clip = Rect {
+        x: 20.5,
+        y: 30.25,
+        width: 180.0,
+        height: 170.5,
+    };
+    assert_variants_match_general(
+        "clipped solid fill",
+        graph_for(record_solid_fill_scene, Some(clip)),
+    );
+}
+
+#[test]
 fn gradient_and_stroke_batches_shade_as_the_general_pipeline_does() {
     assert_variants_match_general("mixed", graph_for(record_mixed_scene, None));
 }

@@ -1102,9 +1102,13 @@ impl ShapeVariant {
         }
     }
 
-    fn entries(self) -> (&'static str, &'static str) {
+    /// The vertex and fragment entry points of this variant, for records
+    /// drawn `flat` (none of them turned).
+    fn entries(self, flat: bool) -> (&'static str, &'static str) {
         let fill = self.kind == Some(FRAGMENT_KIND_FILL as u8);
-        if self.solid && fill {
+        if self.solid && fill && flat && !self.clipped {
+            ("vs_record_plain_fill", "fs_plain_fill")
+        } else if self.solid && fill {
             ("vs_record_solid_fill", "fs_solid_fill")
         } else if self.solid {
             ("vs_record_solid", "fs_solid")
@@ -1317,7 +1321,7 @@ pub(crate) fn create_shape_pipeline(
     let (vertex_entry, fragment_entry) = if depth == ShapeDepth::Interior {
         ("vs_record_interior", "fs_interior")
     } else {
-        variant.entries()
+        variant.entries(turns == ShapeTurns::None)
     };
     let blend = (depth != ShapeDepth::Interior).then(|| blend_state_for_mode(blend_mode));
     let instance_layout = record_vertex_layouts().map(Some);

@@ -134,6 +134,37 @@ fn full_from_solid_fill(fill: SolidFillOutput) -> VertexOutput {
     return full_output(solid);
 }
 
+// What an unclipped fill drawn flat needs: `SolidFillOutput` without the
+// position its fragments never read, the clip it has none of, and the
+// stroke vector whose only use for a fill is the turned flag. Every vertex
+// stores each vector its stage writes, so the lean set saves a quarter of
+// the vertex stage's stores.
+struct PlainFillOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(3) @interpolate(flat) rect: vec4<f32>,
+    @location(4) @interpolate(flat) radii: vec4<f32>,
+    @location(7) @interpolate(flat) interior_insets: vec2<u32>,
+}
+
+fn plain_fill_output(full: VertexOutput) -> PlainFillOutput {
+    let fill = solid_fill_output(full);
+    return PlainFillOutput(fill.clip_position, fill.color, fill.rect, fill.radii, fill.interior_insets);
+}
+
+fn full_from_plain_fill(plain: PlainFillOutput) -> VertexOutput {
+    var fill: SolidFillOutput;
+    fill.clip_position = plain.clip_position;
+    fill.color = plain.color;
+    fill.world_pos = vec4<f32>(0.0);
+    fill.rect = plain.rect;
+    fill.radii = plain.radii;
+    fill.clip_rect = vec4<f32>(0.0);
+    fill.stroke_params = vec4<f32>(0.0);
+    fill.interior_insets = plain.interior_insets;
+    return full_from_solid_fill(fill);
+}
+
 struct GradientFillOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_pos: vec4<f32>,
@@ -673,6 +704,15 @@ fn vs_record_solid(
     record: ShapeRecord,
 ) -> SolidOutput {
     return solid_output(placed_record_vertex(record, vertex_idx, instance));
+}
+
+@vertex
+fn vs_record_plain_fill(
+    @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
+    record: ShapeRecord,
+) -> PlainFillOutput {
+    return plain_fill_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
 @vertex
@@ -1251,6 +1291,11 @@ fn fs_solid(input: SolidOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_solid_fill(input: SolidFillOutput) -> @location(0) vec4<f32> {
     return fragment(full_from_solid_fill(input));
+}
+
+@fragment
+fn fs_plain_fill(input: PlainFillOutput) -> @location(0) vec4<f32> {
+    return fragment(full_from_plain_fill(input));
 }
 
 @fragment
