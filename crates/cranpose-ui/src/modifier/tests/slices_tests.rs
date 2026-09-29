@@ -266,3 +266,47 @@ fn a_tilt_merged_with_a_surface_keeps_its_camera_and_pivot() {
         "a later layer that turns frames the merged transform"
     );
 }
+
+#[test]
+fn a_texts_slices_read_its_string_style_and_options_from_its_layout() {
+    let style = TextStyle {
+        span_style: crate::text::SpanStyle {
+            font_size: crate::text::TextUnit::Sp(19.0),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let options = TextLayoutOptions {
+        max_lines: 2,
+        ..Default::default()
+    };
+    let text = Rc::new(crate::text::AnnotatedString::from("Shared"));
+    let modifier = Modifier::with_element(crate::text_modifier_node::TextModifierElement::new(
+        Rc::clone(&text),
+        style.clone(),
+        options,
+        crate::density::Density::new(2.0, 1.0),
+    ));
+    let slices = collect_slices_from_modifier(&modifier);
+    assert_eq!(slices.text_content(), Some("Shared"));
+    assert!(Rc::ptr_eq(
+        slices
+            .annotated_text()
+            .expect("a text node's slices hold its text"),
+        &text
+    ));
+    assert_eq!(slices.text_style(), Some(&style));
+    assert_eq!(slices.text_layout_options(), Some(options.normalized()));
+    assert!(slices.text_pan_resolver().is_none());
+    assert!(slices.debug_stats().has_prepared_text_layout);
+}
+
+#[test]
+fn slices_without_text_answer_none_for_every_text_field() {
+    let slices = collect_slices_from_modifier(&Modifier::empty().padding(3.0));
+    assert!(slices.annotated_text().is_none());
+    assert!(slices.text_style().is_none());
+    assert!(slices.text_layout_options().is_none());
+    assert!(slices.measured_text_layout().is_none());
+    assert!(slices.text_window_origin().is_none());
+}
