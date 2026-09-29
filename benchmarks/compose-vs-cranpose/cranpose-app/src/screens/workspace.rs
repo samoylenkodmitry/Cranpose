@@ -31,7 +31,7 @@ use cranpose::{LazyItems, prelude::*};
 use cranpose_core::{MutableState, delay, key, mutableStateOf};
 use cranpose_foundation::lazy::{LazyListState, rememberLazyListState};
 use cranpose_ui::{
-    DashPathEffect, DrawStyle, Path,
+    DashPathEffect, DrawStyle, Path, collect_is_hovered_as_state, rememberMutableInteractionSource,
     text::{FontWeight, ParagraphStyle, SpanStyle, TextUnit},
     widgets::{FlowRow, FlowRowSpec},
 };
@@ -1222,29 +1222,7 @@ fn Panel(grow: f32, lines: [bool; 2], tabs: Vec<&'static str>, content: PanelCon
                 row_spec(0.0),
                 move || {
                     for (ix, title) in tabs.iter().copied().enumerate() {
-                        let active = ix == 0;
-                        Box(
-                            Modifier::empty()
-                                .fill_max_height()
-                                .padding_horizontal(12.0)
-                                .then(if active {
-                                    Modifier::empty().background(BACKGROUND)
-                                } else {
-                                    Modifier::empty()
-                                }),
-                            centered(),
-                            move || {
-                                Label(
-                                    title,
-                                    Modifier::empty(),
-                                    if active {
-                                        style(14.0, FOREGROUND, None)
-                                    } else {
-                                        sm(MUTED_FOREGROUND)
-                                    },
-                                );
-                            },
-                        );
+                        WorkspaceTab(title, ix == 0);
                     }
                 },
             );
@@ -1257,6 +1235,40 @@ fn Panel(grow: f32, lines: [bool; 2], tabs: Vec<&'static str>, content: PanelCon
                     .clip_to_bounds(),
                 BoxSpec::default(),
                 move || (content.0)(),
+            );
+        },
+    );
+}
+
+/// One tab in a dock panel's strip. The active tab has no hover style; an
+/// inactive tab tints to `BORDER` (gpui's `secondary_hover`) while the
+/// pointer rests over it.
+#[composable]
+fn WorkspaceTab(title: &'static str, active: bool) {
+    let interaction = rememberMutableInteractionSource();
+    let hovered = collect_is_hovered_as_state(&interaction);
+    Box(
+        Modifier::empty()
+            .fill_max_height()
+            .padding_horizontal(12.0)
+            .hoverable(interaction, !active)
+            .then(if active {
+                Modifier::empty().background(BACKGROUND)
+            } else if hovered.get() {
+                Modifier::empty().background(BORDER)
+            } else {
+                Modifier::empty()
+            }),
+        centered(),
+        move || {
+            Label(
+                title,
+                Modifier::empty(),
+                if active {
+                    style(14.0, FOREGROUND, None)
+                } else {
+                    sm(MUTED_FOREGROUND)
+                },
             );
         },
     );
@@ -1458,13 +1470,18 @@ fn WatchlistRow(market: Rc<Market>, ix: usize) {
     let baseline = quote.prev_close as f32;
     let code = market.codes[ix].clone();
     let name = market.names[ix].clone();
+    let interaction = rememberMutableInteractionSource();
+    let hovered = collect_is_hovered_as_state(&interaction);
     Row(
         Modifier::empty()
             .width(TABLE_WIDTH)
             .height(ROW_HEIGHT)
+            .hoverable(interaction, true)
             .draw_behind(move |scope| {
                 let size = scope.size();
-                if ix % 2 == 1 {
+                if hovered.get() {
+                    scope.draw_rect(Brush::solid(MUTED));
+                } else if ix % 2 == 1 {
                     scope.draw_rect(Brush::solid(STRIPE));
                 }
                 scope.draw_rect_at(

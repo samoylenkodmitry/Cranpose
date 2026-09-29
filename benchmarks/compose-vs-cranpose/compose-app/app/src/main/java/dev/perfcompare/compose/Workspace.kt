@@ -2,7 +2,10 @@ package dev.perfcompare.compose
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -30,6 +33,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableFloatStateOf
@@ -637,17 +641,34 @@ private fun androidx.compose.foundation.layout.ColumnScope.Panel(
             Modifier.fillMaxWidth().height(32.dp).background(Muted).hairlines(bottom = true),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            tabs.forEachIndexed { ix, title ->
-                val active = ix == 0
-                Box(
-                    Modifier.fillMaxHeight().then(if (active) Modifier.background(Background) else Modifier)
-                        .padding(horizontal = 12.dp),
-                    contentAlignment = Alignment.Center,
-                ) { Label(title, style = sm(if (active) Foreground else MutedForeground)) }
-            }
+            tabs.forEachIndexed { ix, title -> WorkspaceTab(title, active = ix == 0) }
         }
         Box(Modifier.fillMaxWidth().weight(1f).background(Background).clipToBounds()) { content() }
     }
+}
+
+/**
+ * One tab in a dock panel's strip. The active tab has no hover style; an
+ * inactive tab tints to [BorderColor] (gpui's `secondary_hover`) while the
+ * pointer rests over it.
+ */
+@Composable
+private fun WorkspaceTab(title: String, active: Boolean) {
+    val interaction = remember { MutableInteractionSource() }
+    val isHovered by interaction.collectIsHoveredAsState()
+    Box(
+        Modifier.fillMaxHeight()
+            .hoverable(interaction, enabled = !active)
+            .then(
+                when {
+                    active -> Modifier.background(Background)
+                    isHovered -> Modifier.background(BorderColor)
+                    else -> Modifier
+                },
+            )
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) { Label(title, style = sm(if (active) Foreground else MutedForeground)) }
 }
 
 private class Column_(val title: String, val width: Float, val numeric: Boolean)
@@ -754,10 +775,13 @@ private fun WatchlistRow(market: Market, ix: Int) {
     val range = ((quote.last - quote.low52) / (quote.high52 - quote.low52)).coerceIn(0.0, 1.0).toFloat()
     val spark = market.sparks[ix].copyOf().also { it[SPARK_POINTS - 1] = quote.last.toFloat() }
     val baseline = quote.prevClose.toFloat()
+    val interaction = remember { MutableInteractionSource() }
+    val isHovered by interaction.collectIsHoveredAsState()
     Row(
         Modifier.width(TABLE_WIDTH.dp).height(ROW_HEIGHT.dp)
+            .hoverable(interaction)
             .drawBehind {
-                if (ix % 2 == 1) drawRect(Stripe)
+                if (isHovered) drawRect(Muted) else if (ix % 2 == 1) drawRect(Stripe)
                 drawRect(BorderColor, Offset(0f, size.height - 1.dp.toPx()), Size(size.width, 1.dp.toPx()))
             }
             .padding(horizontal = 4.dp),
