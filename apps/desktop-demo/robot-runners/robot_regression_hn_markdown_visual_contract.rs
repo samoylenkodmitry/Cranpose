@@ -147,7 +147,7 @@ fn run_markdown_scrollbar() {
             move || {
                 let local = local_http_client();
                 let client = client.clone();
-                CompositionLocalProvider(vec![local.provides(client)], || {
+                CompositionLocalProvider([local.provides(client)], || {
                     app::MarkdownViewerRobotApp();
                 });
             }

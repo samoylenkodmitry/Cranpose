@@ -39,8 +39,7 @@ pub fn CompositionLocalProvider(
 ) {
     let site = crate::caller_location_key();
     composer_context::with_composer(|composer| {
-        let provided: Vec<ProvidedValue> = values.into_iter().collect();
-        composer.with_composition_locals(provided, site, |_composer| content());
+        composer.with_composition_locals(values, site, |_composer| content());
     });
 }
 

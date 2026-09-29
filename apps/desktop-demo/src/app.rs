@@ -1428,7 +1428,7 @@ fn text_input_example() {
             });
 
             cranpose_core::CompositionLocalProvider(
-                vec![cranpose_ui::local_on_light_surface().provides(true)],
+                [cranpose_ui::local_on_light_surface().provides(true)],
                 || {
                     let state = cranpose_core::remember(|| {
                         TextFieldState::new(
@@ -1732,7 +1732,7 @@ pub fn composition_local_example() {
             let local = local_holder();
             let count = counter.get();
 
-            CompositionLocalProvider(vec![local.provides(Holder { count })], || {
+            CompositionLocalProvider([local.provides(Holder { count })], || {
                 composition_local_content();
             });
         },

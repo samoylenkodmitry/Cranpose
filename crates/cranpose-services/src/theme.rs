@@ -247,7 +247,7 @@ pub fn local_system_theme() -> CompositionLocal<SystemTheme> {
 #[composable]
 pub fn ProvideSystemTheme(theme: SystemTheme, content: impl FnOnce()) {
     let local = local_system_theme();
-    CompositionLocalProvider(vec![local.provides(theme)], move || {
+    CompositionLocalProvider([local.provides(theme)], move || {
         content();
     });
 }

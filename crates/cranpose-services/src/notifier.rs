@@ -280,7 +280,7 @@ pub fn local_notifier() -> CompositionLocal<NotifierRef> {
 pub fn ProvideNotifier(content: impl FnOnce()) {
     let notifier = cranpose_core::remember(default_notifier).with(|state| state.clone());
     let local = local_notifier();
-    CompositionLocalProvider(vec![local.provides(notifier)], move || {
+    CompositionLocalProvider([local.provides(notifier)], move || {
         content();
     });
 }

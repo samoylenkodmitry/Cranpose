@@ -60,7 +60,7 @@ fn composition_local_provider_scopes_values() {
 
     #[composable]
     fn parent(local_counter: CompositionLocal<i32>, state: MutableState<i32>) {
-        CompositionLocalProvider(vec![local_counter.provides(state.value())], || {
+        CompositionLocalProvider([local_counter.provides(state.value())], || {
             child(local_counter.clone());
         });
     }
@@ -104,6 +104,81 @@ fn composition_local_default_value_used_outside_provider() {
 }
 
 #[test]
+fn nested_providers_shadow_and_restore_the_locals_around_them() {
+    thread_local! {
+        static READS: std::cell::RefCell<Vec<(i32, i32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    let first = compositionLocalOf(|| 0);
+    let second = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+
+    #[composable]
+    fn reader(first: CompositionLocal<i32>, second: CompositionLocal<i32>) {
+        let read = (first.current(), second.current());
+        READS.with(|reads| reads.borrow_mut().push(read));
+    }
+
+    composition
+        .render(3, || {
+            CompositionLocalProvider(
+                [first.provides(1), second.provides(2), first.provides(3)],
+                || {
+                    reader(first.clone(), second.clone());
+                    CompositionLocalProvider([second.provides(4)], || {
+                        reader(first.clone(), second.clone());
+                    });
+                    reader(first.clone(), second.clone());
+                },
+            );
+            reader(first.clone(), second.clone());
+        })
+        .expect("compose readers");
+
+    assert_eq!(
+        READS.with(std::cell::RefCell::take),
+        [(3, 2), (3, 4), (3, 2), (0, 0)],
+        "the last value for a local wins, an inner provider shadows only its own, \
+         and each provider's end restores the locals around it"
+    );
+}
+
+#[test]
+fn a_provider_restores_the_very_locals_it_was_given() {
+    let local = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+    let restored = Cell::new(false);
+
+    composition
+        .render(4, || {
+            CompositionLocalProvider([local.provides(1)], || {
+                with_current_composer(|composer| {
+                    let around = composer.current_local_stack();
+                    composer.with_composition_locals([local.provides(2)], 0, |composer| {
+                        assert_eq!(local.current(), 2);
+                        assert!(!same_locals(&composer.current_local_stack(), &around));
+                    });
+                    restored.set(same_locals(&composer.current_local_stack(), &around));
+                });
+            });
+        })
+        .expect("compose providers");
+
+    assert!(
+        restored.get(),
+        "the locals come back as the shared frame they were, not a copy of it"
+    );
+}
+
+fn same_locals(a: &crate::LocalStackSnapshot, b: &crate::LocalStackSnapshot) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+#[test]
 fn malformed_composition_local_entry_falls_back_to_default() {
     thread_local! {
         static READ_VALUE: Cell<i32> = const { Cell::new(0) };
@@ -123,7 +198,7 @@ fn malformed_composition_local_entry_falls_back_to_default() {
                 &local_counter,
                 Rc::new(String::from("wrong")) as Rc<dyn std::any::Any>,
             );
-            CompositionLocalProvider(vec![malformed], || reader(local_counter.clone()));
+            CompositionLocalProvider([malformed], || reader(local_counter.clone()));
         })
         .expect("compose malformed local provider");
 
@@ -153,7 +228,7 @@ fn composition_local_simple_subscription_test() {
     fn root(local_value: CompositionLocal<i32>, trigger: MutableState<i32>) {
         let val = trigger.value();
         println!("root sees trigger value {val}");
-        CompositionLocalProvider(vec![local_value.provides(val)], || {
+        CompositionLocalProvider([local_value.provides(val)], || {
             reader(local_value.clone());
         });
     }
@@ -213,7 +288,7 @@ fn composition_local_unchanged_value_does_not_reinvalidate_reader() {
     fn root(local_value: CompositionLocal<i32>, trigger: MutableState<i32>) {
         ROOT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
         let _ = trigger.value();
-        CompositionLocalProvider(vec![local_value.provides(7)], || {
+        CompositionLocalProvider([local_value.provides(7)], || {
             reader(local_value.clone());
         });
     }
@@ -272,7 +347,7 @@ fn composition_local_custom_policy_uses_equivalence_for_updates() {
     fn root(local_value: CompositionLocal<Arc<i32>>, provided_state: MutableState<Arc<i32>>) {
         ROOT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
         let current = provided_state.value();
-        CompositionLocalProvider(vec![local_value.provides(current)], || {
+        CompositionLocalProvider([local_value.provides(current)], || {
             reader(local_value.clone());
         });
     }
@@ -374,7 +449,7 @@ fn composition_local_tracks_reads_and_recomposes_selectively() {
     fn outside(local_count: CompositionLocal<i32>, trigger: MutableState<i32>) {
         OUTSIDE_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
         let count = trigger.value();
-        CompositionLocalProvider(vec![local_count.provides(count)], || {
+        CompositionLocalProvider([local_count.provides(count)], || {
             #[composable]
             fn reading_text(local_count: CompositionLocal<i32>) {
                 READING_TEXT_RECOMPOSITIONS.with(|c| c.set(c.get() + 1));
@@ -446,7 +521,7 @@ fn static_composition_local_provides_values() {
 
     composition
         .render(1, || {
-            CompositionLocalProvider(vec![local_counter.provides(5)], || {
+            CompositionLocalProvider([local_counter.provides(5)], || {
                 reader(local_counter.clone());
             });
         })
@@ -497,7 +572,7 @@ fn malformed_static_composition_local_entry_falls_back_to_default() {
                 &local_counter,
                 Rc::new(String::from("wrong")) as Rc<dyn std::any::Any>,
             );
-            CompositionLocalProvider(vec![malformed], || reader(local_counter.clone()));
+            CompositionLocalProvider([malformed], || reader(local_counter.clone()));
         })
         .expect("compose malformed static local provider");
 

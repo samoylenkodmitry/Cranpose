@@ -122,7 +122,7 @@ pub(crate) fn main() {
             move || {
                 let local = local_http_client();
                 let client = client.clone();
-                CompositionLocalProvider(vec![local.provides(client)], || {
+                CompositionLocalProvider([local.provides(client)], || {
                     app::combined_app();
                 });
             }

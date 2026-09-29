@@ -423,7 +423,7 @@ pub fn rememberLifecycleEvents() -> cranpose_core::EventStream<LifecycleEvent> {
 pub fn ProvideLifecycle(content: impl FnOnce()) {
     let state = rememberLifecycleState();
     let local = local_lifecycle_state();
-    cranpose_core::CompositionLocalProvider(vec![local.provides(state.get())], move || {
+    cranpose_core::CompositionLocalProvider([local.provides(state.get())], move || {
         content();
     });
 }

@@ -44,7 +44,9 @@ pub struct ModifierChainHandle {
     resolved: ResolvedModifiers,
     capabilities: NodeCapabilities,
     aggregate_child_capabilities: NodeCapabilities,
-    modifier_locals: ModifierLocalsHandle,
+    /// `None` until the chain first provides or reads a modifier local, as
+    /// most chains never do.
+    modifier_locals: Option<ModifierLocalsHandle>,
     inspector_snapshot: Vec<ModifierChainInspectorNode>,
     inspector_entry_scratch: Vec<Option<ModifierInspectorRecord>>,
     debug_logging: bool,
@@ -58,7 +60,7 @@ impl Default for ModifierChainHandle {
             resolved: ResolvedModifiers::default(),
             capabilities: NodeCapabilities::default(),
             aggregate_child_capabilities: NodeCapabilities::default(),
-            modifier_locals: Rc::new(RefCell::new(ModifierLocalManager::new())),
+            modifier_locals: None,
             inspector_snapshot: Vec::new(),
             inspector_entry_scratch: Vec::new(),
             debug_logging: false,
@@ -86,10 +88,7 @@ impl ModifierChainHandle {
             .update_from_ref_iter(modifier.iter_elements(), &mut *self.context.borrow_mut());
         self.capabilities = self.chain.capabilities();
         self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
-        let modifier_local_invalidations = self
-            .modifier_locals
-            .borrow_mut()
-            .sync(&self.chain, resolver);
+        let modifier_local_invalidations = self.sync_modifier_locals(resolver);
 
         let needs_resolved_update = {
             let ctx = self.context.borrow();
@@ -176,8 +175,27 @@ impl ModifierChainHandle {
         self.resolved
     }
 
-    pub fn modifier_locals_handle(&self) -> ModifierLocalsHandle {
-        Rc::clone(&self.modifier_locals)
+    /// The chain's modifier locals, or `None` while it has never provided or
+    /// read one.
+    pub fn modifier_locals_handle(&self) -> Option<ModifierLocalsHandle> {
+        self.modifier_locals.clone()
+    }
+
+    /// Brings the chain's modifier locals up to date, making their manager
+    /// the first time the chain provides or reads one.
+    fn sync_modifier_locals(
+        &mut self,
+        resolver: &mut ModifierLocalAncestorResolver<'_>,
+    ) -> ModifierInvalidations {
+        if self.modifier_locals.is_none()
+            && !self.chain.has_capability(NodeCapabilities::MODIFIER_LOCALS)
+        {
+            return ModifierInvalidations::new();
+        }
+        self.modifier_locals
+            .get_or_insert_with(ModifierLocalsHandle::default)
+            .borrow_mut()
+            .sync(&self.chain, resolver)
     }
 
     pub fn inspector_snapshot(&self) -> &[ModifierChainInspectorNode] {

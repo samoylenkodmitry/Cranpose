@@ -62,7 +62,7 @@ fn the_composition_local_is_one_instance_per_thread() {
     let key = location_key(file!(), line!(), column!());
     let mut render = move || {
         CompositionLocalProvider(
-            vec![local_layout_direction().provides(LayoutDirection::Rtl)],
+            [local_layout_direction().provides(LayoutDirection::Rtl)],
             || recorder.set(local_layout_direction().current()),
         );
     };

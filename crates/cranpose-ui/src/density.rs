@@ -217,7 +217,7 @@ pub fn density() -> Density {
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn ProvideDensity(density: Density, content: impl FnOnce()) {
-    CompositionLocalProvider(vec![local_density().provides(density)], content);
+    CompositionLocalProvider([local_density().provides(density)], content);
 }
 
 #[cfg(test)]
