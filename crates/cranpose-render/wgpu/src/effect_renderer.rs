@@ -22,6 +22,7 @@ use crate::{
         shader_specialization_enabled,
     },
     shaders,
+    shared_shader::SharedShader,
 };
 
 pub(crate) fn blur_scratch_size(
@@ -93,8 +94,7 @@ pub(crate) struct EffectRenderer {
     pub shader_cache: ShaderPipelineCache,
     pipeline_cache: Option<wgpu::PipelineCache>,
 
-    blur_shader: wgpu::ShaderModule,
-    blur_pipeline_layout: wgpu::PipelineLayout,
+    blur_shader: SharedShader,
     blur_pipelines: [LazyGpuResource<wgpu::RenderPipeline>; BLUR_TILE_MODES.len()],
     blur_downsample_pipelines: [[LazyGpuResource<wgpu::RenderPipeline>;
         BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()],
@@ -106,19 +106,16 @@ pub(crate) struct EffectRenderer {
     blur_uniform_uploads: Vec<UniformUpload>,
     blur_kernels: RefCell<BoundedLruCache<u32, BlurKernel>>,
 
-    offset_shader: wgpu::ShaderModule,
-    offset_pipeline_layout: wgpu::PipelineLayout,
+    offset_shader: SharedShader,
     offset_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     offset_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
-    blit_shader: wgpu::ShaderModule,
-    blit_pipeline_layout: wgpu::PipelineLayout,
+    blit_shader: SharedShader,
     blit_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
     blit_pipeline_src: [LazyGpuResource<wgpu::RenderPipeline>; 2],
     blit_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
-    projective_blit_shader: wgpu::ShaderModule,
-    projective_blit_pipeline_layout: wgpu::PipelineLayout,
+    projective_blit_shader: SharedShader,
     projective_blit_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
     projective_blit_pipeline_src: [LazyGpuResource<wgpu::RenderPipeline>; 2],
     projective_blit_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
@@ -886,8 +883,7 @@ fn fullscreen_pipeline_job(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
+    shader: &SharedShader,
     fragment_entry: &'static str,
     constants: &[(&'static str, f64)],
     surface_format: wgpu::TextureFormat,
@@ -895,7 +891,6 @@ fn fullscreen_pipeline_job(
 ) -> FixedPipelineJob {
     let device = device.clone();
     let cache = cache.cloned();
-    let layout = layout.clone();
     let shader = shader.clone();
     let constants = constants.to_vec();
     Box::new(move || {
@@ -904,8 +899,8 @@ fn fullscreen_pipeline_job(
             cache.as_ref(),
             &format!("effect {label} entry={fragment_entry}"),
             label,
-            &layout,
-            &shader,
+            shader.layout(),
+            shader.module(),
             fragment_entry,
             &constants,
             wgpu::ColorTargetState {
@@ -917,32 +912,30 @@ fn fullscreen_pipeline_job(
     })
 }
 
-#[expect(clippy::too_many_arguments)]
 fn projective_pipeline_job(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
+    shader: &SharedShader,
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
     texels: bool,
 ) -> FixedPipelineJob {
     let device = device.clone();
     let cache = cache.cloned();
-    let layout = layout.clone();
     let shader = shader.clone();
     let constants = [("PROJECTIVE_TEXELS", if texels { 1.0 } else { 0.0 })];
     Box::new(move || {
+        let module = shader.module();
         crate::render::create_render_pipeline_logged(
             &device,
             cache.as_ref(),
             &format!("effect {label}"),
             wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&layout),
+                layout: Some(shader.layout()),
                 vertex: wgpu::VertexState {
-                    module: &shader,
+                    module,
                     entry_point: Some("projective_blit_vs"),
                     buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
@@ -959,7 +952,7 @@ fn projective_pipeline_job(
                     },
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &shader,
+                    module,
                     entry_point: Some("projective_blit_fs"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: surface_format,
@@ -1043,55 +1036,46 @@ impl EffectRenderer {
                 }],
             });
 
-        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Blur Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::blur_shader().into()),
-        });
-
-        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Blur Pipeline Layout"),
-            bind_group_layouts: &[
+        let blur_shader = SharedShader::new(
+            device,
+            adapter_backend,
+            "Blur Shader",
+            || shaders::blur_shader().into(),
+            &[
                 Some(&effect_texture_bind_group_layout),
                 Some(&blur_uniform_bind_group_layout),
             ],
-            immediate_size: 0,
-        });
+        );
 
         let blur_pipelines = BLUR_TILE_MODES.map(|_| LazyGpuResource::new("effect/blur"));
         let blur_downsample_pipelines = BLUR_TILE_MODES.map(|_| {
             BLUR_DOWNSAMPLE_BLOCKS.map(|_| LazyGpuResource::new("effect/blur-downsample"))
         });
 
-        let offset_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Offset Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::offset_shader().into()),
-        });
-
-        let offset_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Offset Pipeline Layout"),
-                bind_group_layouts: &[
-                    Some(&effect_texture_bind_group_layout),
-                    Some(&offset_uniform_bind_group_layout),
-                ],
-                immediate_size: 0,
-            });
+        let offset_shader = SharedShader::new(
+            device,
+            adapter_backend,
+            "Offset Shader",
+            || shaders::offset_shader().into(),
+            &[
+                Some(&effect_texture_bind_group_layout),
+                Some(&offset_uniform_bind_group_layout),
+            ],
+        );
 
         let offset_pipeline = LazyGpuResource::new("effect/offset");
 
-        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Blit Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::blit_shader().into()),
-        });
-
-        let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Blit Pipeline Layout"),
-            bind_group_layouts: &[
-                Some(&effect_texture_bind_group_layout),
-                Some(&blit_uniform_bind_group_layout),
-            ],
-            immediate_size: 0,
-        });
+        let blit_layouts = [
+            Some(&effect_texture_bind_group_layout),
+            Some(&blit_uniform_bind_group_layout),
+        ];
+        let blit_shader = SharedShader::new(
+            device,
+            adapter_backend,
+            "Blit Shader",
+            || shaders::blit_shader().into(),
+            &blit_layouts,
+        );
 
         let blit_pipeline = [
             LazyGpuResource::new("effect/blit-src-over"),
@@ -1106,19 +1090,13 @@ impl EffectRenderer {
             LazyGpuResource::new("effect/blit-dst-out-nearest-unmasked"),
         ];
 
-        let projective_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Projective Blit Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::projective_blit_shader().into()),
-        });
-        let projective_blit_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Projective Blit Pipeline Layout"),
-                bind_group_layouts: &[
-                    Some(&effect_texture_bind_group_layout),
-                    Some(&blit_uniform_bind_group_layout),
-                ],
-                immediate_size: 0,
-            });
+        let projective_blit_shader = SharedShader::new(
+            device,
+            adapter_backend,
+            "Projective Blit Shader",
+            || shaders::projective_blit_shader().into(),
+            &blit_layouts,
+        );
         let projective_blit_pipeline = [
             LazyGpuResource::new("effect/projective-src-over"),
             LazyGpuResource::new("effect/projective-src-over-texels"),
@@ -1153,7 +1131,6 @@ impl EffectRenderer {
             ),
             pipeline_cache,
             blur_shader,
-            blur_pipeline_layout,
             blur_pipelines,
             blur_downsample_pipelines,
             blur_mean_pipeline: LazyGpuResource::new("effect/mean"),
@@ -1165,17 +1142,14 @@ impl EffectRenderer {
                 MAX_BLUR_KERNEL_CACHE_ITEMS,
             )),
             offset_shader,
-            offset_pipeline_layout,
             offset_pipeline,
             offset_uniform_bind_group_layout,
             blit_shader,
-            blit_pipeline_layout,
             blit_pipeline,
             blit_pipeline_src,
             blit_pipeline_dst_out,
             blit_uniform_bind_group_layout,
             projective_blit_shader,
-            projective_blit_pipeline_layout,
             projective_blit_pipeline,
             projective_blit_pipeline_src,
             projective_blit_pipeline_dst_out,
@@ -1211,7 +1185,6 @@ impl EffectRenderer {
             device,
             self.pipeline_cache.as_ref(),
             "Blur Pipeline",
-            &self.blur_pipeline_layout,
             &self.blur_shader,
             "blur_fs",
             &[("BLUR_TILE_MODE", tile_mode as f64)],
@@ -1283,7 +1256,6 @@ impl EffectRenderer {
             device,
             self.pipeline_cache.as_ref(),
             "Mean Pipeline",
-            &self.blur_pipeline_layout,
             &self.blur_shader,
             "blur_mean_fs",
             &[],
@@ -1302,7 +1274,6 @@ impl EffectRenderer {
             device,
             self.pipeline_cache.as_ref(),
             "Blur Downsample Pipeline",
-            &self.blur_pipeline_layout,
             &self.blur_shader,
             "blur_downsample_fs",
             &[
@@ -1319,7 +1290,6 @@ impl EffectRenderer {
             device,
             self.pipeline_cache.as_ref(),
             "Offset Pipeline",
-            &self.offset_pipeline_layout,
             &self.offset_shader,
             "offset_fs",
             &[],
@@ -1372,7 +1342,6 @@ impl EffectRenderer {
             device,
             self.pipeline_cache.as_ref(),
             label,
-            &self.blit_pipeline_layout,
             &self.blit_shader,
             "blit_fs",
             &[(
@@ -1446,7 +1415,6 @@ impl EffectRenderer {
             device,
             self.pipeline_cache.as_ref(),
             label,
-            &self.projective_blit_pipeline_layout,
             &self.projective_blit_shader,
             self.surface_format,
             blend,

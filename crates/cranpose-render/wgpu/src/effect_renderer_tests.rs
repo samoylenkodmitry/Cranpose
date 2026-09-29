@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::*;
 use crate::frame_graph::{
     PassContext, WgpuFrameGraph, WgpuFrameGraphExecutor, read_uploaded_bytes,
@@ -108,15 +110,20 @@ fn patterned_source(device: &wgpu::Device, queue: &wgpu::Queue) -> OffscreenTarg
     source
 }
 
+/// The blur shader with its tile mode read at run time, which every
+/// specialization must match pixel for pixel.
+fn dynamic_blur_source() -> Cow<'static, str> {
+    Cow::Owned(format!(
+        "{}{}",
+        shaders::FULLSCREEN_QUAD_VS,
+        include_str!("../tests/fixtures/blur_tile_reference.wgsl"),
+    ))
+}
+
 #[test]
 fn mixed_blur_tile_modes_preserve_dynamic_shader_pixels() {
     let (_lock, device, queue) = crate::frame_graph::upload_test_device();
     let source = patterned_source(&device, &queue);
-    let dynamic = format!(
-        "{}{}",
-        shaders::FULLSCREEN_QUAD_VS,
-        include_str!("../tests/fixtures/blur_tile_reference.wgsl"),
-    );
     for format in [
         wgpu::TextureFormat::Rgba8Unorm,
         wgpu::TextureFormat::Rgba16Float,
@@ -130,10 +137,16 @@ fn mixed_blur_tile_modes_preserve_dynamic_shader_pixels() {
                 device.adapter_info().backend,
             );
             if reference {
-                renderer.blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Dynamic Blur Tile Reference"),
-                    source: wgpu::ShaderSource::Wgsl(dynamic.clone().into()),
-                });
+                renderer.blur_shader = SharedShader::new(
+                    &device,
+                    device.adapter_info().backend,
+                    "Dynamic Blur Tile Reference",
+                    dynamic_blur_source,
+                    &[
+                        Some(&renderer.effect_texture_bind_group_layout),
+                        Some(&renderer.blur_uniform_bind_group_layout),
+                    ],
+                );
             }
             renderer
         });
