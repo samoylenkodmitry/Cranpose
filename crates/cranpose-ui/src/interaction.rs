@@ -26,15 +26,37 @@ pub struct MutableInteractionSource {
 }
 
 struct MutableInteractionSourceInner {
-    next_press_id: RefCell<u64>,
+    next_id: RefCell<u64>,
     active_presses: RefCell<HashSet<u64>>,
+    active_hovers: RefCell<HashSet<u64>>,
     pressed: OwnedMutableState<bool>,
+    hovered: OwnedMutableState<bool>,
     last_interaction: OwnedMutableState<Option<Interaction>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Interaction {
     Press(PressInteraction),
+    Hover(HoverInteraction),
+}
+
+/// The pointer resting over a node: Compose's `HoverInteraction`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HoverInteraction {
+    Enter(HoverInteractionEnter),
+    Exit(HoverInteractionExit),
+}
+
+/// A pointer came to rest over a node.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HoverInteractionEnter {
+    id: u64,
+}
+
+/// The pointer that [`Self::enter`] reported left.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HoverInteractionExit {
+    pub enter: HoverInteractionEnter,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,9 +92,11 @@ impl MutableInteractionSource {
         Self {
             inner: MutableState::with_runtime(
                 Rc::new(MutableInteractionSourceInner {
-                    next_press_id: RefCell::new(1),
+                    next_id: RefCell::new(1),
                     active_presses: RefCell::new(HashSet::new()),
+                    active_hovers: RefCell::new(HashSet::new()),
                     pressed: OwnedMutableState::with_runtime(false, runtime.clone()),
+                    hovered: OwnedMutableState::with_runtime(false, runtime.clone()),
                     last_interaction: OwnedMutableState::with_runtime(None, runtime.clone()),
                 }),
                 runtime,
@@ -90,15 +114,20 @@ impl MutableInteractionSource {
         hasher.finish()
     }
 
-    pub fn press(&self, press_position: Point) -> PressInteractionPress {
+    /// The next id this source hands an interaction.
+    fn next_id(&self) -> u64 {
         let inner = self.inner();
-        let id = {
-            let mut next_press_id = inner.next_press_id.borrow_mut();
-            let id = *next_press_id;
-            *next_press_id = id.saturating_add(1);
-            id
+        let mut next_id = inner.next_id.borrow_mut();
+        let id = *next_id;
+        *next_id = id.saturating_add(1);
+        id
+    }
+
+    pub fn press(&self, press_position: Point) -> PressInteractionPress {
+        let press = PressInteractionPress {
+            id: self.next_id(),
+            press_position,
         };
-        let press = PressInteractionPress { id, press_position };
         self.emit(Interaction::Press(PressInteraction::Press(press)));
         press
     }
@@ -115,27 +144,53 @@ impl MutableInteractionSource {
         )));
     }
 
+    /// Reports that a pointer came to rest over a node, Compose's
+    /// `emit(HoverInteraction.Enter())`, and returns the enter to end it
+    /// with.
+    pub fn enter_hover(&self) -> HoverInteractionEnter {
+        let enter = HoverInteractionEnter { id: self.next_id() };
+        self.emit(Interaction::Hover(HoverInteraction::Enter(enter)));
+        enter
+    }
+
+    /// Reports that the pointer `enter` reported left.
+    pub fn exit_hover(&self, enter: HoverInteractionEnter) {
+        self.emit(Interaction::Hover(HoverInteraction::Exit(
+            HoverInteractionExit { enter },
+        )));
+    }
+
     pub fn emit(&self, interaction: Interaction) {
         let inner = self.inner();
         inner.last_interaction.set(Some(interaction));
-        let is_pressed = {
-            let mut active_presses = inner.active_presses.borrow_mut();
-            match interaction {
-                Interaction::Press(PressInteraction::Press(press)) => {
-                    active_presses.insert(press.id);
-                }
-                Interaction::Press(PressInteraction::Release(release)) => {
-                    active_presses.remove(&release.press.id);
-                }
-                Interaction::Press(PressInteraction::Cancel(cancel)) => {
-                    active_presses.remove(&cancel.press.id);
-                }
+        let (active, state, id, starts) = match interaction {
+            Interaction::Press(press) => {
+                let (id, starts) = match press {
+                    PressInteraction::Press(press) => (press.id, true),
+                    PressInteraction::Release(release) => (release.press.id, false),
+                    PressInteraction::Cancel(cancel) => (cancel.press.id, false),
+                };
+                (&inner.active_presses, &inner.pressed, id, starts)
             }
-            !active_presses.is_empty()
+            Interaction::Hover(hover) => {
+                let (id, starts) = match hover {
+                    HoverInteraction::Enter(enter) => (enter.id, true),
+                    HoverInteraction::Exit(exit) => (exit.enter.id, false),
+                };
+                (&inner.active_hovers, &inner.hovered, id, starts)
+            }
         };
-
-        if inner.pressed.get_non_reactive() != is_pressed {
-            inner.pressed.set(is_pressed);
+        let any = {
+            let mut active = active.borrow_mut();
+            if starts {
+                active.insert(id);
+            } else {
+                active.remove(&id);
+            }
+            !active.is_empty()
+        };
+        if state.get_non_reactive() != any {
+            state.set(any);
         }
     }
 
@@ -153,12 +208,27 @@ impl MutableInteractionSource {
         self.inner().pressed.as_state()
     }
 
+    /// Returns whether a pointer rests over a node of this source as a
+    /// reactive [`State`]: `true` from a `HoverInteraction::Enter` until
+    /// every enter has seen its `HoverInteraction::Exit`.
+    ///
+    /// Mirrors Jetpack Compose: `InteractionSource.collectIsHoveredAsState()`.
+    pub fn collectIsHoveredAsState(&self) -> State<bool> {
+        self.inner().hovered.as_state()
+    }
+
     pub fn collectLastInteractionAsState(&self) -> State<Option<Interaction>> {
         self.inner().last_interaction.as_state()
     }
 }
 
 impl PressInteractionPress {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+impl HoverInteractionEnter {
     pub fn id(&self) -> u64 {
         self.id
     }
@@ -204,60 +274,202 @@ pub fn collect_is_pressed_as_state(interaction_source: &MutableInteractionSource
     interaction_source.collectIsPressedAsState()
 }
 
+/// Free-function form of
+/// [`MutableInteractionSource::collectIsHoveredAsState`].
+///
+/// Mirrors Jetpack Compose: `InteractionSource.collectIsHoveredAsState()`.
+pub fn collect_is_hovered_as_state(interaction_source: &MutableInteractionSource) -> State<bool> {
+    interaction_source.collectIsHoveredAsState()
+}
+
 impl Modifier {
     pub fn press_interaction_source(self, interaction_source: MutableInteractionSource) -> Self {
+        self.interaction_node("pressInteractionSource", interaction_source, PressTracker)
+    }
+
+    /// Reports the pointer resting over this node to `interaction_source` as
+    /// a `HoverInteraction::Enter`, and its leaving as the matching
+    /// `HoverInteraction::Exit`, while `enabled`. Disabling the node or
+    /// removing it ends a hover it reported. Compose's
+    /// `Modifier.hoverable(interactionSource, enabled)`.
+    ///
+    /// Example: `let hovered = source.collectIsHoveredAsState();` and
+    /// `Modifier::empty().hoverable(source, true)` on the row it tints.
+    pub fn hoverable(self, interaction_source: MutableInteractionSource, enabled: bool) -> Self {
+        self.interaction_node("hoverable", interaction_source, HoverTracker { enabled })
+    }
+
+    fn interaction_node<T: InteractionTracker>(
+        self,
+        name: &'static str,
+        interaction_source: MutableInteractionSource,
+        tracker: T,
+    ) -> Self {
         let source_id = interaction_source.id();
-        let modifier = Self::with_element(PressInteractionElement::new(interaction_source))
-            .with_inspector_metadata(inspector_metadata("pressInteractionSource", move |info| {
-                info.add_property("sourceId", source_id.to_string());
-            }));
+        let modifier = Self::with_element(InteractionElement {
+            interaction_source,
+            tracker,
+        })
+        .with_inspector_metadata(inspector_metadata(name, move |info| {
+            info.add_property("sourceId", source_id.to_string());
+        }));
         self.then(modifier)
     }
 }
 
-#[derive(Clone)]
-struct PressInteractionElement {
-    interaction_source: MutableInteractionSource,
+/// What a pointer node reports to an interaction source: which pointer
+/// events start and end the interaction it tracks, and how to end one
+/// early.
+trait InteractionTracker: Copy + PartialEq + std::fmt::Debug + Hash + 'static {
+    /// The interaction the node holds while it lasts.
+    type Active: Copy + 'static;
+
+    /// Feeds the primary pointer's `event` to `source`, starting or ending
+    /// the interaction `active` holds.
+    fn handle(
+        self,
+        source: MutableInteractionSource,
+        active: &RefCell<Option<Self::Active>>,
+        event: &PointerEvent,
+    );
+
+    /// Ends `active` early: the node left, or stopped tracking.
+    fn end(source: MutableInteractionSource, active: Self::Active);
 }
 
-impl PressInteractionElement {
-    fn new(interaction_source: MutableInteractionSource) -> Self {
-        Self { interaction_source }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PressTracker;
+
+impl InteractionTracker for PressTracker {
+    type Active = PressInteractionPress;
+
+    fn handle(
+        self,
+        source: MutableInteractionSource,
+        active: &RefCell<Option<PressInteractionPress>>,
+        event: &PointerEvent,
+    ) {
+        if event.is_consumed() {
+            if let Some(press) = active.borrow_mut().take() {
+                source.cancel(press);
+            }
+            return;
+        }
+        match event.kind {
+            PointerEventKind::Down => {
+                if active.borrow().is_none() {
+                    *active.borrow_mut() = Some(source.press(event.position));
+                }
+            }
+            PointerEventKind::Up => {
+                if let Some(press) = active.borrow_mut().take() {
+                    source.release(press);
+                }
+            }
+            PointerEventKind::Cancel => {
+                if let Some(press) = active.borrow_mut().take() {
+                    source.cancel(press);
+                }
+            }
+            PointerEventKind::Move
+            | PointerEventKind::Scroll
+            | PointerEventKind::Zoom
+            | PointerEventKind::RotaryScrollPre
+            | PointerEventKind::RotaryScroll
+            | PointerEventKind::Enter
+            | PointerEventKind::Exit => {}
+        }
+    }
+
+    fn end(source: MutableInteractionSource, active: PressInteractionPress) {
+        source.cancel(active);
     }
 }
 
-impl std::fmt::Debug for PressInteractionElement {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct HoverTracker {
+    enabled: bool,
+}
+
+impl InteractionTracker for HoverTracker {
+    type Active = HoverInteractionEnter;
+
+    fn handle(
+        self,
+        source: MutableInteractionSource,
+        active: &RefCell<Option<HoverInteractionEnter>>,
+        event: &PointerEvent,
+    ) {
+        match event.kind {
+            PointerEventKind::Enter | PointerEventKind::Move
+                if self.enabled && active.borrow().is_none() =>
+            {
+                *active.borrow_mut() = Some(source.enter_hover());
+            }
+            PointerEventKind::Exit => {
+                if let Some(enter) = active.borrow_mut().take() {
+                    source.exit_hover(enter);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn end(source: MutableInteractionSource, active: HoverInteractionEnter) {
+        source.exit_hover(active);
+    }
+}
+
+#[derive(Clone)]
+struct InteractionElement<T> {
+    interaction_source: MutableInteractionSource,
+    tracker: T,
+}
+
+impl<T: InteractionTracker> std::fmt::Debug for InteractionElement<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PressInteractionElement")
+        f.debug_struct("InteractionElement")
             .field("source_id", &self.interaction_source.id())
+            .field("tracker", &self.tracker)
             .finish()
     }
 }
 
-impl PartialEq for PressInteractionElement {
+impl<T: InteractionTracker> PartialEq for InteractionElement<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.interaction_source == other.interaction_source
+        self.interaction_source == other.interaction_source && self.tracker == other.tracker
     }
 }
 
-impl Eq for PressInteractionElement {}
+impl<T: InteractionTracker> Eq for InteractionElement<T> {}
 
-impl Hash for PressInteractionElement {
+impl<T: InteractionTracker> Hash for InteractionElement<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        "pressInteractionSource".hash(state);
+        self.tracker.hash(state);
         self.interaction_source.id().hash(state);
     }
 }
 
-impl ModifierNodeElement for PressInteractionElement {
-    type Node = PressInteractionNode;
+impl<T: InteractionTracker> ModifierNodeElement for InteractionElement<T> {
+    type Node = InteractionNode<T>;
 
     fn create(&self) -> Self::Node {
-        PressInteractionNode::new(self.interaction_source)
+        let active = Rc::new(RefCell::new(None));
+        InteractionNode {
+            interaction_source: self.interaction_source,
+            tracker: self.tracker,
+            cached_handler: InteractionNode::handler(
+                self.interaction_source,
+                self.tracker,
+                active.clone(),
+            ),
+            active,
+            state: NodeState::new(),
+        }
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.update(self.interaction_source);
+        node.update(self.interaction_source, self.tracker);
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -265,97 +477,60 @@ impl ModifierNodeElement for PressInteractionElement {
     }
 }
 
-struct PressInteractionNode {
+struct InteractionNode<T: InteractionTracker> {
     interaction_source: MutableInteractionSource,
-    active_press: Rc<RefCell<Option<PressInteractionPress>>>,
+    tracker: T,
+    active: Rc<RefCell<Option<T::Active>>>,
     cached_handler: Rc<dyn Fn(PointerEvent)>,
     state: NodeState,
 }
 
-impl PressInteractionNode {
-    fn new(interaction_source: MutableInteractionSource) -> Self {
-        let active_press = Rc::new(RefCell::new(None));
-        let cached_handler = Self::create_handler(interaction_source, active_press.clone());
-        Self {
-            interaction_source,
-            active_press,
-            cached_handler,
-            state: NodeState::new(),
-        }
-    }
-
-    fn update(&mut self, interaction_source: MutableInteractionSource) {
-        if self.interaction_source == interaction_source {
+impl<T: InteractionTracker> InteractionNode<T> {
+    fn update(&mut self, interaction_source: MutableInteractionSource, tracker: T) {
+        if self.interaction_source == interaction_source && self.tracker == tracker {
             return;
         }
-        if let Some(press) = self.active_press.borrow_mut().take() {
-            self.interaction_source.cancel(press);
-        }
+        self.end_active();
         self.interaction_source = interaction_source;
-        self.cached_handler =
-            Self::create_handler(self.interaction_source, self.active_press.clone());
+        self.tracker = tracker;
+        self.cached_handler = Self::handler(interaction_source, tracker, self.active.clone());
     }
 
-    fn create_handler(
+    fn end_active(&self) {
+        if let Some(active) = self.active.borrow_mut().take() {
+            T::end(self.interaction_source, active);
+        }
+    }
+
+    fn handler(
         interaction_source: MutableInteractionSource,
-        active_press: Rc<RefCell<Option<PressInteractionPress>>>,
+        tracker: T,
+        active: Rc<RefCell<Option<T::Active>>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
-            if event.id != 0 {
-                return;
-            }
-
-            if event.is_consumed() {
-                if let Some(press) = active_press.borrow_mut().take() {
-                    interaction_source.cancel(press);
-                }
-                return;
-            }
-
-            match event.kind {
-                PointerEventKind::Down => {
-                    if active_press.borrow().is_none() {
-                        let press = interaction_source.press(event.position);
-                        *active_press.borrow_mut() = Some(press);
-                    }
-                }
-                PointerEventKind::Up => {
-                    if let Some(press) = active_press.borrow_mut().take() {
-                        interaction_source.release(press);
-                    }
-                }
-                PointerEventKind::Cancel => {
-                    if let Some(press) = active_press.borrow_mut().take() {
-                        interaction_source.cancel(press);
-                    }
-                }
-                PointerEventKind::Move
-                | PointerEventKind::Scroll
-                | PointerEventKind::Zoom
-                | PointerEventKind::RotaryScrollPre
-                | PointerEventKind::RotaryScroll
-                | PointerEventKind::Enter
-                | PointerEventKind::Exit => {}
+            if event.id == 0 {
+                tracker.handle(interaction_source, &active, &event);
             }
         })
     }
 }
 
-impl std::fmt::Debug for PressInteractionNode {
+impl<T: InteractionTracker> std::fmt::Debug for InteractionNode<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PressInteractionNode")
+        f.debug_struct("InteractionNode")
             .field("source_id", &self.interaction_source.id())
+            .field("tracker", &self.tracker)
             .finish()
     }
 }
 
-impl DelegatableNode for PressInteractionNode {
+impl<T: InteractionTracker> DelegatableNode for InteractionNode<T> {
     fn node_state(&self) -> &NodeState {
         &self.state
     }
 }
 
-impl ModifierNode for PressInteractionNode {
+impl<T: InteractionTracker> ModifierNode for InteractionNode<T> {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         context.invalidate(InvalidationKind::PointerInput);
     }
@@ -369,13 +544,11 @@ impl ModifierNode for PressInteractionNode {
     }
 
     fn on_detach(&mut self) {
-        if let Some(press) = self.active_press.borrow_mut().take() {
-            self.interaction_source.cancel(press);
-        }
+        self.end_active();
     }
 }
 
-impl PointerInputNode for PressInteractionNode {
+impl<T: InteractionTracker> PointerInputNode for InteractionNode<T> {
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
         Some(self.cached_handler.clone())
     }

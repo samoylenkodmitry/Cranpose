@@ -153,3 +153,105 @@ fn interaction_source_exposes_latest_interaction() {
         )))
     );
 }
+
+#[test]
+fn interaction_source_tracks_active_hover_state() {
+    let composition = Composition::new(MemoryApplier::new());
+    let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
+    let hovered = source.collectIsHoveredAsState();
+    let pressed = source.collectIsPressedAsState();
+    assert!(!hovered.get());
+
+    let first = source.enter_hover();
+    let second = source.enter_hover();
+    assert!(hovered.get());
+    assert!(!pressed.get(), "a hover is not a press");
+    assert_ne!(first.id(), second.id());
+    source.exit_hover(first);
+    assert!(hovered.get(), "one hover still rests over the source");
+    source.exit_hover(second);
+    assert!(!hovered.get());
+    assert_eq!(
+        source.collectLastInteractionAsState().get(),
+        Some(Interaction::Hover(HoverInteraction::Exit(
+            HoverInteractionExit { enter: second }
+        )))
+    );
+    assert!(!collect_is_hovered_as_state(&source).get());
+}
+
+fn hover_node(source: MutableInteractionSource, enabled: bool) -> InteractionNode<HoverTracker> {
+    InteractionElement {
+        interaction_source: source,
+        tracker: HoverTracker { enabled },
+    }
+    .create()
+}
+
+fn deliver(node: &InteractionNode<HoverTracker>, kind: PointerEventKind) {
+    let handler = node.pointer_input_handler().expect("a pointer handler");
+    handler(PointerEvent::new(kind, Point::ZERO, Point::ZERO));
+}
+
+#[test]
+fn a_hoverable_node_reports_the_pointer_entering_and_leaving() {
+    let composition = Composition::new(MemoryApplier::new());
+    let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
+    let hovered = source.collectIsHoveredAsState();
+    let node = hover_node(source, true);
+
+    deliver(&node, PointerEventKind::Enter);
+    assert!(hovered.get());
+    deliver(&node, PointerEventKind::Enter);
+    deliver(&node, PointerEventKind::Exit);
+    assert!(!hovered.get(), "a second enter does not stack");
+    deliver(&node, PointerEventKind::Move);
+    assert!(
+        hovered.get(),
+        "a move over a node that saw no enter, as one that appeared under the pointer, enters"
+    );
+}
+
+#[test]
+fn a_disabled_or_removed_hoverable_ends_its_hover() {
+    let composition = Composition::new(MemoryApplier::new());
+    let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
+    let hovered = source.collectIsHoveredAsState();
+
+    let mut node = hover_node(source, false);
+    deliver(&node, PointerEventKind::Enter);
+    assert!(!hovered.get(), "a disabled node reports nothing");
+
+    InteractionElement {
+        interaction_source: source,
+        tracker: HoverTracker { enabled: true },
+    }
+    .update(&mut node);
+    deliver(&node, PointerEventKind::Enter);
+    assert!(hovered.get());
+    InteractionElement {
+        interaction_source: source,
+        tracker: HoverTracker { enabled: false },
+    }
+    .update(&mut node);
+    assert!(!hovered.get(), "disabling the node ends its hover");
+
+    let mut node = hover_node(source, true);
+    deliver(&node, PointerEventKind::Enter);
+    assert!(hovered.get());
+    node.on_detach();
+    assert!(!hovered.get(), "removing the node ends its hover");
+
+    let other = MutableInteractionSource::with_runtime(composition.runtime_handle());
+    let mut node = hover_node(source, true);
+    deliver(&node, PointerEventKind::Enter);
+    InteractionElement {
+        interaction_source: other,
+        tracker: HoverTracker { enabled: true },
+    }
+    .update(&mut node);
+    assert!(
+        !hovered.get(),
+        "moving the node to another source ends the hover it reported to the first"
+    );
+}

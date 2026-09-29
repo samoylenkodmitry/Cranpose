@@ -113,8 +113,9 @@ pub use focus_order::{
 };
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use interaction::{
-    Interaction, MutableInteractionSource, PressInteraction, PressInteractionCancel,
-    PressInteractionPress, PressInteractionRelease, collect_is_pressed_as_state,
+    HoverInteraction, HoverInteractionEnter, HoverInteractionExit, Interaction,
+    MutableInteractionSource, PressInteraction, PressInteractionCancel, PressInteractionPress,
+    PressInteractionRelease, collect_is_hovered_as_state, collect_is_pressed_as_state,
     rememberMutableInteractionSource,
 };
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
