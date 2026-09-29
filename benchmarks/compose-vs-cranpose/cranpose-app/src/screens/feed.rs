@@ -254,11 +254,7 @@ fn PostHeader(post: Rc<Post>, s: f32) {
 #[composable]
 fn MediaChart(post: Rc<Post>, s: f32) {
     let height = 140.0 * s;
-    let gradient = Brush::vertical_gradient(
-        vec![PALETTE[post.color], GRADIENT_END[post.color]],
-        0.0,
-        height,
-    );
+    let gradient = Brush::solid(PALETTE[post.color]);
     let bar_brush = Brush::solid(Color::rgba(1.0, 1.0, 1.0, 0.8));
     let bubble_brush = Brush::solid(Color::rgba(1.0, 1.0, 1.0, 0.25));
     Box(
