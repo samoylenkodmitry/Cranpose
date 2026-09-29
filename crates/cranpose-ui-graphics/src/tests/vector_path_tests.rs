@@ -234,3 +234,40 @@ fn empty_and_degenerate_paths_produce_empty_masks() {
     let mask = path.coverage_mask(8, 8, Point::ZERO, 1.0);
     assert!(mask.iter().all(|&value| value == 0));
 }
+
+/// FNV-1a over a mask's bytes, so a test pins every coverage value.
+fn mask_checksum(mask: &[u8]) -> u64 {
+    mask.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+#[test]
+fn coverage_masks_of_curved_self_crossing_paths_keep_every_value() {
+    let star = "M 50 2 L 61 38 L 98 38 L 68 60 L 79 96 L 50 74 L 21 96 L 32 60 L 2 38 L 39 38 Z";
+    let curve = "M 4 90 C 20 10 40 110 60 40 S 90 5 96 70 L 96 98 L 4 98 Z";
+    let spark = "M 0 30 L 7 22 L 13 26 L 20 11 L 26 17 L 33 6 L 39 19 L 46 14 L 52 24 L 59 9 \
+                 L 65 12 L 72 3 L 78 15 L 85 10 L 91 21 L 98 18 L 98 40 L 0 40 Z";
+    let cases = [
+        (star, PathFillRule::NonZero, Point::ZERO, 1.0),
+        (star, PathFillRule::EvenOdd, Point::new(0.5, 0.25), 1.37),
+        (curve, PathFillRule::NonZero, Point::new(-3.0, 2.0), 0.83),
+        (spark, PathFillRule::NonZero, Point::ZERO, 2.625),
+    ];
+    let checksums: Vec<u64> = cases
+        .iter()
+        .map(|&(d, fill_rule, origin, scale)| {
+            let path = VectorPath::parse_with_fill_rule(d, fill_rule).expect("valid path");
+            mask_checksum(&path.coverage_mask(137, 109, origin, scale))
+        })
+        .collect();
+    assert_eq!(checksums, GOLDEN_COVERAGE_CHECKSUMS);
+}
+/// The masks the scanline rasterizer drew when these were recorded: a change
+/// to how it walks edges or adds spans must leave every byte alone.
+const GOLDEN_COVERAGE_CHECKSUMS: [u64; 4] = [
+    10_165_060_571_465_318_907,
+    8_478_606_399_201_302_132,
+    15_335_880_165_108_163_399,
+    12_358_567_486_535_341_188,
+];

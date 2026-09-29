@@ -159,107 +159,151 @@ impl VectorPath {
         if width == 0 || height == 0 || scale <= 0.0 {
             return mask;
         }
-
-        struct Edge {
-            top: Point,
-            bottom: Point,
-            winding: i32,
-        }
-        let mut edges = Vec::new();
-        for subpath in &self.subpaths {
-            if subpath.len() < 3 {
-                continue;
-            }
-            let map = |p: &Point| Point::new((p.x - origin.x) * scale, (p.y - origin.y) * scale);
-            for i in 0..subpath.len() {
-                let a = map(&subpath[i]);
-                let b = map(&subpath[(i + 1) % subpath.len()]);
-                if a.y == b.y {
-                    continue;
-                }
-                if a.y < b.y {
-                    edges.push(Edge {
-                        top: a,
-                        bottom: b,
-                        winding: 1,
-                    });
-                } else {
-                    edges.push(Edge {
-                        top: b,
-                        bottom: a,
-                        winding: -1,
-                    });
-                }
-            }
-        }
+        let mut edges = self.scanline_edges(origin, scale);
         if edges.is_empty() {
             return mask;
         }
-
-        let mut crossings: Vec<(f32, i32)> = Vec::new();
+        edges.sort_by(|a, b| a.top.y.total_cmp(&b.top.y));
+        let mut scanner = EdgeScanner::new(&edges);
         let mut row_coverage = vec![0.0f32; width];
         let subsample_weight = 1.0 / SUBSAMPLES as f32;
-
-        for row in 0..height {
+        for (row, mask_row) in mask.chunks_exact_mut(width).enumerate() {
             row_coverage.fill(0.0);
             let mut row_touched = false;
-
             for sub in 0..SUBSAMPLES {
                 let sample_y = row as f32 + (sub as f32 + 0.5) * subsample_weight;
-
-                crossings.clear();
-                for edge in &edges {
-                    if edge.top.y <= sample_y && sample_y < edge.bottom.y {
-                        let t = (sample_y - edge.top.y) / (edge.bottom.y - edge.top.y);
-                        let x = edge.top.x + t * (edge.bottom.x - edge.top.x);
-                        crossings.push((x, edge.winding));
-                    }
-                }
-                if crossings.len() < 2 {
-                    continue;
-                }
-                crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
-
-                let mut winding = 0i32;
-                let mut span_start = 0.0f32;
-                for &(x, direction) in &crossings {
-                    let was_inside = match self.fill_rule {
-                        PathFillRule::NonZero => winding != 0,
-                        PathFillRule::EvenOdd => winding % 2 != 0,
-                    };
-                    winding += match self.fill_rule {
-                        PathFillRule::NonZero => direction,
-                        PathFillRule::EvenOdd => 1,
-                    };
-                    let is_inside = match self.fill_rule {
-                        PathFillRule::NonZero => winding != 0,
-                        PathFillRule::EvenOdd => winding % 2 != 0,
-                    };
-                    if !was_inside && is_inside {
-                        span_start = x;
-                    } else if was_inside && !is_inside {
-                        row_touched |= accumulate_span(
-                            &mut row_coverage,
-                            span_start,
-                            x,
-                            subsample_weight,
-                            width,
-                        );
-                    }
-                }
+                let crossings = scanner.crossings_at(sample_y);
+                row_touched |= self.fill_rule.for_each_span(crossings, |x0, x1| {
+                    accumulate_span(&mut row_coverage, x0, x1, subsample_weight, width)
+                });
             }
-
             if row_touched {
-                let mask_row = &mut mask[row * width..(row + 1) * width];
-                for (dst, coverage) in mask_row.iter_mut().zip(row_coverage.iter()) {
-                    let existing = *dst as f32 / 255.0;
-                    let combined = (existing + coverage).min(1.0);
-                    *dst = (combined * 255.0 + 0.5) as u8;
-                }
+                add_row_coverage(mask_row, &row_coverage);
             }
         }
-
         mask
+    }
+
+    /// The path's non-horizontal edges in pixel space, each from its top
+    /// to its bottom, with the direction it ran in.
+    fn scanline_edges(&self, origin: Point, scale: f32) -> Vec<Edge> {
+        let map = |p: &Point| Point::new((p.x - origin.x) * scale, (p.y - origin.y) * scale);
+        let closed = self.subpaths.iter().filter(|subpath| subpath.len() >= 3);
+        closed
+            .flat_map(|subpath| {
+                let next = subpath.iter().skip(1).chain(subpath.first());
+                subpath.iter().zip(next).filter_map(move |(a, b)| {
+                    let (a, b) = (map(a), map(b));
+                    match a.y.total_cmp(&b.y) {
+                        std::cmp::Ordering::Less => Some(Edge {
+                            top: a,
+                            bottom: b,
+                            winding: 1,
+                        }),
+                        std::cmp::Ordering::Greater => Some(Edge {
+                            top: b,
+                            bottom: a,
+                            winding: -1,
+                        }),
+                        std::cmp::Ordering::Equal => None,
+                    }
+                })
+            })
+            .collect()
+    }
+}
+
+/// One edge of a path in pixel space, from its top to its bottom, and the
+/// winding direction it ran in.
+struct Edge {
+    top: Point,
+    bottom: Point,
+    winding: i32,
+}
+
+/// Walks sample lines down a path's edges sorted by their tops, keeping the
+/// edges the current line may cross: lines only descend, so an edge enters
+/// once and leaves once.
+struct EdgeScanner<'a> {
+    edges: &'a [Edge],
+    next: usize,
+    active: Vec<&'a Edge>,
+    crossings: Vec<(f32, i32)>,
+}
+
+impl<'a> EdgeScanner<'a> {
+    fn new(edges: &'a [Edge]) -> Self {
+        Self {
+            edges,
+            next: 0,
+            active: Vec::new(),
+            crossings: Vec::new(),
+        }
+    }
+
+    /// Where the edges cross the line at `sample_y`, left to right, each
+    /// with its winding direction.
+    fn crossings_at(&mut self, sample_y: f32) -> &[(f32, i32)] {
+        while let Some(edge) = self
+            .edges
+            .get(self.next)
+            .filter(|edge| edge.top.y <= sample_y)
+        {
+            self.active.push(edge);
+            self.next += 1;
+        }
+        self.active.retain(|edge| sample_y < edge.bottom.y);
+        self.crossings.clear();
+        self.crossings.extend(self.active.iter().map(|edge| {
+            let t = (sample_y - edge.top.y) / (edge.bottom.y - edge.top.y);
+            (edge.top.x + t * (edge.bottom.x - edge.top.x), edge.winding)
+        }));
+        self.crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+        &self.crossings
+    }
+}
+
+impl PathFillRule {
+    /// Hands `span` each run of a sample line that lies inside the fill,
+    /// from `crossings` sorted left to right; whether any span touched a
+    /// pixel.
+    fn for_each_span(
+        self,
+        crossings: &[(f32, i32)],
+        mut span: impl FnMut(f32, f32) -> bool,
+    ) -> bool {
+        if crossings.len() < 2 {
+            return false;
+        }
+        let inside = |winding: i32| match self {
+            Self::NonZero => winding != 0,
+            Self::EvenOdd => winding % 2 != 0,
+        };
+        let mut touched = false;
+        let mut winding = 0i32;
+        let mut span_start = 0.0f32;
+        for &(x, direction) in crossings {
+            let was_inside = inside(winding);
+            winding += match self {
+                Self::NonZero => direction,
+                Self::EvenOdd => 1,
+            };
+            match (was_inside, inside(winding)) {
+                (false, true) => span_start = x,
+                (true, false) => touched |= span(span_start, x),
+                _ => {}
+            }
+        }
+        touched
+    }
+}
+
+/// Adds a row's summed coverage onto its row of the 8-bit mask.
+fn add_row_coverage(mask_row: &mut [u8], row_coverage: &[f32]) {
+    for (dst, coverage) in mask_row.iter_mut().zip(row_coverage) {
+        let existing = *dst as f32 / 255.0;
+        let combined = (existing + coverage).min(1.0);
+        *dst = (combined * 255.0 + 0.5) as u8;
     }
 }
 
@@ -273,13 +317,27 @@ fn accumulate_span(row_coverage: &mut [f32], x0: f32, x1: f32, weight: f32, widt
         return false;
     }
 
+    // Pixels the span covers whole take the weight as it is; only the
+    // pixels holding its ends take a fraction.
     let first = x0.floor() as usize;
     let last = (x1.ceil() as usize).min(width);
-    for (pixel, coverage) in row_coverage.iter_mut().enumerate().take(last).skip(first) {
+    let partial = |pixel: usize| {
         let pixel_start = pixel as f32;
-        let pixel_end = pixel_start + 1.0;
-        let covered = (x1.min(pixel_end) - x0.max(pixel_start)).max(0.0);
-        *coverage += covered * weight;
+        (x1.min(pixel_start + 1.0) - x0.max(pixel_start)).max(0.0) * weight
+    };
+    let Some(span) = row_coverage.get_mut(first..last) else {
+        return false;
+    };
+    match span {
+        [] => {}
+        [only] => *only += partial(first),
+        [head, interior @ .., tail] => {
+            *head += partial(first);
+            for coverage in interior {
+                *coverage += weight;
+            }
+            *tail += partial(last - 1);
+        }
     }
     true
 }
