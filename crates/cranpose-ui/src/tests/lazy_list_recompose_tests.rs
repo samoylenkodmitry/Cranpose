@@ -54,6 +54,7 @@ impl TextMeasurer for CountingPreparedTextMeasurer {
             metrics: self.measure(text, style),
             did_overflow: false,
             render_text: Default::default(),
+            wrap_hold: None,
         }
     }
 
@@ -111,6 +112,7 @@ impl TextMeasurer for TallMultilineTextMeasurer {
             metrics: self.measure(text, style),
             did_overflow: false,
             render_text: Default::default(),
+            wrap_hold: None,
         }
     }
 

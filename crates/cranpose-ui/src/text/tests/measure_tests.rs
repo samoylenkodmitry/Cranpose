@@ -1384,6 +1384,7 @@ fn prepared_as(display: &str, width: f32, did_overflow: bool) -> PreparedTextLay
         },
         did_overflow,
         render_text: Default::default(),
+        wrap_hold: None,
     }
 }
 
@@ -1636,6 +1637,7 @@ fn a_prepared_layout_converts_its_render_text_once() {
         },
         did_overflow: false,
         render_text: Default::default(),
+        wrap_hold: None,
     };
     let untouched = layout.clone();
     let first = layout.render_text();
@@ -1659,9 +1661,8 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
         &text,
         whole.clone(),
         &style,
-        f32::MAX,
-        LineBreak::Simple,
-        Hyphens::None,
+        (f32::MAX, &mut None),
+        (LineBreak::Simple, Hyphens::None),
         &mut lines,
     );
     assert_eq!(lines.len(), 2, "a line that fits takes one display line");
@@ -1672,9 +1673,8 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
         &text,
         whole,
         &style,
-        60.0,
-        LineBreak::Simple,
-        Hyphens::None,
+        (60.0, &mut None),
+        (LineBreak::Simple, Hyphens::None),
         &mut lines,
     );
     assert!(
@@ -1758,4 +1758,83 @@ fn the_text_service_drops_what_layout_passes_stopped_measuring() {
         3,
         "a text no pass measured is measured anew"
     );
+}
+
+/// Lays `text` out greedily with the monospaced measurer at `max_width`.
+fn wrapped_at(text: &str, max_width: f32) -> PreparedTextLayout {
+    prepare_text_layout_with_measurer_for_node(
+        &MonospacedTextMeasurer,
+        None,
+        &crate::text::AnnotatedString::from(text),
+        &TextStyle::default(),
+        TextLayoutOptions::default(),
+        Some(max_width),
+    )
+}
+
+#[test]
+fn a_greedily_wrapped_layout_comes_out_the_same_at_every_width_it_holds() {
+    let texts = [
+        "cell 123",
+        "alpha beta gamma delta epsilon",
+        "a bb ccc dddd eeeee ffffff",
+        "supercalifragilistic word",
+        "x  y   z",
+        "one\ntwo three four five",
+    ];
+    let mut held = 0;
+    for text in texts {
+        for step in 0..120 {
+            let width = 6.25 + step as f32 * 2.5;
+            let prepared = wrapped_at(text, width);
+            let Some(hold) = prepared.wrap_hold else {
+                continue;
+            };
+            assert!(hold.holds(width), "{text:?} at {width} holds its own width");
+            held += 1;
+            let first_probe = (hold.fits - WRAP_EPSILON - 4.0).max(0.5);
+            for probe_step in 0..200 {
+                let probe = first_probe + probe_step as f32 * 0.37;
+                if !hold.holds(probe) {
+                    continue;
+                }
+                let probed = wrapped_at(text, probe);
+                assert_eq!(
+                    probed.text.text, prepared.text.text,
+                    "{text:?} wraps at {probe} as at {width}: {hold:?}"
+                );
+                assert_eq!(probed.metrics, prepared.metrics, "{text:?} at {probe}");
+                assert_eq!(probed.did_overflow, prepared.did_overflow);
+            }
+        }
+    }
+    assert!(held > 100, "only {held} layouts wrapped");
+}
+
+#[test]
+fn a_greedily_wrapped_layout_holds_the_widths_that_break_it_the_same() {
+    // "cell 123" breaks into "cell" and "123" at any width from "cell " up to
+    // the whole label, less one character.
+    let char_width = 14.0 * 0.6;
+    let prepared = wrapped_at("cell 123", 5.5 * char_width);
+    assert_eq!(prepared.text.text, "cell\n123");
+    let widths = PreparedWidths::of(
+        &crate::text::AnnotatedString::from("cell 123"),
+        TextLayoutOptions::default(),
+        Some(5.5 * char_width),
+        &prepared,
+    );
+    for width in [5.0, 6.5, 7.4] {
+        assert!(
+            widths.hold(Some(width * char_width)),
+            "{width} characters break it the same"
+        );
+    }
+    for width in [4.0, 8.0, 20.0] {
+        assert!(
+            !widths.hold(Some(width * char_width)),
+            "{width} characters may break it elsewhere"
+        );
+    }
+    assert!(!widths.hold(None), "unconstrained, it does not wrap");
 }
