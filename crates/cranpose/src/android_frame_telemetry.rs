@@ -114,6 +114,7 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
         "debug.cranpose.no_interiors_first",
         "CRANPOSE_NO_INTERIORS_FIRST",
     ),
+    ("debug.cranpose.frame_lead", "CRANPOSE_FRAME_LEAD_TENTHS"),
 ];
 
 pub(crate) fn seed_env_from_system_properties() {
