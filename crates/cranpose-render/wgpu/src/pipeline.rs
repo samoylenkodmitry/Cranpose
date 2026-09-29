@@ -1891,6 +1891,19 @@ fn loose_shape(primitive: &DrawPrimitive, layer: &GraphicsLayer) -> Option<DrawP
             stroke: *stroke,
             inner_radius: *inner_radius,
         },
+        DrawPrimitive::Line {
+            rect,
+            brush,
+            start,
+            end,
+            stroke,
+        } => DrawPrimitive::Line {
+            rect: *rect,
+            brush: painted(brush),
+            start: *start,
+            end: *end,
+            stroke: *stroke,
+        },
         DrawPrimitive::Blend {
             primitive,
             blend_mode,

@@ -796,7 +796,7 @@ fn web_frame_waker_is_shell_owned_without_thread_local_router() {
     );
     assert!(
         web_source.contains("app.borrow_mut().set_frame_waker({")
-            && web_source.contains("move || request_frame()"),
+            && web_source.contains("request_frame();\n            run_tasks();"),
         "web runtime should install the per-shell frame requester directly on AppShell"
     );
 }
@@ -1235,6 +1235,27 @@ fn every_platform_bridge_lets_a_reader_move_an_adjustable_control() {
             && web_source.contains("accessibility::set_progress("),
         "the web mirror should read as a slider and move on the arrow keys"
     );
+}
+
+#[test]
+fn every_desktop_window_paces_a_frame_its_surface_could_not_take() {
+    let source = crate_source("src/desktop.rs");
+    let skips: Vec<&str> = source
+        .split("SurfaceFrame::Skip => {")
+        .skip(1)
+        .map(|branch| branch.split("return").next().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        skips.len(),
+        2,
+        "the primary window and a native window each skip a frame"
+    );
+    for branch in skips {
+        assert!(
+            branch.contains("pace_after_empty_redraw("),
+            "a minimized or occluded window hands out no texture; its next attempt must wait a frame interval, or the loop spins a core: {branch}"
+        );
+    }
 }
 
 #[test]

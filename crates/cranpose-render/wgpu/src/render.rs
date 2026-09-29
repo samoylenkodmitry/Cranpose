@@ -166,6 +166,63 @@ type DeviceRect4 = (f32, f32, f32, f32);
 /// A rect of whole target pixels: x, y, width, height.
 pub(crate) type TargetRect = (u32, u32, u32, u32);
 
+/// The target pixels a clipped shape variant keeps of `placement`'s records
+/// under `viewport`, as a scissor that stands in for its clip test: every
+/// pixel whose centre, moved by the viewport's offset, lies inside the
+/// device clip, inclusive of its edges, as the shader compares them. `None`
+/// without a clip or under a turn, where the variant tests the clip itself.
+/// An empty clip keeps an empty scissor.
+pub(crate) fn clip_scissor(
+    placement: &crate::scene::Placement,
+    root_scale: f32,
+    viewport: ViewportUniformParams,
+) -> Option<TargetRect> {
+    if !viewport.transform.is_identity() {
+        return None;
+    }
+    let [x, y, width, height] = crate::run_store::device_clip(placement, root_scale)?;
+    let columns = kept_pixels(x, x + width, viewport.offset[0], viewport.width);
+    let rows = kept_pixels(y, y + height, viewport.offset[1], viewport.height);
+    Some((
+        columns.start,
+        rows.start,
+        columns.end - columns.start,
+        rows.end - rows.start,
+    ))
+}
+
+/// The pixels along one axis whose centre, moved by `offset`, lies within
+/// `low..=high`, within `0..extent`: stepped with the shader's own float
+/// sums so the edges fall where its comparisons put them.
+fn kept_pixels(low: f32, high: f32, offset: f32, extent: u32) -> std::ops::Range<u32> {
+    let centre = |pixel: u32| pixel as f32 + 0.5 + offset;
+    let guess = |edge: f32| (edge - offset - 0.5).ceil().clamp(0.0, extent as f32) as u32;
+    let mut start = guess(low);
+    while start > 0 && centre(start - 1) >= low {
+        start -= 1;
+    }
+    while start < extent && centre(start) < low {
+        start += 1;
+    }
+    let mut end = guess(high).max(start);
+    while end > start && centre(end - 1) > high {
+        end -= 1;
+    }
+    while end < extent && centre(end) <= high {
+        end += 1;
+    }
+    start..end
+}
+
+/// The pixels both scissors keep, `None` when they share none.
+pub(crate) fn intersect_target_rects(a: TargetRect, b: TargetRect) -> Option<TargetRect> {
+    let left = a.0.max(b.0);
+    let top = a.1.max(b.1);
+    let right = (a.0 + a.2).min(b.0 + b.2);
+    let bottom = (a.1 + a.3).min(b.1 + b.3);
+    (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
+}
+
 /// A draw's scissor cut down to the pixels its pass segment may touch;
 /// `None` when nothing of it remains.
 pub(crate) fn bounded_scissor(
@@ -1715,31 +1772,22 @@ fn glyph_clip_edges(clip: Rect, root_scale: f32) -> [f32; 4] {
     ]
 }
 
-/// Whether `clip` cuts into `rect`.
-fn clip_cuts(clip: Option<Rect>, rect: Rect) -> bool {
-    clip.is_some_and(|clip| clip.intersect(rect) != Some(rect))
-}
-
-/// Where the glyph quads of a text drawn in `draw_rect` are cut to its
-/// `clip`, in the quads' own space. Under a turned viewport the cut is the
-/// clip itself, before the turn, which no scissor can follow; the text then
-/// draws without one. Otherwise it is the pixel edges of the clip's
-/// `scissor`, `None` when the clip leaves the text whole: cut there, the
-/// quads cover exactly the pixels the scissor would pass, with the same
-/// texels, so the text needs no scissor of its own and draws in one call
-/// with its neighbours.
+/// Where the glyph quads of a text are cut, in the quads' own space. Under a
+/// turned viewport the cut is the text's `clip` itself, before the turn,
+/// which no scissor can follow; the text then draws without one. Otherwise
+/// it is the pixel edges of the text's `scissor`, its draw rect within its
+/// clip: cut there, the quads cover exactly the pixels the scissor would
+/// pass, with the same texels, so the text needs no scissor of its own and
+/// draws in one call with its neighbours, even where a last line's
+/// descenders or a glyph's padding reach past its draw rect.
 fn glyph_cut_edges(
     clip: Option<Rect>,
-    draw_rect: Rect,
     scissor: TargetRect,
     viewport: ViewportUniformParams,
     root_scale: f32,
 ) -> Option<[f32; 4]> {
     if !viewport.transform.is_identity() {
         return clip.map(|clip| glyph_clip_edges(clip, root_scale));
-    }
-    if !clip_cuts(clip, draw_rect) {
-        return None;
     }
     let (x, y, width, height) = scissor;
     let [offset_x, offset_y] = viewport.offset;
@@ -2450,6 +2498,9 @@ pub(crate) struct StoreRunBatch {
     pub(crate) command: DrawCommandId,
     pub(crate) uniform_slot: usize,
     pub(crate) draws: SmallVec<[RunDrawCall; 8]>,
+    /// The scissor an unturned run's clip puts on its paint: see
+    /// [`clip_scissor`].
+    pub(crate) clip: Option<TargetRect>,
 }
 
 struct CompositionTarget {
@@ -4112,13 +4163,16 @@ impl GpuRenderer {
         self.run_store.is_stored(run)
     }
 
+    /// The pipeline `segment` of a run at `placement` draws with. `clipped`
+    /// says the variant tests the run's clip: a turned run's, since an
+    /// unturned one's clip is its paint's scissor (see [`clip_scissor`]).
     fn run_pipeline_key(
         segment: &RecordSegment,
         placement: &crate::scene::Placement,
         tier: RunTier,
         ablation: ShapeAblation,
         turns: ShapeTurns,
-        depth: bool,
+        (depth, clipped): (bool, bool),
     ) -> ShapePipelineKey {
         let blend_mode = supported_blend_mode(segment.blend);
         let laid = depth
@@ -4129,7 +4183,7 @@ impl GpuRenderer {
         ShapePipelineKey {
             blend_mode,
             tier,
-            variant: ShapeVariant::of_segment(segment, placement.clip.is_some(), ablation, laid),
+            variant: ShapeVariant::of_segment(segment, clipped, ablation, laid),
             turns,
             depth: if depth {
                 ShapeDepth::Tested
@@ -4163,12 +4217,21 @@ impl GpuRenderer {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
         let turns = ShapeTurns::of(viewport.transform, false);
+        let clip = clip_scissor(placement, root_scale, viewport);
+        let clipped = placement.clip.is_some() && clip.is_none();
         let mut draws = SmallVec::new();
         self.run_store.stored_run_draws(
             &self.device,
             run,
             &mut |segment| {
-                Self::run_pipeline_key(segment, placement, RunTier::Store, ablation, turns, depth)
+                Self::run_pipeline_key(
+                    segment,
+                    placement,
+                    RunTier::Store,
+                    ablation,
+                    turns,
+                    (depth, clipped),
+                )
             },
             &mut draws,
         );
@@ -4202,6 +4265,7 @@ impl GpuRenderer {
             command,
             uniform_slot,
             draws,
+            clip,
         }
     }
 
@@ -4222,6 +4286,9 @@ impl GpuRenderer {
     /// placement under `turn`, keyed for a pass whose flat and turned
     /// records alternate often when `mixed_turns`.
     #[expect(clippy::too_many_arguments)]
+    /// Appends `run`'s records at `window` to the open arena chunk. `clipped`
+    /// says its variant tests its clip, which an unturned run leaves to its
+    /// paint's scissor.
     pub(crate) fn append_arena_run(
         &mut self,
         chunk: usize,
@@ -4230,7 +4297,7 @@ impl GpuRenderer {
         root_scale: f32,
         turn: SegmentTransform,
         mixed_turns: bool,
-        depth: bool,
+        (depth, clipped): (bool, bool),
     ) -> u32 {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
@@ -4245,7 +4312,7 @@ impl GpuRenderer {
                         RunTier::Arena,
                         ablation,
                         turns,
-                        depth,
+                        (depth, clipped),
                     );
                     if !keys.contains(&key) {
                         keys.push(key);
@@ -5147,7 +5214,7 @@ impl GpuRenderer {
             atlas_size: self.text_glyph_atlas.size(),
             bounds: run.bounds,
         };
-        let cut = glyph_cut_edges(text_draw.clip, draw_rect, scissor, viewport, root_scale);
+        let cut = glyph_cut_edges(text_draw.clip, scissor, viewport, root_scale);
         self.append_text_glyph_quad_run(
             raster_rect,
             quads,
@@ -6193,6 +6260,10 @@ mod retained_glyph_tests;
 #[cfg(test)]
 #[path = "tests/frame_clear_tests.rs"]
 mod frame_clear_tests;
+
+#[cfg(test)]
+#[path = "tests/render_clip_scissor_tests.rs"]
+mod clip_scissor_tests;
 
 #[cfg(test)]
 #[path = "tests/glyph_kind_tests.rs"]

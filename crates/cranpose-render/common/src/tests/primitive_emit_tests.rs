@@ -666,3 +666,65 @@ fn blended_text_still_lowers_because_glyphs_composite_src_over() {
     );
     assert_eq!(params.len(), 1);
 }
+
+#[test]
+fn a_line_lands_at_its_layer_placed_ends_with_its_width_scaled() {
+    let layer = GraphicsLayer {
+        scale: 2.0,
+        transform_origin: cranpose_ui_graphics::TransformOrigin::new(0.0, 0.0),
+        ..GraphicsLayer::default()
+    };
+    let stroke = Stroke {
+        width: 4.0,
+        cap: StrokeCap::Round,
+        join: StrokeJoin::Miter,
+    };
+    let params = line_shape_params(
+        &Brush::solid(Color::WHITE),
+        Point::new(5.0, 10.0),
+        Point::new(25.0, 10.0),
+        stroke,
+        layer_bounds(),
+        &layer,
+        None,
+        BlendMode::SrcOver,
+        false,
+    )
+    .expect("a visible line");
+    let line = params.line.expect("the line's geometry");
+    let expected_start =
+        apply_layer_affine_to_point(Point::new(15.0, 30.0), layer_bounds(), &layer);
+    let expected_end = apply_layer_affine_to_point(Point::new(35.0, 30.0), layer_bounds(), &layer);
+    assert!(approx(line.start.x, expected_start.x) && approx(line.start.y, expected_start.y));
+    assert!(approx(line.end.x, expected_end.x) && approx(line.end.y, expected_end.y));
+    assert!(
+        approx(line.half_width, 4.0),
+        "the width scales with the layer"
+    );
+    assert_eq!(line.cap, StrokeCap::Round);
+    assert!(params.arc.is_none() && params.stroke.is_none());
+    assert!(
+        params.rect.x <= line.start.x - line.half_width
+            && params.rect.x + params.rect.width >= line.end.x + line.half_width,
+        "the quad covers the scaled stroke and its round ends"
+    );
+}
+
+#[test]
+fn a_line_that_covers_nothing_emits_no_shape() {
+    let point = Point::new(5.0, 5.0);
+    assert!(
+        line_shape_params(
+            &Brush::solid(Color::WHITE),
+            point,
+            point,
+            Stroke::new(4.0),
+            layer_bounds(),
+            &GraphicsLayer::default(),
+            None,
+            BlendMode::SrcOver,
+            false,
+        )
+        .is_none()
+    );
+}

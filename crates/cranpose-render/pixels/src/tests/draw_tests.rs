@@ -57,6 +57,7 @@ fn shape_snap_does_not_move_its_fixed_ancestor_clip() {
         shape: None,
         stroke: None,
         arc: None,
+        line: None,
         z_index: 0,
         clip: Some(Rect {
             x: 2.0,
@@ -496,6 +497,7 @@ fn shape_template(rect: Rect) -> crate::scene::DrawShape {
         shape: None,
         stroke: None,
         arc: None,
+        line: None,
         z_index: 0,
         clip: None,
         blend_mode: BlendMode::SrcOver,
@@ -649,4 +651,34 @@ fn arc_and_stroke_rasterization_never_writes_nan_or_panics() {
         (0..CANVAS).all(|y| (0..CANVAS).all(|x| is_background(&frame, x, y))),
         "a zero-width stroke must draw nothing"
     );
+}
+
+#[test]
+fn a_line_covers_each_pixel_as_its_geometry_says() {
+    use cranpose_ui_graphics::{LineGeometry, Stroke, StrokeCap, StrokeJoin};
+    for cap in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square] {
+        let line = LineGeometry::new(
+            Point::new(12.0, 44.0),
+            Point::new(48.5, 18.25),
+            Stroke {
+                width: 5.0,
+                cap,
+                join: StrokeJoin::Miter,
+            },
+        );
+        let mut shape = shape_template(line.bounds());
+        shape.line = Some(line);
+        let frame = render_shape(shape);
+        for y in 0..CANVAS {
+            for x in 0..CANVAS {
+                let coverage = line.coverage(Point::new(x as f32 + 0.5, y as f32 + 0.5));
+                let expected = 18.0 + (255.0 - 18.0) * coverage;
+                let actual = f32::from(frame[((y * CANVAS + x) * 4) as usize]);
+                assert!(
+                    (actual - expected).abs() <= 2.0,
+                    "cap {cap:?}: pixel ({x}, {y}) is {actual}, its coverage says {expected}"
+                );
+            }
+        }
+    }
 }

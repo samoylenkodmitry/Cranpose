@@ -5,7 +5,7 @@ use std::{ops::AddAssign, rc::Rc};
 use crate::{
     ArcRecordArgs, Brush, Color, ColorFilter, CommandRecorder, CommandRecording, ImageBitmap,
     ImageSampling, normalized_band,
-    stroke::Stroke,
+    stroke::{LineGeometry, Stroke},
     typography::{
         DrawTextMeasurer, DrawTextStyle, TextAlign, TextMeasurement, TextVerticalAlign,
         estimate_text_measurement,
@@ -606,6 +606,17 @@ pub enum DrawPrimitive {
         /// `> 0` turns a filled wedge into an annular sector.
         inner_radius: f32,
     },
+    /// A stroked straight segment from `start` to `end`, its ends shaped by
+    /// the stroke's cap: Compose's `drawLine`.
+    Line {
+        /// The box of the two ends; the stroke reaches half its width past
+        /// it, as a stroked rect's does past its rect.
+        rect: Rect,
+        brush: Brush,
+        start: Point,
+        end: Point,
+        stroke: Stroke,
+    },
     Image {
         rect: Rect,
         image: ImageBitmap,
@@ -741,6 +752,19 @@ impl DrawPrimitive {
                 sweep_angle,
                 stroke,
                 inner_radius,
+            },
+            DrawPrimitive::Line {
+                rect,
+                brush,
+                start,
+                end,
+                stroke,
+            } => DrawPrimitive::Line {
+                rect: rect.translate(dx, dy),
+                brush,
+                start: Point::new(start.x + dx, start.y + dy),
+                end: Point::new(end.x + dx, end.y + dy),
+                stroke,
             },
             DrawPrimitive::Image {
                 rect,
@@ -910,6 +934,21 @@ pub trait DrawScope {
         radius: f32,
         start_angle: f32,
         sweep_angle: f32,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    );
+
+    /// Strokes the straight segment from `start` to `end`, centred on it and
+    /// `stroke.width` wide, its ends shaped by `stroke.cap`: Compose's
+    /// `drawLine(brush, start, end, strokeWidth, cap)`. Nothing is drawn
+    /// for a non-positive width, a non-finite end, or a segment of no length
+    /// between butt caps; round and square caps draw a dot there.
+    fn draw_line(&mut self, brush: Brush, start: Point, end: Point, stroke: Stroke);
+    fn draw_line_blend(
+        &mut self,
+        brush: Brush,
+        start: Point,
+        end: Point,
         stroke: Stroke,
         blend_mode: BlendMode,
     );
@@ -1423,6 +1462,25 @@ impl DrawScope for DrawScopeDefault {
             0.0,
             blend_mode,
         );
+    }
+
+    fn draw_line(&mut self, brush: Brush, start: Point, end: Point, stroke: Stroke) {
+        self.draw_line_blend(brush, start, end, stroke, BlendMode::SrcOver);
+    }
+
+    fn draw_line_blend(
+        &mut self,
+        brush: Brush,
+        start: Point,
+        end: Point,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    ) {
+        let line = LineGeometry::new(start, end, stroke);
+        if line.is_degenerate() {
+            return;
+        }
+        self.recording.push_line(&line, &brush, stroke, blend_mode);
     }
 
     fn draw_annular_sector(

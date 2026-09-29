@@ -139,9 +139,17 @@ fn triangle_area(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f64 {
 
 /// The device pixels a record's quad rasterizes: the stored rect (the
 /// disc for a scope-recorded arc), grown by the stroke's outer half for a
-/// stroked rect, scaled. Canonicalization moves edges by at most a
-/// sixteenth of a pixel, which the estimate ignores.
+/// stroked rect, scaled; for a line, its quad along the segment.
+/// Canonicalization moves edges by at most a sixteenth of a pixel, which
+/// the estimate ignores.
 pub(crate) fn quad_area(record: &ShapeRecord, scale: f32) -> f64 {
+    if let Some(line) = record.line_geometry() {
+        // The quad lies along the segment, past each end by the cap's reach.
+        let frame = line.frame();
+        let length = (frame.half_length + line.cap_reach()) * 2.0 * scale;
+        let width = line.half_width * 2.0 * scale;
+        return f64::from(length) * f64::from(width);
+    }
     let rect = record.stored_rect();
     let half_stroke = if record.fragment_kind() == FRAGMENT_KIND_ARC {
         0.0
@@ -164,7 +172,7 @@ pub(crate) struct ShapeFill {
 }
 
 impl ShapeFill {
-    pub(crate) const CLASSES: usize = 6;
+    pub(crate) const CLASSES: usize = 8;
     pub(crate) const LABELS: [&'static str; ShapeFill::CLASSES] = [
         "fill",
         "fill_grad",
@@ -172,6 +180,8 @@ impl ShapeFill {
         "stroke_grad",
         "arc",
         "arc_grad",
+        "line",
+        "line_grad",
     ];
 
     fn class(record: &ShapeRecord) -> usize {

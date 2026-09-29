@@ -267,6 +267,7 @@ var<uniform> placements: array<Placement, 4>;
 
 const RECORD_KIND_ROUND_RECT: u32 = 1u;
 const RECORD_KIND_ARC: u32 = 2u;
+const RECORD_KIND_LINE: u32 = 3u;
 const RECORD_STROKED: u32 = 4u;
 const RECORD_CAP_SHIFT: u32 = 3u;
 const RECORD_JOIN_SHIFT: u32 = 5u;
@@ -473,7 +474,32 @@ fn shape_output(
     let kind = record.flags & 3u;
     let stroked = (record.flags & RECORD_STROKED) != 0u;
 
-    if (kind == RECORD_KIND_ARC) {
+    if (kind == RECORD_KIND_LINE) {
+        let line = line_frame(record, placement);
+        let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
+        output.radii = vec4<f32>(0.0);
+        output.stroke_params = vec4<f32>(
+            line.half_width,
+            f32(SHAPE_KIND_LINE | (cap << 2u)),
+            line.half_length,
+            0.0,
+        );
+        output.arc_params = vec4<f32>(line.center, line.direction);
+        // The bands test discards outside `rect`: give it the stroke's
+        // bounds, as `LineGeometry::bounds` takes them, since a level or
+        // upright segment's own box has no area.
+        let cap_reach = select(line.half_width, 0.0, cap == STROKE_CAP_BUTT);
+        let along = abs(line.direction);
+        var reach = along * cap_reach + along.yx * line.half_width;
+        if (cap == STROKE_CAP_ROUND) {
+            reach = vec2<f32>(line.half_width);
+        }
+        reach += vec2<f32>(BAND_QUAD_MARGIN);
+        let start = line.center - line.direction * line.half_length;
+        let end = line.center + line.direction * line.half_length;
+        let low = min(start, end) - reach;
+        output.rect = vec4<f32>(low, max(start, end) + reach - low);
+    } else if (kind == RECORD_KIND_ARC) {
         output.radii = arc_trig(record.arc_normalized.x, record.arc_normalized.y);
         let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
         output.stroke_params = vec4<f32>(
@@ -577,6 +603,14 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
     }
     let placement = record_placement(record);
     let geometry = record_geometry(record, placement);
+    if ((record.flags & 3u) == RECORD_KIND_LINE) {
+        let line = line_frame(record, placement);
+        let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
+        if (local >= 4u) {
+            return pinned(line_corner(line, cap, 3u), placement);
+        }
+        return shape_output(record, placement, geometry, line_corner(line, cap, local));
+    }
     if (SHAPE_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
         let segments = 1u << ((record.flags >> RECORD_BAND_CLASS_SHIFT) & RECORD_BAND_CLASS_MASK);
         if (local >= segments * 2u + 2u) {
@@ -769,6 +803,66 @@ fn arc_trig(start: f32, sweep: f32) -> vec4<f32> {
     return vec4<f32>(sin(mid), cos(mid), max(sin(half), 0.0), cos(half));
 }
 
+// A line record in device space: its midpoint, the unit direction from its
+// start to its end, half its length and half its width. The record keeps
+// its ends in `arc_geometry` and the direction and half length, in its own
+// units, in `arc_normalized`.
+struct LineFrame {
+    center: vec2<f32>,
+    direction: vec2<f32>,
+    half_length: f32,
+    half_width: f32,
+}
+
+fn line_frame(record: ShapeRecord, placement: Placement) -> LineFrame {
+    let scale = placement.root_scale;
+    let start = (record.arc_geometry.xy + placement.offset) * scale;
+    let end = (record.arc_geometry.zw + placement.offset) * scale;
+    return LineFrame(
+        (start + end) * 0.5,
+        record.arc_normalized.xy,
+        record.arc_normalized.z * scale,
+        max(record.stroke_width, 0.0) * 0.5 * scale,
+    );
+}
+
+// Corner `local` of a line's quad, oriented along it: past each end by the
+// cap's reach, and to each side by half the width, each padded by the
+// antialiasing margin. `local` walks the quad as a rect's does, the far end
+// in its high bit and the left side in its low one.
+fn line_corner(line: LineFrame, cap: u32, local: u32) -> vec2<f32> {
+    let cap_reach = select(line.half_width, 0.0, cap == STROKE_CAP_BUTT);
+    let reach = line.half_length + cap_reach + BAND_QUAD_MARGIN;
+    let side = line.half_width + BAND_QUAD_MARGIN;
+    let along = select(-reach, reach, (local >> 1u) == 1u);
+    let across = select(-side, side, (local & 1u) == 1u);
+    let normal = vec2<f32>(-line.direction.y, line.direction.x);
+    return line.center + line.direction * along + normal * across;
+}
+
+// The share of the pixel at `p` a line covers, as `LineGeometry::coverage`
+// takes it on the CPU: exact box coverage across the segment and along it,
+// so a thin line keeps its weight at any sub-pixel offset; past a round
+// cap's ends, the distance to its disc. `frame` is the centre and
+// direction, `params` the half width and the half length in `z`.
+fn line_coverage(p: vec2<f32>, frame: vec4<f32>, params: vec4<f32>, cap: u32) -> f32 {
+    let d = p - frame.xy;
+    let along = abs(dot(d, frame.zw));
+    let across = abs(d.x * frame.w - d.y * frame.z);
+    let half_width = params.x;
+    let half_length = params.z;
+    let across_coverage = clamp(half_width + 0.5 - across, 0.0, 1.0);
+    if (cap == STROKE_CAP_ROUND) {
+        if (along <= half_length) {
+            return across_coverage;
+        }
+        let distance = length(vec2<f32>(along - half_length, across)) - half_width;
+        return clamp(0.5 - distance, 0.0, 1.0);
+    }
+    let reach = half_length + select(0.0, half_width, cap == STROKE_CAP_SQUARE);
+    return across_coverage * clamp(reach + 0.5 - along, 0.0, 1.0);
+}
+
 fn band_position(
     record: ShapeRecord,
     placement: Placement,
@@ -813,8 +907,9 @@ fn band_position(
 //
 // `stroke_params.y` packs three 2-bit fields and a flag:
 //
-//   bits 0-1  shape kind : 0 = fill, 1 = stroked rect/round-rect, 2 = arc band
-//   bits 2-3  stroke cap : 0 = butt, 1 = round, 2 = square   (arcs only)
+//   bits 0-1  shape kind : 0 = fill, 1 = stroked rect/round-rect, 2 = arc band,
+//                          3 = line
+//   bits 2-3  stroke cap : 0 = butt, 1 = round, 2 = square   (arcs and lines)
 //   bits 4-5  stroke join: 0 = miter, 1 = round, 2 = bevel   (rects only)
 //   bit  6    turned     : `SHAPE_FLAG_TURNED`, under `TURNS_MIXED` only
 //
@@ -824,6 +919,7 @@ fn band_position(
 const SHAPE_KIND_FILL: u32 = 0u;
 const SHAPE_KIND_STROKE: u32 = 1u;
 const SHAPE_KIND_ARC: u32 = 2u;
+const SHAPE_KIND_LINE: u32 = 3u;
 
 // Pipeline constants a batch fixes when every record it draws agrees: the
 // shape kind (-1 keeps the per-record ladder), whether every brush is solid,
@@ -842,6 +938,7 @@ override SHAPE_DISCARD: bool = false;
 override BRUSH_KIND_FIXED: i32 = -1;
 
 const STROKE_CAP_BUTT: u32 = 0u;
+const STROKE_CAP_ROUND: u32 = 1u;
 const STROKE_CAP_SQUARE: u32 = 2u;
 
 const STROKE_JOIN_MITER: u32 = 0u;
@@ -1202,7 +1299,9 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     let has_radii = (input.radii[0] > 0.0 || input.radii[1] > 0.0 ||
                      input.radii[2] > 0.0 || input.radii[3] > 0.0);
     var alpha: f32;
-    if (shape_kind == SHAPE_KIND_ARC) {
+    if (shape_kind == SHAPE_KIND_LINE) {
+        alpha = line_coverage(rect_pos, input.arc_params, input.stroke_params, stroke_cap);
+    } else if (shape_kind == SHAPE_KIND_ARC) {
         // Arcs have no corner radii, so `radii` carries the precomputed
         // (sin, cos) of the mid angle (xy) and of the half sweep (zw).
         let dist = sdf_arc_band(

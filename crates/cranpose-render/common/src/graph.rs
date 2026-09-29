@@ -696,7 +696,8 @@ fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {
         DrawPrimitive::Content
         | DrawPrimitive::Rect { .. }
         | DrawPrimitive::RoundRect { .. }
-        | DrawPrimitive::Arc { .. } => 0,
+        | DrawPrimitive::Arc { .. }
+        | DrawPrimitive::Line { .. } => 0,
         DrawPrimitive::Blend { primitive, .. } => {
             size_of::<DrawPrimitive>() + draw_primitive_heap_bytes(primitive)
         }

@@ -340,6 +340,7 @@ fn push_layer_shadow(
             shape,
             stroke: None,
             arc: None,
+            line: None,
             z_index: 0,
             clip: None,
             blend_mode: BlendMode::SrcOver,
@@ -1041,15 +1042,7 @@ pub(crate) fn push_draw_primitive(
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
         fn push_shape(&mut self, params: ShapeDrawParams) {
-            self.scene.push_shape_with_stroke_and_arc(
-                params.rect,
-                params.brush.into_brush(),
-                params.shape,
-                params.stroke,
-                params.arc,
-                params.clip,
-                params.blend_mode,
-            );
+            self.scene.push_shape_params(params);
         }
 
         fn push_image(&mut self, params: ImageDrawParams) {
@@ -1127,6 +1120,7 @@ fn push_shadow_primitive(
                 shape: params.shape,
                 stroke: params.stroke,
                 arc: params.arc,
+                line: params.line,
                 z_index: 0,
                 clip: params.clip,
                 blend_mode: params.blend_mode,
