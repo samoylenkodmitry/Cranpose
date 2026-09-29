@@ -253,12 +253,16 @@ impl<'a> EdgeScanner<'a> {
             self.next += 1;
         }
         self.active.retain(|edge| sample_y < edge.bottom.y);
-        self.crossings.clear();
-        self.crossings.extend(self.active.iter().map(|edge| {
+        let x_at = |edge: &Edge| {
             let t = (sample_y - edge.top.y) / (edge.bottom.y - edge.top.y);
-            (edge.top.x + t * (edge.bottom.x - edge.top.x), edge.winding)
-        }));
-        self.crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+            edge.top.x + t * (edge.bottom.x - edge.top.x)
+        };
+        // The active edges stay in crossing order: it barely changes from
+        // one sample line to the next, so the sort meets presorted runs.
+        self.active.sort_by(|a, b| x_at(a).total_cmp(&x_at(b)));
+        self.crossings.clear();
+        self.crossings
+            .extend(self.active.iter().map(|edge| (x_at(edge), edge.winding)));
         &self.crossings
     }
 }
