@@ -10,8 +10,8 @@ pub mod style;
 pub mod unit;
 
 pub use annotated_string::{
-    AnnotatedString, LinkAnnotation, LinkKey, RangeStyle, RenderString, StringAnnotation,
-    shared_plain_annotated_string, shared_plain_render_string,
+    AnnotatedString, LinkAnnotation, LinkKey, RangeStyle, RenderString, SpanBoundaries,
+    StringAnnotation, shared_plain_annotated_string, shared_plain_render_string,
 };
 pub use decoration::{Shadow, TextDecoration};
 pub use draw_scope_text::{AppContextTextMeasurer, draw_style_line_box, text_style_for_draw_style};

@@ -318,7 +318,7 @@ impl TextMeasurer for PrefixWidthCountingMeasurer {
         text: &crate::text::AnnotatedString,
         line_range: Range<usize>,
         style: &TextStyle,
-    ) -> Option<Rc<TextLinePrefixWidths>> {
+    ) -> Option<TextLinePrefixWidths> {
         self.prefix_calls.set(self.prefix_calls.get() + 1);
         MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
     }
@@ -384,7 +384,7 @@ impl TextMeasurer for LineHeightCountingMeasurer {
         text: &crate::text::AnnotatedString,
         line_range: Range<usize>,
         style: &TextStyle,
-    ) -> Option<Rc<TextLinePrefixWidths>> {
+    ) -> Option<TextLinePrefixWidths> {
         MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
     }
 
@@ -435,7 +435,7 @@ impl TextMeasurer for FitProbeCountingMeasurer {
         text: &crate::text::AnnotatedString,
         line_range: Range<usize>,
         style: &TextStyle,
-    ) -> Option<Rc<TextLinePrefixWidths>> {
+    ) -> Option<TextLinePrefixWidths> {
         self.prefix_calls.set(self.prefix_calls.get() + 1);
         MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
     }
@@ -1528,7 +1528,7 @@ impl TextMeasurer for EllipsisProbeMeasurer {
         text: &crate::text::AnnotatedString,
         line_range: Range<usize>,
         style: &TextStyle,
-    ) -> Option<Rc<TextLinePrefixWidths>> {
+    ) -> Option<TextLinePrefixWidths> {
         MonospacedTextMeasurer.measure_line_prefix_widths(text, line_range, style)
     }
 
