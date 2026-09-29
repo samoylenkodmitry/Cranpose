@@ -1772,31 +1772,22 @@ fn glyph_clip_edges(clip: Rect, root_scale: f32) -> [f32; 4] {
     ]
 }
 
-/// Whether `clip` cuts into `rect`.
-fn clip_cuts(clip: Option<Rect>, rect: Rect) -> bool {
-    clip.is_some_and(|clip| clip.intersect(rect) != Some(rect))
-}
-
-/// Where the glyph quads of a text drawn in `draw_rect` are cut to its
-/// `clip`, in the quads' own space. Under a turned viewport the cut is the
-/// clip itself, before the turn, which no scissor can follow; the text then
-/// draws without one. Otherwise it is the pixel edges of the clip's
-/// `scissor`, `None` when the clip leaves the text whole: cut there, the
-/// quads cover exactly the pixels the scissor would pass, with the same
-/// texels, so the text needs no scissor of its own and draws in one call
-/// with its neighbours.
+/// Where the glyph quads of a text are cut, in the quads' own space. Under a
+/// turned viewport the cut is the text's `clip` itself, before the turn,
+/// which no scissor can follow; the text then draws without one. Otherwise
+/// it is the pixel edges of the text's `scissor`, its draw rect within its
+/// clip: cut there, the quads cover exactly the pixels the scissor would
+/// pass, with the same texels, so the text needs no scissor of its own and
+/// draws in one call with its neighbours, even where a last line's
+/// descenders or a glyph's padding reach past its draw rect.
 fn glyph_cut_edges(
     clip: Option<Rect>,
-    draw_rect: Rect,
     scissor: TargetRect,
     viewport: ViewportUniformParams,
     root_scale: f32,
 ) -> Option<[f32; 4]> {
     if !viewport.transform.is_identity() {
         return clip.map(|clip| glyph_clip_edges(clip, root_scale));
-    }
-    if !clip_cuts(clip, draw_rect) {
-        return None;
     }
     let (x, y, width, height) = scissor;
     let [offset_x, offset_y] = viewport.offset;
@@ -5223,7 +5214,7 @@ impl GpuRenderer {
             atlas_size: self.text_glyph_atlas.size(),
             bounds: run.bounds,
         };
-        let cut = glyph_cut_edges(text_draw.clip, draw_rect, scissor, viewport, root_scale);
+        let cut = glyph_cut_edges(text_draw.clip, scissor, viewport, root_scale);
         self.append_text_glyph_quad_run(
             raster_rect,
             quads,

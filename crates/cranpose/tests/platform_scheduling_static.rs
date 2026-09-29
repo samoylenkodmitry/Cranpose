@@ -1238,6 +1238,27 @@ fn every_platform_bridge_lets_a_reader_move_an_adjustable_control() {
 }
 
 #[test]
+fn every_desktop_window_paces_a_frame_its_surface_could_not_take() {
+    let source = crate_source("src/desktop.rs");
+    let skips: Vec<&str> = source
+        .split("SurfaceFrame::Skip => {")
+        .skip(1)
+        .map(|branch| branch.split("return").next().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        skips.len(),
+        2,
+        "the primary window and a native window each skip a frame"
+    );
+    for branch in skips {
+        assert!(
+            branch.contains("pace_after_empty_redraw("),
+            "a minimized or occluded window hands out no texture; its next attempt must wait a frame interval, or the loop spins a core: {branch}"
+        );
+    }
+}
+
+#[test]
 fn desktop_bridge_builds_nothing_without_a_reader_and_publishes_on_androids_interval() {
     let desktop_source = crate_source("src/desktop_accessibility.rs");
     let sync = desktop_source

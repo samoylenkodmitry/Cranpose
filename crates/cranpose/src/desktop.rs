@@ -5757,6 +5757,15 @@ impl ApplicationHandler for App {
                             return;
                         }
                         SurfaceFrame::Skip => {
+                            // No texture: the window is minimized, occluded or
+                            // timed out. The next attempt waits a frame
+                            // interval, as after an empty redraw, or the loop
+                            // retries at once and spins a core.
+                            pace_after_empty_redraw(
+                                &mut self.last_frame_start_time,
+                                frame_started_at,
+                                false,
+                            );
                             #[cfg(feature = "robot")]
                             {
                                 self.unpresentable_frames_since_present =

@@ -59,7 +59,7 @@ fn press_interaction_press(interaction: Option<Interaction>) -> Option<PressInte
         Some(Interaction::Press(PressInteraction::Press(press))) => Some(press),
         Some(Interaction::Press(PressInteraction::Release(release))) => Some(release.press),
         Some(Interaction::Press(PressInteraction::Cancel(cancel))) => Some(cancel.press),
-        None => None,
+        Some(Interaction::Hover(_)) | None => None,
     }
 }
 
