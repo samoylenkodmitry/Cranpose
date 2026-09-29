@@ -763,7 +763,9 @@ impl LayoutNode {
         self.debug_modifiers.get()
     }
 
-    pub fn modifier_locals_handle(&self) -> ModifierLocalsHandle {
+    /// The node's modifier locals, or `None` while its modifiers have never
+    /// provided or read one.
+    pub fn modifier_locals_handle(&self) -> Option<ModifierLocalsHandle> {
         self.modifier_chain.modifier_locals_handle()
     }
 
@@ -1166,7 +1168,7 @@ struct LayoutNodeRegistryDebugStats {
 struct LayoutNodeRegistryEntry {
     parent: Option<NodeId>,
     modifier_child_capabilities: NodeCapabilities,
-    modifier_locals: ModifierLocalsHandle,
+    modifier_locals: Option<ModifierLocalsHandle>,
     is_virtual: bool,
 }
 
@@ -1221,7 +1223,7 @@ impl LayoutNodeRegistryState {
         id: NodeId,
         parent: Option<NodeId>,
         modifier_child_capabilities: NodeCapabilities,
-        modifier_locals: ModifierLocalsHandle,
+        modifier_locals: Option<ModifierLocalsHandle>,
     ) {
         if let Some(entry) = self.entries.borrow_mut().get_mut(&id) {
             entry.parent = parent;
@@ -1262,18 +1264,13 @@ impl LayoutNodeRegistryState {
             let (next_parent, resolved) = {
                 let entries = self.entries.borrow();
                 if let Some(entry) = entries.get(&parent_id) {
-                    let resolved = if entry
+                    let resolved = entry
                         .modifier_child_capabilities
                         .contains(NodeCapabilities::MODIFIER_LOCALS)
-                    {
-                        entry
-                            .modifier_locals
-                            .borrow()
-                            .resolve(token)
-                            .map(|value| value.with_source(ModifierLocalSource::Ancestor))
-                    } else {
-                        None
-                    };
+                        .then_some(entry.modifier_locals.as_ref())
+                        .flatten()
+                        .and_then(|locals| locals.borrow().resolve(token))
+                        .map(|value| value.with_source(ModifierLocalSource::Ancestor));
                     (entry.parent, resolved)
                 } else {
                     (None, None)
