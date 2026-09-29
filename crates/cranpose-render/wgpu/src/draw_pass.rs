@@ -133,10 +133,14 @@ enum Batch<'a> {
         batch: StoreRunBatch,
         scissor: Option<(u32, u32, u32, u32)>,
     },
+    /// Draws of an arena chunk, as ranges of the pass's arena draws: the
+    /// ones it paints here, and on the batch that closes the chunk, every
+    /// draw of the chunk, whose opaque interiors go down together.
     Arena {
         chunk: usize,
         uniform_slot: usize,
-        draws: Vec<RunDrawCall>,
+        paint: std::ops::Range<usize>,
+        interiors: Option<std::ops::Range<usize>>,
         scissor: Option<(u32, u32, u32, u32)>,
     },
     Images {
@@ -269,12 +273,17 @@ impl GpuRenderer {
             overlay_images: None,
             depth_seq: 0,
             open: None,
+            arena_draws: std::mem::take(&mut scratch.arena_draws),
+            chunk_start: 0,
+            chunk_base: 0,
+            chunk_slot: None,
         };
         let prepared = segments
             .iter()
             .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
         prep.finish(self);
         let batches = prep.batches;
+        scratch.arena_draws = prep.arena_draws;
         let buffers = PassBuffers {
             images: match &prepared {
                 Ok(()) if !scratch.image_indices.is_empty() => Some(self.upload_image_slot(
@@ -324,8 +333,11 @@ impl GpuRenderer {
                         &mut pass,
                         frame,
                         &batches,
-                        &scratch.image_cmds,
-                        &scratch.glyph_cmds,
+                        PassCmds {
+                            images: &scratch.image_cmds,
+                            glyphs: &scratch.glyph_cmds,
+                            arena: &scratch.arena_draws,
+                        },
                         &buffers,
                     )
                 };
@@ -345,7 +357,9 @@ impl GpuRenderer {
             image_cmds: std::mem::take(&mut self.scratch_image_cmds),
             glyph_instances: std::mem::take(&mut self.scratch_glyph_instances),
             glyph_cmds: std::mem::take(&mut self.scratch_glyph_cmds),
+            arena_draws: std::mem::take(&mut self.scratch_arena_draws),
         };
+        scratch.arena_draws.clear();
         scratch.image_vertices.clear();
         scratch.image_indices.clear();
         scratch.image_cmds.clear();
@@ -360,6 +374,7 @@ impl GpuRenderer {
         self.scratch_image_cmds = scratch.image_cmds;
         self.scratch_glyph_instances = scratch.glyph_instances;
         self.scratch_glyph_cmds = scratch.glyph_cmds;
+        self.scratch_arena_draws = scratch.arena_draws;
     }
 
     fn draw_batches(
@@ -367,23 +382,22 @@ impl GpuRenderer {
         pass: &mut wgpu::RenderPass<'_>,
         frame: PassFrame,
         batches: &[Batch<'_>],
-        image_cmds: &[crate::render::ImageDrawCmd],
-        glyph_cmds: &[crate::render::GlyphDrawCmd],
+        cmds: PassCmds<'_>,
         buffers: &PassBuffers,
     ) -> Result<(), String> {
         let target_size = frame.size;
         if frame.depth {
             for batch in batches.iter().rev() {
-                self.draw_shape_batch(pass, batch, frame, RunStage::Interiors)?;
+                self.draw_shape_batch(pass, batch, cmds.arena, frame, RunStage::Interiors)?;
             }
         }
         for batch in batches {
             match batch {
                 Batch::StoreRun { .. } | Batch::Arena { .. } => {
-                    self.draw_shape_batch(pass, batch, frame, RunStage::Paint)?;
+                    self.draw_shape_batch(pass, batch, cmds.arena, frame, RunStage::Paint)?;
                 }
                 Batch::Images {
-                    cmds,
+                    cmds: range,
                     blend_mode,
                     uniform_slot,
                     scissor,
@@ -396,13 +410,13 @@ impl GpuRenderer {
                         pass,
                         slot,
                         *uniform_slot,
-                        &image_cmds[cmds.clone()],
+                        &cmds.images[range.clone()],
                         self.image_pipeline(*blend_mode, frame.depth),
                         *scissor,
                     )?;
                 }
                 Batch::Glyphs {
-                    cmds,
+                    cmds: range,
                     uniform_slot,
                     scissor,
                 } => {
@@ -410,7 +424,7 @@ impl GpuRenderer {
                         pass,
                         (buffers.glyphs.as_ref(), buffers.turned_glyphs.as_ref()),
                         *uniform_slot,
-                        &glyph_cmds[cmds.clone()],
+                        &cmds.glyphs[range.clone()],
                         *scissor,
                         frame,
                     )?;
@@ -438,10 +452,12 @@ impl GpuRenderer {
 
 impl GpuRenderer {
     /// Records one shape batch's stage; other batches draw nothing here.
+    /// An arena batch's draws are ranges of `arena`.
     fn draw_shape_batch(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         batch: &Batch<'_>,
+        arena: &[RunDrawCall],
         frame: PassFrame,
         stage: RunStage,
     ) -> Result<(), String> {
@@ -452,16 +468,26 @@ impl GpuRenderer {
             Batch::Arena {
                 chunk,
                 uniform_slot,
-                draws,
+                paint,
+                interiors,
                 scissor,
-            } => self.draw_arena(
-                pass,
-                *chunk,
-                *uniform_slot,
-                draws,
-                frame.scissor(*scissor),
-                stage,
-            ),
+            } => {
+                let draws = match stage {
+                    RunStage::Paint => paint.clone(),
+                    RunStage::Interiors => match interiors {
+                        Some(interiors) => interiors.clone(),
+                        None => return Ok(()),
+                    },
+                };
+                self.draw_arena(
+                    pass,
+                    *chunk,
+                    *uniform_slot,
+                    &arena[draws],
+                    frame.scissor(*scissor),
+                    stage,
+                )
+            }
             _ => Ok(()),
         }
     }
@@ -703,6 +729,15 @@ struct PassScratch {
     image_cmds: Vec<crate::render::ImageDrawCmd>,
     glyph_instances: crate::render::GlyphInstances,
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
+    arena_draws: Vec<RunDrawCall>,
+}
+
+/// The commands a pass's batches draw ranges of.
+#[derive(Clone, Copy)]
+struct PassCmds<'a> {
+    images: &'a [crate::render::ImageDrawCmd],
+    glyphs: &'a [crate::render::GlyphDrawCmd],
+    arena: &'a [RunDrawCall],
 }
 
 /// Most glyph draws held back at once; past this they draw, so a long
@@ -795,6 +830,14 @@ struct PassPrep<'a, 's, C> {
     /// that bind the same keep adding to them: layers drawn in place carry
     /// their turns in their records and glyphs, not in what they bind.
     open: Option<SegmentBinding>,
+    /// Every arena draw of the pass, which arena batches draw ranges of.
+    arena_draws: Vec<RunDrawCall>,
+    /// Where the open chunk's draws start in `arena_draws`.
+    chunk_start: usize,
+    /// The pass-order index of the open chunk's first record.
+    chunk_base: u32,
+    /// The uniform slot the open chunk's batches bind, once one is pushed.
+    chunk_slot: Option<usize>,
 }
 
 impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
@@ -880,40 +923,106 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         }
     }
 
-    /// Closes the open arena chunk into a batch.
+    /// Opens the arena chunk shapes append to next, its records placed
+    /// next in the pass's order.
+    fn open_chunk(&mut self, renderer: &mut GpuRenderer) -> usize {
+        let open = renderer.open_arena();
+        self.chunk = Some(open);
+        self.chunk_start = self.arena_draws.len();
+        self.chunk_base = self.depth_seq;
+        self.chunk_slot = None;
+        open
+    }
+
+    /// The uniform slot the open chunk's batches bind: the segment's, or in a
+    /// pass with a depth buffer one that places the chunk's records from its
+    /// base in the pass's order.
+    fn chunk_uniform_slot(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) -> usize {
+        if let Some(slot) = self.chunk_slot {
+            return slot;
+        }
+        let slot = if self.depth {
+            renderer.claim_uniform_slot(ViewportUniformParams {
+                depth_base: self.chunk_base as f32,
+                ..binding.bound
+            })
+        } else {
+            binding.uniform_slot
+        };
+        self.chunk_slot = Some(slot);
+        slot
+    }
+
+    /// Closes the open arena chunk: a batch paints its draws since the last
+    /// cut and lays down the opaque interiors of all of its draws.
     fn close_chunk(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) {
         let Some(open) = self.chunk.take() else {
             return;
         };
-        let draws = renderer.close_arena(open);
-        if !draws.is_empty() {
-            let uniform_slot = self.depth_slot(renderer, binding, &draws);
+        let records = renderer.open_arena_records();
+        let paint_start = self.arena_draws.len();
+        renderer.close_arena(open, &mut self.arena_draws);
+        let end = self.arena_draws.len();
+        if end == self.chunk_start {
+            return;
+        }
+        let uniform_slot = self.chunk_uniform_slot(renderer, binding);
+        if self.depth {
+            self.depth_seq = self.chunk_base.saturating_add(records);
+        }
+        self.batches.push(Batch::Arena {
+            chunk: open,
+            uniform_slot,
+            paint: paint_start..end,
+            interiors: Some(self.chunk_start..end),
+            scissor: binding.scissor,
+        });
+    }
+
+    /// Draws the held glyphs where the open chunk has got to, and keeps the
+    /// chunk open: its shapes so far paint first and the glyphs above them,
+    /// while its later records, and the opaque interiors of all of them,
+    /// stay one chunk. Without an open chunk it draws what is held.
+    fn draw_held_glyphs(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding) {
+        let Some(open) = self.chunk else {
+            self.flush(renderer, binding);
+            return;
+        };
+        let Some(cmds) = self.pending_glyphs.take() else {
+            return;
+        };
+        let paint_start = self.arena_draws.len();
+        renderer.cut_arena(open, &mut self.arena_draws);
+        let end = self.arena_draws.len();
+        if end > paint_start {
+            let uniform_slot = self.chunk_uniform_slot(renderer, binding);
             self.batches.push(Batch::Arena {
                 chunk: open,
                 uniform_slot,
-                draws,
+                paint: paint_start..end,
+                interiors: None,
                 scissor: binding.scissor,
             });
         }
-    }
-
-    /// The uniform slot a shape batch of `draws` binds: the segment's, or in
-    /// a pass with a depth buffer one that places the batch's records next
-    /// in the pass's order.
-    fn depth_slot(
-        &mut self,
-        renderer: &mut GpuRenderer,
-        binding: SegmentBinding,
-        draws: &[RunDrawCall],
-    ) -> usize {
-        if !self.depth {
-            return binding.uniform_slot;
-        }
-        let base = self.take_depth_range(draws);
-        renderer.claim_uniform_slot(ViewportUniformParams {
-            depth_base: base,
-            ..binding.bound
-        })
+        // The glyphs sit where the chunk's next record will: its later
+        // opaque interiors hide them, its earlier ones do not.
+        let uniform_slot = if self.depth {
+            renderer.claim_uniform_slot(ViewportUniformParams {
+                depth_base: self
+                    .chunk_base
+                    .saturating_add(renderer.open_arena_records())
+                    as f32,
+                ..binding.bound
+            })
+        } else {
+            binding.uniform_slot
+        };
+        self.overlay_segment = Some(binding.uniform_slot);
+        self.batches.push(Batch::Glyphs {
+            cmds,
+            uniform_slot,
+            scissor: binding.scissor,
+        });
     }
 
     /// The uniform slot a new glyph batch binds: the binding's, or in a pass
@@ -1036,7 +1145,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 .run_target_bounds(draw, run)
                 .is_some_and(|bounds| self.pending_glyphs.overlaps(bounds))
             {
-                self.flush(renderer, run.binding);
+                self.draw_held_glyphs(renderer, run.binding);
             }
             let window = window.unwrap_or(0..u32::MAX);
             if renderer.run_is_stored(draw) {
@@ -1070,7 +1179,10 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     {
                         self.close_chunk(renderer, run.binding);
                     }
-                    let open = *self.chunk.get_or_insert_with(|| renderer.open_arena());
+                    let open = match self.chunk {
+                        Some(open) => open,
+                        None => self.open_chunk(renderer),
+                    };
                     let taken = renderer.append_arena_run(
                         open,
                         draw,

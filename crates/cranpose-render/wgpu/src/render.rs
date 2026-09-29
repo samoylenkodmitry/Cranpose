@@ -2354,6 +2354,7 @@ pub struct GpuRenderer {
     pub(crate) scratch_glyph_instances: GlyphInstances,
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
     pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
+    pub(crate) scratch_arena_draws: Vec<RunDrawCall>,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
     scratch_text_glyph_entries: Vec<GlyphAtlasEntry>,
     frame_graph_executor: WgpuFrameGraphExecutor,
@@ -2615,6 +2616,7 @@ impl GpuRenderer {
             scratch_glyph_instances: GlyphInstances::default(),
             scratch_image_cmds: Vec::new(),
             scratch_glyph_cmds: Vec::new(),
+            scratch_arena_draws: Vec::new(),
             scratch_text_glyph_run: Vec::new(),
             scratch_text_glyph_entries: Vec::new(),
             frame_graph_executor,
@@ -4022,13 +4024,18 @@ impl GpuRenderer {
         taken
     }
 
-    /// Uploads the open chunk and returns its draws.
-    pub(crate) fn close_arena(&mut self, chunk: usize) -> Vec<RunDrawCall> {
-        let (draws, fill) = self.run_store.close_arena(&self.device, chunk);
-        if let Some(fill) = fill {
+    /// Moves the open chunk's draws since its last cut onto `out`, keeping
+    /// it open.
+    pub(crate) fn cut_arena(&mut self, chunk: usize, out: &mut Vec<RunDrawCall>) {
+        self.run_store.cut_arena(&self.device, chunk, out);
+    }
+
+    /// Uploads the open chunk and moves its draws since its last cut onto
+    /// `out`.
+    pub(crate) fn close_arena(&mut self, chunk: usize, out: &mut Vec<RunDrawCall>) {
+        if let Some(fill) = self.run_store.close_arena(&self.device, chunk, out) {
             self.frame_stats.add_shape_fill(fill);
         }
-        draws
     }
 
     pub(crate) fn draw_run_calls(
