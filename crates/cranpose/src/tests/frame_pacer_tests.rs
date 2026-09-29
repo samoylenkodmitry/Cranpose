@@ -492,3 +492,76 @@ fn rising_a_level_drops_the_lead() {
         "the missed vsyncs that made the pacer rise drop the lead"
     );
 }
+
+/// A pacer running unpaced whose frames each waited `wait_ns` for the
+/// renderer over one hold window.
+fn unpaced_waiting(wait_ns: i64) -> FramePacer {
+    let mut pacer = FramePacer::default();
+    pacer.record_shown(VSYNC, 2, VSYNC);
+    assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+    for _ in 0..crate::unpaced_hold::WINDOW {
+        pacer.record_handoff_wait(wait_ns, VSYNC);
+    }
+    pacer
+}
+
+#[test]
+fn an_unpaced_frame_that_would_only_wait_for_the_renderer_is_held_after_a_return() {
+    let mut pacer = unpaced_waiting(12_000_000);
+    let hold = pacer.current_hold_ns();
+    assert_eq!(hold, 5_000_000);
+    let vsync = 10 * VSYNC;
+    let returned = vsync + 1_000_000;
+    pacer.note_frame_returned(returned);
+
+    let during = returned + hold / 2;
+    assert!(!pacer.slot_open(during, vsync, VSYNC));
+    assert_eq!(
+        pacer.lead_wake_ns(during, vsync, VSYNC),
+        Some(returned + hold),
+        "the loop wakes when the hold ends"
+    );
+    assert!(!pacer.begin_frame(during, vsync, VSYNC));
+
+    let after = returned + hold;
+    assert!(pacer.slot_open(after, vsync, VSYNC));
+    assert!(pacer.begin_frame(after, vsync, VSYNC));
+    assert!(
+        pacer.begin_frame(after + 1_000_000, vsync, VSYNC),
+        "only a return starts another hold"
+    );
+}
+
+#[test]
+fn a_loop_that_finds_the_renderer_free_is_not_held() {
+    let mut pacer = unpaced_waiting(1_000_000);
+    assert_eq!(pacer.current_hold_ns(), 0);
+    pacer.note_frame_returned(10 * VSYNC);
+    assert!(pacer.begin_frame(10 * VSYNC, 10 * VSYNC, VSYNC));
+}
+
+#[test]
+fn a_paced_loop_ignores_hand_off_waits() {
+    let mut pacer = buffered();
+    for _ in 0..crate::unpaced_hold::WINDOW {
+        pacer.record_handoff_wait(12_000_000, VSYNC);
+    }
+    assert_eq!(pacer.current_hold_ns(), 0);
+    pacer.note_frame_returned(STUFFED);
+    assert_eq!(pacer.lead_wake_ns(STUFFED, STUFFED, VSYNC), None);
+}
+
+#[test]
+fn a_change_of_level_stops_holding_frames() {
+    let mut pacer = unpaced_waiting(12_000_000);
+    assert_eq!(pacer.current_hold_ns(), 5_000_000);
+    let now = shown_run(&mut pacer, 2 * VSYNC, FULL_HISTORY as i64, 3);
+    pacer.note_frame_returned(now);
+    assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
+    assert_eq!(pacer.current_hold_ns(), 0);
+    assert_eq!(
+        pacer.lead_wake_ns(now, now, VSYNC),
+        None,
+        "a hold noted before the change is gone with it"
+    );
+}
