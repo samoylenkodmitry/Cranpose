@@ -330,7 +330,7 @@ fn PopupLayer(entry: PopupEntry) {
     Box(
         Modifier::empty()
             .absolute_offset(data.position.x, data.position.y)
-            .semantics(move |config| {
+            .stable_semantics(move |config| {
                 config.is_modal = dismiss.is_some();
                 config.dismiss = dismiss.clone().map(|dismiss| {
                     cranpose_foundation::SemanticsDismiss::new(move || {

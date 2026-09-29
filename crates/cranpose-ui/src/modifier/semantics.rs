@@ -102,13 +102,18 @@ impl fmt::Debug for SemanticsRequester {
 
 pub struct SemanticsModifierNode {
     recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
+    /// The recorder may read state it did not capture.
+    reads_live_state: bool,
     state: NodeState,
 }
 
 impl SemanticsModifierNode {
-    pub fn new(recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>) -> Self {
+    /// A node running `recorder`; `reads_live_state` says the recorder may
+    /// read state it did not capture, so every semantics update runs it.
+    pub fn new(recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>, reads_live_state: bool) -> Self {
         Self {
             recorder,
+            reads_live_state,
             state: NodeState::new(),
         }
     }
@@ -224,16 +229,26 @@ impl SemanticsNodeTrait for SemanticsModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
         (self.recorder)(config);
     }
+
+    fn reach(&self) -> cranpose_foundation::SemanticsReach {
+        cranpose_foundation::SemanticsReach::merged_by(self, self.reads_live_state)
+    }
 }
 
 #[derive(Clone)]
 pub struct SemanticsElement {
     recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
+    reads_live_state: bool,
 }
 
 impl SemanticsElement {
-    pub fn new(recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>) -> Self {
-        Self { recorder }
+    /// An element running `recorder`; `reads_live_state` says the recorder
+    /// may read state it did not capture.
+    pub fn new(recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>, reads_live_state: bool) -> Self {
+        Self {
+            recorder,
+            reads_live_state,
+        }
     }
 }
 
@@ -261,11 +276,12 @@ impl ModifierNodeElement for SemanticsElement {
     type Node = SemanticsModifierNode;
 
     fn create(&self) -> Self::Node {
-        SemanticsModifierNode::new(self.recorder.clone())
+        SemanticsModifierNode::new(self.recorder.clone(), self.reads_live_state)
     }
 
     fn update(&self, node: &mut Self::Node) {
         node.recorder = self.recorder.clone();
+        node.reads_live_state = self.reads_live_state;
     }
 
     fn capabilities(&self) -> NodeCapabilities {

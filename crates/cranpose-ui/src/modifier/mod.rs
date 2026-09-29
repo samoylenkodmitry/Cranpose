@@ -540,13 +540,38 @@ impl Modifier {
     /// Example:
     /// `Modifier::empty().semantics_spec(SemanticsSpec::new().content_description("Amount").error("needs a number"))`
     pub fn semantics_spec(self, spec: cranpose_foundation::SemanticsSpec) -> Self {
-        self.semantics(move |config: &mut SemanticsConfiguration| config.merge(&spec))
+        self.stable_semantics(move |config: &mut SemanticsConfiguration| config.merge(&spec))
     }
+
+    /// Records what a screen reader reads for this node. The recorder may
+    /// read live state, so every semantics update runs it again; one whose
+    /// answer changes without the node changing can say so with a
+    /// [`SemanticsRequester`](crate::SemanticsRequester).
     pub fn semantics<F>(self, recorder: F) -> Self
     where
         F: Fn(&mut SemanticsConfiguration) + 'static,
     {
-        let recorder: std::rc::Rc<dyn Fn(&mut SemanticsConfiguration)> = std::rc::Rc::new(recorder);
+        self.semantics_recorder(std::rc::Rc::new(recorder), true)
+    }
+
+    /// [`Modifier::semantics`] for a recorder that reads nothing but what it
+    /// captured. Its answer changes only when the modifier is set again, which
+    /// invalidates the node's semantics, so a semantics update keeps what it
+    /// reported instead of running it.
+    ///
+    /// Example: `Modifier::empty().stable_semantics(move |config| config.content_description = Some(label.clone()))`
+    pub fn stable_semantics<F>(self, recorder: F) -> Self
+    where
+        F: Fn(&mut SemanticsConfiguration) + 'static,
+    {
+        self.semantics_recorder(std::rc::Rc::new(recorder), false)
+    }
+
+    fn semantics_recorder(
+        self,
+        recorder: std::rc::Rc<dyn Fn(&mut SemanticsConfiguration)>,
+        reads_live_state: bool,
+    ) -> Self {
         let metadata = if inspector_metadata_enabled() {
             let mut preview = SemanticsConfiguration::default();
             recorder(&mut preview);
@@ -575,7 +600,7 @@ impl Modifier {
         } else {
             inspector_metadata("semantics", |_| {})
         };
-        let element = SemanticsElement::new(recorder);
+        let element = SemanticsElement::new(recorder, reads_live_state);
         let modifier =
             Modifier::from_parts(&[modifier_element(element)]).with_inspector_metadata(metadata);
         self.then(modifier)
@@ -591,7 +616,7 @@ impl Modifier {
     /// Example: `Modifier::empty().progress_semantics(0.35, 0.0, 1.0, 0)`
     pub fn progress_semantics(self, current: f32, start: f32, end: f32, steps: u32) -> Self {
         let info = ProgressBarRangeInfo::new(current, start, end, steps);
-        self.semantics(move |config| config.progress = Some(info))
+        self.stable_semantics(move |config| config.progress = Some(info))
     }
 
     /// Marks this control as one that opens a list of choices, so a reader
@@ -613,7 +638,7 @@ impl Modifier {
     /// `Modifier.semantics { expand { … } }`.
     pub fn expand(self, action: impl Fn() -> bool + 'static) -> Self {
         let action = cranpose_foundation::SemanticsExpand::new(action);
-        self.semantics(move |config| config.expand = Some(action.clone()))
+        self.stable_semantics(move |config| config.expand = Some(action.clone()))
     }
 
     /// Says what a long press on this control does, so a screen reader can
@@ -632,7 +657,7 @@ impl Modifier {
     ) -> Self {
         let label = label.into();
         let action = cranpose_foundation::SemanticsLongClick::new(action);
-        self.semantics(move |config| {
+        self.stable_semantics(move |config| {
             config.on_long_click_label = Some(label.clone());
             config.on_long_click = Some(action.clone());
         })
@@ -649,7 +674,7 @@ impl Modifier {
     ) -> Self {
         let label = label.into();
         let action = cranpose_foundation::SemanticsMagicTap::new(action);
-        self.semantics(move |config| {
+        self.stable_semantics(move |config| {
             config.on_magic_tap_label = Some(label.clone());
             config.on_magic_tap = Some(action.clone());
         })
@@ -660,7 +685,7 @@ impl Modifier {
     /// `accessibilityInputLabels`.
     pub fn input_labels<S: Into<String>>(self, labels: impl IntoIterator<Item = S>) -> Self {
         let labels: Vec<String> = labels.into_iter().map(Into::into).collect();
-        self.semantics(move |config| config.input_labels.clone_from(&labels))
+        self.stable_semantics(move |config| config.input_labels.clone_from(&labels))
     }
 
     /// The language of this control's text, as a BCP 47 tag such as "de" or
@@ -668,7 +693,7 @@ impl Modifier {
     /// `accessibilityLanguage`, ARIA's `lang`.
     pub fn language(self, tag: impl Into<String>) -> Self {
         let tag = tag.into();
-        self.semantics(move |config| config.language = Some(tag.clone()))
+        self.stable_semantics(move |config| config.language = Some(tag.clone()))
     }
 
     /// Says what this control does when a screen reader asks it to close, and
@@ -676,7 +701,7 @@ impl Modifier {
     /// `Modifier.semantics { collapse { … } }`.
     pub fn collapse(self, action: impl Fn() -> bool + 'static) -> Self {
         let action = cranpose_foundation::SemanticsExpand::new(action);
-        self.semantics(move |config| config.collapse = Some(action.clone()))
+        self.stable_semantics(move |config| config.collapse = Some(action.clone()))
     }
 
     /// Says what this control does when a screen reader asks to send it away:
@@ -685,7 +710,7 @@ impl Modifier {
     /// out. Compose's `Modifier.semantics { dismiss { … } }`.
     pub fn dismiss(self, action: impl Fn() -> bool + 'static) -> Self {
         let action = cranpose_foundation::SemanticsDismiss::new(action);
-        self.semantics(move |config| config.dismiss = Some(action.clone()))
+        self.stable_semantics(move |config| config.dismiss = Some(action.clone()))
     }
 
     /// Says what this list does when a screen reader asks for the row at an
@@ -695,7 +720,7 @@ impl Modifier {
     /// own. Compose's `Modifier.semantics { scrollToIndex { … } }`.
     pub fn scroll_to_index(self, action: impl Fn(usize) -> bool + 'static) -> Self {
         let action = cranpose_foundation::SemanticsScrollToIndex::new(action);
-        self.semantics(move |config| config.scroll_to_index = Some(action.clone()))
+        self.stable_semantics(move |config| config.scroll_to_index = Some(action.clone()))
     }
 
     /// Moves this node in the order a screen reader visits the nodes beside
@@ -704,7 +729,7 @@ impl Modifier {
     /// be read first takes a negative number. Compose's
     /// `Modifier.semantics { traversalIndex = -1f }`.
     pub fn traversal_index(self, index: f32) -> Self {
-        self.semantics(move |config| config.traversal_index = index)
+        self.stable_semantics(move |config| config.traversal_index = index)
     }
 
     /// Marks a field as one that holds a secret, so no screen reader reads
@@ -712,7 +737,7 @@ impl Modifier {
     /// "password" in place of the text. Compose's
     /// `Modifier.semantics { password() }`.
     pub fn password(self) -> Self {
-        self.semantics(|config| config.password = true)
+        self.stable_semantics(|config| config.password = true)
     }
 
     /// Says why the control's content is wrong, so a screen reader reads
@@ -720,7 +745,7 @@ impl Modifier {
     /// Compose's `Modifier.semantics { error("...") }`.
     pub fn error(self, message: impl Into<String>) -> Self {
         let message = message.into();
-        self.semantics(move |config| config.error = Some(message.clone()))
+        self.stable_semantics(move |config| config.error = Some(message.clone()))
     }
 
     /// Names the screen or pane this node is the root of, so a screen reader
@@ -728,7 +753,7 @@ impl Modifier {
     /// opens. Compose's `Modifier.semantics { paneTitle = "..." }`.
     pub fn pane_title(self, title: impl Into<String>) -> Self {
         let title = title.into();
-        self.semantics(move |config| config.pane_title = Some(title.clone()))
+        self.stable_semantics(move |config| config.pane_title = Some(title.clone()))
     }
 
     /// Makes the selectable controls under this node one group, so a screen
@@ -736,7 +761,7 @@ impl Modifier {
     /// tab, 2 of 5". `LiquidTabBar` declares it on its own. Compose's
     /// `Modifier.selectableGroup()`.
     pub fn selectable_group(self) -> Self {
-        self.semantics(|config| config.selectable_group = true)
+        self.stable_semantics(|config| config.selectable_group = true)
     }
 
     /// Makes a screen reader take this node and the text under it as one
@@ -744,7 +769,7 @@ impl Modifier {
     /// belong together reads as "Milk, 2, 3.40" and not as three stops.
     /// Compose's `Modifier.semantics(mergeDescendants = true) {}`.
     pub fn merge_descendants(self) -> Self {
-        self.semantics(|config| config.merge_descendants = true)
+        self.stable_semantics(|config| config.merge_descendants = true)
     }
 
     /// Takes this node and everything under it out of what a screen reader
@@ -752,7 +777,7 @@ impl Modifier {
     /// carries the same words as its name. Compose's
     /// `semantics { hideFromAccessibility() }`.
     pub fn hide_from_accessibility(self) -> Self {
-        self.semantics(|config| config.hidden = true)
+        self.stable_semantics(|config| config.hidden = true)
     }
 
     /// Marks this component as a heading, so a screen reader lists it among
@@ -768,7 +793,7 @@ impl Modifier {
     ///
     /// This is Compose's `Modifier.semantics { role = Role.Button }`.
     pub fn role(self, role: cranpose_foundation::SemanticsWidgetRole) -> Self {
-        self.semantics(move |config| config.role = Some(role))
+        self.stable_semantics(move |config| config.role = Some(role))
     }
 
     /// Makes a screen reader read this component's text out whenever it
@@ -777,7 +802,7 @@ impl Modifier {
     ///
     /// This is Compose's `Modifier.semantics { liveRegion = LiveRegionMode.Polite }`.
     pub fn live_region(self, mode: cranpose_foundation::LiveRegionMode) -> Self {
-        self.semantics(move |config| config.live_region = Some(mode))
+        self.stable_semantics(move |config| config.live_region = Some(mode))
     }
 
     /// Gives this component the text a screen reader reads for it, for a
@@ -786,7 +811,7 @@ impl Modifier {
     /// This is Compose's `Modifier.semantics { contentDescription = "..." }`.
     pub fn content_description(self, description: impl Into<String>) -> Self {
         let description = description.into();
-        self.semantics(move |config| config.content_description = Some(description.clone()))
+        self.stable_semantics(move |config| config.content_description = Some(description.clone()))
     }
 
     /// Makes this component focusable.

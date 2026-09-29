@@ -198,7 +198,7 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     let on_change = std::rc::Rc::new(on_change);
     let track = Modifier::empty()
         .size(Size::new(TRACK_WIDTH, TRACK_HEIGHT))
-        .semantics(switch_semantics(checked))
+        .stable_semantics(switch_semantics(checked))
         .focusable()
         .pointer_input(checked, {
             let on_change = std::rc::Rc::clone(&on_change);

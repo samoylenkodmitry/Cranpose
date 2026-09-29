@@ -12,8 +12,9 @@ use cranpose_foundation::{
 use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult, MeasureScope, Placement};
 
 use super::{
-    LayoutNode, SemanticsNode, SemanticsTree, build_semantics_tree_from_applier, core::Measurable,
-    measure_layout, update_semantics_tree_from_applier,
+    LayoutNode, MeasureLayoutOptions, SemanticsNode, SemanticsTree,
+    build_semantics_tree_from_applier, core::Measurable, measure_layout_with_options,
+    update_semantics_tree_from_applier,
 };
 use crate::{
     layout::policies::LeafMeasurePolicy,
@@ -205,11 +206,20 @@ impl Scroller {
         })
     }
 
-    /// Lays the tree out again, as a pass that moved nodes does.
+    /// Lays the tree out again, as the shell's pass that moved nodes does:
+    /// collecting no semantics on the way.
     fn relayout(&mut self) -> Result<(), NodeError> {
         self.applier
             .with_node::<LayoutNode, _>(self.root, |root| root.mark_needs_measure())?;
-        measure_layout(&mut self.applier, self.root, Size::new(100.0, 100.0))?;
+        measure_layout_with_options(
+            &mut self.applier,
+            self.root,
+            Size::new(100.0, 100.0),
+            MeasureLayoutOptions {
+                collect_semantics: false,
+                build_layout_tree: false,
+            },
+        )?;
         Ok(())
     }
 
@@ -433,6 +443,43 @@ fn a_recorder_reading_live_state_merges_on_every_update() -> Result<(), NodeErro
         .and_then(|tree| tree.root().children.first())
         .and_then(|row| row.state_description.clone());
     assert_eq!(state.as_deref(), Some("at 3"));
+    Ok(())
+}
+
+#[test]
+fn a_moved_row_keeps_a_stable_recorders_report() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut scroller = Scroller::new();
+    let runs = Rc::new(Cell::new(0));
+    let (stable_runs, live_runs) = (Rc::clone(&runs), Rc::new(Cell::new(0)));
+    let counted = Rc::clone(&live_runs);
+    let stable = scroller.row_with(Modifier::empty().stable_semantics(move |config| {
+        stable_runs.set(stable_runs.get() + 1);
+        config.content_description = Some("Saved".into());
+    }));
+    let live = scroller.row_with(Modifier::empty().semantics(move |config| {
+        counted.set(counted.get() + 1);
+        config.content_description = Some("Clock".into());
+    }));
+    scroller.set_children(&[stable, live])?;
+    scroller.relayout()?;
+    scroller.update()?;
+
+    let mut moved = || -> Result<(usize, usize), NodeError> {
+        let before = (runs.get(), live_runs.get());
+        scroller.offset.set(scroller.offset.get() + 1.0);
+        scroller.relayout()?;
+        let merged = scroller.update()?;
+        assert_eq!(merged, 0);
+        // `update` checks against a fresh tree, which runs each recorder once.
+        Ok((runs.get() - before.0 - 1, live_runs.get() - before.1 - 1))
+    };
+    moved()?;
+    assert_eq!(
+        moved()?,
+        (0, 1),
+        "a move runs the live recorder again and leaves the stable one"
+    );
     Ok(())
 }
 

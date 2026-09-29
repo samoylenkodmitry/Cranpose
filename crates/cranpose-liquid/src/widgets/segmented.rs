@@ -251,7 +251,7 @@ pub fn LiquidSegmentedControl(
                         let on_select = Rc::clone(&semantic_selection);
                         let cell = Modifier::empty()
                             .size(Size::new(segment_width, SEGMENT_HEIGHT))
-                            .semantics(super::selection::selection_semantics(
+                            .stable_semantics(super::selection::selection_semantics(
                                 description,
                                 SemanticsWidgetRole::RadioButton,
                                 index,

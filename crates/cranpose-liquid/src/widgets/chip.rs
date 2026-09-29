@@ -85,7 +85,7 @@ fn ChipPane(
     let on_click = Rc::new(RefCell::new(on_click));
     let base = base
         .press_interaction_source(interaction)
-        .semantics(chip_semantics(selection))
+        .stable_semantics(chip_semantics(selection))
         .clickable(move |_point| {
             default_haptics().perform(HapticFeedback::Selection);
             (on_click.borrow_mut())();

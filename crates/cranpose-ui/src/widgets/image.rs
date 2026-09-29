@@ -951,7 +951,7 @@ where
     let intrinsic_dp = painter.intrinsic_size();
     let draw_alpha = alpha.clamp(0.0, 1.0);
 
-    let semantics_modifier = Modifier::empty().semantics(move |config| {
+    let semantics_modifier = Modifier::empty().stable_semantics(move |config| {
         config.content_description.clone_from(&content_description);
     });
 
@@ -959,7 +959,7 @@ where
     let density = crate::density::density().density();
     let image_modifier = semantics_modifier
         .then(modifier)
-        .semantics(|config| {
+        .stable_semantics(|config| {
             if config.role.is_none()
                 && config
                     .content_description

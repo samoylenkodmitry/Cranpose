@@ -98,7 +98,7 @@ where
             scope.draw_round_rect(Brush::Solid(container), CornerRadii::uniform(radius));
         })
         .clickable(move |_point| on_click())
-        .semantics(move |config: &mut SemanticsConfiguration| {
+        .stable_semantics(move |config: &mut SemanticsConfiguration| {
             config.role = Some(SemanticsWidgetRole::Button);
             config.is_clickable = true;
             config.content_description = Some(description.clone());

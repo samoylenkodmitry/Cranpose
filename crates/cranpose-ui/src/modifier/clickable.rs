@@ -41,7 +41,7 @@ impl Modifier {
 fn pressable(modifier: Modifier) -> Modifier {
     modifier
         .then(
-            Modifier::empty().semantics(|config: &mut SemanticsConfiguration| {
+            Modifier::empty().stable_semantics(|config: &mut SemanticsConfiguration| {
                 config.is_clickable = true;
             }),
         )

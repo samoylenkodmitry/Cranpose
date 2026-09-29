@@ -527,7 +527,7 @@ fn TabCells(
                     let cell = Modifier::empty()
                         .offset(BLOB_MARGIN + index as f32 * geometry.pitch, BLOB_MARGIN)
                         .size(Size::new(geometry.cell_width, BLOB_HEIGHT))
-                        .semantics(super::selection::selection_semantics(
+                        .stable_semantics(super::selection::selection_semantics(
                             label_for_semantics.to_string(),
                             SemanticsWidgetRole::Tab,
                             index,
