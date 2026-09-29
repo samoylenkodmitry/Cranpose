@@ -314,7 +314,7 @@ struct CachedTextGlyphQuad {
 
 struct CachedTextGlyphRun {
     /// The run's glyphs that draw: zero-sized and transparent ones are left
-    /// out when the run is cached.
+    /// out when the run is collected.
     glyphs: Rc<[SoftwareGlyphAtlasPlacement]>,
     bounds: GlyphRunBounds,
     /// Where each of `glyphs` sits in the atlas at `atlas_generation`. A
@@ -436,11 +436,6 @@ impl GlyphRunQuads<'_> {
             .zip(self.entries)
             .map(|(glyph, entry)| cached_text_glyph_quad(glyph, *entry, self.atlas_size))
     }
-}
-
-/// Whether `glyph` puts any pixels down.
-fn glyph_draws(glyph: &SoftwareGlyphAtlasPlacement) -> bool {
-    glyph.width != 0 && glyph.height != 0 && glyph.color.3 > 0.0
 }
 
 struct CachedGpuTextGlyphRun {
@@ -1854,6 +1849,46 @@ impl GlyphAtlasSlotKey {
             glyph,
             luminance: TextLuminance::of_color(color),
         }
+    }
+}
+
+/// Slots of [`RunAtlasEntries`], by glyph id.
+const RUN_ATLAS_ENTRY_SLOTS: usize = 64;
+
+/// The atlas entries a run's preparation has looked up, by glyph id: a run
+/// repeats its letters, and each atlas lookup hashes the slot key and moves
+/// the entry up the atlas's recency order, where the first lookup already
+/// put it for this frame.
+struct RunAtlasEntries {
+    slots: [Option<(GlyphAtlasSlotKey, GlyphAtlasEntry)>; RUN_ATLAS_ENTRY_SLOTS],
+}
+
+impl RunAtlasEntries {
+    fn new() -> Self {
+        Self {
+            slots: [None; RUN_ATLAS_ENTRY_SLOTS],
+        }
+    }
+
+    /// `glyph`'s entry from an earlier glyph of the run, else from
+    /// `look_up`, remembered for the rest of it.
+    fn entry(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        glyph: &SoftwareGlyphAtlasPlacement,
+        look_up: impl FnOnce(&mut GpuRenderer) -> Result<GlyphAtlasEntry, String>,
+    ) -> Result<GlyphAtlasEntry, String> {
+        let key = GlyphAtlasSlotKey::new(glyph.key, glyph.color);
+        let slot = &mut self.slots[glyph.key.glyph_id as usize % RUN_ATLAS_ENTRY_SLOTS];
+        if let Some((seen, entry)) = *slot
+            && seen == key
+        {
+            renderer.frame_stats.record_text_glyph_atlas_hits(1);
+            return Ok(entry);
+        }
+        let entry = look_up(renderer)?;
+        *slot = Some((key, entry));
+        Ok(entry)
     }
 }
 
@@ -4704,21 +4739,27 @@ impl GpuRenderer {
         entries: &mut Vec<GlyphAtlasEntry>,
     ) -> Result<Rc<[GlyphAtlasEntry]>, String> {
         entries.clear();
+        let mut seen = RunAtlasEntries::new();
         if let Some(glyph_run) = cached_glyph_run {
             for glyph in glyph_run {
-                entries.push(self.glyph_atlas_entry_for_placement(glyph)?);
+                entries.push(seen.entry(self, glyph, |renderer| {
+                    renderer.glyph_atlas_entry_for_placement(glyph)
+                })?);
             }
         } else {
             for run_glyph in collected_run {
-                if !glyph_draws(&run_glyph.placement()) {
-                    continue;
-                }
-                entries.push(match run_glyph {
-                    SoftwareGlyphAtlasRunGlyph::Cached(placement) => {
-                        self.glyph_atlas_entry_for_placement(placement)?
-                    }
-                    SoftwareGlyphAtlasRunGlyph::New(glyph) => self.glyph_atlas_entry_for(glyph)?,
-                });
+                entries.push(seen.entry(
+                    self,
+                    &run_glyph.placement(),
+                    |renderer| match run_glyph {
+                        SoftwareGlyphAtlasRunGlyph::Cached(placement) => {
+                            renderer.glyph_atlas_entry_for_placement(placement)
+                        }
+                        SoftwareGlyphAtlasRunGlyph::New(glyph) => {
+                            renderer.glyph_atlas_entry_for(glyph)
+                        }
+                    },
+                )?);
             }
         }
 
@@ -4996,7 +5037,6 @@ impl GpuRenderer {
         let glyphs: Rc<[SoftwareGlyphAtlasPlacement]> = collected_run
             .iter()
             .map(SoftwareGlyphAtlasRunGlyph::placement)
-            .filter(glyph_draws)
             .collect();
         let bounds = GlyphRunBounds::of(&glyphs);
         self.text_glyph_run_cache.put(

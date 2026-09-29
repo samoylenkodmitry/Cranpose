@@ -770,22 +770,3 @@ fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
     assert_eq!(quad.uv.max, expected.uv.max);
     assert_eq!(quad.uv.sample_bounds, expected.uv.sample_bounds);
 }
-
-#[test]
-fn only_a_glyph_with_area_and_colour_draws() {
-    let (glyphs, _) = test_run(0);
-    let glyph = glyphs[0];
-    assert!(glyph_draws(&glyph));
-    assert!(!glyph_draws(&SoftwareGlyphAtlasPlacement {
-        width: 0,
-        ..glyph
-    }));
-    assert!(!glyph_draws(&SoftwareGlyphAtlasPlacement {
-        height: 0,
-        ..glyph
-    }));
-    assert!(!glyph_draws(&SoftwareGlyphAtlasPlacement {
-        color: Color(1.0, 1.0, 1.0, 0.0),
-        ..glyph
-    }));
-}

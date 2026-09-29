@@ -1872,3 +1872,82 @@ fn prefix_widths_past_their_character_budget_leave_least_recent_first() {
     );
     assert_eq!(cache.chars, 30);
 }
+
+/// Collects the run of `text` drawn in `color` at 14 px.
+fn collected_run(text: &AnnotatedString, color: Color) -> Vec<SoftwareGlyphAtlasRunGlyph> {
+    let fonts = SoftwareTextFontSet::from_font(
+        default_software_text_font().expect("bundled default test font"),
+    );
+    let rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 400.0,
+        height: 40.0,
+    };
+    let mut glyph_cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(64);
+    let mut run = Vec::new();
+    collect_solid_text_atlas_run(
+        text,
+        rect,
+        &TextStyle::default(),
+        color,
+        14.0,
+        1.0,
+        &fonts,
+        &mut glyph_cache,
+        &mut run,
+    )
+    .expect("atlas-compatible text");
+    run
+}
+
+#[test]
+fn a_collected_run_holds_only_the_glyphs_that_put_pixels_down() {
+    let text = AnnotatedString::from("Hi there, AV!");
+    let opaque = collected_run(&text, Color(1.0, 1.0, 1.0, 1.0));
+    assert_eq!(
+        opaque.len(),
+        text.text.chars().filter(|ch| !ch.is_whitespace()).count(),
+        "every visible character and no space"
+    );
+    assert!(
+        opaque
+            .iter()
+            .map(SoftwareGlyphAtlasRunGlyph::placement)
+            .all(|glyph| glyph.width != 0
+                && glyph.height != 0
+                && glyph.color == Color(1.0, 1.0, 1.0, 1.0))
+    );
+    assert!(collected_run(&text, Color(1.0, 1.0, 1.0, 0.0)).is_empty());
+}
+
+#[test]
+fn a_transparent_span_still_moves_the_glyphs_after_it() {
+    let spanned = |color| {
+        AnnotatedString::builder()
+            .push_style(SpanStyle {
+                color: Some(color),
+                ..Default::default()
+            })
+            .append("Hidden ")
+            .pop()
+            .append("shown")
+            .to_annotated_string()
+    };
+    let white = Color(1.0, 1.0, 1.0, 1.0);
+    let place = |run: &[SoftwareGlyphAtlasRunGlyph]| {
+        run.iter()
+            .map(|glyph| {
+                let glyph = glyph.placement();
+                (glyph.x, glyph.y)
+            })
+            .collect::<Vec<_>>()
+    };
+    let visible = collected_run(&spanned(white), white);
+    let hidden = collected_run(&spanned(Color(1.0, 1.0, 1.0, 0.0)), white);
+    assert_eq!(hidden.len(), "shown".len());
+    assert_eq!(
+        place(&hidden),
+        place(&visible)[visible.len() - hidden.len()..]
+    );
+}

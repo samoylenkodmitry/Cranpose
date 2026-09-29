@@ -2070,6 +2070,8 @@ pub fn collect_cached_solid_text_atlas_placements(
     )
 }
 
+/// Appends the glyphs of `text` that put pixels down to `out`: each either
+/// placed from the mask cache or rasterized into it.
 #[expect(clippy::too_many_arguments)]
 pub fn collect_solid_text_atlas_run<'a>(
     text: impl Into<StyledTextRef<'a>>,
@@ -2746,7 +2748,11 @@ fn collect_text_segment_solid_atlas_run(
         font,
     };
     glyph_cache.segment_metrics.clear();
+    let transparent = color.3 <= 0.0;
     collect_atlas_segment(request, glyph_cache, out, |cache, glyph, out| {
+        if transparent {
+            return ControlFlow::Continue(());
+        }
         let metrics = match cache.segment_metrics.get(glyph.ch) {
             Some(metrics) => metrics,
             None => match cache.get_atlas_metrics(&glyph.key) {
