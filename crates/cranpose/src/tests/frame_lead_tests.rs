@@ -120,3 +120,17 @@ fn falling_back_starts_frames_on_their_slot_again() {
         "the next window is followed by a trial straight away"
     );
 }
+
+#[test]
+fn a_pinned_lead_stays_and_learns_nothing() {
+    let mut lead = FrameLead::pinned_at(Some(2));
+    assert_eq!(lead.lead_ns(PERIOD), PERIOD * 2 / 10);
+    run(&mut lead, 3 * WINDOW, 20_000_000, 0);
+    run_trial(&mut lead, 12_000_000, 1);
+    assert_eq!(lead.lead_ns(PERIOD), PERIOD * 2 / 10, "no trial moves it");
+    assert_eq!(
+        FrameLead::pinned_at(Some(10)).lead_ns(PERIOD),
+        0,
+        "a whole period is no lead a frame can take, so it learns"
+    );
+}

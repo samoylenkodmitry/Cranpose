@@ -34,7 +34,14 @@ const LEADS_TENTHS: [i64; 3] = [0, 3, 5];
 const FIRST_HOLD_NS: i64 = 2_000_000_000;
 const LONGEST_HOLD_NS: i64 = 32_000_000_000;
 
+/// Pins the lead, in tenths of a period, instead of learning it: for
+/// measuring what each lead does to a workload. Android sets it from
+/// `debug.cranpose.frame_lead`.
+const PINNED_LEAD_ENV: &str = "CRANPOSE_FRAME_LEAD_TENTHS";
+
 pub(crate) struct FrameLead {
+    /// The lead [`PINNED_LEAD_ENV`] pins, in tenths of a period.
+    pinned_tenths: Option<i64>,
     /// The lead kept, as an index into [`LEADS_TENTHS`].
     kept: usize,
     /// The lead on trial, if a trial runs.
@@ -51,7 +58,20 @@ pub(crate) struct FrameLead {
 
 impl Default for FrameLead {
     fn default() -> Self {
+        Self::pinned_at(
+            std::env::var(PINNED_LEAD_ENV)
+                .ok()
+                .and_then(|value| value.trim().parse::<i64>().ok()),
+        )
+    }
+}
+
+impl FrameLead {
+    /// A lead that learns, or stays at `tenths` of a period when that is a
+    /// lead a frame can take (0 to 9).
+    pub(crate) fn pinned_at(tenths: Option<i64>) -> Self {
         Self {
+            pinned_tenths: tenths.filter(|tenths| (0..10).contains(tenths)),
             kept: 0,
             trial: None,
             last_tried: 0,
@@ -63,13 +83,14 @@ impl Default for FrameLead {
             hold_ns: FIRST_HOLD_NS,
         }
     }
-}
 
-impl FrameLead {
     /// How long before its slot's vsync a frame starts, for a display
     /// refreshing every `vsync_period_ns`.
     pub(crate) fn lead_ns(&self, vsync_period_ns: i64) -> i64 {
-        vsync_period_ns * LEADS_TENTHS[self.trial.unwrap_or(self.kept)] / 10
+        let tenths = self
+            .pinned_tenths
+            .unwrap_or_else(|| LEADS_TENTHS[self.trial.unwrap_or(self.kept)]);
+        vsync_period_ns * tenths / 10
     }
 
     /// Records how long a frame took from being queued to being shown, at
@@ -77,6 +98,9 @@ impl FrameLead {
     /// another lead once the kept one has held long enough, and keeps the
     /// trial's lead when it brought frames to the screen sooner.
     pub(crate) fn record(&mut self, latency_ns: i64, now_ns: i64) {
+        if self.pinned_tenths.is_some() {
+            return;
+        }
         if self.settle > 0 {
             self.settle -= 1;
             return;
