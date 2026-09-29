@@ -16,9 +16,9 @@
 //!   rows showing it; the selected symbol's quotes also update every quote
 //!   panel. Sixteen panels that are not shown receive every quote too.
 //!
-//! GPUI draws the sparklines and moving averages as stroked paths.
-//! Cranpose has no stroked-path primitive yet, so they are drawn as runs of
-//! small rects: a stepped line over a filled area.
+//! The sparklines, moving averages, chart guides and sort arrows are paths
+//! (`DrawScope::draw_path`), filled, stroked and dashed as GPUI draws them.
+//! Watchlist rows and inactive tabs take GPUI's hover backgrounds.
 use std::{
     cell::{Cell, RefCell},
     collections::VecDeque,
