@@ -48,39 +48,42 @@ impl AccessibilitySnapshot {
         &mut self,
         elements: Vec<AccessibilityElement>,
     ) -> Result<Replaced, AccessibilityIdentityError> {
-        let mut previous: HashMap<_, _> = self
-            .elements
-            .iter()
-            .zip(&self.ids)
-            .enumerate()
-            .map(|(index, (element, id))| (element.identity_key(), (*id, index)))
-            .collect();
-        let mut identities: HashMap<_, _> = HashMap::default();
-        let mut indices = HashMap::default();
-        let mut ids = Vec::with_capacity(elements.len());
-        let mut was = Vec::with_capacity(elements.len());
-        let mut last_id = self.last_id;
+        let mut identities: HashMap<_, usize> =
+            HashMap::with_capacity_and_hasher(elements.len(), Default::default());
         for (index, element) in elements.iter().enumerate() {
             let identity = (element.node_id, element.canvas_key);
-            if identities.insert(identity, ()).is_some() {
+            if identities.insert(identity, index).is_some() {
                 return Err(AccessibilityIdentityError::Duplicate(
                     identity.0, identity.1,
                 ));
             }
-            let (id, old) = match previous.remove(&element.identity_key()) {
-                Some((id, old)) => (id, Some(old)),
-                None => {
-                    last_id = last_id
-                        .checked_add(1)
-                        .ok_or(AccessibilityIdentityError::Exhausted)?;
-                    (last_id, None)
-                }
-            };
-            ids.push(id);
-            was.push(old);
-            indices.insert(id, index);
         }
-        self.indices = indices;
+        // A control keeps its id while it is the same node: same identity and
+        // generation.
+        let mut was = vec![None; elements.len()];
+        let mut ids = vec![0; elements.len()];
+        for (old, (element, id)) in self.elements.iter().zip(&self.ids).enumerate() {
+            if let Some(&index) = identities.get(&(element.node_id, element.canvas_key))
+                && elements[index].node_generation == element.node_generation
+            {
+                was[index] = Some(old);
+                ids[index] = *id;
+            }
+        }
+        let mut last_id = self.last_id;
+        for (id, was) in ids.iter_mut().zip(&was) {
+            if was.is_none() {
+                last_id = last_id
+                    .checked_add(1)
+                    .ok_or(AccessibilityIdentityError::Exhausted)?;
+                *id = last_id;
+            }
+        }
+        self.indices = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| (*id, index))
+            .collect();
         self.last_id = last_id;
         Ok(Replaced {
             elements: std::mem::replace(&mut self.elements, elements),

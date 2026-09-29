@@ -321,7 +321,7 @@ impl IosAccessibilityBridge {
         if accessibility::apply_accessibility_options(shell, options) {
             shell.set_font_scale(options.font_scale);
         }
-        let next = accessibility::snapshot(shell);
+        let next = accessibility::snapshot(shell, self.snapshot.elements.len());
         self.speak(&next);
         let input_changed = (crate::ios_keyboard::reader_input_active()
             && reader_field(&next).is_some())

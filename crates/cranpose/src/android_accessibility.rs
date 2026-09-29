@@ -287,7 +287,7 @@ pub(crate) fn sync(
     let mut announcements = accessibility::drain_app_announcements();
     let now = std::time::Instant::now();
     let elements = if policy.try_begin_publish(now) {
-        accessibility::snapshot_if_changed(shell, seen_revision)
+        accessibility::snapshot_if_changed(shell, seen_revision, previous.elements.len())
     } else {
         None
     };

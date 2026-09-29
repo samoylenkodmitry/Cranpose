@@ -1183,7 +1183,7 @@ impl WebAccessibilityBridge {
         document: &Document,
         shell: &mut AppShell<WgpuRenderer>,
     ) -> Result<(), JsValue> {
-        let elements = accessibility::snapshot(shell);
+        let elements = accessibility::snapshot(shell, self.previous.elements.len());
         self.speak(&elements);
         if elements == self.previous.elements && !self.dirty {
             return self.sync_password(shell, &elements);
