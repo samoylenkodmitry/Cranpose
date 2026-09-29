@@ -2583,6 +2583,9 @@ pub struct GpuRenderer {
     shadow_surface_cache_bytes: u64,
     pub(crate) frame_stats: gpu_stats::FrameStats,
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
+    /// The GPU work the last rendered frame submitted, until taken.
+    #[cfg(not(target_arch = "wasm32"))]
+    last_submission: Option<wgpu::SubmissionIndex>,
     pending_frame_warmup_frames: u8,
     frame_count: u64,
     /// How many requested shader warm-ups this renderer has queued.
@@ -2875,6 +2878,8 @@ impl GpuRenderer {
             shadow_surface_cache_bytes: 0,
             frame_stats: gpu_stats::FrameStats::default(),
             last_frame_stats: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            last_submission: None,
             pending_frame_warmup_frames: 0,
             frame_count: 0,
             shader_warm_ups_queued: 0,
@@ -3428,6 +3433,13 @@ impl GpuRenderer {
         self.frame_graph_executor.pass_timing_report()
     }
 
+    /// The GPU work the last rendered frame submitted, once: `None` when no
+    /// frame submitted since the last call.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_submission(&mut self) -> Option<wgpu::SubmissionIndex> {
+        self.last_submission.take()
+    }
+
     pub fn needs_frame_warmup(&self) -> bool {
         self.pending_frame_warmup_frames > 0
     }
@@ -3634,6 +3646,7 @@ impl GpuRenderer {
                     if execution.stats.pass_count > 0 {
                         self.frame_stats.record_command_stats(execution.stats);
                     }
+                    self.last_submission = Some(execution.submission);
                     (Ok(()), true)
                 }
                 Err(crate::frame_graph::FrameGraphError::NoDeclaredPasses) => (Ok(()), false),

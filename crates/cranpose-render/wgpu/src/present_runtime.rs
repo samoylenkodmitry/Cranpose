@@ -75,6 +75,9 @@ pub(crate) struct PresentStatus {
     pub(crate) last_error_frame: AtomicU64,
     /// The present thread's OS id once it has started, `0` before.
     pub(crate) thread_id: AtomicI32,
+    /// Frames after which the present thread waited for the GPU to finish
+    /// the frame before them.
+    pub(crate) gpu_waits: AtomicU64,
 }
 
 pub(crate) fn encode_present_outcome(outcome: PresentOutcome, frame_id: u64) -> u64 {
@@ -104,7 +107,14 @@ pub(crate) struct PresentState {
     waker: PresentWaker,
     clock: Option<PresentClock>,
     observer: Option<BoxedPresentObserver>,
+    /// The GPU work of the last frame rendered, which the next frame waits
+    /// for once it is submitted.
+    in_flight: Option<wgpu::SubmissionIndex>,
 }
+
+/// How long the present thread waits for a frame's GPU work at most: far
+/// past any frame, so it only bounds a wait on a device that stopped.
+const GPU_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
 impl PresentState {
     pub(crate) fn new(
@@ -135,6 +145,7 @@ impl PresentState {
             waker,
             clock,
             observer,
+            in_flight: None,
         }
     }
 
@@ -323,6 +334,7 @@ impl PresentState {
             after_render_ns,
             after_present_ns: self.now(),
         };
+        self.await_previous_frame();
         if let Err(error) = result {
             log::error!("[present-runtime] render error: {error}");
             self.status
@@ -451,6 +463,7 @@ impl PresentState {
             after_render_ns,
             after_present_ns: self.now(),
         };
+        self.await_previous_frame();
         if let Err(error) = result {
             log::error!("[present-runtime] offscreen render error: {error}");
             self.status
@@ -458,6 +471,25 @@ impl PresentState {
                 .store(returns.frame_id.max(1), Ordering::Relaxed);
         }
         self.finish_returns(returns);
+    }
+
+    /// Waits until the GPU has finished the frame rendered before the one
+    /// just submitted, before the frame is handed back and the producer may
+    /// start another. The GPU then holds at most one frame queued behind the
+    /// one it runs: a loop the GPU cannot keep up with starts its next frame
+    /// as the GPU takes the last one up, instead of piling frames in front
+    /// of it that each reach the screen a GPU frame later. A loop the GPU
+    /// keeps up with finds that frame long finished.
+    fn await_previous_frame(&mut self) {
+        let submitted = self.gpu_renderer.take_submission();
+        let Some(previous) = std::mem::replace(&mut self.in_flight, submitted) else {
+            return;
+        };
+        let _ = self.device.poll(wgpu::PollType::Wait {
+            submission_index: Some(previous),
+            timeout: Some(GPU_WAIT_TIMEOUT),
+        });
+        self.status.gpu_waits.fetch_add(1, Ordering::Relaxed);
     }
 
     fn finish_returns(&mut self, returns: RenderReturns) {

@@ -306,6 +306,42 @@ fn a_returned_frame_frees_a_credit_it_reports_until_drained() {
 }
 
 #[test]
+fn each_frame_after_the_first_waits_on_the_gpu_for_the_one_before() {
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
+        inline_runtime_or_skip!("frames in flight");
+    let mut runtime = renderer.init_gpu_inline_for_tests(
+        device,
+        queue,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        backend,
+        downlevel,
+    );
+    let ack = renderer
+        .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
+        .expect("inline runtime must accept controls");
+    runtime.pump();
+    ack.try_recv().expect("attach must ack after the pump");
+
+    renderer.scene_mut().graph = Some(direct_graph());
+    for frame in 1..=3u64 {
+        assert_eq!(
+            renderer.publish_frame(WIDTH, HEIGHT),
+            PublishOutcome::Published
+        );
+        runtime.pump();
+        assert_eq!(
+            drain_outcomes(&mut renderer),
+            vec![(frame, PresentOutcome::Presented)]
+        );
+        assert_eq!(
+            renderer.present_gpu_waits_for_tests(),
+            Some(frame - 1),
+            "frame {frame} is handed back once the GPU finished the frame before it"
+        );
+    }
+}
+
+#[test]
 fn reconfigure_cancels_waiting_packet_before_ack() {
     let (_lock, mut renderer, device, queue, backend, downlevel) =
         inline_runtime_or_skip!("invalidation-before-ack");

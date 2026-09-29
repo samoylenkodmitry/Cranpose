@@ -902,6 +902,22 @@ impl WgpuRenderer {
         self.frontend.frame_sequence
     }
 
+    /// Threaded mode: frames after which the present thread waited for the
+    /// GPU to finish the frame before them.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn present_gpu_waits_for_tests(&self) -> Option<u64> {
+        match &self.backend {
+            PresentBackend::Threaded(handle) => Some(
+                handle
+                    .status()
+                    .gpu_waits
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            _ => None,
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn present_status_snapshot_for_tests(&self) -> Option<(bool, u64, u64)> {
