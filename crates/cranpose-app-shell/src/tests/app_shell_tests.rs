@@ -11349,7 +11349,7 @@ fn a_task_woken_between_frames_runs_when_the_loop_wakes_and_its_change_waits_for
         "the delay has not run out on the first frame"
     );
 
-    let waited = std::time::Instant::now();
+    let waited = web_time::Instant::now();
     while !shell.has_pending_ui() && waited.elapsed() < Duration::from_secs(5) {
         std::thread::yield_now();
     }

@@ -796,7 +796,7 @@ fn web_frame_waker_is_shell_owned_without_thread_local_router() {
     );
     assert!(
         web_source.contains("app.borrow_mut().set_frame_waker({")
-            && web_source.contains("move || request_frame()"),
+            && web_source.contains("request_frame();\n            run_tasks();"),
         "web runtime should install the per-shell frame requester directly on AppShell"
     );
 }
