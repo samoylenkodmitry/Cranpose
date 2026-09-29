@@ -3834,8 +3834,8 @@ fn every_platform_bridge_pages_a_scroll_container() {
     );
     assert!(
         java_source.contains("info.setParent(host, element.scrollParent);")
-            && java_source
-                .contains("if (child.scrollParent == element.id) info.addChild(host, child.id);")
+            && java_source.contains("childIds.get(element.scrollParent)[at] = element.id;")
+            && java_source.contains("for (int child : children) info.addChild(host, child);")
             && wire_source.contains("fn scroll_parent_ids("),
         "a row sits under its list in the virtual view tree, so TalkBack's page gesture on the row reaches the list"
     );
