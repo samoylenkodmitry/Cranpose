@@ -8,9 +8,9 @@ use std::{
 use bytemuck::{Pod, Zeroable};
 
 use crate::{
-    ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, Point, Rect,
-    RenderHash, ShapeRecordBody, ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap, StrokeJoin,
-    TAU, TileMode, arc_band,
+    ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, LineGeometry,
+    Point, Rect, RenderHash, ShapeRecordBody, ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap,
+    StrokeJoin, TAU, TileMode, arc_band,
     float::{at_least, within},
 };
 
@@ -20,6 +20,8 @@ pub const RECORD_KIND_RECT: u32 = 0;
 pub const RECORD_KIND_ROUND_RECT: u32 = 1;
 /// The kind bits of [`ShapeRecord::flags`]: an arc band or annular sector.
 pub const RECORD_KIND_ARC: u32 = 2;
+/// The kind bits of [`ShapeRecord::flags`]: a stroked straight segment.
+pub const RECORD_KIND_LINE: u32 = 3;
 
 const KIND_SHIFT: u32 = 0;
 const STROKED_BIT: u32 = 1 << 2;
@@ -265,10 +267,11 @@ pub fn band_pays(geometry: &ArcGeometry, rect: Rect) -> bool {
 }
 
 /// The fragment program's shape kinds: a filled rect or round rect, a
-/// stroked one, and an arc band.
+/// stroked one, an arc band and a line segment.
 pub const FRAGMENT_KIND_FILL: u32 = 0;
 pub const FRAGMENT_KIND_STROKE: u32 = 1;
 pub const FRAGMENT_KIND_ARC: u32 = 2;
+pub const FRAGMENT_KIND_LINE: u32 = 3;
 
 const TWO_BITS: u32 = 0b11;
 const BLEND_MASK: u32 = 0xff;
@@ -399,9 +402,13 @@ impl ShapeRecord {
     }
 
     /// The rect this record's pixels can reach: its rect grown by half the
-    /// stroke width.
+    /// stroke width, or a line's own bounds, which its end caps can reach
+    /// past on a slant.
     pub fn coverage_rect(&self) -> Rect {
-        expand_rect(self.rect_value(), self.half_stroke())
+        match self.line_geometry() {
+            Some(line) => line.bounds(),
+            None => expand_rect(self.rect_value(), self.half_stroke()),
+        }
     }
 
     fn half_stroke(&self) -> f32 {
@@ -410,6 +417,16 @@ impl ShapeRecord {
         } else {
             0.0
         }
+    }
+
+    /// The segment the fragment stage draws; `None` for any other kind.
+    pub fn line_geometry(&self) -> Option<LineGeometry> {
+        (self.kind() == RECORD_KIND_LINE).then(|| LineGeometry {
+            start: Point::new(self.arc[0], self.arc[1]),
+            end: Point::new(self.arc_band[2], self.arc_band[3]),
+            half_width: self.stroke_width * 0.5,
+            cap: STROKE_CAPS[((self.flags >> CAP_SHIFT) & TWO_BITS) as usize],
+        })
     }
 
     /// The normalised band the fragment stage draws; `None` for rects.
@@ -498,8 +515,11 @@ fn interior_occludes(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
 }
 
 fn fragment_kind(flags: u32) -> u32 {
-    if (flags >> KIND_SHIFT) & TWO_BITS == RECORD_KIND_ARC {
+    let kind = (flags >> KIND_SHIFT) & TWO_BITS;
+    if kind == RECORD_KIND_ARC {
         FRAGMENT_KIND_ARC
+    } else if kind == RECORD_KIND_LINE {
+        FRAGMENT_KIND_LINE
     } else if flags & STROKED_BIT != 0 {
         FRAGMENT_KIND_STROKE
     } else {
@@ -765,6 +785,9 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
             let half_stroke = stroke.as_ref().map_or(0.0, |stroke| stroke.width * 0.5);
             Some(expand_rect(*rect, half_stroke))
         }
+        DrawPrimitive::Line {
+            start, end, stroke, ..
+        } => Some(LineGeometry::new(*start, *end, *stroke).bounds()),
         DrawPrimitive::Image { rect, .. } => Some(*rect),
         DrawPrimitive::Text(text) => Some(text.rect),
         DrawPrimitive::Content | DrawPrimitive::Shadow(_) => None,
@@ -931,6 +954,18 @@ impl ShapeRecorder {
                     blend_mode,
                 },
             ),
+            DrawPrimitive::Line {
+                brush,
+                start,
+                end,
+                stroke,
+                ..
+            } => self.push_line(
+                &LineGeometry::new(start, end, stroke),
+                &brush,
+                stroke,
+                blend_mode,
+            ),
             other => return Recorded::Other(other),
         })
     }
@@ -950,6 +985,50 @@ impl ShapeRecorder {
             occluders: false,
             bare_interiors: false,
         });
+    }
+
+    /// Records the segment `line` stroked with `stroke` and returns the
+    /// pixels it can reach. The ends ride in the arc columns, and the unit
+    /// direction and half length the vertex stage orients its quad by in
+    /// the curve column; a degenerate segment is kept, as the app drew it,
+    /// and draws nothing.
+    pub fn push_line(
+        &mut self,
+        line: &LineGeometry,
+        brush: &Brush,
+        stroke: Stroke,
+        blend: BlendMode,
+    ) -> Rect {
+        let (handle, color) = self.intern_brush(brush);
+        let mut flags = pack_flags(RECORD_KIND_LINE, Some(stroke), blend, StrokeCap::Butt);
+        if line.is_degenerate() {
+            flags |= ARC_DEGENERATE_BIT;
+        }
+        let frame = line.frame();
+        let ends = [line.start.x, line.start.y, line.end.x, line.end.y];
+        // A square end on a slant reaches past half the width, which is
+        // all `push_shape` grows the ends' box by.
+        let bounds = line.bounds();
+        self.include_bounds(bounds);
+        self.push_shape(
+            ShapeRecordBody {
+                rect: rect_row(line.end_bounds()),
+                color,
+                stroke_width: stroke.width,
+                flags,
+                brush: handle,
+                placement: 0,
+                arc_geometry: ends,
+            },
+            ShapeRecordCurve {
+                radii: [0.0; 4],
+                arc_normalized: [frame.direction.x, frame.direction.y, frame.half_length, 0.0],
+            },
+            ends,
+            blend,
+            None,
+        );
+        bounds
     }
 
     #[inline]
@@ -1662,6 +1741,13 @@ impl CommandRecording {
                 },
                 stroke,
             },
+            RECORD_KIND_LINE => DrawPrimitive::Line {
+                rect,
+                brush,
+                start: Point::new(record.arc[0], record.arc[1]),
+                end: Point::new(record.arc_band[2], record.arc_band[3]),
+                stroke: stroke.unwrap_or_default(),
+            },
             RECORD_KIND_ARC => DrawPrimitive::Arc {
                 rect,
                 brush,
@@ -1924,6 +2010,18 @@ impl CommandRecorder {
     #[inline]
     pub fn push_scope_arc(&mut self, args: &ArcRecordArgs<'_>, geometry: &ArcGeometry) {
         self.shapes.push_scope_arc(args, geometry);
+        self.note_shape();
+    }
+
+    /// Records the segment `line` a draw scope stroked.
+    pub fn push_line(
+        &mut self,
+        line: &LineGeometry,
+        brush: &Brush,
+        stroke: Stroke,
+        blend: BlendMode,
+    ) {
+        self.shapes.push_line(line, brush, stroke, blend);
         self.note_shape();
     }
 

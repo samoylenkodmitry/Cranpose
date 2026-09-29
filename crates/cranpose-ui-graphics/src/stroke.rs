@@ -510,6 +510,154 @@ pub fn inflate_rect(rect: Rect, amount: f32) -> Rect {
     }
 }
 
+/// A stroked straight segment: its two ends, half its width and its cap,
+/// in the units it is drawn in. [`crate::DrawPrimitive::Line`] lowers to it,
+/// and the GPU and CPU renderers take their coverage from the same frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineGeometry {
+    pub start: Point,
+    pub end: Point,
+    pub half_width: f32,
+    pub cap: StrokeCap,
+}
+
+/// Where a pixel sits relative to a [`LineGeometry`]: its midpoint, the unit
+/// direction from start to end, and half its length.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineFrame {
+    pub center: Point,
+    pub direction: Point,
+    pub half_length: f32,
+}
+
+impl LineGeometry {
+    /// The segment from `start` to `end` stroked with `stroke`.
+    pub fn new(start: Point, end: Point, stroke: Stroke) -> Self {
+        Self {
+            start,
+            end,
+            half_width: stroke.half_width(),
+            cap: stroke.cap,
+        }
+    }
+
+    /// True when the segment covers nothing: a non-finite input, no width,
+    /// or no length between butt caps, as Compose's `drawLine` draws nothing
+    /// there.
+    pub fn is_degenerate(&self) -> bool {
+        !all_finite([self.start.x, self.start.y, self.end.x, self.end.y])
+            || !(self.half_width > 0.0 && self.half_width.is_finite())
+            || (self.cap == StrokeCap::Butt && self.start == self.end)
+    }
+
+    /// The midpoint, unit direction and half length coverage is measured
+    /// in. A segment of no length points along +X, so its round or square
+    /// cap still draws a dot.
+    pub fn frame(&self) -> LineFrame {
+        let (dx, dy) = (self.end.x - self.start.x, self.end.y - self.start.y);
+        let length = (dx * dx + dy * dy).sqrt();
+        let direction = if length > 0.0 {
+            Point::new(dx / length, dy / length)
+        } else {
+            Point::new(1.0, 0.0)
+        };
+        LineFrame {
+            center: Point::new(
+                (self.start.x + self.end.x) * 0.5,
+                (self.start.y + self.end.y) * 0.5,
+            ),
+            direction,
+            half_length: length * 0.5,
+        }
+    }
+
+    /// How far past each end the stroke reaches: half the width for round
+    /// and square caps, nothing for butt caps.
+    pub fn cap_reach(&self) -> f32 {
+        if self.cap == StrokeCap::Butt {
+            0.0
+        } else {
+            self.half_width
+        }
+    }
+
+    /// The axis-aligned box of the ends, the rect the primitive carries.
+    pub fn end_bounds(&self) -> Rect {
+        let min_x = self.start.x.min(self.end.x);
+        let min_y = self.start.y.min(self.end.y);
+        Rect {
+            x: min_x,
+            y: min_y,
+            width: self.start.x.max(self.end.x) - min_x,
+            height: self.start.y.max(self.end.y) - min_y,
+        }
+    }
+
+    /// How far past the ends' box the stroke reaches on each axis: a round
+    /// end's disc bounds it by half the width every way; a butt or square
+    /// end's corners reach along the segment by the cap and across it by
+    /// half the width, which on a slant is more than half the width.
+    pub fn reach(&self) -> Point {
+        if self.cap == StrokeCap::Round {
+            return Point::new(self.half_width, self.half_width);
+        }
+        let frame = self.frame();
+        let (along_x, along_y) = (frame.direction.x.abs(), frame.direction.y.abs());
+        let cap = self.cap_reach();
+        Point::new(
+            along_x * cap + along_y * self.half_width,
+            along_y * cap + along_x * self.half_width,
+        )
+    }
+
+    /// The pixels the stroke can reach: the ends' box grown by
+    /// [`Self::reach`].
+    pub fn bounds(&self) -> Rect {
+        let ends = self.end_bounds();
+        let reach = self.reach();
+        Rect {
+            x: ends.x - reach.x,
+            y: ends.y - reach.y,
+            width: ends.width + reach.x * 2.0,
+            height: ends.height + reach.y * 2.0,
+        }
+    }
+
+    /// The same segment with its ends at `start` and `end` and its width
+    /// scaled by `scale`, as a layer's transform places it.
+    pub fn placed(&self, start: Point, end: Point, scale: f32) -> Self {
+        Self {
+            start,
+            end,
+            half_width: self.half_width * scale,
+            ..*self
+        }
+    }
+
+    /// The share of the pixel centred at `point` the stroke covers: exact
+    /// box coverage across the segment and along it, as a rect's edges are
+    /// covered, so a thin line keeps its weight at any sub-pixel offset;
+    /// past the ends of a round cap, the distance to the cap's disc.
+    /// `shape.wgsl` mirrors it.
+    pub fn coverage(&self, point: Point) -> f32 {
+        let frame = self.frame();
+        let (dx, dy) = (point.x - frame.center.x, point.y - frame.center.y);
+        let along = (dx * frame.direction.x + dy * frame.direction.y).abs();
+        let across = (dx * frame.direction.y - dy * frame.direction.x).abs();
+        let across_coverage = (self.half_width + 0.5 - across).clamp(0.0, 1.0);
+        if self.cap == StrokeCap::Round {
+            if along <= frame.half_length {
+                return across_coverage;
+            }
+            let (past, side) = (along - frame.half_length, across);
+            let distance = (past * past + side * side).sqrt() - self.half_width;
+            return (0.5 - distance).clamp(0.0, 1.0);
+        }
+        let reach = frame.half_length + self.cap_reach();
+        across_coverage * (reach + 0.5 - along).clamp(0.0, 1.0)
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/stroke_tests.rs"]
 mod tests;
