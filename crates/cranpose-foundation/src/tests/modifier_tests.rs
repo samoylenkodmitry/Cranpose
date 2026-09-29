@@ -1633,6 +1633,38 @@ fn chain_can_find_node_refs() {
 }
 
 #[test]
+fn get_node_rc_lends_the_node_the_chain_holds() {
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let elements = vec![
+        modifier_element(TestLayoutElement),
+        modifier_element(TestDrawElement),
+    ];
+    chain.update_from_slice(&elements, &mut context);
+
+    let first = chain.get_node_rc(0).expect("layout node exists");
+    let again = chain.get_node_rc(0).expect("layout node exists");
+    assert!(Rc::ptr_eq(first, again));
+    assert_eq!(
+        Rc::strong_count(first),
+        1,
+        "lending a node must not share it"
+    );
+    assert!(
+        first
+            .borrow()
+            .as_any()
+            .downcast_ref::<TestLayoutNode>()
+            .is_some()
+    );
+    assert!(!Rc::ptr_eq(
+        first,
+        chain.get_node_rc(1).expect("draw node exists")
+    ));
+    assert!(chain.get_node_rc(2).is_none());
+}
+
+#[test]
 fn visit_descendants_matching_short_circuits() {
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
