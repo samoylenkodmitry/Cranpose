@@ -2117,6 +2117,71 @@ impl GlyphDrawCmd {
     pub(crate) fn bounds(&self) -> (u32, u32, u32, u32) {
         self.bounds
     }
+
+    /// Whether the draw's quads are [`TurnedGlyph`]s, or `None` for a
+    /// retained run, which draws on its own.
+    fn turned(&self) -> Option<bool> {
+        match self.source {
+            GlyphDrawSource::Shared { turned, .. } => Some(turned),
+            GlyphDrawSource::Retained { .. } => None,
+        }
+    }
+}
+
+/// The kind of glyph draw, turned (`true`) or plain, that can move after
+/// every draw of the other kind in `draws` without moving past a draw it
+/// shares a pixel with: glyphs blend, so only draws that share pixels must
+/// keep their order. The fewer kind is tried first, which checks fewer
+/// pairs. `None` when neither can move, a retained run is among them, or
+/// the kinds do not change back and forth.
+pub(crate) fn movable_glyph_kind<T>(
+    draws: &[T],
+    kind: impl Fn(&T) -> Option<bool>,
+    bounds: impl Fn(&T) -> TargetRect,
+) -> Option<bool> {
+    let mut turned = 0;
+    for draw in draws {
+        turned += usize::from(kind(draw)?);
+    }
+    let changes = draws
+        .windows(2)
+        .filter(|pair| kind(&pair[0]) != kind(&pair[1]))
+        .count();
+    if changes < 2 {
+        return None;
+    }
+    let fewer = turned * 2 < draws.len();
+    [fewer, !fewer].into_iter().find(|&moved| {
+        draws.iter().enumerate().all(|(index, draw)| {
+            kind(draw) != Some(moved)
+                || draws[index + 1..].iter().all(|later| {
+                    kind(later) == Some(moved)
+                        || !crate::draw_pass::target_rects_overlap(bounds(draw), bounds(later))
+                })
+        })
+    })
+}
+
+/// Moves a glyph batch's draws of the kind [`movable_glyph_kind`] picks
+/// after those of the other kind, each kind in its order, so each draws
+/// once instead of once per change between them. `moved` is scratch.
+pub(crate) fn group_glyph_kinds(cmds: &mut [GlyphDrawCmd], moved: &mut Vec<GlyphDrawCmd>) {
+    let Some(kind) = movable_glyph_kind(cmds, GlyphDrawCmd::turned, GlyphDrawCmd::bounds) else {
+        return;
+    };
+    moved.clear();
+    let mut kept = 0;
+    for read in 0..cmds.len() {
+        if cmds[read].turned() == Some(kind) {
+            moved.push(cmds[read].clone());
+        } else {
+            cmds.swap(kept, read);
+            kept += 1;
+        }
+    }
+    for (slot, cmd) in cmds[kept..].iter_mut().zip(moved.drain(..)) {
+        *slot = cmd;
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2386,6 +2451,7 @@ pub struct GpuRenderer {
     pub(crate) scratch_glyph_instances: GlyphInstances,
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
     pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
+    pub(crate) scratch_glyph_moved: Vec<GlyphDrawCmd>,
     pub(crate) scratch_arena_draws: Vec<RunDrawCall>,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
     scratch_text_glyph_entries: Vec<GlyphAtlasEntry>,
@@ -2648,6 +2714,7 @@ impl GpuRenderer {
             scratch_glyph_instances: GlyphInstances::default(),
             scratch_image_cmds: Vec::new(),
             scratch_glyph_cmds: Vec::new(),
+            scratch_glyph_moved: Vec::new(),
             scratch_arena_draws: Vec::new(),
             scratch_text_glyph_run: Vec::new(),
             scratch_text_glyph_entries: Vec::new(),
@@ -5998,3 +6065,7 @@ mod retained_glyph_tests;
 #[cfg(test)]
 #[path = "tests/frame_clear_tests.rs"]
 mod frame_clear_tests;
+
+#[cfg(test)]
+#[path = "tests/glyph_kind_tests.rs"]
+mod glyph_kind_tests;

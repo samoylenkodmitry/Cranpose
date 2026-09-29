@@ -324,6 +324,7 @@ impl GpuRenderer {
                     self.effect_renderer.record_composite_pass();
                     self.frame_stats.add_draw_calls(composite_draws);
                 }
+                group_glyph_batches(&batches, &mut scratch);
                 let draw_result = {
                     let frame = PassFrame {
                         size: (target.width, target.height),
@@ -358,6 +359,7 @@ impl GpuRenderer {
             image_cmds: std::mem::take(&mut self.scratch_image_cmds),
             glyph_instances: std::mem::take(&mut self.scratch_glyph_instances),
             glyph_cmds: std::mem::take(&mut self.scratch_glyph_cmds),
+            glyph_moved: std::mem::take(&mut self.scratch_glyph_moved),
             arena_draws: std::mem::take(&mut self.scratch_arena_draws),
         };
         scratch.arena_draws.clear();
@@ -375,6 +377,7 @@ impl GpuRenderer {
         self.scratch_image_cmds = scratch.image_cmds;
         self.scratch_glyph_instances = scratch.glyph_instances;
         self.scratch_glyph_cmds = scratch.glyph_cmds;
+        self.scratch_glyph_moved = scratch.glyph_moved;
         self.scratch_arena_draws = scratch.arena_draws;
     }
 
@@ -746,6 +749,8 @@ struct PassScratch {
     image_cmds: Vec<crate::render::ImageDrawCmd>,
     glyph_instances: crate::render::GlyphInstances,
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
+    /// Where a glyph batch's draws of one kind wait while it groups them.
+    glyph_moved: Vec<crate::render::GlyphDrawCmd>,
     arena_draws: Vec<RunDrawCall>,
 }
 
@@ -757,11 +762,24 @@ struct PassCmds<'a> {
     arena: &'a [RunDrawCall],
 }
 
+/// Draws each glyph batch's labels one kind, turned or upright, at a time
+/// where their order allows: see [`crate::render::group_glyph_kinds`].
+fn group_glyph_batches(batches: &[Batch<'_>], scratch: &mut PassScratch) {
+    for batch in batches {
+        if let Batch::Glyphs { cmds, .. } = batch {
+            crate::render::group_glyph_kinds(
+                &mut scratch.glyph_cmds[cmds.clone()],
+                &mut scratch.glyph_moved,
+            );
+        }
+    }
+}
+
 /// Most glyph draws held back at once; past this they draw, so a long
 /// stretch of shapes checks each against a bounded list.
 const MAX_PENDING_GLYPHS: usize = 256;
 
-fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
+pub(crate) fn target_rects_overlap(a: TargetRect, b: TargetRect) -> bool {
     a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
 }
 
