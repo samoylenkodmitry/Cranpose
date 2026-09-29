@@ -2417,10 +2417,22 @@ pub struct ModifierNodeChain {
     head_sentinel: Box<SentinelNode>,
     tail_sentinel: Box<SentinelNode>,
     ordered_nodes: Vec<(NodeLink, NodeCapabilities, NodeCapabilities)>,
-    scratch_old_used: Vec<bool>,
-    scratch_match_order: Vec<Option<usize>>,
-    scratch_final_slots: Vec<Option<ModifierNodeEntry>>,
-    scratch_elements: Vec<DynModifierElement>,
+}
+
+/// Buffers the reconciliation of a chain reuses, held per thread rather than
+/// per chain: a chain kept its own after its first reconciliation, a few
+/// hundred bytes on every node of a tree.
+#[derive(Default)]
+struct ReconcileScratch {
+    old_used: Vec<bool>,
+    match_order: Vec<Option<usize>>,
+    final_slots: Vec<Option<ModifierNodeEntry>>,
+    elements: Vec<DynModifierElement>,
+}
+
+thread_local! {
+    static RECONCILE_SCRATCH: std::cell::RefCell<ReconcileScratch> =
+        std::cell::RefCell::default();
 }
 
 struct SentinelNode {
@@ -2549,6 +2561,127 @@ impl EntryIndex {
     }
 }
 
+/// Updates `entry` for `element` where it is, when the element is of the
+/// entry's type and key and its node can take it: an element of a node's
+/// type and key updates the node whatever its content, as Compose does.
+/// `false` leaves the entry as it was.
+fn update_entry_in_place(
+    entry: &mut ModifierNodeEntry,
+    element: &DynModifierElement,
+    context: &mut dyn ModifierNodeContext,
+) -> bool {
+    if entry.element_type != element.element_type()
+        || entry.node_type != element.node_type()
+        || entry.key != element.key()
+        || !element.can_update_node(&**entry.node.borrow())
+    {
+        return false;
+    }
+    let same_element = entry.element.as_ref().equals_element(element.as_ref());
+    let capabilities = element.capabilities();
+    attach_if_detached(entry, context);
+    if !same_element || element.requires_update() {
+        element.update_node(&mut **entry.node.borrow_mut());
+        entry.element = element.clone();
+        entry.hash_code = element.hash_code();
+        request_update_auto_invalidations(element.as_ref(), context, capabilities);
+    }
+    entry.capabilities = capabilities;
+    entry
+        .node
+        .borrow()
+        .node_state()
+        .set_capabilities(capabilities);
+    true
+}
+
+fn attach_if_detached(entry: &ModifierNodeEntry, context: &mut dyn ModifierNodeContext) {
+    let attached = entry.node.borrow().node_state().is_attached();
+    if !attached {
+        attach_node_tree(&mut **entry.node.borrow_mut(), context);
+    }
+}
+
+/// A new entry for `element` and its node, attached and updated.
+fn fresh_entry(
+    element: DynModifierElement,
+    context: &mut dyn ModifierNodeContext,
+) -> ModifierNodeEntry {
+    let capabilities = element.capabilities();
+    let entry = ModifierNodeEntry::new(
+        element.element_type(),
+        element.node_type(),
+        element.key(),
+        element.clone(),
+        element.create_node(),
+        element.hash_code(),
+        capabilities,
+    );
+    attach_node_tree(&mut **entry.node.borrow_mut(), context);
+    element.update_node(&mut **entry.node.borrow_mut());
+    request_auto_invalidations(context, capabilities);
+    entry
+}
+
+/// Matches `element`, at `new_pos` of the rebuilt tail, against the old
+/// entries: one of its type and key whose node can take it is updated and
+/// marked for `new_pos`, and `None` is returned; otherwise the element's
+/// new entry is.
+fn reconcile_element(
+    element: DynModifierElement,
+    new_pos: usize,
+    (old_entries, index): (&mut [ModifierNodeEntry], &EntryIndex),
+    (used, match_order): (&mut [bool], &mut [Option<usize>]),
+    context: &mut dyn ModifierNodeContext,
+) -> Option<ModifierNodeEntry> {
+    let element_type = element.element_type();
+    let node_type = element.node_type();
+    let key = element.key();
+    let hash_code = element.hash_code();
+    let capabilities = element.capabilities();
+    let Some(idx) = index.find_match(
+        old_entries,
+        used,
+        EntryMatchQuery {
+            element_type,
+            node_type,
+            key,
+            hash_code,
+            element: &element,
+        },
+    ) else {
+        return Some(fresh_entry(element, context));
+    };
+    let entry = &mut old_entries[idx];
+    if !element.can_update_node(&**entry.node.borrow()) {
+        return Some(fresh_entry(element, context));
+    }
+
+    used[idx] = true;
+    match_order[idx] = Some(new_pos);
+    let same_element = entry.element.as_ref().equals_element(element.as_ref());
+    attach_if_detached(entry, context);
+    if !same_element || element.requires_update() {
+        element.update_node(&mut **entry.node.borrow_mut());
+        entry.element = element;
+        entry.hash_code = hash_code;
+        request_update_auto_invalidations(entry.element.as_ref(), context, capabilities);
+    }
+    if idx != new_pos {
+        request_auto_invalidations(context, capabilities);
+    }
+    entry.key = key;
+    entry.element_type = element_type;
+    entry.node_type = node_type;
+    entry.capabilities = capabilities;
+    entry
+        .node
+        .borrow()
+        .node_state()
+        .set_capabilities(capabilities);
+    None
+}
+
 impl ModifierNodeChain {
     pub fn new() -> Self {
         let mut chain = Self {
@@ -2558,10 +2691,6 @@ impl ModifierNodeChain {
             head_sentinel: Box::new(SentinelNode::new()),
             tail_sentinel: Box::new(SentinelNode::new()),
             ordered_nodes: Vec::new(),
-            scratch_old_used: Vec::new(),
-            scratch_match_order: Vec::new(),
-            scratch_final_slots: Vec::new(),
-            scratch_elements: Vec::new(),
         };
         chain.sync_chain_links();
         chain
@@ -2611,67 +2740,43 @@ impl ModifierNodeChain {
     ) where
         I: Iterator<Item = &'a DynModifierElement>,
     {
+        // Taken out for the reconciliation, so one that reconciles another
+        // chain inside it works on buffers of its own.
+        let mut scratch = RECONCILE_SCRATCH
+            .try_with(|scratch| std::mem::take(&mut *scratch.borrow_mut()))
+            .unwrap_or_default();
+        self.reconcile(elements, context, &mut scratch);
+        scratch.elements.clear();
+        scratch.final_slots.clear();
+        let _ = RECONCILE_SCRATCH.try_with(|slot| *slot.borrow_mut() = scratch);
+    }
+
+    fn reconcile<'a, I>(
+        &mut self,
+        elements: I,
+        context: &mut dyn ModifierNodeContext,
+        scratch: &mut ReconcileScratch,
+    ) where
+        I: Iterator<Item = &'a DynModifierElement>,
+    {
         let old_len = self.entries.len();
         let mut fast_path_failed_at: Option<usize> = None;
         let mut elements_count = 0;
 
-        self.scratch_elements.clear();
+        scratch.elements.clear();
 
         for (idx, element) in elements.enumerate() {
             elements_count = idx + 1;
-
             if fast_path_failed_at.is_none() && idx < old_len {
-                let entry = &mut self.entries[idx];
-                // An element of the node's type and key updates the node where
-                // it is, whatever its content, as Compose does.
-                let same_type = entry.element_type == element.element_type();
-                let same_node_type = entry.node_type == element.node_type();
-                let same_key = entry.key == element.key();
-                if same_type && same_node_type && same_key {
-                    let can_update_node = {
-                        let node_borrow = entry.node.borrow();
-                        element.can_update_node(&**node_borrow)
-                    };
-                    if !can_update_node {
-                        fast_path_failed_at = Some(idx);
-                        self.scratch_elements.push(element.clone());
-                        continue;
-                    }
-
-                    let same_element = entry.element.as_ref().equals_element(element.as_ref());
-                    let capabilities = element.capabilities();
-
-                    {
-                        let node_borrow = entry.node.borrow();
-                        if !node_borrow.node_state().is_attached() {
-                            drop(node_borrow);
-                            attach_node_tree(&mut **entry.node.borrow_mut(), context);
-                        }
-                    }
-
-                    let needs_update = !same_element || element.requires_update();
-                    if needs_update {
-                        element.update_node(&mut **entry.node.borrow_mut());
-                        entry.element = element.clone();
-                        entry.hash_code = element.hash_code();
-                        request_update_auto_invalidations(element.as_ref(), context, capabilities);
-                    }
-
-                    entry.capabilities = capabilities;
-                    entry
-                        .node
-                        .borrow()
-                        .node_state()
-                        .set_capabilities(capabilities);
+                if update_entry_in_place(&mut self.entries[idx], element, context) {
                     continue;
                 }
                 fast_path_failed_at = Some(idx);
             }
-
-            self.scratch_elements.push(element.clone());
+            scratch.elements.push(element.clone());
         }
 
-        if fast_path_failed_at.is_none() && self.scratch_elements.is_empty() {
+        if fast_path_failed_at.is_none() && scratch.elements.is_empty() {
             if elements_count < self.entries.len() {
                 for entry in self.entries.drain(elements_count..) {
                     request_auto_invalidations(context, entry.capabilities);
@@ -2682,138 +2787,57 @@ impl ModifierNodeChain {
             return;
         }
 
-        let fail_idx = fast_path_failed_at.unwrap_or(old_len);
+        self.rebuild_tail(fast_path_failed_at.unwrap_or(old_len), context, scratch);
+    }
 
+    /// Rebuilds the chain from `fail_idx` for the elements in `scratch`:
+    /// each takes over an old entry of its type and key, wherever it was,
+    /// or gets a node of its own; old entries nothing took over detach.
+    fn rebuild_tail(
+        &mut self,
+        fail_idx: usize,
+        context: &mut dyn ModifierNodeContext,
+        scratch: &mut ReconcileScratch,
+    ) {
         let mut old_entries: Vec<ModifierNodeEntry> = self.entries.drain(fail_idx..).collect();
         let processed_entries_len = self.entries.len();
         let old_len = old_entries.len();
 
-        self.scratch_old_used.clear();
-        self.scratch_old_used.resize(old_len, false);
+        scratch.old_used.clear();
+        scratch.old_used.resize(old_len, false);
 
-        self.scratch_match_order.clear();
-        self.scratch_match_order.resize(old_len, None);
+        scratch.match_order.clear();
+        scratch.match_order.resize(old_len, None);
 
         let index = EntryIndex::build(&old_entries);
 
-        let new_elements_count = self.scratch_elements.len();
-        self.scratch_final_slots.clear();
-        self.scratch_final_slots.reserve(new_elements_count);
+        let new_elements_count = scratch.elements.len();
+        scratch.final_slots.clear();
+        scratch.final_slots.reserve(new_elements_count);
 
-        for (new_pos, element) in self.scratch_elements.drain(..).enumerate() {
-            self.scratch_final_slots.push(None);
-            let element_type = element.element_type();
-            let node_type = element.node_type();
-            let key = element.key();
-            let hash_code = element.hash_code();
-            let capabilities = element.capabilities();
-
-            let matched_idx = index.find_match(
-                &old_entries,
-                &self.scratch_old_used,
-                EntryMatchQuery {
-                    element_type,
-                    node_type,
-                    key,
-                    hash_code,
-                    element: &element,
-                },
+        for (new_pos, element) in scratch.elements.drain(..).enumerate() {
+            let fresh = reconcile_element(
+                element,
+                new_pos,
+                (&mut old_entries, &index),
+                (&mut scratch.old_used, &mut scratch.match_order),
+                context,
             );
-
-            if let Some(idx) = matched_idx {
-                let entry = &mut old_entries[idx];
-                let can_update_node = {
-                    let node_borrow = entry.node.borrow();
-                    element.can_update_node(&**node_borrow)
-                };
-                if !can_update_node {
-                    let replacement = ModifierNodeEntry::new(
-                        element_type,
-                        node_type,
-                        key,
-                        element.clone(),
-                        element.create_node(),
-                        hash_code,
-                        capabilities,
-                    );
-                    attach_node_tree(&mut **replacement.node.borrow_mut(), context);
-                    element.update_node(&mut **replacement.node.borrow_mut());
-                    request_auto_invalidations(context, capabilities);
-                    self.scratch_final_slots[new_pos] = Some(replacement);
-                    continue;
-                }
-
-                self.scratch_old_used[idx] = true;
-                self.scratch_match_order[idx] = Some(new_pos);
-                let moved = idx != new_pos;
-
-                let same_element = entry.element.as_ref().equals_element(element.as_ref());
-
-                {
-                    let node_borrow = entry.node.borrow();
-                    if !node_borrow.node_state().is_attached() {
-                        drop(node_borrow);
-                        attach_node_tree(&mut **entry.node.borrow_mut(), context);
-                    }
-                }
-
-                let needs_update = !same_element || element.requires_update();
-                if needs_update {
-                    element.update_node(&mut **entry.node.borrow_mut());
-                    entry.element = element;
-                    entry.hash_code = hash_code;
-                    request_update_auto_invalidations(
-                        entry.element.as_ref(),
-                        context,
-                        capabilities,
-                    );
-                }
-                if moved {
-                    request_auto_invalidations(context, capabilities);
-                }
-
-                entry.key = key;
-                entry.element_type = element_type;
-                entry.node_type = node_type;
-                entry.capabilities = capabilities;
-                entry
-                    .node
-                    .borrow()
-                    .node_state()
-                    .set_capabilities(capabilities);
-            } else {
-                let entry = ModifierNodeEntry::new(
-                    element_type,
-                    node_type,
-                    key,
-                    element.clone(),
-                    element.create_node(),
-                    hash_code,
-                    capabilities,
-                );
-                attach_node_tree(&mut **entry.node.borrow_mut(), context);
-                element.update_node(&mut **entry.node.borrow_mut());
-                request_auto_invalidations(context, capabilities);
-                self.scratch_final_slots[new_pos] = Some(entry);
-            }
+            scratch.final_slots.push(fresh);
         }
 
         for (i, entry) in old_entries.into_iter().enumerate() {
-            if self.scratch_old_used[i] {
-                if let Some(pos) = self.scratch_match_order[i] {
-                    self.scratch_final_slots[pos] = Some(entry);
-                } else {
+            match scratch.match_order[i] {
+                Some(pos) if scratch.old_used[i] => scratch.final_slots[pos] = Some(entry),
+                _ => {
                     request_auto_invalidations(context, entry.capabilities);
                     detach_node_tree(&mut **entry.node.borrow_mut());
                 }
-            } else {
-                request_auto_invalidations(context, entry.capabilities);
-                detach_node_tree(&mut **entry.node.borrow_mut());
             }
         }
 
-        self.entries.reserve(self.scratch_final_slots.len());
-        for slot in self.scratch_final_slots.drain(..) {
+        self.entries.reserve(scratch.final_slots.len());
+        for slot in scratch.final_slots.drain(..) {
             if let Some(entry) = slot {
                 self.entries.push(entry);
             } else {
