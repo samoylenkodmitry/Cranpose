@@ -2033,12 +2033,14 @@ impl AdmissionGate {
     /// so each one that goes unread doubles the wait, up to
     /// `IN_PLACE_MAX_PATIENCE`.
     fn drawn_in_place(key: LayerRasterCacheKey) -> Self {
+        // DIAGNOSTIC (scratch): never keep a layer that draws in place.
+        let _ = (IN_PLACE_PATIENCE, IN_PLACE_MAX_PATIENCE);
         Self::with_cost(
             key,
             AdmissionCost::Copy {
-                patience: IN_PLACE_PATIENCE,
-                floor: IN_PLACE_PATIENCE,
-                ceiling: IN_PLACE_MAX_PATIENCE,
+                patience: u32::MAX,
+                floor: u32::MAX,
+                ceiling: u32::MAX,
             },
         )
     }
