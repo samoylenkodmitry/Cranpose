@@ -60,3 +60,51 @@ fn value_size_counts_only_the_low_byte() {
     assert_eq!(value_size(0x0044), 4);
     assert_eq!(value_size(0x00FF), 16);
 }
+
+fn kerned_font() -> KernedFont {
+    KernedFont::new(
+        FontArc::try_from_slice(NOTO).expect("font"),
+        KernedFont::read_kerning(NOTO, &[]),
+    )
+}
+
+#[test]
+fn a_face_without_feature_settings_keeps_its_cmap_glyphs() {
+    let font = kerned_font();
+    assert!(font.with_feature_settings(None).is_none());
+    assert!(font.with_feature_settings(Some("\"zero\" 0")).is_none());
+    assert!(font.with_feature_settings(Some("liga")).is_none());
+    assert_eq!(font.feature_key(), 0);
+    assert_eq!(font.glyph_id('0'), GlyphId(glyph(&face(), '0')));
+}
+
+#[test]
+fn feature_settings_substitute_every_glyph_the_face_maps() {
+    let base = kerned_font();
+    let zero = base
+        .with_feature_settings(Some("\"zero\""))
+        .expect("zero substitutes");
+    assert_eq!(zero.glyph_id('0'), GlyphId(2251));
+    assert_eq!(zero.glyph_id('1'), base.glyph_id('1'));
+    assert_eq!(zero.glyph_advance('0').0, GlyphId(2251));
+    assert_eq!(base.glyph_advance('0').0, base.glyph_id('0'));
+    assert_ne!(zero.feature_key(), 0);
+}
+
+#[test]
+fn a_shaped_face_reshapes_from_its_cmap_glyphs() {
+    let base = kerned_font();
+    let zero = base
+        .with_feature_settings(Some("zero"))
+        .expect("zero substitutes");
+    assert!(zero.with_feature_settings(Some("'zero' on")).is_none());
+    let small_caps = zero
+        .with_feature_settings(Some("smcp"))
+        .expect("smcp substitutes");
+    assert_eq!(small_caps.glyph_id('0'), base.glyph_id('0'));
+    assert_eq!(small_caps.glyph_id('a'), GlyphId(1868));
+    let unshaped = zero.with_feature_settings(None).expect("back to the cmap");
+    assert_eq!(unshaped.glyph_id('0'), base.glyph_id('0'));
+    assert_eq!(unshaped.feature_key(), 0);
+    assert_eq!(unshaped.ascii_glyph('0'), base.ascii_glyph('0'));
+}

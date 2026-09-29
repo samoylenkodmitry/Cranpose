@@ -289,6 +289,38 @@ fn measurement_hash_includes_platform_paragraph_shaping() {
 }
 
 #[test]
+fn font_feature_settings_reach_every_text_cache_hash() {
+    let featured = |settings: &str| SpanStyle {
+        font_feature_settings: Some(settings.to_owned()),
+        ..Default::default()
+    };
+    let plain = SpanStyle::default();
+    let spanned = |span: SpanStyle| crate::text::AnnotatedString {
+        text: "0123".to_owned(),
+        span_styles: vec![crate::text::RangeStyle {
+            item: span,
+            range: 0..2,
+        }],
+        ..Default::default()
+    };
+    for (a, b) in [
+        (&plain, &featured("zero")),
+        (&featured("zero"), &featured("smcp")),
+    ] {
+        let (style_a, style_b) = (
+            TextStyle::from_span_style(a.clone()),
+            TextStyle::from_span_style(b.clone()),
+        );
+        assert_ne!(style_a.measurement_hash(), style_b.measurement_hash());
+        assert_ne!(style_a.render_hash(), style_b.render_hash());
+        assert_ne!(a.render_hash(), b.render_hash());
+        let (text_a, text_b) = (spanned(a.clone()), spanned(b.clone()));
+        assert_ne!(text_a.span_styles_hash(), text_b.span_styles_hash());
+        assert_ne!(text_a.render_hash(), text_b.render_hash());
+    }
+}
+
+#[test]
 fn span_style_render_hash_changes_for_visual_attributes() {
     let plain = SpanStyle::default();
     let decorated = SpanStyle {
