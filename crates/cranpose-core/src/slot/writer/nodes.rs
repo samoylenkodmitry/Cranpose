@@ -1,46 +1,44 @@
 use super::super::{
-    NodeRecord, NodeSlotUpdate, SlotTable, SlotWriteSession,
-    collect_root_node_ids_from_records_into,
+    NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession, root_node_ids,
 };
 use crate::{AnchorId, NodeId};
 
 impl SlotTable {
-    fn collect_subtree_node_records(&mut self, group_anchor: AnchorId) -> Vec<NodeRecord> {
+    /// The node records of a group's subtree, repaired to storage: each
+    /// group's node segment starts where the one before it ends, so the
+    /// subtree's records are one run from its root group's segment on.
+    fn subtree_node_records(&mut self, group_anchor: AnchorId) -> &[NodeRecord] {
         let Some(group_index) = self.active_group_index(group_anchor) else {
             log::error!(
                 "slot table ignored root-node collection for stale group anchor {group_anchor:?}"
             );
-            return Vec::new();
+            return &[];
         };
-        let Some(subtree_range) =
-            self.repair_group_subtree_range_at_index(group_index, "root-node collection")
+        let Some(node_count) =
+            self.repair_group_subtree_node_count_from_storage(group_index, "root-node collection")
         else {
             log::error!(
                 "slot table ignored root-node collection for malformed subtree at group index {group_index}"
             );
-            return Vec::new();
+            return &[];
         };
-
-        for index in subtree_range.as_range() {
-            self.repair_group_node_len_to_storage(index, "root-node collection");
-        }
-
-        let mut nodes = Vec::new();
-        for index in subtree_range.as_range() {
-            nodes.extend(self.group_node_records_at(index).iter().copied());
-        }
-        self.repair_group_subtree_node_count_from_storage(group_index, "root-node collection");
-        nodes
+        let start = self.group_node_start_at(group_index);
+        let records = start
+            .checked_add(node_count)
+            .and_then(|end| self.nodes.get(start..end));
+        records.unwrap_or_else(|| {
+            log::error!(
+                "slot table ignored root-node collection past node storage at group index {group_index}"
+            );
+            &[]
+        })
     }
 
     pub(in crate::slot) fn collect_subtree_root_node_ids(
         &mut self,
         group_anchor: AnchorId,
-    ) -> Vec<NodeId> {
-        let nodes = self.collect_subtree_node_records(group_anchor);
-        let mut root_nodes = Vec::new();
-        collect_root_node_ids_from_records_into(&nodes, &mut root_nodes);
-        root_nodes
+    ) -> RootNodeIds {
+        root_node_ids(self.subtree_node_records(group_anchor)).collect()
     }
 }
 
