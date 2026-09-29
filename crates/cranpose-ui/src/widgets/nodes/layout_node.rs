@@ -189,9 +189,23 @@ struct NodeCacheState {
     intrinsics: Vec<(IntrinsicKind, f32)>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct LayoutNodeCacheHandles {
     state: Rc<RefCell<NodeCacheState>>,
+}
+
+impl Clone for LayoutNodeCacheHandles {
+    fn clone(&self) -> Self {
+        Self {
+            state: Rc::clone(&self.state),
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        if !Rc::ptr_eq(&self.state, &source.state) {
+            self.state = Rc::clone(&source.state);
+        }
+    }
 }
 
 impl LayoutNodeCacheHandles {
@@ -350,7 +364,9 @@ impl LayoutNode {
         shell.modifier_slices_snapshot = RefCell::new(Rc::default());
         shell.modifier_slices_dirty = Cell::new(true);
         shell.layout_state = Rc::new(RefCell::new(LayoutState::default()));
-        shell.layout_runtime_state = Rc::new(RefCell::new(LayoutRuntimeState::default()));
+        shell.layout_runtime_state = Rc::new(RefCell::new(LayoutRuntimeState::new(Rc::clone(
+            &shell.measure_policy,
+        ))));
         shell.coordinator_geometry = Rc::default();
         shell
     }
@@ -360,6 +376,9 @@ impl LayoutNode {
         measure_policy: Rc<dyn MeasurePolicy>,
         is_virtual: bool,
     ) -> Self {
+        let layout_runtime_state = Rc::new(RefCell::new(LayoutRuntimeState::new(Rc::clone(
+            &measure_policy,
+        ))));
         let mut node = Self {
             #[cfg(feature = "inspection")]
             source_trace: cranpose_core::source_trace::current_source_trace(),
@@ -390,7 +409,7 @@ impl LayoutNode {
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
             layout_state: Rc::new(RefCell::new(LayoutState::default())),
-            layout_runtime_state: Rc::new(RefCell::new(LayoutRuntimeState::default())),
+            layout_runtime_state,
             coordinator_geometry: Rc::default(),
         };
         node.sync_modifier_chain();
@@ -730,8 +749,8 @@ impl LayoutNode {
         self.is_virtual
     }
 
-    pub(crate) fn cache_handles(&self) -> LayoutNodeCacheHandles {
-        self.cache.clone()
+    pub(crate) fn cache_handles(&self) -> &LayoutNodeCacheHandles {
+        &self.cache
     }
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
@@ -898,14 +917,14 @@ impl LayoutNode {
         self.modifier_chain.with_text_field_modifier_mut(f)
     }
 
-    /// Returns a handle to the shared layout state.
-    /// Used by layout system to update state without borrowing the Applier.
-    pub fn layout_state_handle(&self) -> Rc<RefCell<LayoutState>> {
-        self.layout_state.clone()
+    /// Returns the handle to the shared layout state, which layout clones
+    /// to update the state without borrowing the Applier.
+    pub fn layout_state_handle(&self) -> &Rc<RefCell<LayoutState>> {
+        &self.layout_state
     }
 
-    pub(crate) fn coordinator_geometry(&self) -> Rc<crate::modifier::CoordinatorGeometry> {
-        Rc::clone(&self.coordinator_geometry)
+    pub(crate) fn coordinator_geometry(&self) -> &crate::modifier::CoordinatorGeometry {
+        &self.coordinator_geometry
     }
 
     pub(crate) fn layout_runtime_state_handle(&self) -> Rc<RefCell<LayoutRuntimeState>> {

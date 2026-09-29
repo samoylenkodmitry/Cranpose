@@ -1,7 +1,50 @@
+use std::ops::Range;
+
 use super::{
     CheckedU32Delta, GroupRecord, checked_u32_delta, checked_usize_to_i64, checked_usize_to_u32,
     ranges::{GroupItemRange, ItemRangeKind, NodeRangeKind, PayloadRangeKind, TypedItemRange},
 };
+
+pub(in crate::slot) trait SegmentItems {
+    type Item;
+
+    fn item_count(&self) -> usize;
+    #[cfg(any(test, debug_assertions))]
+    fn item(&self, index: usize) -> Option<&Self::Item>;
+    fn insert_item(&mut self, index: usize, item: Self::Item);
+    fn remove_items(&mut self, range: Range<usize>) -> Vec<Self::Item>;
+    fn insert_items(&mut self, index: usize, items: Vec<Self::Item>);
+    fn rotate_items_right(&mut self, range: Range<usize>, count: usize);
+}
+
+impl<T> SegmentItems for Vec<T> {
+    type Item = T;
+
+    fn item_count(&self) -> usize {
+        self.len()
+    }
+
+    #[cfg(any(test, debug_assertions))]
+    fn item(&self, index: usize) -> Option<&T> {
+        self.get(index)
+    }
+
+    fn insert_item(&mut self, index: usize, item: T) {
+        self.insert(index, item);
+    }
+
+    fn remove_items(&mut self, range: Range<usize>) -> Vec<T> {
+        self.drain(range).collect()
+    }
+
+    fn insert_items(&mut self, index: usize, items: Vec<T>) {
+        self.splice(index..index, items);
+    }
+
+    fn rotate_items_right(&mut self, range: Range<usize>, count: usize) {
+        self[range].rotate_right(count);
+    }
+}
 
 pub(in crate::slot) trait GroupSegment {
     const NAME: &'static str;
@@ -325,12 +368,12 @@ pub(in crate::slot) fn add_group_segment_len<S: GroupSegment>(
     *len = checked_u32_delta(*len, delta, 0, S::NAME);
 }
 
-pub(in crate::slot) fn insert_group_segment_item<S: GroupSegment, T>(
+pub(in crate::slot) fn insert_group_segment_item<S: GroupSegment, I: SegmentItems>(
     groups: &mut [GroupRecord],
-    items: &mut Vec<T>,
+    items: &mut I,
     group_index: usize,
     item_offset: usize,
-    item: T,
+    item: I::Item,
 ) {
     if group_index >= groups.len() {
         log::error!(
@@ -341,13 +384,13 @@ pub(in crate::slot) fn insert_group_segment_item<S: GroupSegment, T>(
     }
     let insert_index = segment_insert_index_for_group_mut::<S>(
         groups,
-        items.len(),
+        items.item_count(),
         group_index,
         "segment item insertion",
     );
     let repaired_len = repair_group_segment_len_to_storage::<S>(
         groups,
-        items.len(),
+        items.item_count(),
         group_index,
         "segment item insertion",
     )
@@ -366,42 +409,44 @@ pub(in crate::slot) fn insert_group_segment_item<S: GroupSegment, T>(
         );
         return;
     };
-    if insert_index > items.len() {
+    if insert_index > items.item_count() {
         log::error!(
             "slot table ignored {} segment item insertion for group index {group_index}: item index {insert_index} exceeds storage length {}",
             S::NAME,
-            items.len()
+            items.item_count()
         );
         return;
     }
-    items.insert(insert_index, item);
+    items.insert_item(insert_index, item);
     add_group_segment_len::<S>(groups, group_index, 1);
     shift_group_segment_starts_from::<S>(groups, group_index + 1, 1);
 }
 
-pub(in crate::slot) fn remove_group_segment_range<S: GroupSegment, T>(
+pub(in crate::slot) fn remove_group_segment_range<S: GroupSegment, I: SegmentItems>(
     groups: &mut [GroupRecord],
-    items: &mut Vec<T>,
+    items: &mut I,
     item_range: GroupItemRange<S::RangeKind>,
-) -> Vec<T> {
+) -> Vec<I::Item> {
     if item_range.is_empty() {
         return Vec::new();
     }
     let group_index = item_range.group_index();
-    let removed = items.drain(item_range.as_range()).collect::<Vec<_>>();
-    let removed_len = checked_usize_to_i64(removed.len(), "removed segment length");
+    let range = item_range.as_range();
+    let removed_len = checked_usize_to_i64(range.len(), "removed segment length");
+    let removed = items.remove_items(range);
     add_group_segment_len::<S>(groups, group_index, -removed_len);
     shift_group_segment_starts_from::<S>(groups, group_index + 1, -removed_len);
     removed
 }
 
-pub(in crate::slot) fn extract_subtree_segment<S: GroupSegment, T>(
+pub(in crate::slot) fn extract_subtree_segment<S: GroupSegment, I: SegmentItems>(
     groups: &mut [GroupRecord],
-    items: &mut Vec<T>,
+    items: &mut I,
     removed_group_index: usize,
     removed_groups: &mut [GroupRecord],
-) -> Vec<T> {
-    let segment_end = removed_subtree_segment_end::<S>(groups, items.len(), removed_group_index);
+) -> Vec<I::Item> {
+    let segment_end =
+        removed_subtree_segment_end::<S>(groups, items.item_count(), removed_group_index);
     for group_index in 0..removed_groups.len() {
         repair_group_segment_len_to_storage::<S>(
             removed_groups,
@@ -421,35 +466,36 @@ pub(in crate::slot) fn extract_subtree_segment<S: GroupSegment, T>(
     }
 
     let item_range = TypedItemRange::<S::RangeKind>::from_start_len(item_start, item_len);
-    let removed = items.drain(item_range.as_range()).collect::<Vec<_>>();
+    let removed = items.remove_items(item_range.as_range());
     let item_len_delta = checked_usize_to_i64(item_len, "removed subtree segment length");
     shift_group_segment_starts_from::<S>(groups, removed_group_index, -item_len_delta);
     removed
 }
 
-pub(in crate::slot) fn restore_subtree_segment<S: GroupSegment, T>(
+pub(in crate::slot) fn restore_subtree_segment<S: GroupSegment, I: SegmentItems>(
     groups: &mut [GroupRecord],
-    items: &mut Vec<T>,
+    items: &mut I,
     insert_group_index: usize,
     restoring_groups: &mut [GroupRecord],
-    restoring_items: Vec<T>,
+    restoring_items: Vec<I::Item>,
 ) {
     let item_insert_index = segment_insert_index_for_group_mut::<S>(
         groups,
-        items.len(),
+        items.item_count(),
         insert_group_index,
         "subtree segment restore",
     );
-    let restoring_len = checked_usize_to_i64(restoring_items.len(), "restoring segment length");
+    let restoring_len =
+        checked_usize_to_i64(restoring_items.item_count(), "restoring segment length");
     shift_group_segment_starts_from::<S>(groups, insert_group_index, restoring_len);
     let item_insert_delta = checked_usize_to_i64(item_insert_index, "restoring segment start");
     offset_detached_group_segment_starts::<S>(restoring_groups, item_insert_delta);
-    items.splice(item_insert_index..item_insert_index, restoring_items);
+    items.insert_items(item_insert_index, restoring_items);
 }
 
-pub(in crate::slot) fn move_subtree_segment_to_earlier_group<S: GroupSegment, T>(
+pub(in crate::slot) fn move_subtree_segment_to_earlier_group<S: GroupSegment, I: SegmentItems>(
     groups: &mut [GroupRecord],
-    items: &mut [T],
+    items: &mut I,
     insert_group_index: usize,
     moving_group_index: usize,
     moving_group_len: usize,
@@ -487,7 +533,7 @@ pub(in crate::slot) fn move_subtree_segment_to_earlier_group<S: GroupSegment, T>
     for group_index in insert_group_index..moving_group_end {
         repair_group_segment_start_and_len_to_storage::<S>(
             groups,
-            items.len(),
+            items.item_count(),
             group_index,
             "subtree segment move",
         );
@@ -501,7 +547,7 @@ pub(in crate::slot) fn move_subtree_segment_to_earlier_group<S: GroupSegment, T>
 
     let item_insert_index = segment_insert_index_for_group_mut::<S>(
         groups,
-        items.len(),
+        items.item_count(),
         insert_group_index,
         "subtree segment move",
     );
@@ -519,17 +565,17 @@ pub(in crate::slot) fn move_subtree_segment_to_earlier_group<S: GroupSegment, T>
         );
         return 0;
     };
-    if item_end > items.len() {
+    if item_end > items.item_count() {
         log::error!(
             "slot table ignored {} segment move because item range {item_start}..{item_end} exceeds {} items",
             S::NAME,
-            items.len()
+            items.item_count()
         );
         return 0;
     }
 
     if item_len > 0 {
-        items[item_insert_index..item_end].rotate_right(item_len);
+        items.rotate_items_right(item_insert_index..item_end, item_len);
     }
 
     let moved_start_delta = checked_usize_to_i64(

@@ -87,6 +87,11 @@ pub(crate) enum SlotInvariantError {
         expected: usize,
         actual: usize,
     },
+    PayloadStoreMismatch {
+        detail: &'static str,
+        expected: usize,
+        actual: usize,
+    },
     ScopeIndexCountMismatch {
         expected: usize,
         actual: usize,
