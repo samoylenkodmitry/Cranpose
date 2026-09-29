@@ -3034,10 +3034,10 @@ impl ModifierNodeChain {
         })
     }
 
-    /// Returns an Rc clone of the node at the given index for shared ownership.
-    /// This is used by coordinators to hold direct references to nodes.
-    pub fn get_node_rc(&self, index: usize) -> Option<Rc<RefCell<Box<dyn ModifierNode>>>> {
-        self.entries.get(index).map(|entry| Rc::clone(&entry.node))
+    /// Returns the shared node at the given index. Coordinators compare it
+    /// with the node they hold and clone it only to hold a new one.
+    pub fn get_node_rc(&self, index: usize) -> Option<&Rc<RefCell<Box<dyn ModifierNode>>>> {
+        self.entries.get(index).map(|entry| &entry.node)
     }
 
     /// Returns true if the chain contains any nodes matching the given invalidation kind.

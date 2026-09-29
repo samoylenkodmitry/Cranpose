@@ -1441,14 +1441,14 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
     let guard = ApplierSlotGuard::new(&mut applier);
     let applier_host = guard.host();
     let slots_handle = guard.slots_handle();
-    let mut builder = LayoutBuilder::new_with_epoch(
+    let builder = LayoutBuilder::new_with_epoch(
         Rc::clone(&applier_host),
         1,
         Rc::clone(&slots_handle),
         FrameLayoutArena::default(),
     );
 
-    builder.measure_node(
+    builder.state.measure_node(
         root_id,
         Constraints {
             min_width: 0.0,
@@ -1458,21 +1458,13 @@ fn nested_measurement_returns_multiple_scratch_vecs_to_pool() -> Result<(), Node
         },
     )?;
 
-    let state = builder.state.borrow();
+    let frame_arena = builder.state.frame_arena.borrow();
     assert!(
-        state.frame_arena.tmp_records.available_count() >= 2,
-        "nested measurement should retain multiple record scratch vecs"
-    );
-    assert!(
-        state.frame_arena.tmp_child_ids.available_count() >= 2,
+        frame_arena.tmp_child_ids.available_count() >= 2,
         "nested measurement should retain multiple child-id scratch vecs"
     );
     assert!(
-        state.frame_arena.tmp_layout_node_data.available_count() >= 2,
-        "nested measurement should retain multiple modifier scratch vecs"
-    );
-    assert!(
-        state.frame_arena.tmp_placements.available_count() >= 2,
+        frame_arena.tmp_placements.available_count() >= 2,
         "nested measurement should retain multiple placement scratch vecs"
     );
 
@@ -1605,6 +1597,118 @@ fn layout_reconciles_child_measurables_by_child_identity() -> Result<(), NodeErr
         ],
         "child measurable wrappers should follow child ids when order changes"
     );
+
+    Ok(())
+}
+
+#[test]
+fn layout_binds_inserted_children_and_drops_removed_and_missing_ones() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+    let mut leaf = |height: f32| {
+        applier.create(Box::new(LayoutNode::new(
+            Modifier::empty(),
+            Rc::new(LeafMeasurePolicy::new(Size {
+                width: 10.0,
+                height,
+            })),
+        )))
+    };
+    let first = leaf(10.0);
+    let second = leaf(20.0);
+    let inserted = leaf(40.0);
+    let missing = leaf(80.0);
+    applier.remove(missing)?;
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children = vec![first, second];
+    let root_id = applier.create(Box::new(root));
+
+    let measured = measure_layout(&mut applier, root_id, Size::new(100.0, 200.0))?;
+    assert_eq!(measured.root_size().height, 30.0);
+    let initial_stats =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+
+    applier.with_node::<LayoutNode, _>(root_id, |node| {
+        node.children = vec![inserted, missing, first];
+        node.mark_needs_measure();
+    })?;
+    let measured = measure_layout(&mut applier, root_id, Size::new(100.0, 200.0))?;
+    let stats =
+        applier.with_node::<LayoutNode, _>(root_id, |node| node.layout_runtime_debug_stats())?;
+
+    assert_eq!(measured.root_size().height, 50.0);
+    assert_eq!(stats.child_ids, vec![inserted, first]);
+    assert_eq!(stats.child_measurable_count, 2);
+    assert_eq!(
+        stats.child_state_ptrs[1], initial_stats.child_state_ptrs[0],
+        "a kept child keeps its measure state when a child is inserted before it"
+    );
+    assert!(
+        !initial_stats
+            .child_state_ptrs
+            .contains(&stats.child_state_ptrs[0])
+    );
+    assert_eq!(
+        applier.with_node::<LayoutNode, _>(first, |node| node.position())?,
+        Point { x: 0.0, y: 40.0 },
+        "the kept child is placed through its rebound state"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_box_aligns_a_child_by_the_parent_data_its_modifier_resolves() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+    let child = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty().alignInBox(Alignment::BOTTOM_END),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 10.0,
+        })),
+    )));
+    let mut root = LayoutNode::new(
+        Modifier::empty().size(Size::new(100.0, 60.0)),
+        Rc::new(BoxMeasurePolicy::new(Alignment::TOP_START, false)),
+    );
+    root.children.push(child);
+    let root_id = applier.create(Box::new(root));
+
+    measure_layout(&mut applier, root_id, Size::new(200.0, 200.0))?;
+
+    assert_eq!(
+        applier.with_node::<LayoutNode, _>(child, |node| node.position())?,
+        Point { x: 90.0, y: 50.0 }
+    );
+
+    Ok(())
+}
+
+#[test]
+fn layout_measures_with_a_replaced_measure_policy() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+    let root_id = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 10.0,
+        })),
+    )));
+
+    let first = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+    applier.with_node::<LayoutNode, _>(root_id, |node| {
+        node.set_measure_policy(Rc::new(LeafMeasurePolicy::new(Size {
+            width: 30.0,
+            height: 20.0,
+        })));
+    })?;
+    let second = measure_layout(&mut applier, root_id, Size::new(100.0, 100.0))?;
+
+    assert_eq!(first.root_size(), Size::new(10.0, 10.0));
+    assert_eq!(second.root_size(), Size::new(30.0, 20.0));
 
     Ok(())
 }
@@ -2063,23 +2167,38 @@ fn parent_data_uses_resolved_layout_properties() {
             .alignInColumn(HorizontalAlignment::End),
         Rc::new(MaxSizePolicy),
     );
-    let cache = layout_node.cache_handles();
     let node_id = applier.create(Box::new(layout_node));
-    let applier_host = Rc::new(ConcreteApplierHost::new(applier));
-
-    let state = LayoutChildMeasureState::new(node_id);
-    state.configure(LayoutChildMeasureConfig {
-        applier: Rc::clone(&applier_host),
-        node_id,
-        error: Rc::new(RefCell::new(None)),
-        runtime_handle: None,
-        cache,
-        cache_epoch: 1,
-        force_remeasure: false,
-        measure_handle: None,
-        layout_state: None,
-    });
+    let builder = LayoutBuilder::new_with_epoch(
+        Rc::new(ConcreteApplierHost::new(applier)),
+        1,
+        Rc::new(RefCell::new(SlotTable::default())),
+        FrameLayoutArena::default(),
+    );
+    let frame = Rc::new(LayoutChildFrame::default());
+    let state = LayoutChildMeasureState::new(node_id, Rc::clone(&frame));
+    builder
+        .state
+        .applier
+        .borrow_typed()
+        .with_node::<LayoutNode, _>(node_id, |node| {
+            state.bind(
+                LayoutChildBinding {
+                    cache: node.cache_handles(),
+                    layout_state: Some(node.layout_state_handle()),
+                    parent_data: Some(parent_data_of(node)),
+                    dirty: false,
+                },
+                &builder.state,
+            );
+        })
+        .expect("node available");
     let measurable = LayoutChildMeasurable::new(state);
+    assert_eq!(
+        measurable.parent_data(),
+        cranpose_ui_layout::ParentData::default(),
+        "a child reports no parent data outside its parent's measure"
+    );
+    frame.bind(&builder.state);
 
     let parent_data = measurable
         .flex_parent_data()
