@@ -723,6 +723,30 @@ const IDLE_PREFETCH_MARGIN: Duration = Duration::from_millis(1);
 /// the frame can start now, else until the paced lead wake, `idle_timeout`
 /// or the vsync callback it asks for, less the lazy items it prefetches
 /// meanwhile.
+/// Updates the app while it runs in the background with no surface: when
+/// another thread's work is waiting on the UI thread, or when the update the
+/// last such work asked for is due. Returns when to update next: one period
+/// on while work keeps arriving.
+fn update_offscreen(
+    shell: Option<&mut AppShell<WgpuRenderer>>,
+    host_window_registry: &Rc<android_host_window::AndroidHostWindowRegistry>,
+    pending_ui: bool,
+    next_update: Option<web_time::Instant>,
+) -> Option<web_time::Instant> {
+    let due = next_update.is_some_and(|at| at <= web_time::Instant::now());
+    if !pending_ui && !due {
+        return next_update;
+    }
+    if let Some(shell) = shell
+        && shell.needs_update()
+    {
+        android_host_window::with_android_host_window_registry(host_window_registry, || {
+            shell.update()
+        });
+    }
+    pending_ui.then(|| web_time::Instant::now() + OFFSCREEN_UPDATE_PERIOD)
+}
+
 fn wait_for_pending_frame(
     pacer: &FramePacer,
     mut shell: Option<&mut AppShell<WgpuRenderer>>,
@@ -2504,28 +2528,26 @@ pub fn run(
             break;
         }
 
-        let offscreen_due = next_offscreen_update.is_some_and(|at| at <= web_time::Instant::now());
-        if offscreen && (offscreen_pending_ui || offscreen_due) {
-            if let Some(shell) = &mut app_shell
-                && shell.needs_update()
-            {
-                android_host_window::with_android_host_window_registry(
-                    &host_window_registry,
-                    || shell.update(),
-                );
-            }
-            next_offscreen_update = match offscreen_pending_ui {
-                true => Some(web_time::Instant::now() + OFFSCREEN_UPDATE_PERIOD),
-                false => None,
-            };
+        if offscreen {
+            next_offscreen_update = update_offscreen(
+                app_shell.as_mut(),
+                &host_window_registry,
+                offscreen_pending_ui,
+                next_offscreen_update,
+            );
         }
 
         let mut frame_started_at: Option<web_time::Instant> = None;
         frame_waits_for_vsync = false;
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
-            let frame_due = resources.has_surface()
-                && shell.needs_update()
-                && shell.renderer().has_frame_credit();
+            let on_screen = resources.has_surface();
+            if on_screen {
+                // Tasks woken since the last pass, a delay that ran out, run
+                // now rather than at the next frame that starts.
+                shell.run_pending_tasks();
+            }
+            let frame_due =
+                on_screen && shell.needs_update() && shell.renderer().has_frame_credit();
             let frame_starts = frame_due
                 && frame_pacer.begin_frame(
                     crate::android_frame_telemetry::monotonic_nanos(),

@@ -440,7 +440,11 @@ pub async fn run(
     crate::web_host_surface::wake_with(request_frame.clone());
     app.borrow_mut().set_frame_waker({
         let request_frame = request_frame.clone();
-        move || request_frame()
+        let run_tasks = woken_task_pump(Rc::downgrade(&app));
+        move || {
+            request_frame();
+            run_tasks();
+        }
     });
 
     crate::web_clipboard::install(&app, request_frame.clone());
@@ -888,6 +892,29 @@ fn request_animation_frame(window: &web_sys::Window, f: &Closure<dyn FnMut()>) -
             log::error!("requestAnimationFrame registration failed: {error:?}");
             false
         }
+    }
+}
+
+/// Runs the tasks a wake-up made ready as a microtask once the running script
+/// yields, rather than in the next animation frame: a coroutine whose `delay`
+/// ran out resumes when its timer fires, as Compose's main dispatcher resumes
+/// one, and the frame draws what it changed. One pump is queued at a time.
+fn woken_task_pump(app: std::rc::Weak<RefCell<AppShell<WgpuRenderer>>>) -> impl Fn() + 'static {
+    let queued = Rc::new(Cell::new(false));
+    move || {
+        if queued.replace(true) {
+            return;
+        }
+        let queued = Rc::clone(&queued);
+        let app = app.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            queued.set(false);
+            if let Some(app) = app.upgrade()
+                && let Ok(mut app) = app.try_borrow_mut()
+            {
+                app.run_pending_tasks();
+            }
+        });
     }
 }
 
