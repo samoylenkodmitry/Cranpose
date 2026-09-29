@@ -1163,7 +1163,7 @@ impl SemanticsUpdate<'_> {
             }
             // Only a node that may keep its report reads its reach: one
             // merged again takes its modality from its configuration.
-            let reach = (same && !layout.needs_semantics()).then(|| layout.semantics_reach());
+            let reach = (same && !layout.semantics_changed()).then(|| layout.semantics_reach());
             let content = match reach {
                 Some(reach) if !reach.merges_live_state => None,
                 _ => Some((

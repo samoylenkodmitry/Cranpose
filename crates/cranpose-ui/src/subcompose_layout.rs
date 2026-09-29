@@ -1343,6 +1343,12 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         crate::modal_nodes::reach_changed(self.id.get());
     }
 
+    /// One flag serves both: the tree merges a subcompose node on every
+    /// update, and a descendant's change leaves its reach as it was.
+    fn mark_descendant_needs_semantics(&self) {
+        self.needs_semantics.set(true);
+    }
+
     fn needs_semantics(&self) -> bool {
         self.needs_semantics.get()
     }

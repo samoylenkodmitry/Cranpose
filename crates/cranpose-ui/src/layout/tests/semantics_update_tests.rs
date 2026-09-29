@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{Applier, MemoryApplier, NodeError, NodeId};
+use cranpose_core::{Applier, MemoryApplier, Node, NodeError, NodeId};
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
     SemanticsConfiguration, SemanticsNode as SemanticsModifier, SemanticsReach,
@@ -150,9 +150,13 @@ struct Scroller {
 impl Scroller {
     fn new() -> Self {
         let offset = Rc::new(Cell::new(0.0));
+        let merges = Rc::new(Cell::new(0));
         let mut applier = MemoryApplier::new();
         let root = applier.create(Box::new(LayoutNode::new(
-            Modifier::empty(),
+            Modifier::from_element(StableLabelElement {
+                label: Rc::new(Cell::new("List")),
+                merges: Rc::clone(&merges),
+            }),
             Rc::new(ScrolledStackPolicy {
                 offset: Rc::clone(&offset),
             }),
@@ -161,7 +165,7 @@ impl Scroller {
             applier,
             root,
             offset,
-            merges: Rc::new(Cell::new(0)),
+            merges,
             tree: None,
         }
     }
@@ -189,7 +193,12 @@ impl Scroller {
     }
 
     fn set_children(&mut self, children: &[NodeId]) -> Result<(), NodeError> {
-        self.applier.with_node::<LayoutNode, _>(self.root, |root| {
+        let root = self.root;
+        for &child in children {
+            self.applier
+                .with_node::<LayoutNode, _>(child, |row| row.set_parent_for_bubbling(root))?;
+        }
+        self.applier.with_node::<LayoutNode, _>(root, |root| {
             root.children.clear();
             root.children.extend_from_slice(children);
             root.mark_needs_measure();
@@ -262,7 +271,11 @@ fn a_moved_row_keeps_its_report_and_takes_its_new_bounds() -> Result<(), NodeErr
     let second = scroller.labelled_row("Second");
     scroller.set_children(&[first, second])?;
     scroller.relayout()?;
-    assert_eq!(scroller.update()?, 2, "a new tree merges every row");
+    assert_eq!(
+        scroller.update()?,
+        3,
+        "a new tree merges the list and every row"
+    );
 
     scroller.offset.set(5.0);
     scroller.relayout()?;
@@ -299,6 +312,33 @@ fn a_row_that_marks_its_semantics_merges_again() -> Result<(), NodeError> {
 }
 
 #[test]
+fn a_change_below_merges_only_the_node_that_changed() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut scroller = Scroller::new();
+    let label = Rc::new(Cell::new("Before"));
+    let row = scroller.row(&label);
+    scroller.set_children(&[row])?;
+    scroller.relayout()?;
+    scroller.update()?;
+
+    label.set("After");
+    cranpose_core::bubble_semantics_dirty(&mut scroller.applier, row);
+    let root_dirty = scroller
+        .applier
+        .with_node::<LayoutNode, _>(scroller.root, |root| {
+            (root.needs_semantics(), root.semantics_changed())
+        })?;
+    assert_eq!(
+        root_dirty,
+        (true, false),
+        "the list only learns that something below it changed"
+    );
+    assert_eq!(scroller.update()?, 1, "the list keeps its report");
+    assert_eq!(scroller.rows()[0].1.as_deref(), Some("After"));
+    Ok(())
+}
+
+#[test]
 fn rows_that_come_and_go_are_matched_by_id() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut scroller = Scroller::new();
@@ -308,7 +348,7 @@ fn rows_that_come_and_go_are_matched_by_id() -> Result<(), NodeError> {
         .collect();
     scroller.set_children(&rows)?;
     scroller.relayout()?;
-    assert_eq!(scroller.update()?, 4);
+    assert_eq!(scroller.update()?, 5);
 
     let appended = scroller.labelled_row("e");
     scroller.set_children(&[rows[1], rows[2], rows[3], appended])?;

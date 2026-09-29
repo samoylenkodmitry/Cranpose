@@ -1499,7 +1499,12 @@ pub trait Node: Any {
     }
     /// Mark this node as needing semantics recomputation.
     fn mark_needs_semantics(&self) {}
-    /// Check if this node needs semantics recomputation.
+    /// Mark that a node below this one needs semantics recomputation, while
+    /// this node's own semantics are unchanged.
+    fn mark_descendant_needs_semantics(&self) {
+        self.mark_needs_semantics();
+    }
+    /// Check if this node or a node below it needs semantics recomputation.
     fn needs_semantics(&self) -> bool {
         false
     }
@@ -1734,7 +1739,7 @@ fn bubble_semantics_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId
             Some(pid) => {
                 if let Ok(parent) = applier.get_mut(pid) {
                     if !parent.needs_semantics() {
-                        parent.mark_needs_semantics();
+                        parent.mark_descendant_needs_semantics();
                     }
                     node_id = pid;
                 } else {
@@ -1780,7 +1785,7 @@ fn bubble_semantics_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
 
         let advanced = with_node_mut(parent_id, |node: &mut N| {
             if !node.needs_semantics() {
-                node.mark_needs_semantics();
+                node.mark_descendant_needs_semantics();
             }
             true
         })
