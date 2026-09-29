@@ -122,3 +122,35 @@ fn node_ptr<N: ModifierNode + 'static>(handle: &ModifierChainHandle) -> *const N
         .map(|node| &*node as *const N)
         .expect("expected node to exist")
 }
+
+#[test]
+fn a_chain_keeps_no_modifier_locals_until_it_provides_one() {
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&Modifier::empty().padding(4.0));
+    assert!(
+        handle.modifier_locals_handle().is_none(),
+        "a chain that neither provides nor reads a modifier local keeps no manager"
+    );
+
+    let key = crate::modifier::ModifierLocalKey::new(|| 3_i32);
+    let _ = handle.update(&Modifier::empty().modifier_local_provider(key.clone(), || 5_i32));
+    let locals = handle
+        .modifier_locals_handle()
+        .expect("a providing chain keeps its modifier locals");
+    let resolved = locals
+        .borrow()
+        .resolve(&key.token())
+        .expect("the provider's value resolves");
+    assert_eq!(resolved.value().downcast_ref::<i32>(), Some(&5));
+
+    let _ = handle.update(&Modifier::empty().padding(4.0));
+    assert!(
+        handle
+            .modifier_locals_handle()
+            .expect("a manager once made stays")
+            .borrow()
+            .resolve(&key.token())
+            .is_none(),
+        "a chain that stops providing clears what it provided"
+    );
+}
