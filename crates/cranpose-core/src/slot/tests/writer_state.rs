@@ -51,7 +51,7 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         session.skip_group();
         let child_a_result = session.finish_group_body();
         assert!(child_a_result.detached_children.is_empty());
-        assert_eq!(child_a_result.root_nodes, vec![10]);
+        assert_eq!(child_a_result.root_nodes.as_slice(), [10]);
         assert!(child_a_result.was_skipped);
         session.end_group();
 

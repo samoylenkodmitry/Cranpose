@@ -207,19 +207,61 @@ fn collected(layer: LayerNode) -> ChildLayer {
 }
 
 #[test]
-fn a_transform_that_only_turns_and_moves_is_rigid() {
-    assert!(is_rigid(turn(33.0)));
-    assert!(is_rigid(
-        turn(-7.5).then(ProjectiveTransform::translation(12.0, -3.0))
-    ));
-    assert!(!is_rigid(ProjectiveTransform::uniform_scale(1.5)));
-    assert!(!is_rigid(
-        turn(20.0).then(ProjectiveTransform::uniform_scale(0.5))
-    ));
-    assert!(!is_rigid(ProjectiveTransform::from_rect_to_quad(
-        rect(0.0, 0.0, 1.0, 1.0),
-        [[0.0, 0.0], [1.0, 0.1], [0.0, 1.0], [0.8, 1.3]],
-    )));
+fn a_transform_that_scales_evenly_turns_and_moves_has_its_scale() {
+    let scale_of = |transform| similarity_scale(transform).map(|scale| (scale * 1e4).round() / 1e4);
+    assert_eq!(scale_of(turn(33.0)), Some(1.0));
+    assert_eq!(
+        scale_of(turn(-7.5).then(ProjectiveTransform::translation(12.0, -3.0))),
+        Some(1.0)
+    );
+    assert_eq!(scale_of(ProjectiveTransform::uniform_scale(1.5)), Some(1.5));
+    assert_eq!(
+        scale_of(turn(20.0).then(ProjectiveTransform::uniform_scale(0.5))),
+        Some(0.5)
+    );
+    assert_eq!(scale_of(ProjectiveTransform::uniform_scale(0.0)), None);
+    assert_eq!(
+        scale_of(ProjectiveTransform::from_rect_to_quad(
+            rect(0.0, 0.0, 1.0, 1.0),
+            [[0.0, 0.0], [2.0, 0.0], [0.0, 1.0], [2.0, 1.0]],
+        )),
+        None,
+        "an uneven scale resamples"
+    );
+    assert_eq!(
+        scale_of(ProjectiveTransform::from_rect_to_quad(
+            rect(0.0, 0.0, 1.0, 1.0),
+            [[0.0, 0.0], [1.0, 0.1], [0.0, 1.0], [0.8, 1.3]],
+        )),
+        None
+    );
+}
+
+#[test]
+fn a_scaled_layer_draws_in_place_at_its_raster_scale_until_its_scale_moves_within_a_held_raster() {
+    assert_eq!(in_place_content_scale(1.0, 1.4), Some(1.0));
+    assert_eq!(in_place_content_scale(0.7, 0.7), Some(0.7));
+    assert_eq!(in_place_content_scale(0.7, 0.9), None);
+}
+
+#[test]
+fn a_layer_that_scales_evenly_at_its_raster_scale_draws_in_place() {
+    let scaled = |transform| {
+        collected(turned_layer(
+            transform,
+            GraphicsLayer {
+                scale: 0.7,
+                ..Default::default()
+            },
+            vec![run(vec![solid(rect(0.0, 0.0, 60.0, 40.0))])],
+        ))
+    };
+    assert!(scaled(ProjectiveTransform::uniform_scale(0.7)).in_place);
+    assert!(scaled(turn(20.0).then(ProjectiveTransform::uniform_scale(0.7))).in_place);
+    assert!(
+        !scaled(ProjectiveTransform::uniform_scale(0.5)).in_place,
+        "a transform scaling past the layer's raster scale composites its surface"
+    );
 }
 
 #[test]

@@ -19,7 +19,7 @@ use crate::{
     composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
     runtime,
-    slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, ValueSlotId},
+    slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, RootNodeIds, ValueSlotId},
 };
 
 pub struct ValueSlotHandle<'pass, T: 'static> {
@@ -2092,7 +2092,7 @@ impl Composer {
         Ok((result, frame.scopes))
     }
 
-    fn attach_root_nodes(&self, root_nodes: Vec<NodeId>) {
+    fn attach_root_nodes(&self, root_nodes: RootNodeIds) {
         for id in root_nodes {
             self.attach_to_parent(id);
         }

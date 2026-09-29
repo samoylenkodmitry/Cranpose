@@ -43,6 +43,12 @@ enum Scene {
     /// A paragraph of ink text naming `w`, wrapped to 140 points and held to
     /// 30, turned by 21 degrees: the text clips its lines to its own bounds.
     ClippedText,
+    /// A 0.6w x 60 box of ink scaled by 0.7.
+    ScaledBox,
+    /// A line of ink text naming `w`, scaled by 0.75.
+    ScaledText,
+    /// A 0.6w x 60 box of ink scaled by 0.8 and turned by 23 degrees.
+    ScaledTurnedBox,
 }
 
 impl Scene {
@@ -53,9 +59,10 @@ impl Scene {
     }
 }
 
-fn turned(degrees: f32, offscreen: bool) -> Modifier {
+fn turned(degrees: f32, scale: f32, offscreen: bool) -> Modifier {
     Modifier::empty().graphics_layer_value(GraphicsLayer {
         rotation_z: degrees,
+        scale,
         compositing_strategy: if offscreen {
             CompositingStrategy::Offscreen
         } else {
@@ -70,15 +77,30 @@ fn centred() -> BoxSpec {
 }
 
 #[composable]
-fn InkBox(width: f32, height: f32, degrees: f32, offscreen: bool) {
+fn InkBox(width: f32, height: f32, degrees: f32, scale: f32, offscreen: bool) {
     Box(
         Modifier::empty()
             .size_points(width, height)
-            .then(turned(degrees, offscreen))
+            .then(turned(degrees, scale, offscreen))
             .background(INK),
         BoxSpec::default(),
         || {},
     );
+}
+
+#[composable]
+fn InkText(label: String, modifier: Modifier) {
+    Box(modifier, BoxSpec::default(), move || {
+        Text(
+            label.clone(),
+            Modifier::empty(),
+            TextStyle::from_span_style(SpanStyle {
+                color: Some(INK),
+                font_size: TextUnit::Sp(18.0),
+                ..Default::default()
+            }),
+        );
+    });
 }
 
 #[composable]
@@ -91,53 +113,38 @@ fn TurnedPage(scene: Scene, offscreen: bool, width: MutableState<f32>) {
         move || {
             let w = width.get();
             match scene {
-                Scene::Box => InkBox(w * 0.6, 60.0, 23.0, offscreen),
-                Scene::Text => {
-                    Box(turned(-17.0, offscreen), BoxSpec::default(), move || {
-                        Text(
-                            format!("Turned in place {w}"),
-                            Modifier::empty(),
-                            TextStyle::from_span_style(SpanStyle {
-                                color: Some(INK),
-                                font_size: TextUnit::Sp(18.0),
-                                ..Default::default()
-                            }),
-                        );
-                    });
+                Scene::Box => InkBox(w * 0.6, 60.0, 23.0, 1.0, offscreen),
+                Scene::Text => InkText(
+                    format!("Turned in place {w}"),
+                    turned(-17.0, 1.0, offscreen),
+                ),
+                Scene::ScaledBox => InkBox(w * 0.6, 60.0, 0.0, 0.7, offscreen),
+                Scene::ScaledText => {
+                    InkText(format!("Scaled in place {w}"), turned(0.0, 0.75, offscreen));
                 }
+                Scene::ScaledTurnedBox => InkBox(w * 0.6, 60.0, 23.0, 0.8, offscreen),
                 Scene::Nested | Scene::InSurface => {
                     Box(
-                        Modifier::empty()
-                            .size_points(160.0, 100.0)
-                            .then(turned(-15.0, offscreen || scene == Scene::InSurface)),
+                        Modifier::empty().size_points(160.0, 100.0).then(turned(
+                            -15.0,
+                            1.0,
+                            offscreen || scene == Scene::InSurface,
+                        )),
                         centred(),
-                        move || InkBox(w * 0.4, 40.0, 40.0, offscreen),
+                        move || InkBox(w * 0.4, 40.0, 40.0, 1.0, offscreen),
                     );
                 }
-                Scene::ClippedText => {
-                    Box(
-                        Modifier::empty()
-                            .size_points(140.0, 30.0)
-                            .then(turned(21.0, offscreen)),
-                        BoxSpec::default(),
-                        move || {
-                            Text(
-                                format!("Cut by its own bounds as it turns, {w} wide"),
-                                Modifier::empty(),
-                                TextStyle::from_span_style(SpanStyle {
-                                    color: Some(INK),
-                                    font_size: TextUnit::Sp(18.0),
-                                    ..Default::default()
-                                }),
-                            );
-                        },
-                    );
-                }
+                Scene::ClippedText => InkText(
+                    format!("Cut by its own bounds as it turns, {w} wide"),
+                    Modifier::empty()
+                        .size_points(140.0, 30.0)
+                        .then(turned(21.0, 1.0, offscreen)),
+                ),
                 Scene::Clipped => {
                     Box(
                         Modifier::empty().size_points(100.0, 100.0).clip_to_bounds(),
                         centred(),
-                        move || InkBox(160.0, w * 0.2, 30.0, offscreen),
+                        move || InkBox(160.0, w * 0.2, 30.0, 1.0, offscreen),
                     );
                 }
             }
@@ -234,7 +241,7 @@ fn in_place_and_offscreen(scene: Scene) -> Option<(Coverage, Coverage)> {
     assert_eq!(
         in_place_stats.isolated_layer_renders,
         scene.surfaces_in_place(),
-        "{scene:?}: a changing layer that only turns draws in place: {in_place_stats:?}"
+        "{scene:?}: a changing layer that only scales evenly and turns draws in place: {in_place_stats:?}"
     );
     assert_eq!(
         in_place_stats.layer_cache_hits_by_kind[SOURCE_KIND], 0,
@@ -323,6 +330,33 @@ fn a_child_drawn_in_place_into_its_parent_s_surface_lands_where_its_own_surface_
         return;
     };
     assert_centred(Scene::InSurface, &drawn, 0.05);
+}
+
+#[test]
+fn a_scaled_box_drawn_in_place_covers_what_its_surface_covers() {
+    let Some(drawn) = assert_lands_alike(Scene::ScaledBox, 0.005, 0.05) else {
+        return;
+    };
+    assert_area(Scene::ScaledBox, &drawn, WIDTH * 0.6 * 0.7 * 60.0 * 0.7);
+    assert_centred(Scene::ScaledBox, &drawn, 0.05);
+}
+
+#[test]
+fn scaled_text_drawn_in_place_lands_where_its_surface_lands() {
+    assert_lands_alike(Scene::ScaledText, 0.04, 0.25);
+}
+
+#[test]
+fn a_scaled_and_turned_box_drawn_in_place_covers_what_its_surface_covers() {
+    let Some(drawn) = assert_lands_alike(Scene::ScaledTurnedBox, 0.005, 0.05) else {
+        return;
+    };
+    assert_area(
+        Scene::ScaledTurnedBox,
+        &drawn,
+        WIDTH * 0.6 * 0.8 * 60.0 * 0.8,
+    );
+    assert_centred(Scene::ScaledTurnedBox, &drawn, 0.05);
 }
 
 #[test]

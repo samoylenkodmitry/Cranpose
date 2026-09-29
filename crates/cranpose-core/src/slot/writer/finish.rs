@@ -1,7 +1,7 @@
 use super::{
     super::{
-        ChildCursor, DetachedSubtree, FinishGroupResult, SlotLifecycleCoordinator, SlotTable,
-        SlotWriteSession,
+        ChildCursor, DetachedSubtree, FinishGroupResult, RootNodeIds, SlotLifecycleCoordinator,
+        SlotTable, SlotWriteSession,
     },
     SlotWriteSessionState,
 };
@@ -72,7 +72,7 @@ impl SlotTable {
         let root_nodes = if was_skipped {
             self.collect_subtree_root_node_ids(group_anchor)
         } else {
-            Vec::new()
+            RootNodeIds::new()
         };
         state.note_removed_nodes(direct_nodes.len());
         let result = FinishGroupResult {
