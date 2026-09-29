@@ -175,11 +175,21 @@ fn graph_has_runtime_shader_effect(layer: &LayerNode) -> bool {
 
 fn build_layer_node_for_test(
     snapshot: BuildNodeSnapshot,
-    scale: f32,
     inherited_motion_context_animated: bool,
 ) -> LayerNode {
     let app_context = cranpose_ui::AppContext::new();
-    app_context.enter(|| build_layer_node(snapshot, scale, inherited_motion_context_animated))
+    app_context.enter(|| {
+        let mut layer = LayerNode::default();
+        write_snapshot_layer(
+            snapshot,
+            LowerContext {
+                inherited_motion_context_animated,
+                ..LowerContext::ROOT
+            },
+            &mut layer,
+        );
+        layer
+    })
 }
 
 /// The slices a modifier resolves to, shared the way a laid-out node shares
@@ -307,8 +317,8 @@ fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
 
 #[test]
 fn parent_translation_changes_layer_transform_but_not_child_local_geometry() {
-    let static_graph = build_layer_node_for_test(snapshot_with_translation(0.0), 1.0, false);
-    let moved_graph = build_layer_node_for_test(snapshot_with_translation(23.5), 1.0, false);
+    let static_graph = build_layer_node_for_test(snapshot_with_translation(0.0), false);
+    let moved_graph = build_layer_node_for_test(snapshot_with_translation(23.5), false);
 
     let RenderNode::Layer(static_child) = &static_graph.children[0] else {
         panic!("expected child layer");
@@ -337,8 +347,8 @@ fn parent_translation_changes_layer_transform_but_not_child_local_geometry() {
 
 #[test]
 fn stored_content_hash_ignores_parent_translation() {
-    let static_graph = build_layer_node_for_test(snapshot_with_translation(0.0), 1.0, false);
-    let moved_graph = build_layer_node_for_test(snapshot_with_translation(23.5), 1.0, false);
+    let static_graph = build_layer_node_for_test(snapshot_with_translation(0.0), false);
+    let moved_graph = build_layer_node_for_test(snapshot_with_translation(23.5), false);
 
     assert_eq!(
         static_graph.target_content_hash(),
@@ -370,7 +380,7 @@ fn parent_content_offset_is_encoded_in_child_transform() {
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(parent, 1.0, false);
+    let graph = build_layer_node_for_test(parent, false);
     let RenderNode::Layer(child) = &graph.children[0] else {
         panic!("expected child layer");
     };
@@ -409,17 +419,14 @@ fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
     let (_composition, scroll) = scroll_container_slices();
     let base = build_layer_node_for_test(
         parent_with_offset(Point { x: 0.0, y: -18.0 }, &scroll),
-        1.0,
         true,
     );
     let moved = build_layer_node_for_test(
         parent_with_offset(Point { x: 0.0, y: -32.0 }, &scroll),
-        1.0,
         true,
     );
     let rested = build_layer_node_for_test(
         parent_with_offset(Point { x: 0.0, y: -18.0 }, &scroll),
-        1.0,
         false,
     );
 
@@ -1133,7 +1140,7 @@ fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
 #[test]
 fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
     let mut graph = RenderGraph {
-        root: build_layer_node_for_test(snapshot_with_translation(0.0), 1.0, false),
+        root: build_layer_node_for_test(snapshot_with_translation(0.0), false),
     };
     let mut applier = MemoryApplier::new();
 
@@ -2346,7 +2353,7 @@ fn overlay_draw_commands_are_tagged_after_children() {
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(parent, 1.0, false);
+    let graph = build_layer_node_for_test(parent, false);
     let RenderNode::DrawRun(behind) = &graph.children[0] else {
         panic!("expected before-children draw run");
     };
@@ -2380,10 +2387,10 @@ fn command_recordings_reuse_buffers_across_rebuilds() {
         run
     }
 
-    let graph_a = build_layer_node_for_test(snapshot(), 1.0, false);
+    let graph_a = build_layer_node_for_test(snapshot(), false);
     let ptr_a = run_of(&graph_a).recording.shapes().bodies().as_ptr();
 
-    let graph_b = build_layer_node_for_test(snapshot(), 1.0, false);
+    let graph_b = build_layer_node_for_test(snapshot(), false);
     let ptr_b = run_of(&graph_b).recording.shapes().bodies().as_ptr();
     assert_ne!(
         ptr_a, ptr_b,
@@ -2396,7 +2403,7 @@ fn command_recordings_reuse_buffers_across_rebuilds() {
     );
 
     drop(graph_a);
-    let graph_c = build_layer_node_for_test(snapshot(), 1.0, false);
+    let graph_c = build_layer_node_for_test(snapshot(), false);
     assert_eq!(
         run_of(&graph_c).recording.shapes().bodies().as_ptr(),
         ptr_a,
@@ -2405,7 +2412,7 @@ fn command_recordings_reuse_buffers_across_rebuilds() {
 
     let held = std::rc::Rc::clone(&run_of(&graph_c).recording);
     drop(graph_c);
-    let graph_d = build_layer_node_for_test(snapshot(), 1.0, false);
+    let graph_d = build_layer_node_for_test(snapshot(), false);
     let ptr_d = run_of(&graph_d).recording.shapes().bodies().as_ptr();
     assert_ne!(ptr_d, held.shapes().bodies().as_ptr());
     assert_ne!(ptr_d, run_of(&graph_b).recording.shapes().bodies().as_ptr());
@@ -2439,8 +2446,8 @@ fn stored_content_hash_changes_when_child_transform_changes() {
         ..parent.clone()
     };
 
-    let static_graph = build_layer_node_for_test(parent, 1.0, false);
-    let moved_graph = build_layer_node_for_test(moved_parent, 1.0, false);
+    let static_graph = build_layer_node_for_test(parent, false);
+    let moved_graph = build_layer_node_for_test(moved_parent, false);
 
     assert_ne!(
         static_graph.target_content_hash(),
@@ -2465,8 +2472,8 @@ fn stored_effect_hash_tracks_local_effect_only() {
         ..GraphicsLayer::default()
     });
 
-    let base_graph = build_layer_node_for_test(base, 1.0, false);
-    let effected_graph = build_layer_node_for_test(effected, 1.0, false);
+    let base_graph = build_layer_node_for_test(base, false);
+    let effected_graph = build_layer_node_for_test(effected, false);
 
     assert_eq!(
         base_graph.target_content_hash(),
@@ -2498,7 +2505,7 @@ fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(snapshot, 1.0, false);
+    let graph = build_layer_node_for_test(snapshot, false);
     let RenderNode::Primitive(text_primitive) = &graph.children[0] else {
         panic!("expected text primitive");
     };
@@ -2540,7 +2547,7 @@ fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(snapshot, 1.0, false);
+    let graph = build_layer_node_for_test(snapshot, false);
     let RenderNode::Primitive(text_primitive) = &graph.children[0] else {
         panic!("expected text primitive");
     };
@@ -2596,7 +2603,7 @@ fn text_field_pan_shifts_glyphs_and_clips_to_field_bounds() {
 
     // A field draws its caret and selection around its text.
     let text_node = |snapshot: BuildNodeSnapshot| {
-        let graph = build_layer_node_for_test(snapshot, 1.0, false);
+        let graph = build_layer_node_for_test(snapshot, false);
         graph
             .children
             .iter()
@@ -2672,7 +2679,7 @@ fn translated_content_context_preserves_descendant_text_motion_when_unspecified(
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(parent, 1.0, false);
+    let graph = build_layer_node_for_test(parent, false);
     let RenderNode::Layer(child_layer) = &graph.children[0] else {
         panic!("expected child layer");
     };
@@ -2716,7 +2723,7 @@ fn content_offset_without_translated_context_keeps_descendant_text_unspecified()
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(parent, 1.0, false);
+    let graph = build_layer_node_for_test(parent, false);
     let RenderNode::Layer(child_layer) = &graph.children[0] else {
         panic!("expected child layer");
     };
@@ -2769,7 +2776,7 @@ fn translated_content_context_preserves_effectful_text_motion_when_unspecified()
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(parent, 1.0, false);
+    let graph = build_layer_node_for_test(parent, false);
     let RenderNode::Layer(child_layer) = &graph.children[0] else {
         panic!("expected child layer");
     };
@@ -2811,7 +2818,7 @@ fn animated_motion_marker_preserves_descendant_text_motion_when_unspecified() {
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(parent, 1.0, true);
+    let graph = build_layer_node_for_test(parent, true);
     let RenderNode::Layer(child_layer) = &graph.children[0] else {
         panic!("expected child layer");
     };
@@ -3084,7 +3091,7 @@ fn explicit_static_text_motion_is_preserved_under_scrolling_context() {
         ..Default::default()
     };
 
-    let graph = build_layer_node_for_test(parent, 1.0, false);
+    let graph = build_layer_node_for_test(parent, false);
     let RenderNode::Layer(child_layer) = &graph.children[0] else {
         panic!("expected child layer");
     };
