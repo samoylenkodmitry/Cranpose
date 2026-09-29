@@ -1,7 +1,7 @@
 use cranpose_ui::{
     composable,
     text::{SpanStyle, TextUnit},
-    Color, Column, ColumnSpec, LinearArrangement, Modifier, Size, Spacer, Text, TextStyle,
+    Color, Column, ColumnSpec, LinearArrangement, Modifier, Spacer, Text, TextStyle,
 };
 
 const PARAGRAPH_WIDTH: f32 = 245.0;
@@ -92,10 +92,7 @@ pub fn TextWrapReproScreen() {
                 Modifier::empty().width(520.0),
                 label_style(),
             );
-            Spacer(Size {
-                width: 0.0,
-                height: 4.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 4.0));
             FramedParagraph("Verdict".to_string(), VERDICT.to_string());
             FramedParagraph("Engine".to_string(), ENGINE.to_string());
         },

@@ -272,10 +272,7 @@ pub(crate) fn InteractiveAnimTab() {
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 4.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 4.0));
         },
     );
 }

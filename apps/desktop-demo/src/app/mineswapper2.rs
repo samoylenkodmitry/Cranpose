@@ -1,7 +1,7 @@
 use cranpose_core::rememberMutableStateOf;
 use cranpose_ui::{
     composable, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii,
-    LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    LinearArrangement, Modifier, Row, RowSpec, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,10 +261,7 @@ pub fn mineswapper2_tab() {
                         TextStyle::default(),
                     );
 
-                    Spacer(Size {
-                        width: 0.0,
-                        height: 0.0,
-                    });
+                    Spacer(Modifier::empty().size_points(0.0, 0.0));
 
                     Row(
                         Modifier::empty(),
@@ -370,10 +367,7 @@ pub fn mineswapper2_tab() {
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 12.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 12.0));
 
             let game = game_state.get();
             let flag_mode_value = flag_mode.get();
@@ -402,10 +396,7 @@ pub fn mineswapper2_tab() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 8.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 8.0));
 
             Text(
                 status_text,
@@ -416,10 +407,7 @@ pub fn mineswapper2_tab() {
                 TextStyle::default(),
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             let grid_width = game.width;
             let grid_height = game.height;

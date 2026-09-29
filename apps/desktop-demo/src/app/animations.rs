@@ -6,7 +6,7 @@ use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle},
     Color, Column, ColumnSpec, GraphicsLayer, LazyColumn, LazyColumnSpec, LinearArrangement,
-    Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    Modifier, Row, RowSpec, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone)]
@@ -135,10 +135,7 @@ pub(crate) fn AnimationsTab() {
                                     RowSpec::default(),
                                     || {},
                                 );
-                                Spacer(Size {
-                                    width: 8.0,
-                                    height: 0.0,
-                                });
+                                Spacer(Modifier::empty().size_points(8.0, 0.0));
                                 Text(
                                     format!("Offset {offset_x:.1}"),
                                     Modifier::empty(),
@@ -193,10 +190,7 @@ pub(crate) fn AnimationsTab() {
                                     RowSpec::default(),
                                     || {},
                                 );
-                                Spacer(Size {
-                                    width: 10.0,
-                                    height: 0.0,
-                                });
+                                Spacer(Modifier::empty().size_points(10.0, 0.0));
                                 Text(
                                     "Animation sampled inside graphics_layer",
                                     Modifier::empty(),

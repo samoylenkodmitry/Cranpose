@@ -81,10 +81,7 @@ fn TopBar(palette: Palette, active_label: &'static str) {
         RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
             Text(TITLE, Modifier::empty(), heading_text_style(palette.text));
-            Spacer(Size {
-                width: 12.0,
-                height: 0.0,
-            });
+            Spacer(Modifier::empty().size_points(12.0, 0.0));
             Text(
                 active_label,
                 Modifier::empty(),

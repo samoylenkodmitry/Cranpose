@@ -425,36 +425,61 @@ impl ShapeRecord {
     }
 }
 
-/// The area of a fill's interior, where its coverage is 1, as the shape
-/// shader's `fill_interior` takes it: of the two bands its corners leave
-/// whole, the band between the left and right corners at full height or the
-/// one between the top and bottom corners at full width, the larger.
-/// `radii` is top-left, top-right, bottom-right, bottom-left, as recorded.
-fn fill_interior_area(width: f32, height: f32, radii: [f32; 4]) -> f32 {
+/// The area of the larger of the two bands a fill's corners leave whole,
+/// as the shape shader's `fill_bands` takes it: the band between the left
+/// and right corners at full height or the one between the top and bottom
+/// corners at full width. `radii` is top-left, top-right, bottom-right,
+/// bottom-left, as recorded.
+fn band_interior_area(width: f32, height: f32, radii: [f32; 4]) -> f32 {
     let [top_left, top_right, bottom_right, bottom_left] =
         radii.map(|radius| at_least(radius, 0.0));
-    let across = at_least(
-        width - top_left.max(bottom_left) - top_right.max(bottom_right),
+    let across = inset_area(
+        width,
+        height,
+        top_left.max(bottom_left) + top_right.max(bottom_right),
         0.0,
-    ) * at_least(height, 0.0);
-    let down = at_least(width, 0.0)
-        * at_least(
-            height - top_left.max(top_right) - bottom_left.max(bottom_right),
-            0.0,
-        );
+    );
+    let down = inset_area(
+        width,
+        height,
+        0.0,
+        top_left.max(top_right) + bottom_left.max(bottom_right),
+    );
     across.max(down)
 }
 
-/// Whether a record is a rounded fill whose interior covers at least half
-/// of its rect: see [`fill_interior_area`].
+/// The area of a fill's interior, where its coverage is 1, as the shape
+/// shader's `fill_interior` takes it: the larger of its bands and the rect
+/// inset past every corner's arc, whose corner a corner of radius `r`
+/// reaches `r (1 - 1/√2)` in from each side.
+fn fill_interior_area(width: f32, height: f32, radii: [f32; 4]) -> f32 {
+    let [top_left, top_right, bottom_right, bottom_left] =
+        radii.map(|radius| at_least(radius, 0.0) * (1.0 - std::f32::consts::FRAC_1_SQRT_2));
+    band_interior_area(width, height, radii).max(inset_area(
+        width,
+        height,
+        top_left.max(bottom_left) + top_right.max(bottom_right),
+        top_left.max(top_right) + bottom_left.max(bottom_right),
+    ))
+}
+
+/// The area of a `width` × `height` rect less `less_width` and `less_height`.
+fn inset_area(width: f32, height: f32, less_width: f32, less_height: f32) -> f32 {
+    at_least(width - less_width, 0.0) * at_least(height - less_height, 0.0)
+}
+
+/// Whether a record is a rounded fill whose bands cover at least half of
+/// its rect: a gradient batch tests them per fragment (see
+/// [`band_interior_area`]), and a solid one tests no interior.
 fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     if fragment_kind(body.flags) != FRAGMENT_KIND_FILL {
         return false;
     }
-    let rounded = curve.radii.iter().any(|&radius| radius > 0.0);
+    let [top_left, top_right, bottom_right, bottom_left] = curve.radii;
+    let rounded = top_left.max(top_right).max(bottom_right.max(bottom_left)) > 0.0;
     let [_, _, width, height] = body.rect;
     let area = width * height;
-    rounded && area > 0.0 && fill_interior_area(width, height, curve.radii) * 2.0 >= area
+    rounded && area > 0.0 && band_interior_area(width, height, curve.radii) * 2.0 >= area
 }
 
 /// The least interior, in square logical pixels, that a solid fill lays
@@ -1118,9 +1143,6 @@ impl ShapeRecorder {
                 index => self.tables.brushes[index as usize - 1].kind,
             };
         let kind_bit = 1u8 << fragment_kind(body.flags);
-        let interiors = interior_repays(&body, &curve);
-        let occluders = interior_occludes(&body, &curve);
-        let bare_interiors = interiors && (body.brush != 0 || body.color[3] < 1.0);
         let band_class = band_bucket.unwrap_or(0) as u8;
         body.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
         let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient)
@@ -1128,6 +1150,18 @@ impl ShapeRecorder {
         if !extend {
             self.segment_waste = 0;
         }
+        // A record joining a segment matters to its interior flags only
+        // where it could set one still clear, so its interior is measured
+        // only then: thousands of small shapes join a segment the first
+        // repaying one has already marked.
+        let joined = extend.then(|| self.tables.segments.last()).flatten();
+        let translucent = body.brush != 0 || body.color[3] < 1.0;
+        let interiors = !joined
+            .is_some_and(|segment| segment.interiors && (segment.bare_interiors || !translucent))
+            && interior_repays(&body, &curve);
+        let occluders =
+            !joined.is_some_and(|segment| segment.occluders) && interior_occludes(&body, &curve);
+        let bare_interiors = interiors && translucent;
         let tables = self.tables_mut();
         tables.shapes.push(body, curve, source);
         extend_segment_in(

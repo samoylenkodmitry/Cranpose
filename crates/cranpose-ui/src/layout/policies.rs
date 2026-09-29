@@ -538,8 +538,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
             SmallVec::with_capacity(child_main_sizes.len());
         main_positions.resize(child_main_sizes.len(), 0.0);
 
-        let arrangement = if total_main > container_main
-            && !matches!(self.main_axis_arrangement, LinearArrangement::SpacedBy(_))
+        let arrangement = if total_main > container_main && !self.main_axis_arrangement.is_spaced()
         {
             LinearArrangement::Start
         } else {

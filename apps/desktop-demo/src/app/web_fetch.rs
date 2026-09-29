@@ -3,7 +3,7 @@ use cranpose_ui::{
     composable,
     text::{SpanStyle, TextDecoration},
     Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, LinearArrangement, Modifier,
-    Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    Row, RowSpec, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,10 +87,7 @@ pub(crate) fn web_fetch_example() {
                     TextStyle::default(),
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 12.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 12.0));
 
                 Text(
                     concat!(
@@ -105,10 +102,7 @@ pub(crate) fn web_fetch_example() {
                     TextStyle::default(),
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 16.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 16.0));
 
                 let api_url = "https://api.ipify.org";
                 let link_handler = uri_handler.clone();
@@ -153,10 +147,7 @@ pub(crate) fn web_fetch_example() {
                     },
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 12.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 12.0));
 
                 Row(
                     Modifier::empty().fill_max_width().padding(4.0),
@@ -198,10 +189,7 @@ pub(crate) fn web_fetch_example() {
                     },
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 12.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 12.0));
 
                 let status_snapshot = fetch_status.get();
                 let (status_label, banner_color) = match &status_snapshot {
@@ -227,10 +215,7 @@ pub(crate) fn web_fetch_example() {
                     TextStyle::default(),
                 );
 
-                Spacer(Size {
-                    width: 0.0,
-                    height: 8.0,
-                });
+                Spacer(Modifier::empty().size_points(0.0, 8.0));
 
                 match status_snapshot {
                     FetchStatus::Idle => {
