@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     cell::Cell,
-    collections::HashMap,
     hash::{Hash, Hasher},
     rc::Rc,
     sync::{Arc, mpsc},
@@ -10,7 +9,9 @@ use std::{
 
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::{
-    NodeId, collections::bounded_lru::BoundedLruCache, hash::default as default_hash,
+    NodeId,
+    collections::{bounded_lru::BoundedLruCache, map::HashMap},
+    hash::default as default_hash,
 };
 use cranpose_render_common::{
     geometry::blur_reach,
@@ -1119,11 +1120,12 @@ impl ShapePipelineKey {
     }
 
     /// The pipeline that lays down the opaque interiors of this key's
-    /// draws, if they have any: plain source-over draws off any transform.
+    /// draws, if they have any: plain source-over draws. A transformed
+    /// draw's layer draws in place only under a rigid transform, which keeps
+    /// the interior's half-pixel inset from the fill's edge exact.
     pub(crate) fn interior(self) -> Option<Self> {
         (self.depth == ShapeDepth::Tested
             && self.blend_mode == BlendMode::SrcOver
-            && !self.transformed
             && !self.variant.ablation.material
             && !self.variant.ablation.fill)
             .then_some(Self {
@@ -2353,6 +2355,7 @@ pub struct GpuRenderer {
     pub(crate) scratch_glyph_instances: GlyphInstances,
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
     pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
+    pub(crate) scratch_arena_draws: Vec<RunDrawCall>,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
     scratch_text_glyph_entries: Vec<GlyphAtlasEntry>,
     frame_graph_executor: WgpuFrameGraphExecutor,
@@ -2614,6 +2617,7 @@ impl GpuRenderer {
             scratch_glyph_instances: GlyphInstances::default(),
             scratch_image_cmds: Vec::new(),
             scratch_glyph_cmds: Vec::new(),
+            scratch_arena_draws: Vec::new(),
             scratch_text_glyph_run: Vec::new(),
             scratch_text_glyph_entries: Vec::new(),
             frame_graph_executor,
@@ -2623,11 +2627,11 @@ impl GpuRenderer {
             ablation: Ablation::default(),
             ablation_frames: 0,
             nesting_overflow_reported: false,
-            backdrop_gates: HashMap::new(),
-            fill_gates: HashMap::new(),
-            effect_gates: HashMap::new(),
-            source_gates: HashMap::new(),
-            transparent_sources: HashMap::new(),
+            backdrop_gates: HashMap::default(),
+            fill_gates: HashMap::default(),
+            effect_gates: HashMap::default(),
+            source_gates: HashMap::default(),
+            transparent_sources: HashMap::default(),
             shadow_surface_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
             ),
@@ -4021,13 +4025,18 @@ impl GpuRenderer {
         taken
     }
 
-    /// Uploads the open chunk and returns its draws.
-    pub(crate) fn close_arena(&mut self, chunk: usize) -> Vec<RunDrawCall> {
-        let (draws, fill) = self.run_store.close_arena(&self.device, chunk);
-        if let Some(fill) = fill {
+    /// Moves the open chunk's draws since its last cut onto `out`, keeping
+    /// it open.
+    pub(crate) fn cut_arena(&mut self, chunk: usize, out: &mut Vec<RunDrawCall>) {
+        self.run_store.cut_arena(&self.device, chunk, out);
+    }
+
+    /// Uploads the open chunk and moves its draws since its last cut onto
+    /// `out`.
+    pub(crate) fn close_arena(&mut self, chunk: usize, out: &mut Vec<RunDrawCall>) {
+        if let Some(fill) = self.run_store.close_arena(&self.device, chunk, out) {
             self.frame_stats.add_shape_fill(fill);
         }
-        draws
     }
 
     pub(crate) fn draw_run_calls(

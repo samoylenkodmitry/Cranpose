@@ -138,7 +138,11 @@ fn only_plain_source_over_draws_in_a_depth_pass_lay_interiors_down() {
         transformed: true,
         ..tested
     };
-    assert_eq!(turned.interior(), None);
+    assert_eq!(
+        turned.interior().map(|interior| interior.transformed),
+        Some(true),
+        "a fill drawn in place under its layer's rigid turn lays its interior down under it"
+    );
 }
 
 #[test]

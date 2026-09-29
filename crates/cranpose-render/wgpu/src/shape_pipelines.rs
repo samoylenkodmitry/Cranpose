@@ -1,4 +1,6 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
+
+use cranpose_core::collections::map::HashMap;
 
 use crate::{
     pipeline_compiler::PipelineCompiler,
@@ -56,7 +58,7 @@ impl ShapePipelines {
         };
         Self {
             factory,
-            ready: HashMap::new(),
+            ready: HashMap::default(),
             #[cfg(not(target_arch = "wasm32"))]
             compiler,
         }

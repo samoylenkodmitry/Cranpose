@@ -1,6 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
+use cranpose_core::collections::map::HashMap;
 use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_color};
 use cranpose_ui_graphics::{
     ARC_BUCKETS, BrushRecord, Color, GradientStopRecord, GraphicsLayer, RecordLane, RecordSegment,
@@ -861,7 +862,7 @@ impl RunStore {
         Self {
             mode,
             layout,
-            stored: HashMap::new(),
+            stored: HashMap::default(),
             arena: ArenaTables::new(mode, alignment),
             fill_stats: false,
             scratch_stops: Vec::new(),
@@ -1272,27 +1273,40 @@ impl RunStore {
         taken
     }
 
-    /// Places the open chunk's tables in the frame's arena; returns the
-    /// draws and the chunk's fill.
+    /// Moves the draws the open chunk recorded since it opened or was last
+    /// cut onto `out`, with the strip indices they draw, leaving the chunk
+    /// open: the records appended next start draws of their own.
+    pub(crate) fn cut_arena(
+        &mut self,
+        device: &wgpu::Device,
+        chunk: usize,
+        out: &mut Vec<RunDrawCall>,
+    ) {
+        debug_assert_eq!(
+            chunk + 1,
+            self.arena.chunks.len(),
+            "only the open chunk cuts"
+        );
+        for draw in &self.arena.staging.draws {
+            let class = draw.band_class;
+            self.strip_indices[class as usize].ensure(device, band_class_segments(class));
+        }
+        out.append(&mut self.arena.staging.draws);
+    }
+
+    /// Places the open chunk's tables in the frame's arena, moves the draws
+    /// recorded since its last cut onto `out` and returns the chunk's fill.
     pub(crate) fn close_arena(
         &mut self,
         device: &wgpu::Device,
         chunk: usize,
-    ) -> (Vec<RunDrawCall>, Option<ShapeFill>) {
-        debug_assert_eq!(
-            chunk + 1,
-            self.arena.chunks.len(),
-            "only the open chunk closes"
-        );
+        out: &mut Vec<RunDrawCall>,
+    ) -> Option<ShapeFill> {
         if self.arena.staging.is_empty() {
-            return (Vec::new(), None);
+            return None;
         }
-        let mut staging = std::mem::take(&mut self.arena.staging);
-        let draws = std::mem::take(&mut staging.draws);
-        for draw in &draws {
-            let class = draw.band_class;
-            self.strip_indices[class as usize].ensure(device, band_class_segments(class));
-        }
+        self.cut_arena(device, chunk, out);
+        let staging = std::mem::take(&mut self.arena.staging);
         let placed = self.arena.place(
             device,
             &self.layout,
@@ -1307,7 +1321,7 @@ impl RunStore {
         self.arena.chunks[chunk] = placed;
         let fill = self.fill_stats.then_some(staging.fill);
         self.arena.staging = staging;
-        (draws, fill)
+        fill
     }
 }
 
