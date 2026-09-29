@@ -515,7 +515,7 @@ fn MarkdownViewerPerfApp() {
     })
     .with(|client| client.clone());
     let local = local_http_client();
-    CompositionLocalProvider(vec![local.provides(client)], || {
+    CompositionLocalProvider([local.provides(client)], || {
         app::MarkdownViewerRobotApp();
     });
 }
@@ -527,7 +527,7 @@ fn MarkdownViewerDefaultFixturePerfApp() {
     })
     .with(|client| client.clone());
     let local = local_http_client();
-    CompositionLocalProvider(vec![local.provides(client)], || {
+    CompositionLocalProvider([local.provides(client)], || {
         app::MarkdownViewerRobotApp();
     });
 }

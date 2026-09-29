@@ -96,7 +96,7 @@ fn content() {
                 ghost,
             );
             cranpose_core::CompositionLocalProvider(
-                vec![local_on_light_surface().provides(true)],
+                [local_on_light_surface().provides(true)],
                 || {
                     let state = cranpose_core::remember(|| TextFieldState::new(TEXT))
                         .with(TextFieldState::clone);

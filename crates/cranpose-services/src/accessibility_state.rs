@@ -58,7 +58,7 @@ pub fn local_accessibility_state() -> CompositionLocal<AccessibilityState> {
 #[composable]
 pub fn ProvideAccessibilityState(state: AccessibilityState, content: impl FnOnce()) {
     let local = local_accessibility_state();
-    CompositionLocalProvider(vec![local.provides(state)], move || {
+    CompositionLocalProvider([local.provides(state)], move || {
         content();
     });
 }

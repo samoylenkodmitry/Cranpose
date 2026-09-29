@@ -889,7 +889,7 @@ fn test_composition_local_demo(
             });
 
             let current_count = counter.get();
-            CompositionLocalProvider(vec![local_holder.provides(current_count)], {
+            CompositionLocalProvider([local_holder.provides(current_count)], {
                 let local_holder = local_holder.clone();
                 move || {
                     test_composition_local_content(local_holder);

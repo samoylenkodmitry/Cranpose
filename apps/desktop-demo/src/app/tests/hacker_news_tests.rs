@@ -946,7 +946,7 @@ fn single_pane_back_navigation_settles_after_opening_comments() {
         let mock_client = mock_client.clone();
         move || {
             let local = cranpose_services::local_http_client();
-            CompositionLocalProvider(vec![local.provides(mock_client.clone())], move || {
+            CompositionLocalProvider([local.provides(mock_client.clone())], move || {
                 HackerNewsTab();
             });
         }
@@ -1109,7 +1109,7 @@ fn restored_single_pane_story_list_keeps_same_host_during_drag() {
         let mock_client = mock_client.clone();
         move || {
             let local = cranpose_services::local_http_client();
-            CompositionLocalProvider(vec![local.provides(mock_client.clone())], move || {
+            CompositionLocalProvider([local.provides(mock_client.clone())], move || {
                 HackerNewsTab();
             });
         }
@@ -1212,7 +1212,7 @@ fn restored_single_pane_programmatic_scroll_keeps_same_list_host() {
         let mock_client = mock_client.clone();
         move || {
             let local = cranpose_services::local_http_client();
-            CompositionLocalProvider(vec![local.provides(mock_client.clone())], move || {
+            CompositionLocalProvider([local.provides(mock_client.clone())], move || {
                 HackerNewsTab();
             });
         }

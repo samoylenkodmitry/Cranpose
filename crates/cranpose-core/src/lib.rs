@@ -591,7 +591,11 @@ impl AnchorId {
 
 pub(crate) type ScopeId = usize;
 pub(crate) type FrameCallbackId = u64;
-type LocalStackSnapshot = Rc<Vec<composer::LocalContext>>;
+/// The composition locals in scope: the innermost provider's frame, whose
+/// parents lead out to the outermost, or `None` outside every provider. A
+/// provider pushes one frame over the chain, so a snapshot of the locals is
+/// a shared pointer and never a copy of them.
+type LocalStackSnapshot = Option<Rc<composer::LocalFrame>>;
 
 #[derive(Clone)]
 pub(crate) struct LocalKey(Rc<()>);
@@ -629,7 +633,6 @@ impl Hash for LocalKey {
 }
 
 thread_local! {
-    static EMPTY_LOCAL_STACK: LocalStackSnapshot = Rc::new(Vec::new());
     #[cfg(debug_assertions)]
     static DEBUG_SCOPE_LABELS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
     #[cfg(debug_assertions)]
@@ -637,10 +640,6 @@ thread_local! {
         RefCell::new(HashMap::default());
     #[cfg(all(test, debug_assertions))]
     static DEBUG_SCOPE_TRACKING_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
-}
-
-fn empty_local_stack() -> LocalStackSnapshot {
-    EMPTY_LOCAL_STACK.with(Rc::clone)
 }
 
 enum RecomposeCallback {
@@ -698,7 +697,7 @@ impl RecomposeScopeInner {
             recompose: RefCell::new(None),
             parent_scope: RefCell::new(None),
             lifetime_owner_scope: RefCell::new(None),
-            local_stack: RefCell::new(empty_local_stack()),
+            local_stack: RefCell::new(None),
             #[cfg(feature = "inspection")]
             source_trace: RefCell::new(Rc::from([])),
             slots_storage_key: Cell::new(0),

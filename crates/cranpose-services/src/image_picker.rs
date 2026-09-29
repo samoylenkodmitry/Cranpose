@@ -119,7 +119,7 @@ pub fn ProvideImagePicker(content: impl FnOnce()) {
     let picker = cranpose_core::remember(default_image_picker).with(|state| state.clone());
     let local = local_image_picker();
 
-    CompositionLocalProvider(vec![local.provides(picker)], move || {
+    CompositionLocalProvider([local.provides(picker)], move || {
         content();
     });
 }

@@ -319,7 +319,7 @@ pub fn local_launch_args() -> CompositionLocal<LaunchArgsRef> {
 #[composable]
 pub fn ProvideLaunchArgs(args: LaunchArgsRef, content: impl FnOnce()) {
     let local = local_launch_args();
-    CompositionLocalProvider(vec![local.provides(args)], move || {
+    CompositionLocalProvider([local.provides(args)], move || {
         content();
     });
 }

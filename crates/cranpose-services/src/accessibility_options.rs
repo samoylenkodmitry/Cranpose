@@ -108,7 +108,7 @@ pub fn local_accessibility_options() -> CompositionLocal<AccessibilityOptions> {
 #[composable]
 pub fn ProvideAccessibilityOptions(options: AccessibilityOptions, content: impl FnOnce()) {
     let provided = local_accessibility_options().provides(options.normalized());
-    CompositionLocalProvider(vec![provided], move || content());
+    CompositionLocalProvider([provided], move || content());
 }
 
 #[cfg(test)]

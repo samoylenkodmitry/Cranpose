@@ -16,7 +16,7 @@ use crate::{
     SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
     SnapshotStateObserver, StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
     collections::map::{HashMap, HashSet},
-    composer_context, empty_local_stack, explicit_group_key_seed,
+    composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
     runtime,
     slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, ValueSlotId},
@@ -590,9 +590,23 @@ pub(crate) struct SubcomposeFrame {
     pub(crate) scopes: Vec<RecomposeScope>,
 }
 
-#[derive(Default, Clone)]
-pub(crate) struct LocalContext {
-    pub(crate) values: HashMap<LocalKey, Rc<dyn Any>>,
+/// The values one provider supplies, over the frames of the providers around
+/// it.
+pub(crate) struct LocalFrame {
+    values: SmallVec<[(LocalKey, Rc<dyn Any>); 2]>,
+    parent: LocalStackSnapshot,
+}
+
+/// The entry the innermost provider in `stack` supplies for `key`.
+fn provided_entry(stack: &LocalStackSnapshot, key: &LocalKey) -> Option<Rc<dyn Any>> {
+    let mut frame = stack.as_deref();
+    while let Some(current) = frame {
+        if let Some((_, entry)) = current.values.iter().find(|(provided, _)| provided == key) {
+            return Some(Rc::clone(entry));
+        }
+        frame = current.parent.as_deref();
+    }
+    None
 }
 
 pub(crate) struct ComposerCore {
@@ -701,7 +715,7 @@ impl ComposerCore {
             commands: RefCell::new(CommandQueue::default()),
             scope_stack: RefCell::new(Vec::new()),
             subcomposition_owner_scope: RefCell::new(None),
-            local_stack: RefCell::new(empty_local_stack()),
+            local_stack: RefCell::new(None),
             side_effects: RefCell::new(Vec::new()),
             pending_scope_options: RefCell::new(None),
             phase: Cell::new(crate::Phase::Compose),
@@ -1822,44 +1836,25 @@ impl Composer {
     }
 
     pub fn read_composition_local<T: Clone + 'static>(&self, local: &CompositionLocal<T>) -> T {
-        let stack = self.core.local_stack.borrow();
-        for context in stack.iter().rev() {
-            if let Some(entry) = context.values.get(&local.key) {
-                match entry.clone().downcast::<LocalStateEntry<T>>() {
-                    Ok(typed) => return typed.value(),
-                    Err(_) => {
-                        log::error!(
-                            "composition local entry type mismatch for key {:?}",
-                            local.key
-                        );
-                        return local.default_value();
-                    }
-                }
-            }
-        }
-        local.default_value()
+        self.provided_local::<LocalStateEntry<T>>(&local.key)
+            .map_or_else(|| local.default_value(), |entry| entry.value())
     }
 
     pub fn read_static_composition_local<T: Clone + 'static>(
         &self,
         local: &StaticCompositionLocal<T>,
     ) -> T {
-        let stack = self.core.local_stack.borrow();
-        for context in stack.iter().rev() {
-            if let Some(entry) = context.values.get(&local.key) {
-                match entry.clone().downcast::<StaticLocalEntry<T>>() {
-                    Ok(typed) => return typed.value(),
-                    Err(_) => {
-                        log::error!(
-                            "static composition local entry type mismatch for key {:?}",
-                            local.key
-                        );
-                        return local.default_value();
-                    }
-                }
-            }
-        }
-        local.default_value()
+        self.provided_local::<StaticLocalEntry<T>>(&local.key)
+            .map_or_else(|| local.default_value(), |entry| entry.value())
+    }
+
+    /// The innermost provided entry for `key`, when it is an `E`.
+    fn provided_local<E: 'static>(&self, key: &LocalKey) -> Option<Rc<E>> {
+        let entry = provided_entry(&self.core.local_stack.borrow(), key)?;
+        entry
+            .downcast::<E>()
+            .inspect_err(|_| log::error!("composition local entry type mismatch for key {key:?}"))
+            .ok()
     }
 
     pub fn current_recompose_scope(&self) -> Option<RecomposeScope> {
@@ -2135,32 +2130,32 @@ impl Composer {
         }
     }
 
+    /// Runs `f` with `provided` in scope over the locals around it; of values
+    /// for one local, the last wins.
     pub fn with_composition_locals<R>(
         &self,
-        provided: Vec<ProvidedValue>,
+        provided: impl IntoIterator<Item = ProvidedValue>,
         site: crate::Key,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
+        let provided: SmallVec<[ProvidedValue; 2]> = provided.into_iter().collect();
         if provided.is_empty() {
             return f(self);
         }
-        let mut context = LocalContext::default();
+        let mut values = SmallVec::<[(LocalKey, Rc<dyn Any>); 2]>::new();
         for value in provided.into_iter().rev() {
-            if context.values.contains_key(value.key()) {
+            if values.iter().any(|(key, _)| key == value.key()) {
                 continue;
             }
-            let (key, entry) = value.into_entry(self, site);
-            context.values.insert(key, entry);
+            values.push(value.into_entry(self, site));
         }
-        {
-            let mut stack = self.local_stack();
-            Rc::make_mut(&mut *stack).push(context);
-        }
+        let parent = self.current_local_stack();
+        *self.local_stack() = Some(Rc::new(LocalFrame {
+            values,
+            parent: parent.clone(),
+        }));
         let result = f(self);
-        {
-            let mut stack = self.local_stack();
-            Rc::make_mut(&mut *stack).pop();
-        }
+        *self.local_stack() = parent;
         result
     }
 }
