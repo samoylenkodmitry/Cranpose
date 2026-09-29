@@ -561,17 +561,22 @@ const WINDOW: (f32, f32) = (1280.0, 820.0);
 #[composable]
 pub fn WorkspaceFrame(mode: WorkspaceMode) {
     BoxWithConstraints(Modifier::empty().fill_max_size(), move |scope| {
-        let host = cranpose_ui::density::density();
-        let width = scope.max_width().0;
-        let fitted =
-            cranpose_ui::Density::new(host.density() * width / WINDOW.0, host.font_scale());
-        cranpose_ui::density::ProvideDensity(fitted, move || {
-            Box(
-                Modifier::empty().size_points(WINDOW.0, WINDOW.1),
-                BoxSpec::default(),
-                move || WorkspaceScreen(mode),
-            );
-        });
+        // gpui_perf's window keeps its size; a narrower screen shows all of
+        // it scaled down, as the Compose app does.
+        let scale = (scope.max_width().0 / WINDOW.0).min(1.0);
+        let canvas = Modifier::empty()
+            .wrap_content_size(Alignment::TOP_START, true)
+            .size_points(WINDOW.0, WINDOW.1);
+        let canvas = if scale < 1.0 {
+            canvas.graphics_layer_value(GraphicsLayer {
+                scale,
+                transform_origin: TransformOrigin::new(0.0, 0.0),
+                ..GraphicsLayer::default()
+            })
+        } else {
+            canvas
+        };
+        Box(canvas, BoxSpec::default(), move || WorkspaceScreen(mode));
     });
 }
 

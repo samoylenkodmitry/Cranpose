@@ -26,7 +26,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.MutableState
@@ -53,7 +55,6 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -351,11 +352,23 @@ private fun quoteSymbol(tick: Int, i: Int): Int = when {
 @Composable
 fun WorkspaceFrame(mode: WorkspaceMode) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val host = LocalDensity.current
-        val fitted = Density(host.density * maxWidth.value / WINDOW_WIDTH, host.fontScale)
-        CompositionLocalProvider(LocalDensity provides fitted) {
-            Box(Modifier.size(WINDOW_WIDTH.dp, WINDOW_HEIGHT.dp)) { WorkspaceScreen(mode) }
-        }
+        // gpui_perf's window keeps its size; a narrower screen shows all of
+        // it scaled down, as the Cranpose app does.
+        val scale = (maxWidth.value / WINDOW_WIDTH).coerceAtMost(1f)
+        val canvas = Modifier
+            .wrapContentSize(Alignment.TopStart, unbounded = true)
+            .size(WINDOW_WIDTH.dp, WINDOW_HEIGHT.dp)
+        Box(
+            if (scale < 1f) {
+                canvas.graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    transformOrigin = TransformOrigin(0f, 0f)
+                }
+            } else {
+                canvas
+            },
+        ) { WorkspaceScreen(mode) }
     }
 }
 
