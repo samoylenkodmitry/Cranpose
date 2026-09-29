@@ -3,8 +3,13 @@ use std::{
     mem,
 };
 
+use smallvec::SmallVec;
+
 use super::{DeferredDrop, GroupRecord, checked_usize_to_u32};
 use crate::{AnchorId, Key, NodeId, ScopeId, collections::map::HashSet};
+
+/// The root nodes of a group's subtree: most groups have a few, kept inline.
+pub(crate) type RootNodeIds = SmallVec<[NodeId; 4]>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SlotPassMode {
@@ -436,7 +441,7 @@ impl DetachedSubtree {
 pub(crate) struct FinishGroupResult {
     pub(crate) detached_children: Vec<DetachedSubtree>,
     pub(crate) direct_nodes: Vec<NodeId>,
-    pub(crate) root_nodes: Vec<NodeId>,
+    pub(crate) root_nodes: RootNodeIds,
     pub(crate) was_skipped: bool,
 }
 
@@ -445,7 +450,7 @@ impl FinishGroupResult {
         Self {
             detached_children: Vec::new(),
             direct_nodes: Vec::new(),
-            root_nodes: Vec::new(),
+            root_nodes: RootNodeIds::new(),
             was_skipped: false,
         }
     }
@@ -457,20 +462,28 @@ impl PayloadRecord {
     }
 }
 
+/// Records this many or fewer find a node's parent among them by scanning
+/// them, which costs less than hashing their ids into a set.
+const ROOT_SCAN_LIMIT: usize = 16;
+
+/// The ids of the records in `nodes` whose parent is not among them, in
+/// order.
+pub(in crate::slot) fn root_node_ids(nodes: &[NodeRecord]) -> impl Iterator<Item = NodeId> + '_ {
+    let hashed: Option<HashSet<NodeId>> =
+        (nodes.len() > ROOT_SCAN_LIMIT).then(|| nodes.iter().map(|node| node.id).collect());
+    nodes.iter().filter_map(move |node| {
+        let parent_outside = node.parent_id.is_none_or(|parent_id| match &hashed {
+            Some(ids) => !ids.contains(&parent_id),
+            None => nodes.iter().all(|other| other.id != parent_id),
+        });
+        parent_outside.then_some(node.id)
+    })
+}
+
 pub(in crate::slot) fn collect_root_node_ids_from_records_into(
     nodes: &[NodeRecord],
     root_nodes: &mut Vec<NodeId>,
 ) {
     root_nodes.clear();
-    root_nodes.reserve(nodes.len());
-
-    let mut node_set: HashSet<NodeId> = HashSet::default();
-    node_set.reserve(nodes.len());
-    node_set.extend(nodes.iter().map(|node| node.id));
-
-    root_nodes.extend(nodes.iter().filter_map(|node| {
-        node.parent_id
-            .is_none_or(|parent_id| !node_set.contains(&parent_id))
-            .then_some(node.id)
-    }));
+    root_nodes.extend(root_node_ids(nodes));
 }
