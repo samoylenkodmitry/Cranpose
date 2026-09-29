@@ -42,6 +42,11 @@ test-helpers = []
 # Path-only dev-dep: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
 
+[target.'cfg(target_vendor = "apple")'.dependencies]
+# `delay` hands its deadline to GCD's user-interactive queue: a sleeping thread
+# at the default quality of service wakes milliseconds late on macOS.
+dispatch2 = "0.3"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
