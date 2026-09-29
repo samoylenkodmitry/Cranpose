@@ -1,10 +1,6 @@
 use super::*;
 use crate::{BlendMode, Brush, Color, DrawPrimitive, DrawScope, DrawScopeDefault, Size};
 
-fn p(x: f32, y: f32) -> Point {
-    Point::new(x, y)
-}
-
 fn stroke(width: f32, cap: StrokeCap, join: StrokeJoin) -> Stroke {
     Stroke { width, cap, join }
 }
@@ -19,23 +15,27 @@ fn lines(points: &[Point], closed: bool, stroke: Stroke) -> Vec<LineGeometry> {
 fn a_path_keeps_its_contours_and_whether_each_closes() {
     let mut path = Path::new();
     assert!(path.is_empty());
-    path.move_to(p(0.0, 0.0));
-    path.line_to(p(10.0, 0.0));
-    path.line_to(p(10.0, 10.0));
+    path.move_to(Point::new(0.0, 0.0));
+    path.line_to(Point::new(10.0, 0.0));
+    path.line_to(Point::new(10.0, 10.0));
     path.close();
-    path.line_to(p(-5.0, 5.0));
+    path.line_to(Point::new(-5.0, 5.0));
     let contours = path.contours();
     assert_eq!(contours.len(), 2);
     assert_eq!(
         contours[0],
         PathContour {
-            points: vec![p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0)],
+            points: vec![
+                Point::new(0.0, 0.0),
+                Point::new(10.0, 0.0),
+                Point::new(10.0, 10.0)
+            ],
             closed: true,
         }
     );
     assert_eq!(
         contours[1].points,
-        vec![p(0.0, 0.0), p(-5.0, 5.0)],
+        vec![Point::new(0.0, 0.0), Point::new(-5.0, 5.0)],
         "an edge after a close starts at the closed contour's first point"
     );
     assert!(!path.is_empty());
@@ -56,11 +56,11 @@ fn a_path_keeps_its_contours_and_whether_each_closes() {
 #[test]
 fn curves_flatten_to_points_on_the_curve() {
     let mut path = Path::new();
-    path.move_to(p(0.0, 0.0));
-    path.quadratic_to(p(50.0, 100.0), p(100.0, 0.0));
+    path.move_to(Point::new(0.0, 0.0));
+    path.quadratic_to(Point::new(50.0, 100.0), Point::new(100.0, 0.0));
     let quadratic = &path.contours()[0].points;
     assert!(quadratic.len() > 4, "a curve flattens to several edges");
-    assert_eq!(quadratic.last(), Some(&p(100.0, 0.0)));
+    assert_eq!(quadratic.last(), Some(&Point::new(100.0, 0.0)));
     let peak = quadratic.iter().map(|point| point.y).fold(0.0, f32::max);
     assert!(
         (peak - 50.0).abs() < 1.0,
@@ -68,11 +68,15 @@ fn curves_flatten_to_points_on_the_curve() {
     );
 
     let mut path = Path::new();
-    path.move_to(p(0.0, 0.0));
-    path.cubic_to(p(0.0, 60.0), p(60.0, 60.0), p(60.0, 0.0));
+    path.move_to(Point::new(0.0, 0.0));
+    path.cubic_to(
+        Point::new(0.0, 60.0),
+        Point::new(60.0, 60.0),
+        Point::new(60.0, 0.0),
+    );
     let cubic = &path.contours()[0].points;
-    assert_eq!(cubic.first(), Some(&p(0.0, 0.0)));
-    assert_eq!(cubic.last(), Some(&p(60.0, 0.0)));
+    assert_eq!(cubic.first(), Some(&Point::new(0.0, 0.0)));
+    assert_eq!(cubic.last(), Some(&Point::new(60.0, 0.0)));
     let peak = cubic.iter().map(|point| point.y).fold(0.0, f32::max);
     assert!(
         (peak - 45.0).abs() < 1.0,
@@ -83,9 +87,9 @@ fn curves_flatten_to_points_on_the_curve() {
 #[test]
 fn a_filled_path_closes_every_contour_into_a_vector_path() {
     let mut path = Path::new();
-    path.move_to(p(0.0, 0.0));
-    path.line_to(p(10.0, 0.0));
-    path.line_to(p(10.0, 10.0));
+    path.move_to(Point::new(0.0, 0.0));
+    path.line_to(Point::new(10.0, 0.0));
+    path.line_to(Point::new(10.0, 10.0));
     let fill = path.to_vector_path(PathFillRule::EvenOdd);
     assert_eq!(fill.subpaths().len(), 1);
     assert_eq!(fill.fill_rule(), PathFillRule::EvenOdd);
@@ -97,15 +101,26 @@ fn dashes_follow_the_pattern_from_its_phase_across_corners() {
     let dash = DashPathEffect::new(&[4.0, 2.0], 5.0);
     assert_eq!(dash.intervals(), &[4.0, 2.0]);
     let mut dashes = Vec::new();
-    dash.for_each_dash(&[p(0.0, 0.0), p(10.0, 0.0), p(10.0, 6.0)], |piece| {
-        dashes.push(piece.to_vec());
-    });
+    dash.for_each_dash(
+        &[
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(10.0, 6.0),
+        ],
+        |piece| {
+            dashes.push(piece.to_vec());
+        },
+    );
     assert_eq!(
         dashes,
         vec![
-            vec![p(1.0, 0.0), p(5.0, 0.0)],
-            vec![p(7.0, 0.0), p(10.0, 0.0), p(10.0, 1.0)],
-            vec![p(10.0, 3.0), p(10.0, 6.0)],
+            vec![Point::new(1.0, 0.0), Point::new(5.0, 0.0)],
+            vec![
+                Point::new(7.0, 0.0),
+                Point::new(10.0, 0.0),
+                Point::new(10.0, 1.0)
+            ],
+            vec![Point::new(10.0, 3.0), Point::new(10.0, 6.0)],
         ],
         "five into the pattern the walk starts one unit into a gap; the middle dash turns the corner"
     );
@@ -113,7 +128,7 @@ fn dashes_follow_the_pattern_from_its_phase_across_corners() {
 
 #[test]
 fn a_pattern_that_cannot_dash_draws_the_polyline_whole() {
-    let points = [p(0.0, 0.0), p(10.0, 0.0)];
+    let points = [Point::new(0.0, 0.0), Point::new(10.0, 0.0)];
     for dash in [
         DashPathEffect::new(&[4.0], 0.0),
         DashPathEffect::new(&[0.0, 0.0], 0.0),
@@ -126,7 +141,11 @@ fn a_pattern_that_cannot_dash_draws_the_polyline_whole() {
 
 #[test]
 fn a_round_stroke_draws_every_edge_with_round_ends() {
-    let points = [p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0)];
+    let points = [
+        Point::new(0.0, 0.0),
+        Point::new(10.0, 0.0),
+        Point::new(10.0, 10.0),
+    ];
     let drawn = lines(
         &points,
         false,
@@ -134,12 +153,19 @@ fn a_round_stroke_draws_every_edge_with_round_ends() {
     );
     assert_eq!(drawn.len(), 2);
     assert!(drawn.iter().all(|line| line.cap == StrokeCap::Round));
-    assert_eq!((drawn[0].start, drawn[0].end), (p(0.0, 0.0), p(10.0, 0.0)));
+    assert_eq!(
+        (drawn[0].start, drawn[0].end),
+        (Point::new(0.0, 0.0), Point::new(10.0, 0.0))
+    );
 }
 
 #[test]
 fn a_butt_capped_mitred_stroke_grows_its_inner_ends_by_half_the_width() {
-    let points = [p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0)];
+    let points = [
+        Point::new(0.0, 0.0),
+        Point::new(10.0, 0.0),
+        Point::new(10.0, 10.0),
+    ];
     let drawn = lines(
         &points,
         false,
@@ -151,8 +177,12 @@ fn a_butt_capped_mitred_stroke_grows_its_inner_ends_by_half_the_width() {
             .map(|line| (line.start, line.end, line.cap))
             .collect::<Vec<_>>(),
         vec![
-            (p(0.0, 0.0), p(11.0, 0.0), StrokeCap::Butt),
-            (p(10.0, -1.0), p(10.0, 10.0), StrokeCap::Butt),
+            (Point::new(0.0, 0.0), Point::new(11.0, 0.0), StrokeCap::Butt),
+            (
+                Point::new(10.0, -1.0),
+                Point::new(10.0, 10.0),
+                StrokeCap::Butt
+            ),
         ],
         "the corner is covered as a miter covers a right angle; the open ends stay butt"
     );
@@ -160,7 +190,11 @@ fn a_butt_capped_mitred_stroke_grows_its_inner_ends_by_half_the_width() {
 
 #[test]
 fn a_round_join_on_a_butt_stroke_adds_a_dot_at_each_corner() {
-    let points = [p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0)];
+    let points = [
+        Point::new(0.0, 0.0),
+        Point::new(10.0, 0.0),
+        Point::new(10.0, 10.0),
+    ];
     let drawn = lines(
         &points,
         false,
@@ -171,7 +205,7 @@ fn a_round_join_on_a_butt_stroke_adds_a_dot_at_each_corner() {
         .filter(|line| line.start == line.end)
         .map(|line| line.start)
         .collect();
-    assert_eq!(dots, vec![p(10.0, 0.0), p(10.0, 0.0)]);
+    assert_eq!(dots, vec![Point::new(10.0, 0.0), Point::new(10.0, 0.0)]);
     assert!(
         drawn
             .iter()
@@ -182,7 +216,11 @@ fn a_round_join_on_a_butt_stroke_adds_a_dot_at_each_corner() {
 
 #[test]
 fn a_closed_contour_strokes_its_closing_edge_with_corners_all_round() {
-    let points = [p(0.0, 0.0), p(10.0, 0.0), p(10.0, 10.0)];
+    let points = [
+        Point::new(0.0, 0.0),
+        Point::new(10.0, 0.0),
+        Point::new(10.0, 10.0),
+    ];
     let drawn = lines(
         &points,
         true,
@@ -190,7 +228,10 @@ fn a_closed_contour_strokes_its_closing_edge_with_corners_all_round() {
     );
     assert_eq!(drawn.len(), 3, "three edges, closing edge included");
     assert!(drawn.iter().all(|line| line.cap == StrokeCap::Round));
-    assert_eq!((drawn[2].start, drawn[2].end), (p(10.0, 10.0), p(0.0, 0.0)));
+    assert_eq!(
+        (drawn[2].start, drawn[2].end),
+        (Point::new(10.0, 10.0), Point::new(0.0, 0.0))
+    );
 }
 
 fn primitives(draw: impl FnOnce(&mut DrawScopeDefault)) -> Vec<DrawPrimitive> {
@@ -202,9 +243,9 @@ fn primitives(draw: impl FnOnce(&mut DrawScopeDefault)) -> Vec<DrawPrimitive> {
 #[test]
 fn a_drawn_path_strokes_as_lines_and_fills_as_an_image() {
     let mut path = Path::new();
-    path.move_to(p(4.0, 4.0));
-    path.line_to(p(40.0, 4.0));
-    path.line_to(p(40.0, 40.0));
+    path.move_to(Point::new(4.0, 4.0));
+    path.line_to(Point::new(40.0, 4.0));
+    path.line_to(Point::new(40.0, 40.0));
     let brush = Brush::solid(Color::WHITE);
     let stroked = primitives(|scope| {
         scope.draw_path(
