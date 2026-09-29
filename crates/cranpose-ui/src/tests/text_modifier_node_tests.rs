@@ -50,6 +50,7 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
             },
             did_overflow: false,
             render_text: Default::default(),
+            wrap_hold: None,
         }
     }
 
@@ -122,6 +123,7 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
             },
             did_overflow: false,
             render_text: Default::default(),
+            wrap_hold: None,
         }
     }
 
@@ -182,6 +184,7 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
             },
             did_overflow: false,
             render_text: Default::default(),
+            wrap_hold: None,
         }
     }
 
@@ -469,6 +472,50 @@ fn a_text_that_wraps_nothing_keeps_its_layout_while_its_width_grows() {
         prepares,
         vec![(1, 12.0), (1, 12.0), (1, 12.0), (1, 12.0), (2, 12.0)],
         "widths from 12 up reuse the first layout; a narrower one prepares again"
+    );
+}
+
+#[test]
+fn a_wrapped_label_keeps_its_layout_while_its_width_moves_between_breaks() {
+    let (tx, rx) = mpsc::channel();
+
+    std::thread::spawn(move || {
+        let app_context = crate::AppContext::new();
+        app_context.enter(|| {
+            let node = TextModifierNode::new(
+                Rc::new(AnnotatedString::from("cell 123")),
+                TextStyle::default(),
+                TextLayoutOptions::default(),
+                crate::density::Density::new(1.0, 1.0),
+            );
+            // The default monospaced measurer draws 8.4 per character, so
+            // "cell " is 42 wide and the whole label 67.2.
+            let layout_at = |width: f32| {
+                node.layout.measure_layout(Some(width));
+                node.layout.measured_layout()
+            };
+            let first = layout_at(50.0);
+            let text = first.as_ref().map(|layout| layout.text.text.clone());
+            let same = |other: &Option<Rc<crate::text::PreparedTextLayout>>| {
+                matches!((&first, other), (Some(a), Some(b)) if Rc::ptr_eq(a, b))
+            };
+            let moved = [layout_at(43.0), layout_at(60.0), layout_at(66.0)]
+                .iter()
+                .all(same);
+            let unwrapped = same(&layout_at(80.0));
+            let narrowed = same(&layout_at(30.0));
+            tx.send((text, moved, unwrapped, narrowed))
+                .expect("send layouts");
+        });
+    });
+
+    let (text, moved, unwrapped, narrowed) = rx.recv().expect("receive layouts");
+    assert_eq!(text.as_deref(), Some("cell\n123"));
+    assert!(moved, "widths that break it the same keep the first layout");
+    assert!(!unwrapped, "a width the whole label fits lays it out again");
+    assert!(
+        !narrowed,
+        "a width \"cell\" no longer fits lays it out again"
     );
 }
 

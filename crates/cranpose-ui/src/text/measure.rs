@@ -57,6 +57,51 @@ pub struct PreparedTextLayout {
     /// `text` as a renderer draws it, converted on first use: see
     /// [`PreparedTextLayout::render_text`].
     pub render_text: std::cell::OnceCell<std::sync::Arc<crate::text::RenderString>>,
+    /// The max widths the layout's greedy wrap breaks the same lines at, when
+    /// it wrapped: `None` when it did not, or broke lines another way.
+    pub(crate) wrap_hold: Option<WrapHold>,
+}
+
+/// The max widths a greedy wrap breaks a text's lines the same at: every
+/// width `w` with `fits <= w + WRAP_EPSILON < pulls_up`. Below `fits` a break
+/// no longer fits; from `pulls_up` a line takes up its next word.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WrapHold {
+    fits: f32,
+    pulls_up: f32,
+}
+
+impl WrapHold {
+    /// Every width, before any line narrows it.
+    const ANY: Self = Self {
+        fits: f32::NEG_INFINITY,
+        pulls_up: f32::INFINITY,
+    };
+
+    fn narrow(&mut self, fits: f32, pulls_up: f32) {
+        self.fits = self.fits.max(fits);
+        self.pulls_up = self.pulls_up.min(pulls_up);
+    }
+
+    fn holds(self, width: f32) -> bool {
+        self.fits <= width + WRAP_EPSILON && width + WRAP_EPSILON < self.pulls_up
+    }
+
+    /// Narrows `hold` to the widths a line `width` wide fits whole at.
+    fn fit_whole(hold: &mut Option<Self>, width: f32) {
+        if let Some(hold) = hold {
+            hold.narrow(width, f32::INFINITY);
+        }
+    }
+
+    /// `hold` narrowed to the widths its layout reports `measured_width` at,
+    /// and kept only when it holds `max_width`, the width it was made at: a
+    /// layout wider than its limit reports the limit.
+    fn settle(hold: Option<Self>, measured_width: f32, max_width: Option<f32>) -> Option<Self> {
+        let mut hold = hold?;
+        hold.narrow(measured_width + WRAP_EPSILON, f32::INFINITY);
+        max_width.filter(|width| hold.holds(*width)).map(|_| hold)
+    }
 }
 
 impl PreparedTextLayout {
@@ -941,9 +986,8 @@ fn wrapped_line_ranges_with_measurer<M: TextMeasurer + ?Sized>(
             text,
             line_range,
             style,
-            width_limit,
-            line_break_mode,
-            hyphens_mode,
+            (width_limit, &mut None),
+            (line_break_mode, hyphens_mode),
             &mut lines,
         );
     }
@@ -997,20 +1041,16 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     let line_ranges = split_line_ranges(text.text.as_str());
     let source_line_count = line_ranges.len();
     let mut visible_lines: Vec<DisplayLine>;
+    let mut wrap_hold = None;
     if let Some(width_limit) = wrap_width {
-        visible_lines = Vec::with_capacity(line_ranges.len());
-        for line_range in line_ranges {
-            wrap_line_to_width(
-                measurer,
-                text,
-                line_range,
-                style,
-                width_limit,
-                line_break_mode,
-                hyphens_mode,
-                &mut visible_lines,
-            );
-        }
+        (visible_lines, wrap_hold) = wrap_lines(
+            measurer,
+            text,
+            line_ranges,
+            style,
+            width_limit,
+            (line_break_mode, hyphens_mode),
+        );
     } else {
         visible_lines = line_ranges
             .into_iter()
@@ -1060,6 +1100,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     } else {
         measured_width
     };
+    let wrap_hold = WrapHold::settle(wrap_hold, measured_width, wrap_width);
 
     let edges = measurer
         .line_box(style)
@@ -1076,6 +1117,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
         },
         did_overflow,
         render_text: Default::default(),
+        wrap_hold,
     };
 
     if let Some(start) = total_start {
@@ -1479,6 +1521,8 @@ pub(crate) enum PreparedWidths {
     /// No line wrapped or overflowed: unconstrained, and every width from
     /// its measured width up. A narrower width may wrap, so it is not held.
     AtLeast(f32),
+    /// Lines wrapped greedily, and every width that breaks them the same.
+    Wrapped(WrapHold),
 }
 
 impl PreparedWidths {
@@ -1504,10 +1548,15 @@ impl PreparedWidths {
             .scale_down_min_font_size_sp()
             .is_some()
             || prepared.did_overflow
-            || wrapped
             || trailing_space
         {
             return exact;
+        }
+        if wrapped {
+            return match (prepared.wrap_hold, max_width) {
+                (Some(hold), Some(width)) if hold.holds(width) => Self::Wrapped(hold),
+                _ => exact,
+            };
         }
         match max_width {
             Some(width) if prepared.metrics.width >= width => exact,
@@ -1521,6 +1570,7 @@ impl PreparedWidths {
         match self {
             Self::Exact(bits) => max_width.map(f32::to_bits) == bits,
             Self::AtLeast(min) => max_width.is_none_or(|width| width >= min),
+            Self::Wrapped(hold) => max_width.is_some_and(|width| hold.holds(width)),
         }
     }
 }
@@ -1608,17 +1658,45 @@ impl<'a, M: TextMeasurer + ?Sized> LineMeasureContext<'a, M> {
     }
 }
 
+/// The display lines `line_ranges` wrap into at `max_width`, and when any
+/// wrapped greedily, the widths that wrap them the same.
+fn wrap_lines<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    text: &crate::text::AnnotatedString,
+    line_ranges: Vec<Range<usize>>,
+    style: &TextStyle,
+    max_width: f32,
+    modes: (LineBreak, Hyphens),
+) -> (Vec<DisplayLine>, Option<WrapHold>) {
+    let source_lines = line_ranges.len();
+    let mut lines = Vec::with_capacity(source_lines);
+    let mut hold = Some(WrapHold::ANY);
+    for line_range in line_ranges {
+        wrap_line_to_width(
+            measurer,
+            text,
+            line_range,
+            style,
+            (max_width, &mut hold),
+            modes,
+            &mut lines,
+        );
+    }
+    let wrapped = lines.len() != source_lines;
+    (lines, hold.filter(|_| wrapped))
+}
+
 /// Appends the display lines `line_range` wraps into at `max_width` to
-/// `out`: most lines fit whole, and take no allocation of their own.
-#[expect(clippy::too_many_arguments)]
+/// `out`: most lines fit whole, and take no allocation of their own. Narrows
+/// `hold` to the widths that wrap it the same, or clears it when the wrap is
+/// not greedy.
 fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     measurer: &M,
     text: &crate::text::AnnotatedString,
     line_range: Range<usize>,
     style: &TextStyle,
-    max_width: f32,
-    line_break: LineBreak,
-    hyphens: Hyphens,
+    (max_width, hold): (f32, &mut Option<WrapHold>),
+    (line_break, hyphens): (LineBreak, Hyphens),
     out: &mut Vec<DisplayLine>,
 ) {
     let line_text = &text.text[line_range.clone()];
@@ -1632,6 +1710,7 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     if let Some(measured_width) = measurer.measure_line_width(text, line_range.clone(), style)
         && measured_width <= max_width + WRAP_EPSILON
     {
+        WrapHold::fit_whole(hold, measured_width);
         out.push(DisplayLine::from_measured_source_range(
             line_range,
             measured_width,
@@ -1651,23 +1730,28 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
             out,
         )
     {
+        *hold = None;
         return;
     }
 
     wrap_line_greedy(
-        measurer, text, line_range, style, max_width, line_break, hyphens, out,
+        measurer,
+        text,
+        line_range,
+        style,
+        (max_width, hold),
+        (line_break, hyphens),
+        out,
     );
 }
 
-#[expect(clippy::too_many_arguments)]
 fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     measurer: &M,
     text: &crate::text::AnnotatedString,
     line_range: Range<usize>,
     style: &TextStyle,
-    max_width: f32,
-    line_break: LineBreak,
-    hyphens: Hyphens,
+    (max_width, hold): (f32, &mut Option<WrapHold>),
+    (line_break, hyphens): (LineBreak, Hyphens),
     out: &mut Vec<DisplayLine>,
 ) {
     let line_text = &text.text[line_range.clone()];
@@ -1678,6 +1762,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
         measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
         && measured_width <= max_width + WRAP_EPSILON
     {
+        WrapHold::fit_whole(hold, measured_width);
         out.push(DisplayLine::from_measured_source_range(
             line_range,
             measured_width,
@@ -1712,6 +1797,13 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             && wrap_idx == best
             && best < boundaries.len() - 1
             && is_break_inside_word(line_text, &boundaries, wrap_idx);
+        narrow_to_break(
+            hold,
+            &measure_context,
+            (line_text, &boundaries),
+            (start_idx, best),
+            can_hyphenate,
+        );
         if can_hyphenate {
             effective_wrap_idx = resolve_auto_hyphen_break(
                 measurer,
@@ -1891,6 +1983,63 @@ fn choose_wrap_break(
         }
     }
     best
+}
+
+/// Narrows `hold` to the widths a line from `start_idx` breaks the same at
+/// as it does where `best` characters fit, or clears it when the break was
+/// hyphenated, which no width range describes.
+fn narrow_to_break<M: TextMeasurer + ?Sized>(
+    hold: &mut Option<WrapHold>,
+    measure_context: &LineMeasureContext<'_, M>,
+    (line, boundaries): (&str, &[usize]),
+    (start_idx, best): (usize, usize),
+    hyphenated: bool,
+) {
+    if hyphenated {
+        *hold = None;
+    }
+    let Some(hold) = hold else {
+        return;
+    };
+    let (fits, pulls_up) = wrap_break_widths(line, boundaries, start_idx, best);
+    let width = |idx| measure_context.measure_char_range(boundaries, start_idx, idx);
+    hold.narrow(
+        fits.map_or(f32::NEG_INFINITY, width),
+        pulls_up.map_or(f32::INFINITY, width),
+    );
+}
+
+/// The character counts, from `start_idx`, whose widths bound the widths
+/// [`choose_wrap_break`] picks the same break at as it does for `best`: the
+/// first a line must fit to keep its break (`None` when any width does),
+/// and the first that would take the break past it (`None` when none
+/// would).
+fn wrap_break_widths(
+    line: &str,
+    boundaries: &[usize],
+    start_idx: usize,
+    best: usize,
+) -> (Option<usize>, Option<usize>) {
+    let end = boundaries.len() - 1;
+    // A line takes its first character whether it fits or not.
+    if best <= start_idx + 1 {
+        return (None, (best < end).then_some(best + 1));
+    }
+    if best >= end {
+        return (Some(end), None);
+    }
+    let after_space = |idx: usize| {
+        line[boundaries[idx - 1]..boundaries[idx]]
+            .chars()
+            .all(char::is_whitespace)
+    };
+    match (start_idx + 1..=best).rev().find(|&idx| after_space(idx)) {
+        Some(wrap_idx) => {
+            let next = (best + 1..end).find(|&idx| after_space(idx)).unwrap_or(end);
+            (Some(wrap_idx), Some(next))
+        }
+        None => (Some(best), Some(best + 1)),
+    }
 }
 
 fn is_break_inside_word(line: &str, boundaries: &[usize], break_idx: usize) -> bool {
