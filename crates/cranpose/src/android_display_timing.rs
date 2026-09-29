@@ -121,6 +121,16 @@ impl cranpose_render_wgpu::PresentObserver for DisplayTimingObserver {
             }
         };
         for record in records {
+            // DIAGNOSTIC (scratch): what the swapchain reports besides the
+            // present time, for every frame.
+            log::warn!(
+                "[margin] id={} desired={} actual={} earliest={} margin={}",
+                record.present_id,
+                record.desired_present_time,
+                record.actual_present_time,
+                record.earliest_present_time,
+                record.present_margin
+            );
             let shown_ns = record.actual_present_time as i64;
             let shown = self.presents.shown(record.present_id, shown_ns);
             if let (true, Some(shown)) = (shown_ns > 0, shown) {
