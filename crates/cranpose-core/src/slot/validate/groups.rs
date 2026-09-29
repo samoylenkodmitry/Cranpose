@@ -1,5 +1,8 @@
 use super::{
-    super::{GroupKey, GroupRecord, NodeRecord, PayloadRecord, SlotTable, checked_usize_to_u32},
+    super::{
+        GroupKey, GroupRecord, NodeRecord, PayloadRecord, SlotTable, checked_usize_to_u32,
+        segments::SegmentItems,
+    },
     SlotInvariantError, SlotTreeContext, anchors,
     nodes::{self, validate_group_nodes},
     payloads::{self, validate_group_payloads},
@@ -13,7 +16,7 @@ use crate::{
 pub(super) struct SlotTreeView<'a> {
     pub(super) tree: SlotTreeContext,
     pub(super) groups: &'a [GroupRecord],
-    pub(super) payloads: &'a [PayloadRecord],
+    pub(super) payloads: &'a dyn SegmentItems<Item = PayloadRecord>,
     pub(super) nodes: &'a [NodeRecord],
 }
 
@@ -367,8 +370,8 @@ pub(super) fn validate_slot_tree(
         stack.push((group.anchor, subtree_end));
     }
 
-    if expected_payload_start != view.payloads.len() {
-        return Err(view.payload_count_mismatch(expected_payload_start, view.payloads.len()));
+    if expected_payload_start != view.payloads.item_count() {
+        return Err(view.payload_count_mismatch(expected_payload_start, view.payloads.item_count()));
     }
     if expected_node_start != view.nodes.len() {
         return Err(view.node_count_mismatch(expected_node_start, view.nodes.len()));
