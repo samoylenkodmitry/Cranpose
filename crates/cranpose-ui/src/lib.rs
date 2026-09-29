@@ -127,8 +127,9 @@ pub use layout::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
         VerticalAlignment,
     },
-    measure_layout, measure_layout_with_options, top_modal_from_applier, tree_needs_layout,
-    tree_needs_semantics, update_semantics_tree_from_applier,
+    has_placed_content, measure_layout, measure_layout_with_options, placed_content_extent,
+    top_modal_from_applier, tree_needs_layout, tree_needs_semantics,
+    update_semantics_tree_from_applier,
 };
 pub use layout_direction::{
     LayoutDirection, ProvideLayoutDirection, layout_direction, local_layout_direction,
