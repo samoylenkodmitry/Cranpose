@@ -796,7 +796,7 @@ fn web_frame_waker_is_shell_owned_without_thread_local_router() {
     );
     assert!(
         web_source.contains("app.borrow_mut().set_frame_waker({")
-            && web_source.contains("move || request_frame()"),
+            && web_source.contains("request_frame();\n            run_tasks();"),
         "web runtime should install the per-shell frame requester directly on AppShell"
     );
 }
@@ -1256,6 +1256,38 @@ fn every_desktop_window_paces_a_frame_its_surface_could_not_take() {
             "a minimized or occluded window hands out no texture; its next attempt must wait a frame interval, or the loop spins a core: {branch}"
         );
     }
+}
+
+#[test]
+fn desktop_bridge_builds_nothing_without_a_reader_and_publishes_on_androids_interval() {
+    let desktop_source = crate_source("src/desktop_accessibility.rs");
+    let sync = desktop_source
+        .split("pub(crate) fn sync(")
+        .nth(1)
+        .and_then(|body| body.split("\n    }\n").next())
+        .expect("the desktop bridge syncs in one method");
+    let leaves_without_reader = sync
+        .find("if !reader_connected {\n            return;\n        }")
+        .expect("the sync leaves early while no reader holds the tree");
+    let snapshots = sync
+        .find("accessibility::snapshot_if_changed(")
+        .expect("the sync snapshots the semantics tree");
+    assert!(
+        leaves_without_reader < snapshots,
+        "no semantics snapshot or accesskit tree is built while no reader holds the tree"
+    );
+    assert!(
+        sync.contains("tree_owed || self.policy.try_begin_publish(Instant::now())"),
+        "a connecting reader gets the whole tree at once; changes after it go out on the shared publish interval"
+    );
+    let loop_source = crate_source("src/desktop.rs");
+    assert!(
+        desktop_source.contains("pub(crate) fn serve(")
+            && desktop_source.contains("if self.tree_owed.load(Ordering::Relaxed)")
+            && loop_source.contains("accessibility.serve(app, now)")
+            && loop_source.contains("DesktopAccessibilityBridge::wake_deadline"),
+        "the loop syncs a tree a reader asked for, and wakes for a change the interval held back"
+    );
 }
 
 #[test]

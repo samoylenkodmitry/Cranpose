@@ -3207,6 +3207,86 @@ fn window_root_subtree_is_left_out_of_the_parent_layout_tree() -> Result<(), Nod
 }
 
 #[test]
+fn placed_content_reads_the_layout_trees_boxes_without_building_it() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    fn tree_extent(layout_box: &LayoutBox, extent: &mut Option<Size>) {
+        for child in &layout_box.children {
+            if child.rect.width > 0.0 && child.rect.height > 0.0 {
+                let (right, bottom) = (
+                    child.rect.x + child.rect.width,
+                    child.rect.y + child.rect.height,
+                );
+                *extent = Some(extent.map_or_else(
+                    || Size::new(right, bottom),
+                    |extent| Size::new(extent.width.max(right), extent.height.max(bottom)),
+                ));
+            }
+            tree_extent(child, extent);
+        }
+    }
+    let mut applier = MemoryApplier::new();
+    let leaf = |width, height| {
+        LayoutNode::new(
+            Modifier::empty(),
+            Rc::new(LeafMeasurePolicy::new(Size::new(width, height))),
+        )
+    };
+    let unmeasured = applier.create(Box::new(leaf(10.0, 10.0)));
+    assert!(
+        !super::has_placed_content(&mut applier, unmeasured)?,
+        "a root never placed has no content"
+    );
+
+    let first = applier.create(Box::new(leaf(10.0, 10.0)));
+    let second = applier.create(Box::new(leaf(20.0, 10.0)));
+    let flat = applier.create(Box::new(leaf(0.0, 10.0)));
+    let mut column = LayoutNode::new(Modifier::empty().padding(2.0), Rc::new(VerticalStackPolicy));
+    column.children.extend([first, second, flat]);
+    let column = applier.create(Box::new(column));
+    let window = Rc::new(TestWindow {
+        size: Cell::new(Size::new(300.0, 200.0)),
+    });
+    let window_content = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(MaxSizePolicy),
+    )));
+    let mut window_node = LayoutNode::new(
+        Modifier::empty().window_root(window),
+        Rc::new(VerticalStackPolicy),
+    );
+    window_node.children.push(window_content);
+    let window_node = applier.create(Box::new(window_node));
+    applier.get_mut(window_node)?.set_node_id(window_node);
+    let mut root = LayoutNode::new(Modifier::empty().padding(4.0), Rc::new(VerticalStackPolicy));
+    root.children.extend([column, window_node]);
+    let root = applier.create(Box::new(root));
+    measure_layout(&mut applier, root, Size::new(100.0, 100.0))?;
+
+    let layout = build_layout_tree_from_applier(&mut applier, root)?.expect("layout");
+    let mut expected = None;
+    tree_extent(layout.root(), &mut expected);
+    assert_eq!(
+        expected,
+        Some(Size::new(28.0, 38.0)),
+        "the padded column is the farthest box; the window's 300 by 200 is not the root's"
+    );
+    assert_eq!(super::placed_content_extent(&mut applier, root)?, expected);
+    assert!(super::has_placed_content(&mut applier, root)?);
+
+    let mut bare = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    let flat_only = applier.create(Box::new(leaf(0.0, 10.0)));
+    bare.children.push(flat_only);
+    let bare = applier.create(Box::new(bare));
+    measure_layout(&mut applier, bare, Size::new(100.0, 100.0))?;
+    assert!(
+        !super::has_placed_content(&mut applier, bare)?,
+        "a box without area is not content"
+    );
+    assert_eq!(super::placed_content_extent(&mut applier, bare)?, None);
+    Ok(())
+}
+
+#[test]
 fn window_root_subtree_is_left_out_of_the_parent_semantics_tree() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();

@@ -74,10 +74,7 @@ fn compose_fixed_rows(
                     scope.items(
                         LazyItems::new(heights.len()).key(|index: usize| index as u64),
                         move |index| {
-                            Spacer(Size {
-                                width: 0.0,
-                                height: heights[index],
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, heights[index]));
                         },
                     );
                 },
@@ -615,10 +612,7 @@ fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
                     settings_spec(),
                     |scope| {
                         scope.items(LazyItems::new(10).key(|index: usize| index as u64), |_| {
-                            Spacer(Size {
-                                width: 0.0,
-                                height: ROW_HEIGHT,
-                            });
+                            Spacer(Modifier::empty().size_points(0.0, ROW_HEIGHT));
                         });
                     },
                 );

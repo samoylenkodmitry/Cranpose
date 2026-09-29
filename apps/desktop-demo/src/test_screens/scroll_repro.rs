@@ -3,8 +3,8 @@ use cranpose_ui::{
     composable,
     text::SpanStyle,
     widgets::{LazyColumn, LazyColumnSpec},
-    Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text,
-    TextStyle, VerticalAlignment,
+    Color, Column, ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Spacer, Text, TextStyle,
+    VerticalAlignment,
 };
 
 #[composable]
@@ -34,10 +34,7 @@ pub fn ScrollReproScreen() {
                 },
             );
 
-            Spacer(Size {
-                width: 0.0,
-                height: 16.0,
-            });
+            Spacer(Modifier::empty().size_points(0.0, 16.0));
 
             LazyColumn(
                 Modifier::empty()
@@ -80,10 +77,7 @@ fn ReproItem(rank: usize) {
                 },
             );
 
-            Spacer(Size {
-                width: 8.0,
-                height: 0.0,
-            });
+            Spacer(Modifier::empty().size_points(8.0, 0.0));
 
             Column(Modifier::empty().weight(1.0), ColumnSpec::default(), {
                 move || {

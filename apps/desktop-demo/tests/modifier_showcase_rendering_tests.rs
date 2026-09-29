@@ -15,10 +15,7 @@ fn simple_card_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         cranpose_ui::Box(
             Modifier::empty()
@@ -67,10 +64,7 @@ fn positioned_boxes_showcase() {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         cranpose_ui::Box(
             Modifier::empty()
@@ -120,10 +114,7 @@ fn dynamic_modifiers_showcase(frame: i32) {
             TextStyle::default(),
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         let x = (frame as f32 * 10.0) % 200.0;
         let y = 50.0;
@@ -148,10 +139,7 @@ fn dynamic_modifiers_showcase(frame: i32) {
             },
         );
 
-        Spacer(Size {
-            width: 0.0,
-            height: 16.0,
-        });
+        Spacer(Modifier::empty().size_points(0.0, 16.0));
 
         Text(
             format!("Frame: {frame}, X: {x:.1}"),

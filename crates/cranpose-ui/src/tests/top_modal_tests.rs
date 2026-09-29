@@ -288,10 +288,7 @@ fn ScrollModalLazyColumn(
             LazyColumnSpec::default(),
             |scope| {
                 scope.items(cranpose_foundation::lazy::LazyItems::new(50), |_| {
-                    Spacer(Size {
-                        width: 40.0,
-                        height: 48.0,
-                    });
+                    Spacer(Modifier::empty().size_points(40.0, 48.0));
                 });
             },
         )));

@@ -784,3 +784,52 @@ fn a_runs_quads_are_derived_from_its_glyphs_and_atlas_entries() {
     assert_eq!(quad.uv.max, expected.uv.max);
     assert_eq!(quad.uv.sample_bounds, expected.uv.sample_bounds);
 }
+
+/// A full-height rect across the target, clipped to `columns`.
+fn clipped_run(columns: std::ops::Range<f32>, color: Color) -> RunDraw {
+    let run = filled_run(0.0, 128.0, color);
+    let clip = Rect {
+        x: columns.start,
+        y: 0.0,
+        width: columns.end - columns.start,
+        height: 32.0,
+    };
+    RunDraw {
+        placement: crate::scene::Placement::at(Point::default(), None, Some(clip)),
+        ..run
+    }
+}
+
+#[test]
+fn runs_under_different_clips_each_keep_their_own_pixels() {
+    let (_lock, mut renderer) = fonted_renderer();
+    let red = Color(1.0, 0.0, 0.0, 1.0);
+    let blue = Color(0.0, 0.0, 1.0, 1.0);
+    let mut scene = CompositorScene::new();
+    scene.push_run(clipped_run(10.25..40.5, red));
+    scene.push_run(clipped_run(60.5..90.0, blue));
+    let (pixels, _) = draw_scene(&mut renderer, &scene);
+    let black = pixel_at(&pixels, 0, 16).to_vec();
+    let red_pixel = pixel_at(&pixels, 20, 16).to_vec();
+    let blue_pixel = pixel_at(&pixels, 70, 16).to_vec();
+    assert_ne!(red_pixel, black);
+    assert_ne!(blue_pixel, black);
+    // A pixel shows a run when its centre lies within the run's clip.
+    for x in 0..128 {
+        let centre = x as f32 + 0.5;
+        let expected = if (10.25..=40.5).contains(&centre) {
+            &red_pixel
+        } else if (60.5..=90.0).contains(&centre) {
+            &blue_pixel
+        } else {
+            &black
+        };
+        for y in [0, 16, 31] {
+            assert_eq!(
+                pixel_at(&pixels, x, y),
+                expected.as_slice(),
+                "pixel {x},{y}"
+            );
+        }
+    }
+}

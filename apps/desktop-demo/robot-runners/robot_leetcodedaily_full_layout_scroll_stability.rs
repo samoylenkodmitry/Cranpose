@@ -1395,7 +1395,7 @@ fn LeetcodeDailyFullLayoutApp() {
                                                                                     theme,
                                                                                     compact,
                                                                                 );
-                                                                                Spacer(Size::new(0.0, 86.0));
+                                                                                Spacer(Modifier::empty().size_points(0.0, 86.0));
                                                                             }
                                                                         },
                                                                     );
@@ -1506,7 +1506,7 @@ fn GuidedWorkspace(
         active_queue_target,
         theme,
     );
-    Spacer(Size::new(0.0, 82.0));
+    Spacer(Modifier::empty().size_points(0.0, 82.0));
     CodeCard(
         fields,
         status,
@@ -2160,7 +2160,7 @@ fn interactive_queue_content(
         ),
         RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(5.0)),
         move || {
-            Spacer(Size::new(icon_size, 0.0));
+            Spacer(Modifier::empty().size_points(icon_size, 0.0));
             BasicText(
                 label.clone(),
                 Modifier::empty().weight(1.0),
@@ -3350,7 +3350,7 @@ fn SectionHeader(title: &'static str, icon: UiIcon, theme: ThemeMode) {
         icon_overlay_modifier(Modifier::empty(), icon, 24.0, 0.0, theme, false),
         RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(10.0)),
         move || {
-            Spacer(Size::new(24.0, 0.0));
+            Spacer(Modifier::empty().size_points(24.0, 0.0));
             Text(title, Modifier::empty(), heading_style(24.0, theme));
         },
     );
@@ -3416,7 +3416,7 @@ fn FieldSuggestion(
                 icon_overlay_modifier(Modifier::empty(), icon, 24.0, 0.0, theme, false),
                 RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(9.0)),
                 move || {
-                    Spacer(Size::new(24.0, 0.0));
+                    Spacer(Modifier::empty().size_points(24.0, 0.0));
                     Text(field.label(), Modifier::empty(), queue_text_style(theme));
                 },
             );
@@ -3843,7 +3843,7 @@ fn theme_button(label: String, theme: ThemeMode, on_click: impl FnMut() + 'stati
                 icon_overlay_modifier(Modifier::empty(), UiIcon::Theme, 24.0, 0.0, theme, false),
                 RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(8.0)),
                 move || {
-                    Spacer(Size::new(24.0, 0.0));
+                    Spacer(Modifier::empty().size_points(24.0, 0.0));
                     Text(
                         label_for_row.clone(),
                         Modifier::empty(),
@@ -3876,7 +3876,7 @@ fn button_content(
         icon_overlay_modifier(row_modifier, icon, icon_size, 0.0, theme, busy),
         RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(4.0)),
         move || {
-            Spacer(Size::new(icon_size, 0.0));
+            Spacer(Modifier::empty().size_points(icon_size, 0.0));
             if expand_label {
                 BasicText(
                     label.clone(),
@@ -3994,7 +3994,7 @@ fn labeled_field(
                 RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(16.0)),
                 {
                     move || {
-                        Spacer(Size::new(44.0, 0.0));
+                        Spacer(Modifier::empty().size_points(44.0, 0.0));
                         let field_state = state;
                         Column(
                             Modifier::empty().weight(1.0),
@@ -4082,7 +4082,7 @@ fn labeled_code_field(
                 RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(16.0)),
                 {
                     move || {
-                        Spacer(Size::new(44.0, 0.0));
+                        Spacer(Modifier::empty().size_points(44.0, 0.0));
                         let field_state = state;
                         Column(
                             Modifier::empty().weight(1.0),

@@ -142,6 +142,8 @@ enum Batch<'a> {
         paint: std::ops::Range<usize>,
         interiors: Option<std::ops::Range<usize>>,
         scissor: Option<(u32, u32, u32, u32)>,
+        /// The scissor the painted draws' unturned clip puts on them.
+        clip: Option<(u32, u32, u32, u32)>,
     },
     Images {
         cmds: std::ops::Range<usize>,
@@ -198,6 +200,20 @@ fn intersect_scissors(
             let bottom = (ay + ah).min(by + bh);
             (right > left && bottom > top).then(|| Some((left, top, right - left, bottom - top)))
         }
+    }
+}
+
+/// The scissor a shape batch's `stage` draws under: the batch's, and for its
+/// paint only the pixels its unturned clip keeps, `None` when none are left.
+/// The interiors keep the batch's: their pipeline cuts each to its clip.
+fn stage_scissor(
+    scissor: TargetRect,
+    clip: Option<TargetRect>,
+    stage: RunStage,
+) -> Option<TargetRect> {
+    match (stage, clip) {
+        (RunStage::Paint, Some(clip)) => crate::render::intersect_target_rects(scissor, clip),
+        _ => Some(scissor),
     }
 }
 
@@ -278,6 +294,7 @@ impl GpuRenderer {
             chunk_start: 0,
             chunk_base: 0,
             chunk_slot: None,
+            chunk_clip: None,
         };
         let prepared = segments
             .iter()
@@ -467,7 +484,10 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         match batch {
             Batch::StoreRun { batch, scissor } => {
-                self.draw_store_run(pass, batch, frame.scissor(*scissor), stage)
+                match stage_scissor(frame.scissor(*scissor), batch.clip, stage) {
+                    Some(scissor) => self.draw_store_run(pass, batch, scissor, stage),
+                    None => Ok(()),
+                }
             }
             Batch::Arena {
                 chunk,
@@ -475,6 +495,7 @@ impl GpuRenderer {
                 paint,
                 interiors,
                 scissor,
+                clip,
             } => {
                 let draws = match stage {
                     RunStage::Paint => paint.clone(),
@@ -483,14 +504,10 @@ impl GpuRenderer {
                         None => return Ok(()),
                     },
                 };
-                self.draw_arena(
-                    pass,
-                    *chunk,
-                    *uniform_slot,
-                    &arena[draws],
-                    frame.scissor(*scissor),
-                    stage,
-                )
+                let Some(scissor) = stage_scissor(frame.scissor(*scissor), *clip, stage) else {
+                    return Ok(());
+                };
+                self.draw_arena(pass, *chunk, *uniform_slot, &arena[draws], scissor, stage)
             }
             _ => Ok(()),
         }
@@ -920,6 +937,10 @@ struct PassPrep<'a, 's, C> {
     chunk_base: u32,
     /// The uniform slot the open chunk's batches bind, once one is pushed.
     chunk_slot: Option<usize>,
+    /// The scissor the unturned clip of the records appended since the
+    /// chunk's last cut puts on their paint: a run clipped otherwise cuts
+    /// the chunk first.
+    chunk_clip: Option<TargetRect>,
 }
 
 impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
@@ -1058,6 +1079,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             paint: paint_start..end,
             interiors: Some(self.chunk_start..end),
             scissor: binding.scissor,
+            clip: self.chunk_clip,
         });
     }
 
@@ -1073,19 +1095,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         let Some(cmds) = self.pending_glyphs.take() else {
             return;
         };
-        let paint_start = self.arena_draws.len();
-        renderer.cut_arena(open, &mut self.arena_draws);
-        let end = self.arena_draws.len();
-        if end > paint_start {
-            let uniform_slot = self.chunk_uniform_slot(renderer, binding);
-            self.batches.push(Batch::Arena {
-                chunk: open,
-                uniform_slot,
-                paint: paint_start..end,
-                interiors: None,
-                scissor: binding.scissor,
-            });
-        }
+        self.cut_paint(renderer, binding, open);
         // The glyphs sit where the chunk's next record will: its later
         // opaque interiors hide them, its earlier ones do not.
         let uniform_slot = if self.depth {
@@ -1105,6 +1115,25 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             uniform_slot,
             scissor: binding.scissor,
         });
+    }
+
+    /// Paints the open chunk's draws since its last cut, under the clip
+    /// their records share, and keeps the chunk open.
+    fn cut_paint(&mut self, renderer: &mut GpuRenderer, binding: SegmentBinding, open: usize) {
+        let paint_start = self.arena_draws.len();
+        renderer.cut_arena(open, &mut self.arena_draws);
+        let end = self.arena_draws.len();
+        if end > paint_start {
+            let uniform_slot = self.chunk_uniform_slot(renderer, binding);
+            self.batches.push(Batch::Arena {
+                chunk: open,
+                uniform_slot,
+                paint: paint_start..end,
+                interiors: None,
+                scissor: binding.scissor,
+                clip: self.chunk_clip,
+            });
+        }
     }
 
     /// The uniform slot a new glyph batch binds: the binding's, or in a pass
@@ -1254,6 +1283,15 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             } else {
                 let total = draw.record_count().min(window.end);
                 let mut from = window.start;
+                let clip =
+                    crate::render::clip_scissor(&draw.placement, run.segment.scale, run.viewport);
+                if let Some(open) = self.chunk
+                    && clip != self.chunk_clip
+                {
+                    self.cut_paint(renderer, run.binding, open);
+                }
+                self.chunk_clip = clip;
+                let clipped = draw.placement.clip.is_some() && clip.is_none();
                 while from < total {
                     if self
                         .chunk
@@ -1272,7 +1310,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         run.segment.scale,
                         run.viewport.transform,
                         self.mixed_turns,
-                        self.depth,
+                        (self.depth, clipped),
                     );
                     if taken == 0 {
                         self.close_chunk(renderer, run.binding);

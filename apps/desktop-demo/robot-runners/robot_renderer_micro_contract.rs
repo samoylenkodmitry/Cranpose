@@ -333,7 +333,7 @@ fn CompactOverflowButton(icon: ImageBitmap, modifier: Modifier) {
                     ..TextOptions::default()
                 },
             );
-            Spacer(Size::new(8.0, 1.0));
+            Spacer(Modifier::empty().size_points(8.0, 1.0));
             Box(
                 Modifier::empty()
                     .size(Size::new(24.0, 18.0))

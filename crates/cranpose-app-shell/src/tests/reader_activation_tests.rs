@@ -490,11 +490,11 @@ fn scrolling_controls(
                     BoxSpec::default(),
                     || {},
                 );
-                Spacer(if horizontal {
+                Spacer(Modifier::empty().size(if horizontal {
                     Size::new(400.0, 1.0)
                 } else {
                     Size::new(1.0, 400.0)
-                });
+                }));
                 Box(
                     Modifier::empty()
                         .size(Size::new(200.0, 48.0))
@@ -904,7 +904,7 @@ fn reader_focus_reveals_other_controls_without_replacing_the_active_editor() {
                                 .content_description(label),
                             TextStyle::default(),
                         );
-                        Spacer(Size::new(1.0, 200.0));
+                        Spacer(Modifier::empty().size_points(1.0, 200.0));
                     }
                 },
             );

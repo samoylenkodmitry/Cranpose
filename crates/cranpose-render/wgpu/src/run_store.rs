@@ -127,6 +127,23 @@ pub(crate) struct PlacementData {
     transform_reserved: [f32; 2],
 }
 
+/// `placement`'s clip in device pixels at `root_scale` as x, y, width and
+/// height: snapped to the device grid when the placement is.
+pub(crate) fn device_clip(placement: &Placement, root_scale: f32) -> Option<[f32; 4]> {
+    let clip = placement.clip?;
+    let device = if placement.snap_anchor.is_some() {
+        canonicalized_scaled_rect(clip, root_scale)
+    } else {
+        cranpose_ui_graphics::Rect {
+            x: clip.x * root_scale,
+            y: clip.y * root_scale,
+            width: clip.width * root_scale,
+            height: clip.height * root_scale,
+        }
+    };
+    Some([device.x, device.y, device.width, device.height])
+}
+
 impl PlacementData {
     /// The placement data of `placement` at `root_scale`, drawn in place
     /// under `turn`: the identity except for a layer that turns.
@@ -143,20 +160,10 @@ impl PlacementData {
         if placement.paints() {
             flags |= PLACEMENT_PAINTED;
         }
-        let clip = match placement.clip {
+        let clip = match device_clip(placement, root_scale) {
             Some(clip) => {
                 flags |= PLACEMENT_CLIPPED;
-                let device = if canonicalize {
-                    canonicalized_scaled_rect(clip, root_scale)
-                } else {
-                    cranpose_ui_graphics::Rect {
-                        x: clip.x * root_scale,
-                        y: clip.y * root_scale,
-                        width: clip.width * root_scale,
-                        height: clip.height * root_scale,
-                    }
-                };
-                [device.x, device.y, device.width, device.height]
+                clip
             }
             None => [0.0; 4],
         };
