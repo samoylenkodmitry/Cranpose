@@ -69,7 +69,7 @@ pub fn SelectionContainer(modifier: Modifier, content: impl FnMut() + 'static) {
     let content = Rc::new(RefCell::new(content));
     let pointer = Rc::clone(&gesture);
     CompositionLocalProvider(
-        vec![local_selection_registrar().provides(Some(registrar.clone()))],
+        [local_selection_registrar().provides(Some(registrar.clone()))],
         move || {
             let content = Rc::clone(&content);
             Box(
@@ -143,7 +143,7 @@ fn selection_menu(registrar: &SelectionRegistrar, gesture: &Rc<SelectionGesture>
 /// [`SelectionContainer`], as Jetpack Compose's `DisableSelection` does.
 #[composable]
 pub fn DisableSelection(content: impl FnOnce()) {
-    CompositionLocalProvider(vec![local_selection_registrar().provides(None)], content);
+    CompositionLocalProvider([local_selection_registrar().provides(None)], content);
 }
 
 /// What a `Text` in a [`SelectionContainer`] adds in front of its text: it

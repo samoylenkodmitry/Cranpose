@@ -316,7 +316,7 @@ pub fn LiquidTheme(spec: LiquidThemeSpec, content: impl FnOnce()) {
         spec.typography.clone()
     };
     CompositionLocalProvider(
-        vec![
+        [
             local_liquid_colors().provides(colors),
             local_liquid_typography().provides(typography),
             local_liquid_glass_tint_amount().provides(spec.glass_tint_amount),

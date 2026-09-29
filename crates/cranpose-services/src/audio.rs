@@ -648,7 +648,7 @@ pub fn local_audio() -> CompositionLocal<AudioPlayerRef> {
 pub fn ProvideAudio(content: impl FnOnce()) {
     let player = cranpose_core::remember(default_audio).with(|state| state.clone());
     let local = local_audio();
-    CompositionLocalProvider(vec![local.provides(player)], move || {
+    CompositionLocalProvider([local.provides(player)], move || {
         content();
     });
 }

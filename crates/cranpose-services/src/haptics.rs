@@ -369,7 +369,7 @@ pub fn local_haptics() -> CompositionLocal<HapticsRef> {
 pub fn ProvideHaptics(content: impl FnOnce()) {
     let haptics = cranpose_core::remember(default_haptics).with(|state| state.clone());
     let local = local_haptics();
-    CompositionLocalProvider(vec![local.provides(haptics)], move || {
+    CompositionLocalProvider([local.provides(haptics)], move || {
         content();
     });
 }

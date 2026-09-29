@@ -305,7 +305,7 @@ pub fn ProvideFilePicker(content: impl FnOnce()) {
     let picker = cranpose_core::remember(default_file_picker).with(|state| state.clone());
     let picker_local = local_file_picker();
 
-    CompositionLocalProvider(vec![picker_local.provides(picker)], move || {
+    CompositionLocalProvider([picker_local.provides(picker)], move || {
         content();
     });
 }

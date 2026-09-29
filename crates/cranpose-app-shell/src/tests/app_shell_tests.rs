@@ -7332,7 +7332,7 @@ fn app_shell_composition_local_test_tab() {
                 Modifier::empty().padding(8.0),
                 TextStyle::default(),
             );
-            CompositionLocalProvider(vec![local.provides(provided)], || {
+            CompositionLocalProvider([local.provides(provided)], || {
                 Text(
                     format!("READING local {}", local.current()),
                     Modifier::empty().padding(8.0),

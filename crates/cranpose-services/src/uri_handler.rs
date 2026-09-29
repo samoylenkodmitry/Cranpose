@@ -142,7 +142,7 @@ pub fn ProvideUriHandler(content: impl FnOnce()) {
     let uri_handler = cranpose_core::remember(default_uri_handler).with(|state| state.clone());
     let uri_local = local_uri_handler();
 
-    CompositionLocalProvider(vec![uri_local.provides(uri_handler)], move || {
+    CompositionLocalProvider([uri_local.provides(uri_handler)], move || {
         content();
     });
 }

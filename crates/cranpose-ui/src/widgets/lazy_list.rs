@@ -1437,9 +1437,7 @@ fn LazyColumnNode(
     {
         let node_slot = &mut node;
         cranpose_core::CompositionLocalProvider(
-            vec![
-                crate::bring_into_view::local_bring_into_view_responder().provides(Some(responder)),
-            ],
+            [crate::bring_into_view::local_bring_into_view_responder().provides(Some(responder))],
             move || {
                 *node_slot = Some(LazyColumnImpl(modifier, state, spec, content));
             },

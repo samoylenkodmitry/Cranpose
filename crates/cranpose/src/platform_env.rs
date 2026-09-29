@@ -38,7 +38,7 @@ impl PlatformEnvironment {
         let theme = cranpose_services::default_system_theme();
         let launch_args = cranpose_services::launch_args();
         cranpose_core::CompositionLocalProvider(
-            vec![
+            [
                 local_safe_area_insets().provides(self.safe_area.get()),
                 local_ime_insets().provides(self.ime_insets.get()),
                 cranpose_services::local_system_theme().provides(theme),

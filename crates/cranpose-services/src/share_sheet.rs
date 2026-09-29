@@ -126,7 +126,7 @@ pub fn ProvideShareSheet(content: impl FnOnce()) {
     let share_sheet = cranpose_core::remember(default_share_sheet).with(|state| state.clone());
     let local = local_share_sheet();
 
-    CompositionLocalProvider(vec![local.provides(share_sheet)], move || {
+    CompositionLocalProvider([local.provides(share_sheet)], move || {
         content();
     });
 }
