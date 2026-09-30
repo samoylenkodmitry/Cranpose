@@ -1,4 +1,4 @@
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 
 use super::*;
 use crate::text::{AnnotatedString, TextLayoutResult, TextMeasurer, TextMetrics, TextStyle};
@@ -161,52 +161,86 @@ fn the_font_scale_is_per_app_context() {
 }
 
 #[test]
-fn invalidation_flags_are_shared_across_threads() {
-    let state = Arc::new(RenderState::new_with_density(1.0));
+fn app_context_state_stays_on_its_own_thread() {
+    let context = AppContext::new();
     let (tx, rx) = mpsc::channel();
-    let worker_state = Arc::clone(&state);
-
+    let (release, wait) = mpsc::channel();
     let handle = std::thread::spawn(move || {
-        worker_state
-            .render_invalidated
-            .store(true, Ordering::Relaxed);
-        worker_state
-            .pointer_invalidated
-            .store(true, Ordering::Relaxed);
-        worker_state
-            .focus_invalidated
-            .store(true, Ordering::Relaxed);
-        worker_state
-            .layout_invalidated
-            .store(true, Ordering::Relaxed);
-        worker_state
-            .density_bits
-            .store(f32::to_bits(2.0), Ordering::Relaxed);
-        tx.send(()).expect("signal invalidation setup");
-
-        f32::from_bits(worker_state.density_bits.load(Ordering::Relaxed))
+        let worker = AppContext::new();
+        worker.enter(|| {
+            set_density(2.0);
+            set_font_scale(1.5);
+            request_pointer_invalidation();
+            request_focus_invalidation();
+            schedule_layout_repass(11);
+            schedule_measure_repass(12);
+            schedule_modifier_slices_repass(13);
+            record_geometry_scene_node(14);
+            tx.send(()).expect("signal worker setup");
+            wait.recv().expect("wait for main context");
+            assert_eq!(current_density(), 2.0);
+            assert_eq!(current_font_scale(), 1.5);
+            assert_eq!(take_layout_repass_nodes(), vec![11]);
+            assert_eq!(take_measure_repass_nodes(), vec![12]);
+            assert_eq!(take_modifier_slice_repass_nodes(), vec![13]);
+            assert_eq!(take_draw_repass_nodes(), vec![13]);
+            assert_eq!(take_geometry_scene_nodes(), vec![14]);
+            for take in [
+                take_render_invalidation,
+                take_pointer_invalidation,
+                take_focus_invalidation,
+                take_layout_invalidation,
+            ] {
+                assert!(take());
+                assert!(!take());
+            }
+        });
     });
+    rx.recv().expect("wait for worker setup");
+    context.enter(|| {
+        assert_eq!(current_density(), 1.0);
+        assert_eq!(current_font_scale(), 1.0);
+        assert!(!peek_render_invalidation());
+        assert!(!peek_pointer_invalidation());
+        assert!(!peek_focus_invalidation());
+        assert!(!peek_layout_invalidation());
+        assert!(take_layout_repass_nodes().is_empty());
+        assert!(take_measure_repass_nodes().is_empty());
+        assert!(take_modifier_slice_repass_nodes().is_empty());
+        assert!(take_draw_repass_nodes().is_empty());
+        assert!(take_geometry_scene_nodes().is_empty());
+        set_density(3.0);
+        set_font_scale(2.0);
+        schedule_layout_repass(21);
+    });
+    release.send(()).expect("release worker");
+    handle.join().expect("worker context remains isolated");
+    context.enter(|| {
+        assert_eq!(current_density(), 3.0);
+        assert_eq!(current_font_scale(), 2.0);
+        assert_eq!(take_layout_repass_nodes(), vec![21]);
+    });
+}
 
-    rx.recv().expect("wait for worker invalidation setup");
-    assert!(state.render_invalidated.load(Ordering::Relaxed));
-    assert!(state.pointer_invalidated.load(Ordering::Relaxed));
-    assert!(state.focus_invalidated.load(Ordering::Relaxed));
-    assert!(state.layout_invalidated.load(Ordering::Relaxed));
-    assert_eq!(
-        f32::from_bits(state.density_bits.load(Ordering::Relaxed)),
-        2.0
-    );
-    assert!(state.render_invalidated.swap(false, Ordering::Relaxed));
-    assert!(state.pointer_invalidated.swap(false, Ordering::Relaxed));
-    assert!(state.focus_invalidated.swap(false, Ordering::Relaxed));
-    assert!(state.layout_invalidated.swap(false, Ordering::Relaxed));
-
-    let density = handle.join().expect("worker invalidation snapshot");
-    assert_eq!(density, 2.0);
-    assert!(!state.render_invalidated.load(Ordering::Relaxed));
-    assert!(!state.pointer_invalidated.load(Ordering::Relaxed));
-    assert!(!state.focus_invalidated.load(Ordering::Relaxed));
-    assert!(!state.layout_invalidated.load(Ordering::Relaxed));
+#[test]
+fn layout_cache_epochs_return_the_old_epoch_and_keep_context_floors_separate() {
+    let first = AppContext::new();
+    let second = AppContext::new();
+    first.enter(|| {
+        assert_eq!(current_layout_cache_epoch(), 1);
+        assert_eq!(next_layout_cache_epoch(), 1);
+        assert_eq!(current_layout_cache_epoch(), 2);
+        assert_eq!(layout_cache_floor(), 0);
+        invalidate_layout_cache_epoch();
+        assert_eq!(current_layout_cache_epoch(), 3);
+        assert_eq!(layout_cache_floor(), 3);
+        assert_eq!(next_layout_cache_epoch(), 3);
+        assert_eq!(layout_cache_floor(), 3);
+    });
+    second.enter(|| {
+        assert_eq!(current_layout_cache_epoch(), 1);
+        assert_eq!(layout_cache_floor(), 0);
+    });
 }
 
 #[test]

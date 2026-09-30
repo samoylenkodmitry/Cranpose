@@ -1,13 +1,10 @@
 #[cfg(test)]
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     rc::{Rc, Weak},
-    sync::{
-        Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
-    },
+    sync::Arc,
 };
 
 use cranpose_core::{
@@ -18,20 +15,22 @@ pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
 
 struct RenderState {
-    layout_repasses: Mutex<LayoutRepassManager>,
-    measure_repasses: Mutex<LayoutRepassManager>,
-    draw_repasses: Mutex<DrawRepassManager>,
-    modifier_slice_repasses: Mutex<LayoutRepassManager>,
-    geometry_scene_nodes: Mutex<LayoutRepassManager>,
-    render_invalidated: AtomicBool,
-    pointer_invalidated: AtomicBool,
-    focus_invalidated: AtomicBool,
-    layout_invalidated: AtomicBool,
-    density_bits: AtomicU32,
-    font_scale: Mutex<crate::font_scale::FontScaleCurve>,
+    layout_repasses: RefCell<LayoutRepassManager>,
+    measure_repasses: RefCell<LayoutRepassManager>,
+    draw_repasses: RefCell<DrawRepassManager>,
+    modifier_slice_repasses: RefCell<LayoutRepassManager>,
+    geometry_scene_nodes: RefCell<LayoutRepassManager>,
+    render_invalidated: Cell<bool>,
+    pointer_invalidated: Cell<bool>,
+    focus_invalidated: Cell<bool>,
+    layout_invalidated: Cell<bool>,
+    density: Cell<f32>,
+    font_scale: Cell<crate::font_scale::FontScaleCurve>,
 }
 
 #[doc(hidden)]
+/// Application state owned by one thread through [`Rc`]. Entering a context
+/// selects it for UI operations on that thread; contexts cannot cross threads.
 pub struct AppContext {
     id: AppContextId,
     self_weak: RefCell<Weak<AppContext>>,
@@ -39,9 +38,9 @@ pub struct AppContext {
     draw_observer: SnapshotStateObserver,
     text: crate::text::measure::TextService,
     layout_frame_arena: RefCell<crate::layout::FrameLayoutArena>,
-    layout_cache_epoch: AtomicU64,
-    layout_cache_floor: AtomicU64,
-    last_fling_velocity_bits: AtomicU32,
+    layout_cache_epoch: Cell<u64>,
+    layout_cache_floor: Cell<u64>,
+    last_fling_velocity: Cell<f32>,
     scroll_motion_contexts: crate::scroll::ScrollMotionContextStore,
     lazy_prefetch: crate::lazy_prefetch::LazyPrefetchState,
     layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
@@ -159,17 +158,17 @@ pub fn prune_draw_observations_to_nodes(retained: &HashSet<NodeId>) {
 impl RenderState {
     fn new_with_density(density: f32) -> Self {
         Self {
-            layout_repasses: Mutex::new(LayoutRepassManager::new()),
-            measure_repasses: Mutex::new(LayoutRepassManager::new()),
-            draw_repasses: Mutex::new(DrawRepassManager::new()),
-            modifier_slice_repasses: Mutex::new(LayoutRepassManager::new()),
-            geometry_scene_nodes: Mutex::new(LayoutRepassManager::new()),
-            render_invalidated: AtomicBool::new(false),
-            pointer_invalidated: AtomicBool::new(false),
-            focus_invalidated: AtomicBool::new(false),
-            layout_invalidated: AtomicBool::new(false),
-            density_bits: AtomicU32::new(normalize_density(density).to_bits()),
-            font_scale: Mutex::new(crate::font_scale::FontScaleCurve::linear(1.0)),
+            layout_repasses: RefCell::new(LayoutRepassManager::new()),
+            measure_repasses: RefCell::new(LayoutRepassManager::new()),
+            draw_repasses: RefCell::new(DrawRepassManager::new()),
+            modifier_slice_repasses: RefCell::new(LayoutRepassManager::new()),
+            geometry_scene_nodes: RefCell::new(LayoutRepassManager::new()),
+            render_invalidated: Cell::new(false),
+            pointer_invalidated: Cell::new(false),
+            focus_invalidated: Cell::new(false),
+            layout_invalidated: Cell::new(false),
+            density: Cell::new(normalize_density(density)),
+            font_scale: Cell::new(crate::font_scale::FontScaleCurve::linear(1.0)),
         }
     }
 }
@@ -212,9 +211,9 @@ impl AppContext {
             draw_observer: new_draw_observer(),
             text: crate::text::measure::TextService::new(),
             layout_frame_arena: RefCell::new(crate::layout::FrameLayoutArena::default()),
-            layout_cache_epoch: AtomicU64::new(1),
-            layout_cache_floor: AtomicU64::new(0),
-            last_fling_velocity_bits: AtomicU32::new(0.0f32.to_bits()),
+            layout_cache_epoch: Cell::new(1),
+            layout_cache_floor: Cell::new(0),
+            last_fling_velocity: Cell::new(0.0),
             scroll_motion_contexts: crate::scroll::ScrollMotionContextStore::new(),
             lazy_prefetch: crate::lazy_prefetch::LazyPrefetchState::new(),
             layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState::new(
@@ -279,13 +278,19 @@ impl AppContext {
     pub fn set_text_measurer_rc(&self, measurer: Rc<dyn crate::text::TextMeasurer>) {
         self.text.set_measurer(measurer);
         self.invalidate_layout_caches();
-        self.state.layout_invalidated.store(true, Ordering::Relaxed);
-        self.state.render_invalidated.store(true, Ordering::Relaxed);
+        self.state.layout_invalidated.set(true);
+        self.state.render_invalidated.set(true);
     }
 
     fn invalidate_layout_caches(&self) {
-        let floor = self.layout_cache_epoch.fetch_add(1, Ordering::Relaxed) + 1;
-        self.layout_cache_floor.store(floor, Ordering::Relaxed);
+        let floor = self.advance_layout_cache_epoch().wrapping_add(1);
+        self.layout_cache_floor.set(floor);
+    }
+
+    fn advance_layout_cache_epoch(&self) -> u64 {
+        let previous = self.layout_cache_epoch.get();
+        self.layout_cache_epoch.set(previous.wrapping_add(1));
+        previous
     }
 
     #[doc(hidden)]
@@ -470,39 +475,35 @@ pub(crate) fn invalidate_layout_cache_epoch() {
 
 pub(crate) fn next_layout_cache_epoch() -> u64 {
     let context = require_current_app_context("layout cache epoch access");
-    context.layout_cache_epoch.fetch_add(1, Ordering::Relaxed)
+    context.advance_layout_cache_epoch()
 }
 
 pub(crate) fn current_layout_cache_epoch() -> u64 {
     let context = require_current_app_context("layout cache epoch access");
-    context.layout_cache_epoch.load(Ordering::Relaxed)
+    context.layout_cache_epoch.get()
 }
 
 pub(crate) fn layout_cache_floor() -> u64 {
     let context = require_current_app_context("layout cache epoch access");
-    context.layout_cache_floor.load(Ordering::Relaxed)
+    context.layout_cache_floor.get()
 }
 
 pub(crate) fn record_last_fling_velocity(velocity: f32) {
     if let Some(context) = current_app_context() {
-        context
-            .last_fling_velocity_bits
-            .store(velocity.to_bits(), Ordering::Relaxed);
+        context.last_fling_velocity.set(velocity);
     }
 }
 
 #[doc(hidden)]
 pub fn debug_last_fling_velocity() -> f32 {
     let context = require_current_app_context("fling velocity diagnostics access");
-    f32::from_bits(context.last_fling_velocity_bits.load(Ordering::Relaxed))
+    context.last_fling_velocity.get()
 }
 
 #[doc(hidden)]
 pub fn debug_reset_last_fling_velocity() {
     let context = require_current_app_context("fling velocity diagnostics access");
-    context
-        .last_fling_velocity_bits
-        .store(0.0f32.to_bits(), Ordering::Relaxed);
+    context.last_fling_velocity.set(0.0);
 }
 
 impl AppContext {
@@ -737,10 +738,6 @@ impl DrawRepassManager {
     }
 }
 
-fn lock_repass_manager<T>(manager: &Mutex<T>) -> MutexGuard<'_, T> {
-    manager.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// Schedules a layout repass for a specific node.
 ///
 /// **This is the preferred way to invalidate layout for local changes** (e.g., scroll, single-node mutations).
@@ -768,7 +765,7 @@ pub fn schedule_layout_repass(node_id: NodeId) {
         );
     }
     with_render_state(|state| {
-        lock_repass_manager(&state.layout_repasses).schedule_repass(node_id);
+        state.layout_repasses.borrow_mut().schedule_repass(node_id);
     });
     request_render_invalidation();
 }
@@ -802,7 +799,10 @@ fn layout_repass_schedule_diagnostics_enabled_for(node_id: NodeId) -> bool {
 
 pub(crate) fn schedule_modifier_slices_repass(node_id: NodeId) {
     with_render_state(|state| {
-        lock_repass_manager(&state.modifier_slice_repasses).schedule_repass(node_id);
+        state
+            .modifier_slice_repasses
+            .borrow_mut()
+            .schedule_repass(node_id);
     });
     schedule_draw_repass(node_id);
 }
@@ -823,38 +823,39 @@ fn schedule_draw_repass_for_app_context(context_id: AppContextId, node_id: NodeI
 }
 
 fn schedule_draw_repass_in_context(context: &AppContext, node_id: NodeId) {
-    lock_repass_manager(&context.state.draw_repasses).schedule_repass(node_id);
     context
         .state
-        .render_invalidated
-        .store(true, Ordering::Relaxed);
+        .draw_repasses
+        .borrow_mut()
+        .schedule_repass(node_id);
+    context.state.render_invalidated.set(true);
 }
 
 /// Returns true if any draw repasses are pending.
 pub fn has_pending_draw_repasses() -> bool {
-    with_render_state(|state| lock_repass_manager(&state.draw_repasses).has_pending_repass())
+    with_render_state(|state| state.draw_repasses.borrow().has_pending_repass())
 }
 
 /// Takes all pending draw repass node IDs.
 pub fn take_draw_repass_nodes() -> Vec<NodeId> {
-    with_render_state(|state| lock_repass_manager(&state.draw_repasses).take_dirty_nodes())
+    with_render_state(|state| state.draw_repasses.borrow_mut().take_dirty_nodes())
 }
 
 /// Returns true if any layout repasses are pending.
 pub fn has_pending_layout_repasses() -> bool {
-    with_render_state(|state| lock_repass_manager(&state.layout_repasses).has_pending_repass())
+    with_render_state(|state| state.layout_repasses.borrow().has_pending_repass())
 }
 
 /// Returns a stable snapshot of pending layout repass node IDs without consuming them.
 pub fn pending_layout_repass_nodes_snapshot() -> Vec<NodeId> {
-    with_render_state(|state| lock_repass_manager(&state.layout_repasses).dirty_nodes_snapshot())
+    with_render_state(|state| state.layout_repasses.borrow().dirty_nodes_snapshot())
 }
 
 /// Takes all pending layout repass node IDs.
 ///
 /// The caller should iterate over these and call `bubble_layout_dirty` for each.
 pub fn take_layout_repass_nodes() -> Vec<NodeId> {
-    with_render_state(|state| lock_repass_manager(&state.layout_repasses).take_dirty_nodes())
+    with_render_state(|state| state.layout_repasses.borrow_mut().take_dirty_nodes())
 }
 
 /// Schedules a scoped re-*measure* of `node_id` on the next frame.
@@ -867,14 +868,14 @@ pub fn take_layout_repass_nodes() -> Vec<NodeId> {
 /// `LazyColumn` would reuse its cached, full-height item slot.
 pub fn schedule_measure_repass(node_id: NodeId) {
     with_render_state(|state| {
-        lock_repass_manager(&state.measure_repasses).schedule_repass(node_id);
+        state.measure_repasses.borrow_mut().schedule_repass(node_id);
     });
     request_render_invalidation();
 }
 
 /// Returns true if any measure repasses are pending.
 pub fn has_pending_measure_repasses() -> bool {
-    with_render_state(|state| lock_repass_manager(&state.measure_repasses).has_pending_repass())
+    with_render_state(|state| state.measure_repasses.borrow().has_pending_repass())
 }
 
 /// Returns a stable snapshot of pending measure repass node IDs without
@@ -886,25 +887,31 @@ pub fn has_pending_measure_repasses() -> bool {
 /// phase as "something changed, but nothing says where", which is
 /// indistinguishable from a full invalidation.
 pub fn pending_measure_repass_nodes_snapshot() -> Vec<NodeId> {
-    with_render_state(|state| lock_repass_manager(&state.measure_repasses).dirty_nodes_snapshot())
+    with_render_state(|state| state.measure_repasses.borrow().dirty_nodes_snapshot())
 }
 
 /// Takes all pending measure repass node IDs.
 ///
 /// The caller should iterate over these and call `bubble_measure_dirty` for each.
 pub fn take_measure_repass_nodes() -> Vec<NodeId> {
-    with_render_state(|state| lock_repass_manager(&state.measure_repasses).take_dirty_nodes())
+    with_render_state(|state| state.measure_repasses.borrow_mut().take_dirty_nodes())
 }
 
 pub(crate) fn take_modifier_slice_repass_nodes() -> Vec<NodeId> {
     with_render_state(|state| {
-        lock_repass_manager(&state.modifier_slice_repasses).take_dirty_nodes()
+        state
+            .modifier_slice_repasses
+            .borrow_mut()
+            .take_dirty_nodes()
     })
 }
 
 pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
     with_render_state(|state| {
-        lock_repass_manager(&state.geometry_scene_nodes).schedule_repass(node_id);
+        state
+            .geometry_scene_nodes
+            .borrow_mut()
+            .schedule_repass(node_id);
     });
 }
 
@@ -914,12 +921,12 @@ pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
 /// is mandatory whenever layout ran: geometry recorded by one pass is
 /// meaningless to the next.
 pub fn take_geometry_scene_nodes() -> Vec<NodeId> {
-    with_render_state(|state| lock_repass_manager(&state.geometry_scene_nodes).take_dirty_nodes())
+    with_render_state(|state| state.geometry_scene_nodes.borrow_mut().take_dirty_nodes())
 }
 
 /// Returns the current density scale factor (logical px per dp).
 pub fn current_density() -> f32 {
-    with_render_state(|state| f32::from_bits(state.density_bits.load(Ordering::Relaxed)))
+    with_render_state(|state| state.density.get())
 }
 
 /// Updates the current density scale factor.
@@ -927,12 +934,10 @@ pub fn current_density() -> f32 {
 /// This triggers a global layout invalidation when the value changes because
 /// density impacts layout, text measurement, and input thresholds.
 pub fn set_density(density: f32) {
-    let normalized = normalize_density(density);
-    let new_bits = normalized.to_bits();
+    let density = normalize_density(density);
     with_render_state(|state| {
-        let old_bits = state.density_bits.swap(new_bits, Ordering::Relaxed);
-        if old_bits != new_bits {
-            state.layout_invalidated.store(true, Ordering::Relaxed);
+        if state.density.replace(density) != density {
+            state.layout_invalidated.set(true);
         }
     });
 }
@@ -957,7 +962,7 @@ pub fn current_font_scale() -> f32 {
 /// [`crate::font_scale`] — so this, and not [`current_font_scale`], is what a
 /// size in `Sp` is resolved through. The scalar remains the thing to *report*.
 pub fn current_font_scale_curve() -> crate::font_scale::FontScaleCurve {
-    with_render_state(|state| *lock_font_scale(&state.font_scale))
+    with_render_state(|state| state.font_scale.get())
 }
 
 /// A size in scale-independent pixels, in dp, through the running app's curve.
@@ -993,66 +998,55 @@ pub fn set_font_scale_curve(curve: crate::font_scale::FontScaleCurve) {
         crate::font_scale::FontScaleCurve::linear(normalized)
     };
     with_render_state(|state| {
-        let mut current = lock_font_scale(&state.font_scale);
-        if *current != curve {
-            *current = curve;
-            state.layout_invalidated.store(true, Ordering::Relaxed);
+        if state.font_scale.replace(curve) != curve {
+            state.layout_invalidated.set(true);
         }
     });
 }
 
-fn lock_font_scale(
-    slot: &Mutex<crate::font_scale::FontScaleCurve>,
-) -> MutexGuard<'_, crate::font_scale::FontScaleCurve> {
-    match slot.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
 /// Requests that the renderer rebuild the current scene.
 pub fn request_render_invalidation() {
-    with_render_state(|state| state.render_invalidated.store(true, Ordering::Relaxed));
+    with_render_state(|state| state.render_invalidated.set(true));
 }
 
 /// Returns true if a render invalidation was pending and clears the flag.
 pub fn take_render_invalidation() -> bool {
-    with_render_state(|state| state.render_invalidated.swap(false, Ordering::Relaxed))
+    with_render_state(|state| state.render_invalidated.replace(false))
 }
 
 /// Returns true if a render invalidation is pending without clearing it.
 pub fn peek_render_invalidation() -> bool {
-    with_render_state(|state| state.render_invalidated.load(Ordering::Relaxed))
+    with_render_state(|state| state.render_invalidated.get())
 }
 
 /// Requests a new pointer-input pass without touching layout or draw dirties.
 pub fn request_pointer_invalidation() {
-    with_render_state(|state| state.pointer_invalidated.store(true, Ordering::Relaxed));
+    with_render_state(|state| state.pointer_invalidated.set(true));
 }
 
 /// Returns true if a pointer invalidation was pending and clears the flag.
 pub fn take_pointer_invalidation() -> bool {
-    with_render_state(|state| state.pointer_invalidated.swap(false, Ordering::Relaxed))
+    with_render_state(|state| state.pointer_invalidated.replace(false))
 }
 
 /// Returns true if a pointer invalidation is pending without clearing it.
 pub fn peek_pointer_invalidation() -> bool {
-    with_render_state(|state| state.pointer_invalidated.load(Ordering::Relaxed))
+    with_render_state(|state| state.pointer_invalidated.get())
 }
 
 /// Requests a focus recomposition without affecting layout/draw dirties.
 pub fn request_focus_invalidation() {
-    with_render_state(|state| state.focus_invalidated.store(true, Ordering::Relaxed));
+    with_render_state(|state| state.focus_invalidated.set(true));
 }
 
 /// Returns true if a focus invalidation was pending and clears the flag.
 pub fn take_focus_invalidation() -> bool {
-    with_render_state(|state| state.focus_invalidated.swap(false, Ordering::Relaxed))
+    with_render_state(|state| state.focus_invalidated.replace(false))
 }
 
 /// Returns true if a focus invalidation is pending without clearing it.
 pub fn peek_focus_invalidation() -> bool {
-    with_render_state(|state| state.focus_invalidated.load(Ordering::Relaxed))
+    with_render_state(|state| state.focus_invalidated.get())
 }
 
 /// Requests a **global** layout re-run.
@@ -1082,17 +1076,17 @@ pub fn peek_focus_invalidation() -> bool {
 /// Scoped repasses give you O(subtree) performance instead of O(app), and they don't
 /// invalidate caches across the entire app.
 pub fn request_layout_invalidation() {
-    with_render_state(|state| state.layout_invalidated.store(true, Ordering::Relaxed));
+    with_render_state(|state| state.layout_invalidated.set(true));
 }
 
 /// Returns true if a layout invalidation was pending and clears the flag.
 pub fn take_layout_invalidation() -> bool {
-    with_render_state(|state| state.layout_invalidated.swap(false, Ordering::Relaxed))
+    with_render_state(|state| state.layout_invalidated.replace(false))
 }
 
 /// Returns true if a layout invalidation is pending without clearing it.
 pub fn peek_layout_invalidation() -> bool {
-    with_render_state(|state| state.layout_invalidated.load(Ordering::Relaxed))
+    with_render_state(|state| state.layout_invalidated.get())
 }
 
 #[cfg(any(test, feature = "test-helpers"))]
