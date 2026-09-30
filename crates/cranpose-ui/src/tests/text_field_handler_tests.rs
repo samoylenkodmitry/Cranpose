@@ -29,7 +29,7 @@ fn focused_state(
         line_limits,
         true,
         CaretGeometryRefs {
-            node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
+            local_to_window: Rc::new(Cell::new(ProjectiveTransform::identity())),
             content_origin: Rc::default(),
             scroll_offset: Rc::new(Cell::new(0.0)),
             style: TextStyle::default(),

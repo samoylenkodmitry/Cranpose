@@ -14,7 +14,7 @@ use std::{
 };
 
 use cranpose_core::MutableState;
-use cranpose_ui_graphics::{Point, Rect, Size};
+use cranpose_ui_graphics::{Point, ProjectiveTransform, Rect, Size};
 
 use crate::{
     text::{
@@ -54,18 +54,18 @@ pub struct TextSelection {
 }
 
 /// Where a registered text's content sits in the window: layout writes the
-/// node's origin and places the text in it, and the text's highlight the
+/// node's window transform and places the text in it, and the text's highlight the
 /// size its content draws in.
 #[derive(Default)]
 pub(crate) struct SelectableGeometry {
-    node_origin: Rc<Cell<Point>>,
+    local_to_window: Rc<Cell<ProjectiveTransform>>,
     content_origin: RefCell<crate::modifier::CoordinatorRect>,
     content_size: Cell<Size>,
 }
 
 impl SelectableGeometry {
-    pub(crate) fn node_origin_sink(&self) -> Rc<Cell<Point>> {
-        Rc::clone(&self.node_origin)
+    pub(crate) fn window_transform_sink(&self) -> Rc<Cell<ProjectiveTransform>> {
+        Rc::clone(&self.local_to_window)
     }
 
     pub(crate) fn set_content_origin(&self, origin: crate::modifier::CoordinatorRect) {
@@ -77,15 +77,16 @@ impl SelectableGeometry {
     }
 
     fn rect(&self) -> Rect {
-        let origin = self.node_origin.get();
         let offset = self.content_origin.borrow().origin();
         let size = self.content_size.get();
-        Rect {
-            x: origin.x + offset.x,
-            y: origin.y + offset.y,
-            width: size.width,
-            height: size.height,
-        }
+        self.local_to_window
+            .get()
+            .bounds_for_rect(Rect::from_origin_size(offset, size))
+    }
+
+    fn content_to_window(&self) -> ProjectiveTransform {
+        let offset = self.content_origin.borrow().origin();
+        ProjectiveTransform::translation(offset.x, offset.y).then(self.local_to_window.get())
     }
 }
 
@@ -334,13 +335,14 @@ impl SelectionRegistrar {
             .iter()
             .min_by(|a, b| horizontal_gap(a).total_cmp(&horizontal_gap(b)))
         {
-            let rect = held.geometry.rect();
+            let local = held
+                .geometry
+                .content_to_window()
+                .inverse()?
+                .map_point(point);
             return Some(SelectionEdge {
                 selectable: held.key,
-                offset: held.offset_at(Point {
-                    x: point.x - rect.x,
-                    y: point.y - rect.y,
-                }),
+                offset: held.offset_at(local),
             });
         }
         let next = order
@@ -426,15 +428,10 @@ impl SelectionRegistrar {
         let (first, _) = self.ordered(selection)?;
         let range = self.covered(selection, first.selectable)?;
         self.with_selectable(first.selectable, |held| {
-            let rect = held.geometry.rect();
+            let transform = held.geometry.content_to_window();
             held.highlight(range.start, range.end)
                 .first()
-                .map(|line| Rect {
-                    x: rect.x + line.x,
-                    y: rect.y + line.y,
-                    width: line.width,
-                    height: line.height,
-                })
+                .map(|line| transform.bounds_for_rect(*line))
         })
         .flatten()
     }

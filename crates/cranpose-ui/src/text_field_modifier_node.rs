@@ -12,14 +12,15 @@ use cranpose_foundation::{
     SemanticsConfiguration, SemanticsNode, Size,
     text::{TextFieldLineLimits, TextFieldState, TextRange},
 };
-use cranpose_ui_graphics::{Brush, Color, Point};
+use cranpose_ui_graphics::{Brush, Color, Point, ProjectiveTransform};
 use cranpose_ui_layout::ceil_to_px;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TextFieldHandleMetrics {
     pub focused: bool,
     pub direct_manipulation: bool,
-    pub node_origin: Point,
+    /// Maps the field's local coordinates to its window.
+    pub local_to_window: ProjectiveTransform,
     pub padding_left: f32,
     pub padding_top: f32,
     pub scroll_offset: f32,
@@ -327,7 +328,7 @@ fn build_focus_handler(
         line_limits,
         refs.focus_options.get().show_keyboard_on_focus,
         crate::text_field_handler::CaretGeometryRefs {
-            node_origin: refs.node_origin.clone(),
+            local_to_window: refs.local_to_window.clone(),
             content_origin: refs.content_origin.clone(),
             scroll_offset: refs.scroll_offset.clone(),
             style: style.clone(),
@@ -421,7 +422,7 @@ pub(crate) struct TextFieldRefs {
     pub focus_node: Rc<Cell<Option<cranpose_core::NodeId>>>,
     pub scroll_offset: Rc<Cell<f32>>,
     pub direct_manipulation: Rc<Cell<bool>>,
-    pub node_origin: Rc<Cell<Point>>,
+    pub local_to_window: Rc<Cell<ProjectiveTransform>>,
     pub line_height: Rc<Cell<f32>>,
     pub wrap_width: Rc<Cell<Option<f32>>>,
     pub press_track: MutableState<Option<PointerPressTrack>>,
@@ -448,7 +449,7 @@ impl TextFieldRefs {
             focus_node: Rc::new(Cell::new(None::<cranpose_core::NodeId>)),
             scroll_offset: Rc::new(Cell::new(0.0_f32)),
             direct_manipulation: Rc::new(Cell::new(false)),
-            node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
+            local_to_window: Rc::new(Cell::new(ProjectiveTransform::identity())),
             line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
             wrap_width: Rc::new(Cell::new(None::<f32>)),
             press_track: mutableStateOf(None::<PointerPressTrack>),
@@ -653,11 +654,6 @@ impl TextFieldModifierNode {
         };
 
         Rc::new(move |event: PointerEvent| {
-            refs.node_origin.set(Point {
-                x: event.global_position.x - event.position.x,
-                y: event.global_position.y - event.position.y,
-            });
-
             let content = refs.content_origin.borrow().origin();
             let click_x = (event.position.x - content.x + refs.scroll_offset.get()).max(0.0);
             let click_y = (event.position.y - content.y).max(0.0);
@@ -817,8 +813,8 @@ impl TextFieldModifierNode {
         *self.refs.is_focused.borrow()
     }
 
-    pub(crate) fn window_origin_sink(&self) -> Rc<Cell<Point>> {
-        self.refs.node_origin.clone()
+    pub(crate) fn window_transform_sink(&self) -> Rc<Cell<ProjectiveTransform>> {
+        self.refs.local_to_window.clone()
     }
 
     pub(crate) fn layout_handle(&self) -> TextFieldLayoutHandle {
@@ -1009,13 +1005,7 @@ impl ModifierNode for TextFieldModifierNode {
         Some(self)
     }
 
-    fn as_semantics_node(&self) -> Option<&dyn SemanticsNode> {
-        (!self.decorated).then_some(self)
-    }
-
-    fn as_semantics_node_mut(&mut self) -> Option<&mut dyn SemanticsNode> {
-        if self.decorated { None } else { Some(self) }
-    }
+    cranpose_foundation::impl_semantics_node!();
 
     fn as_pointer_input_node(&self) -> Option<&dyn PointerInputNode> {
         (!self.decorated).then_some(self)
@@ -1137,7 +1127,7 @@ impl DrawModifierNode for TextFieldModifierNode {
         let node_id = self.refs.node_id.clone();
         let pan_resolver = self.cached_pan_resolver.clone();
         let handle_controller = self.handle_controller.clone();
-        let node_origin = self.refs.node_origin.clone();
+        let local_to_window = self.refs.local_to_window.clone();
         let direct_manipulation = self.refs.direct_manipulation.clone();
         let press_track = self.refs.press_track;
         let gesture_claimed = self.refs.gesture_claimed.clone();
@@ -1149,7 +1139,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     controller.publish(TextFieldHandleMetrics {
                         focused: false,
                         direct_manipulation: false,
-                        node_origin: node_origin.get(),
+                        local_to_window: local_to_window.get(),
                         padding_left: 0.0,
                         padding_top: 0.0,
                         scroll_offset: 0.0,
@@ -1176,7 +1166,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                 controller.publish(TextFieldHandleMetrics {
                     focused: true,
                     direct_manipulation: direct_manipulation.get(),
-                    node_origin: node_origin.get(),
+                    local_to_window: local_to_window.get(),
                     padding_left: content_origin.borrow().origin().x,
                     padding_top: content_origin.borrow().origin().y,
                     scroll_offset: pan,
@@ -1335,7 +1325,9 @@ impl DrawModifierNode for TextFieldModifierNode {
 
 impl SemanticsNode for TextFieldModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
-        merge_text_field_semantics(self.state, self.line_limits, config);
+        if !self.decorated {
+            merge_text_field_semantics(self.state, self.line_limits, config);
+        }
     }
 
     /// Neither modal nor hidden, but the field's text and selection are read
@@ -1573,11 +1565,11 @@ impl ModifierNodeElement for TextFieldElement {
     }
 
     fn capabilities(&self) -> NodeCapabilities {
-        let drawn = NodeCapabilities::LAYOUT | NodeCapabilities::DRAW;
+        let drawn = NodeCapabilities::LAYOUT | NodeCapabilities::DRAW | NodeCapabilities::SEMANTICS;
         if self.decorator.is_some() {
             drawn
         } else {
-            drawn | NodeCapabilities::SEMANTICS | NodeCapabilities::POINTER_INPUT
+            drawn | NodeCapabilities::POINTER_INPUT
         }
     }
 

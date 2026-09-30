@@ -9,7 +9,7 @@ mod screens;
 use std::cell::Cell;
 
 use cranpose::prelude::*;
-pub use screens::workspace::FRAME_OBSERVER;
+pub use screens::workspace::{FRAME_OBSERVER, WorkspaceFrame, WorkspaceMode};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scenario {
@@ -54,13 +54,14 @@ impl Scenario {
     }
 }
 
-/// The device's Roboto faces, read from the same two files the Compose app
+/// The device's Roboto faces, read from the same files the Compose app
 /// loads, so both frameworks shape and measure identical fonts. Read once and
 /// kept for the life of the process.
 #[cfg(target_os = "android")]
 fn system_roboto() -> &'static [&'static [u8]] {
     let faces: Vec<&'static [u8]> = [
         "/system/fonts/Roboto-Regular.ttf",
+        "/system/fonts/Roboto-Medium.ttf",
         "/system/fonts/Roboto-Bold.ttf",
     ]
     .iter()
@@ -115,6 +116,7 @@ struct Launch {
     depth: usize,
     chips: usize,
     workspace: screens::workspace::WorkspaceMode,
+    still: bool,
 }
 
 impl Launch {
@@ -149,6 +151,7 @@ impl Launch {
             workspace: screens::workspace::WorkspaceMode::from_name(
                 args.string("mode").unwrap_or("quotes"),
             ),
+            still: args.boolean("still").unwrap_or(false),
         }
     }
 }
@@ -194,7 +197,9 @@ pub fn PerfCompareApp() {
                     launch.depth,
                     launch.chips,
                 ),
-                Scenario::Workspace => screens::workspace::WorkspaceFrame(launch.workspace),
+                Scenario::Workspace => {
+                    screens::workspace::WorkspaceFrame(launch.workspace, launch.still)
+                }
             }
         },
     );

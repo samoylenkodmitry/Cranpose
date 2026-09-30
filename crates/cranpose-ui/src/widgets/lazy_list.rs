@@ -1405,13 +1405,8 @@ fn LazyColumnNode(
 ) -> NodeId {
     cranpose_core::debug_label_current_scope("LazyColumnNode");
 
-    let viewport: Rc<Cell<cranpose_ui_graphics::Rect>> = cranpose_core::remember(|| {
-        Rc::new(Cell::new(cranpose_ui_graphics::Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-        }))
+    let viewport = cranpose_core::remember(|| {
+        Rc::new(Cell::new(cranpose_ui_graphics::WindowCoordinates::default()))
     })
     .with(Rc::clone);
     let responder = {
@@ -1420,10 +1415,11 @@ fn LazyColumnNode(
             let viewport = Rc::clone(&viewport);
             crate::bring_into_view::BringIntoViewResponder::new(move |caret, ime_bottom| {
                 let vp = viewport.get();
-                if vp.width <= 0.0 || vp.height <= 0.0 {
+                if vp.size.width <= 0.0 || vp.size.height <= 0.0 {
                     return;
                 }
-                let delta = crate::bring_into_view::scroll_delta_to_reveal(caret, vp, ime_bottom);
+                let delta =
+                    crate::bring_into_view::local_scroll_delta_to_reveal(caret, vp, ime_bottom);
                 if delta.abs() > 0.5 {
                     state.dispatch_scroll_delta(-delta);
                 }
@@ -1431,7 +1427,7 @@ fn LazyColumnNode(
         })
         .with(|r| r.clone())
     };
-    let modifier = modifier.report_window_rect(Rc::clone(&viewport));
+    let modifier = modifier.report_window_coordinates(Rc::clone(&viewport));
 
     let mut node: Option<NodeId> = None;
     {

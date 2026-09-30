@@ -5,6 +5,28 @@
 
 use cranpose_ui_graphics::Rect;
 
+/// Finds the first matching node in a semantics subtree, including its root.
+pub fn find_semantics_node<'a>(
+    node: &'a cranpose_ui::SemanticsNode,
+    predicate: &impl Fn(&cranpose_ui::SemanticsNode) -> bool,
+) -> Option<&'a cranpose_ui::SemanticsNode> {
+    if predicate(node) {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_semantics_node(child, predicate))
+}
+
+/// Checks a semantics subtree for an exact accessible description or text value.
+pub fn semantics_contain_text(node: &cranpose_ui::SemanticsNode, text: &str) -> bool {
+    find_semantics_node(node, &|node| {
+        node.description.as_deref() == Some(text)
+            || matches!(&node.role, cranpose_ui::SemanticsRole::Text { value } if value.as_str() == text)
+    })
+    .is_some()
+}
+
 /// Pump a bounded frame window and assert measured frame work stays above `min_fps`.
 ///
 /// The metric line is printed in a stable machine-readable form:

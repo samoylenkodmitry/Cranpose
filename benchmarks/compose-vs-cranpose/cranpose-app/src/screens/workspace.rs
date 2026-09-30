@@ -1,7 +1,7 @@
 //! The trading workspace of gpui-fast's `gpui_perf` showcase
 //! (github.com/longbridge/gpui-fast, `crates/gpui_perf/src/showcase`), the
 //! most complex screen it measures, ported element for element: the
-//! showcase's frame (toolbar, a sidebar of 243 pages, the page header and
+//! showcase's frame (toolbar, a sidebar of 244 pages, the page header and
 //! the frame-stats bar) around a docked window of market panels that a
 //! timer streams quotes into.
 //!
@@ -29,11 +29,20 @@ use std::{
 
 use cranpose::{LazyItems, prelude::*};
 use cranpose_core::{MutableState, delay, key, mutableStateOf};
-use cranpose_foundation::lazy::{LazyListState, rememberLazyListState};
+use cranpose_foundation::{
+    SemanticsWidgetRole,
+    lazy::{LazyListState, rememberLazyListState},
+    text::{TextFieldLineLimits, TextFieldState},
+};
 use cranpose_ui::{
-    DashPathEffect, DrawStyle, Path, collect_is_hovered_as_state, rememberMutableInteractionSource,
-    text::{FontWeight, ParagraphStyle, SpanStyle, TextUnit},
-    widgets::{FlowRow, FlowRowSpec},
+    BasicTextFieldDecorated, BasicTextFieldOptions, DashPathEffect, DrawStyle, FocusRequester,
+    Path, ScrollState, WindowCoordinates, collect_is_hovered_as_state,
+    mouse_input::{MouseInput, MouseInputTarget, local_mouse_input},
+    rememberMutableInteractionSource,
+    text::{
+        FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, ParagraphStyle,
+        PlatformParagraphStyle, SpanStyle, TextUnit,
+    },
 };
 
 const SYMBOLS: usize = 200;
@@ -49,10 +58,9 @@ const SELECTED: usize = 7;
 const STREAM_EVERY: Duration = Duration::from_millis(16);
 const SCROLL_STEP: f32 = 32.0;
 
-/// Called on the main thread at the start of every frame, before the frame's
-/// work, with the quote ticks streamed so far, by a harness that links this
-/// crate to measure what a frame costs, as gpui_perf's `--auto` samples its
-/// main thread.
+/// Called on the main thread from each workspace frame-clock callback with
+/// the quote ticks streamed so far. A harness can use these UI update samples
+/// to measure main-thread work; presentation timing is measured externally.
 pub static FRAME_OBSERVER: OnceLock<fn(u64)> = OnceLock::new();
 
 /// What the workspace does while it is measured, as gpui_perf's workspace
@@ -65,7 +73,7 @@ pub enum WorkspaceMode {
     /// quotes every 16 ms.
     Scroll,
     /// The pointer moves over the watchlist's rows, with 8 quotes every
-    /// 16 ms; an external driver moves it.
+    /// 16 ms. Mouse events traverse the normal hit-testing path each frame.
     Hover,
 }
 
@@ -117,24 +125,26 @@ fn change_color(change: f64) -> Color {
     if change >= 0.0 { SUCCESS } else { DANGER }
 }
 
-/// Text in the showcase's type scale: `size` px with Tailwind's line height
-/// for it.
 fn style(size: f32, color: Color, weight: Option<FontWeight>) -> TextStyle {
-    let line = match size as u32 {
-        0..=12 => 16.0,
-        13..=14 => 20.0,
-        15..=20 => 28.0,
-        _ => 32.0,
-    };
     TextStyle {
         span_style: SpanStyle {
             color: Some(color),
             font_size: TextUnit::Sp(size),
             font_weight: weight,
+            font_feature_settings: Some("tnum".to_string()),
             ..Default::default()
         },
         paragraph_style: ParagraphStyle {
-            line_height: TextUnit::Em(line / size),
+            line_height: TextUnit::Em(1.618_034),
+            line_height_style: Some(LineHeightStyle {
+                alignment: LineHeightAlignment::Center,
+                trim: LineHeightTrim::None,
+                ..Default::default()
+            }),
+            platform_style: Some(PlatformParagraphStyle {
+                include_font_padding: Some(false),
+                ..Default::default()
+            }),
             ..Default::default()
         },
     }
@@ -165,29 +175,37 @@ fn sm(color: Color) -> TextStyle {
 
 /// Draws a hairline along each side `sides` names: left, top, right, bottom.
 fn hairlines(modifier: Modifier, sides: [bool; 4]) -> Modifier {
-    modifier.draw_behind(move |scope| {
-        let size = scope.size();
-        let [left, top, right, bottom] = sides;
-        let brush = Brush::solid(BORDER);
-        let line = |x: f32, y: f32, width: f32, height: f32| Rect {
-            x,
-            y,
-            width,
-            height,
-        };
-        if left {
-            scope.draw_rect_at(line(0.0, 0.0, 1.0, size.height), brush.clone());
-        }
-        if top {
-            scope.draw_rect_at(line(0.0, 0.0, size.width, 1.0), brush.clone());
-        }
-        if right {
-            scope.draw_rect_at(line(size.width - 1.0, 0.0, 1.0, size.height), brush.clone());
-        }
-        if bottom {
-            scope.draw_rect_at(line(0.0, size.height - 1.0, size.width, 1.0), brush);
-        }
-    })
+    let [left, top, right, bottom] = sides;
+    modifier
+        .draw_behind(move |scope| {
+            let size = scope.size();
+            let [left, top, right, bottom] = sides;
+            let brush = Brush::solid(BORDER);
+            let line = |x: f32, y: f32, width: f32, height: f32| Rect {
+                x,
+                y,
+                width,
+                height,
+            };
+            if left {
+                scope.draw_rect_at(line(0.0, 0.0, 1.0, size.height), brush.clone());
+            }
+            if top {
+                scope.draw_rect_at(line(0.0, 0.0, size.width, 1.0), brush.clone());
+            }
+            if right {
+                scope.draw_rect_at(line(size.width - 1.0, 0.0, 1.0, size.height), brush.clone());
+            }
+            if bottom {
+                scope.draw_rect_at(line(0.0, size.height - 1.0, size.width, 1.0), brush);
+            }
+        })
+        .padding_each(
+            if left { 1.0 } else { 0.0 },
+            if top { 1.0 } else { 0.0 },
+            if right { 1.0 } else { 0.0 },
+            if bottom { 1.0 } else { 0.0 },
+        )
 }
 
 fn row_spec(gap: f32) -> RowSpec {
@@ -555,12 +573,55 @@ fn quote_symbol(tick: usize, i: usize) -> usize {
 /// The width and height of gpui-fast's showcase window, in points.
 const WINDOW: (f32, f32) = (1280.0, 820.0);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScrollTarget {
+    Off,
+    Sidebar,
+    Watchlist,
+}
+
+struct WatchlistHover {
+    viewport: Rc<Cell<WindowCoordinates>>,
+    frame: Cell<usize>,
+    mouse: MouseInput,
+}
+
+impl PartialEq for WatchlistHover {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+
+impl WatchlistHover {
+    fn advance(&self) {
+        let viewport = self.viewport.get();
+        let rows = (viewport.size.height / ROW_HEIGHT).floor() as usize;
+        if rows == 0 || viewport.size.width <= 0.0 {
+            return;
+        }
+        let frame = self.frame.get();
+        self.frame.set(frame.wrapping_add(1));
+        let phase = frame % (2 * rows);
+        let row = if phase < rows {
+            phase
+        } else {
+            2 * rows - 1 - phase
+        };
+        self.mouse.move_to(
+            MouseInputTarget::Primary,
+            viewport
+                .local_to_window
+                .map_point(Point::new(120.0, ROW_HEIGHT * (row as f32 + 0.5))),
+        );
+    }
+}
+
 /// The workspace at the showcase window's size in points. A screen of another
 /// width draws it at the density that makes it span that width, so every
 /// device lays out the same 1280 × 820 points: the rows, panels and text a
 /// frame draws are the showcase's own.
 #[composable]
-pub fn WorkspaceFrame(mode: WorkspaceMode) {
+pub fn WorkspaceFrame(mode: WorkspaceMode, still: bool) {
     BoxWithConstraints(Modifier::empty().fill_max_size(), move |scope| {
         // gpui_perf's window keeps its size; a narrower screen shows all of
         // it scaled down, as the Compose app does.
@@ -577,19 +638,48 @@ pub fn WorkspaceFrame(mode: WorkspaceMode) {
         } else {
             canvas
         };
-        Box(canvas, BoxSpec::default(), move || WorkspaceScreen(mode));
+        Box(canvas, BoxSpec::default(), move || {
+            WorkspaceScreen(mode, still)
+        });
     });
 }
 
 #[composable]
-pub fn WorkspaceScreen(mode: WorkspaceMode) {
+fn WorkspaceScreen(mode: WorkspaceMode, still: bool) {
     let market = remember(|| Rc::new(Market::new())).with(|market| market.clone());
     let watchlist = rememberLazyListState();
+    let sidebar = cranpose_ui::rememberScrollState!();
+    let streaming = rememberMutableStateOf(move || !still);
+    let scroll_mode = rememberMutableStateOf(move || {
+        if mode == WorkspaceMode::Scroll && !still {
+            ScrollTarget::Watchlist
+        } else {
+            ScrollTarget::Off
+        }
+    });
     let fps = rememberMutableStateOf(|| 0.0f32);
+    let hover = if mode == WorkspaceMode::Hover && !still {
+        Some(
+            remember(|| {
+                Rc::new(WatchlistHover {
+                    viewport: Rc::new(Cell::new(WindowCoordinates::default())),
+                    frame: Cell::new(0),
+                    mouse: local_mouse_input(),
+                })
+            })
+            .with(Clone::clone),
+        )
+    } else {
+        None
+    };
 
     let stream = market.clone();
-    LaunchedEffectAsync(mode as u8, move |scope| {
+    let live = streaming.get();
+    LaunchedEffectAsync((mode as u8, live), move |scope| {
         std::boxed::Box::pin(async move {
+            if !live {
+                return;
+            }
             let quotes = mode.quotes_per_tick();
             while scope.is_active() {
                 delay(STREAM_EVERY).await;
@@ -601,58 +691,34 @@ pub fn WorkspaceScreen(mode: WorkspaceMode) {
         })
     });
     let ticked = market.clone();
-    LaunchedEffectAsync(mode as u8, move |scope| {
-        std::boxed::Box::pin(async move {
-            let clock = scope.runtime().frame_clock();
-            let mut direction = 1.0f32;
-            let mut window_start = clock.next_frame().await;
-            let mut window_frames = 0u32;
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
-                }
-                if let Some(observe) = FRAME_OBSERVER.get() {
-                    observe(ticked.ticks.get() as u64);
-                }
-                window_frames += 1;
-                // The frame-stats bar samples twice a second, as the
-                // showcase's does.
-                if now.saturating_sub(window_start) >= 500_000_000 {
-                    fps.set(window_frames as f32 * 1e9 / now.saturating_sub(window_start) as f32);
-                    window_start = now;
-                    window_frames = 0;
-                }
-                if mode == WorkspaceMode::Scroll {
-                    if !watchlist.can_scroll_forward_non_reactive() {
-                        direction = -1.0;
-                    } else if !watchlist.can_scroll_backward_non_reactive() {
-                        direction = 1.0;
-                    }
-                    watchlist.dispatch_scroll_delta(-SCROLL_STEP * direction);
-                }
-            }
-        })
+    let hovered = hover.clone();
+    let target = scroll_mode.get();
+    LaunchedEffectAsync(target as u8, move |scope| {
+        std::boxed::Box::pin(run_workspace_frames(
+            scope, ticked, hovered, target, watchlist, sidebar, fps,
+        ))
     });
 
     Column(
         Modifier::empty().fill_max_size().background(BACKGROUND),
         ColumnSpec::default(),
         move || {
-            ShowcaseToolbar();
+            ShowcaseToolbar(scroll_mode, streaming);
             let market = market.clone();
+            let hover = hover.clone();
             Row(
                 Modifier::empty().fill_max_width().weight(1.0),
                 RowSpec::default(),
                 move || {
-                    GallerySidebar();
+                    GallerySidebar(sidebar);
                     let market = market.clone();
+                    let hover = hover.clone();
                     Column(
                         Modifier::empty().weight(1.0).fill_max_height(),
                         ColumnSpec::default(),
                         move || {
                             PageHeader();
-                            Workspace(market.clone(), watchlist);
+                            Workspace(market.clone(), watchlist, hover.clone());
                         },
                     );
                 },
@@ -662,18 +728,67 @@ pub fn WorkspaceScreen(mode: WorkspaceMode) {
     );
 }
 
+async fn run_workspace_frames(
+    scope: cranpose_core::LaunchedEffectScope,
+    ticked: Rc<Market>,
+    hovered: Option<Rc<WatchlistHover>>,
+    target: ScrollTarget,
+    watchlist: LazyListState,
+    sidebar: ScrollState,
+    fps: MutableState<f32>,
+) {
+    let clock = scope.runtime().frame_clock();
+    let mut direction = 1.0f32;
+    let mut window_start = clock.next_frame().await;
+    let mut window_frames = 0u32;
+    while scope.is_active() {
+        let now = clock.next_frame().await;
+        if !scope.is_active() {
+            break;
+        }
+        if let Some(observe) = FRAME_OBSERVER.get() {
+            observe(ticked.ticks.get() as u64);
+        }
+        if let Some(hover) = &hovered {
+            hover.advance();
+        }
+        window_frames += 1;
+        // The frame-stats bar samples twice a second, as the
+        // showcase's does.
+        if now.saturating_sub(window_start) >= 500_000_000 {
+            fps.set(window_frames as f32 * 1e9 / now.saturating_sub(window_start) as f32);
+            window_start = now;
+            window_frames = 0;
+        }
+        if target == ScrollTarget::Watchlist {
+            if !watchlist.can_scroll_forward_non_reactive() {
+                direction = -1.0;
+            } else if !watchlist.can_scroll_backward_non_reactive() {
+                direction = 1.0;
+            }
+            watchlist.dispatch_scroll_delta(-SCROLL_STEP * direction);
+        } else if target == ScrollTarget::Sidebar {
+            let position = sidebar.value_non_reactive();
+            if position >= sidebar.max_value() {
+                direction = -1.0;
+            } else if position <= 0.0 {
+                direction = 1.0;
+            }
+            sidebar.dispatch_raw_delta(SCROLL_STEP * direction);
+        }
+    }
+}
+
 #[composable]
-fn ShowcaseToolbar() {
+fn ShowcaseToolbar(scroll_mode: MutableState<ScrollTarget>, streaming: MutableState<bool>) {
     Row(
         hairlines(
-            Modifier::empty()
-                .fill_max_width()
-                .height(40.0)
-                .padding_horizontal(16.0),
+            Modifier::empty().fill_max_width().height(40.0),
             [false, false, false, true],
-        ),
+        )
+        .padding_horizontal(16.0),
         row_spec(16.0),
-        || {
+        move || {
             Box(
                 Modifier::empty()
                     .height(24.0)
@@ -685,7 +800,7 @@ fn ShowcaseToolbar() {
                     Label(
                         "cranpose",
                         Modifier::empty(),
-                        style(14.0, Color::WHITE, None),
+                        style(14.0, Color::WHITE, Some(FontWeight::MEDIUM)),
                     );
                 },
             );
@@ -696,33 +811,56 @@ fn ShowcaseToolbar() {
                     .background(MUTED)
                     .rounded_corners(RADIUS)
                     .padding(2.0),
-                row_spec(0.0),
-                || {
-                    for (ix, label) in ["Off", "Sidebar", "Page", "Table", "List", "Watchlist"]
-                        .into_iter()
-                        .enumerate()
-                    {
-                        let selected = ix == 0;
+                row_spec(2.0),
+                move || {
+                    for (label, target) in [
+                        ("Off", Some(ScrollTarget::Off)),
+                        ("Sidebar", Some(ScrollTarget::Sidebar)),
+                        ("Page", None),
+                        ("Table", None),
+                        ("List", None),
+                        ("Watchlist", Some(ScrollTarget::Watchlist)),
+                    ] {
+                        let selected = target == Some(scroll_mode.get());
+                        let modifier = Modifier::empty().height(24.0).semantics(move |config| {
+                            config.content_description = Some(format!("Auto-scroll {label}"));
+                            config.enabled = target.is_some();
+                            config.selected = Some(selected);
+                            config.role = Some(SemanticsWidgetRole::Tab);
+                        });
+                        let modifier = if let Some(target) = target {
+                            modifier.selectable(
+                                selected,
+                                Some(SemanticsWidgetRole::Tab),
+                                move || scroll_mode.set(target),
+                            )
+                        } else {
+                            modifier
+                        };
                         Box(
-                            Modifier::empty().height(24.0).padding_horizontal(8.0).then(
-                                if selected {
+                            modifier
+                                .then(if selected {
                                     Modifier::empty()
                                         .background(BACKGROUND)
                                         .rounded_corners(RADIUS_SM)
                                 } else {
                                     Modifier::empty()
-                                },
-                            ),
+                                })
+                                .padding_horizontal(8.0),
                             centered(),
                             move || {
                                 Label(
                                     label,
                                     Modifier::empty(),
-                                    sm(if selected {
-                                        FOREGROUND
-                                    } else {
-                                        MUTED_FOREGROUND
-                                    }),
+                                    style(
+                                        14.0,
+                                        if selected {
+                                            FOREGROUND
+                                        } else {
+                                            MUTED_FOREGROUND
+                                        },
+                                        selected.then_some(FontWeight::MEDIUM),
+                                    ),
                                 );
                             },
                         );
@@ -734,73 +872,115 @@ fn ShowcaseToolbar() {
                 BoxSpec::default(),
                 || {},
             );
-            for (label, on) in [
-                ("Refresh data", false),
-                ("Stream quotes", true),
-                ("Retained views", true),
-            ] {
-                Row(Modifier::empty(), row_spec(8.0), move || {
-                    Box(
-                        Modifier::empty()
-                            .size_points(28.0, 16.0)
-                            .background(if on { PRIMARY } else { INPUT })
-                            .rounded_corners(8.0),
-                        BoxSpec::new().content_alignment(if on {
-                            Alignment::CENTER_END
-                        } else {
-                            Alignment::CENTER_START
-                        }),
-                        || {
-                            Box(
-                                Modifier::empty()
-                                    .padding(2.0)
-                                    .size_points(12.0, 12.0)
-                                    .background(BACKGROUND)
-                                    .rounded_corners(6.0),
-                                BoxSpec::default(),
-                                || {},
-                            );
-                        },
-                    );
-                    Label(label, Modifier::empty(), sm(FOREGROUND));
-                });
-            }
+            ShowcaseToggles(streaming);
         },
     );
 }
 
-const GROUPS: [(&str, usize); 12] = [
-    ("Getting started", 6),
-    ("Inputs", 32),
-    ("Buttons", 18),
-    ("Data display", 36),
-    ("Feedback", 22),
-    ("Navigation", 24),
-    ("Overlays", 20),
-    ("Layout", 22),
-    ("Forms", 26),
-    ("Charts", 16),
-    ("Media", 12),
-    ("Applications", 9),
-];
-const PAGE_WORDS: [&str; 12] = [
+#[composable]
+fn ShowcaseToggles(streaming: MutableState<bool>) {
+    for (label, on) in [
+        ("Refresh data", false),
+        ("Stream quotes", streaming.get()),
+        ("Retained views", true),
+    ] {
+        let modifier = Modifier::empty().height(24.0);
+        let modifier = if label == "Stream quotes" {
+            modifier.toggleable(
+                on,
+                Some(label.to_string()),
+                Some(SemanticsWidgetRole::Switch),
+                move |next| streaming.set(next),
+            )
+        } else {
+            modifier.semantics(move |config| {
+                config.content_description = Some(label.to_string());
+                config.enabled = false;
+                config.toggled = Some(on);
+                config.role = Some(SemanticsWidgetRole::Switch);
+            })
+        };
+        Row(modifier.padding_horizontal(4.0), row_spec(8.0), move || {
+            Box(
+                Modifier::empty()
+                    .size_points(28.0, 16.0)
+                    .background(if on { PRIMARY } else { INPUT })
+                    .rounded_corners(8.0),
+                BoxSpec::new().content_alignment(if on {
+                    Alignment::CENTER_END
+                } else {
+                    Alignment::CENTER_START
+                }),
+                move || {
+                    Box(
+                        Modifier::empty()
+                            .padding(2.0)
+                            .size_points(12.0, 12.0)
+                            .background(if on { PRIMARY_FOREGROUND } else { BACKGROUND })
+                            .rounded_corners(6.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+            Label(label, Modifier::empty(), sm(FOREGROUND));
+        });
+    }
+}
+
+const COMPONENTS: [&str; 48] = [
     "Accordion",
+    "Alert",
+    "Avatar",
     "Badge",
+    "Breadcrumb",
+    "Button",
     "Calendar",
+    "Card",
+    "Checkbox",
+    "Clipboard",
+    "Collapsible",
+    "Combobox",
+    "DataTable",
+    "DatePicker",
+    "Dialog",
     "Dropdown",
     "Editor",
     "Form",
-    "Grid",
-    "Hover card",
+    "GroupBox",
+    "Icon",
+    "Image",
     "Input",
     "Kbd",
     "Label",
+    "List",
     "Menu",
+    "Notification",
+    "NumberInput",
+    "Pagination",
+    "Popover",
+    "Progress",
+    "Radio",
+    "Rating",
+    "Resizable",
+    "Scrollbar",
+    "Select",
+    "Separator",
+    "Settings",
+    "Sheet",
+    "Sidebar",
+    "Skeleton",
+    "Slider",
+    "Spinner",
+    "Switch",
+    "Table",
+    "Tabs",
+    "Tag",
+    "Tooltip",
 ];
 
 #[composable]
-fn GallerySidebar() {
-    let scroll = cranpose_ui::rememberScrollState!();
+fn GallerySidebar(scroll: ScrollState) {
     Column(
         hairlines(
             Modifier::empty()
@@ -819,56 +999,76 @@ fn GallerySidebar() {
                     .padding_each(8.0, 0.0, 8.0, 16.0),
                 ColumnSpec::default(),
                 || {
-                    let mut page = 0usize;
-                    for (title, pages) in GROUPS {
-                        Label(
-                            title,
-                            Modifier::empty().padding_each(8.0, 16.0, 8.0, 4.0),
-                            style(12.0, MUTED_FOREGROUND, None),
-                        );
-                        for _ in 0..pages {
-                            let selected = page == 241;
-                            let name = if selected {
-                                "Trading workspace".to_string()
-                            } else {
-                                format!("{} {}", PAGE_WORDS[page % PAGE_WORDS.len()], page / 12 + 1)
-                            };
-                            Box(
-                                Modifier::empty()
-                                    .fill_max_width()
-                                    .height(28.0)
-                                    .padding_horizontal(8.0)
-                                    .then(if selected {
-                                        Modifier::empty()
-                                            .background(SIDEBAR_ACCENT)
-                                            .rounded_corners(RADIUS)
-                                    } else {
-                                        Modifier::empty()
-                                    }),
-                                BoxSpec::new().content_alignment(Alignment::CENTER_START),
-                                move || {
-                                    Label(
-                                        name.clone(),
-                                        Modifier::empty(),
-                                        style(14.0, FOREGROUND, None),
-                                    );
-                                },
-                            );
-                            page += 1;
-                        }
+                    SidebarGroup(
+                        "Getting started",
+                        &["Introduction", "Installation", "Theming"],
+                        "",
+                    );
+                    SidebarGroup("Components", &COMPONENTS, "");
+                    for (title, suffix) in [
+                        ("Recipes", "recipes"),
+                        ("Patterns", "patterns"),
+                        ("Layouts", "layouts"),
+                        ("Accessibility", "accessibility"),
+                    ] {
+                        SidebarGroup(title, &COMPONENTS, suffix);
                     }
+                    SidebarGroup("Applications", &["Trading workspace"], "");
                 },
             );
             Label(
                 "3 unread",
                 hairlines(
-                    Modifier::empty()
-                        .fill_max_width()
-                        .padding_symmetric(16.0, 8.0),
+                    Modifier::empty().fill_max_width(),
                     [false, true, false, false],
-                ),
+                )
+                .padding_symmetric(16.0, 8.0),
                 xs(MUTED_FOREGROUND),
             );
+        },
+    );
+}
+
+#[composable]
+fn SidebarGroup(title: &'static str, pages: &'static [&'static str], suffix: &'static str) {
+    Column(
+        Modifier::empty(),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(2.0)),
+        move || {
+            Label(
+                title,
+                Modifier::empty().padding_each(8.0, 16.0, 8.0, 4.0),
+                style(12.0, MUTED_FOREGROUND, Some(FontWeight::MEDIUM)),
+            );
+            for &name in pages {
+                let selected = name == "Trading workspace";
+                Box(
+                    Modifier::empty()
+                        .fill_max_width()
+                        .height(28.0)
+                        .then(if selected {
+                            Modifier::empty()
+                                .background(SIDEBAR_ACCENT)
+                                .rounded_corners(RADIUS)
+                        } else {
+                            Modifier::empty()
+                        })
+                        .padding_horizontal(8.0),
+                    BoxSpec::new().content_alignment(Alignment::CENTER_START),
+                    move || {
+                        let label = if suffix.is_empty() {
+                            name.to_string()
+                        } else {
+                            format!("{name} {suffix}")
+                        };
+                        Label(
+                            label,
+                            Modifier::empty(),
+                            style(14.0, FOREGROUND, selected.then_some(FontWeight::MEDIUM)),
+                        );
+                    },
+                );
+            }
         },
     );
 }
@@ -877,17 +1077,16 @@ fn GallerySidebar() {
 fn PageHeader() {
     Column(
         hairlines(
-            Modifier::empty()
-                .fill_max_width()
-                .padding_symmetric(24.0, 16.0),
+            Modifier::empty().fill_max_width(),
             [false, false, false, true],
-        ),
+        )
+        .padding_symmetric(24.0, 16.0),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(4.0)),
         || {
             Label(
                 "Trading workspace",
                 Modifier::empty(),
-                style(20.0, FOREGROUND, Some(FontWeight::BOLD)),
+                style(20.0, FOREGROUND, Some(FontWeight::SEMI_BOLD)),
             );
             Label(
                 "Docked market panels, every one subscribed to a feed of streaming quotes.",
@@ -904,22 +1103,19 @@ fn FrameStats(fps: MutableState<f32>) {
         hairlines(
             Modifier::empty()
                 .fill_max_width()
-                .height(24.0)
-                .padding_horizontal(16.0),
+                .height(28.0)
+                .background(SIDEBAR),
             [false, true, false, false],
-        ),
-        row_spec(16.0),
+        )
+        .padding_horizontal(16.0),
+        row_spec(12.0),
         move || {
             Label(
-                format!("{:.0} fps", fps.get()),
+                format!("{} UI updates/s", fps.get() as u32),
                 Modifier::empty(),
                 xs(MUTED_FOREGROUND),
             );
-            Label(
-                "frames drawn by cranpose",
-                Modifier::empty(),
-                xs(MUTED_FOREGROUND),
-            );
+            Label("cranpose", Modifier::empty(), xs(MUTED_FOREGROUND));
         },
     );
 }
@@ -938,7 +1134,7 @@ fn LetterIcon(letter: &'static str, side: f32, fill: Color, color: Color, round:
             Label(
                 letter,
                 Modifier::empty(),
-                style(side * 0.6, color, Some(FontWeight::BOLD)),
+                style(side * 0.6, color, Some(FontWeight::SEMI_BOLD)),
             );
         },
     );
@@ -948,21 +1144,21 @@ fn LetterIcon(letter: &'static str, side: f32, fill: Color, color: Color, round:
 fn Chip(label: &'static str, selected: bool, vertical: f32, text_size: f32) {
     Box(
         Modifier::empty()
-            .padding_symmetric(8.0, vertical)
             .then(if selected {
                 Modifier::empty()
                     .background(SECONDARY)
                     .rounded_corners(RADIUS_SM)
             } else {
                 Modifier::empty()
-            }),
+            })
+            .padding_symmetric(8.0, vertical),
         BoxSpec::default(),
         move || {
             Label(
                 label,
                 Modifier::empty(),
                 if selected {
-                    style(text_size, FOREGROUND, None)
+                    style(text_size, FOREGROUND, Some(FontWeight::MEDIUM))
                 } else {
                     style(text_size, MUTED_FOREGROUND, None)
                 },
@@ -972,19 +1168,20 @@ fn Chip(label: &'static str, selected: bool, vertical: f32, text_size: f32) {
 }
 
 #[composable]
-fn Workspace(market: Rc<Market>, watchlist: LazyListState) {
+fn Workspace(market: Rc<Market>, watchlist: LazyListState, hover: Option<Rc<WatchlistHover>>) {
     Column(
         Modifier::empty().fill_max_width().weight(1.0),
         ColumnSpec::default(),
         move || {
             WorkspaceToolbar();
             let dock = market.clone();
+            let hover = hover.clone();
             Row(
                 Modifier::empty().fill_max_width().weight(1.0),
                 RowSpec::default(),
                 move || {
                     IconSidebar();
-                    Dock(dock.clone(), watchlist);
+                    Dock(dock.clone(), watchlist, hover.clone());
                 },
             );
             StatusBar(market.status);
@@ -996,15 +1193,11 @@ fn Workspace(market: Rc<Market>, watchlist: LazyListState) {
 fn WorkspaceToolbar() {
     Row(
         hairlines(
-            Modifier::empty()
-                .fill_max_width()
-                .height(40.0)
-                .padding_horizontal(12.0),
+            Modifier::empty().fill_max_width().height(40.0),
             [false, false, false, true],
-        ),
-        RowSpec::new()
-            .horizontal_arrangement(LinearArrangement::SpaceBetween)
-            .vertical_alignment(VerticalAlignment::CenterVertically),
+        )
+        .padding_horizontal(12.0),
+        row_spec(16.0),
         || {
             Row(Modifier::empty(), row_spec(4.0), || {
                 Box(
@@ -1027,15 +1220,7 @@ fn WorkspaceToolbar() {
                     Chip(title, ix == 0, 4.0, 14.0);
                 }
             });
-            Row(
-                Modifier::empty()
-                    .width(288.0)
-                    .height(28.0)
-                    .border(1.0, FOREGROUND, RoundedCornerShape::uniform(RADIUS))
-                    .padding_horizontal(8.0),
-                row_spec(0.0),
-                || Label("Search symbols", Modifier::empty(), sm(MUTED_FOREGROUND)),
-            );
+            SearchBox(Modifier::empty().weight(1.0));
             Row(Modifier::empty(), row_spec(12.0), || {
                 Row(Modifier::empty(), row_spec(4.0), || {
                     Box(
@@ -1051,8 +1236,66 @@ fn WorkspaceToolbar() {
                 LetterIcon("!", 20.0, SECONDARY, MUTED_FOREGROUND, false);
                 LetterIcon("*", 20.0, SECONDARY, MUTED_FOREGROUND, false);
                 Label("Account A/C(1637)", Modifier::empty(), xs(MUTED_FOREGROUND));
-                LetterIcon("J", 24.0, SERIES[1], Color::WHITE, true);
+                Box(
+                    Modifier::empty()
+                        .size_points(24.0, 24.0)
+                        .background(SERIES[1])
+                        .rounded_corners(12.0),
+                    centered(),
+                    || {
+                        Label(
+                            "J",
+                            Modifier::empty(),
+                            style(12.0, Color::WHITE, Some(FontWeight::MEDIUM)),
+                        )
+                    },
+                );
             });
+        },
+    );
+}
+
+#[composable]
+fn SearchBox(modifier: Modifier) {
+    let text = remember(|| TextFieldState::new("")).with(|state| *state);
+    let focused = rememberMutableStateOf(|| false);
+    let focus = remember(FocusRequester::new).with(Clone::clone);
+    let request = focus.clone();
+    LaunchedEffect((), move |_| {
+        if let Err(error) = request.request_focus() {
+            log::debug!("workspace search focus: {error}");
+        }
+    });
+    BasicTextFieldDecorated(
+        text,
+        modifier
+            .height(28.0)
+            .focus_requester(&focus)
+            .on_focus_changed(move |state| focused.set(state.is_focused()))
+            .semantics(|config| config.content_description = Some("Search symbols".to_string()))
+            .border(
+                1.0,
+                if focused.get() { FOREGROUND } else { INPUT },
+                RoundedCornerShape::uniform(RADIUS),
+            )
+            .padding_horizontal(9.0),
+        BasicTextFieldOptions {
+            text_style: sm(MUTED_FOREGROUND),
+            cursor_color: Color::TRANSPARENT,
+            line_limits: TextFieldLineLimits::SingleLine,
+            show_keyboard_on_focus: false,
+        },
+        move |scope| {
+            Box(
+                Modifier::empty(),
+                BoxSpec::new().content_alignment(Alignment::CENTER_START),
+                move || {
+                    if text.text().is_empty() {
+                        Label("Search symbols", Modifier::empty(), sm(MUTED_FOREGROUND));
+                    }
+                    scope.inner_text_field();
+                },
+            );
         },
     );
 }
@@ -1064,10 +1307,10 @@ fn IconSidebar() {
             Modifier::empty()
                 .width(48.0)
                 .fill_max_height()
-                .background(SIDEBAR)
-                .padding_vertical(8.0),
+                .background(SIDEBAR),
             [false, false, true, false],
-        ),
+        )
+        .padding_vertical(8.0),
         ColumnSpec::new()
             .vertical_arrangement(LinearArrangement::spaced_by(4.0))
             .horizontal_alignment(HorizontalAlignment::CenterHorizontally),
@@ -1109,22 +1352,27 @@ fn IconSidebar() {
 /// The dock: the watchlist, then a column of the quote and its chart, then
 /// a column of the order book, time and sales and trade statistics.
 #[composable]
-fn Dock(market: Rc<Market>, watchlist: LazyListState) {
+fn Dock(market: Rc<Market>, watchlist: LazyListState, hover: Option<Rc<WatchlistHover>>) {
     Row(
         Modifier::empty().weight(1.0).fill_max_height(),
         RowSpec::default(),
         move || {
             let m = market.clone();
+            let hover = hover.clone();
             Column(
                 Modifier::empty().weight(1.0).fill_max_height(),
                 ColumnSpec::default(),
                 move || {
                     let m = m.clone();
+                    let hover = hover.clone();
                     Panel(
                         1.0,
                         [true, false],
-                        vec!["Watchlist", "Positions"],
-                        PanelContent(Rc::new(move || Watchlist(m.clone(), watchlist))),
+                        &["Watchlist", "Positions"],
+                        m.clone(),
+                        PanelContent(Rc::new(move || {
+                            Watchlist(m.clone(), watchlist, hover.clone())
+                        })),
                     );
                 },
             );
@@ -1137,14 +1385,16 @@ fn Dock(market: Rc<Market>, watchlist: LazyListState) {
                     Panel(
                         1.0,
                         [true, true],
-                        vec!["Quote", "Profile"],
+                        &["Quote", "Profile"],
+                        m.clone(),
                         PanelContent(Rc::new(move || QuoteDetail(detail.clone()))),
                     );
                     let chart = m.clone();
                     Panel(
                         1.2,
                         [true, false],
-                        vec!["Candlestick", "Intraday"],
+                        &["Candlestick", "Intraday"],
+                        m.clone(),
                         PanelContent(Rc::new(move || Chart(chart.clone()))),
                     );
                 },
@@ -1158,21 +1408,24 @@ fn Dock(market: Rc<Market>, watchlist: LazyListState) {
                     Panel(
                         1.0,
                         [false, true],
-                        vec!["Order Book"],
+                        &["Order Book"],
+                        m.clone(),
                         PanelContent(Rc::new(move || OrderBook(book.clone()))),
                     );
                     let tape = m.clone();
                     Panel(
                         1.6,
                         [false, true],
-                        vec!["Time & Sales", "News"],
+                        &["Time & Sales", "News"],
+                        m.clone(),
                         PanelContent(Rc::new(move || TimeAndSales(tape.clone()))),
                     );
                     let stats = m.clone();
                     Panel(
                         0.7,
                         [false, false],
-                        vec!["Statistics"],
+                        &["Statistics"],
+                        m.clone(),
                         PanelContent(Rc::new(move || TradeStats(stats.market_buckets()))),
                     );
                 },
@@ -1200,8 +1453,15 @@ impl PartialEq for PanelContent {
 /// A dock slot: a tab bar over its active panel. `lines` says whether it
 /// draws the hairline to its right and below it.
 #[composable]
-fn Panel(grow: f32, lines: [bool; 2], tabs: Vec<&'static str>, content: PanelContent) {
+fn Panel(
+    grow: f32,
+    lines: [bool; 2],
+    tabs: &'static [&'static str],
+    market: Rc<Market>,
+    content: PanelContent,
+) {
     let [right, bottom] = lines;
+    let active = rememberMutableStateOf(|| 0usize);
     Column(
         hairlines(
             Modifier::empty().fill_max_width().weight(grow),
@@ -1210,7 +1470,6 @@ fn Panel(grow: f32, lines: [bool; 2], tabs: Vec<&'static str>, content: PanelCon
         .clip_to_bounds(),
         ColumnSpec::default(),
         move || {
-            let tabs = tabs.clone();
             Row(
                 hairlines(
                     Modifier::empty()
@@ -1222,11 +1481,12 @@ fn Panel(grow: f32, lines: [bool; 2], tabs: Vec<&'static str>, content: PanelCon
                 row_spec(0.0),
                 move || {
                     for (ix, title) in tabs.iter().copied().enumerate() {
-                        WorkspaceTab(title, ix == 0);
+                        WorkspaceTab(title, ix, active);
                     }
                 },
             );
             let content = content.clone();
+            let market = market.clone();
             Box(
                 Modifier::empty()
                     .fill_max_width()
@@ -1234,7 +1494,14 @@ fn Panel(grow: f32, lines: [bool; 2], tabs: Vec<&'static str>, content: PanelCon
                     .background(BACKGROUND)
                     .clip_to_bounds(),
                 BoxSpec::default(),
-                move || (content.0)(),
+                move || {
+                    let selected = active.get();
+                    if selected == 0 {
+                        (content.0)();
+                    } else if let Some(&title) = tabs.get(selected) {
+                        HiddenPanel(title, market.clone());
+                    }
+                },
             );
         },
     );
@@ -1244,13 +1511,16 @@ fn Panel(grow: f32, lines: [bool; 2], tabs: Vec<&'static str>, content: PanelCon
 /// inactive tab tints to `BORDER` (gpui's `secondary_hover`) while the
 /// pointer rests over it.
 #[composable]
-fn WorkspaceTab(title: &'static str, active: bool) {
+fn WorkspaceTab(title: &'static str, index: usize, selected: MutableState<usize>) {
+    let active = selected.get() == index;
     let interaction = rememberMutableInteractionSource();
     let hovered = collect_is_hovered_as_state(&interaction);
     Box(
         Modifier::empty()
             .fill_max_height()
-            .padding_horizontal(12.0)
+            .selectable(active, Some(SemanticsWidgetRole::Tab), move || {
+                selected.set(index)
+            })
             .hoverable(interaction, !active)
             .then(if active {
                 Modifier::empty().background(BACKGROUND)
@@ -1258,17 +1528,39 @@ fn WorkspaceTab(title: &'static str, active: bool) {
                 Modifier::empty().background(BORDER)
             } else {
                 Modifier::empty()
-            }),
+            })
+            .padding_horizontal(12.0),
         centered(),
         move || {
             Label(
                 title,
                 Modifier::empty(),
                 if active {
-                    style(14.0, FOREGROUND, None)
+                    style(14.0, FOREGROUND, Some(FontWeight::MEDIUM))
                 } else {
                     sm(MUTED_FOREGROUND)
                 },
+            );
+        },
+    );
+}
+
+#[composable]
+fn HiddenPanel(title: &'static str, market: Rc<Market>) {
+    let received =
+        remember(move || market.hidden.first().map_or(0, Cell::get)).with(|count| *count);
+    Column(
+        Modifier::empty()
+            .fill_max_size()
+            .semantics(move |config| config.content_description = Some(format!("{title} panel")))
+            .padding(12.0),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(4.0)),
+        move || {
+            Label(title, Modifier::empty(), sm(FOREGROUND));
+            Label(
+                format!("{received} updates"),
+                Modifier::empty(),
+                xs(MUTED_FOREGROUND),
             );
         },
     );
@@ -1320,7 +1612,7 @@ fn Cell_(column: usize, gap: f32, content: impl FnMut() + 'static) {
 }
 
 #[composable]
-fn Watchlist(market: Rc<Market>, state: LazyListState) {
+fn Watchlist(market: Rc<Market>, state: LazyListState, hover: Option<Rc<WatchlistHover>>) {
     let scroll = cranpose_ui::rememberScrollState!();
     Column(
         Modifier::empty().fill_max_size(),
@@ -1356,6 +1648,7 @@ fn Watchlist(market: Rc<Market>, state: LazyListState) {
                 },
             );
             let market = market.clone();
+            let hover = hover.clone();
             Column(
                 Modifier::empty()
                     .fill_max_width()
@@ -1365,20 +1658,27 @@ fn Watchlist(market: Rc<Market>, state: LazyListState) {
                 move || {
                     WatchlistHeader();
                     let market = market.clone();
-                    LazyColumn(
-                        Modifier::empty().width(TABLE_WIDTH).weight(1.0),
-                        state,
-                        LazyColumnSpec::new(),
-                        move |scope| {
-                            let market = market.clone();
-                            scope.items(
-                                LazyItems::new(SYMBOLS)
-                                    .key(|index| index as u64)
-                                    .content_type(|_| 0),
-                                move |ix| WatchlistRow(market.clone(), ix),
-                            );
-                        },
-                    );
+                    let mut viewport = Modifier::empty().fill_max_width().weight(1.0);
+                    if let Some(hover) = &hover {
+                        viewport = viewport.report_window_coordinates(hover.viewport.clone());
+                    }
+                    Box(viewport, BoxSpec::default(), move || {
+                        let market = market.clone();
+                        LazyColumn(
+                            Modifier::empty().width(TABLE_WIDTH).fill_max_height(),
+                            state,
+                            LazyColumnSpec::new(),
+                            move |scope| {
+                                let market = market.clone();
+                                scope.items(
+                                    LazyItems::new(SYMBOLS)
+                                        .key(|index| index as u64)
+                                        .content_type(|_| 0),
+                                    move |ix| WatchlistRow(market.clone(), ix),
+                                );
+                            },
+                        );
+                    });
                 },
             );
         },
@@ -1392,10 +1692,10 @@ fn WatchlistHeader() {
             Modifier::empty()
                 .width(TABLE_WIDTH)
                 .height(32.0)
-                .background(MUTED)
-                .padding_horizontal(4.0),
+                .background(MUTED),
             [false, true, false, true],
-        ),
+        )
+        .padding_horizontal(4.0),
         row_spec(0.0),
         || {
             for (column, (title, _, sortable)) in COLUMNS.iter().copied().enumerate() {
@@ -1403,7 +1703,7 @@ fn WatchlistHeader() {
                     Label(
                         title,
                         Modifier::empty(),
-                        style(12.0, MUTED_FOREGROUND, None),
+                        style(12.0, MUTED_FOREGROUND, Some(FontWeight::MEDIUM)),
                     );
                     if sortable {
                         SortArrows(column == SORTED_BY);
@@ -1430,7 +1730,11 @@ fn SortArrows(sorted_down: bool) {
                     path.line_to(Point::new(width, base));
                     path.line_to(Point::new(width / 2.0, tip));
                     path.close();
-                    let color = if !up && sorted_down { FOREGROUND } else { BORDER };
+                    let color = if !up && sorted_down {
+                        FOREGROUND
+                    } else {
+                        BORDER
+                    };
                     scope.draw_path(&path, Brush::solid(color), DrawStyle::Fill);
                 }
             }),
@@ -1476,6 +1780,9 @@ fn WatchlistRow(market: Rc<Market>, ix: usize) {
         Modifier::empty()
             .width(TABLE_WIDTH)
             .height(ROW_HEIGHT)
+            .semantics(move |config| {
+                config.content_description = Some(format!("Watchlist row {ix}"))
+            })
             .hoverable(interaction, true)
             .draw_behind(move |scope| {
                 let size = scope.size();
@@ -1516,7 +1823,7 @@ fn WatchlistRow(market: Rc<Market>, ix: usize) {
                 Label(
                     code.to_string(),
                     Modifier::empty(),
-                    style(14.0, FOREGROUND, None),
+                    style(14.0, FOREGROUND, Some(FontWeight::MEDIUM)),
                 );
             });
             let name = name.clone();
@@ -1640,7 +1947,34 @@ fn draw_spark(scope: &mut dyn DrawScope, points: &[f32], baseline: f32, color: C
     area.line_to(Point::new(size.width, size.height));
     area.close();
     scope.draw_path(&area, Brush::solid(faded(color, 0.12)), DrawStyle::Fill);
-    scope.draw_path(&line, Brush::solid(color), DrawStyle::Stroke(Stroke::new(1.0)));
+    scope.draw_path(
+        &line,
+        Brush::solid(color),
+        DrawStyle::Stroke(Stroke::new(1.0)),
+    );
+}
+
+#[derive(Clone, Copy)]
+enum QuoteStatValue {
+    Price(f64),
+    Amount(f64),
+    Shares(f64),
+    Decimal(f64),
+    Percent(f64),
+    Literal(&'static str),
+}
+
+impl QuoteStatValue {
+    fn text(self) -> String {
+        match self {
+            Self::Price(value) => price(value),
+            Self::Amount(value) => amount(value),
+            Self::Shares(value) => format!("{} shares", amount(value)),
+            Self::Decimal(value) => format!("{value:.2}"),
+            Self::Percent(value) => format!("{value:.2}%"),
+            Self::Literal(value) => value.to_string(),
+        }
+    }
 }
 
 #[composable]
@@ -1651,45 +1985,43 @@ fn QuoteDetail(market: Rc<Market>) {
     let pre_change = quote.pre_market - quote.prev_close;
     let volume = quote.volume as f64;
     let shares = quote.float_shares * 1.08;
-    let stats: [(&'static str, String); 24] = [
-        ("Open", price(quote.open)),
-        ("Prev. Close", price(quote.prev_close)),
-        ("High", price(quote.high)),
-        ("Low", price(quote.low)),
-        ("Volume", format!("{} shares", amount(volume))),
-        ("Turnover", amount(quote.turnover)),
-        ("52wk High", price(quote.high_52)),
-        ("52wk Low", price(quote.low_52)),
-        ("Mkt Cap", amount(shares * quote.last)),
-        ("Float Cap", amount(quote.float_shares * quote.last)),
-        ("Shares", amount(shares)),
-        ("Float Shares", amount(quote.float_shares)),
-        ("P/E (TTM)", format!("{:.2}", quote.last / 8.83)),
-        ("P/E (Static)", format!("{:.2}", quote.last / 7.91)),
-        ("P/B", format!("{:.2}", quote.last / 21.4)),
-        ("Dividend (TTM)", "1.060".to_string()),
-        ("Div. Yield", format!("{:.2}%", 1.06 / quote.last * 100.0)),
-        (
-            "Turnover %",
-            format!("{:.2}%", volume / quote.float_shares * 100.0),
-        ),
-        ("Vol Ratio", format!("{:.2}", volume / quote.average_volume)),
+    use QuoteStatValue::{Amount, Decimal, Literal, Percent, Price, Shares};
+    let stats = [
+        ("Open", Price(quote.open)),
+        ("Prev. Close", Price(quote.prev_close)),
+        ("High", Price(quote.high)),
+        ("Low", Price(quote.low)),
+        ("Volume", Shares(volume)),
+        ("Turnover", Amount(quote.turnover)),
+        ("52wk High", Price(quote.high_52)),
+        ("52wk Low", Price(quote.low_52)),
+        ("Mkt Cap", Amount(shares * quote.last)),
+        ("Float Cap", Amount(quote.float_shares * quote.last)),
+        ("Shares", Amount(shares)),
+        ("Float Shares", Amount(quote.float_shares)),
+        ("P/E (TTM)", Decimal(quote.last / 8.83)),
+        ("P/E (Static)", Decimal(quote.last / 7.91)),
+        ("P/B", Decimal(quote.last / 21.4)),
+        ("Dividend (TTM)", Literal("1.060")),
+        ("Div. Yield", Percent(1.06 / quote.last * 100.0)),
+        ("Turnover %", Percent(volume / quote.float_shares * 100.0)),
+        ("Vol Ratio", Decimal(volume / quote.average_volume)),
         (
             "Amplitude",
-            format!(
-                "{:.2}%",
-                (quote.high - quote.low) / quote.prev_close * 100.0
-            ),
+            Percent((quote.high - quote.low) / quote.prev_close * 100.0),
         ),
-        ("Avg Price", price(quote.turnover / volume)),
-        ("Bid/Ask", format!("{:.2}%", 50.0 + change * 3.0)),
-        ("Lot Size", "100".to_string()),
-        ("Min Tick", "0.010".to_string()),
+        ("Avg Price", Price(quote.turnover / volume)),
+        ("Bid/Ask", Percent(50.0 + change * 3.0)),
+        ("Lot Size", Literal("100")),
+        ("Min Tick", Literal("0.010")),
     ];
     let code = market.codes[SELECTED].clone();
     let name = market.names[SELECTED].clone();
     Column(
-        Modifier::empty().fill_max_size().padding(12.0),
+        Modifier::empty()
+            .fill_max_size()
+            .padding(12.0)
+            .wrap_content_height(VerticalAlignment::Top, true),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(8.0)),
         move || {
             let (code, name) = (code.clone(), name.clone());
@@ -1697,7 +2029,7 @@ fn QuoteDetail(market: Rc<Market>) {
                 Label(
                     code.to_string(),
                     Modifier::empty(),
-                    style(14.0, FOREGROUND, Some(FontWeight::BOLD)),
+                    style(14.0, FOREGROUND, Some(FontWeight::SEMI_BOLD)),
                 );
                 Label(name.to_string(), Modifier::empty(), xs(MUTED_FOREGROUND));
                 Box(
@@ -1712,8 +2044,10 @@ fn QuoteDetail(market: Rc<Market>) {
             Row(Modifier::empty(), row_spec(8.0), move || {
                 Label(
                     price(quote.last),
-                    Modifier::empty(),
-                    style(24.0, color, Some(FontWeight::BOLD)),
+                    Modifier::empty().semantics(|config| {
+                        config.content_description = Some("Selected quote price".to_string())
+                    }),
+                    style(24.0, color, Some(FontWeight::SEMI_BOLD)),
                 );
                 Label(signed(change), Modifier::empty(), sm(color));
                 Label(
@@ -1733,25 +2067,35 @@ fn QuoteDetail(market: Rc<Market>) {
                 );
                 Label("04:12 EST", Modifier::empty(), xs(MUTED_FOREGROUND));
             });
-            let stats = stats.clone();
-            FlowRow(
+            Column(
                 Modifier::empty().fill_max_width(),
-                FlowRowSpec::new(),
+                ColumnSpec::default(),
                 move || {
-                    for (ix, (label, value)) in stats.iter().cloned().enumerate() {
+                    for values in stats.as_chunks::<2>().0 {
+                        let pair = [values[0], values[1]];
                         Row(
-                            Modifier::empty().fill_max_width_fraction(0.5).padding_each(
-                                if ix % 2 == 1 { 12.0 } else { 0.0 },
-                                2.0,
-                                if ix % 2 == 0 { 12.0 } else { 0.0 },
-                                2.0,
-                            ),
-                            RowSpec::new()
-                                .horizontal_arrangement(LinearArrangement::SpaceBetween)
-                                .vertical_alignment(VerticalAlignment::CenterVertically),
+                            Modifier::empty().fill_max_width(),
+                            RowSpec::default(),
                             move || {
-                                Label(label, Modifier::empty(), xs(MUTED_FOREGROUND));
-                                Label(value.clone(), Modifier::empty(), xs(FOREGROUND));
+                                for (side, (label, value)) in pair.into_iter().enumerate() {
+                                    Row(
+                                        Modifier::empty().weight(1.0).padding_each(
+                                            if side == 1 { 12.0 } else { 0.0 },
+                                            2.0,
+                                            if side == 0 { 12.0 } else { 0.0 },
+                                            2.0,
+                                        ),
+                                        RowSpec::new()
+                                            .horizontal_arrangement(LinearArrangement::SpaceBetween)
+                                            .vertical_alignment(
+                                                VerticalAlignment::CenterVertically,
+                                            ),
+                                        move || {
+                                            Label(label, Modifier::empty(), xs(MUTED_FOREGROUND));
+                                            Label(value.text(), Modifier::empty(), xs(FOREGROUND));
+                                        },
+                                    );
+                                }
                             },
                         );
                     }
@@ -1859,43 +2203,53 @@ fn Chart(market: Rc<Market>) {
                         || {},
                     );
                     // The price axis and the last price's box.
-                    Column(
+                    BoxWithConstraints(
                         Modifier::empty()
                             .width(PRICE_AXIS)
                             .fill_max_height()
                             .align(Alignment::TOP_END)
-                            .padding_each(4.0, 0.0, 0.0, TIME_AXIS),
-                        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpaceBetween),
-                        move || {
+                            .padding_each(0.0, 0.0, 0.0, TIME_AXIS),
+                        move |scope| {
+                            let plot_height = scope.max_height().0;
                             for line in 0..=4 {
                                 Label(
-                                    price(high - span * (line as f64 / 4.0) * 0.75),
-                                    Modifier::empty(),
+                                    price(high - span * (line as f64 / 4.0)),
+                                    Modifier::empty()
+                                        .offset(4.0, plot_height * (line as f32 / 4.0 * 0.75)),
                                     xs(MUTED_FOREGROUND),
                                 );
                             }
+                            Box(
+                                Modifier::empty()
+                                    .offset(0.0, plot_height * last_at)
+                                    .background(change_color(change))
+                                    .rounded_corners(RADIUS_SM)
+                                    .padding_horizontal(4.0),
+                                BoxSpec::default(),
+                                move || {
+                                    Label(price(last.close), Modifier::empty(), xs(Color::WHITE))
+                                },
+                            );
                         },
                     );
-                    Box(
-                        Modifier::empty()
-                            .align(Alignment::TOP_END)
-                            .offset_fraction(0.0, last_at)
-                            .background(change_color(change))
-                            .rounded_corners(RADIUS_SM)
-                            .padding_horizontal(4.0),
-                        BoxSpec::default(),
-                        move || Label(price(last.close), Modifier::empty(), xs(Color::WHITE)),
-                    );
-                    Row(
+                    BoxWithConstraints(
                         Modifier::empty()
                             .fill_max_width()
                             .height(TIME_AXIS)
                             .align(Alignment::BOTTOM_START)
                             .padding_each(0.0, 0.0, PRICE_AXIS, 0.0),
-                        RowSpec::new().horizontal_arrangement(LinearArrangement::SpaceBetween),
-                        || {
-                            for month in ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08"] {
-                                Label(month, Modifier::empty(), xs(MUTED_FOREGROUND));
+                        |scope| {
+                            let plot_width = scope.max_width().0;
+                            for (ix, month) in
+                                ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08"]
+                                    .into_iter()
+                                    .enumerate()
+                            {
+                                Label(
+                                    month,
+                                    Modifier::empty().offset(plot_width * (ix as f32 / 5.0), 0.0),
+                                    xs(MUTED_FOREGROUND),
+                                );
                             }
                         },
                     );
@@ -1997,7 +2351,11 @@ fn draw_chart(
                 path.line_to(point);
             }
         }
-        scope.draw_path(&path, Brush::solid(color), DrawStyle::Stroke(Stroke::new(1.2)));
+        scope.draw_path(
+            &path,
+            Brush::solid(color),
+            DrawStyle::Stroke(Stroke::new(1.2)),
+        );
     }
     let close_y = y(candles[candles.len() - 1].close);
     let last_x = x(candles.len() - 1);
@@ -2027,7 +2385,10 @@ fn OrderBook(market: Rc<Market>) {
         .flat_map(|ix| [size(ix, true), size(ix, false)])
         .fold(1.0, f64::max);
     Column(
-        Modifier::empty().fill_max_size().padding(8.0),
+        Modifier::empty()
+            .fill_max_size()
+            .padding(8.0)
+            .wrap_content_height(VerticalAlignment::Top, true),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(4.0)),
         move || {
             BookBalance(ratio);
@@ -2077,10 +2438,12 @@ fn BookBalance(ratio: f32) {
                 Modifier::empty()
                     .weight(1.0)
                     .height(4.0)
+                    .rounded_corners(2.0)
+                    .clip_to_bounds()
+                    .background(DANGER)
                     .draw_behind(move |scope| {
                         let size = scope.size();
-                        scope.draw_round_rect(Brush::solid(DANGER), CornerRadii::uniform(2.0));
-                        scope.draw_round_rect_at(
+                        scope.draw_rect_at(
                             Rect {
                                 x: 0.0,
                                 y: 0.0,
@@ -2088,7 +2451,6 @@ fn BookBalance(ratio: f32) {
                                 height: size.height,
                             },
                             Brush::solid(SUCCESS),
-                            CornerRadii::uniform(2.0),
                         );
                     }),
                 BoxSpec::default(),
@@ -2161,7 +2523,8 @@ fn TimeAndSales(market: Rc<Market>) {
     Row(
         Modifier::empty()
             .fill_max_size()
-            .padding_symmetric(12.0, 8.0),
+            .padding_symmetric(12.0, 8.0)
+            .wrap_content_height(VerticalAlignment::Top, true),
         RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(16.0)),
         move || {
             for half in [0..TRADES / 2, TRADES / 2..TRADES] {
@@ -2255,7 +2618,7 @@ fn TradeStats(buckets: MutableState<[f64; 6]>) {
         move || {
             Box(
                 Modifier::empty()
-                    .size_points(112.0, 112.0)
+                    .required_size(Size::new(112.0, 112.0))
                     .draw_behind(move |scope| {
                         let size = scope.size();
                         let center = Point::new(size.width / 2.0, size.height / 2.0);
@@ -2278,7 +2641,9 @@ fn TradeStats(buckets: MutableState<[f64; 6]>) {
                 || {},
             );
             Column(
-                Modifier::empty().weight(1.0),
+                Modifier::empty()
+                    .weight(1.0)
+                    .wrap_content_height(VerticalAlignment::CenterVertically, true),
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(2.0)),
                 move || {
                     for ((value, label), color) in values.iter().copied().zip(BUCKETS).zip(colors) {
@@ -2320,7 +2685,8 @@ fn TradeStats(buckets: MutableState<[f64; 6]>) {
                                 .fill_max_width()
                                 .padding_each(0.0, 4.0, 0.0, 0.0),
                             [false, true, false, false],
-                        ),
+                        )
+                        .padding_each(0.0, 4.0, 0.0, 0.0),
                         RowSpec::new().horizontal_arrangement(LinearArrangement::SpaceBetween),
                         move || {
                             Label("Net inflow", Modifier::empty(), xs(FOREGROUND));
@@ -2342,13 +2708,11 @@ fn StatusBar(tick: MutableState<usize>) {
     let tick = tick.get();
     Row(
         hairlines(
-            Modifier::empty()
-                .fill_max_width()
-                .height(24.0)
-                .padding_horizontal(12.0)
-                .clip_to_bounds(),
+            Modifier::empty().fill_max_width().height(24.0),
             [false, true, false, false],
-        ),
+        )
+        .padding_horizontal(12.0)
+        .clip_to_bounds(),
         row_spec(16.0),
         move || {
             for (ix, name) in ["HSI", "HSCEI", "HSTECH", "SSE", "SPX", "IXIC"]

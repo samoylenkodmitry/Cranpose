@@ -213,7 +213,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             crate::ios_keyboard::set_mirror(state.text, state.selection_start, state.selection_end);
         }
         if let Some(geom) = shell.ime_caret_geometry() {
-            crate::ios_keyboard::set_caret_geometry(geom.caret_xs, geom.top, geom.line_height);
+            crate::ios_keyboard::set_caret_geometry(geom);
         }
 
         let dirty_before = gpu.surface_dirty;

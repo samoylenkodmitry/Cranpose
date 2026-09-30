@@ -308,5 +308,5 @@ fn slices_without_text_answer_none_for_every_text_field() {
     assert!(slices.text_style().is_none());
     assert!(slices.text_layout_options().is_none());
     assert!(slices.measured_text_layout().is_none());
-    assert!(slices.text_window_origin().is_none());
+    assert!(slices.text_window_transform().is_none());
 }

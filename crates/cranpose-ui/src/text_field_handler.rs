@@ -4,7 +4,7 @@ use std::{
 };
 
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
-use cranpose_ui_graphics::Point;
+use cranpose_ui_graphics::ProjectiveTransform;
 
 use crate::{
     text::{AnnotatedString, TextStyle, measure_text},
@@ -14,7 +14,7 @@ use crate::{
 
 #[derive(Clone)]
 pub(crate) struct CaretGeometryRefs {
-    pub node_origin: Rc<Cell<Point>>,
+    pub local_to_window: Rc<Cell<ProjectiveTransform>>,
     pub content_origin: Rc<RefCell<crate::modifier::CoordinatorRect>>,
     pub scroll_offset: Rc<Cell<f32>>,
     pub style: TextStyle,
@@ -227,10 +227,9 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             return None;
         }
         let g = &self.geometry;
-        let origin = g.node_origin.get();
         let content = g.content_origin.borrow().origin();
-        let base_x = origin.x + content.x - g.scroll_offset.get();
-        let top = origin.y + content.y;
+        let base_x = content.x - g.scroll_offset.get();
+        let top = content.y;
         let line_height = measure_text(&AnnotatedString::from("Ag"), &g.style).line_height;
 
         let mut caret_xs = Vec::with_capacity(text.len() + 1);
@@ -245,6 +244,7 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
             caret_xs,
             top,
             line_height,
+            local_to_window: g.local_to_window.get(),
         })
     }
 }

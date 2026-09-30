@@ -1634,20 +1634,26 @@ impl ModifierNodeElement for ClipToBoundsElement {
 }
 
 pub trait WindowRectSink {
-    fn set(&self, rect: cranpose_ui_graphics::Rect);
+    fn set(&self, coordinates: cranpose_ui_graphics::WindowCoordinates);
 }
 
 impl WindowRectSink for Cell<cranpose_ui_graphics::Rect> {
-    fn set(&self, rect: cranpose_ui_graphics::Rect) {
-        Cell::set(self, rect);
+    fn set(&self, coordinates: cranpose_ui_graphics::WindowCoordinates) {
+        Cell::set(self, coordinates.bounds());
+    }
+}
+
+impl WindowRectSink for Cell<cranpose_ui_graphics::WindowCoordinates> {
+    fn set(&self, coordinates: cranpose_ui_graphics::WindowCoordinates) {
+        Cell::set(self, coordinates);
     }
 }
 
 struct StateWindowRectSink(cranpose_core::MutableState<cranpose_ui_graphics::Rect>);
 
 impl WindowRectSink for StateWindowRectSink {
-    fn set(&self, rect: cranpose_ui_graphics::Rect) {
-        self.0.set(rect);
+    fn set(&self, coordinates: cranpose_ui_graphics::WindowCoordinates) {
+        self.0.set(coordinates.bounds());
     }
 }
 
@@ -1698,6 +1704,11 @@ impl WindowRectReporterElement {
         Self { sink }
     }
 
+    /// Reports the node's local size and complete window transform.
+    pub fn from_coordinates(sink: Rc<Cell<cranpose_ui_graphics::WindowCoordinates>>) -> Self {
+        Self { sink }
+    }
+
     pub fn from_state(sink: cranpose_core::MutableState<cranpose_ui_graphics::Rect>) -> Self {
         Self {
             sink: Rc::new(StateWindowRectSink(sink)),
@@ -1727,10 +1738,6 @@ impl Hash for WindowRectReporterElement {
 
 impl_sink_reporter_element!(WindowRectReporterElement, WindowRectReporterNode);
 
-/// Tells a selectable text's geometry where its content sits: slice
-/// collection hands it the padding in front of the text and layout the
-/// node's window origin, which is what a container needs to find the text
-/// under a pointer.
 pub(crate) struct SelectableTextNode {
     sink: Rc<crate::selection_container::SelectableGeometry>,
     state: NodeState,

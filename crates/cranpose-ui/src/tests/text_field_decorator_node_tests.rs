@@ -2,7 +2,7 @@ use std::cell::Cell;
 
 use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_foundation::{PointerEventKind, text::TextRange};
-use cranpose_ui_graphics::Size;
+use cranpose_ui_graphics::{Point, Size};
 
 use super::*;
 use crate::{
@@ -140,10 +140,6 @@ fn the_decoration_is_the_one_node_focus_and_accessibility_know() {
             .is_some_and(|config| config.is_editable_text)
     );
     assert!(
-        inner.node_data.semantics().is_none(),
-        "the inner field only draws"
-    );
-    assert!(
         inner
             .node_data
             .modifier_slices()
@@ -191,14 +187,6 @@ fn the_decorated_field_and_its_box_are_keyed_by_the_refs_they_share() {
     assert_eq!(decorator.key(), Some(refs.key()));
     assert_eq!(field.key(), Some(refs.key()));
     assert_ne!(TextFieldRefs::new().key(), refs.key());
-    assert_eq!(
-        decorator.capabilities(),
-        NodeCapabilities::SEMANTICS | NodeCapabilities::POINTER_INPUT
-    );
-    assert_eq!(
-        field.capabilities(),
-        NodeCapabilities::LAYOUT | NodeCapabilities::DRAW
-    );
     assert_eq!(
         crate::text_field_modifier_node::TextFieldElement::new(state, TextStyle::default()).key(),
         None

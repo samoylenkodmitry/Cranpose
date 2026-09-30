@@ -4,7 +4,6 @@
 //! anywhere in it edits the field; the inner field only lays out and draws.
 
 use std::{
-    cell::Cell,
     hash::{Hash, Hasher},
     rc::Rc,
 };
@@ -16,7 +15,6 @@ use cranpose_foundation::{
     SemanticsNode,
     text::{TextFieldLineLimits, TextFieldState},
 };
-use cranpose_ui_graphics::Point;
 
 use crate::{
     focus_dispatch::FocusTargetHandle,
@@ -54,7 +52,7 @@ impl TextFieldDecoratorElement {
     }
 
     /// The field's own pointer handler, fed each event at the position it
-    /// has in the inner field, whose window origin layout publishes.
+    /// has in the inner field, whose window transform layout publishes.
     fn pointer_handler(&self) -> Rc<dyn Fn(PointerEvent)> {
         let field = TextFieldModifierNode::create_handler(
             self.state,
@@ -63,13 +61,11 @@ impl TextFieldDecoratorElement {
             self.style.clone(),
             self.modal_depth,
         );
-        let field_origin: Rc<Cell<Point>> = Rc::clone(&self.refs.node_origin);
+        let field_transform = Rc::clone(&self.refs.local_to_window);
         Rc::new(move |event: PointerEvent| {
-            let origin = field_origin.get();
-            field(event.copy_with_local_position(Point {
-                x: event.global_position.x - origin.x,
-                y: event.global_position.y - origin.y,
-            }));
+            if let Some(inverse) = field_transform.get().inverse() {
+                field(event.copy_with_local_position(inverse.map_point(event.global_position)));
+            }
         })
     }
 }

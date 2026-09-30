@@ -33,6 +33,7 @@ pub mod modal;
 mod modal_nodes;
 mod modifier;
 mod modifier_nodes;
+pub mod mouse_input;
 pub mod nine_patch;
 mod pointer_dispatch;
 pub mod pointer_icon_session;
@@ -84,7 +85,7 @@ pub use cranpose_foundation::{
 pub use cranpose_ui_graphics::{
     BlurredEdgeTreatment, ColorFilter, CursorIcon, CustomPointerIcon, DashPathEffect, Dp,
     DrawScope, DrawStyle, ImageBitmap, ImagePixelFormat, ImageSampling, Path, PointerIcon,
-    PointerIconError, Stroke, StrokeCap, StrokeJoin,
+    PointerIconError, Stroke, StrokeCap, StrokeJoin, WindowCoordinates,
 };
 pub use cranpose_ui_layout::{AlignmentLines, IntrinsicSize, Measurement};
 pub use cursor_animation::{

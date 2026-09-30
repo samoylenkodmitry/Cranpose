@@ -475,10 +475,7 @@ fn resting_metrics(origin_y: f32) -> crate::text_field_modifier_node::TextFieldH
     crate::text_field_modifier_node::TextFieldHandleMetrics {
         focused: false,
         direct_manipulation: false,
-        node_origin: Point {
-            x: 20.0,
-            y: origin_y,
-        },
+        local_to_window: cranpose_ui_graphics::ProjectiveTransform::translation(20.0, origin_y),
         padding_left: 0.0,
         padding_top: 0.0,
         scroll_offset: 0.0,

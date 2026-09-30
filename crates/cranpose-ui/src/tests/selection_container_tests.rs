@@ -30,10 +30,9 @@ fn page_styled(texts: &[(&str, Rect)], style: TextStyle) -> Page {
         .map(|(text, rect)| {
             let key = registrar.subscribe();
             let geometry = Rc::new(SelectableGeometry::default());
-            geometry.node_origin.set(Point {
-                x: rect.x,
-                y: rect.y,
-            });
+            geometry
+                .local_to_window
+                .set(ProjectiveTransform::translation(rect.x, rect.y));
             geometry.set_content_size(Size {
                 width: rect.width,
                 height: rect.height,

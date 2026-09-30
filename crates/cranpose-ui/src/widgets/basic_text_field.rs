@@ -121,12 +121,12 @@ impl LongPressWatcher {
     }
 }
 
-/// Window-space position where a handle's tip should sit for the caret/selection
+/// Local position where a handle's tip should sit for the caret/selection
 /// endpoint at byte `offset`: the bottom of that offset's visual line.
 /// `affinity` decides the line at a shared soft-wrap boundary: selection ENDS,
 /// the cursor handle and the loupe anchor upstream (the line the finger rides),
 /// the selection START anchors downstream (the first highlighted glyph).
-fn handle_tip_window_pos(
+fn handle_tip_local_pos(
     text: &str,
     style: &TextStyle,
     metrics: &TextFieldHandleMetrics,
@@ -144,13 +144,29 @@ fn handle_tip_window_pos(
     );
     let caret_x = measure_text(&AnnotatedString::from(&text[line_start..offset]), style).width;
     Point {
-        x: metrics.node_origin.x + metrics.padding_left + caret_x - metrics.scroll_offset,
-        y: metrics.node_origin.y
-            + metrics.padding_top
+        x: metrics.padding_left + caret_x - metrics.scroll_offset,
+        y: metrics.padding_top
             + line_index as f32 * metrics.line_height
             + metrics.glyph_box.0
             + metrics.glyph_box.1,
     }
+}
+
+fn caret_window_geometry(
+    text: &str,
+    style: &TextStyle,
+    metrics: &TextFieldHandleMetrics,
+    offset: usize,
+    affinity: LineAffinity,
+) -> (Point, Rect) {
+    let tip = handle_tip_local_pos(text, style, metrics, offset, affinity);
+    let bounds = metrics.local_to_window.bounds_for_rect(Rect {
+        x: tip.x,
+        y: tip.y - metrics.glyph_box.1,
+        width: 2.0,
+        height: metrics.glyph_box.1,
+    });
+    (metrics.local_to_window.map_point(tip), bounds)
 }
 
 /// Maps a window-space drag position back to the nearest text byte offset in
@@ -166,14 +182,15 @@ fn window_pos_to_offset(
     window_pos: Point,
     y_bias: f32,
 ) -> usize {
-    let local_x = (window_pos.x - metrics.node_origin.x - metrics.padding_left
-        + metrics.scroll_offset)
-        .max(0.0);
-    let local_y = (window_pos.y + y_bias
-        - 0.5 * metrics.line_height
-        - metrics.node_origin.y
-        - metrics.padding_top)
-        .max(0.0);
+    let Some(inverse) = metrics.local_to_window.inverse() else {
+        return 0;
+    };
+    let local = inverse.map_point(Point {
+        y: window_pos.y + y_bias,
+        ..window_pos
+    });
+    let local_x = (local.x - metrics.padding_left + metrics.scroll_offset).max(0.0);
+    let local_y = (local.y - 0.5 * metrics.line_height - metrics.padding_top).max(0.0);
     crate::text::offset_for_position_wrapped(
         text,
         style,
@@ -371,13 +388,7 @@ fn caret_window_rect(
     metrics: &TextFieldHandleMetrics,
     offset: usize,
 ) -> Rect {
-    let tip = handle_tip_window_pos(text, style, metrics, offset, LineAffinity::Upstream);
-    Rect {
-        x: tip.x,
-        y: tip.y - metrics.glyph_box.1,
-        width: 2.0,
-        height: metrics.glyph_box.1,
-    }
+    caret_window_geometry(text, style, metrics, offset, LineAffinity::Upstream).1
 }
 
 /// Consumer half of bug 2: while the field is focused, asks the nearest scroll
@@ -545,7 +556,7 @@ fn SelectionHandles(
     let end_tip_y: Rc<Cell<f32>> = remember(|| Rc::new(Cell::new(0.0f32))).with(Rc::clone);
 
     if selection.collapsed() {
-        let tip = handle_tip_window_pos(
+        let (tip, caret_rect) = caret_window_geometry(
             &text,
             &style,
             &metrics,
@@ -569,7 +580,7 @@ fn SelectionHandles(
         SelectionHandle(
             HandleKind::Cursor,
             tip,
-            metrics.glyph_box.1,
+            caret_rect.height,
             HANDLE_RADIUS,
             accent,
             move |pos| {
@@ -595,8 +606,8 @@ fn SelectionHandles(
             CaretActionMenu(
                 MenuAnchor {
                     center_x: tip.x,
-                    line_top: tip.y - metrics.glyph_box.1,
-                    line_bottom: tip.y,
+                    line_top: caret_rect.y,
+                    line_bottom: caret_rect.y + caret_rect.height,
                 },
                 drag_pos.value().is_none(),
                 can_paste,
@@ -625,9 +636,10 @@ fn SelectionHandles(
     } else {
         let start = selection.min();
         let end = selection.max();
-        let start_tip =
-            handle_tip_window_pos(&text, &style, &metrics, start, LineAffinity::Downstream);
-        let end_tip = handle_tip_window_pos(&text, &style, &metrics, end, LineAffinity::Upstream);
+        let (start_tip, start_rect) =
+            caret_window_geometry(&text, &style, &metrics, start, LineAffinity::Downstream);
+        let (end_tip, end_rect) =
+            caret_window_geometry(&text, &style, &metrics, end, LineAffinity::Upstream);
 
         let last_dragged_start = Rc::clone(&last_dragged);
         let last_dragged_end = Rc::clone(&last_dragged);
@@ -645,7 +657,7 @@ fn SelectionHandles(
         SelectionHandle(
             HandleKind::SelectionStart,
             start_tip,
-            metrics.glyph_box.1,
+            start_rect.height,
             HANDLE_RADIUS,
             accent,
             move |pos| {
@@ -681,7 +693,7 @@ fn SelectionHandles(
         SelectionHandle(
             HandleKind::SelectionEnd,
             end_tip,
-            metrics.glyph_box.1,
+            end_rect.height,
             HANDLE_RADIUS,
             accent,
             move |pos| {
@@ -710,16 +722,16 @@ fn SelectionHandles(
             } else {
                 None
             };
-            let (center_x, line_bottom) = match last_dragged.get() {
-                Some(HandleKind::SelectionStart) => (start_tip.x, start_tip.y),
-                Some(HandleKind::SelectionEnd | HandleKind::Cursor) => (end_tip.x, end_tip.y),
-                None => ((start_tip.x + end_tip.x) * 0.5, start_tip.y),
+            let (center_x, caret_rect) = match last_dragged.get() {
+                Some(HandleKind::SelectionStart) => (start_tip.x, start_rect),
+                Some(HandleKind::SelectionEnd | HandleKind::Cursor) => (end_tip.x, end_rect),
+                None => ((start_tip.x + end_tip.x) * 0.5, start_rect),
             };
             TextSelectionMenu(
                 MenuAnchor {
                     center_x,
-                    line_top: line_bottom - metrics.glyph_box.1,
-                    line_bottom,
+                    line_top: caret_rect.y,
+                    line_bottom: caret_rect.y + caret_rect.height,
                 },
                 drag_pos.value().is_none(),
                 slide_point,
@@ -751,9 +763,9 @@ fn SelectionHandles(
     let loupe_target = drag_pos.value().and_then(|finger| {
         let bias = drag_bias.get().map_or(0.0, |grab| grab.bias());
         let offset = window_pos_to_offset(&text, &style, &metrics, finger, bias);
-        let line_bottom =
-            handle_tip_window_pos(&text, &style, &metrics, offset, LineAffinity::Upstream).y;
-        loupe_target_for_drag(finger, line_bottom, metrics.glyph_box.1)
+        let (_, caret_rect) =
+            caret_window_geometry(&text, &style, &metrics, offset, LineAffinity::Upstream);
+        loupe_target_for_drag(finger, caret_rect.y + caret_rect.height, caret_rect.height)
     });
     SelectionLoupe(loupe_target);
 }
