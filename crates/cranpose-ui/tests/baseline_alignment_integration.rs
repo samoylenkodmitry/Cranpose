@@ -490,7 +490,7 @@ fn custom_layouts_can_report_baselines_through_padding_and_parent_wrappers() {
                         .align_by_baseline();
                     if wrapped {
                         Box(modifier, BoxSpec::default(), move || {
-                            custom_baseline_layout(Modifier::empty(), subcompose)
+                            custom_baseline_layout(Modifier::empty(), subcompose);
                         });
                     } else {
                         custom_baseline_layout(modifier, subcompose);
