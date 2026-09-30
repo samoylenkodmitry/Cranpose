@@ -320,7 +320,7 @@ fn log_smaps_top(phase: &str) {
         let is_header = line
             .as_bytes()
             .first()
-            .is_some_and(|byte| byte.is_ascii_hexdigit())
+            .is_some_and(u8::is_ascii_hexdigit)
             && line.contains('-');
         if is_header {
             current_mapping = smaps_mapping_name(line);
