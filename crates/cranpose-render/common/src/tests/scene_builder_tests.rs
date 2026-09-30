@@ -11,11 +11,10 @@ use cranpose_ui_graphics::{Brush, DrawPrimitive, DrawScopeDefault, GraphicsLayer
 
 use super::*;
 
-#[test]
-fn scene_snapshot_preserves_children_beyond_inline_capacity_in_order() {
-    let mut composition = cranpose_ui::run_test_composition(|| {
-        Column(Modifier::empty(), ColumnSpec::default(), || {
-            for index in 0..12 {
+fn laid_out_scene_column(child_count: usize) -> cranpose_ui::TestComposition {
+    let mut composition = cranpose_ui::run_test_composition(move || {
+        Column(Modifier::empty(), ColumnSpec::default(), move || {
+            for index in 0..child_count {
                 Text(
                     format!("child-{index}"),
                     Modifier::empty().height(20.0),
@@ -33,12 +32,28 @@ fn scene_snapshot_preserves_children_beyond_inline_capacity_in_order() {
             root,
             Size {
                 width: 240.0,
-                height: 300.0,
+                height: child_count as f32 * 20.0,
             },
         )
         .expect("layout");
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
     applier.clear_runtime_handle();
+    drop(applier);
+    composition
+}
+
+#[test]
+fn scene_snapshot_preserves_children_beyond_inline_capacity_in_order() {
+    let mut composition = laid_out_scene_column(12);
+    let root = composition.root().expect("root");
+    let mut applier = composition.applier_mut();
+    let stored_children = applier
+        .with_node::<LayoutNode, _>(root, |node| node.children.as_ptr())
+        .expect("root layout node");
+    read_node_data(&applier, root, |data| {
+        assert_eq!(data.children.as_ptr(), stored_children);
+    })
+    .expect("root scene data");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
     let mut labels = Vec::new();
     collect_text_labels(&graph.root, &mut labels);
     assert_eq!(
@@ -47,6 +62,74 @@ fn scene_snapshot_preserves_children_beyond_inline_capacity_in_order() {
             .map(|index| format!("child-{index}"))
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+#[ignore = "manual release timing probe"]
+fn scene_rebuild_timing() {
+    use std::hint::black_box;
+
+    use web_time::Instant;
+
+    let iterations = std::env::var("SCENE_REBUILD_ITERATIONS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(1000);
+    for children in [8, 64, 256] {
+        let mut composition = laid_out_scene_column(children);
+        let root = composition.root().expect("root");
+        let mut applier = composition.applier_mut();
+        let applier = &mut *applier;
+        let mut graph = None;
+        for _ in 0..100 {
+            graph = rebuild_graph_from_applier(applier, root, 1.0, graph);
+            assert!(graph.is_some());
+        }
+        let start = Instant::now();
+        for _ in 0..iterations {
+            graph = black_box(rebuild_graph_from_applier(applier, root, 1.0, graph));
+            assert!(graph.is_some());
+        }
+        let ns_per_rebuild = start.elapsed().as_nanos() as f64 / iterations as f64;
+        println!(
+            "SCENE_REBUILD children={children} iterations={iterations} ns_per_rebuild={ns_per_rebuild:.3}"
+        );
+    }
+}
+
+#[test]
+fn scene_read_keeps_lazy_children_stable_while_the_handle_changes() {
+    let mut composition = cranpose_ui::run_test_composition(|| {
+        LazyColumn(
+            Modifier::empty().size_points(240.0, 240.0),
+            rememberLazyListState(),
+            LazyColumnSpec::default(),
+            |scope| {
+                scope.items(12, |_| {
+                    Spacer(Modifier::empty().height(20.0));
+                });
+            },
+        );
+    });
+    let root = composition.root().expect("root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let expected = lay_out_lazy_column(&mut applier, root);
+    let node: &dyn std::any::Any = applier.get_ref(root).expect("root node");
+    let handle = node
+        .downcast_ref::<SubcomposeLayoutNode>()
+        .expect("lazy root")
+        .handle();
+    read_node_data(&applier, root, |data| {
+        assert_eq!(data.children, expected);
+        handle.set_active_children(std::iter::empty());
+        assert_eq!(data.children, expected);
+    })
+    .expect("scene data");
+    read_node_data(&applier, root, |data| assert!(data.children.is_empty()))
+        .expect("updated scene data");
+    applier.clear_runtime_handle();
 }
 
 fn find_text_motion(layer: &LayerNode, label: &str) -> Option<Option<TextMotion>> {
@@ -539,7 +622,7 @@ fn rounded_corners_clip_to_bounds_builds_graph_shape_clip_from_modifier_chain() 
             },
         )
         .expect("rounded clip layout");
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("rounded clip graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("rounded clip graph");
     applier.clear_runtime_handle();
 
     let rounded_layer = find_layer_by_node_id(&graph.root, root).expect("rounded layer");
@@ -625,7 +708,7 @@ fn a_draw_before_the_graphics_layer_wraps_the_clipped_layer_in_the_parents_space
             },
         )
         .expect("layout");
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
     applier.clear_runtime_handle();
     let card_id = card_id.borrow().expect("card id");
     let (wrapper, card) = wrapper_and_card(&graph.root, card_id);
@@ -686,7 +769,7 @@ fn a_dirty_wrapped_node_is_rebuilt_as_one_wrapper() {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, viewport).expect("layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
     applier.clear_runtime_handle();
     drop(applier);
     let card_id = card_id.borrow().expect("card id");
@@ -701,7 +784,7 @@ fn a_dirty_wrapped_node_is_rebuilt_as_one_wrapper() {
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, viewport).expect("layout");
     assert!(update_graph_from_applier(
-        &mut applier,
+        &applier,
         &mut graph,
         &[card_id],
         1.0
@@ -759,7 +842,7 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
     applier
         .compute_layout(root, viewport)
         .expect("initial layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     let child_id = child_id_holder
         .borrow()
         .expect("text child id should be captured");
@@ -790,7 +873,7 @@ fn update_graph_from_applier_replaces_dirty_child_layer() {
         .expect("text child id should remain captured");
 
     assert!(
-        update_graph_from_applier(&mut applier, &mut graph, &[child_id], 1.0),
+        update_graph_from_applier(&applier, &mut graph, &[child_id], 1.0),
         "dirty child should be replaceable from retained applier state"
     );
     applier.clear_runtime_handle();
@@ -925,7 +1008,7 @@ fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
     applier
         .compute_layout(root, viewport)
         .expect("initial layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     graph.root.recompute_raster_cache_hashes();
     applier.clear_runtime_handle();
     drop(applier);
@@ -950,7 +1033,7 @@ fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
     let child_id = child_id_holder
         .borrow()
         .expect("text child id should be captured");
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &[child_id], 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &[child_id], 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -1011,7 +1094,7 @@ fn dirty_update_with_a_new_row_leaves_the_hashes_a_full_walk_leaves() {
     applier
         .compute_layout(root, viewport)
         .expect("initial layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     graph.root.recompute_raster_cache_hashes();
     applier.clear_runtime_handle();
     drop(applier);
@@ -1033,7 +1116,7 @@ fn dirty_update_with_a_new_row_leaves_the_hashes_a_full_walk_leaves() {
         .compute_layout(root, viewport)
         .expect("updated layout");
     let column_id = column_id_holder.borrow().expect("column id");
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &[column_id], 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &[column_id], 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -1122,7 +1205,7 @@ fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
 
     for offset in [Point { x: 7.0, y: 11.0 }, Point { x: -3.0, y: 5.0 }] {
         translation.set(offset);
-        let _graph = build_graph_from_applier(&mut applier, root, 1.0).expect("scene graph");
+        let _graph = build_graph_from_applier(&applier, root, 1.0).expect("scene graph");
         assert_eq!(
             sink.get(),
             Rect {
@@ -1142,9 +1225,9 @@ fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
     let mut graph = RenderGraph {
         root: build_layer_node_for_test(snapshot_with_translation(0.0), false),
     };
-    let mut applier = MemoryApplier::new();
+    let applier = MemoryApplier::new();
 
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &[2], 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &[2], 1.0);
 
     assert_eq!(
         report,
@@ -1200,7 +1283,7 @@ fn scrolled_list_under_a_composited_layer_keeps_the_hashes_a_full_walk_leaves() 
     applier
         .compute_layout(root, viewport)
         .expect("scrolled layout");
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &dirty_nodes, 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -1243,7 +1326,7 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
     applier
         .compute_layout(root, viewport)
         .expect("initial scroll layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     graph.root.recompute_raster_cache_hashes();
     let initial_target_top =
         find_text_top(&graph.root, "scroll target").expect("initial target text");
@@ -1269,7 +1352,7 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
     applier
         .compute_layout(root, viewport)
         .expect("scrolled layout");
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &dirty_nodes, 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -1335,7 +1418,7 @@ fn an_overmarked_ancestor_chain_still_translates_instead_of_relowering() {
         .compute_layout(root, viewport)
         .expect("scrolled layout");
     reset_lowered_layer_count();
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &dirty_nodes, 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -1394,7 +1477,7 @@ fn a_scrolled_container_translates_clean_children_instead_of_relowering() {
         .compute_layout(root, viewport)
         .expect("scrolled layout");
     reset_lowered_layer_count();
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &dirty_nodes, 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -1532,7 +1615,7 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         .compute_layout(root, viewport)
         .expect("scrolled layout");
     reset_lowered_layer_count();
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &dirty_nodes, 1.0);
 
     assert!(report.applied(), "got {:?}", report.update);
     assert_eq!(
@@ -1550,7 +1633,7 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         .count();
     assert_eq!(wrappers, 12, "every row keeps exactly one wrapper");
     assert_dirty_hash_road_matches_full_walk(&graph);
-    let fresh = build_graph_from_applier(&mut applier, root, 1.0).expect("fresh graph");
+    let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh graph");
     applier.clear_runtime_handle();
     assert_eq!(
         crate::graph_hash::layer_raster_cache_hashes(&graph.root),
@@ -1574,7 +1657,7 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         .expect("changed row layout");
     let mut dirty = row_ids.clone();
     dirty.push(first_text.get().expect("first text node"));
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty, 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &dirty, 1.0);
     assert!(report.applied());
     assert!(find_text_top(&graph.root, "changed row").is_some());
     assert!(find_text_top(&graph.root, "row 0").is_none());
@@ -1599,7 +1682,7 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
         *clicks.borrow(),
         (0..12).map(|index| (index, 1)).collect::<Vec<_>>()
     );
-    let fresh = build_graph_from_applier(&mut applier, root, 1.0).expect("fresh changed graph");
+    let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh changed graph");
     applier.clear_runtime_handle();
     assert_eq!(
         collect_text_tops(&graph.root),
@@ -1650,7 +1733,7 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
     applier
         .compute_layout(root, viewport)
         .expect("initial lazy layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     graph.root.recompute_raster_cache_hashes();
     let _ = applier.take_structural_change_parents_attached_to(root);
     let initial_row_top = find_text_top(&graph.root, "row 4").expect("initial row text");
@@ -1678,7 +1761,7 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
     );
 
     reset_lowered_layer_count();
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &dirty_nodes, 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -1797,7 +1880,7 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
         applier
             .compute_layout(root, viewport)
             .expect("initial lazy layout");
-        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
         graph.root.recompute_raster_cache_hashes();
         let _ = applier.take_structural_change_parents_attached_to(root);
         applier.clear_runtime_handle();
@@ -1819,7 +1902,7 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
         dirty_nodes.sort_unstable();
         dirty_nodes.dedup();
         reset_lowered_layer_count();
-        let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+        let report = update_graph_from_applier_report(&applier, &mut graph, &dirty_nodes, 1.0);
         assert!(report.applied(), "delta {delta}: boundary frame must apply");
         if delta == -30.0 {
             assert_eq!(
@@ -1829,8 +1912,7 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
             );
         }
 
-        let fresh =
-            build_graph_from_applier(&mut applier, root, 1.0).expect("fresh comparison graph");
+        let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh comparison graph");
         applier.clear_runtime_handle();
 
         let patched_texts = collect_text_tops(&graph.root);
@@ -1905,7 +1987,7 @@ fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child(
     applier
         .compute_layout(root, viewport)
         .expect("scrolled layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("scrolled graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("scrolled graph");
     let child_id = child_id_holder
         .borrow()
         .expect("text child id should be captured");
@@ -1934,7 +2016,7 @@ fn update_graph_from_applier_keeps_parent_content_offset_for_dirty_scroll_child(
     let child_id = child_id_holder
         .borrow()
         .expect("text child id should remain captured");
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &[child_id], 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &[child_id], 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -2052,7 +2134,7 @@ fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
     applier
         .compute_layout(root, viewport)
         .expect("scrolled layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("scrolled graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("scrolled graph");
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -2078,7 +2160,7 @@ fn dirty_scrolled_overlay_graphics_layer_stays_aligned_with_underlay() {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &[overlay_id], 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &[overlay_id], 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -2135,7 +2217,7 @@ fn update_graph_from_applier_refreshes_dirty_graphics_layer_transform() {
     applier
         .compute_layout(root, viewport)
         .expect("initial layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     let node_id = node_id_holder
         .borrow()
         .expect("graphics layer node id should be captured");
@@ -2156,7 +2238,7 @@ fn update_graph_from_applier_refreshes_dirty_graphics_layer_transform() {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &[node_id], 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &[node_id], 1.0);
     assert!(
         report.applied(),
         "dirty graphics layer should be replaceable from retained applier state, got {:?}",
@@ -2214,7 +2296,7 @@ fn update_graph_from_applier_reports_hit_dirty_for_moved_clickable_layer() {
     applier
         .compute_layout(root, viewport)
         .expect("initial layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     let node_id = node_id_holder
         .borrow()
         .expect("graphics layer node id should be captured");
@@ -2231,7 +2313,7 @@ fn update_graph_from_applier_reports_hit_dirty_for_moved_clickable_layer() {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &[node_id], 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &[node_id], 1.0);
     applier.clear_runtime_handle();
 
     assert!(
@@ -2932,7 +3014,7 @@ fn lazy_column_item_text_keeps_unspecified_motion_at_origin() {
             },
         )
         .expect("lazy column layout");
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("lazy column graph");
     applier.clear_runtime_handle();
 
     assert_eq!(find_text_motion(&graph.root, "LazyMotion"), Some(None));
@@ -2971,7 +3053,7 @@ fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     let active_children = lay_out_lazy_column(&mut applier, root);
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("lazy column graph");
     let child_debug: Vec<String> = active_children
         .iter()
         .map(|&child_id| {
@@ -3047,7 +3129,7 @@ fn scrolled_lazy_column_render_graph_keeps_beyond_bound_text_rows() {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     let active_children = lay_out_lazy_column(&mut applier, root);
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("lazy column graph");
     applier.clear_runtime_handle();
 
     let visible_indices: Vec<_> = list_state
@@ -3111,7 +3193,7 @@ fn scrolled_lazy_column_uses_visible_item_offset_as_snap_anchor_offset() {
             },
         )
         .expect("lazy column layout");
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("lazy column graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("lazy column graph");
     applier.clear_runtime_handle();
 
     let layout_info = list_state.layout_info();
@@ -3263,7 +3345,7 @@ fn wrapped_paragraph_paints_the_height_it_measured() {
             body_box.rect.width
         );
 
-        let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+        let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
         applier.clear_runtime_handle();
 
         fn squashed(value: &str) -> String {
@@ -3382,7 +3464,7 @@ fn paint_body(
     };
     let painted_from_layout_tree = painted_text(&build_graph_from_layout_tree(layout.root(), 1.0));
 
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
     applier.clear_runtime_handle();
     let prepare_at = |width: f32| {
         cranpose_ui::text::prepare_text_layout(
@@ -3661,7 +3743,7 @@ fn a_child_that_leaves_for_a_window_leaves_its_parent_s_scene_with_it() {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, viewport).expect("layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
     applier.clear_runtime_handle();
     drop(applier);
     let mut labels = Vec::new();
@@ -3681,7 +3763,7 @@ fn a_child_that_leaves_for_a_window_leaves_its_parent_s_scene_with_it() {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, viewport).expect("layout");
-    let patched = update_graph_from_applier(&mut applier, &mut graph, &[root], 1.0);
+    let patched = update_graph_from_applier(&applier, &mut graph, &[root], 1.0);
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -3708,11 +3790,17 @@ fn lay_out_lazy_column(applier: &mut MemoryApplier, root: NodeId) -> Vec<NodeId>
             },
         )
         .expect("lazy column layout");
-    applier
-        .with_node::<SubcomposeLayoutNode, _>(root, |node| {
-            node.with_active_children(<[NodeId]>::to_vec)
+    let node: &dyn std::any::Any = applier.get_ref(root).expect("root node");
+    let node = node
+        .downcast_ref::<SubcomposeLayoutNode>()
+        .expect("lazy column should be subcompose");
+    node.with_active_children(|children| {
+        read_node_data(applier, root, |data| {
+            assert_eq!(data.children.as_ptr(), children.as_ptr());
         })
-        .expect("lazy column should be subcompose")
+        .expect("lazy column scene data");
+        children.to_vec()
+    })
 }
 
 fn scrolling_rows_column(scroll_state: ScrollState, row_modifier: fn() -> Modifier) {
@@ -3765,7 +3853,7 @@ fn initial_scrolled_graph(composition: &mut cranpose_ui::TestComposition) -> (No
     applier
         .compute_layout(root, scroll_viewport())
         .expect("initial scroll layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     graph.root.recompute_raster_cache_hashes();
     applier.clear_runtime_handle();
     (root, graph)
@@ -3823,7 +3911,7 @@ fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origi
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, viewport).expect("layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -3851,7 +3939,7 @@ fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origi
             }
         })
         .expect("the field is a layout node");
-    let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+    let report = update_graph_from_applier_report(&applier, &mut graph, &dirty_nodes, 1.0);
     assert!(report.applied(), "the scroll patches the graph");
     let patched = field_window_origin(&mut applier, field);
     assert_eq!(
@@ -3862,7 +3950,7 @@ fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origi
         },
         "the rebuilt field adds up its ancestors' origins, scroll and translation"
     );
-    build_graph_from_applier(&mut applier, root, 1.0).expect("fresh graph");
+    build_graph_from_applier(&applier, root, 1.0).expect("fresh graph");
     assert_eq!(field_window_origin(&mut applier, field), patched);
     applier.clear_runtime_handle();
 }
@@ -3895,8 +3983,8 @@ fn rebuilt_text_nodes_share_their_layouts_render_text_and_style() {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, viewport).expect("layout");
-    let first = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
-    let second = build_graph_from_applier(&mut applier, root, 1.0).expect("rebuilt graph");
+    let first = build_graph_from_applier(&applier, root, 1.0).expect("graph");
+    let second = build_graph_from_applier(&applier, root, 1.0).expect("rebuilt graph");
     applier.clear_runtime_handle();
 
     let (mut before, mut after) = (Vec::new(), Vec::new());
@@ -3970,7 +4058,7 @@ fn built_layers_know_whether_their_content_stays_inside() {
             },
         )
         .expect("layout");
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("graph");
     applier.clear_runtime_handle();
 
     let inside = inside_holder.borrow().expect("inside column");
@@ -4035,7 +4123,7 @@ fn a_dirty_child_that_starts_publishing_window_origins_marks_its_ancestors() {
     applier
         .compute_layout(root, viewport)
         .expect("initial layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
     applier.clear_runtime_handle();
     drop(applier);
     let (outer, inner) = *ids.borrow();
@@ -4062,12 +4150,12 @@ fn a_dirty_child_that_starts_publishing_window_origins_marks_its_ancestors() {
         .compute_layout(root, viewport)
         .expect("updated layout");
     assert!(update_graph_from_applier(
-        &mut applier,
+        &applier,
         &mut graph,
         &[inner],
         1.0
     ));
-    let fresh = build_graph_from_applier(&mut applier, root, 1.0).expect("fresh graph");
+    let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh graph");
     applier.clear_runtime_handle();
 
     assert!(

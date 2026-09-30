@@ -72,7 +72,7 @@ fn allocations_per_pass(
     applier
         .compute_layout(root, Size::new(400.0, 4000.0))
         .expect("layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
     assert_eq!(cell_ids(&graph.root).len(), cells, "every cell is a layer");
     pass(&mut applier, root, &mut graph);
     pass(&mut applier, root, &mut graph);
@@ -167,7 +167,7 @@ fn scroll_step_allocations() -> usize {
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
     applier.compute_layout(root, viewport).expect("layout");
-    let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+    let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
     let _ = applier.take_structural_change_parents_attached_to(root);
     applier.clear_runtime_handle();
     drop(applier);
@@ -185,7 +185,7 @@ fn scroll_step_allocations() -> usize {
         dirty.dedup();
         let region = Region::new(GLOBAL);
         assert!(
-            update_graph_from_applier(&mut applier, &mut graph, &dirty, 1.0),
+            update_graph_from_applier(&applier, &mut graph, &dirty, 1.0),
             "the scroll updates the scene in place"
         );
         let allocations = region.change().allocations;

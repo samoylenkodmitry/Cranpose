@@ -77,7 +77,7 @@ fn repro_screen_paragraphs_paint_the_height_they_measured() {
                 .height
         })
         .collect();
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
     applier.clear_runtime_handle();
 
     for (needle, measured_height) in PARAGRAPHS.iter().zip(measured) {

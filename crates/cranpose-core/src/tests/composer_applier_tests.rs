@@ -392,6 +392,54 @@ fn memory_applier_create_routes_generated_high_ids_to_sparse_storage() {
 }
 
 #[test]
+fn memory_applier_borrows_dense_and_high_id_nodes_together() {
+    struct Value(u32);
+    impl Node for Value {}
+
+    let mut applier = MemoryApplier::new();
+    let dense = applier.create(Box::new(Value(7)));
+    applier.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
+    let high = applier.create(Box::new(Value(11)));
+
+    let first: &dyn std::any::Any = applier.get_ref(dense).expect("dense node");
+    let second: &dyn std::any::Any = applier.get_ref(high).expect("sparse node");
+    assert_eq!(first.downcast_ref::<Value>().expect("value node").0, 7);
+    assert_eq!(second.downcast_ref::<Value>().expect("value node").0, 11);
+    assert!(std::ptr::eq(
+        first.downcast_ref::<Value>().expect("value node"),
+        (applier.get_ref(dense).expect("same node") as &dyn std::any::Any)
+            .downcast_ref::<Value>()
+            .expect("value node"),
+    ));
+}
+
+#[test]
+fn memory_applier_shared_read_rejects_missing_and_removed_nodes() {
+    struct Value;
+    impl Node for Value {}
+
+    let mut applier = MemoryApplier::new();
+    let dense = applier.create(Box::new(Value));
+    applier.next_stable_id = MemoryApplier::HIGH_ID_THRESHOLD;
+    let high = applier.create(Box::new(Value));
+    for id in [dense, high] {
+        applier.remove(id).expect("remove node");
+        assert!(
+            matches!(applier.get_ref(id), Err(NodeError::Missing { id: missing }) if missing == id)
+        );
+    }
+    assert!(matches!(
+        applier.get_ref(NodeId::MAX),
+        Err(NodeError::Missing { id: NodeId::MAX })
+    ));
+    applier.stable_index.set_slot(42, 4_096);
+    assert!(matches!(
+        applier.get_ref(42),
+        Err(NodeError::Missing { id: 42 })
+    ));
+}
+
+#[test]
 fn slot_pass_finalization_error_returns_from_try_pass() {
     let (handle, _runtime) = runtime_handle();
     let mut slots = SlotTable::default();
