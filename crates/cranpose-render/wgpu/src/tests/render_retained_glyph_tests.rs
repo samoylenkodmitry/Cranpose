@@ -1,3 +1,4 @@
+use cranpose_render_common::software_text_raster::SoftwareGlyphAtlasMask;
 use cranpose_ui::text::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::Color;
 
@@ -88,6 +89,56 @@ fn glyph_atlas_allocation_preserves_edges_and_rejects_oversized_masks() {
         ]
     );
     assert!(atlas.allocate(extent, 1).is_none());
+    assert_eq!(renderer.device_error_count(), 0);
+}
+
+#[test]
+fn glyph_upload_scratch_grows_once_and_reuses_its_allocation() {
+    let (_lock, mut renderer) = test_renderer();
+    let masks = [
+        (8, 8, 1.0, 255),
+        (15, 10, 0.0, 0),
+        (4, 4, 1.0, 255),
+        (20, 20, 0.0, 0),
+    ];
+    for (glyph_id, (width, height, coverage, expected)) in masks.into_iter().enumerate() {
+        let pixel_count = width * height;
+        let previous_capacity = renderer.text_glyph_atlas.upload_scratch.capacity();
+        let previous_storage = renderer.text_glyph_atlas.upload_scratch.as_ptr();
+        let glyph = SoftwareGlyphAtlasGlyph {
+            key: SoftwareGlyphAtlasKey {
+                glyph_id: glyph_id as u32,
+                ..test_run(0).0[0].key
+            },
+            mask: SoftwareGlyphAtlasMask {
+                alpha: Arc::from(vec![coverage; pixel_count]),
+                width,
+                height,
+            },
+            x: 0,
+            y: 0,
+            color: Color(1.0, 1.0, 1.0, 1.0),
+        };
+        let entry = renderer
+            .glyph_atlas_entry_for(&glyph)
+            .expect("glyph fits in the atlas");
+        let pixels = &renderer.text_glyph_atlas.upload_scratch;
+        assert_eq!(
+            (usize::from(entry.width), usize::from(entry.height)),
+            (width, height)
+        );
+        assert_eq!(pixels.len(), pixel_count);
+        assert!(pixels.iter().all(|&byte| byte == expected));
+        let growth_budget = (previous_capacity * 2).max(pixel_count);
+        assert!(
+            pixels.capacity() <= growth_budget,
+            "{pixel_count} pixels after capacity {previous_capacity}: got capacity {}, budget {growth_budget}",
+            pixels.capacity(),
+        );
+        if pixel_count <= previous_capacity {
+            assert_eq!(pixels.as_ptr(), previous_storage);
+        }
+    }
     assert_eq!(renderer.device_error_count(), 0);
 }
 
