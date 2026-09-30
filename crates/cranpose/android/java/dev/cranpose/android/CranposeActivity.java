@@ -19,6 +19,8 @@ import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
+import android.util.SparseArray;
+import android.util.SparseIntArray;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.WindowManager;
@@ -783,6 +785,13 @@ public class CranposeActivity extends NativeActivity {
          * accessibility cursor position.
          */
         private final HashMap<Integer, Integer> cursors = new HashMap<>();
+        /**
+         * The controls by virtual id, and the ids of each container's
+         * children in order, indexed with every tree, so a reader walking the
+         * tree finds a node and its children without scanning every control.
+         */
+        private final SparseArray<CranposeAccessibilityElement> byId = new SparseArray<>();
+        private final SparseArray<int[]> childIds = new SparseArray<>();
 
         CranposeAccessibilityProvider(View host) {
             this.host = host;
@@ -795,22 +804,20 @@ public class CranposeActivity extends NativeActivity {
          * has no control here, so the app sends every record again.
          */
         boolean update(int[] order, List<CranposeAccessibilityElement> records, int[] moves) {
-            HashMap<Integer, CranposeAccessibilityElement> known = new HashMap<>(elements.size() * 2);
-            for (CranposeAccessibilityElement element : elements) {
-                element.changed = false;
-                known.put(element.id, element);
-            }
+            // byId holds the tree the reader has; the resent controls replace
+            // theirs in it, and indexing the next tree rebuilds it.
+            for (CranposeAccessibilityElement element : elements) element.changed = false;
             for (int index = 0; index + 4 < moves.length; index += 5) {
-                CranposeAccessibilityElement element = known.get(moves[index]);
+                CranposeAccessibilityElement element = byId.get(moves[index]);
                 if (element != null) {
                     element.bounds.set(moves[index + 1], moves[index + 2], moves[index + 3], moves[index + 4]);
                 }
             }
-            for (CranposeAccessibilityElement record : records) known.put(record.id, record);
+            for (CranposeAccessibilityElement record : records) byId.put(record.id, record);
             ArrayList<CranposeAccessibilityElement> next = new ArrayList<>(order.length);
             boolean complete = true;
             for (int id : order) {
-                CranposeAccessibilityElement element = known.get(id);
+                CranposeAccessibilityElement element = byId.get(id);
                 if (element == null) {
                     complete = false;
                 } else {
@@ -824,6 +831,7 @@ public class CranposeActivity extends NativeActivity {
         void setElements(List<CranposeAccessibilityElement> elements) {
             List<CranposeAccessibilityElement> previous = this.elements;
             this.elements = elements;
+            indexElements();
             // One event for the whole tree, as a window coalesces its views'
             // changes: a service drops what it cached beneath the host and
             // asks again for what it needs.
@@ -977,8 +985,9 @@ public class CranposeActivity extends NativeActivity {
             }
             boolean container = element.scrollable || element.collectionRows > 0
                     || element.collectionColumns > 0 || element.isNamedContainer();
-            for (CranposeAccessibilityElement child : elements) {
-                if (child.scrollParent == element.id) info.addChild(host, child.id);
+            int[] children = childIds.get(element.id);
+            if (children != null) {
+                for (int child : children) info.addChild(host, child);
             }
             info.setPackageName(host.getContext().getPackageName());
             info.setEnabled(element.enabled);
@@ -1357,10 +1366,30 @@ public class CranposeActivity extends NativeActivity {
         }
 
         private CranposeAccessibilityElement find(int id) {
+            return byId.get(id);
+        }
+
+        /** Indexes {@link #elements} by id and each container's children by its id. */
+        private void indexElements() {
+            byId.clear();
+            childIds.clear();
+            SparseIntArray counts = new SparseIntArray();
             for (CranposeAccessibilityElement element : elements) {
-                if (element.id == id) return element;
+                byId.put(element.id, element);
+                if (element.scrollParent >= 0) {
+                    counts.put(element.scrollParent, counts.get(element.scrollParent) + 1);
+                }
             }
-            return null;
+            for (int index = 0; index < counts.size(); index++) {
+                childIds.put(counts.keyAt(index), new int[counts.valueAt(index)]);
+            }
+            SparseIntArray filled = new SparseIntArray();
+            for (CranposeAccessibilityElement element : elements) {
+                if (element.scrollParent < 0) continue;
+                int at = filled.get(element.scrollParent);
+                childIds.get(element.scrollParent)[at] = element.id;
+                filled.put(element.scrollParent, at + 1);
+            }
         }
 
         private void sendEvent(int id, int type) {
