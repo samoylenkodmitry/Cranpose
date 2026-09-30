@@ -1,16 +1,22 @@
 package dev.perfcompare.compose
 
+import android.os.SystemClock
+import android.view.InputDevice
+import android.view.MotionEvent
+import android.view.View
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -19,14 +25,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.wrapContentSize
@@ -34,6 +44,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableFloatStateOf
@@ -44,21 +55,42 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -67,12 +99,6 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-
-// The trading workspace of gpui-fast's `gpui_perf` showcase
-// (github.com/longbridge/gpui-fast, crates/gpui_perf/src/showcase), the most
-// complex screen it measures, element for element as the Cranpose app draws
-// it: the showcase's frame around a docked window of market panels that a
-// timer streams quotes into. See the Cranpose app's `screens/workspace.rs`.
 
 private const val SYMBOLS = 200
 private const val HIDDEN_PANELS = 16
@@ -89,6 +115,7 @@ private const val SCROLL_STEP = 32f
 private const val WINDOW_WIDTH = 1280f
 private const val WINDOW_HEIGHT = 820f
 
+/** Quote feed load and initial watchlist motion for the shared workspace benchmark. */
 enum class WorkspaceMode(val quotesPerTick: Int) {
     Quotes(16), Scroll(8), Hover(8);
 
@@ -120,28 +147,22 @@ private val Series = listOf(Color(0xFFCA8A04), Color(0xFF9333EA), Color(0xFF0284
 private const val RADIUS_SM = 4f
 private const val RADIUS = 6f
 
-// The device's Roboto faces, the same two files the Cranpose app loads: the
-// showcase's medium weight draws regular, its semibold bold.
 private val WorkspaceFont = FontFamily(
     Font(File("/system/fonts/Roboto-Regular.ttf"), FontWeight.Normal),
+    Font(File("/system/fonts/Roboto-Medium.ttf"), FontWeight.Medium),
     Font(File("/system/fonts/Roboto-Bold.ttf"), FontWeight.Bold),
 )
 
 private fun changeColor(change: Double) = if (change >= 0) Success else Danger
 
-/** Text in the showcase's type scale: `size` sp with Tailwind's line height, figures tabular. */
-private fun style(size: Float, color: Color, bold: Boolean = false): TextStyle {
-    val line = when {
-        size <= 12f -> 16f
-        size <= 14f -> 20f
-        size <= 20f -> 28f
-        else -> 32f
-    }
+private fun style(size: Float, color: Color, bold: Boolean = false, medium: Boolean = false): TextStyle {
     return TextStyle(
         color = color,
         fontSize = size.sp,
-        lineHeight = line.sp,
-        fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
+        lineHeight = (size * 1.618034f).sp,
+        lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None),
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+        fontWeight = if (bold) FontWeight.SemiBold else if (medium) FontWeight.Medium else FontWeight.Normal,
         fontFamily = WorkspaceFont,
         fontFeatureSettings = "tnum",
     )
@@ -163,7 +184,12 @@ private fun Modifier.hairlines(left: Boolean = false, top: Boolean = false, righ
         if (top) drawRect(BorderColor, Offset.Zero, Size(size.width, line))
         if (right) drawRect(BorderColor, Offset(size.width - line, 0f), Size(line, size.height))
         if (bottom) drawRect(BorderColor, Offset(0f, size.height - line), Size(size.width, line))
-    }
+    }.padding(
+        start = if (left) 1.dp else 0.dp,
+        top = if (top) 1.dp else 0.dp,
+        end = if (right) 1.dp else 0.dp,
+        bottom = if (bottom) 1.dp else 0.dp,
+    )
 
 // Number formats, as the showcase writes them.
 
@@ -348,13 +374,43 @@ private fun quoteSymbol(tick: Int, i: Int): Int = when {
     else -> (tick * 7 + i * 13) % SYMBOLS
 }
 
+private class WatchlistHoverDriver(private val view: View, private val density: Float) {
+    var coordinates: LayoutCoordinates? = null
+    private val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE })
+    private val points = arrayOf(MotionEvent.PointerCoords())
+    private var frame = 0
+
+    fun move() {
+        val layout = coordinates ?: return
+        if (!layout.isAttached) return
+        val rowHeight = ROW_HEIGHT * density
+        val rows = (layout.size.height / rowHeight).toInt()
+        if (rows == 0) return
+        val phase = frame % (rows * 2)
+        val row = if (phase < rows) phase else rows * 2 - 1 - phase
+        val position = layout.localToRoot(Offset(120f * density, rowHeight * (row + 0.5f)))
+        points[0].x = position.x
+        points[0].y = position.y
+        val now = SystemClock.uptimeMillis()
+        val event = MotionEvent.obtain(
+            now, now, if (frame++ == 0) MotionEvent.ACTION_HOVER_ENTER else MotionEvent.ACTION_HOVER_MOVE,
+            1, properties, points, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0,
+        )
+        try {
+            view.dispatchGenericMotionEvent(event)
+        } finally {
+            event.recycle()
+        }
+    }
+}
+
 /**
- * The workspace at the showcase window's size in dp: a screen of another
- * width draws it at the density that makes it span that width, so every
- * device lays out the same 1280 × 820 dp.
+ * Draws the GPUI workspace at 1280 × 820 dp and scales it to narrower screens.
+ * [still] starts with the quote stream and automatic scrolling stopped at tick zero.
+ * The diagnostic footer samples frame callbacks; device benchmarks measure presentation separately.
  */
 @Composable
-fun WorkspaceFrame(mode: WorkspaceMode) {
+fun WorkspaceFrame(mode: WorkspaceMode, still: Boolean = false) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
         // gpui_perf's window keeps its size; a narrower screen shows all of
         // it scaled down, as the Cranpose app does.
@@ -372,49 +428,71 @@ fun WorkspaceFrame(mode: WorkspaceMode) {
             } else {
                 canvas
             },
-        ) { WorkspaceScreen(mode) }
+        ) { WorkspaceScreen(mode, still) }
     }
 }
 
 @Composable
-private fun WorkspaceScreen(mode: WorkspaceMode) {
+private fun WorkspaceScreen(mode: WorkspaceMode, still: Boolean) {
     val market = remember { Market() }
     val watchlist = rememberLazyListState()
+    val sidebar = rememberScrollState()
+    var streaming by remember { mutableStateOf(!still) }
+    var scrollMode by remember { mutableStateOf(if (mode == WorkspaceMode.Scroll && !still) "Watchlist" else "Off") }
     val fps = remember { mutableFloatStateOf(0f) }
+    val view = LocalView.current
+    val density = LocalDensity.current.density
+    val hover = remember(mode, still, view, density) {
+        if (mode == WorkspaceMode.Hover && !still) WatchlistHoverDriver(view, density) else null
+    }
     val step = with(LocalDensity.current) { SCROLL_STEP.dp.toPx() }
-    LaunchedEffect(mode) {
+    LaunchedEffect(mode, streaming) {
+        if (!streaming) return@LaunchedEffect
         while (isActive) {
             delay(STREAM_EVERY_MS)
             market.tick(mode.quotesPerTick)
         }
     }
-    LaunchedEffect(mode) {
+    LaunchedEffect(scrollMode) {
         var direction = 1f
         var windowStart = withFrameNanos { it }
         var windowFrames = 0
         while (isActive) {
             val now = withFrameNanos { it }
             windowFrames += 1
+            hover?.move()
             // The frame-stats bar samples twice a second, as the showcase's does.
             if (now - windowStart >= 500_000_000L) {
                 fps.floatValue = windowFrames * 1e9f / (now - windowStart)
                 windowStart = now
                 windowFrames = 0
             }
-            if (mode == WorkspaceMode.Scroll) {
+            if (scrollMode == "Watchlist") {
                 if (!watchlist.canScrollForward) direction = -1f
                 else if (!watchlist.canScrollBackward) direction = 1f
                 watchlist.dispatchRawDelta(step * direction)
+            } else if (scrollMode == "Sidebar") {
+                if (!sidebar.canScrollForward) direction = -1f
+                else if (!sidebar.canScrollBackward) direction = 1f
+                sidebar.dispatchRawDelta(step * direction)
             }
         }
     }
-    Column(Modifier.fillMaxSize().background(Background)) {
-        ShowcaseToolbar()
+    Column(Modifier.fillMaxSize().background(Background).onPreviewKeyEvent { event ->
+        if (event.type != KeyEventType.KeyDown || event.isAltPressed || event.isCtrlPressed || event.isMetaPressed || event.isShiftPressed) false else when (event.key) {
+            Key.One -> { scrollMode = "Off"; true }
+            Key.Two -> { scrollMode = "Sidebar"; true }
+            Key.Six -> { scrollMode = "Watchlist"; true }
+            Key.Q -> { streaming = !streaming; true }
+            else -> false
+        }
+    }) {
+        ShowcaseToolbar(scrollMode, { scrollMode = it }, streaming, { streaming = it })
         Row(Modifier.fillMaxWidth().weight(1f)) {
-            GallerySidebar()
+            GallerySidebar(sidebar)
             Column(Modifier.weight(1f).fillMaxHeight()) {
                 PageHeader()
-                Workspace(market, watchlist)
+                Workspace(market, watchlist, hover)
             }
         }
         FrameStats(fps.floatValue)
@@ -422,7 +500,7 @@ private fun WorkspaceScreen(mode: WorkspaceMode) {
 }
 
 @Composable
-private fun ShowcaseToolbar() {
+private fun ShowcaseToolbar(scrollMode: String, onScroll: (String) -> Unit, streaming: Boolean, onStreaming: (Boolean) -> Unit) {
     Row(
         Modifier.fillMaxWidth().height(40.dp).hairlines(bottom = true).padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -431,31 +509,39 @@ private fun ShowcaseToolbar() {
         Box(
             Modifier.height(24.dp).background(Success, RoundedCornerShape(RADIUS.dp)).padding(horizontal = 8.dp),
             contentAlignment = Alignment.Center,
-        ) { Label("compose", style = style(14f, Color.White)) }
+        ) { Label("compose", style = style(14f, Color.White, medium = true)) }
         Spacer(Modifier.weight(1f))
         Label("Auto-scroll", style = sm(MutedForeground))
         Row(
             Modifier.background(Muted, RoundedCornerShape(RADIUS.dp)).padding(2.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            listOf("Off", "Sidebar", "Page", "Table", "List", "Watchlist").forEachIndexed { ix, label ->
-                val selected = ix == 0
+            listOf("Off", "Sidebar", "Page", "Table", "List", "Watchlist").forEach { label ->
+                val selected = label == scrollMode
                 Box(
                     Modifier.height(24.dp)
+                        .semantics { contentDescription = "Auto-scroll $label" }
+                        .selectable(selected, enabled = label in listOf("Off", "Sidebar", "Watchlist"), role = Role.Tab) { onScroll(label) }
                         .then(if (selected) Modifier.background(Background, RoundedCornerShape(RADIUS_SM.dp)) else Modifier)
                         .padding(horizontal = 8.dp),
                     contentAlignment = Alignment.Center,
-                ) { Label(label, style = sm(if (selected) Foreground else MutedForeground)) }
+                ) { Label(label, style = style(14f, if (selected) Foreground else MutedForeground, medium = selected)) }
             }
         }
         Box(Modifier.size(1.dp, 16.dp).background(BorderColor))
-        for ((label, on) in listOf("Refresh data" to false, "Stream quotes" to true, "Retained views" to true)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        for ((label, on) in listOf("Refresh data" to false, "Stream quotes" to streaming, "Retained views" to true)) {
+            Row(
+                Modifier.height(24.dp).semantics { contentDescription = label }
+                    .toggleable(on, enabled = label == "Stream quotes", role = Role.Switch, onValueChange = onStreaming)
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Box(
                     Modifier.size(28.dp, 16.dp).background(if (on) Primary else InputColor, RoundedCornerShape(8.dp)),
                     contentAlignment = if (on) Alignment.CenterEnd else Alignment.CenterStart,
                 ) {
-                    Box(Modifier.padding(2.dp).size(12.dp).background(Background, RoundedCornerShape(6.dp)))
+                    Box(Modifier.padding(2.dp).size(12.dp).background(if (on) PrimaryForeground else Background, RoundedCornerShape(6.dp)))
                 }
                 Label(label, style = sm(Foreground))
             }
@@ -463,41 +549,44 @@ private fun ShowcaseToolbar() {
     }
 }
 
+private val Components = listOf(
+    "Accordion", "Alert", "Avatar", "Badge", "Breadcrumb", "Button", "Calendar", "Card",
+    "Checkbox", "Clipboard", "Collapsible", "Combobox", "DataTable", "DatePicker", "Dialog", "Dropdown",
+    "Editor", "Form", "GroupBox", "Icon", "Image", "Input", "Kbd", "Label", "List", "Menu",
+    "Notification", "NumberInput", "Pagination", "Popover", "Progress", "Radio", "Rating", "Resizable",
+    "Scrollbar", "Select", "Separator", "Settings", "Sheet", "Sidebar", "Skeleton", "Slider",
+    "Spinner", "Switch", "Table", "Tabs", "Tag", "Tooltip",
+)
 private val Groups = listOf(
-    "Getting started" to 6, "Inputs" to 32, "Buttons" to 18, "Data display" to 36, "Feedback" to 22,
-    "Navigation" to 24, "Overlays" to 20, "Layout" to 22, "Forms" to 26, "Charts" to 16, "Media" to 12,
-    "Applications" to 9,
-)
-private val PageWords = listOf(
-    "Accordion", "Badge", "Calendar", "Dropdown", "Editor", "Form", "Grid", "Hover card", "Input",
-    "Kbd", "Label", "Menu",
-)
+    "Getting started" to listOf("Introduction", "Installation", "Theming"),
+    "Components" to Components,
+) + listOf("Recipes", "Patterns", "Layouts", "Accessibility").map { group ->
+    group to Components.map { "$it ${group.lowercase(java.util.Locale.ROOT)}" }
+} + listOf("Applications" to listOf("Trading workspace"))
 
 @Composable
-private fun GallerySidebar() {
-    val scroll = rememberScrollState()
+private fun GallerySidebar(scroll: androidx.compose.foundation.ScrollState) {
     Column(Modifier.width(256.dp).fillMaxHeight().background(SidebarColor).hairlines(right = true)) {
         Column(
             Modifier.fillMaxWidth().weight(1f).verticalScroll(scroll)
                 .padding(start = 8.dp, end = 8.dp, bottom = 16.dp),
         ) {
-            var page = 0
             for ((title, pages) in Groups) {
-                Label(
-                    title,
-                    Modifier.padding(start = 8.dp, top = 16.dp, end = 8.dp, bottom = 4.dp),
-                    style(12f, MutedForeground),
-                )
-                repeat(pages) {
-                    val selected = page == 241
-                    val name = if (selected) "Trading workspace" else "${PageWords[page % PageWords.size]} ${page / 12 + 1}"
-                    Box(
-                        Modifier.fillMaxWidth().height(28.dp)
-                            .then(if (selected) Modifier.background(SidebarAccent, RoundedCornerShape(RADIUS.dp)) else Modifier)
-                            .padding(horizontal = 8.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) { Label(name, style = style(14f, Foreground)) }
-                    page += 1
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Label(
+                        title,
+                        Modifier.padding(start = 8.dp, top = 16.dp, end = 8.dp, bottom = 4.dp),
+                        style(12f, MutedForeground, medium = true),
+                    )
+                    for (name in pages) {
+                        val selected = name == "Trading workspace"
+                        Box(
+                            Modifier.fillMaxWidth().height(28.dp)
+                                .then(if (selected) Modifier.background(SidebarAccent, RoundedCornerShape(RADIUS.dp)) else Modifier)
+                                .padding(horizontal = 8.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) { Label(name, style = style(14f, Foreground, medium = selected)) }
+                    }
                 }
             }
         }
@@ -523,12 +612,12 @@ private fun PageHeader() {
 @Composable
 private fun FrameStats(fps: Float) {
     Row(
-        Modifier.fillMaxWidth().height(24.dp).hairlines(top = true).padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        Modifier.fillMaxWidth().height(28.dp).background(SidebarColor).hairlines(top = true).padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Label("${fps.toInt()} fps", style = xs(MutedForeground))
-        Label("frames drawn by compose", style = xs(MutedForeground))
+        Label("${fps.toInt()} UI updates/s", style = xs(MutedForeground))
+        Label("compose", style = xs(MutedForeground))
     }
 }
 
@@ -545,16 +634,16 @@ private fun Chip(label: String, selected: Boolean, vertical: Float, textSize: Fl
     Box(
         Modifier.then(if (selected) Modifier.background(Secondary, RoundedCornerShape(RADIUS_SM.dp)) else Modifier)
             .padding(horizontal = 8.dp, vertical = vertical.dp),
-    ) { Label(label, style = style(textSize, if (selected) Foreground else MutedForeground)) }
+    ) { Label(label, style = style(textSize, if (selected) Foreground else MutedForeground, medium = selected)) }
 }
 
 @Composable
-private fun Workspace(market: Market, watchlist: LazyListState) {
+private fun Workspace(market: Market, watchlist: LazyListState, hover: WatchlistHoverDriver?) {
     Column(Modifier.fillMaxSize()) {
         WorkspaceToolbar()
         Row(Modifier.fillMaxWidth().weight(1f)) {
             IconSidebar()
-            Dock(market, watchlist)
+            Dock(market, watchlist, hover)
         }
         StatusBar(market.status.intValue)
     }
@@ -564,7 +653,7 @@ private fun Workspace(market: Market, watchlist: LazyListState) {
 private fun WorkspaceToolbar() {
     Row(
         Modifier.fillMaxWidth().height(40.dp).hairlines(bottom = true).padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -572,12 +661,7 @@ private fun WorkspaceToolbar() {
             listOf("Watchlist", "Markets", "Portfolio", "Trade", "Screener", "News", "Community")
                 .forEachIndexed { ix, title -> Chip(title, ix == 0, 4f, 14f) }
         }
-        Row(
-            Modifier.width(288.dp).height(28.dp)
-                .border(1.dp, Foreground, RoundedCornerShape(RADIUS.dp))
-                .padding(horizontal = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) { Label("Search symbols", style = sm(MutedForeground)) }
+        SearchBox(Modifier.weight(1f))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(8.dp).background(Success, RoundedCornerShape(4.dp)))
@@ -586,9 +670,39 @@ private fun WorkspaceToolbar() {
             LetterIcon("!", 20f, Secondary, MutedForeground)
             LetterIcon("*", 20f, Secondary, MutedForeground)
             Label("Account A/C(1637)", style = xs(MutedForeground))
-            LetterIcon("J", 24f, Series[1], Color.White, round = true)
+            Box(Modifier.size(24.dp).background(Series[1], RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
+                Label("J", style = style(12f, Color.White, medium = true))
+            }
         }
     }
+}
+
+@Composable
+private fun SearchBox(modifier: Modifier) {
+    var text by remember { mutableStateOf("") }
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    BasicTextField(
+        value = text,
+        onValueChange = { text = it },
+        modifier = modifier.height(28.dp).focusRequester(focus)
+            .semantics { contentDescription = "Search symbols" }
+            .border(1.dp, if (focused) Foreground else InputColor, RoundedCornerShape(RADIUS.dp))
+            .padding(horizontal = 9.dp),
+        textStyle = sm(MutedForeground),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(showKeyboardOnFocus = false),
+        cursorBrush = SolidColor(Color.Transparent),
+        interactionSource = interaction,
+        decorationBox = { input ->
+            Box(contentAlignment = Alignment.CenterStart) {
+                if (text.isEmpty()) Label("Search symbols", style = sm(MutedForeground))
+                input()
+            }
+        },
+    )
 }
 
 @Composable
@@ -610,19 +724,19 @@ private fun IconSidebar() {
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.Dock(market: Market, watchlist: LazyListState) {
+private fun androidx.compose.foundation.layout.RowScope.Dock(market: Market, watchlist: LazyListState, hover: WatchlistHoverDriver?) {
     Row(Modifier.weight(1f).fillMaxHeight()) {
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            Panel(1f, right = true, bottom = false, tabs = listOf("Watchlist", "Positions")) { Watchlist(market, watchlist) }
+            Panel(1f, right = true, bottom = false, tabs = listOf("Watchlist", "Positions"), market = market) { Watchlist(market, watchlist, hover) }
         }
         Column(Modifier.width(460.dp).fillMaxHeight()) {
-            Panel(1f, right = true, bottom = true, tabs = listOf("Quote", "Profile")) { QuoteDetail(market) }
-            Panel(1.2f, right = true, bottom = false, tabs = listOf("Candlestick", "Intraday")) { Chart(market) }
+            Panel(1f, right = true, bottom = true, tabs = listOf("Quote", "Profile"), market = market) { QuoteDetail(market) }
+            Panel(1.2f, right = true, bottom = false, tabs = listOf("Candlestick", "Intraday"), market = market) { Chart(market) }
         }
         Column(Modifier.width(380.dp).fillMaxHeight()) {
-            Panel(1f, right = false, bottom = true, tabs = listOf("Order Book")) { OrderBook(market) }
-            Panel(1.6f, right = false, bottom = true, tabs = listOf("Time & Sales", "News")) { TimeAndSales(market) }
-            Panel(0.7f, right = false, bottom = false, tabs = listOf("Statistics")) { TradeStats(market) }
+            Panel(1f, right = false, bottom = true, tabs = listOf("Order Book"), market = market) { OrderBook(market) }
+            Panel(1.6f, right = false, bottom = true, tabs = listOf("Time & Sales", "News"), market = market) { TimeAndSales(market) }
+            Panel(0.7f, right = false, bottom = false, tabs = listOf("Statistics"), market = market) { TradeStats(market) }
         }
     }
 }
@@ -634,16 +748,20 @@ private fun androidx.compose.foundation.layout.ColumnScope.Panel(
     right: Boolean,
     bottom: Boolean,
     tabs: List<String>,
+    market: Market,
     content: @Composable () -> Unit,
 ) {
+    var active by remember { mutableIntStateOf(0) }
     Column(Modifier.fillMaxWidth().weight(grow).hairlines(right = right, bottom = bottom).clipToBounds()) {
         Row(
             Modifier.fillMaxWidth().height(32.dp).background(Muted).hairlines(bottom = true),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            tabs.forEachIndexed { ix, title -> WorkspaceTab(title, active = ix == 0) }
+            tabs.forEachIndexed { ix, title -> WorkspaceTab(title, active = ix == active) { active = ix } }
         }
-        Box(Modifier.fillMaxWidth().weight(1f).background(Background).clipToBounds()) { content() }
+        Box(Modifier.fillMaxWidth().weight(1f).background(Background).clipToBounds()) {
+            if (active == 0) content() else HiddenPanel(tabs[active], market)
+        }
     }
 }
 
@@ -653,11 +771,12 @@ private fun androidx.compose.foundation.layout.ColumnScope.Panel(
  * pointer rests over it.
  */
 @Composable
-private fun WorkspaceTab(title: String, active: Boolean) {
+private fun WorkspaceTab(title: String, active: Boolean, onClick: () -> Unit) {
     val interaction = remember { MutableInteractionSource() }
     val isHovered by interaction.collectIsHoveredAsState()
     Box(
         Modifier.fillMaxHeight()
+            .selectable(active, interactionSource = interaction, indication = null, role = Role.Tab, onClick = onClick)
             .hoverable(interaction, enabled = !active)
             .then(
                 when {
@@ -668,7 +787,19 @@ private fun WorkspaceTab(title: String, active: Boolean) {
             )
             .padding(horizontal = 12.dp),
         contentAlignment = Alignment.Center,
-    ) { Label(title, style = sm(if (active) Foreground else MutedForeground)) }
+    ) { Label(title, style = style(14f, if (active) Foreground else MutedForeground, medium = active)) }
+}
+
+@Composable
+private fun HiddenPanel(title: String, market: Market) {
+    val received = remember(title) { market.hidden[0] }
+    Column(
+        Modifier.fillMaxSize().semantics { contentDescription = "$title panel" }.padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Label(title, style = sm(Foreground))
+        Label("$received updates", style = xs(MutedForeground))
+    }
 }
 
 private class Column_(val title: String, val width: Float, val numeric: Boolean)
@@ -695,7 +826,7 @@ private fun Cell(column: Int, gap: Float, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Watchlist(market: Market, state: LazyListState) {
+private fun Watchlist(market: Market, state: LazyListState, hover: WatchlistHoverDriver?) {
     val scroll = rememberScrollState()
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -710,8 +841,10 @@ private fun Watchlist(market: Market, state: LazyListState) {
         }
         Column(Modifier.fillMaxWidth().weight(1f).horizontalScroll(scroll, enabled = false)) {
             WatchlistHeader()
-            LazyColumn(Modifier.width(TABLE_WIDTH.dp).weight(1f), state) {
-                items(SYMBOLS, key = { it }, contentType = { 0 }) { ix -> WatchlistRow(market, ix) }
+            Box(Modifier.fillMaxWidth().weight(1f).onGloballyPositioned { hover?.coordinates = it }) {
+                LazyColumn(Modifier.width(TABLE_WIDTH.dp).fillMaxHeight(), state) {
+                    items(SYMBOLS, key = { it }, contentType = { 0 }) { ix -> WatchlistRow(market, ix) }
+                }
             }
         }
     }
@@ -726,7 +859,7 @@ private fun WatchlistHeader() {
     ) {
         Columns.forEachIndexed { column, spec ->
             Cell(column, 4f) {
-                Label(spec.title, style = style(12f, MutedForeground))
+                Label(spec.title, style = style(12f, MutedForeground, medium = true))
                 if (spec.numeric) SortArrows(column == SORTED_BY)
             }
         }
@@ -773,12 +906,14 @@ private fun WatchlistRow(market: Market, ix: Int) {
         percent(preChange / quote.prevClose * 100) to preColor,
     )
     val range = ((quote.last - quote.low52) / (quote.high52 - quote.low52)).coerceIn(0.0, 1.0).toFloat()
-    val spark = market.sparks[ix].copyOf().also { it[SPARK_POINTS - 1] = quote.last.toFloat() }
+    val spark = market.sparks[ix]
+    val last = quote.last.toFloat()
     val baseline = quote.prevClose.toFloat()
     val interaction = remember { MutableInteractionSource() }
     val isHovered by interaction.collectIsHoveredAsState()
     Row(
         Modifier.width(TABLE_WIDTH.dp).height(ROW_HEIGHT.dp)
+            .semantics { contentDescription = "Watchlist row $ix" }
             .hoverable(interaction)
             .drawBehind {
                 if (isHovered) drawRect(Muted) else if (ix % 2 == 1) drawRect(Stripe)
@@ -791,7 +926,7 @@ private fun WatchlistRow(market: Market, ix: Int) {
             Box(Modifier.background(Secondary, RoundedCornerShape(RADIUS_SM.dp)).padding(horizontal = 2.dp)) {
                 Label(Markets[ix % Markets.size], style = xs(MutedForeground))
             }
-            Label(market.codes[ix], style = style(14f, Foreground))
+            Label(market.codes[ix], style = style(14f, Foreground, medium = true))
         }
         Cell(1, 8f) {
             LetterIcon(listOf("A", "B", "C", "D", "E", "F", "G", "H")[ix % 8], 18f, Secondary, MutedForeground, round = true)
@@ -820,22 +955,27 @@ private fun WatchlistRow(market: Market, ix: Int) {
             )
         }
         Cell(14, 0f) {
-            Box(Modifier.fillMaxWidth().height(20.dp).drawBehind { drawSpark(spark, baseline, color) })
+            Box(Modifier.fillMaxWidth().height(20.dp).drawBehind { drawSpark(spark, last, baseline, color) })
         }
     }
 }
 
 /** A symbol's day as a line over a faint fill. */
-private fun DrawScope.drawSpark(points: FloatArray, baseline: Float, color: Color) {
+private fun DrawScope.drawSpark(points: FloatArray, last: Float, baseline: Float, color: Color) {
     var low = baseline
     var high = baseline
-    for (point in points) { low = min(low, point); high = max(high, point) }
+    for (ix in points.indices) {
+        val point = if (ix == points.lastIndex) last else points[ix]
+        low = min(low, point)
+        high = max(high, point)
+    }
     val span = max(high - low, 0.0001f)
     val step = size.width / (points.size - 1)
     fun y(value: Float) = size.height * ((high - value) / span)
     val area = Path().apply { moveTo(0f, size.height) }
     val line = Path()
-    points.forEachIndexed { ix, value ->
+    points.forEachIndexed { ix, point ->
+        val value = if (ix == points.lastIndex) last else point
         area.lineTo(step * ix, y(value))
         if (ix == 0) line.moveTo(0f, y(value)) else line.lineTo(step * ix, y(value))
     }
@@ -868,7 +1008,10 @@ private fun QuoteDetail(market: Market) {
         "Avg Price" to price(quote.turnover / volume), "Bid/Ask" to "${fixed2(50 + change * 3)}%",
         "Lot Size" to "100", "Min Tick" to "0.010",
     )
-    Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        Modifier.fillMaxSize().padding(12.dp).wrapContentHeight(Alignment.Top, unbounded = true),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Label(market.codes[SELECTED], style = style(14f, Foreground, bold = true))
             Label(market.names[SELECTED], style = xs(MutedForeground))
@@ -876,10 +1019,10 @@ private fun QuoteDetail(market: Market) {
                 Label("Trading", style = xs(Success))
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Label(price(quote.last), style = style(24f, color, bold = true))
-            Label(signed(change), style = sm(color))
-            Label(percent(change / quote.prevClose * 100), style = sm(color))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Label(price(quote.last), Modifier.alignByBaseline().semantics { contentDescription = "Selected quote price" }, style = style(24f, color, bold = true))
+            Label(signed(change), Modifier.alignByBaseline(), style = sm(color))
+            Label(percent(change / quote.prevClose * 100), Modifier.alignByBaseline(), style = sm(color))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             val pre = changeColor(preChange)
@@ -888,20 +1031,25 @@ private fun QuoteDetail(market: Market) {
             Label(percent(preChange / quote.prevClose * 100), style = xs(pre))
             Label("04:12 EST", style = xs(MutedForeground))
         }
-        FlowRow(Modifier.fillMaxWidth()) {
-            stats.forEachIndexed { ix, (label, value) ->
-                Row(
-                    Modifier.fillMaxWidth(0.5f).padding(
-                        start = if (ix % 2 == 1) 12.dp else 0.dp,
-                        top = 2.dp,
-                        end = if (ix % 2 == 0) 12.dp else 0.dp,
-                        bottom = 2.dp,
-                    ),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Label(label, style = xs(MutedForeground))
-                    Label(value, style = xs(Foreground))
+        Column(Modifier.fillMaxWidth()) {
+            for (pair in stats.indices step 2) {
+                Row(Modifier.fillMaxWidth()) {
+                    for (ix in pair..pair + 1) {
+                        val (label, value) = stats[ix]
+                        Row(
+                            Modifier.weight(1f).padding(
+                                start = if (ix % 2 == 1) 12.dp else 0.dp,
+                                top = 2.dp,
+                                end = if (ix % 2 == 0) 12.dp else 0.dp,
+                                bottom = 2.dp,
+                            ),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Label(label, style = xs(MutedForeground))
+                            Label(value, style = xs(Foreground))
+                        }
+                    }
                 }
             }
         }
@@ -950,24 +1098,28 @@ private fun Chart(market: Market) {
         }
         Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp, vertical = 8.dp)) {
             Box(Modifier.fillMaxSize().drawBehind { drawChart(candles, averages, low, high, maxVolume) })
-            Column(
+            BoxWithConstraints(
                 Modifier.width(PRICE_AXIS.dp).fillMaxHeight().align(Alignment.TopEnd)
-                    .padding(start = 4.dp, bottom = TIME_AXIS.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
+                    .padding(bottom = TIME_AXIS.dp),
             ) {
-                for (line in 0..4) Label(price(high - span * (line / 4.0) * 0.75), style = xs(MutedForeground))
-            }
-            BoxWithConstraints(Modifier.fillMaxSize()) {
+                for (line in 0..4) {
+                    Label(
+                        price(high - span * line / 4.0),
+                        Modifier.offset(x = 4.dp, y = maxHeight * (line / 4f * 0.75f)),
+                        xs(MutedForeground),
+                    )
+                }
                 Box(
-                    Modifier.align(Alignment.TopEnd).offset(y = maxHeight * lastAt)
+                    Modifier.offset(y = maxHeight * lastAt)
                         .background(changeColor(change), RoundedCornerShape(RADIUS_SM.dp)).padding(horizontal = 4.dp),
                 ) { Label(price(last.close), style = xs(Color.White)) }
             }
-            Row(
+            BoxWithConstraints(
                 Modifier.fillMaxWidth().height(TIME_AXIS.dp).align(Alignment.BottomStart).padding(end = PRICE_AXIS.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                for (month in listOf("2026-04", "2026-05", "2026-06", "2026-07", "2026-08")) Label(month, style = xs(MutedForeground))
+                for ((ix, month) in listOf("2026-04", "2026-05", "2026-06", "2026-07", "2026-08").withIndex()) {
+                    Label(month, Modifier.offset(x = maxWidth * (ix / 5f)), xs(MutedForeground))
+                }
             }
         }
     }
@@ -1025,7 +1177,10 @@ private fun OrderBook(market: Market) {
     val asks = (0 until BOOK_LEVELS).sumOf { size(it, false) }
     val ratio = (bids / (bids + asks)).toFloat()
     val largest = (0 until BOOK_LEVELS).maxOf { max(size(it, true), size(it, false)) }.coerceAtLeast(1.0)
-    Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(
+        Modifier.fillMaxSize().padding(8.dp).wrapContentHeight(Alignment.Top, unbounded = true),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1033,10 +1188,8 @@ private fun OrderBook(market: Market) {
         ) {
             Label("Bid ${fixed2(ratio * 100.0)}%", style = xs(Success))
             Box(
-                Modifier.weight(1f).height(4.dp).drawBehind {
-                    drawRoundRect(Danger, cornerRadius = CornerRadius(size.height / 2))
-                    drawRoundRect(Success, size = Size(size.width * ratio, size.height), cornerRadius = CornerRadius(size.height / 2))
-                },
+                Modifier.weight(1f).height(4.dp).clip(RoundedCornerShape(2.dp)).background(Danger)
+                    .drawBehind { drawRect(Success, size = Size(size.width * ratio, size.height)) },
             )
             Label("${fixed2((1 - ratio) * 100.0)}% Ask", style = xs(Danger))
         }
@@ -1076,9 +1229,10 @@ private fun OrderBook(market: Market) {
 @Composable
 private fun TimeAndSales(market: Market) {
     market.tape.intValue
-    val trades = market.trades.toList()
+    val trades = market.trades
     Row(
-        Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp),
+        Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)
+            .wrapContentHeight(Alignment.Top, unbounded = true),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         for (half in listOf(0 until TRADES / 2, TRADES / 2 until TRADES)) {
@@ -1131,7 +1285,7 @@ private fun TradeStats(market: Market) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(112.dp).drawBehind {
+            Modifier.requiredSize(112.dp).drawBehind {
                 val stroke = 14.dp.toPx()
                 val radius = min(size.width, size.height) / 2 - 8.dp.toPx()
                 val topLeft = Offset(center.x - radius, center.y - radius)
@@ -1143,7 +1297,7 @@ private fun TradeStats(market: Market) {
                 }
             },
         )
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Column(Modifier.weight(1f).wrapContentHeight(unbounded = true), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             values.forEachIndexed { ix, value ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(8.dp).background(colors[ix], RoundedCornerShape(4.dp)))
@@ -1155,7 +1309,7 @@ private fun TradeStats(market: Market) {
                 }
             }
             Row(
-                Modifier.fillMaxWidth().hairlines(top = true).padding(top = 4.dp),
+                Modifier.fillMaxWidth().padding(top = 4.dp).hairlines(top = true).padding(top = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Label("Net inflow", style = xs(Foreground))
