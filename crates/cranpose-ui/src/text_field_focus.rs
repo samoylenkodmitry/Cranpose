@@ -65,6 +65,11 @@ pub trait FocusedTextFieldHandler {
     fn target_node(&self) -> Option<cranpose_core::NodeId> {
         self.node_id()
     }
+    /// Whether a focus request should open the software keyboard.
+    /// Pointer taps request the keyboard independently of this preference.
+    fn show_keyboard_on_focus(&self) -> bool {
+        true
+    }
     /// Handle a key event. Returns true if consumed.
     fn handle_key(&self, event: &KeyEvent) -> bool;
     /// Insert pasted text.
@@ -322,6 +327,7 @@ pub fn request_focus(
 
     let previous_field = focused_field_node();
     let gaining_field = handler.node_id();
+    let show_keyboard = handler.show_keyboard_on_focus();
 
     crate::render_state::with_text_field_focus(|state| {
         state.request_focus(is_focused, handler, modal_depth);
@@ -333,7 +339,9 @@ pub fn request_focus(
 
     crate::cursor_animation::start_cursor_blink();
 
-    crate::text_input_session::notify_text_input_focus_gained();
+    if show_keyboard {
+        crate::text_input_session::notify_text_input_focus_gained();
+    }
 
     crate::request_render_invalidation();
 }

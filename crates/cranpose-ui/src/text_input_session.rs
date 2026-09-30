@@ -5,13 +5,14 @@
 //! editable text gains or loses focus. The text-field focus manager
 //! ([`crate::text_field_focus`]) fires these notifications:
 //!
-//! - a text field acquired focus → `notify_text_input_focus_gained` →
+//! - a text field requests the keyboard → `notify_text_input_focus_gained` →
 //!   `show_keyboard`
 //! - focus was explicitly cleared, or the focused field left the composition →
 //!   `notify_text_input_focus_lost` → `hide_keyboard`
 //!
-//! `show_keyboard` fires on *every* focus request, including taps on an
-//! already-focused field. This is intentional: the user may have dismissed the
+//! Focus requests show the keyboard when the field's `show_keyboard_on_focus`
+//! option is true. A pointer tap always requests it, including on an
+//! already-focused field. The user may have dismissed the
 //! keyboard (e.g. Android back gesture) without the framework knowing, and
 //! tapping the field again must bring it back. Platform show/hide calls are
 //! expected to be idempotent. `hide_keyboard` is only forwarded when the
@@ -33,7 +34,7 @@ use std::{
 /// the keyboard is already visible (every tap on a text field re-requests it)
 /// and `hide_keyboard` may race a keyboard the user already dismissed.
 pub trait PlatformTextInputHandler {
-    /// A text field gained focus; the platform should show its soft keyboard.
+    /// A focused text field requests its software keyboard.
     fn show_keyboard(&self);
     /// No text field is focused anymore; the platform should hide its soft
     /// keyboard.

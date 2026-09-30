@@ -325,6 +325,7 @@ fn build_focus_handler(
         refs.node_id.get(),
         refs.focus_node.get(),
         line_limits,
+        refs.focus_options.get().show_keyboard_on_focus,
         crate::text_field_handler::CaretGeometryRefs {
             node_origin: refs.node_origin.clone(),
             content_origin: refs.content_origin.clone(),
@@ -341,19 +342,23 @@ fn request_pointer_focus(
     style: &TextStyle,
     modal_depth: usize,
 ) {
-    if modal_depth < crate::modal::current_modal_depth()
-        || refs
-            .focus_node
-            .get()
-            .is_some_and(crate::focus_dispatch::request_focus_in_context)
-    {
+    if modal_depth < crate::modal::current_modal_depth() {
         return;
     }
-    crate::text_field_focus::request_focus(
-        refs.is_focused.clone(),
-        build_focus_handler(state, refs, line_limits, style),
-        modal_depth,
-    );
+    let routed = refs
+        .focus_node
+        .get()
+        .is_some_and(crate::focus_dispatch::request_focus_in_context);
+    if !routed {
+        crate::text_field_focus::request_focus(
+            refs.is_focused.clone(),
+            build_focus_handler(state, refs, line_limits, style),
+            modal_depth,
+        );
+    }
+    if !refs.focus_options.get().show_keyboard_on_focus && *refs.is_focused.borrow() {
+        crate::text_input_session::notify_text_input_focus_gained();
+    }
 }
 
 pub(crate) struct TextFieldFocusBridge {
@@ -386,12 +391,18 @@ impl crate::focus_dispatch::FocusTargetHandle for TextFieldFocusBridge {
             crate::text_field_focus::request_focus(
                 self.refs.is_focused.clone(),
                 build_focus_handler(self.state, &self.refs, self.line_limits, &self.style),
-                self.refs.modal_depth.get(),
+                self.refs.focus_options.get().modal_depth,
             );
         } else if crate::text_field_focus::focused_field_node() == self.refs.node_id.get() {
             crate::text_field_focus::clear_focus();
         }
     }
+}
+
+#[derive(Clone, Copy)]
+struct TextFieldFocusOptions {
+    modal_depth: usize,
+    show_keyboard_on_focus: bool,
 }
 
 #[derive(Clone)]
@@ -415,7 +426,7 @@ pub(crate) struct TextFieldRefs {
     pub wrap_width: Rc<Cell<Option<f32>>>,
     pub press_track: MutableState<Option<PointerPressTrack>>,
     pub gesture_claimed: Rc<Cell<bool>>,
-    pub modal_depth: Rc<Cell<usize>>,
+    focus_options: Rc<Cell<TextFieldFocusOptions>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -442,7 +453,10 @@ impl TextFieldRefs {
             wrap_width: Rc::new(Cell::new(None::<f32>)),
             press_track: mutableStateOf(None::<PointerPressTrack>),
             gesture_claimed: Rc::new(Cell::new(false)),
-            modal_depth: Rc::new(Cell::new(0)),
+            focus_options: Rc::new(Cell::new(TextFieldFocusOptions {
+                modal_depth: 0,
+                show_keyboard_on_focus: true,
+            })),
         }
     }
 
@@ -1395,6 +1409,7 @@ pub struct TextFieldElement {
     style: TextStyle,
     cursor_color: Color,
     line_limits: TextFieldLineLimits,
+    show_keyboard_on_focus: bool,
     handle_controller: Option<TextFieldHandleController>,
     modal_depth: usize,
     decorator: Option<TextFieldRefs>,
@@ -1408,6 +1423,7 @@ impl TextFieldElement {
             style,
             cursor_color: DEFAULT_CURSOR_COLOR,
             line_limits: TextFieldLineLimits::default(),
+            show_keyboard_on_focus: true,
             handle_controller: None,
             modal_depth: 0,
             decorator: None,
@@ -1430,6 +1446,13 @@ impl TextFieldElement {
     /// Creates an element with custom line limits.
     pub fn with_line_limits(mut self, line_limits: TextFieldLineLimits) -> Self {
         self.line_limits = line_limits;
+        self
+    }
+
+    /// Sets whether focus opens the software keyboard. A pointer tap always
+    /// requests it, including when the field is already focused.
+    pub fn with_show_keyboard_on_focus(mut self, show: bool) -> Self {
+        self.show_keyboard_on_focus = show;
         self
     }
 
@@ -1466,6 +1489,7 @@ impl Hash for TextFieldElement {
         self.cursor_color.3.to_bits().hash(state);
         self.style.render_hash().hash(state);
         self.line_limits.hash(state);
+        self.show_keyboard_on_focus.hash(state);
         self.modal_depth.hash(state);
         self.decorator.as_ref().map(TextFieldRefs::key).hash(state);
     }
@@ -1477,6 +1501,7 @@ impl PartialEq for TextFieldElement {
             && self.style == other.style
             && self.cursor_color == other.cursor_color
             && self.line_limits == other.line_limits
+            && self.show_keyboard_on_focus == other.show_keyboard_on_focus
             && self.modal_depth == other.modal_depth
             && self.decorator == other.decorator
     }
@@ -1495,7 +1520,10 @@ impl ModifierNodeElement for TextFieldElement {
                 .with_cursor_color(self.cursor_color)
                 .with_line_limits(self.line_limits);
         node.modal_depth = self.modal_depth;
-        node.refs.modal_depth.set(self.modal_depth);
+        node.refs.focus_options.set(TextFieldFocusOptions {
+            modal_depth: self.modal_depth,
+            show_keyboard_on_focus: self.show_keyboard_on_focus,
+        });
         if let Some(controller) = self.handle_controller.clone() {
             node = node.with_handle_controller(controller);
         }
@@ -1513,7 +1541,10 @@ impl ModifierNodeElement for TextFieldElement {
         node.line_limits = self.line_limits;
         node.handle_controller.clone_from(&self.handle_controller);
         node.modal_depth = self.modal_depth;
-        node.refs.modal_depth.set(self.modal_depth);
+        node.refs.focus_options.set(TextFieldFocusOptions {
+            modal_depth: self.modal_depth,
+            show_keyboard_on_focus: self.show_keyboard_on_focus,
+        });
         node.rebuild_cached_closures();
 
         if node.update_cached_state() {}

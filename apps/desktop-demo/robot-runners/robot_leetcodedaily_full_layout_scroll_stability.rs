@@ -4016,6 +4016,7 @@ fn labeled_field(
                                                 BasicTextFieldOptions {
                                                     text_style: field_text_style(theme),
                                                     cursor_color: accent_color(theme),
+                                                    show_keyboard_on_focus: true,
                                                     line_limits: if min_lines == 1 && max_lines == 1
                                                     {
                                                         TextFieldLineLimits::SingleLine
@@ -4104,6 +4105,7 @@ fn labeled_code_field(
                                                 BasicTextFieldOptions {
                                                     text_style: code_field_style(theme),
                                                     cursor_color: accent_color(theme),
+                                                    show_keyboard_on_focus: true,
                                                     line_limits: if min_lines == 1 && max_lines == 1
                                                     {
                                                         TextFieldLineLimits::SingleLine
