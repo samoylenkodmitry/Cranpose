@@ -54,6 +54,7 @@ data class Launch(
     val depth: Int,
     val chips: Int,
     val workspace: WorkspaceMode,
+    val still: Boolean = false,
 )
 
 private var firstFrameLogged = false
@@ -79,6 +80,7 @@ class MainActivity : ComponentActivity() {
             depth = intent.getIntExtra("depth", 40),
             chips = intent.getIntExtra("chips", 6),
             workspace = WorkspaceMode.fromName(intent.getStringExtra("mode")),
+            still = intent.getBooleanExtra("still", false),
         )
         setContent { PerfCompareApp(launch) }
     }
@@ -108,7 +110,7 @@ fun PerfCompareApp(launch: Launch) {
                 GridScreen(launch.scenario == Scenario.GridLayer, launch.rows, launch.columns)
             Scenario.Deep, Scenario.DeepLayer ->
                 DeepScreen(launch.scenario == Scenario.DeepLayer, launch.depth, launch.chips)
-            Scenario.Workspace -> WorkspaceFrame(launch.workspace)
+            Scenario.Workspace -> WorkspaceFrame(launch.workspace, launch.still)
         }
     }
 }

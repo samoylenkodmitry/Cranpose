@@ -9,8 +9,9 @@ device and measures both from outside either framework.
 
 Each app takes the scenario and its size from intent extras
 (`--es scenario NAME --ei rows 30 …`) and animates itself from its frame clock
-(`withFrameNanos` / `next_frame()`). Both apps therefore do the same work per
-second, without touch input.
+(`withFrameNanos` / `next_frame()`). Both apps use the same animation rules and
+per-frame workload, without touch input. Their work per second depends on the
+frame rate. Workspace quote streaming separately targets the same 16 ms cadence.
 
 A scenario that Compose finishes at 60 fps cannot separate the two
 frameworks, so `measure.py` runs every scenario at a **heavy** load. On the
@@ -27,6 +28,7 @@ Huawei Mate 20 X that load keeps Jetpack Compose itself below 60 fps.
 | `grid_layer` | `grid`, with every cell in a static rotated graphics layer. | 30 × 12 cells | Relayout under many layers |
 | `deep` | The same width animation over 40 levels nested inside one another, each with a row of wrapping chips. | 40 levels × 6 chips | Deep relayout |
 | `deep_layer` | `deep`, with every level in a static rotated graphics layer. | 40 levels × 6 chips | Relayout under nested layers |
+| `workspace` | GPUI trading workspace: quote subscriptions, watchlist, chart, order book, trades and statistics. | 200 symbols, 16 hidden subscriptions | Text updates, clipping, scrolling and hover |
 
 Knobs:
 
@@ -37,7 +39,9 @@ Knobs:
   alpha at 1;
 - `grid` and `grid_layer`: `--ei rows` and `--ei cols`;
 - `deep` and `deep_layer`: `--ei depth` and `--ei chips`;
-- `--ez still true` holds the feed still for side-by-side layout checks.
+- `workspace`: `--es mode quotes`, `scroll` or `hover` (default `quotes`);
+- `--ez still true` holds the feed still, or starts the workspace at tick zero
+  with its stream, automatic scrolling and synthetic hover stopped.
 
 ## Parity rules
 
@@ -46,7 +50,10 @@ Knobs:
 - **Fonts:** both apps load `/system/fonts/Roboto-Regular.ttf` and
   `Roboto-Bold.ttf` from the device and set a 1.4 em line height. The bundled
   Noto Sans Merged declares 2.1 em of ascent plus descent, which Compose honors
-  and Cranpose does not, so it cannot be compared.
+  and Cranpose does not, so it cannot be compared. The workspace also loads
+  `Roboto-Medium.ttf` and follows GPUI's 1.618034 em line height, including the
+  leading above and below single-line labels. Compose uses centered line
+  height, `Trim.None` and `includeFontPadding = false` for that contract.
 - **Window:** the same fullscreen theme, `singleTask` and `configChanges`, and
   one arm64 build each.
 - **Release builds:**
@@ -60,7 +67,56 @@ Knobs:
     lambda, the row's own recompose scope);
   - drawing allocates no per-frame objects;
   - lazy items have stable keys and content types;
-  - numbers are formatted by hand.
+    - numbers are formatted by hand.
+
+## Workspace reference and interaction checks
+
+The workspace follows `gpui_perf/src/showcase` from GPUI reference commit
+`7ab23f46f2ba3a040ceb27d387383a2896bc5ae1`. Its canvas is 1280 × 820 logical
+pixels, scaled uniformly to fit a narrower display. The light theme, tick-zero
+market data and device Roboto files must match before comparing screenshots.
+Crop OS chrome and the unused area below the Android canvas; compare the
+client areas at the same logical size. Font rasterization and density rounding
+can still differ across Android and macOS.
+
+The layout contract includes a 40-pixel showcase toolbar, 256-pixel gallery
+sidebar, 40-pixel workspace toolbar, 48-pixel icon rail and 28-pixel diagnostic
+footer. The page header keeps its natural text height and 16-pixel vertical
+padding. Dock tabs are 32 pixels high; middle and right columns are 460 and
+380 pixels wide. One-pixel borders consume layout space. The selected quote
+uses baseline-aligned prices and two equal columns of statistics. Charts keep
+the same plot, price-axis and time-axis coordinates as GPUI.
+
+The shared interactive controls are symbol search, dock tabs, quote streaming
+and Off/Sidebar/Watchlist automatic scrolling. Search gains editing focus at
+launch and opens Android's software keyboard when tapped. Alternate dock tabs show the
+subscription count when opened, as GPUI does. Destination chips, market-filter
+chips and chart-period chips remain static in the reference. Full gallery
+pages, gallery refresh and GPUI's retention toggle are outside this workspace
+benchmark; the corresponding unsupported Compose controls are disabled.
+
+`quotes` delivers 16 quote events every 16 ms; `scroll` and `hover` deliver 8.
+Automatic scrolling advances 32 logical pixels per frame callback. Hover
+dispatches real mouse events through the view's input path: at x = 120 within
+the watchlist row viewport, it visits each complete visible row's center and
+bounces back, one row per callback. `still` disables this driver at launch.
+The footer's **UI updates/s** counts frame-clock callbacks, while benchmark
+reports measure presented frames independently through SurfaceFlinger.
+
+Compose's device integration tests cover search input, keyboard visibility on
+programmatic focus and real taps, opening and closing a dock panel, pausing and
+resuming quotes, starting and stopping visible scrolling, and the visible
+highlight produced by the hover driver:
+
+```bash
+cd compose-app
+./gradlew :app:connectedDebugAndroidTest
+```
+
+For a paused reference capture, cold-launch each app with `--es scenario
+workspace --ez still true`. Capture GPUI in a separate fixture with its stream
+off before the first tick, light theme and those same three Roboto files;
+preserve the original reference checkout and benchmark executable.
 
 ## Measurement
 
