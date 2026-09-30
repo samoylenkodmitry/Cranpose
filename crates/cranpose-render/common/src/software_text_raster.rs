@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     hash::{Hash, Hasher},
     ops::ControlFlow,
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -76,6 +77,7 @@ pub struct SoftwareTextFont {
     metadata: SoftwareTextFontMetadata,
     score: TextFontScore,
     content_hash: u64,
+    glyph_map_hash: u64,
 }
 
 #[derive(Clone)]
@@ -174,6 +176,7 @@ impl SoftwareTextFont {
             metadata,
             score,
             content_hash,
+            glyph_map_hash: content_hash,
         })
     }
 
@@ -244,6 +247,7 @@ impl SoftwareTextFont {
             metadata,
             score,
             content_hash,
+            glyph_map_hash: content_hash,
         })
     }
 
@@ -272,6 +276,22 @@ impl SoftwareTextFont {
     /// rasterized output depends on which font served the run.
     pub fn content_hash(&self) -> u64 {
         self.content_hash
+    }
+
+    pub(crate) fn shaped_for(&self, style: &TextStyle) -> Cow<'_, Self> {
+        match self
+            .font
+            .with_feature_settings(style.span_style.font_feature_settings.as_deref())
+        {
+            None => Cow::Borrowed(self),
+            Some(font) => Cow::Owned(Self {
+                glyph_map_hash: self.content_hash ^ font.feature_key(),
+                font,
+                metadata: self.metadata.clone(),
+                score: self.score,
+                content_hash: self.content_hash,
+            }),
+        }
     }
 
     fn raster_ref(&self) -> RasterFontRef<'_, KernedFont> {
@@ -776,7 +796,7 @@ impl SoftwareTextGlyphMetricsCache {
             };
         }
         let key = GlyphMetricsKey {
-            font_hash: font.content_hash(),
+            font_hash: font.glyph_map_hash,
             ch,
         };
         if let Some(metrics) = self.glyphs.get(&key) {
@@ -1473,6 +1493,8 @@ pub fn rasterize_text_to_image(
     scale: f32,
     font: &SoftwareTextFont,
 ) -> Option<ImageBitmap> {
+    let shaped = font.shaped_for(style);
+    let font = &*shaped;
     rasterize_text_to_image_impl(
         TextRasterImageRequest {
             text,
@@ -1499,6 +1521,8 @@ pub fn rasterize_text_to_image_with_glyph_cache(
     font: &SoftwareTextFont,
     glyph_cache: &mut SoftwareGlyphRasterCache,
 ) -> Option<ImageBitmap> {
+    let shaped = font.shaped_for(style);
+    let font = &*shaped;
     rasterize_text_to_image_impl(
         TextRasterImageRequest {
             text,
@@ -1590,7 +1614,7 @@ fn annotated_line_alignment_offsets(
             };
             if !content.is_empty() {
                 let segment_font_size = segment_style.resolve_font_size(font_size);
-                let font = fonts.resolve(&segment_style)?;
+                let font = fonts.resolve(&segment_style)?.shaped_for(&segment_style);
                 let font_px_size = font.ab_glyph_px_size(segment_font_size) * scale;
                 let letter_spacing = font
                     .metadata
@@ -2019,7 +2043,7 @@ pub fn measure_text_with_font(
     font_size: f32,
     font: &SoftwareTextFont,
 ) -> TextMetrics {
-    measure_text_impl(text, style, font_size, font.raster_ref())
+    measure_text_impl(text, style, font_size, font.shaped_for(style).raster_ref())
 }
 
 fn measure_text_with_font_cached(
@@ -2029,7 +2053,7 @@ fn measure_text_with_font_cached(
     font: &SoftwareTextFont,
     cache: &mut SoftwareTextMetricsCache,
 ) -> TextMetrics {
-    measure_text_impl_cached(text, style, font_size, font, cache)
+    measure_text_impl_cached(text, style, font_size, &font.shaped_for(style), cache)
 }
 
 pub fn measure_annotated_text_with_font(
@@ -2098,6 +2122,8 @@ pub fn text_offset_for_position_with_font(
         return 0;
     }
 
+    let shaped = font.shaped_for(style);
+    let font = &*shaped;
     let font_size = resolve_font_size(style);
     let line_box = font_line_box(style, font, font_size);
     let line_height = line_box.height;
@@ -2166,6 +2192,8 @@ pub fn cursor_x_for_offset_with_font(
     }
 
     let font_size = resolve_font_size(style);
+    let shaped = font.shaped_for(style);
+    let font = &*shaped;
     measure_text_impl(&text[..clamped_offset], style, font_size, font.raster_ref()).width
 }
 
@@ -2174,6 +2202,8 @@ pub fn layout_text_with_font(
     style: &TextStyle,
     font: &SoftwareTextFont,
 ) -> TextLayoutResult {
+    let shaped = font.shaped_for(style);
+    let font = &*shaped;
     let font_size = resolve_font_size(style);
     let glyph_font_size = font.ab_glyph_px_size(font_size);
     let resolved_weight = font.weight();
@@ -2519,6 +2549,8 @@ fn draw_text_segment_solid_to_rgba(
         .text_motion
         .unwrap_or(TextMotion::Static)
         == TextMotion::Static;
+    let shaped = font.shaped_for(style);
+    let font = &*shaped;
     let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
     let origin_x = if text_motion_static {
         local_rect.x.round()
@@ -2801,6 +2833,8 @@ fn collect_atlas_segment<T>(
         return None;
     }
 
+    let shaped = font.shaped_for(style);
+    let font = &*shaped;
     let m = text_segment_metrics(text, local_rect, style, font_size, scale, font);
     let font_hash = font.content_hash();
     let kerned = &font.font;
@@ -3257,6 +3291,8 @@ fn append_font_prefix_width_segment<S: PrefixWidthSink>(
     glyph_metrics: &mut SoftwareTextGlyphMetricsCache,
     walk: &mut PrefixWidthWalk<'_, S>,
 ) {
+    let shaped = font.shaped_for(style);
+    let font = &*shaped;
     let glyph_font_size = font.ab_glyph_px_size(font_size);
     let scaled_font = font.font.as_scaled(PxScale::from(glyph_font_size));
     let letter_spacing = font.metadata.tracking.resolve(style, font_size);
@@ -4539,3 +4575,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/software_text_raster_line_alignment_tests.rs"]
 mod line_alignment_tests;
+
+#[cfg(test)]
+#[path = "tests/software_text_features_tests.rs"]
+mod feature_tests;
