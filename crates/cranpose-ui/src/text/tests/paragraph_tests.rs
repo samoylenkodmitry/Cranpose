@@ -166,7 +166,9 @@ fn every_ascii_byte_uses_only_letters_as_a_strong_direction() {
 #[test]
 #[ignore = "manual release-mode timing probe"]
 fn content_direction_scan_timing() {
-    use std::{hint::black_box, time::Instant};
+    use std::hint::black_box;
+
+    use web_time::Instant;
     let iterations = std::env::var("DIRECTION_SCAN_ITERATIONS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
