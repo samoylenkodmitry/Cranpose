@@ -37,7 +37,6 @@ use text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
 const APP_WIDTH: u32 = 1100;
 const APP_HEIGHT: u32 = 1100;
 const APP_BOTTOM_LIST_GAP: f32 = 50.0;
-const WORKSPACE_VIEWPORT_FALLBACK_TOP: f32 = 96.0;
 const INTERACTIVE_QUEUE_CHIP_WIDTH: f32 = 214.0;
 const INTERACTIVE_QUEUE_CHIP_GAP: f32 = 10.0;
 const BUTTON_ACTIVITY_INDICATOR_WIDTH: f32 = 66.0;
@@ -8361,30 +8360,14 @@ fn assert_button_quality_matches_baseline(
 
 fn workspace_viewport_bounds(robot: &cranpose::Robot) -> Bounds {
     let window = stable_window_bounds();
-    let (window_width, window_height) = app_window_size();
-    let tag_bounds = robot
+    let semantics = robot
         .get_semantics()
-        .ok()
-        .and_then(|semantics| find_semantic_text_bounds(&semantics, VIEWPORT_TAG));
-    if let Some(bounds) = tag_bounds {
-        if bounds.x >= -1.0
-            && bounds.y >= -1.0
-            && bounds.x + bounds.width <= window_width as f32 + 1.0
-            && bounds.width >= window_width as f32 * 0.5
-            && bounds.height >= window_height as f32 * 0.25
-        {
-            if let Some(clipped) = bounds.clipped_to(window) {
-                return clipped;
-            }
-        }
-    }
-
-    Bounds {
-        x: window.x,
-        y: WORKSPACE_VIEWPORT_FALLBACK_TOP,
-        width: window.width,
-        height: (window.height - WORKSPACE_VIEWPORT_FALLBACK_TOP).max(0.0),
-    }
+        .unwrap_or_else(|err| fail_with_robot(robot, &format!("failed to get workspace semantics: {err}")));
+    let bounds = find_semantic_text_bounds(&semantics, VIEWPORT_TAG)
+        .unwrap_or_else(|| fail_with_robot(robot, "workspace viewport semantics not found"));
+    bounds.clipped_to(window).unwrap_or_else(|| {
+        fail_with_robot(robot, &format!("workspace viewport {bounds:?} is outside window {window:?}"))
+    })
 }
 
 fn find_semantic_text_bounds(
