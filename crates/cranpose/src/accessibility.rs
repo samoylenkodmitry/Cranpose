@@ -443,7 +443,7 @@ impl Default for AccessibilityElement {
 pub(crate) fn snapshot_if_changed<R>(
     shell: &mut AppShell<R>,
     seen_revision: &mut Option<u64>,
-    capacity: usize,
+    published: &mut AccessibilitySnapshot,
 ) -> Option<Vec<AccessibilityElement>>
 where
     R: Renderer,
@@ -453,16 +453,19 @@ where
     if *seen_revision == Some(revision) {
         return None;
     }
-    let next = snapshot(shell, capacity);
+    let next = snapshot(shell, published);
     *seen_revision = Some(shell.semantics_snapshot_revision());
     Some(next)
 }
 
-/// The elements a reader reaches, with room for `capacity` of them up front:
-/// as many as the snapshot published last held, so the list is allocated
-/// once rather than grown.
+/// The elements a reader reaches, written over the elements `published`
+/// holds no longer: a snapshot like the one before reuses their strings and
+/// lists instead of allocating its own.
 #[cfg_attr(test, allow(dead_code))]
-pub(crate) fn snapshot<R>(shell: &mut AppShell<R>, capacity: usize) -> Vec<AccessibilityElement>
+pub(crate) fn snapshot<R>(
+    shell: &mut AppShell<R>,
+    published: &mut AccessibilitySnapshot,
+) -> Vec<AccessibilityElement>
 where
     R: Renderer,
     R::Error: Debug,
@@ -473,15 +476,96 @@ where
     let Some(semantics_tree) = shell.semantics_tree() else {
         return Vec::new();
     };
-    let mut elements = Vec::with_capacity(capacity);
-    project_node(semantics_tree.root(), false, None, None, &mut elements);
+    let mut projection = Projection::new(published.take_spare());
+    project_node(semantics_tree.root(), false, None, None, &mut projection);
+    let elements = projection.finish();
+    #[cfg(debug_assertions)]
+    assert_same_elements(&elements, &project_semantics(semantics_tree.root()));
     elements
 }
 
 fn project_semantics(root: &SemanticsNode) -> Vec<AccessibilityElement> {
-    let mut elements = Vec::new();
-    project_node(root, false, None, None, &mut elements);
-    elements
+    let mut projection = Projection::new(Vec::new());
+    project_node(root, false, None, None, &mut projection);
+    projection.finish()
+}
+
+#[cfg(debug_assertions)]
+fn assert_same_elements(reused: &[AccessibilityElement], fresh: &[AccessibilityElement]) {
+    if reused != fresh && format!("{reused:?}") != format!("{fresh:?}") {
+        let at = reused
+            .iter()
+            .zip(fresh)
+            .position(|(reused, fresh)| format!("{reused:?}") != format!("{fresh:?}"))
+            .unwrap_or_else(|| reused.len().min(fresh.len()));
+        panic!(
+            "a projection over reused buffers differs from a fresh one at element {at}: {:?} != {:?}",
+            reused.get(at),
+            fresh.get(at)
+        );
+    }
+}
+
+struct Projection {
+    elements: Vec<AccessibilityElement>,
+    written: usize,
+    members: Vec<usize>,
+}
+
+impl Projection {
+    fn new(elements: Vec<AccessibilityElement>) -> Self {
+        Self {
+            elements,
+            written: 0,
+            members: Vec::new(),
+        }
+    }
+
+    fn next_slot(&mut self) -> &mut AccessibilityElement {
+        if self.written == self.elements.len() {
+            self.elements.push(AccessibilityElement::default());
+        }
+        &mut self.elements[self.written]
+    }
+
+    fn commit(&mut self) {
+        self.written += 1;
+    }
+
+    fn written(&mut self) -> &mut [AccessibilityElement] {
+        &mut self.elements[..self.written]
+    }
+
+    fn finish(mut self) -> Vec<AccessibilityElement> {
+        self.elements.truncate(self.written);
+        self.elements
+    }
+}
+
+fn reuse_text(buffer: Option<String>, text: Option<&str>) -> Option<String> {
+    text.map(|text| reuse_string(buffer.unwrap_or_default(), text))
+}
+
+fn reuse_string(mut buffer: String, text: &str) -> String {
+    buffer.clear();
+    buffer.push_str(text);
+    buffer
+}
+
+fn reuse_texts<'a>(mut buffer: Vec<String>, texts: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let mut written = 0;
+    for text in texts {
+        match buffer.get_mut(written) {
+            Some(slot) => {
+                slot.clear();
+                slot.push_str(text);
+            }
+            None => buffer.push(text.to_owned()),
+        }
+        written += 1;
+    }
+    buffer.truncate(written);
+    buffer
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -571,13 +655,13 @@ fn project_node(
     suppress_static_text: bool,
     inherited_live_region: Option<LiveRegionMode>,
     inherited_scroll: Option<NodeId>,
-    elements: &mut Vec<AccessibilityElement>,
+    out: &mut Projection,
 ) {
     if node.hidden {
         return;
     }
     let live_region = node.live_region.or(inherited_live_region);
-    let first_new = elements.len();
+    let first_new = out.written;
     let clickable = node
         .actions
         .iter()
@@ -585,7 +669,6 @@ fn project_node(
     let actionable = clickable || node.editable_text;
     let merges = node.merges_accessibility_descendants();
     let boundary = node.is_accessibility_boundary();
-    let label = node.accessibility_label();
     let rect = AccessibilityRect::new(
         node.bounds.x,
         node.bounds.y,
@@ -594,31 +677,17 @@ fn project_node(
     );
 
     let container = is_container(node);
-    if let Some(label) = label
-        && rect.is_visible()
-        && (boundary || !suppress_static_text)
-    {
-        elements.push(element_for_node(
-            node,
-            rect,
-            label.into_owned(),
-            clickable,
-            live_region,
-        ));
-    } else if container && rect.is_visible() {
-        elements.push(element_for_node(
-            node,
-            rect,
-            String::new(),
-            clickable,
-            live_region,
-        ));
-    } else if actionable && rect.is_visible() {
-        warn_unlabeled(node.node_id);
+    if rect.is_visible() {
+        let named = boundary || !suppress_static_text;
+        if !write_node_element(node, rect, named, container, clickable, live_region, out)
+            && actionable
+        {
+            warn_unlabeled(node.node_id);
+        }
     }
 
-    project_canvas_children(node, rect, live_region, elements);
-    for element in &mut elements[first_new..] {
+    project_canvas_children(node, rect, live_region, out);
+    for element in &mut out.written()[first_new..] {
         element.node_generation = node.node_generation;
         element.scroll_parent = inherited_scroll;
     }
@@ -634,8 +703,33 @@ fn project_node(
         suppress_children,
         live_region,
         scroll_for_children,
-        elements,
+        out,
     );
+}
+
+fn write_node_element(
+    node: &SemanticsNode,
+    rect: AccessibilityRect,
+    named: bool,
+    container: bool,
+    clickable: bool,
+    live_region: Option<LiveRegionMode>,
+    out: &mut Projection,
+) -> bool {
+    let slot = out.next_slot();
+    let mut label = std::mem::take(&mut slot.label);
+    label.clear();
+    let labelled = named && node.write_accessibility_label(&mut label);
+    if !labelled && !container {
+        slot.label = label;
+        return false;
+    }
+    if !labelled {
+        label.clear();
+    }
+    fill_node_element(slot, node, rect, label, clickable, live_region);
+    out.commit();
+    true
 }
 
 /// A node a reader walks into rather than stops on: a list, a scroll view, or
@@ -667,16 +761,16 @@ fn project_children(
     suppress_static_text: bool,
     live_region: Option<LiveRegionMode>,
     scroll_for_children: Option<NodeId>,
-    elements: &mut Vec<AccessibilityElement>,
+    out: &mut Projection,
 ) {
-    let first_child = elements.len();
+    let first_child = out.written;
     for child in node.accessibility_children() {
         project_node(
             child,
             suppress_static_text,
             live_region,
             scroll_for_children,
-            elements,
+            out,
         );
     }
     let selectable_group = node.selectable_group
@@ -684,27 +778,32 @@ fn project_children(
             node.widget_role,
             Some(SemanticsWidgetRole::RadioGroup | SemanticsWidgetRole::TabBar)
         );
+    let elements = &mut out.elements[..out.written];
     if selectable_group {
-        number_group(node.node_id, first_child, elements);
+        number_group(node.node_id, first_child, elements, &mut out.members);
     }
     if selectable_group || node.widget_role == Some(SemanticsWidgetRole::Menu) {
-        mark_group_tab_stop(node.node_id, first_child, elements);
+        mark_group_tab_stop(node.node_id, first_child, elements, &mut out.members);
     }
 }
 
-fn mark_group_tab_stop(group: NodeId, first_child: usize, elements: &mut [AccessibilityElement]) {
-    let members: Vec<_> = (first_child..elements.len())
-        .filter(|index| {
-            let element = &elements[*index];
-            element.scroll_parent == Some(group)
-                && matches!(
-                    element.role,
-                    AccessibilityRole::RadioButton
-                        | AccessibilityRole::Tab
-                        | AccessibilityRole::MenuItem
-                )
-        })
-        .collect();
+fn mark_group_tab_stop(
+    group: NodeId,
+    first_child: usize,
+    elements: &mut [AccessibilityElement],
+    members: &mut Vec<usize>,
+) {
+    members.clear();
+    members.extend((first_child..elements.len()).filter(|index| {
+        let element = &elements[*index];
+        element.scroll_parent == Some(group)
+            && matches!(
+                element.role,
+                AccessibilityRole::RadioButton
+                    | AccessibilityRole::Tab
+                    | AccessibilityRole::MenuItem
+            )
+    }));
     let stop = members
         .iter()
         .copied()
@@ -716,7 +815,7 @@ fn mark_group_tab_stop(group: NodeId, first_child: usize, elements: &mut [Access
                 std::cmp::Reverse(*index),
             )
         });
-    for index in members {
+    for &index in members.iter() {
         elements[index].tab_stop = Some(index) == stop;
     }
 }
@@ -724,12 +823,16 @@ fn mark_group_tab_stop(group: NodeId, first_child: usize, elements: &mut [Access
 /// Gives each selectable control under a group its place and the group's
 /// size, and tells the group's own element how many it holds and which way
 /// it runs.
-fn number_group(group: NodeId, first_child: usize, elements: &mut [AccessibilityElement]) {
-    let members: Vec<usize> = (first_child..elements.len())
-        .filter(|index| {
-            elements[*index].selected.is_some() && elements[*index].scroll_parent == Some(group)
-        })
-        .collect();
+fn number_group(
+    group: NodeId,
+    first_child: usize,
+    elements: &mut [AccessibilityElement],
+    members: &mut Vec<usize>,
+) {
+    members.clear();
+    members.extend((first_child..elements.len()).filter(|index| {
+        elements[*index].selected.is_some() && elements[*index].scroll_parent == Some(group)
+    }));
     let count = members.len();
     let Some(first) = members.first() else {
         return;
@@ -773,25 +876,25 @@ fn expansion(node: &SemanticsNode) -> Option<bool> {
 /// What a reader reads out for a control's long press: the verb phrase the
 /// app gave, and for a control that declared the action with no phrase the
 /// plain words for what it is. A control with no long press gets nothing.
-fn long_click_label(node: &SemanticsNode) -> Option<String> {
+fn long_click_label(node: &SemanticsNode) -> Option<&str> {
     node.on_long_click.as_ref()?;
     let named = node
         .on_long_click_label
-        .clone()
+        .as_deref()
         .filter(|label| !label.trim().is_empty());
-    Some(named.unwrap_or_else(|| "long press".to_owned()))
+    Some(named.unwrap_or("long press"))
 }
 
 /// What a reader lists for a control's magic tap: the verb phrase the app
 /// gave, or the plain words for the gesture. A control with no magic tap
 /// gets nothing.
-fn magic_tap_label(node: &SemanticsNode) -> Option<String> {
+fn magic_tap_label(node: &SemanticsNode) -> Option<&str> {
     node.on_magic_tap.as_ref()?;
     let named = node
         .on_magic_tap_label
-        .clone()
+        .as_deref()
         .filter(|label| !label.trim().is_empty());
-    Some(named.unwrap_or_else(|| "magic tap".to_owned()))
+    Some(named.unwrap_or("magic tap"))
 }
 
 #[cfg(debug_assertions)]
@@ -819,16 +922,18 @@ pub(crate) struct CollectionItem {
     pub(crate) horizontal: bool,
 }
 
-/// One control as the platforms see it. A scroll container with no label of
-/// its own comes through with an empty label: a reader never lands on it, but
-/// it is the node the reader pages through.
-fn element_for_node(
+/// Writes one control as the platforms see it into `slot`, reusing the
+/// strings and lists an earlier snapshot left there. A scroll container with
+/// no label of its own comes through with an empty label: a reader never
+/// lands on it, but it is the node the reader pages through.
+fn fill_node_element(
+    slot: &mut AccessibilityElement,
     node: &SemanticsNode,
     rect: AccessibilityRect,
     label: String,
     clickable: bool,
     live_region: Option<LiveRegionMode>,
-) -> AccessibilityElement {
+) {
     let role = if node.is_modal {
         AccessibilityRole::Dialog
     } else if let Some(role) = node.widget_role {
@@ -842,34 +947,42 @@ fn element_for_node(
     } else {
         AccessibilityRole::StaticText
     };
-    AccessibilityElement {
+    let spare = std::mem::take(slot);
+    let value = reuse_text(
+        spare.value,
+        node.text
+            .as_deref()
+            .or_else(|| node.editable_text.then_some(label.as_str()))
+            .filter(|_| !node.password)
+            .filter(|value| node.editable_text || !value.is_empty()),
+    );
+    *slot = AccessibilityElement {
         node_id: node.node_id,
         node_generation: node.node_generation,
         canvas_key: None,
-        value: node
-            .text
-            .clone()
-            .or_else(|| node.editable_text.then(|| label.clone()))
-            .filter(|_| !node.password)
-            .filter(|value| node.editable_text || !value.is_empty()),
+        value,
         label,
-        state_description: node.state_description.clone(),
-        click_label: node.on_click_label.clone(),
-        long_click_label: long_click_label(node),
-        magic_tap_label: magic_tap_label(node),
-        input_labels: node.input_labels.clone(),
-        language: node.language.clone(),
+        state_description: reuse_text(spare.state_description, node.state_description.as_deref()),
+        click_label: reuse_text(spare.click_label, node.on_click_label.as_deref()),
+        long_click_label: reuse_text(spare.long_click_label, long_click_label(node)),
+        magic_tap_label: reuse_text(spare.magic_tap_label, magic_tap_label(node)),
+        input_labels: reuse_texts(
+            spare.input_labels,
+            node.input_labels.iter().map(String::as_str),
+        ),
+        language: reuse_text(spare.language, node.language.as_deref()),
         bounds: rect,
         role,
         clickable: clickable && node.enabled,
         selected: node.selected,
         toggled: node.toggled,
         enabled: node.enabled,
-        custom_actions: node
-            .custom_actions
-            .iter()
-            .map(|action| action.label.clone())
-            .collect(),
+        custom_actions: reuse_texts(
+            spare.custom_actions,
+            node.custom_actions
+                .iter()
+                .map(|action| action.label.as_str()),
+        ),
         focusable: node.focusable,
         tab_stop: true,
         focused: node.focused,
@@ -885,8 +998,8 @@ fn element_for_node(
         scroll_parent: None,
         collection: node.collection,
         collection_item: None,
-        pane_title: node.pane_title.clone(),
-        error: node.error.clone(),
+        pane_title: reuse_text(spare.pane_title, node.pane_title.as_deref()),
+        error: reuse_text(spare.error, node.error.as_deref()),
         password: node.password,
         expanded: expansion(node),
         dismissable: node.dismiss.is_some(),
@@ -896,7 +1009,7 @@ fn element_for_node(
             .filter(|_| node.editable_text && !node.password)
             .map(|range| (range.start, range.end)),
         multiline: node.multiline,
-    }
+    };
 }
 
 /// Pages a scroll container for a screen reader that asked for the next or
@@ -1053,7 +1166,7 @@ fn project_canvas_children(
     node: &SemanticsNode,
     owner: AccessibilityRect,
     live_region: Option<LiveRegionMode>,
-    elements: &mut Vec<AccessibilityElement>,
+    out: &mut Projection,
 ) {
     for child in &node.canvas_children {
         let rect = AccessibilityRect::new(
@@ -1070,26 +1183,34 @@ fn project_canvas_children(
             None if child.clickable => AccessibilityRole::Button,
             None => AccessibilityRole::StaticText,
         };
-        elements.push(AccessibilityElement {
+        let slot = out.next_slot();
+        let spare = std::mem::take(slot);
+        *slot = AccessibilityElement {
             node_id: node.node_id,
             canvas_key: Some(child.key),
-            label: child.label.clone(),
-            state_description: child.state_description.clone(),
-            click_label: child.on_click_label.clone(),
+            label: reuse_string(spare.label, &child.label),
+            state_description: reuse_text(
+                spare.state_description,
+                child.state_description.as_deref(),
+            ),
+            click_label: reuse_text(spare.click_label, child.on_click_label.as_deref()),
             bounds: rect,
             role,
             clickable: child.clickable && node.enabled && child.enabled,
             selected: child.selected,
             toggled: child.toggled,
             enabled: node.enabled && child.enabled,
-            custom_actions: child
-                .custom_actions
-                .iter()
-                .map(|action| action.label.clone())
-                .collect(),
+            custom_actions: reuse_texts(
+                spare.custom_actions,
+                child
+                    .custom_actions
+                    .iter()
+                    .map(|action| action.label.as_str()),
+            ),
             live_region,
             ..AccessibilityElement::default()
-        });
+        };
+        out.commit();
     }
 }
 
@@ -1846,7 +1967,7 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    snapshot(shell, 0)
+    snapshot(shell, &mut AccessibilitySnapshot::default())
         .iter()
         .map(spoken_line)
         .filter(|line| !line.is_empty())

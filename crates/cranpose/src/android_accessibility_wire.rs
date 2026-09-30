@@ -83,6 +83,7 @@ impl AccessibilityWire {
             }
         }
         let reordered = !known || snapshot.ids != replaced.ids;
+        snapshot.recycle(replaced.elements);
         self.density = Some(density.to_bits());
         self.parents = parents;
         Ok(AccessibilityUpdate {

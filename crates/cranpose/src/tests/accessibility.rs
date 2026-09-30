@@ -1874,3 +1874,101 @@ fn placed(root: &SemanticsNode, bounds: &HashMap<NodeId, AccessibilityRect>) -> 
         .collect();
     node
 }
+
+fn busy_screen(y: f32) -> SemanticsNode {
+    let mut field = text_node(2, "Name");
+    field.editable_text = true;
+    field.text = Some("Ada".into());
+    field.text_selection = Some(cranpose_ui::TextRange::new(1, 2));
+    field.language = Some("en".into());
+    field.error = Some("Too short".into());
+    let mut button = text_node(3, "Archive");
+    button.actions.push(click(3));
+    button.on_click_label = Some("archive the message".into());
+    button.state_description = Some("Ready".into());
+    button.input_labels = vec!["Archive".into(), "Store".into()];
+    button.custom_actions = vec![SemanticsCustomAction::new("Delete", || {})];
+    button.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
+    let mut canvas = node(4, SemanticsRole::Layout, Vec::new(), None, Vec::new());
+    canvas.canvas_children = vec![
+        CanvasSemanticsNode::control(1, rect(0.0, 0.0, 100.0, 40.0), "Play")
+            .with_state_description("Paused"),
+    ];
+    let row = merged_test_row(vec![text_node(5, "Inbox"), text_node(6, "3 new")]);
+    let mut pane = node(
+        7,
+        SemanticsRole::Layout,
+        Vec::new(),
+        None,
+        vec![row, field, button, canvas],
+    );
+    pane.pane_title = Some("Mail".into());
+    let mut bounds = HashMap::default();
+    for (index, id) in [7, 1, 5, 6, 2, 3, 4].into_iter().enumerate() {
+        bounds.insert(
+            id,
+            AccessibilityRect::new(0.0, y + 48.0 * index as f32, 300.0, 48.0),
+        );
+    }
+    placed(&pane, &bounds)
+}
+
+fn project_over(
+    root: &SemanticsNode,
+    spare: Vec<AccessibilityElement>,
+) -> Vec<AccessibilityElement> {
+    let mut projection = Projection::new(spare);
+    project_node(root, false, None, None, &mut projection);
+    projection.finish()
+}
+
+#[test]
+fn a_projection_over_another_snapshot_says_what_a_fresh_one_does() {
+    let screen = busy_screen(0.0);
+    let fresh = project_semantics(&screen);
+    assert_eq!(fresh.len(), 5, "{fresh:?}");
+    let mut stale: Vec<AccessibilityElement> = project_semantics(&busy_screen(7.0))
+        .into_iter()
+        .rev()
+        .map(|mut element| {
+            element.value = Some("stale".into());
+            element.custom_actions.push("Stale".into());
+            element.collection_item = Some(CollectionItem {
+                position: 1,
+                count: 1,
+                horizontal: true,
+            });
+            element
+        })
+        .collect();
+    stale.extend(stale.clone());
+    assert_eq!(project_over(&screen, stale), fresh);
+    assert_eq!(project_over(&screen, Vec::new()), fresh);
+}
+
+#[test]
+fn a_projection_like_the_last_one_reuses_its_strings() {
+    let first = project_semantics(&busy_screen(0.0));
+    let labels: Vec<*const u8> = first.iter().map(|element| element.label.as_ptr()).collect();
+    let values: Vec<Option<*const u8>> = first
+        .iter()
+        .map(|element| element.value.as_ref().map(|value| value.as_ptr()))
+        .collect();
+    let moved = project_over(&busy_screen(12.5), first);
+    assert_eq!(
+        moved
+            .iter()
+            .map(|element| element.label.as_ptr())
+            .collect::<Vec<_>>(),
+        labels,
+        "each label is written into the string the same control had"
+    );
+    assert_eq!(
+        moved
+            .iter()
+            .map(|element| element.value.as_ref().map(|value| value.as_ptr()))
+            .collect::<Vec<_>>(),
+        values
+    );
+    assert_eq!(moved, project_semantics(&busy_screen(12.5)));
+}
