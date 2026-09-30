@@ -377,3 +377,39 @@ fn text_align_fraction_puts_the_slack_before_the_text_by_alignment_and_direction
         "a right-to-left paragraph starts at the right edge"
     );
 }
+
+#[test]
+fn text_alignment_respects_physical_edges_and_paragraph_direction() {
+    let cases = [
+        (TextDirection::Ltr, "שלום", false),
+        (TextDirection::Rtl, "hello", true),
+        (TextDirection::Content, "hello", false),
+        (TextDirection::Content, "שלום", true),
+        (TextDirection::ContentOrLtr, "123.45", false),
+        (TextDirection::ContentOrRtl, "123.45", true),
+        (TextDirection::Unspecified, "hello", false),
+        (TextDirection::Unspecified, "שלום", true),
+    ];
+    let alignments = [
+        (TextAlign::Left, 0.0, 0.0),
+        (TextAlign::Right, 1.0, 1.0),
+        (TextAlign::Center, 0.5, 0.5),
+        (TextAlign::Start, 0.0, 1.0),
+        (TextAlign::End, 1.0, 0.0),
+        (TextAlign::Justify, 0.0, 1.0),
+        (TextAlign::Unspecified, 0.0, 1.0),
+    ];
+    for (text_direction, text, rtl) in cases {
+        for (text_align, ltr_fraction, rtl_fraction) in alignments {
+            let mut style = TextStyle::default();
+            style.paragraph_style.text_direction = text_direction;
+            style.paragraph_style.text_align = text_align;
+            let expected = if rtl { rtl_fraction } else { ltr_fraction };
+            assert_eq!(
+                text_align_fraction(&style, text),
+                expected,
+                "{text_align:?}, {text_direction:?}, {text:?}"
+            );
+        }
+    }
+}

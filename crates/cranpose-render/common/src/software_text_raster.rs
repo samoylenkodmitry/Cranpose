@@ -1593,8 +1593,11 @@ fn annotated_line_alignment_offsets(
     scale: f32,
     fonts: &SoftwareTextFontSet,
 ) -> Option<Vec<f32>> {
+    if !text.text.contains('\n') {
+        return None;
+    }
     let align_fraction = cranpose_ui::text::text_align_fraction(style, text.text);
-    if align_fraction == 0.0 || !text.text.contains('\n') {
+    if align_fraction == 0.0 {
         return None;
     }
 

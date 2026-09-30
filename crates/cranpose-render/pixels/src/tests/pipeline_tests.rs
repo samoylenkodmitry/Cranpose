@@ -540,47 +540,6 @@ fn expand_text_bounds_for_baseline_shift_superscript_extends_top() {
 }
 
 #[test]
-fn resolve_text_horizontal_offset_centers_text() {
-    let style = cranpose_ui::TextStyle {
-        paragraph_style: cranpose_ui::ParagraphStyle {
-            text_align: cranpose_ui::text::TextAlign::Center,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
-    assert!((offset - 20.0).abs() < f32::EPSILON);
-}
-
-#[test]
-fn resolve_text_horizontal_offset_uses_rtl_start() {
-    let style = cranpose_ui::TextStyle {
-        paragraph_style: cranpose_ui::ParagraphStyle {
-            text_align: cranpose_ui::text::TextAlign::Start,
-            text_direction: cranpose_ui::text::TextDirection::Rtl,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
-    assert!((offset - 40.0).abs() < f32::EPSILON);
-}
-
-#[test]
-fn resolve_text_horizontal_offset_uses_start_for_unspecified_align() {
-    let style = cranpose_ui::TextStyle {
-        paragraph_style: cranpose_ui::ParagraphStyle {
-            text_align: cranpose_ui::text::TextAlign::Unspecified,
-            text_direction: cranpose_ui::text::TextDirection::Rtl,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let offset = resolve_text_horizontal_offset(&style, "hello", 120.0, 80.0);
-    assert!((offset - 40.0).abs() < f32::EPSILON);
-}
-
-#[test]
 fn push_text_style_draws_emits_background_shadow_and_main_text() {
     let mut scene = RasterScene::new();
     let style = cranpose_ui::TextStyle {

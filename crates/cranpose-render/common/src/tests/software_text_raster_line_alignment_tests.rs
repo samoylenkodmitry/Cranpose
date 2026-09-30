@@ -1,4 +1,4 @@
-use cranpose_ui::text::{ParagraphStyle, TextAlign};
+use cranpose_ui::text::{ParagraphStyle, TextAlign, TextDirection};
 
 use super::*;
 
@@ -26,6 +26,59 @@ fn centred_style(align: TextAlign) -> TextStyle {
             ..ParagraphStyle::default()
         },
         ..TextStyle::default()
+    }
+}
+
+#[test]
+fn a_single_line_needs_no_per_line_alignment_offsets() {
+    let font = default_software_text_font().expect("bundled default font");
+    let fonts = SoftwareTextFontSet::from_font(font);
+    let text = StyledTextRef {
+        text: "123456789.00",
+        span_styles: &[],
+    };
+    for alignment in [
+        TextAlign::Left,
+        TextAlign::Right,
+        TextAlign::Center,
+        TextAlign::Start,
+        TextAlign::End,
+    ] {
+        let mut style = centred_style(alignment);
+        style.paragraph_style.text_direction = TextDirection::Rtl;
+        assert!(annotated_line_alignment_offsets(&text, &style, 20.0, 1.0, &fonts).is_none());
+    }
+}
+
+#[test]
+fn rtl_physical_left_and_relative_end_rasterize_at_the_left_edge() {
+    let font = default_software_text_font().expect("bundled default font");
+    let rasterize = |alignment, direction| {
+        let mut style = centred_style(alignment);
+        style.paragraph_style.text_direction = direction;
+        rasterize_text_to_image(
+            "wwwwwwwwwwww\nww",
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 80.0,
+            },
+            &style,
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+            &font,
+        )
+        .expect("text image")
+    };
+    let left = rasterize(TextAlign::Left, TextDirection::Ltr);
+    for alignment in [TextAlign::Left, TextAlign::End] {
+        let actual = rasterize(alignment, TextDirection::Rtl);
+        assert!(
+            actual.pixels() == left.pixels(),
+            "{alignment:?} must match the left-aligned pixels"
+        );
     }
 }
 

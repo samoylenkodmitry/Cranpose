@@ -17,8 +17,6 @@ use cranpose_render_common::{
         draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
     },
 };
-#[cfg(test)]
-use cranpose_ui::text::{ResolvedTextDirection, TextAlign, resolve_text_direction};
 use cranpose_ui::{
     LayoutBox, TextLayoutOptions, measure_text,
     text::{TextDecoration, TextStyle},
@@ -621,37 +619,6 @@ fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
 
 #[cfg(test)]
 use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
-
-#[cfg(test)]
-fn resolve_text_horizontal_offset(
-    style: &TextStyle,
-    text: &str,
-    content_width: f32,
-    measured_width: f32,
-) -> f32 {
-    let available_width = content_width.max(0.0);
-    let remaining = (available_width - measured_width.max(0.0)).max(0.0);
-    let paragraph_style = &style.paragraph_style;
-    let direction = resolve_text_direction(text, Some(paragraph_style.text_direction));
-    match paragraph_style.text_align {
-        TextAlign::Left => 0.0,
-        TextAlign::Right => remaining,
-        TextAlign::Center => remaining * 0.5,
-        TextAlign::Justify => 0.0,
-        TextAlign::Start => match direction {
-            ResolvedTextDirection::Ltr => 0.0,
-            ResolvedTextDirection::Rtl => remaining,
-        },
-        TextAlign::End => match direction {
-            ResolvedTextDirection::Ltr => remaining,
-            ResolvedTextDirection::Rtl => 0.0,
-        },
-        TextAlign::Unspecified => match direction {
-            ResolvedTextDirection::Ltr => 0.0,
-            ResolvedTextDirection::Rtl => remaining,
-        },
-    }
-}
 
 /// Replaces `scene` with `root`'s graph, built in the allocations of the
 /// graph it held.

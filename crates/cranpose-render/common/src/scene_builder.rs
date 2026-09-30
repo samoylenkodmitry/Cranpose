@@ -2050,6 +2050,9 @@ fn resolve_text_horizontal_offset(
     measured_width: f32,
 ) -> f32 {
     let remaining = (content_width - measured_width).max(0.0);
+    if remaining == 0.0 {
+        return 0.0;
+    }
     remaining * cranpose_ui::text::text_align_fraction(text_style, text)
 }
 
