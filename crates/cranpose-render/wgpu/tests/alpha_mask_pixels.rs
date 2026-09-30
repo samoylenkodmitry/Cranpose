@@ -91,7 +91,7 @@ fn alpha_masks_match_rgba_pixels_across_sampling_filters_blends_and_transforms()
 }
 
 #[test]
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "backend-gles"))]
 fn alpha_masks_match_rgba_pixels_on_gl() {
     assert_alpha_mask_parity(wgpu::Backends::GL);
 }
