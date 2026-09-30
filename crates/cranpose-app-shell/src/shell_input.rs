@@ -1191,6 +1191,76 @@ where
         if self.inspector_key(event) {
             return true;
         }
+        let root = self.key_event_root();
+        if root.is_none() && self.id() != RootId::Primary {
+            return false;
+        }
+        let route =
+            cranpose_ui::KeyEventRoute::new(&mut self.shell.app.composition.applier_mut(), root);
+        if self.dispatch_modifier_key(&route, event, true) {
+            return true;
+        }
+        if route.focus_is_current() && self.on_focused_key_event(event) {
+            return true;
+        }
+        if self.dispatch_modifier_key(&route, event, false) {
+            return true;
+        }
+        if !route.focus_is_current() || cranpose_ui::text_field_focus::has_focused_field() {
+            return false;
+        }
+        let handled = run_in_mutable_snapshot(|| cranpose_ui::dispatch_unhandled_key_event(event))
+            .unwrap_or(false);
+        if handled {
+            self.mark_dirty();
+            self.shell.app.request_layout_pass();
+        }
+        handled
+    }
+
+    fn dispatch_modifier_key(
+        &mut self,
+        route: &cranpose_ui::KeyEventRoute,
+        event: &KeyEvent,
+        preview: bool,
+    ) -> bool {
+        let handled = run_in_mutable_snapshot(|| {
+            let mut applier = self.shell.app.composition.applier_mut();
+            if preview {
+                route.dispatch_preview(&mut applier, event)
+            } else {
+                route.dispatch_bubble(&mut applier, event)
+            }
+        })
+        .unwrap_or(false);
+        if handled {
+            self.mark_dirty();
+            self.shell.app.request_layout_pass();
+        }
+        handled
+    }
+
+    fn key_event_root(&self) -> Option<cranpose_core::NodeId> {
+        self.surface()
+            .modal_focus
+            .last()
+            .map(|entry| entry.0)
+            .or_else(|| self.surface().root)
+            .or_else(|| match self.id() {
+                RootId::Primary => self.shell.app.composition.root(),
+                RootId::Window(_) => None,
+            })
+    }
+
+    fn receives_focused_input(&mut self) -> bool {
+        let root = self.key_event_root();
+        cranpose_ui::KeyEventRoute::contains_focus(
+            &mut self.shell.app.composition.applier_mut(),
+            root,
+        )
+    }
+
+    fn on_focused_key_event(&mut self, event: &KeyEvent) -> bool {
         use KeyEventType::KeyDown;
 
         if event.event_type == KeyDown && event.modifiers.command_or_ctrl() {
@@ -1240,12 +1310,9 @@ where
             return true;
         }
 
-        let handled = if cranpose_ui::text_field_focus::has_focused_field() {
+        let handled =
             run_in_mutable_snapshot(|| cranpose_ui::text_field_focus::dispatch_key_event(event))
-        } else {
-            run_in_mutable_snapshot(|| cranpose_ui::dispatch_unhandled_key_event(event))
-        }
-        .unwrap_or(false);
+                .unwrap_or(false);
 
         if handled {
             self.mark_dirty();
@@ -1256,8 +1323,7 @@ where
     }
 
     /// Handles paste event from platform clipboard.
-    /// Returns `true` if the paste was consumed by a focused text field.
-    /// O(1) operation using stored handler.
+    /// Returns `true` if a focused text field in this surface consumed the paste.
     pub fn on_paste(&mut self, text: &str) -> bool {
         if self.inspector_owns_keyboard() {
             return true;
@@ -1268,6 +1334,9 @@ where
     }
 
     fn on_paste_inner(&mut self, text: &str) -> bool {
+        if !self.receives_focused_input() {
+            return false;
+        }
         let handled =
             run_in_mutable_snapshot(|| cranpose_ui::text_field_focus::dispatch_paste(text))
                 .unwrap_or(false);
@@ -1281,8 +1350,7 @@ where
     }
 
     /// Handles copy request from platform.
-    /// Returns the selected text from focused text field, or None.
-    /// O(1) operation using stored handler.
+    /// Returns the selected text from this surface's focused field, or `None`.
     pub fn on_copy(&mut self) -> Option<String> {
         let app_context = Rc::clone(&self.shell.app.app_context);
         if self.inspector_owns_keyboard() {
@@ -1292,12 +1360,14 @@ where
     }
 
     fn on_copy_inner(&mut self) -> Option<String> {
+        if !self.receives_focused_input() {
+            return None;
+        }
         cranpose_ui::text_field_focus::dispatch_copy()
     }
 
     /// Handles cut request from platform.
-    /// Returns the cut text from focused text field, or None.
-    /// O(1) operation using stored handler.
+    /// Returns the cut text from this surface's focused field, or `None`.
     pub fn on_cut(&mut self) -> Option<String> {
         let _event_handler = enter_event_handler_scope();
         if self.inspector_owns_keyboard() {
@@ -1308,6 +1378,9 @@ where
     }
 
     fn on_cut_inner(&mut self) -> Option<String> {
+        if !self.receives_focused_input() {
+            return None;
+        }
         let text =
             run_in_mutable_snapshot(cranpose_ui::text_field_focus::dispatch_cut).unwrap_or(None);
 
@@ -1336,6 +1409,9 @@ where
     }
 
     fn on_ime_preedit_inner(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        if !self.receives_focused_input() {
+            return false;
+        }
         let handled = run_in_mutable_snapshot(|| {
             cranpose_ui::text_field_focus::dispatch_ime_preedit(text, cursor)
         })
@@ -1362,6 +1438,9 @@ where
     }
 
     fn on_ime_finish_composing_inner(&mut self) -> bool {
+        if !self.receives_focused_input() {
+            return false;
+        }
         let handled =
             run_in_mutable_snapshot(cranpose_ui::text_field_focus::dispatch_ime_finish_composing)
                 .unwrap_or(false);
@@ -1384,6 +1463,9 @@ where
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| {
+            if !self.receives_focused_input() {
+                return false;
+            }
             let handled = run_in_mutable_snapshot(|| {
                 cranpose_ui::text_field_focus::dispatch_ime_set_composing_region(
                     start_bytes,
@@ -1412,6 +1494,9 @@ where
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
         app_context.enter(|| {
+            if !self.receives_focused_input() {
+                return false;
+            }
             let handled = run_in_mutable_snapshot(|| {
                 cranpose_ui::text_field_focus::dispatch_ime_set_selection(start_bytes, end_bytes)
             })
@@ -1427,20 +1512,28 @@ where
 
     /// Returns a snapshot of the focused text field's editable state for
     /// platform IMEs (text, selection and composition in UTF-8 bytes), or
-    /// `None` when no text field is focused.
+    /// `None` when this surface has no focused text field.
     pub fn ime_editor_state(&mut self) -> Option<cranpose_ui::text_field_focus::ImeEditorState> {
         let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(cranpose_ui::text_field_focus::focused_editor_state)
+        app_context.enter(|| {
+            self.receives_focused_input()
+                .then(cranpose_ui::text_field_focus::focused_editor_state)
+                .flatten()
+        })
     }
 
     /// Window-space caret geometry of the focused field for coordinate-based
     /// platform text input (iOS trackpad cursor + tap-to-position), or `None`
-    /// when no text field is focused.
+    /// when this surface has no focused text field.
     pub fn ime_caret_geometry(
         &mut self,
     ) -> Option<cranpose_ui::text_field_focus::ImeCaretGeometry> {
         let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(cranpose_ui::text_field_focus::focused_caret_geometry)
+        app_context.enter(|| {
+            self.receives_focused_input()
+                .then(cranpose_ui::text_field_focus::focused_caret_geometry)
+                .flatten()
+        })
     }
 
     /// Clears text-field focus (used by platform IME actions such as
@@ -1448,9 +1541,13 @@ where
     pub fn clear_text_field_focus(&mut self) {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.shell.app.app_context);
-        app_context.enter(cranpose_ui::text_field_focus::clear_focus);
-        self.mark_dirty();
-        self.shell.app.request_layout_pass();
+        app_context.enter(|| {
+            if self.receives_focused_input() {
+                cranpose_ui::text_field_focus::clear_focus();
+                self.mark_dirty();
+                self.shell.app.request_layout_pass();
+            }
+        });
     }
 
     /// Handles IME delete-surrounding events.
@@ -1465,6 +1562,9 @@ where
     }
 
     fn on_ime_delete_surrounding_inner(&mut self, before_bytes: usize, after_bytes: usize) -> bool {
+        if !self.receives_focused_input() {
+            return false;
+        }
         let handled = run_in_mutable_snapshot(|| {
             cranpose_ui::text_field_focus::dispatch_delete_surrounding(before_bytes, after_bytes)
         })

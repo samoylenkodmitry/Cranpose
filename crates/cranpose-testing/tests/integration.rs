@@ -4,6 +4,7 @@ mod conditional_rendering_test;
 mod integration_modifier_tests;
 mod intrinsics_test;
 mod keyboard_focus_test;
+mod keyboard_routing_test;
 mod modifier_offset_test;
 mod modifier_reuse_test;
 mod modifier_size_position_test;

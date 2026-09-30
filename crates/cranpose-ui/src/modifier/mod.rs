@@ -27,6 +27,7 @@ mod fill;
 mod focus;
 mod focus_ring;
 mod graphics_layer;
+mod key_input;
 mod local;
 mod minimum_interactive;
 mod offset;
@@ -68,6 +69,7 @@ pub use drag_and_drop::{
 use focus::FocusTargetElement;
 pub use focus::{FocusDirection, FocusRequestError, FocusRequester, FocusRequesterElement};
 pub use graphics_layer::GlassMaterial;
+pub use key_input::KeyEventRoute;
 pub(crate) use local::{
     ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
 };

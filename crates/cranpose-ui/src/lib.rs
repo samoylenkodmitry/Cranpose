@@ -152,14 +152,15 @@ pub use modifier::{
     DragAndDropOutcome, DragAndDropPayload, DragAndDropPoint, DragAndDropSource,
     DragAndDropSourceElement, DragAndDropSourceNode, DragAndDropState, DragAndDropTarget,
     DragAndDropTargetElement, DragAndDropTargetNode, EdgeInsets, FocusDirection, FocusRequestError,
-    FocusRequester, GlassMaterial, GraphicsLayer, LayerShape, Modifier, ModifierLocalKey,
-    ModifierLocalReadScope, ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent,
-    PointerEventKind, PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground,
-    ResolvedModifiers, RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape,
-    RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size, TransformOrigin,
-    WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode, WindowRootRegistry,
-    collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
-    is_window_root, nearest_window_root, nearest_window_roots, window_roots, window_roots_revision,
+    FocusRequester, GlassMaterial, GraphicsLayer, KeyEventRoute, LayerShape, Modifier,
+    ModifierLocalKey, ModifierLocalReadScope, ModifierNodeSlices, ModifierNodeSlicesDebugStats,
+    Point, PointerEvent, PointerEventKind, PointerInputScope, PointerSource, Rect, RenderEffect,
+    ResolvedBackground, ResolvedModifiers, RotaryInputModifierNode, RotaryScrollEvent,
+    RoundedCornerShape, RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size,
+    TransformOrigin, WindowRootDescriptor, WindowRootElement, WindowRootEntry, WindowRootNode,
+    WindowRootRegistry, collect_modifier_slices, collect_semantics_from_modifier,
+    collect_slices_from_modifier, is_window_root, nearest_window_root, nearest_window_roots,
+    window_roots, window_roots_revision,
 };
 #[cfg(feature = "test-helpers")]
 pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
