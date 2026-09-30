@@ -4080,9 +4080,10 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
 fn every_platform_lets_a_reader_find_an_empty_text_field() {
     let projection_source = crate_source("src/accessibility.rs");
     assert!(
-        projection_source.contains("let label = node.accessibility_label();")
-            && workspace_source("crates/cranpose-ui/src/layout/semantics_labels.rs")
-                .contains("self.editable_text.then_some(Cow::Borrowed(\"\"))"),
+        projection_source.contains("node.write_accessibility_label(&mut label)")
+            && workspace_source("crates/cranpose-ui/src/layout/semantics_labels.rs").contains(
+                "self.write_accessibility_words(out))\n            || self.editable_text"
+            ),
         "the projection publishes an editable field even with nothing to read"
     );
 

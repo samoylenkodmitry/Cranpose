@@ -44,24 +44,27 @@ impl SemanticsNode {
     }
 
     /// Children in screen-reader order. Equal indices retain composition order;
-    /// non-finite indices are treated as the default index, zero.
-    pub fn accessibility_children(&self) -> Vec<&Self> {
-        let mut children: Vec<_> = self.children.iter().collect();
-        let index = |node: &&Self| {
+    /// non-finite indices are treated as the default index, zero. Children
+    /// that all keep the default index come in composition order without
+    /// being collected first.
+    pub fn accessibility_children(&self) -> impl Iterator<Item = &Self> + '_ {
+        let index = |node: &Self| {
             if node.traversal_index.is_finite() {
                 node.traversal_index
             } else {
                 0.0
             }
         };
-        if children.iter().any(|child| index(child) != 0.0) {
-            children.sort_by(|left, right| {
-                index(left)
-                    .partial_cmp(&index(right))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+        if !self.children.iter().any(|child| index(child) != 0.0) {
+            return ReaderOrder::Composed(self.children.iter());
         }
-        children
+        let mut children: Vec<_> = self.children.iter().collect();
+        children.sort_by(|left, right| {
+            index(left)
+                .partial_cmp(&index(right))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        ReaderOrder::Sorted(children.into_iter())
     }
 
     /// The accessible name, including merged static descendants in reading
@@ -72,8 +75,43 @@ impl SemanticsNode {
         if self.hidden {
             return None;
         }
-        let own = self
-            .description
+        if let Some(own) = self.own_accessibility_label() {
+            return Some(Cow::Borrowed(own));
+        }
+        let mut words = String::new();
+        if self.merges_accessibility_descendants() && self.write_accessibility_words(&mut words) {
+            return Some(Cow::Owned(words));
+        }
+        self.editable_text.then_some(Cow::Borrowed(""))
+    }
+
+    /// Appends the name [`SemanticsNode::accessibility_label`] gives to
+    /// `out`, without collecting a merged name first, and answers whether
+    /// the node has a name at all; an unnamed editable field has an empty one.
+    pub fn write_accessibility_label(&self, out: &mut String) -> bool {
+        if self.hidden {
+            return false;
+        }
+        if let Some(own) = self.own_accessibility_label() {
+            out.push_str(own);
+            return true;
+        }
+        (self.merges_accessibility_descendants() && self.write_accessibility_words(out))
+            || self.editable_text
+    }
+
+    fn own_accessibility_label(&self) -> Option<&str> {
+        if self.password {
+            return Some(
+                self.description
+                    .as_deref()
+                    .filter(|label| {
+                        !label.trim().is_empty() && Some(*label) != self.text.as_deref()
+                    })
+                    .unwrap_or("password"),
+            );
+        }
+        self.description
             .as_deref()
             .filter(|label| !label.trim().is_empty())
             .or_else(|| match &self.role {
@@ -81,38 +119,53 @@ impl SemanticsNode {
                     Some(value.as_str())
                 }
                 _ => None,
-            });
-        if self.password {
-            return Some(Cow::Borrowed(
-                self.description
-                    .as_deref()
-                    .filter(|label| {
-                        !label.trim().is_empty() && Some(*label) != self.text.as_deref()
-                    })
-                    .unwrap_or("password"),
-            ));
-        }
-        own.map(Cow::Borrowed)
-            .or_else(|| {
-                if !self.merges_accessibility_descendants() {
-                    return None;
-                }
-                let mut words = Vec::new();
-                self.collect_accessibility_words(&mut words);
-                (!words.is_empty()).then(|| Cow::Owned(words.join(", ")))
             })
-            .or_else(|| self.editable_text.then_some(Cow::Borrowed("")))
     }
 
-    fn collect_accessibility_words<'a>(&'a self, words: &mut Vec<&'a str>) {
+    fn write_accessibility_words(&self, out: &mut String) -> bool {
+        let mut wrote = false;
+        self.append_accessibility_words(out, &mut wrote);
+        wrote
+    }
+
+    fn append_accessibility_words(&self, out: &mut String, wrote: &mut bool) {
         for child in self.accessibility_children() {
             if child.hidden || child.is_accessibility_boundary() {
                 continue;
             }
-            match child.accessibility_label() {
-                Some(Cow::Borrowed(label)) if !label.trim().is_empty() => words.push(label),
-                _ => child.collect_accessibility_words(words),
+            match child.own_accessibility_label() {
+                Some(label) if !label.trim().is_empty() => {
+                    if *wrote {
+                        out.push_str(", ");
+                    }
+                    out.push_str(label);
+                    *wrote = true;
+                }
+                _ => child.append_accessibility_words(out, wrote),
             }
+        }
+    }
+}
+
+enum ReaderOrder<'a> {
+    Composed(std::slice::Iter<'a, SemanticsNode>),
+    Sorted(std::vec::IntoIter<&'a SemanticsNode>),
+}
+
+impl<'a> Iterator for ReaderOrder<'a> {
+    type Item = &'a SemanticsNode;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Composed(children) => children.next(),
+            Self::Sorted(children) => children.next(),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            Self::Composed(children) => children.size_hint(),
+            Self::Sorted(children) => children.size_hint(),
         }
     }
 }

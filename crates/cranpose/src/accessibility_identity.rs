@@ -48,6 +48,7 @@ pub(crate) struct AccessibilitySnapshot {
     pub(crate) ids: Vec<i32>,
     last_id: i32,
     indices: HashMap<i32, usize>,
+    spare: Vec<AccessibilityElement>,
 }
 
 impl AccessibilitySnapshot {
@@ -99,6 +100,33 @@ impl AccessibilitySnapshot {
             ids: std::mem::replace(&mut self.ids, ids),
             was,
         })
+    }
+
+    pub(crate) fn take_spare(&mut self) -> Vec<AccessibilityElement> {
+        let spare = std::mem::take(&mut self.spare);
+        if spare.capacity() == 0 {
+            Vec::with_capacity(self.elements.len())
+        } else {
+            spare
+        }
+    }
+
+    pub(crate) fn recycle(&mut self, elements: Vec<AccessibilityElement>) {
+        if elements.capacity() >= self.spare.capacity() {
+            self.spare = elements;
+        }
+    }
+
+    pub(crate) fn changed(
+        &mut self,
+        elements: Vec<AccessibilityElement>,
+        force: bool,
+    ) -> Option<Vec<AccessibilityElement>> {
+        if force || elements != self.elements {
+            return Some(elements);
+        }
+        self.recycle(elements);
+        None
     }
 
     pub(crate) fn element(&self, id: i32) -> Option<&AccessibilityElement> {

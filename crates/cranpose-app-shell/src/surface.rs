@@ -290,6 +290,12 @@ impl<R: Renderer> RootSurface<R> {
                 &mut self.semantics_tree,
             ) {
                 Ok(()) => {
+                    #[cfg(debug_assertions)]
+                    crate::semantics_check::assert_matches_rebuild(
+                        &mut applier,
+                        root,
+                        self.semantics_tree.as_ref(),
+                    );
                     self.semantics_moved = false;
                     app.semantics_snapshot_revision =
                         app.semantics_snapshot_revision.wrapping_add(1);
