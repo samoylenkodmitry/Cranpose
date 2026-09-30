@@ -2114,13 +2114,6 @@ impl TextGlyphAtlas {
         let height = u32::try_from(glyph.mask.height).ok()?;
         let entry = self.allocate(width, height)?;
         self.upload_scratch.clear();
-        self.upload_scratch.reserve(
-            glyph
-                .mask
-                .alpha
-                .len()
-                .saturating_sub(self.upload_scratch.capacity()),
-        );
         let correction = key.luminance.correction();
         self.upload_scratch.extend(
             glyph
