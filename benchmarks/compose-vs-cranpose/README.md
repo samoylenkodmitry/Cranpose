@@ -9,8 +9,9 @@ device and measures both from outside either framework.
 
 Each app takes the scenario and its size from intent extras
 (`--es scenario NAME --ei rows 30 …`) and animates itself from its frame clock
-(`withFrameNanos` / `next_frame()`). Both apps therefore do the same work per
-second, without touch input.
+(`withFrameNanos` / `next_frame()`). Both apps use the same animation rules and
+per-frame workload, without touch input. Their work per second depends on the
+frame rate. Workspace quote streaming separately targets the same 16 ms cadence.
 
 A scenario that Compose finishes at 60 fps cannot separate the two
 frameworks, so `measure.py` runs every scenario at a **heavy** load. On the
@@ -87,7 +88,8 @@ uses baseline-aligned prices and two equal columns of statistics. Charts keep
 the same plot, price-axis and time-axis coordinates as GPUI.
 
 The shared interactive controls are symbol search, dock tabs, quote streaming
-and Off/Sidebar/Watchlist automatic scrolling. Alternate dock tabs show the
+and Off/Sidebar/Watchlist automatic scrolling. Search gains editing focus at
+launch and opens Android's software keyboard when tapped. Alternate dock tabs show the
 subscription count when opened, as GPUI does. Destination chips, market-filter
 chips and chart-period chips remain static in the reference. Full gallery
 pages, gallery refresh and GPUI's retention toggle are outside this workspace
@@ -101,9 +103,10 @@ bounces back, one row per callback. `still` disables this driver at launch.
 The footer's **UI updates/s** counts frame-clock callbacks, while benchmark
 reports measure presented frames independently through SurfaceFlinger.
 
-Compose's device integration tests cover search input, opening and closing a
-dock panel, pausing and resuming quotes, starting and stopping visible scrolling,
-and the visible highlight produced by the hover driver:
+Compose's device integration tests cover search input, keyboard visibility on
+programmatic focus and real taps, opening and closing a dock panel, pausing and
+resuming quotes, starting and stopping visible scrolling, and the visible
+highlight produced by the hover driver:
 
 ```bash
 cd compose-app

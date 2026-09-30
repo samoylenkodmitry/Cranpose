@@ -37,6 +37,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.foundation.layout.wrapContentSize
@@ -679,26 +681,25 @@ private fun WorkspaceToolbar() {
 
 @Composable
 private fun SearchBox(modifier: Modifier) {
-    var text by remember { mutableStateOf("") }
+    val text = rememberTextFieldState()
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     BasicTextField(
-        value = text,
-        onValueChange = { text = it },
+        state = text,
         modifier = modifier.height(28.dp).focusRequester(focus)
             .semantics { contentDescription = "Search symbols" }
             .border(1.dp, if (focused) Foreground else InputColor, RoundedCornerShape(RADIUS.dp))
             .padding(horizontal = 9.dp),
         textStyle = sm(MutedForeground),
-        singleLine = true,
+        lineLimits = TextFieldLineLimits.SingleLine,
         keyboardOptions = KeyboardOptions(showKeyboardOnFocus = false),
         cursorBrush = SolidColor(Color.Transparent),
         interactionSource = interaction,
-        decorationBox = { input ->
+        decorator = { input ->
             Box(contentAlignment = Alignment.CenterStart) {
-                if (text.isEmpty()) Label("Search symbols", style = sm(MutedForeground))
+                if (text.text.isEmpty()) Label("Search symbols", style = sm(MutedForeground))
                 input()
             }
         },
