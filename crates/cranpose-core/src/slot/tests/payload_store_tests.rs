@@ -11,7 +11,7 @@ fn payload(id: usize) -> PayloadRecord {
         owner: AnchorId::new(1),
         anchor: PayloadAnchor::new(id, 1),
         type_id: TypeId::of::<usize>(),
-        type_name: std::any::type_name::<usize>(),
+        type_name: std::any::type_name::<usize>,
         source: crate::slot::BRANCH_PATH_ROOT,
         kind: PayloadKind::Remember,
         value: Box::new(id),

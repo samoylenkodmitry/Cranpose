@@ -157,7 +157,7 @@ impl SlotTable {
                         "Payload(owner={:?}, kind={}, type={})",
                         payload.owner,
                         payload.kind.label(),
-                        payload.type_name
+                        (payload.type_name)()
                     ),
                 });
             }
