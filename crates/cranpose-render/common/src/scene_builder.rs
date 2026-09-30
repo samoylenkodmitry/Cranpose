@@ -702,7 +702,7 @@ impl TranslateGeometry {
         graphics_layer: &GraphicsLayer,
         parent_abs: AbsOrigin,
     ) -> Self {
-        let content_offset = layout_state.content_offset;
+        let content_offset = layout_state.content_offset();
         let top_left = Point {
             x: parent_abs.content_origin.x + layout_state.position().x,
             y: parent_abs.content_origin.y + layout_state.position().y,
@@ -1483,9 +1483,10 @@ fn write_node_layer(
     if let Some(geometry) = geometry {
         publish_origin_sinks(&slices, geometry.window_origin, size);
     }
+    let content_offset = layout_state.content_offset();
     let child_context = context.for_children(
         &slices,
-        layout_state.content_offset,
+        content_offset,
         geometry.map(TranslateGeometry::child_abs),
     );
     let head = node_layer_head(
@@ -1495,10 +1496,8 @@ fn write_node_layer(
             local_bounds,
             node_bounds,
             placement,
-            content_offset: layout_state.content_offset,
-            translated_content_offset: slices
-                .translated_content_offset()
-                .unwrap_or(layout_state.content_offset),
+            content_offset,
+            translated_content_offset: slices.translated_content_offset().unwrap_or(content_offset),
         },
         graphics_layer,
         context,

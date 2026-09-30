@@ -321,14 +321,14 @@ impl IosAccessibilityBridge {
         if accessibility::apply_accessibility_options(shell, options) {
             shell.set_font_scale(options.font_scale);
         }
-        let next = accessibility::snapshot(shell, self.snapshot.elements.len());
+        let next = accessibility::snapshot(shell, &mut self.snapshot);
         self.speak(&next);
         let input_changed = (crate::ios_keyboard::reader_input_active()
             && reader_field(&next).is_some())
             != self.reader_view.is_some();
-        if next == self.snapshot.elements && !input_changed {
+        let Some(next) = self.snapshot.changed(next, input_changed) else {
             return;
-        }
+        };
         accessibility::log_spoken_tree(&next);
         let structure_changed = input_changed
             || !accessibility::voiceover_same_structure(&self.snapshot.elements, &next);
@@ -347,6 +347,7 @@ impl IosAccessibilityBridge {
             &next_snapshot.elements,
             &replaced.was,
         );
+        next_snapshot.recycle(replaced.elements);
         let next = &next_snapshot.elements;
         let next_ids = &next_snapshot.ids;
         self.requests.screen_action.set(

@@ -287,11 +287,11 @@ pub(crate) fn sync(
     let mut announcements = accessibility::drain_app_announcements();
     let now = std::time::Instant::now();
     let elements = if policy.try_begin_publish(now) {
-        accessibility::snapshot_if_changed(shell, seen_revision, previous.elements.len())
+        accessibility::snapshot_if_changed(shell, seen_revision, previous)
     } else {
         None
     };
-    let elements = elements.filter(|elements| host_lost_tree || *elements != previous.elements);
+    let elements = elements.and_then(|elements| previous.changed(elements, host_lost_tree));
     if let Some(elements) = &elements {
         announcements.extend(accessibility::live_region_announcements(
             &previous.elements,

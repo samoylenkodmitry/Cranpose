@@ -192,7 +192,7 @@ fn padding_size_and_offset_land_on_whole_device_pixels() {
         },
         |node| {
             let state = node.layout_state();
-            (state.size(), state.position(), state.content_offset)
+            (state.size(), state.position(), state.content_offset())
         },
     );
     let pixels = |value: f32| value * density;
