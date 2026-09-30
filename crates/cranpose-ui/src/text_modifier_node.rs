@@ -361,7 +361,9 @@ impl DrawModifierNode for TextModifierNode {}
 
 impl SemanticsNode for TextModifierNode {
     fn merge_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.content_description = Some(self.text().to_string());
+        config
+            .content_description
+            .get_or_insert_with(|| self.text().to_string());
     }
 
     fn reach(&self) -> cranpose_foundation::SemanticsReach {

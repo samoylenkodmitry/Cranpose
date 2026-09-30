@@ -16,3 +16,4 @@ mod pointer_input_integration_test;
 mod remember_keyed_test;
 mod render_invalidation_test;
 mod robot_input;
+mod window_coordinates_test;

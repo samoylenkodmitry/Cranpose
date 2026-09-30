@@ -1268,6 +1268,7 @@ where
                 self.app.runtime.drain_frame_callbacks(frame_time);
                 let after_frame_callbacks = Instant::now();
                 runtime_handle.drain_ui();
+                self.dispatch_requested_mouse_moves(frame_time);
                 let after_ui_drain = Instant::now();
                 let should_render = self.app.composition.should_recompose();
                 let mut reconcile_attempted = false;
@@ -1299,6 +1300,27 @@ where
                 result
             })
         })
+    }
+
+    fn dispatch_requested_mouse_moves(&mut self, frame_time: u64) {
+        use cranpose_ui::mouse_input::MouseInputTarget;
+        let pending = self.app.app_context.pending_mouse_moves();
+        for _ in 0..pending {
+            let Some(request) = self.app.app_context.take_mouse_move() else {
+                break;
+            };
+            let root = match request.target {
+                MouseInputTarget::Primary => RootId::Primary,
+                MouseInputTarget::Window(id) => RootId::Window(id),
+            };
+            if let Some(mut surface) = self.surface(root) {
+                surface.set_pointer_source(PointerSource::Mouse);
+                surface.set_cursor_at_event_time(request.position.x, request.position.y, PointerEventTime {
+                    platform_time_ms: Some((frame_time / 1_000_000).min(i64::MAX as u64) as i64),
+                    animation_time_nanos: frame_time,
+                });
+            }
+        }
     }
 
     fn reconcile_in_context(&mut self) -> (bool, bool) {

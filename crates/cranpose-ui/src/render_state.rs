@@ -46,6 +46,7 @@ pub struct AppContext {
     lazy_prefetch: crate::lazy_prefetch::LazyPrefetchState,
     layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
     pointer_dispatch: crate::pointer_dispatch::PointerDispatchState,
+    mouse_input: crate::mouse_input::MouseInputQueue,
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
     modal: crate::modal::ModalState,
     modal_nodes: crate::modal_nodes::ModalNodes,
@@ -220,6 +221,7 @@ impl AppContext {
             layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState::new(
             ),
             pointer_dispatch: crate::pointer_dispatch::PointerDispatchState::new(),
+            mouse_input: crate::mouse_input::MouseInputQueue::default(),
             focus_dispatch: crate::focus_dispatch::FocusInvalidationState::new(),
             modal: crate::modal::ModalState::new(),
             modal_nodes: crate::modal_nodes::ModalNodes::default(),
@@ -252,6 +254,22 @@ impl AppContext {
 
     pub(crate) fn id(&self) -> AppContextId {
         self.id
+    }
+
+    pub(crate) fn mouse_input(&self) -> &crate::mouse_input::MouseInputQueue {
+        &self.mouse_input
+    }
+
+    /// Number of coalesced mouse movements waiting for host dispatch.
+    #[doc(hidden)]
+    pub fn pending_mouse_moves(&self) -> usize {
+        self.mouse_input.len()
+    }
+
+    /// Takes the oldest queued mouse movement, retaining the queue's storage.
+    #[doc(hidden)]
+    pub fn take_mouse_move(&self) -> Option<crate::mouse_input::MouseMoveRequest> {
+        self.mouse_input.take()
     }
 
     /// The window roots attached in this context.

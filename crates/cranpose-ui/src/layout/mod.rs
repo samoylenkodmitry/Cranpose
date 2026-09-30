@@ -22,6 +22,7 @@ use cranpose_foundation::{
     SemanticsMagicTap, SemanticsScrollBy, SemanticsScrollToIndex, SemanticsSetProgress,
     SemanticsSetSelection, SemanticsSetText, SemanticsWidgetRole, text::TextRange,
 };
+use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform_to_window};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
 use web_time::Instant;
 
@@ -916,8 +917,14 @@ pub fn build_layout_tree_from_applier(
 ) -> Result<Option<LayoutTree>, NodeError> {
     let origin = layout_tree_origin(read_layout_node(applier, root, |state, _| state)?);
     let mut child_stack = Vec::new();
-    place_layout_box(applier, root, origin, Point::default(), &mut child_stack)
-        .map(|root| root.map(LayoutTree::new))
+    place_layout_box(
+        applier,
+        root,
+        origin,
+        ProjectiveTransform::identity(),
+        &mut child_stack,
+    )
+    .map(|root| root.map(LayoutTree::new))
 }
 
 /// Whether any box placed under `root` has area, as
@@ -1075,8 +1082,8 @@ fn snapshot_node_data(
     node_id: NodeId,
     top_left: Point,
     size: Size,
-    parent_layer_translation: Point,
-) -> Result<(LayoutNodeData, Point), NodeError> {
+    parent_transform: ProjectiveTransform,
+) -> Result<(LayoutNodeData, ProjectiveTransform), NodeError> {
     let info = runtime_metadata_for(applier, node_id)?;
     let kind = layout_kind_from_metadata(node_id, &info);
     let RuntimeNodeMetadata {
@@ -1087,15 +1094,17 @@ fn snapshot_node_data(
         ..
     } = info;
 
-    let layer_translation = match modifier_slices.graphics_layer() {
-        Some(layer) => Point {
-            x: parent_layer_translation.x + layer.translation_x,
-            y: parent_layer_translation.y + layer.translation_y,
-        },
-        None => parent_layer_translation,
-    };
-
-    publish_window_geometry(&modifier_slices, top_left, layer_translation, size);
+    let window_transform = modifier_slices
+        .graphics_layer()
+        .map_or(parent_transform, |layer| {
+            layer_transform_to_window(
+                parent_transform,
+                top_left,
+                modifier_slices.layer_bounds(size),
+                &layer,
+            )
+        });
+    modifier_slices.publish_window_geometry(top_left, window_transform, size);
 
     let data = LayoutNodeData::new(
         modifier,
@@ -1112,7 +1121,7 @@ fn snapshot_node_data(
             .unwrap_or_default();
         data
     };
-    Ok((data, layer_translation))
+    Ok((data, window_transform))
 }
 
 /// Places `node_id`'s box and its subtree. `child_stack` is shared by the
@@ -1123,7 +1132,7 @@ fn place_layout_box(
     applier: &mut MemoryApplier,
     node_id: NodeId,
     parent_content_origin: Point,
-    parent_layer_translation: Point,
+    parent_transform: ProjectiveTransform,
     child_stack: &mut Vec<NodeId>,
 ) -> Result<Option<LayoutBox>, NodeError> {
     let first_child = child_stack.len();
@@ -1150,13 +1159,8 @@ fn place_layout_box(
         width: state.size().width,
         height: state.size().height,
     };
-    let (data, layer_translation) = snapshot_node_data(
-        applier,
-        node_id,
-        top_left,
-        state.size(),
-        parent_layer_translation,
-    )?;
+    let (data, window_transform) =
+        snapshot_node_data(applier, node_id, top_left, state.size(), parent_transform)?;
     let child_origin = Point {
         x: top_left.x + state.content_offset().x,
         y: top_left.y + state.content_offset().y,
@@ -1172,7 +1176,7 @@ fn place_layout_box(
             applier,
             child_id,
             child_origin,
-            layer_translation,
+            window_transform,
             child_stack,
         )? {
             children.push(child);
@@ -1292,30 +1296,6 @@ impl Default for MeasureLayoutOptions {
 /// Returns Result to force caller to handle errors explicitly. No more unwrap_or(true) safety net.
 pub fn tree_needs_layout(applier: &mut dyn Applier, root: NodeId) -> Result<bool, NodeError> {
     Ok(applier.get_mut(root)?.needs_layout())
-}
-
-fn publish_window_geometry(
-    modifier_slices: &crate::modifier::ModifierNodeSlices,
-    top_left: Point,
-    layer_translation: Point,
-    size: Size,
-) {
-    let origin = Point {
-        x: top_left.x + layer_translation.x,
-        y: top_left.y + layer_translation.y,
-    };
-    if let Some(sink) = modifier_slices.text_window_origin() {
-        sink.set(origin);
-    }
-    if let Some(sink) = modifier_slices.viewport_window_rect() {
-        sink.set(GeometryRect {
-            x: origin.x,
-            y: origin.y,
-            width: size.width,
-            height: size.height,
-        });
-    }
-    modifier_slices.publish_pointer_input_size(size);
 }
 
 /// Check if the root semantics snapshot is dirty.
@@ -3523,7 +3503,7 @@ fn build_layout_tree(
         applier: &mut MemoryApplier,
         node: &MeasuredNode,
         origin: Point,
-        parent_layer_translation: Point,
+        parent_transform: ProjectiveTransform,
     ) -> Result<LayoutBox, NodeError> {
         let top_left = Point {
             x: origin.x + node.offset.x,
@@ -3535,13 +3515,8 @@ fn build_layout_tree(
             width: node.size.width,
             height: node.size.height,
         };
-        let (data, layer_translation) = snapshot_node_data(
-            applier,
-            node.node_id,
-            top_left,
-            node.size,
-            parent_layer_translation,
-        )?;
+        let (data, window_transform) =
+            snapshot_node_data(applier, node.node_id, top_left, node.size, parent_transform)?;
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
             if crate::modifier::is_window_root(applier, child.node.node_id) {
@@ -3551,12 +3526,7 @@ fn build_layout_tree(
                 x: top_left.x + child.offset.x,
                 y: top_left.y + child.offset.y,
             };
-            children.push(place(
-                applier,
-                &child.node,
-                child_origin,
-                layer_translation,
-            )?);
+            children.push(place(applier, &child.node, child_origin, window_transform)?);
         }
         Ok(LayoutBox {
             node_generation: applier.node_generation(node.node_id),
@@ -3568,7 +3538,7 @@ fn build_layout_tree(
         applier,
         node,
         Point { x: 0.0, y: 0.0 },
-        Point { x: 0.0, y: 0.0 },
+        ProjectiveTransform::identity(),
     )?))
 }
 

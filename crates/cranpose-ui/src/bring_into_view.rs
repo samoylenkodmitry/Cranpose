@@ -18,7 +18,7 @@ use std::{
 };
 
 use cranpose_core::{CompositionLocal, compositionLocalOf};
-use cranpose_ui_graphics::Rect;
+use cranpose_ui_graphics::{Point, Rect, WindowCoordinates};
 
 use crate::modifier::Modifier;
 
@@ -35,7 +35,7 @@ pub const BRING_INTO_VIEW_MARGIN: f32 = 12.0;
 /// keyboard (0 when it is hidden); the usable region is therefore
 /// `[viewport.y, viewport.y + viewport.height - ime_bottom]`.
 ///
-/// The return value is a delta to **add to the container's scroll offset**:
+/// The return value is the required vertical movement in window pixels:
 /// * positive → scroll toward the content end (content moves up) so a caret
 ///   hidden below the fold / behind the keyboard rises into view;
 /// * negative → scroll back toward the content start (content moves down) so a
@@ -66,6 +66,43 @@ pub fn scroll_delta_to_reveal(caret: Rect, viewport: Rect, ime_bottom: f32) -> f
     }
 
     0.0
+}
+
+pub(crate) fn local_scroll_delta_to_reveal(
+    caret: Rect,
+    viewport: WindowCoordinates,
+    ime_bottom: f32,
+) -> f32 {
+    let delta = scroll_delta_to_reveal(caret, viewport.bounds(), ime_bottom);
+    if delta.abs() <= f32::EPSILON {
+        return 0.0;
+    }
+    let transform = viewport.local_to_window;
+    let Some(inverse) = transform.inverse() else {
+        return 0.0;
+    };
+    let anchor = Point {
+        x: caret.x + caret.width * 0.5,
+        y: if delta > 0.0 {
+            caret.y + caret.height
+        } else {
+            caret.y
+        },
+    };
+    let local = inverse.map_point(anchor);
+    let matrix = transform.matrix();
+    let target_y = anchor.y - delta;
+    let denominator = matrix[1][1] - target_y * matrix[2][1];
+    if denominator.abs() <= f32::EPSILON {
+        return 0.0;
+    }
+    let homogeneous_w = matrix[2][0] * local.x + matrix[2][1] * local.y + matrix[2][2];
+    let local_delta = delta * homogeneous_w / denominator;
+    if local_delta.is_finite() {
+        local_delta
+    } else {
+        0.0
+    }
 }
 
 /// A scroll container's ability to scroll a target window rect into view.
@@ -126,8 +163,20 @@ pub fn local_bring_into_view_responder() -> CompositionLocal<Option<BringIntoVie
 }
 
 impl Modifier {
+    /// Publishes this node's local size and complete local-to-window mapping.
+    /// Coordinates include placement, scrolling, and graphics-layer transforms.
+    /// They use logical pixels in the window containing this node.
+    pub fn report_window_coordinates(
+        self,
+        sink: Rc<Cell<cranpose_ui_graphics::WindowCoordinates>>,
+    ) -> Self {
+        self.then(Modifier::with_element(
+            crate::modifier_nodes::WindowRectReporterElement::from_coordinates(sink),
+        ))
+    }
+
     /// Publishes this node's composited window rect (window coordinates,
-    /// resolved through ancestor scroll placement + graphics-layer translation)
+    /// resolved through ancestor scroll placement and graphics-layer transforms)
     /// into `sink` every layout pass.
     ///
     /// Scroll containers use it to expose their viewport bounds to a
@@ -141,7 +190,7 @@ impl Modifier {
 
     /// Publishes this node's composited window rect into observable state.
     /// State changes schedule composition, so anchored overlays follow layout,
-    /// scrolling, graphics-layer translation, and viewport changes.
+    /// scrolling, graphics-layer transforms, and viewport changes.
     pub fn report_window_rect_state(self, sink: cranpose_core::MutableState<Rect>) -> Self {
         self.then(Modifier::with_element(
             crate::modifier_nodes::WindowRectReporterElement::from_state(sink),

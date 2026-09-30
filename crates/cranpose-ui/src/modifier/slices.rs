@@ -44,7 +44,7 @@ pub struct ModifierNodeSlices {
     translated_content_offset_reader: Option<Rc<dyn Fn() -> Point>>,
     text: Option<SliceText>,
     text_coordinator: Option<CoordinatorRect>,
-    text_window_origin: Option<Rc<std::cell::Cell<Point>>>,
+    text_window_transform: Option<Rc<std::cell::Cell<cranpose_ui_graphics::ProjectiveTransform>>>,
     viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
     /// Boxed: few nodes carry a layer, and inline it took 240 bytes of
     /// every node's slices.
@@ -105,7 +105,7 @@ impl Clone for ModifierNodeSlices {
             translated_content_offset_reader: self.translated_content_offset_reader.clone(),
             text: self.text.clone(),
             text_coordinator: self.text_coordinator.clone(),
-            text_window_origin: self.text_window_origin.clone(),
+            text_window_transform: self.text_window_transform.clone(),
             viewport_window_rect: self.viewport_window_rect.clone(),
             graphics_layer: self.graphics_layer.clone(),
             graphics_layer_resolver: self.graphics_layer_resolver.clone(),
@@ -294,6 +294,32 @@ impl ModifierNodeSlices {
             .map_or_else(|| Rect::from_size(node_size), |layer| layer.rect(node_size))
     }
 
+    /// Publishes geometry in window coordinates through the same transform as
+    /// rendering. Pointer-input sizes stay in the node's local coordinates.
+    #[doc(hidden)]
+    pub fn publish_window_geometry(
+        &self,
+        origin: Point,
+        transform: cranpose_ui_graphics::ProjectiveTransform,
+        size: Size,
+    ) {
+        if self.text_window_transform.is_some() || self.viewport_window_rect.is_some() {
+            let local_to_window =
+                cranpose_ui_graphics::ProjectiveTransform::translation(origin.x, origin.y)
+                    .then(transform);
+            if let Some(sink) = self.text_window_transform() {
+                sink.set(local_to_window);
+            }
+            if let Some(sink) = self.viewport_window_rect() {
+                sink.set(cranpose_ui_graphics::WindowCoordinates {
+                    size,
+                    local_to_window,
+                });
+            }
+        }
+        self.publish_pointer_input_size(size);
+    }
+
     pub fn motion_context_animated(&self) -> bool {
         self.motion_context_animated
     }
@@ -364,21 +390,20 @@ impl ModifierNodeSlices {
         }
     }
 
-    /// The write target for the composited window origin of the text this
-    /// node shows, if it is a `BasicTextField` or a `Text` inside a
-    /// `SelectionContainer`. The layout pass writes the node's true on-screen
-    /// top-left here so selection handles and pointers find the text across
-    /// scroll.
-    pub fn text_window_origin(&self) -> Option<Rc<std::cell::Cell<Point>>> {
-        self.text_window_origin.clone()
+    /// The write target for a text node's local-to-window transform, used by
+    /// editable and selectable text for caret, selection and pointer geometry.
+    pub fn text_window_transform(
+        &self,
+    ) -> Option<&Rc<std::cell::Cell<cranpose_ui_graphics::ProjectiveTransform>>> {
+        self.text_window_transform.as_ref()
     }
 
     /// The write target for a scroll container's composited window rect, if this
     /// node carries a `report_window_rect` modifier. The layout pass writes the
     /// node's true on-screen viewport rect here so a `BringIntoViewResponder`
     /// can scroll a focused field's caret above the soft keyboard.
-    pub fn viewport_window_rect(&self) -> Option<Rc<dyn crate::modifier_nodes::WindowRectSink>> {
-        self.viewport_window_rect.clone()
+    pub fn viewport_window_rect(&self) -> Option<&Rc<dyn crate::modifier_nodes::WindowRectSink>> {
+        self.viewport_window_rect.as_ref()
     }
 
     /// Returns the text layout this node's `Text` or text field produced when
@@ -486,7 +511,7 @@ impl ModifierNodeSlices {
         self.translated_content_offset_reader = None;
         self.text = None;
         self.text_coordinator = None;
-        self.text_window_origin = None;
+        self.text_window_transform = None;
         self.viewport_window_rect = None;
         self.graphics_layer = None;
         self.graphics_layer_resolver = None;
@@ -664,7 +689,7 @@ fn collect_modifier_slices_into(
                         layout: text_field_node.layout_handle(),
                         pan: text_field_node.text_pan_resolver(),
                     })));
-                    slices.text_window_origin = Some(text_field_node.window_origin_sink());
+                    slices.text_window_transform = Some(text_field_node.window_transform_sink());
 
                     let coordinator = CoordinatorRect::new(geometry, layout_ordinal, padding);
                     text_field_node.set_content_origin(coordinator.clone());
@@ -779,7 +804,7 @@ fn collect_window_geometry_sink(
         slices.viewport_window_rect = Some(reporter.window_rect_sink());
     }
     if let Some(selectable) = any.downcast_ref::<SelectableTextNode>() {
-        slices.text_window_origin = Some(selectable.geometry().node_origin_sink());
+        slices.text_window_transform = Some(selectable.geometry().window_transform_sink());
         selectable.geometry().set_content_origin(text);
     }
 }

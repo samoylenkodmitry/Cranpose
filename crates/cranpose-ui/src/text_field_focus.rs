@@ -37,16 +37,56 @@ pub struct ImeEditorState {
 /// Window-space caret geometry for the focused field, used by platforms whose
 /// native text input positions the caret by coordinates rather than key events
 /// (iOS `UITextInput`: spacebar-trackpad cursor movement and tap-to-position).
-/// All values are logical pixels in window space.
-#[derive(Clone, Debug, PartialEq)]
+/// Caret advances are local logical pixels. Use the conversion methods for
+/// native window rectangles and pointer positions, including transformed fields.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ImeCaretGeometry {
-    /// Caret x for each character-boundary offset, in text order: entry `k` is
+    /// Local caret x for each character-boundary offset, in text order: entry `k` is
     /// the caret after `k` characters, so `caret_xs.len() == chars + 1`.
     pub caret_xs: Vec<f32>,
-    /// Top y of the (single) caret line.
+    /// Local top y of the (single) caret line.
     pub top: f32,
-    /// Height of one line (the caret's height).
+    /// Local height of one line (the caret's height).
     pub line_height: f32,
+    /// Maps the field's local coordinates into its window.
+    pub local_to_window: cranpose_ui_graphics::ProjectiveTransform,
+}
+
+impl ImeCaretGeometry {
+    /// The native caret's window rectangle after `character` Unicode scalars.
+    pub fn caret_rect(&self, character: usize) -> cranpose_ui_graphics::Rect {
+        self.range_rect(character, character)
+    }
+
+    /// Window bounds of a range whose endpoints count Unicode scalars.
+    pub fn range_rect(&self, start: usize, end: usize) -> cranpose_ui_graphics::Rect {
+        let x = |index: usize| {
+            self.caret_xs
+                .get(index)
+                .or_else(|| self.caret_xs.last())
+                .copied()
+                .unwrap_or(0.0)
+        };
+        let (left, right) = (x(start), x(end));
+        self.local_to_window
+            .bounds_for_rect(cranpose_ui_graphics::Rect {
+                x: left.min(right),
+                y: self.top,
+                width: (right - left).abs().max(2.0),
+                height: self.line_height,
+            })
+    }
+
+    /// Character boundary nearest a window-space pointer position.
+    /// A singular transform has no visible editable plane and returns `None`.
+    pub fn closest_character(&self, position: cranpose_ui_graphics::Point) -> Option<usize> {
+        let local = self.local_to_window.inverse()?.map_point(position);
+        self.caret_xs
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| (*a - local.x).abs().total_cmp(&(*b - local.x).abs()))
+            .map(|(index, _)| index)
+    }
 }
 
 /// Handler trait for focused text field operations.

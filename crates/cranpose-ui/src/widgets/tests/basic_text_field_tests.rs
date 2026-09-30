@@ -44,7 +44,7 @@ fn render_collapsed_handles(direct_manipulation: bool) -> crate::renderer::Recor
             controller.publish(TextFieldHandleMetrics {
                 focused: true,
                 direct_manipulation,
-                node_origin: Point { x: 0.0, y: 10.0 },
+                local_to_window: cranpose_ui_graphics::ProjectiveTransform::translation(0.0, 10.0),
                 padding_left: 0.0,
                 padding_top: 0.0,
                 scroll_offset: 0.0,
@@ -104,7 +104,7 @@ fn render_range_menu(direct_manipulation: bool) -> crate::renderer::RecordedRend
             controller.publish(TextFieldHandleMetrics {
                 focused: true,
                 direct_manipulation,
-                node_origin: Point { x: 0.0, y: 40.0 },
+                local_to_window: cranpose_ui_graphics::ProjectiveTransform::translation(0.0, 40.0),
                 padding_left: 0.0,
                 padding_top: 0.0,
                 scroll_offset: 0.0,
@@ -177,7 +177,9 @@ fn render_range_menu_subcomposed(
                     controller.publish(TextFieldHandleMetrics {
                         focused: true,
                         direct_manipulation,
-                        node_origin: Point { x: 0.0, y: 40.0 },
+                        local_to_window: cranpose_ui_graphics::ProjectiveTransform::translation(
+                            0.0, 40.0,
+                        ),
                         padding_left: 0.0,
                         padding_top: 0.0,
                         scroll_offset: 0.0,
@@ -261,7 +263,9 @@ fn render_range_menu_lazy_column(
                         controller.publish(TextFieldHandleMetrics {
                             focused: true,
                             direct_manipulation,
-                            node_origin: Point { x: 0.0, y: 40.0 },
+                            local_to_window: cranpose_ui_graphics::ProjectiveTransform::translation(
+                                0.0, 40.0,
+                            ),
                             padding_left: 0.0,
                             padding_top: 0.0,
                             scroll_offset: 0.0,
@@ -372,7 +376,7 @@ fn field_window_origin_follows_vertical_scroll() {
         if node
             .node_data
             .modifier_slices()
-            .text_window_origin()
+            .text_window_transform()
             .is_some()
         {
             return Some(node.rect);
@@ -417,7 +421,8 @@ fn field_window_origin_follows_vertical_scroll() {
             .expect("controller")
             .metrics()
             .expect("metrics published")
-            .node_origin;
+            .local_to_window
+            .map_point(Point::default());
         (node_origin, field_y)
     }
 
@@ -472,7 +477,10 @@ fn window_offset_roundtrip_holds_under_scroll_offset() {
         let metrics = TextFieldHandleMetrics {
             focused: true,
             direct_manipulation: true,
-            node_origin,
+            local_to_window: cranpose_ui_graphics::ProjectiveTransform::translation(
+                node_origin.x,
+                node_origin.y,
+            ),
             padding_left: 4.0,
             padding_top: 3.0,
             scroll_offset: 0.0,
@@ -484,8 +492,8 @@ fn window_offset_roundtrip_holds_under_scroll_offset() {
             if !text.is_char_boundary(offset) {
                 continue;
             }
-            let tip =
-                handle_tip_window_pos(text, &style, &metrics, offset, LineAffinity::Downstream);
+            let (tip, _) =
+                caret_window_geometry(text, &style, &metrics, offset, LineAffinity::Downstream);
             let resolved = window_pos_to_offset(text, &style, &metrics, tip, 0.0);
             assert_eq!(
                 resolved, offset,
@@ -526,7 +534,7 @@ fn shared_wrap_boundary_anchors_by_handle_affinity() {
         let metrics = TextFieldHandleMetrics {
             focused: true,
             direct_manipulation: true,
-            node_origin: Point { x: 0.0, y: 0.0 },
+            local_to_window: cranpose_ui_graphics::ProjectiveTransform::identity(),
             padding_left: 0.0,
             padding_top: 0.0,
             scroll_offset: 0.0,
@@ -535,8 +543,8 @@ fn shared_wrap_boundary_anchors_by_handle_affinity() {
             wrap_width: Some(wrap_width),
         };
 
-        let end_tip =
-            handle_tip_window_pos(text, &style, &metrics, boundary, LineAffinity::Upstream);
+        let (end_tip, _) =
+            caret_window_geometry(text, &style, &metrics, boundary, LineAffinity::Upstream);
         assert!(
             (end_tip.y - line_height).abs() < 0.5,
             "end handle must sit on the UPPER line's bottom ({line_height}), got y={}",
@@ -548,8 +556,8 @@ fn shared_wrap_boundary_anchors_by_handle_affinity() {
             end_tip.x
         );
 
-        let start_tip =
-            handle_tip_window_pos(text, &style, &metrics, boundary, LineAffinity::Downstream);
+        let (start_tip, _) =
+            caret_window_geometry(text, &style, &metrics, boundary, LineAffinity::Downstream);
         assert!(
             (start_tip.y - 2.0 * line_height).abs() < 0.5,
             "start handle must sit on the LOWER line's bottom ({}), got y={}",
@@ -580,8 +588,8 @@ fn shared_wrap_boundary_anchors_by_handle_affinity() {
                 },
                 bias,
             );
-            let resolved_tip =
-                handle_tip_window_pos(text, &style, &metrics, resolved, LineAffinity::Upstream);
+            let (resolved_tip, _) =
+                caret_window_geometry(text, &style, &metrics, resolved, LineAffinity::Upstream);
             let target_tip_y =
                 (finger_y + bias).clamp(line_height, ranges.len() as f32 * line_height);
             assert!(

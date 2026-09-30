@@ -19,7 +19,9 @@ use crate::{
         PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
         RenderNode, TextPrimitiveNode,
     },
-    layer_transform::{layer_scales_or_rotates, layer_transform_to_parent},
+    layer_transform::{
+        layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
+    },
     raster_cache::LayerRasterCacheHashes,
     style_shared::{DrawPlacement, recording_for_placement_reusing},
 };
@@ -627,12 +629,12 @@ fn translated_children(
     }
     let children_unchanged = container.children.len() == placed_fresh.len()
         && container
-            .children
-            .iter()
-            .zip(placed_fresh.iter())
-            .all(|(child, (id, _))| {
-                matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(*id))
-            });
+        .children
+        .iter()
+        .zip(placed_fresh.iter())
+        .all(|(child, (id, _))| {
+            matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(*id))
+        });
     let old_index_by_id = &mut scratch.old_index_by_id;
     old_index_by_id.clear();
     if !children_unchanged {
@@ -690,8 +692,8 @@ fn check_retained_children(
 #[derive(Clone, Copy)]
 struct TranslateGeometry {
     content_offset: Point,
-    layer_translation: Point,
-    window_origin: Point,
+    window_transform: ProjectiveTransform,
+    top_left: Point,
     child_origin: Point,
 }
 
@@ -699,6 +701,7 @@ impl TranslateGeometry {
     fn new(
         layout_state: &cranpose_ui::widgets::LayoutState,
         graphics_layer: &GraphicsLayer,
+        local_bounds: Rect,
         parent_abs: AbsOrigin,
     ) -> Self {
         let content_offset = layout_state.content_offset();
@@ -706,17 +709,16 @@ impl TranslateGeometry {
             x: parent_abs.content_origin.x + layout_state.position().x,
             y: parent_abs.content_origin.y + layout_state.position().y,
         };
-        let layer_translation = Point {
-            x: parent_abs.layer_translation.x + graphics_layer.translation_x,
-            y: parent_abs.layer_translation.y + graphics_layer.translation_y,
-        };
+        let window_transform = layer_transform_to_window(
+            parent_abs.window_transform,
+            top_left,
+            local_bounds,
+            graphics_layer,
+        );
         Self {
             content_offset,
-            layer_translation,
-            window_origin: Point {
-                x: top_left.x + layer_translation.x,
-                y: top_left.y + layer_translation.y,
-            },
+            window_transform,
+            top_left,
             child_origin: Point {
                 x: top_left.x + content_offset.x,
                 y: top_left.y + content_offset.y,
@@ -727,7 +729,7 @@ impl TranslateGeometry {
     fn child_abs(self) -> AbsOrigin {
         AbsOrigin {
             content_origin: self.child_origin,
-            layer_translation: self.layer_translation,
+            window_transform: self.window_transform,
         }
     }
 }
@@ -815,7 +817,11 @@ fn apply_translated_container_state(
             .translated_content_offset()
             .unwrap_or(geometry.content_offset);
     }
-    publish_origin_sinks(modifier_slices, geometry.window_origin, layout_state.size());
+    modifier_slices.publish_window_geometry(
+        geometry.top_left,
+        geometry.window_transform,
+        layout_state.size(),
+    );
     container.origin_in_parent = layout_state.position();
 }
 
@@ -912,7 +918,12 @@ fn translate_layer_from_data(
         }
     };
 
-    let geometry = TranslateGeometry::new(&layout_state, &graphics_layer, parent_abs);
+    let geometry = TranslateGeometry::new(
+        &layout_state,
+        &graphics_layer,
+        container.local_bounds,
+        parent_abs,
+    );
     let child_inherited_translated_content_context =
         inherited_translated_content_context || container.translated_content_context;
     let children_ancestor_hashed =
@@ -949,7 +960,6 @@ fn translate_layer_from_data(
         geometry,
     );
     TRANSLATE_SCRATCH.set(scratch);
-    modifier_slices.publish_pointer_input_size(layout_state.size());
     container.hit_test = hit_test_from_slices(&modifier_slices);
 
     container.has_origin_sinks = modifier_slices_have_origin_sinks(&modifier_slices)
@@ -1333,25 +1343,31 @@ fn write_snapshot_layer(
 #[derive(Clone, Copy)]
 struct AbsOrigin {
     content_origin: Point,
-    layer_translation: Point,
+    window_transform: ProjectiveTransform,
 }
 
 impl AbsOrigin {
     const ROOT: AbsOrigin = AbsOrigin {
         content_origin: Point { x: 0.0, y: 0.0 },
-        layer_translation: Point { x: 0.0, y: 0.0 },
+        window_transform: ProjectiveTransform::identity(),
     };
 
     fn children_of(self, layer: &LayerNode) -> AbsOrigin {
+        let top_left = Point {
+            x: self.content_origin.x + layer.origin_in_parent.x,
+            y: self.content_origin.y + layer.origin_in_parent.y,
+        };
         AbsOrigin {
             content_origin: Point {
                 x: self.content_origin.x + layer.origin_in_parent.x + layer.content_offset.x,
                 y: self.content_origin.y + layer.origin_in_parent.y + layer.content_offset.y,
             },
-            layer_translation: Point {
-                x: self.layer_translation.x + layer.graphics_layer.translation_x,
-                y: self.layer_translation.y + layer.graphics_layer.translation_y,
-            },
+            window_transform: layer_transform_to_window(
+                self.window_transform,
+                top_left,
+                layer.local_bounds,
+                &layer.graphics_layer,
+            ),
         }
     }
 }
@@ -1487,12 +1503,13 @@ fn write_node_layer(
         slices.corner_shape(),
         local_bounds,
     );
-    slices.publish_pointer_input_size(size);
-    let geometry = context
-        .parent_abs
-        .map(|parent_abs| TranslateGeometry::new(&layout_state, &graphics_layer, parent_abs));
+    let geometry = context.parent_abs.map(|parent_abs| {
+        TranslateGeometry::new(&layout_state, &graphics_layer, local_bounds, parent_abs)
+    });
     if let Some(geometry) = geometry {
-        publish_origin_sinks(&slices, geometry.window_origin, size);
+        slices.publish_window_geometry(geometry.top_left, geometry.window_transform, size);
+    } else {
+        slices.publish_pointer_input_size(size);
     }
     let content_offset = layout_state.content_offset();
     let child_context = context.for_children(
@@ -1535,20 +1552,6 @@ fn write_node_layer(
             });
         },
     );
-}
-
-fn publish_origin_sinks(slices: &ModifierNodeSlices, window_origin: Point, size: Size) {
-    if let Some(sink) = slices.text_window_origin() {
-        sink.set(window_origin);
-    }
-    if let Some(sink) = slices.viewport_window_rect() {
-        sink.set(Rect {
-            x: window_origin.x,
-            y: window_origin.y,
-            width: size.width,
-            height: size.height,
-        });
-    }
 }
 
 struct RecorderSlot {
@@ -1954,7 +1957,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
 }
 
 fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {
-    slices.text_window_origin().is_some() || slices.viewport_window_rect().is_some()
+    slices.text_window_transform().is_some() || slices.viewport_window_rect().is_some()
 }
 
 fn graphics_layer_with_shaped_clip(

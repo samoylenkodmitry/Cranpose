@@ -129,23 +129,16 @@ fn read_mirror() -> Mirror {
     mirror().lock().map(|m| m.clone()).unwrap_or_default()
 }
 
-#[derive(Default, Clone)]
-struct CaretGeom {
-    caret_xs: Vec<f32>,
-    top: f32,
-    line_height: f32,
-}
+type CaretGeom = cranpose_ui::text_field_focus::ImeCaretGeometry;
 
 fn caret_geom() -> &'static Mutex<CaretGeom> {
     static G: OnceLock<Mutex<CaretGeom>> = OnceLock::new();
     G.get_or_init(|| Mutex::new(CaretGeom::default()))
 }
 
-pub(crate) fn set_caret_geometry(caret_xs: Vec<f32>, top: f32, line_height: f32) {
+pub(crate) fn set_caret_geometry(geometry: CaretGeom) {
     if let Ok(mut g) = caret_geom().lock() {
-        g.caret_xs = caret_xs;
-        g.top = top;
-        g.line_height = line_height;
+        *g = geometry;
     }
 }
 
@@ -153,43 +146,24 @@ fn read_caret_geom() -> CaretGeom {
     caret_geom().lock().map(|g| g.clone()).unwrap_or_default()
 }
 
-fn caret_height(geom: &CaretGeom) -> f64 {
-    if geom.line_height > 0.5 {
-        geom.line_height as f64
-    } else {
-        16.0
-    }
-}
-
-fn caret_x_for_byte(geom: &CaretGeom, text: &str, byte: usize) -> f32 {
-    if geom.caret_xs.is_empty() {
-        return 0.0;
-    }
-    let byte = byte.min(text.len());
-    let char_index = text[..byte].chars().count();
-    geom.caret_xs
-        .get(char_index)
-        .or_else(|| geom.caret_xs.last())
-        .copied()
-        .unwrap_or(0.0)
-}
-
-fn byte_for_x(geom: &CaretGeom, text: &str, x: f32) -> usize {
-    if geom.caret_xs.is_empty() {
-        return text.len();
-    }
-    let mut best_k = 0usize;
-    let mut best_d = f32::INFINITY;
-    for (k, cx) in geom.caret_xs.iter().enumerate() {
-        let d = (cx - x).abs();
-        if d < best_d {
-            best_d = d;
-            best_k = k;
-        }
-    }
+fn character_for_byte(text: &str, byte: usize) -> usize {
     text.char_indices()
-        .nth(best_k)
-        .map_or(text.len(), |(b, _)| b)
+        .take_while(|(offset, _)| *offset < byte)
+        .count()
+}
+
+fn byte_for_point(geom: &CaretGeom, text: &str, point: CGPoint) -> usize {
+    let position = cranpose_ui::Point::new(point.x as f32, point.y as f32);
+    geom.closest_character(position)
+        .and_then(|character| text.char_indices().nth(character))
+        .map_or(text.len(), |(byte, _)| byte)
+}
+
+fn native_rect(rect: cranpose_ui::Rect) -> CGRect {
+    CGRect::new(
+        CGPoint::new(rect.x as f64, rect.y as f64),
+        CGSize::new(rect.width as f64, rect.height as f64),
+    )
 }
 
 pub(crate) enum ImeOp {
@@ -602,23 +576,14 @@ define_class!(
             let (s, e) = TextRange::bounds(range);
             let geom = read_caret_geom();
             let text = read_mirror().text;
-            let x1 = caret_x_for_byte(&geom, &text, s);
-            let x2 = caret_x_for_byte(&geom, &text, e);
-            CGRect::new(
-                CGPoint::new(x1 as f64, geom.top as f64),
-                CGSize::new((x2 - x1).max(0.0) as f64, caret_height(&geom)),
-            )
+            native_rect(geom.range_rect(character_for_byte(&text, s), character_for_byte(&text, e)))
         }
 
         #[unsafe(method(caretRectForPosition:))]
         fn caret_rect_for_position(&self, position: &UITextPosition) -> CGRect {
             let geom = read_caret_geom();
             let text = read_mirror().text;
-            let x = caret_x_for_byte(&geom, &text, TextPosition::offset(position));
-            CGRect::new(
-                CGPoint::new(x as f64, geom.top as f64),
-                CGSize::new(2.0, caret_height(&geom)),
-            )
+            native_rect(geom.caret_rect(character_for_byte(&text, TextPosition::offset(position))))
         }
 
         #[unsafe(method_id(selectionRectsForRange:))]
@@ -633,7 +598,7 @@ define_class!(
         fn closest_position_to_point(&self, point: CGPoint) -> Option<Retained<UITextPosition>> {
             let geom = read_caret_geom();
             let text = read_mirror().text;
-            let byte = byte_for_x(&geom, &text, point.x as f32);
+            let byte = byte_for_point(&geom, &text, point);
             Some(upos(TextPosition::make(byte, self.mtm())))
         }
 
@@ -646,7 +611,7 @@ define_class!(
             let (s, e) = TextRange::bounds(range);
             let geom = read_caret_geom();
             let text = read_mirror().text;
-            let byte = byte_for_x(&geom, &text, point.x as f32).clamp(s, e);
+            let byte = byte_for_point(&geom, &text, point).clamp(s, e);
             Some(upos(TextPosition::make(byte, self.mtm())))
         }
 
@@ -654,7 +619,7 @@ define_class!(
         fn character_range_at_point(&self, point: CGPoint) -> Option<Retained<UITextRange>> {
             let geom = read_caret_geom();
             let text = read_mirror().text;
-            let byte = byte_for_x(&geom, &text, point.x as f32);
+            let byte = byte_for_point(&geom, &text, point);
             Some(urange(TextRange::make(byte, byte, self.mtm())))
         }
 

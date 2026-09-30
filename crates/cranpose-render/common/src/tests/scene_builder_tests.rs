@@ -3863,11 +3863,12 @@ fn field_window_origin(applier: &mut MemoryApplier, field: NodeId) -> Point {
     applier
         .with_node::<LayoutNode, _>(field, |node| {
             node.modifier_slices_snapshot()
-                .text_window_origin()
+                .text_window_transform()
                 .expect("a text field publishes its window origin")
+                .get()
+                .map_point(Point::default())
         })
         .expect("the field is a layout node")
-        .get()
 }
 
 #[test]
@@ -3934,8 +3935,8 @@ fn a_field_rebuilt_under_a_scrolled_translated_column_publishes_its_window_origi
     };
     applier
         .with_node::<LayoutNode, _>(field, |node| {
-            if let Some(sink) = node.modifier_slices_snapshot().text_window_origin() {
-                sink.set(stale);
+            if let Some(sink) = node.modifier_slices_snapshot().text_window_transform() {
+                sink.set(ProjectiveTransform::translation(stale.x, stale.y));
             }
         })
         .expect("the field is a layout node");

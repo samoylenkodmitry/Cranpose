@@ -29,6 +29,11 @@ cranpose-ui = { path = "../../../crates/cranpose-ui" }
 cranpose-foundation = { path = "../../../crates/cranpose-foundation" }
 log = "0.4"
 
+[dev-dependencies]
+cranpose-app-shell = { path = "../../../crates/cranpose-app-shell" }
+cranpose-render-pixels = { path = "../../../crates/cranpose-render/pixels" }
+cranpose-testing = { path = "../../../crates/cranpose-testing" }
+
 # Its own workspace, like a real application: the release profile below is
 # what the device runs, not the framework repository's.
 [workspace]
