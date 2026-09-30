@@ -396,7 +396,7 @@ fn scope_index_lifecycle_survives_retain_restore_dispose_and_compaction() {
 
     let mut retained = None;
     for subtree in detached_children {
-        if subtree.root_key().explicit_key == Some(RETAINED_EXPLICIT_KEY) {
+        if subtree.root_key().explicit_key() == Some(RETAINED_EXPLICIT_KEY) {
             retained = Some(subtree);
         } else {
             harness.table.invalidate_detached_subtree_anchors(&subtree);

@@ -1,5 +1,6 @@
 use std::{
     any::{Any, TypeId},
+    hash::{Hash, Hasher},
     mem,
 };
 
@@ -23,20 +24,34 @@ pub(crate) enum NodeLifecycle {
     RetainedDetached,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GroupKey {
     pub(crate) static_key: Key,
-    pub(crate) explicit_key: Option<Key>,
+    explicit_value: Key,
     pub(crate) ordinal: u32,
+    has_explicit_key: bool,
 }
 
 impl GroupKey {
     pub(crate) fn new(static_key: Key, explicit_key: Option<Key>, ordinal: u32) -> Self {
         Self {
             static_key,
-            explicit_key,
+            explicit_value: explicit_key.unwrap_or_default(),
             ordinal,
+            has_explicit_key: explicit_key.is_some(),
         }
+    }
+
+    pub(crate) fn explicit_key(&self) -> Option<Key> {
+        self.has_explicit_key.then_some(self.explicit_value)
+    }
+}
+
+impl Hash for GroupKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.static_key.hash(state);
+        self.explicit_key().hash(state);
+        self.ordinal.hash(state);
     }
 }
 
@@ -487,3 +502,7 @@ pub(in crate::slot) fn collect_root_node_ids_from_records_into(
     root_nodes.clear();
     root_nodes.extend(root_node_ids(nodes));
 }
+
+#[cfg(test)]
+#[path = "tests/group_keys.rs"]
+mod tests;

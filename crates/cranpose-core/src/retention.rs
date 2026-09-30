@@ -598,13 +598,13 @@ fn retain_key_cmp(left: &RetainKey, right: &RetainKey) -> Ordering {
     (
         left.parent_scope,
         left.key.static_key,
-        left.key.explicit_key,
+        left.key.explicit_key(),
         left.key.ordinal,
     )
         .cmp(&(
             right.parent_scope,
             right.key.static_key,
-            right.key.explicit_key,
+            right.key.explicit_key(),
             right.key.ordinal,
         ))
 }

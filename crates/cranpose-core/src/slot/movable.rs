@@ -19,11 +19,11 @@ pub(crate) const MOVABLE_PLACEHOLDER_STATIC_KEY: Key = 0x6d6f_7661_626c_6520;
 
 impl GroupKey {
     pub(crate) fn is_movable(self) -> bool {
-        self.static_key == MOVABLE_STATIC_KEY && self.explicit_key.is_some()
+        self.static_key == MOVABLE_STATIC_KEY && self.explicit_key().is_some()
     }
 
     pub(crate) fn movable_id(self) -> Option<Key> {
-        self.is_movable().then_some(self.explicit_key).flatten()
+        self.is_movable().then_some(self.explicit_key()).flatten()
     }
 }
 

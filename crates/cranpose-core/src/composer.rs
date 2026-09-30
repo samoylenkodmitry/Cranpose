@@ -1248,7 +1248,7 @@ impl Composer {
                 placeholder_for: None,
             };
         }
-        let id = key.explicit_key.unwrap_or_default();
+        let id = key.explicit_key().unwrap_or_default();
         let placeholder = self.with_slot_session_mut(|slots| {
             slots.reserve_group_key(crate::slot::GroupKeySeed::movable_placeholder(id))
         });

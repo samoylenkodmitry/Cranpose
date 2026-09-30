@@ -630,7 +630,7 @@ fn compact_anchor_registry_storage_preserves_retained_group_anchors() {
 
     let mut retained = None;
     for subtree in detached_children {
-        if subtree.root_key().explicit_key == Some(RETAINED_EXPLICIT_KEY) {
+        if subtree.root_key().explicit_key() == Some(RETAINED_EXPLICIT_KEY) {
             retained = Some(subtree);
         } else {
             harness.table.invalidate_detached_subtree_anchors(&subtree);
@@ -839,7 +839,7 @@ fn compact_payload_storage_preserves_retained_value_slots() {
 
     let mut retained = None;
     for subtree in detached_children {
-        if subtree.root_key().explicit_key == Some(RETAINED_EXPLICIT_KEY) {
+        if subtree.root_key().explicit_key() == Some(RETAINED_EXPLICIT_KEY) {
             retained = Some(subtree);
         } else {
             harness.table.invalidate_detached_subtree_anchors(&subtree);
@@ -1078,7 +1078,7 @@ fn disposed_identities_reuse_only_after_generation_bump() {
 
     let mut retained = None;
     for subtree in detached_children {
-        match subtree.root_key().explicit_key {
+        match subtree.root_key().explicit_key() {
             Some(RETAINED_KEY) => retained = Some(subtree),
             Some(DISPOSED_KEY) => {
                 harness.table.invalidate_detached_subtree_anchors(&subtree);

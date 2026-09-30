@@ -395,11 +395,17 @@ fn debug_stats_report_explicit_v2_table_local_counts() {
 }
 
 #[test]
-fn group_record_footprint_stays_bounded_until_profiling_justifies_split_storage() {
+fn group_record_footprint_stays_within_88_bytes() {
     let group_record_size = mem::size_of::<GroupRecord>();
 
     assert!(
-        group_record_size <= 128,
+        group_record_size <= 88,
         "GroupRecord is {group_record_size} bytes; revisit field packing with perf data before accepting more group-table bandwidth"
     );
+}
+
+#[test]
+fn group_key_footprint_stays_within_24_bytes() {
+    let key_size = mem::size_of::<GroupKey>();
+    assert!(key_size <= 24, "GroupKey is {key_size} bytes");
 }

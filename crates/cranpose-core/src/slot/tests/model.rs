@@ -733,7 +733,7 @@ fn assert_model_matches_slot_table(
             .groups
             .first()
             .expect("retained subtree must contain a root group");
-        assert_eq!(root_group.key.explicit_key, Some(key));
+        assert_eq!(root_group.key.explicit_key(), Some(key));
         assert_eq!(
             root_group.anchor, expected.anchor,
             "retained group anchor must match the reference model for key {key}"
@@ -1031,7 +1031,7 @@ fn apply_model_operation(
             for subtree in detached_children {
                 let key = subtree
                     .root_key()
-                    .explicit_key
+                    .explicit_key()
                     .expect("generated model test uses explicit child keys");
                 let expected_child = previous_active
                     .get(&key)
@@ -1078,7 +1078,7 @@ fn apply_model_operation(
             });
             harness.finish_pass();
             assert_eq!(
-                harness.table.groups[group_index].key.explicit_key,
+                harness.table.groups[group_index].key.explicit_key(),
                 Some(key),
                 "recompose must target the expected keyed child",
             );

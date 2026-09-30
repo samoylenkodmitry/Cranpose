@@ -80,7 +80,7 @@ impl SlotTable {
                 anchor: group.anchor,
                 parent_anchor: group.parent_anchor,
                 static_key: group.key.static_key,
-                explicit_key: group.key.explicit_key,
+                explicit_key: group.key.explicit_key(),
                 ordinal: group.key.ordinal,
                 scope_id: group.scope_id,
                 depth: group.depth,

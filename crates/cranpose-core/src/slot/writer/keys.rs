@@ -38,7 +38,7 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn consume_group_key(&mut self, key: GroupKey) {
         let keys = self.current_keys();
         let ordinal = key
-            .explicit_key
+            .explicit_key()
             .map_or_else(|| keys.next_ordinal(key.static_key), |_| 0);
         debug_assert_eq!(
             ordinal, key.ordinal,
