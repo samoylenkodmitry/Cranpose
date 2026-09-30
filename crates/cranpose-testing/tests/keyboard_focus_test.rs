@@ -161,6 +161,27 @@ fn check_keyboard_focus(decorated: bool, show_keyboard_on_focus: bool) {
         expected,
         "the existing field must use its updated focus option"
     );
+
+    keyboard.calls.borrow_mut().clear();
+    preference
+        .borrow()
+        .expect("composed keyboard preference")
+        .set(show_keyboard_on_focus);
+    shell.update();
+    let expected: &[&str] = if show_keyboard_on_focus {
+        &["show"]
+    } else {
+        &[]
+    };
+    assert_eq!(
+        keyboard.calls.borrow().as_slice(),
+        expected,
+        "enabling the keyboard while focused requests it immediately; disabling does not hide an existing session"
+    );
+    assert!(
+        shell.ime_editor_state().is_some(),
+        "changing the option preserves editing focus"
+    );
 }
 
 #[test]

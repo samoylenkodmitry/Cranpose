@@ -226,6 +226,8 @@ pub struct BasicTextFieldOptions {
     ///
     /// When `false`, programmatic and keyboard-navigation focus leave the
     /// software keyboard hidden. A pointer tap still explicitly opens it.
+    /// Changing this to `true` while focused also requests the keyboard.
+    /// Changing it to `false` preserves an already visible keyboard.
     pub show_keyboard_on_focus: bool,
 }
 

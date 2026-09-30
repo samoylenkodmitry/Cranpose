@@ -1541,10 +1541,16 @@ impl ModifierNodeElement for TextFieldElement {
         node.line_limits = self.line_limits;
         node.handle_controller.clone_from(&self.handle_controller);
         node.modal_depth = self.modal_depth;
-        node.refs.focus_options.set(TextFieldFocusOptions {
+        let previous_focus_options = node.refs.focus_options.replace(TextFieldFocusOptions {
             modal_depth: self.modal_depth,
             show_keyboard_on_focus: self.show_keyboard_on_focus,
         });
+        if self.show_keyboard_on_focus
+            && !previous_focus_options.show_keyboard_on_focus
+            && *node.refs.is_focused.borrow()
+        {
+            crate::text_input_session::notify_text_input_focus_gained();
+        }
         node.rebuild_cached_closures();
 
         if node.update_cached_state() {}
