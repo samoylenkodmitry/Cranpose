@@ -40,7 +40,10 @@ use crate::{
         ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
     },
     subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode},
-    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState},
+    widgets::nodes::{
+        IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState, begin_placement_pass,
+        placement_pass_with_unplaced_nodes,
+    },
 };
 
 #[derive(Default)]
@@ -1000,6 +1003,47 @@ fn layout_tree_origin(root: Option<LayoutState>) -> Point {
     }
 }
 
+/// Places the root at the origin, the one placement no parent makes, and
+/// names what the pass left unplaced.
+fn finish_placement(applier: &mut MemoryApplier, root: NodeId) {
+    if applier
+        .with_node::<LayoutNode, _>(root, |node| node.set_position(Point::default()))
+        .is_err()
+    {
+        let _ = applier.with_node::<SubcomposeLayoutNode, _>(root, |node| {
+            node.set_position(Point::default());
+        });
+    }
+    if let Some(pass) = placement_pass_with_unplaced_nodes() {
+        record_unplaced_parents(applier, root, pass);
+    }
+}
+
+/// Names to the scene phase the parent of every node `pass` found placed and
+/// left unplaced: nothing about the node itself changed, so the geometry
+/// setters had nothing to report, yet its layer has to leave the scene. A
+/// pass unplaces nodes rarely, so it pays for this walk only when it did.
+fn record_unplaced_parents(applier: &mut MemoryApplier, root: NodeId, pass: u64) {
+    let mut parents = vec![root];
+    let mut children = Vec::new();
+    while let Some(parent) = parents.pop() {
+        children.clear();
+        if !matches!(
+            read_layout_node(applier, parent, |_, ids| children.extend_from_slice(ids)),
+            Ok(Some(()))
+        ) {
+            continue;
+        }
+        for &child in &children {
+            match read_layout_node(applier, child, |state, _| state.unplaced_in(pass)) {
+                Ok(Some(true)) => crate::render_state::record_geometry_scene_node(parent),
+                Ok(Some(false)) => parents.push(child),
+                Ok(None) | Err(_) => {}
+            }
+        }
+    }
+}
+
 /// Reads a layout or subcompose node's layout state and the children it
 /// places, borrowed in place. `None` when the node is neither.
 fn read_layout_node<R>(
@@ -1304,6 +1348,7 @@ pub fn measure_layout_with_options(
 ) -> Result<LayoutMeasurements, NodeError> {
     let telemetry_start = Instant::now();
     crate::render_state::begin_text_layout_pass();
+    begin_placement_pass();
     process_pending_layout_repasses(applier, root)?;
     let after_repasses = Instant::now();
 
@@ -1359,16 +1404,8 @@ pub fn measure_layout_with_options(
         .measure_node(root, normalize_constraints(constraints))?;
     let after_measure = Instant::now();
 
-    if let Ok(mut applier) = applier_host.try_borrow_typed()
-        && applier
-            .with_node::<LayoutNode, _>(root, |node| {
-                node.set_position(Point::default());
-            })
-            .is_err()
-    {
-        let _ = applier.with_node::<SubcomposeLayoutNode, _>(root, |node| {
-            node.set_position(Point::default());
-        });
+    if let Ok(mut applier) = applier_host.try_borrow_typed() {
+        finish_placement(&mut applier, root);
     }
     let after_root_place = Instant::now();
 

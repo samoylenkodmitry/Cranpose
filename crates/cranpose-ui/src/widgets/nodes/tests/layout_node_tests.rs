@@ -520,3 +520,72 @@ fn a_new_layout_runtime_state_has_no_children_or_coordinators() {
     assert_eq!(stats.child_measurable_count, 0);
     assert_eq!(stats.coordinator_node_count, 0);
 }
+
+fn state_of(id: NodeId) -> LayoutState {
+    let mut state = LayoutState::default();
+    state.set_node_id(id);
+    state
+}
+
+fn origin() -> Point {
+    Point { x: 0.0, y: 0.0 }
+}
+
+#[test]
+fn a_first_placement_reports_the_node_even_at_the_origin() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    begin_placement_pass();
+    let mut state = state_of(7);
+    state.place(origin());
+    assert!(state.is_placed());
+    assert_eq!(crate::take_geometry_scene_nodes(), vec![7]);
+}
+
+#[test]
+fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut state = state_of(7);
+    state.place(origin());
+    let _ = crate::take_geometry_scene_nodes();
+
+    begin_placement_pass();
+    state.clear_placed();
+    state.clear_placed();
+    assert!(placement_pass_with_unplaced_nodes().is_some());
+    state.place(origin());
+    assert_eq!(placement_pass_with_unplaced_nodes(), None);
+    assert!(crate::take_geometry_scene_nodes().is_empty());
+
+    state.place(Point { x: 0.0, y: 18.0 });
+    assert_eq!(
+        crate::take_geometry_scene_nodes(),
+        vec![7],
+        "a move is reported"
+    );
+}
+
+#[test]
+fn a_node_its_pass_clears_and_never_places_is_left_unplaced() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut state = state_of(7);
+    state.place(origin());
+    begin_placement_pass();
+    state.clear_placed();
+    let pass = placement_pass_with_unplaced_nodes().expect("the pass left a node unplaced");
+    assert!(state.unplaced_in(pass));
+    assert!(!state.unplaced_in(pass + 1));
+
+    begin_placement_pass();
+    assert_eq!(
+        placement_pass_with_unplaced_nodes(),
+        None,
+        "a new pass starts with nothing unplaced"
+    );
+    let _ = crate::take_geometry_scene_nodes();
+    state.place(origin());
+    assert_eq!(
+        crate::take_geometry_scene_nodes(),
+        vec![7],
+        "placing a node an earlier pass left unplaced reports it, where it was or not"
+    );
+}
