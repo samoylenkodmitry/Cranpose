@@ -310,6 +310,86 @@ fn outline(node: &SemanticsNode) -> Vec<String> {
 }
 
 #[test]
+fn new_semantics_children_allocate_for_the_known_sibling_count() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    for count in [0, 1, 2, 3, 4] {
+        let mut scroller = Scroller::new();
+        let rows: Vec<_> = (0..count).map(|_| scroller.labelled_row("Row")).collect();
+        scroller.set_children(&rows)?;
+        scroller.relayout()?;
+        scroller.update()?;
+        let fresh = build_semantics_tree_from_applier(&mut scroller.applier, scroller.root)?;
+        for tree in [scroller.tree.as_ref(), fresh.as_ref()] {
+            let children = &tree.expect("placed root").root().children;
+            assert_eq!(children.len(), count);
+            assert_eq!(children.capacity(), count, "sibling count {count}");
+            assert!(children.iter().all(|child| child.children.capacity() == 0));
+        }
+        let before = scroller
+            .tree
+            .as_ref()
+            .expect("placed root")
+            .root()
+            .children
+            .as_ptr();
+        scroller.offset.set(5.0);
+        scroller.relayout()?;
+        scroller.update()?;
+        let children = &scroller.tree.as_ref().expect("placed root").root().children;
+        assert_eq!(children.as_ptr(), before, "moving retains the allocation");
+        assert_eq!(children.capacity(), count);
+    }
+    Ok(())
+}
+
+#[test]
+fn unplaced_children_do_not_allocate_semantics_sibling_storage() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut scroller = Scroller::new();
+    let first = scroller.labelled_row("First");
+    let second = scroller.labelled_row("Second");
+    scroller.set_children(&[first, second])?;
+    scroller.relayout()?;
+    for row in [first, second] {
+        scroller.with_row(row, |row| row.clear_placed());
+    }
+    scroller.update()?;
+    assert_eq!(
+        scroller
+            .tree
+            .as_ref()
+            .expect("placed root")
+            .root()
+            .children
+            .capacity(),
+        0
+    );
+    scroller.relayout()?;
+    scroller.update()?;
+    let children = &scroller.tree.as_ref().expect("placed root").root().children;
+    assert_eq!(children.len(), 2);
+    assert_eq!(children.capacity(), 2);
+    Ok(())
+}
+
+#[test]
+fn unplaced_siblings_do_not_inflate_the_initial_semantics_allocation() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut scroller = Scroller::new();
+    let rows: Vec<_> = (0..100).map(|_| scroller.labelled_row("Row")).collect();
+    scroller.set_children(&rows)?;
+    scroller.relayout()?;
+    for &row in &rows[1..] {
+        scroller.with_row(row, |row| row.clear_placed());
+    }
+    scroller.update()?;
+    let children = &scroller.tree.as_ref().expect("placed root").root().children;
+    assert_eq!(children.len(), 1);
+    assert!(children.capacity() <= 4);
+    Ok(())
+}
+
+#[test]
 fn a_moved_row_keeps_its_report_and_takes_its_new_bounds() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut scroller = Scroller::new();
