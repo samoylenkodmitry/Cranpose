@@ -1,9 +1,8 @@
 use std::rc::Rc;
 
-use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
 use cranpose_render_common::primitive_emit::ShapeDrawParams;
-use cranpose_ui::{TextLayoutOptions, TextStyle};
+use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, LineGeometry,
     Point, Rect, RoundedCornerShape, Stroke,
@@ -26,7 +25,6 @@ pub(crate) struct DrawShape {
 
 #[derive(Clone)]
 pub(crate) struct TextDraw {
-    pub node_id: NodeId,
     pub rect: Rect,
     pub snap_anchor: Option<Point>,
     pub text: Rc<cranpose_ui::text::AnnotatedString>,
@@ -34,7 +32,6 @@ pub(crate) struct TextDraw {
     pub text_style: TextStyle,
     pub font_size: f32,
     pub scale: f32,
-    pub layout_options: TextLayoutOptions,
     pub z_index: usize,
     pub clip: Option<Rect>,
 }
@@ -173,20 +170,17 @@ impl RasterScene {
     #[expect(clippy::too_many_arguments)]
     pub fn push_text(
         &mut self,
-        node_id: NodeId,
         rect: Rect,
         text: Rc<cranpose_ui::text::AnnotatedString>,
         color: Color,
         text_style: TextStyle,
         font_size: f32,
         scale: f32,
-        layout_options: TextLayoutOptions,
         clip: Option<Rect>,
     ) {
         let z_index = self.next_z;
         self.next_z += 1;
         self.texts.push(TextDraw {
-            node_id,
             rect,
             snap_anchor: None,
             text,
@@ -194,7 +188,6 @@ impl RasterScene {
             text_style,
             font_size,
             scale,
-            layout_options,
             z_index,
             clip,
         });

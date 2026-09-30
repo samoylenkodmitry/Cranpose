@@ -1,5 +1,6 @@
 //! Common rendering contracts shared between renderer backends.
 
+mod annotated_text;
 mod ascii_glyphs;
 pub mod debug_toggles;
 pub mod dev_overlay;

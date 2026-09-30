@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use cranpose_render_common::{
     brush_sampling::normalize_gradient_t,
     graph::{
@@ -140,7 +142,6 @@ fn render_single_text_frame(
 ) -> (u32, u32, Vec<u8>) {
     let mut raster_scene = RasterScene::new();
     raster_scene.push_text(
-        11,
         Rect {
             x,
             y: 16.0,
@@ -152,7 +153,6 @@ fn render_single_text_frame(
         style,
         64.0,
         1.0,
-        cranpose_ui::TextLayoutOptions::default(),
         None,
     );
 
@@ -266,7 +266,6 @@ fn mirror_tile_mode_reflects_second_interval() {
 fn multiline_text_renders_second_line_pixels() {
     let mut raster_scene = RasterScene::new();
     raster_scene.push_text(
-        1,
         Rect {
             x: 8.0,
             y: 8.0,
@@ -280,7 +279,6 @@ fn multiline_text_renders_second_line_pixels() {
         cranpose_ui::TextStyle::default(),
         14.0,
         1.0,
-        cranpose_ui::TextLayoutOptions::default(),
         None,
     );
 
@@ -372,7 +370,6 @@ fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
 fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
     let mut raster_scene = RasterScene::new();
     raster_scene.push_text(
-        2,
         Rect {
             x: 8.0,
             y: 40.0,
@@ -384,7 +381,6 @@ fn text_clip_bounds_prevent_drawing_outside_scroll_window() {
         cranpose_ui::TextStyle::default(),
         14.0,
         1.0,
-        cranpose_ui::TextLayoutOptions::default(),
         Some(Rect {
             x: 0.0,
             y: 0.0,

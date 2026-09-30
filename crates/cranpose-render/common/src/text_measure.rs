@@ -4,15 +4,21 @@
 //! one font-backed measurer plus its fallback-metrics path for when no font
 //! is installed.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::{
+    hash::{Hash, Hasher},
+    sync::{Mutex, MutexGuard, PoisonError},
+};
 
 use cranpose_core::collections::pass_aged::PassAgedCache;
 use cranpose_ui::{TextMeasurer, TextMetrics, text_layout_result::TextLayoutResult};
 
 use crate::{
     software_text_raster::{
-        SoftwareTextFont, SoftwareTextFontSet, cursor_x_for_offset_with_font,
-        layout_text_with_font, measure_text_with_font, text_offset_for_position_with_font,
+        SoftwareTextFont, SoftwareTextFontSet, annotated_cursor_x_for_offset,
+        annotated_offset_for_position, cursor_x_for_offset_with_font,
+        layout_annotated_text_with_font_set, layout_text_with_font,
+        measure_annotated_text_with_font_set, measure_text_with_font,
+        text_offset_for_position_with_font, visit_annotated_line_boxes,
     },
     text_cache_key::{TextCacheKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
@@ -167,6 +173,15 @@ impl TextMeasurer for CachedFontTextMeasurer {
         ))
     }
 
+    fn visit_line_boxes(
+        &self,
+        text: &cranpose_ui::text::AnnotatedString,
+        style: &cranpose_ui::text::TextStyle,
+        visit: &mut dyn FnMut(cranpose_ui::text::LineBox),
+    ) -> Option<()> {
+        visit_annotated_line_boxes(text, style, self.text_resources.fonts(), visit)
+    }
+
     fn measure(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
@@ -174,9 +189,23 @@ impl TextMeasurer for CachedFontTextMeasurer {
     ) -> TextMetrics {
         let text_str = text.text.as_str();
         let font_size = resolve_font_size(style);
-        let style_hash = style.measurement_hash();
+        let mut style_hash = style.measurement_hash();
+        if !text.span_styles.is_empty() {
+            let mut hasher = cranpose_ui_graphics::FxHasher::default();
+            style_hash.hash(&mut hasher);
+            text.span_styles_hash().hash(&mut hasher);
+            style_hash = hasher.finish();
+        }
         self.lock_cache()
             .get_or_measure(text_str, font_size, style_hash, |value, size| {
+                if !text.span_styles.is_empty() {
+                    return measure_annotated_text_with_font_set(
+                        text,
+                        style,
+                        size,
+                        self.text_resources.fonts(),
+                    );
+                }
                 measure_text_impl(
                     value,
                     style,
@@ -191,8 +220,11 @@ impl TextMeasurer for CachedFontTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
         x: f32,
-        _y: f32,
+        y: f32,
     ) -> usize {
+        if !text.span_styles.is_empty() {
+            return annotated_offset_for_position(text, style, x, y, self.text_resources.fonts());
+        }
         let text = text.text.as_str();
         if text.is_empty() {
             return 0;
@@ -208,7 +240,7 @@ impl TextMeasurer for CachedFontTextMeasurer {
             .get_offset_for_x(x);
         };
 
-        text_offset_for_position_with_font(text, style, x, _y, font)
+        text_offset_for_position_with_font(text, style, x, y, font)
     }
 
     fn get_cursor_x_for_offset(
@@ -217,6 +249,9 @@ impl TextMeasurer for CachedFontTextMeasurer {
         style: &cranpose_ui::text::TextStyle,
         offset: usize,
     ) -> f32 {
+        if !text.span_styles.is_empty() {
+            return annotated_cursor_x_for_offset(text, style, offset, self.text_resources.fonts());
+        }
         let text = text.text.as_str();
         let clamped_offset = offset.min(text.len());
         if clamped_offset == 0 {
@@ -239,6 +274,9 @@ impl TextMeasurer for CachedFontTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
     ) -> cranpose_ui::text_layout_result::TextLayoutResult {
+        if !text.span_styles.is_empty() {
+            return layout_annotated_text_with_font_set(text, style, self.text_resources.fonts());
+        }
         let font_size = resolve_font_size(style);
         let Some(font) = self.text_resources.fonts().resolve(style) else {
             return TextLayoutResult::monospaced(

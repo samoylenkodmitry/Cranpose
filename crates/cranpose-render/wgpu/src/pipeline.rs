@@ -352,6 +352,7 @@ fn build_gpu_text_effect(
     let stroke_padding = stroke_effect_padding_for_draw_mode(&material.draw_mode);
     let effect_rect = expand_text_effect_rect(text_rect, stroke_padding);
     let mut shader = RuntimeShader::new(GPU_TEXT_BRUSH_EFFECT_SHADER);
+    shader.set_input_padding(stroke_padding);
     let logical_width = text_rect.width.max(f32::EPSILON);
     let logical_height = text_rect.height.max(f32::EPSILON);
     set_shader_vec4(&mut shader, 1, [logical_width, logical_height, 0.0, 0.0]);
@@ -978,7 +979,7 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
             font_size,
             text_scale,
             options,
-            text_clip,
+            text_clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
         );
         let z_end = sink.current_z();
         sink.push_effect_layer_with_surface(
@@ -1159,7 +1160,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             font_size,
             text_scale,
             options,
-            text_clip,
+            text_clip.map(|clip| expand_text_effect_rect(clip, effect.input_padding())),
         );
 
         let z_end = sink.current_z();
