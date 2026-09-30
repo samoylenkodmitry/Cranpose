@@ -3834,8 +3834,8 @@ fn every_platform_bridge_pages_a_scroll_container() {
     );
     assert!(
         java_source.contains("info.setParent(host, element.scrollParent);")
-            && java_source
-                .contains("if (child.scrollParent == element.id) info.addChild(host, child.id);")
+            && java_source.contains("childIds.get(element.scrollParent)[at] = element.id;")
+            && java_source.contains("for (int child : children) info.addChild(host, child);")
             && wire_source.contains("fn scroll_parent_ids("),
         "a row sits under its list in the virtual view tree, so TalkBack's page gesture on the row reaches the list"
     );
@@ -4683,5 +4683,39 @@ fn android_opaque_interior_pre_pass_is_switchable_from_a_system_property() {
     assert_property_backed(
         "debug.cranpose.no_interiors_first",
         "CRANPOSE_NO_INTERIORS_FIRST",
+    );
+}
+
+#[test]
+fn android_accessibility_nodes_find_themselves_and_their_children_by_id() {
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let find = java_source
+        .split("private CranposeAccessibilityElement find(int id) {")
+        .nth(1)
+        .and_then(|body| body.split("\n        }\n").next())
+        .expect("the provider finds a control by id in one method");
+    assert!(
+        find.contains("byId.get(id)") && !find.contains("for ("),
+        "a node lookup reads the index; a reader walking the tree otherwise pays a scan per node: {find}"
+    );
+    let node_info = java_source
+        .split("public AccessibilityNodeInfo createAccessibilityNodeInfo(int virtualViewId) {")
+        .nth(1)
+        .and_then(|body| body.split("info.setPackageName(").nth(1))
+        .expect("the provider builds a control's node info in one method");
+    assert!(
+        !node_info.contains("child.scrollParent == element.id"),
+        "a container's children come from the index built with the tree, not a scan of every control"
+    );
+    assert!(
+        java_source.contains("int[] children = childIds.get(element.id);")
+            && java_source.contains("private void indexElements()")
+            && java_source.contains("indexElements();"),
+        "the provider indexes each tree it takes, by id and by container"
+    );
+    assert!(
+        !java_source.contains("HashMap<Integer, CranposeAccessibilityElement>"),
+        "an update reuses the index instead of boxing every id into a new map"
     );
 }
