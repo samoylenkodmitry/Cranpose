@@ -1,6 +1,79 @@
 use super::*;
 
 #[test]
+fn owned_pixels_keep_their_allocation_through_clones() {
+    let pixels = vec![17; 64 * 64 * 4];
+    assert_eq!(pixels.len(), pixels.capacity());
+    let address = pixels.as_ptr();
+    let bitmap = ImageBitmap::from_rgba8(64, 64, pixels).expect("owned bitmap");
+    assert_eq!(bitmap.pixels().as_ptr(), address);
+    let clone = bitmap.clone();
+    drop(bitmap);
+    assert_eq!(clone.pixels().as_ptr(), address);
+    assert!(clone.pixels().iter().all(|byte| *byte == 17));
+}
+
+#[test]
+fn bitmap_handles_share_their_metadata() {
+    assert_eq!(size_of::<ImageBitmap>(), size_of::<Arc<()>>());
+    assert_eq!(size_of::<Option<ImageBitmap>>(), size_of::<ImageBitmap>());
+}
+
+#[test]
+fn borrowed_pixels_are_owned_before_the_source_changes() {
+    let mut pixels = vec![17, 23, 41, 255, 3, 5, 7, 128];
+    let borrowed = ImageBitmap::from_rgba8_slice(2, 1, &pixels).expect("borrowed bitmap");
+    let owned = ImageBitmap::from_rgba8(2, 1, pixels.clone()).expect("owned bitmap");
+    assert_eq!(borrowed, owned);
+    assert_eq!(borrowed.is_opaque(), owned.is_opaque());
+    pixels.fill(0);
+    drop(pixels);
+    assert_eq!(borrowed.pixels(), owned.pixels());
+    assert_eq!(borrowed.intrinsic_size(), owned.intrinsic_size());
+}
+
+#[test]
+fn both_constructors_reject_invalid_dimensions_and_lengths() {
+    for (width, height, pixels, expected) in [
+        (0, 1, vec![0; 4], ImageBitmapError::InvalidDimensions),
+        (1, 0, vec![], ImageBitmapError::InvalidDimensions),
+        (
+            u32::MAX,
+            u32::MAX,
+            vec![],
+            ImageBitmapError::DimensionsTooLarge,
+        ),
+        (
+            1,
+            1,
+            vec![0; 3],
+            ImageBitmapError::PixelDataLengthMismatch {
+                expected: 4,
+                actual: 3,
+            },
+        ),
+        (
+            1,
+            1,
+            vec![0; 5],
+            ImageBitmapError::PixelDataLengthMismatch {
+                expected: 4,
+                actual: 5,
+            },
+        ),
+    ] {
+        assert_eq!(
+            ImageBitmap::from_rgba8_slice(width, height, &pixels),
+            Err(expected.clone())
+        );
+        assert_eq!(
+            ImageBitmap::from_rgba8(width, height, pixels),
+            Err(expected)
+        );
+    }
+}
+
+#[test]
 fn the_same_bytes_under_transposed_dimensions_are_different_bitmaps() {
     let pixels = vec![1, 2, 3, 255, 4, 5, 6, 255];
     let wide = ImageBitmap::from_rgba8(2, 1, pixels.clone()).expect("wide bitmap");

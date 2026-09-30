@@ -1,6 +1,40 @@
 use super::*;
 use crate::layout::core::Alignment;
 
+#[test]
+#[ignore = "manual release timing probe"]
+fn owned_bitmap_construction_timing() {
+    use std::hint::black_box;
+
+    use web_time::Instant;
+
+    let total_bytes = std::env::var("BITMAP_CONSTRUCTION_BYTES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(512 * 1024 * 1024);
+    for (width, height) in [(32, 32), (96, 80), (640, 360)] {
+        let pixel_bytes = (width * height * 4) as usize;
+        let iterations = (total_bytes / pixel_bytes).max(1);
+        for byte in [17, 255] {
+            for _ in 0..100 {
+                black_box(
+                    ImageBitmap::from_rgba8(width, height, vec![byte; pixel_bytes])
+                        .expect("warmup bitmap"),
+                );
+            }
+            let start = Instant::now();
+            for _ in 0..iterations {
+                let pixels = vec![black_box(byte); pixel_bytes];
+                black_box(ImageBitmap::from_rgba8(width, height, pixels).expect("measured bitmap"));
+            }
+            let ns_per_bitmap = start.elapsed().as_nanos() as f64 / iterations as f64;
+            println!(
+                "BITMAP_CONSTRUCTION width={width} height={height} byte={byte} iterations={iterations} ns_per_bitmap={ns_per_bitmap:.3}"
+            );
+        }
+    }
+}
+
 #[cfg(feature = "svg")]
 const RED_RECT_SVG: &[u8] = br##"
     <svg xmlns="http://www.w3.org/2000/svg" width="10" height="20" viewBox="0 0 10 20">
