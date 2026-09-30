@@ -2506,12 +2506,7 @@ fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
     };
 
     let graph = build_layer_node_for_test(snapshot, false);
-    let RenderNode::Primitive(text_primitive) = &graph.children[0] else {
-        panic!("expected text primitive");
-    };
-    let PrimitiveNode::Text(text) = &text_primitive.node else {
-        panic!("expected text primitive");
-    };
+    let text = first_text_primitive(&graph);
     let clip = text
         .clip
         .expect("clipped overflow should produce a clip rect");
@@ -2528,6 +2523,85 @@ fn text_node_preserves_rtl_alignment_clip_and_baseline_shift() {
         clip.intersect(text.rect).is_some(),
         "the clip rect must intersect the shifted text draw rect"
     );
+}
+
+#[test]
+fn text_node_alignment_obeys_physical_and_relative_edges() {
+    for direction in [TextDirection::Ltr, TextDirection::Rtl] {
+        for (alignment, ltr, rtl) in [
+            (TextAlign::Left, 0.0, 0.0),
+            (TextAlign::Right, 1.0, 1.0),
+            (TextAlign::Center, 0.5, 0.5),
+            (TextAlign::Start, 0.0, 1.0),
+            (TextAlign::End, 1.0, 0.0),
+            (TextAlign::Justify, 0.0, 1.0),
+            (TextAlign::Unspecified, 0.0, 1.0),
+        ] {
+            let mut style = TextStyle::default();
+            style.paragraph_style.text_align = alignment;
+            style.paragraph_style.text_direction = direction;
+            let (_composition, slices) =
+                text_slices("hello", style, TextLayoutOptions::default(), 180.0);
+            let graph = build_layer_node_for_test(
+                BuildNodeSnapshot {
+                    node_id: 1,
+                    size: Size {
+                        width: 180.0,
+                        height: 48.0,
+                    },
+                    slices,
+                    ..Default::default()
+                },
+                false,
+            );
+            let text = first_text_primitive(&graph);
+            let fraction = if direction == TextDirection::Rtl {
+                rtl
+            } else {
+                ltr
+            };
+            let expected = (180.0 - text.rect.width) * fraction;
+            assert!(
+                (text.rect.x - expected).abs() < 0.001,
+                "{alignment:?}, {direction:?}: expected x={expected}, got {}",
+                text.rect.x
+            );
+        }
+    }
+}
+
+fn first_text_primitive(layer: &LayerNode) -> &TextPrimitiveNode {
+    let RenderNode::Primitive(primitive) = &layer.children[0] else {
+        panic!("expected text primitive");
+    };
+    let PrimitiveNode::Text(text) = &primitive.node else {
+        panic!("expected text primitive");
+    };
+    text
+}
+
+#[test]
+fn text_alignment_without_positive_slack_keeps_the_origin() {
+    for text_align in [
+        TextAlign::Left,
+        TextAlign::Right,
+        TextAlign::Center,
+        TextAlign::Start,
+        TextAlign::End,
+        TextAlign::Justify,
+        TextAlign::Unspecified,
+    ] {
+        let mut style = TextStyle::default();
+        style.paragraph_style.text_align = text_align;
+        style.paragraph_style.text_direction = TextDirection::Rtl;
+        for (content_width, measured_width) in [(0.0, 0.0), (40.0, 40.0), (40.0, 80.0)] {
+            assert_eq!(
+                resolve_text_horizontal_offset(&style, "hello", content_width, measured_width),
+                0.0,
+                "{text_align:?}, content={content_width}, measured={measured_width}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -2548,12 +2622,7 @@ fn clipped_text_node_raster_bounds_use_measured_text_width_not_full_box() {
     };
 
     let graph = build_layer_node_for_test(snapshot, false);
-    let RenderNode::Primitive(text_primitive) = &graph.children[0] else {
-        panic!("expected text primitive");
-    };
-    let PrimitiveNode::Text(text) = &text_primitive.node else {
-        panic!("expected text primitive");
-    };
+    let text = first_text_primitive(&graph);
     let clip = text.clip.expect("clipped text should keep a clip rect");
 
     assert!(
