@@ -31,11 +31,8 @@ fn slots_host_finish_pass_reports_writer_invariant_violation() {
     slots_host.begin_pass(SlotPassMode::Compose);
     {
         let mut inner = slots_host.inner.borrow_mut();
-        let active_pass = inner
-            .active_pass
-            .as_mut()
-            .expect("test setup should leave a pass active");
-        active_pass.state.root.next_child_index = 1;
+        assert!(inner.pass.active, "test setup should leave a pass active");
+        inner.pass.state.root.next_child_index = 1;
     }
 
     let mut applier = MemoryApplier::new();
