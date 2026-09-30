@@ -340,7 +340,18 @@ impl FramePacer {
     /// frame due now waits out the hold from then.
     pub(crate) fn note_frame_returned(&mut self, now_ns: i64) {
         let hold_ns = self.hold.hold_ns();
-        self.held_until_ns = (self.unpaced() && hold_ns > 0).then_some(now_ns + hold_ns);
+        if self.unpaced() && hold_ns > 0 {
+            self.held_until_ns = self.held_until_ns.max(Some(now_ns + hold_ns));
+        }
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn note_empty_frame(&mut self, now_ns: i64, vsync_ns: i64, vsync_period_ns: i64) {
+        if self.stage.is_none_or(|stage| stage.level == Level::Unpaced) && vsync_period_ns > 0 {
+            let next = next_vsync_ns(now_ns, vsync_ns, vsync_period_ns)
+                .unwrap_or_else(|| now_ns.saturating_add(vsync_period_ns));
+            self.held_until_ns = self.held_until_ns.max(Some(next));
+        }
     }
 
     /// How long an unpaced frame waits after the renderer hands one back.

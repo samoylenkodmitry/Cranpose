@@ -2593,6 +2593,11 @@ pub fn run(
                                 ));
                             }
                             PublishOutcome::NoGraph | PublishOutcome::NoCredit => {
+                                frame_pacer.note_empty_frame(
+                                    crate::android_frame_telemetry::monotonic_nanos(),
+                                    crate::android_vsync::last_vsync_ns(),
+                                    vsync_period_ns(),
+                                );
                                 frame_telemetry.note_idle_iteration();
                             }
                         }
@@ -2604,6 +2609,11 @@ pub fn run(
                         }
                     }
                 } else {
+                    frame_pacer.note_empty_frame(
+                        crate::android_frame_telemetry::monotonic_nanos(),
+                        crate::android_vsync::last_vsync_ns(),
+                        vsync_period_ns(),
+                    );
                     frame_telemetry.note_idle_iteration();
                 }
             } else {
