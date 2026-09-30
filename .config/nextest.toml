@@ -1,0 +1,9 @@
+# Each nextest test has its own process, so the renderer's Rust mutexes cannot
+# serialize access to Metal's shared filesystem shader cache.
+[test-groups.macos-gpu]
+max-threads = 1
+
+[[profile.default.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'package(cranpose-render-wgpu) | (package(desktop-app) & test(/^liquid_(pass_inventory|scroll_phase)::/))'
+test-group = 'macos-gpu'
