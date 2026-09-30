@@ -489,12 +489,10 @@ where
         };
         nodes.extend(moved);
         let buckets = partition_nodes_by_surface(&mut self.app, &self.surfaces, nodes);
-        let mut any_named = false;
         for (surface, bucket) in self.surfaces.iter_mut().zip(buckets) {
             if bucket.is_empty() {
                 continue;
             }
-            any_named = true;
             surface.scene_dirty = true;
             let mut seen: HashSet<NodeId> =
                 surface.scoped_layout_scene_nodes.iter().copied().collect();
@@ -502,17 +500,6 @@ where
                 if seen.insert(node) {
                     surface.scoped_layout_scene_nodes.push(node);
                 }
-            }
-        }
-        // A pass that names nothing still rebuilds every scene. Geometry no
-        // longer needs it: the layout setters name every move, resize and
-        // change of placement. Draw state that advances as a lowering reads
-        // it, without scheduling its node's next redraw, still leans on it: a
-        // Liquid lens relaxes only when something lowers it again, and once
-        // the lens stops travelling these rebuilds are often all that does.
-        if !any_named {
-            for surface in &mut self.surfaces {
-                surface.scene_dirty = true;
             }
         }
     }

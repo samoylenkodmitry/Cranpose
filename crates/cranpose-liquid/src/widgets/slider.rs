@@ -60,7 +60,6 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                 let lens_axis = crate::motion::remember_liquid_drag_axis(controlled_x);
                 lens_axis.settle_to(controlled_x, crate::motion::LiquidMotion::snappy());
                 let thumb_x = lens_axis.value();
-                let liquid_pose = lens_axis.liquid_pose();
 
                 let on_drag = Rc::clone(&on_change);
                 let active_pointer = Rc::clone(&active_pointer);
@@ -190,6 +189,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
 
                     let node = LENS_SIZE + LENS_PAD * 2.0;
                     let lens_for_layer = lens_progress;
+                    let physics_axis = Rc::clone(&lens_axis);
                     let lens = Modifier::empty()
                         .required_size(Size::new(node, node))
                         .offset(0.0, (SLIDER_HEIGHT - node) * 0.5)
@@ -207,7 +207,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                             move || {
                                 let grow = lens_for_layer.get().clamp(0.0, 1.2);
                                 let d = THUMB_SIZE + (LENS_SIZE - THUMB_SIZE) * grow;
-                                let pose = liquid_pose;
+                                let pose = physics_axis.liquid_pose();
                                 GlassDynamics {
                                     activity: Some(grow.clamp(0.0, 1.0)),
                                     morph: Some(GlassMorph {

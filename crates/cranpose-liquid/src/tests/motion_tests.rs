@@ -93,6 +93,8 @@ fn direct_manipulation_owns_visual_selection_until_the_lens_reaches_state() {
 
 #[test]
 fn pointer_sample_excites_the_incompressible_pose_before_render() {
+    let app_context = cranpose_ui::AppContext::new();
+    let _scope = app_context.enter_scope();
     let (_runtime, axis) = axis(0.0);
     axis.begin(0.0, Some(0));
     axis.move_to(14.0, Some(16));
@@ -108,6 +110,8 @@ fn pointer_sample_excites_the_incompressible_pose_before_render() {
 
 #[test]
 fn render_without_a_new_pointer_sample_preserves_velocity_continuity() {
+    let app_context = cranpose_ui::AppContext::new();
+    let _scope = app_context.enter_scope();
     let (_runtime, axis) = axis(0.0);
     axis.runtime.drain_frame_callbacks(1_000_000);
     axis.begin(0.0, Some(0));
@@ -137,6 +141,8 @@ fn controlled_retargets_wait_until_direct_manipulation_ends() {
 
 #[test]
 fn continuous_release_stops_translation_without_erasing_fluid_velocity() {
+    let app_context = cranpose_ui::AppContext::new();
+    let _scope = app_context.enter_scope();
     let (_runtime, axis) = axis(0.0);
     axis.runtime.drain_frame_callbacks(1_000_000);
     axis.begin(0.0, Some(0));

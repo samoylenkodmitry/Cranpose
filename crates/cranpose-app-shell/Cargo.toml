@@ -35,8 +35,9 @@ log = "0.4"
 web-time = { workspace = true }
 
 [dev-dependencies]
-# Path-only dev-dep: stripped from the published manifest (publish order ignores dev edges).
+# Path-only dev-deps: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
+cranpose-liquid = { path = "../cranpose-liquid" }
 cranpose-ui-layout = { workspace = true }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]

@@ -13,6 +13,9 @@ use cranpose_ui_layout::{
 
 use super::*;
 
+#[path = "liquid_lens_frame_tests.rs"]
+mod liquid_lens_frame_tests;
+
 const FIRST_TRADE: u64 = 100;
 const TAPE_ROWS: u64 = 4;
 const ROW_HEIGHT: f32 = 18.0;
@@ -237,9 +240,21 @@ fn assert_scene_matches_rebuild(shell: &mut AppShell<ScopedUpdateCountingRendere
     let drawn = drawn_picture(shell);
     let rebuilt = rebuilt_picture(shell);
     if let Some(line) = drawn.iter().zip(&rebuilt).position(|(a, b)| a != b) {
+        let (drawn, rebuilt) = (&drawn[line], &rebuilt[line]);
+        let at = drawn
+            .bytes()
+            .zip(rebuilt.bytes())
+            .position(|(a, b)| a != b)
+            .unwrap_or(0);
+        let near = |text: &str| {
+            text.get(at.saturating_sub(160)..(at + 160).min(text.len()))
+                .unwrap_or(text)
+                .to_string()
+        };
         panic!(
-            "{frame}: the scoped scene differs from a rebuild at line {line}:\n  drawn:   {}\n  rebuilt: {}",
-            drawn[line], rebuilt[line]
+            "{frame}: the scoped scene differs from a rebuild at line {line}, byte {at}:\n  drawn:   {}\n  rebuilt: {}",
+            near(drawn),
+            near(rebuilt)
         );
     }
     assert_eq!(
@@ -317,6 +332,18 @@ fn rows_inserted_at_the_top_of_a_keyed_column_ride_the_scoped_update() {
         );
         assert_scene_matches_rebuild(&mut tape.shell, "keyed insertion");
     }
+}
+
+#[test]
+fn an_unchanged_layout_pass_preserves_the_scene_without_recording_it() {
+    let _guard = test_guard();
+    let mut host = CountedShell::settled(location_key(file!(), line!(), column!()), TradeTape);
+    host.frame();
+    let picture = drawn_picture(&host.shell);
+    host.shell.app.request_layout_pass();
+    assert_eq!(host.frame(), (0, 0));
+    assert_eq!(drawn_picture(&host.shell), picture);
+    assert_scene_matches_rebuild(&mut host.shell, "unchanged layout");
 }
 
 #[test]

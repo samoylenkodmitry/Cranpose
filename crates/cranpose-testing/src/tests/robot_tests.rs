@@ -47,6 +47,36 @@ struct NeverWarmRenderer {
     inner: TestRenderer,
 }
 
+#[test]
+fn robot_idle_pump_advances_the_animation_clock_until_a_draw_settles() {
+    let finished = Rc::new(std::cell::Cell::new(false));
+    let drawn = Rc::clone(&finished);
+    let mut robot = create_headless_robot_test(100, 100, move || {
+        let clock = cranpose_core::with_current_composer(cranpose_core::Composer::runtime_handle);
+        let drawn = Rc::clone(&drawn);
+        cranpose_ui::Box(
+            cranpose_ui::Modifier::empty()
+                .size_points(20.0, 20.0)
+                .draw_behind(move |_| {
+                    let done = clock
+                        .last_frame_time_nanos()
+                        .is_some_and(|time| time >= 100_000_000);
+                    drawn.set(done);
+                    if !done {
+                        cranpose_ui::request_current_draw_redraw();
+                    }
+                }),
+            cranpose_ui::BoxSpec::default(),
+            || {},
+        );
+    });
+
+    robot.wait_for_idle();
+    assert!(finished.get());
+    assert!(robot.frame_time_nanos() >= 100_000_000);
+    assert!(!robot.shell_mut().needs_redraw());
+}
+
 impl Renderer for NeverWarmRenderer {
     type Scene = Scene;
     type Error = ();
