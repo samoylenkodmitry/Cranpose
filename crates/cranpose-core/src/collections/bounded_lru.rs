@@ -1,6 +1,12 @@
-use std::{borrow::Borrow, hash::Hash, num::NonZeroUsize};
+use std::{
+    borrow::Borrow,
+    hash::{BuildHasher, Hash},
+    num::NonZeroUsize,
+};
 
-use crate::collections::map::HashMap;
+use hashbrown::HashTable;
+
+use crate::collections::map::RandomState;
 
 struct CacheSlot<K, V> {
     key: K,
@@ -22,16 +28,16 @@ struct CacheSlot<K, V> {
 /// every glyph of every frame, and every one of those inserts was walking the
 /// whole table to decide what to drop.
 ///
-/// A key is held twice, once in the index and once in its slot, so an eviction
-/// can find the index entry to remove without searching for it. The keys these
-/// caches use are small `Copy` structs, and the duplicate is what keeps the
-/// links free of raw pointers.
+/// Each key lives in its slot. The hash index holds slot numbers and borrows
+/// their keys for comparisons and rehashing, keeping large keys out of the
+/// index without raw pointers or a second owner.
 ///
 /// The index and slots grow with the entries rather than reserving the bound:
 /// most caches of a process never come near it, and a table sized for
 /// thousands of entries each is megabytes a small screen never touches.
 pub struct BoundedLruCache<K, V> {
-    index: HashMap<K, usize>,
+    index: HashTable<usize>,
+    hash_builder: RandomState,
     slots: Vec<Option<CacheSlot<K, V>>>,
     free: Vec<usize>,
     newest: Option<usize>,
@@ -41,11 +47,13 @@ pub struct BoundedLruCache<K, V> {
 
 impl<K, V> BoundedLruCache<K, V>
 where
-    K: Clone + Eq + Hash,
+    K: Eq + Hash,
 {
+    /// Creates an empty cache that grows up to `cap` entries.
     pub fn new(cap: NonZeroUsize) -> Self {
         Self {
-            index: HashMap::default(),
+            index: HashTable::new(),
+            hash_builder: RandomState::default(),
             slots: Vec::new(),
             free: Vec::new(),
             newest: None,
@@ -54,19 +62,23 @@ where
         }
     }
 
+    /// Creates an empty cache, treating a zero capacity as one.
     pub fn with_capacity_at_least_one(cap: usize) -> Self {
         let cap = NonZeroUsize::new(cap).unwrap_or(NonZeroUsize::MIN);
         Self::new(cap)
     }
 
+    /// Returns the number of cached entries.
     pub fn len(&self) -> usize {
         self.index.len()
     }
 
+    /// Returns whether the cache contains no entries.
     pub fn is_empty(&self) -> bool {
         self.index.is_empty()
     }
 
+    /// Returns the maximum number of cached entries.
     pub fn cap(&self) -> NonZeroUsize {
         self.cap
     }
@@ -83,40 +95,48 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.index.contains_key(key)
+        self.find_slot(key).is_some()
     }
 
+    /// Looks up a value and marks its entry most recently used.
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let slot = *self.index.get(key)?;
+        let slot = self.find_slot(key)?;
         self.promote(slot);
         Some(&self.slot(slot).value)
     }
 
+    /// Looks up a value without changing its recency.
     pub fn peek<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let slot = *self.index.get(key)?;
+        let slot = self.find_slot(key)?;
         Some(&self.slot(slot).value)
     }
 
+    /// Looks up a mutable value and marks its entry most recently used.
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let slot = *self.index.get(key)?;
+        let slot = self.find_slot(key)?;
         self.promote(slot);
         Some(&mut self.slot_mut(slot).value)
     }
 
+    /// Inserts a most recently used entry, returning any displaced entry.
+    ///
+    /// An equal stored key keeps its identity: only its value is replaced,
+    /// and the incoming key is returned with the previous value.
     pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
-        if let Some(&slot) = self.index.get(&key) {
+        let hash = self.hash_builder.hash_one(&key);
+        if let Some(&slot) = self.index.find(hash, |&slot| self.slot(slot).key == key) {
             self.promote(slot);
             let old_value = std::mem::replace(&mut self.slot_mut(slot).value, value);
             return Some((key, old_value));
@@ -128,12 +148,18 @@ where
             None
         };
 
-        let slot = self.claim_slot(key.clone(), value);
-        self.index.insert(key, slot);
+        let slot = self.claim_slot(key, value);
+        self.index.insert_unique(hash, slot, |&slot| {
+            let entry = self.slots[slot]
+                .as_ref()
+                .expect("an indexed cache slot is always occupied");
+            self.hash_builder.hash_one(&entry.key)
+        });
         self.link_newest(slot);
         evicted
     }
 
+    /// Inserts a most recently used entry, returning any displaced value.
     pub fn put(&mut self, key: K, value: V) -> Option<V> {
         self.push(key, value).map(|(_, value)| value)
     }
@@ -144,16 +170,31 @@ where
         Some((&entry.key, &entry.value))
     }
 
+    /// Removes and returns the least recently used entry.
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
         let slot = self.oldest?;
+        let hash = self.hash_builder.hash_one(&self.slot(slot).key);
+        self.index
+            .find_entry(hash, |&index| index == slot)
+            .expect("a linked cache slot is always indexed")
+            .remove();
         self.unlink(slot);
         let entry = self.release_slot(slot);
-        self.index.remove(&entry.key);
         Some((entry.key, entry.value))
     }
 
+    /// Removes the entry under `key` and returns its value.
     pub fn pop(&mut self, key: &K) -> Option<V> {
-        let slot = self.index.remove(key)?;
+        let hash = self.hash_builder.hash_one(key);
+        let (slot, _) = self
+            .index
+            .find_entry(hash, |&slot| {
+                self.slots[slot]
+                    .as_ref()
+                    .is_some_and(|entry| &entry.key == key)
+            })
+            .ok()?
+            .remove();
         self.unlink(slot);
         Some(self.release_slot(slot).value)
     }
@@ -166,6 +207,18 @@ where
             next = entry.older;
             Some((&entry.key, &entry.value))
         })
+    }
+
+    fn find_slot<Q>(&self, key: &Q) -> Option<usize>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.index
+            .find(self.hash_builder.hash_one(key), |&slot| {
+                self.slot(slot).key.borrow() == key
+            })
+            .copied()
     }
 
     fn slot(&self, slot: usize) -> &CacheSlot<K, V> {

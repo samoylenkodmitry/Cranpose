@@ -1,8 +1,88 @@
 use super::BoundedLruCache;
 
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct TimedTextKey {
+    text: std::rc::Rc<str>,
+    parameters: [u64; 3],
+}
+
+fn time_cache<K: Clone + Eq + std::hash::Hash>(
+    name: &str,
+    keys: &[K],
+    capacity: usize,
+    mode: &str,
+    iterations: usize,
+) {
+    use std::hint::black_box;
+
+    let mut cache = cache(capacity);
+    for (index, key) in keys.iter().take(capacity).enumerate() {
+        cache.put(key.clone(), [index as u64; 5]);
+    }
+    let start = web_time::Instant::now();
+    let mut misses = 0;
+    for step in 0..iterations {
+        let index = match mode {
+            "hits" => step * 73 % capacity,
+            "mixed" if step % 32 == 0 => capacity + (step / 32) % capacity,
+            "mixed" => step * 73 % (capacity * 3 / 4),
+            "churn" => step % keys.len(),
+            _ => unreachable!(),
+        };
+        let key = black_box(&keys[index]);
+        if let Some(value) = cache.get(key) {
+            black_box(value);
+        } else {
+            misses += 1;
+            black_box(cache.put(key.clone(), [index as u64; 5]));
+        }
+    }
+    let elapsed = start.elapsed();
+    eprintln!(
+        "CACHE_LOOKUP {name}_{capacity}_{mode} iterations={iterations} ns_per_call={} misses={misses}",
+        elapsed.as_nanos() as f64 / iterations as f64
+    );
+    black_box(cache);
+}
+
+#[test]
+#[ignore]
+fn bounded_cache_timing() {
+    let iterations = std::env::var("CACHE_LOOKUP_ITERATIONS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2_000_000);
+    for capacity in [128, 8192] {
+        let small: Vec<_> = (0..capacity as u64 * 2).collect();
+        let text: Vec<_> = (0..capacity * 2)
+            .map(|index| TimedTextKey {
+                text: std::rc::Rc::from(format!("A cached text label number {index}")),
+                parameters: [16, 0, 450],
+            })
+            .collect();
+        for mode in ["hits", "mixed", "churn"] {
+            time_cache("small", &small, capacity, mode, iterations);
+            time_cache("text", &text, capacity, mode, iterations);
+        }
+    }
+}
+
+#[test]
+fn each_cached_key_has_one_owner() {
+    use std::rc::Rc;
+
+    let key: Rc<str> = Rc::from("key");
+    let mut cache = BoundedLruCache::with_capacity_at_least_one(2);
+    cache.put(Rc::clone(&key), 7);
+    assert_eq!(Rc::strong_count(&key), 2, "the cache stores the key once");
+    assert_eq!(cache.get(&key), Some(&7));
+    assert_eq!(cache.pop(&key), Some(7));
+    assert_eq!(Rc::strong_count(&key), 1, "removal releases the stored key");
+}
+
 fn cache<K, V>(cap: usize) -> BoundedLruCache<K, V>
 where
-    K: Clone + Eq + std::hash::Hash,
+    K: Eq + std::hash::Hash,
 {
     BoundedLruCache::with_capacity_at_least_one(cap)
 }
@@ -181,4 +261,162 @@ fn clear_drops_every_entry_and_keeps_the_bound() {
     lru.put(3, "three");
     lru.put(4, "four");
     assert_eq!(lru.push(5, "five"), Some((3, "three")));
+}
+
+#[test]
+fn borrowed_text_lookups_preserve_recency_and_allow_mutation() {
+    let mut cache = cache(2);
+    cache.put(String::from("first"), 1);
+    cache.put(String::from("second"), 2);
+    assert!(cache.contains("first"));
+    assert_eq!(cache.peek("first"), Some(&1));
+    assert_eq!(cache.peek_lru().map(|(key, _)| key.as_str()), Some("first"));
+    *cache.get_mut("first").expect("stored text") = 3;
+    assert_eq!(cache.get("first"), Some(&3));
+    assert_eq!(
+        cache.push(String::from("third"), 4),
+        Some((String::from("second"), 2))
+    );
+    assert!(!cache.contains("missing"));
+    assert_eq!(cache.peek("missing"), None);
+    assert_eq!(cache.get_mut("missing"), None);
+    assert_eq!(cache.get("missing"), None);
+}
+
+#[test]
+fn replacing_an_equal_key_preserves_the_stored_owner() {
+    use std::rc::Rc;
+
+    let original: Rc<str> = Rc::from("equal");
+    let incoming: Rc<str> = Rc::from("equal");
+    let mut cache = cache(1);
+    cache.put(Rc::clone(&original), 1);
+    let (returned, value) = cache.push(Rc::clone(&incoming), 2).expect("replacement");
+    assert_eq!(value, 1);
+    assert!(Rc::ptr_eq(&returned, &incoming));
+    assert!(Rc::ptr_eq(
+        cache.peek_lru().expect("cached key").0,
+        &original
+    ));
+    drop(returned);
+    assert_eq!(Rc::strong_count(&incoming), 1);
+    assert_eq!(Rc::strong_count(&original), 2);
+    let evicted = cache.push(Rc::from("other"), 3).expect("eviction");
+    assert!(Rc::ptr_eq(&evicted.0, &original));
+    drop(evicted);
+    assert_eq!(Rc::strong_count(&original), 1);
+    cache.put(Rc::clone(&original), 4);
+    cache.clear();
+    assert_eq!(Rc::strong_count(&original), 1);
+    assert_eq!(cache.index.capacity(), 0);
+    assert_eq!(cache.slots.capacity(), 0);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct CollidingKey(u32);
+
+impl std::hash::Hash for CollidingKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u8(0);
+    }
+}
+
+#[test]
+fn collisions_growth_and_slot_reuse_match_a_reference_lru() {
+    for capacity in [1, 17, 129] {
+        let mut cache = cache(capacity);
+        let mut reference: Vec<(u32, u32)> = Vec::new();
+        for key in 0..capacity as u32 {
+            cache.put(CollidingKey(key), key);
+            reference.insert(0, (key, key));
+        }
+        let mut state = 0x1234_5678_9abc_def0u64;
+        for step in 0..4_000u32 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let key = ((state >> 32) % 257) as u32;
+            let position = reference.iter().position(|entry| entry.0 == key);
+            match (state >> 16) % 8 {
+                0..=2 => {
+                    let evicted = if let Some(position) = position {
+                        Some(reference.remove(position))
+                    } else if reference.len() == capacity {
+                        reference.pop()
+                    } else {
+                        None
+                    };
+                    reference.insert(0, (key, step));
+                    assert_eq!(
+                        cache
+                            .push(CollidingKey(key), step)
+                            .map(|(key, value)| (key.0, value)),
+                        evicted
+                    );
+                }
+                3 | 4 => {
+                    let change = (state >> 16) % 8 == 4;
+                    let expected = position.map(|position| {
+                        let mut entry = reference.remove(position);
+                        if change {
+                            entry.1 ^= step;
+                        }
+                        reference.insert(0, entry);
+                        entry.1
+                    });
+                    let actual = if change {
+                        cache.get_mut(&CollidingKey(key)).map(|value| {
+                            *value ^= step;
+                            *value
+                        })
+                    } else {
+                        cache.get(&CollidingKey(key)).copied()
+                    };
+                    assert_eq!(actual, expected);
+                }
+                5 => {
+                    let expected = position.map(|position| reference.remove(position).1);
+                    assert_eq!(cache.pop(&CollidingKey(key)), expected);
+                }
+                6 => assert_eq!(
+                    cache.pop_lru().map(|(key, value)| (key.0, value)),
+                    reference.pop()
+                ),
+                _ => {
+                    assert_eq!(cache.contains(&CollidingKey(key)), position.is_some());
+                    assert_eq!(
+                        cache.peek(&CollidingKey(key)).copied(),
+                        position.map(|position| reference[position].1)
+                    );
+                }
+            }
+            assert_eq!(cache.len(), reference.len());
+            assert_eq!(cache.is_empty(), reference.is_empty());
+            assert_eq!(
+                cache.peek_lru().map(|(key, value)| (key.0, *value)),
+                reference.last().copied()
+            );
+            assert!(
+                cache
+                    .iter()
+                    .map(|(key, value)| (key.0, *value))
+                    .eq(reference.iter().copied())
+            );
+        }
+    }
+}
+
+#[test]
+fn pass_aged_cache_accepts_keys_without_clone() {
+    use crate::collections::pass_aged::{IDLE_PASSES, PassAgedCache};
+
+    let mut cache = PassAgedCache::with_capacity_at_least_one(1);
+    assert_eq!(cache.push(CollidingKey(1), 7), None);
+    assert_eq!(cache.get(&CollidingKey(1)), Some(&7));
+    let mut dropped = Vec::new();
+    for _ in 0..=IDLE_PASSES {
+        cache.begin_pass(|value| dropped.push(value));
+    }
+    assert_eq!(dropped, vec![7]);
+    assert!(cache.is_empty());
 }

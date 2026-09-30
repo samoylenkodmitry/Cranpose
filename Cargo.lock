@@ -1091,6 +1091,7 @@ dependencies = [
  "dispatch2",
  "foldhash",
  "futures-task",
+ "hashbrown 0.17.1",
  "log",
  "pollster",
  "smallvec",
