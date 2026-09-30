@@ -77,6 +77,7 @@ mod tab_lighting_rest_identity;
 mod text_field_live_edit;
 mod transient_pool;
 mod transparent_child;
+mod vertex_gradient_parity;
 mod viewport_crop;
 mod viewport_uniform_growth;
 mod wear_layer_alpha_pixels;

@@ -14,6 +14,7 @@ fn shape_segment(
         count: 1,
         blend,
         gradient: false,
+        vertex_gradient: false,
         brushes: 1,
         kinds,
         band_class: 0,
@@ -28,7 +29,13 @@ fn arena_key(segment: &RecordSegment) -> crate::render::ShapePipelineKey {
     crate::render::ShapePipelineKey {
         blend_mode: segment.blend,
         tier: crate::render::RunTier::Arena,
-        variant: crate::render::ShapeVariant::of_segment(segment, false, Default::default(), false),
+        variant: crate::render::ShapeVariant::of_segment(
+            segment,
+            false,
+            Default::default(),
+            false,
+            true,
+        ),
         turns: crate::render::ShapeTurns::None,
         depth: crate::render::ShapeDepth::Off,
     }
@@ -106,6 +113,23 @@ fn a_run_of_shapes_without_interiors_keeps_its_own_draw() {
             (many as u32..many as u32 + 1, background),
         ]
     );
+}
+
+fn solid_fill_key(vertex_gradient: bool) -> crate::render::ShapePipelineKey {
+    arena_key(&RecordSegment {
+        vertex_gradient,
+        ..shape_segment(1, BlendMode::SrcOver, (false, false, false))
+    })
+}
+
+#[test]
+fn a_vertex_gradient_and_its_small_solid_shapes_share_one_dithered_draw() {
+    let chart = solid_fill_key(true);
+    let bar = solid_fill_key(false);
+    assert_eq!(staged_draws([bar, chart, bar, bar, bar]), [(0..5, chart)]);
+    let many = JOINED_PLAIN_RECORDS + 1;
+    let draws = staged_draws(std::iter::once(chart).chain(std::iter::repeat_n(bar, many as usize)));
+    assert_eq!(draws, [(0..many, chart), (many..many + 1, bar)]);
 }
 
 #[test]
@@ -284,7 +308,7 @@ fn a_solid_segment_never_tests_its_interiors() {
     for clipped in [false, true] {
         let variant = |interiors: bool| {
             let segment = shape_segment(1, BlendMode::SrcOver, (interiors, false, false));
-            ShapeVariant::of_segment(&segment, clipped, Default::default(), false)
+            ShapeVariant::of_segment(&segment, clipped, Default::default(), false, true)
         };
         assert_eq!(variant(true), variant(false), "clipped: {clipped}");
     }
@@ -300,8 +324,8 @@ fn a_segment_whose_interiors_a_pre_pass_lays_down_skips_the_interior_fast_path()
     // Whether a pre-pass laying interiors down changes the variant: only by
     // dropping the interior's fast path, which the test cannot read apart.
     let drops_fast_path = |segment: &RecordSegment| {
-        ShapeVariant::of_segment(segment, false, Default::default(), true)
-            != ShapeVariant::of_segment(segment, false, Default::default(), false)
+        ShapeVariant::of_segment(segment, false, Default::default(), true, true)
+            != ShapeVariant::of_segment(segment, false, Default::default(), false, true)
     };
     assert!(drops_fast_path(&segment(true, false)), "laid down ahead");
     assert!(

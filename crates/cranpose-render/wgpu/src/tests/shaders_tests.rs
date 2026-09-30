@@ -165,7 +165,12 @@ fn shape_shader_validates_for_webgpu_in_both_table_forms() {
 #[test]
 fn shape_vertices_receive_every_record_field_from_its_column() {
     let module = naga::front::wgsl::parse_str(&storage_shape_shader()).unwrap();
-    for entry_name in ["vs_record", "vs_record_solid", "vs_record_gradient_fill"] {
+    for entry_name in [
+        "vs_record",
+        "vs_record_solid",
+        "vs_record_dithered_fill",
+        "vs_record_gradient_fill",
+    ] {
         let entry = module
             .entry_points
             .iter()
@@ -221,15 +226,43 @@ fn shape_vertices_receive_every_record_field_from_its_column() {
 
 #[test]
 fn shape_shader_validates_for_webgl() {
-    for entry in ["vs_record", "vs_record_solid", "vs_record_gradient_fill"] {
+    for entry in [
+        "vs_record",
+        "vs_record_solid",
+        "vs_record_dithered_fill",
+        "vs_record_gradient_fill",
+    ] {
         if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Vertex) {
             panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
         }
     }
-    for entry in ["fs_main", "fs_solid", "fs_gradient_fill"] {
+    for entry in [
+        "fs_main",
+        "fs_solid",
+        "fs_dithered_fill",
+        "fs_gradient_fill",
+    ] {
         if let Err(err) = validate_glsl_portability(super::SHADER, entry, ShaderStage::Fragment) {
             panic!("shape.wgsl `{entry}` must lower to GLSL ES 300: {err}");
         }
+    }
+}
+
+#[test]
+fn dithering_solid_batches_validate_for_webgl() {
+    let constants = naga::back::PipelineConstants::from_iter([
+        ("SHAPE_SOLID".into(), 1.0),
+        ("SHAPE_DITHER".into(), 1.0),
+        ("SHAPE_KIND_FIXED".into(), 0.0),
+    ]);
+    for (entry, stage) in [
+        ("vs_record_dithered_fill", ShaderStage::Vertex),
+        ("fs_dithered_fill", ShaderStage::Fragment),
+        ("vs_record_solid", ShaderStage::Vertex),
+        ("fs_solid", ShaderStage::Fragment),
+    ] {
+        validate_glsl_portability_with_constants(super::SHADER, entry, stage, &constants)
+            .unwrap_or_else(|error| panic!("{entry}: {error}"));
     }
 }
 
@@ -270,6 +303,7 @@ fn shape_fragment_inputs_fit_the_gles_varying_floor() {
         "fs_solid",
         "fs_clipped_fill",
         "fs_plain_fill",
+        "fs_dithered_fill",
         "fs_gradient_fill",
     ] {
         let locations = fragment_input_locations(super::SHADER, entry_point);
@@ -299,6 +333,11 @@ fn shape_fragment_inputs_fit_the_gles_varying_floor() {
         fragment_input_locations(super::SHADER, "fs_plain_fill").len(),
         3,
         "an unclipped fill drawn flat carries its colour, rect and radii"
+    );
+    assert_eq!(
+        fragment_input_locations(super::SHADER, "fs_dithered_fill").len(),
+        4,
+        "a flat fill batch holding a gradient its vertices shade adds only the dither position"
     );
     assert_eq!(
         fragment_input_locations(super::SHADER, "fs_gradient_fill").len(),

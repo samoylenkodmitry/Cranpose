@@ -924,22 +924,28 @@ pub fn capture_graph_settled(
 }
 
 pub fn settled_capture(renderer: &mut LockedRenderer, graph: &RenderGraph) -> Vec<u8> {
-    let mut passes = Vec::new();
-    while passes.len() < 3 {
-        let captured = capture_settled(renderer, |renderer| {
-            renderer.scene_mut().graph = Some(graph.clone());
-            renderer
-                .capture_frame(SIZE, SIZE)
-                .unwrap_or_else(|err| panic!("capture failed: {err:?}"))
-        });
+    stable_settled_capture(renderer, |renderer| {
+        renderer.scene_mut().graph = Some(graph.clone());
+        let captured = renderer
+            .capture_frame(SIZE, SIZE)
+            .unwrap_or_else(|err| panic!("capture failed: {err:?}"));
         assert_eq!((captured.width, captured.height), (SIZE, SIZE));
-        passes.push(captured.pixels);
-    }
+        captured
+    })
+}
+
+pub fn stable_settled_capture(
+    renderer: &mut LockedRenderer,
+    mut capture: impl FnMut(&mut LockedRenderer) -> CapturedFrame,
+) -> Vec<u8> {
+    capture_settled(renderer, &mut capture);
+    let previous = capture_settled(renderer, &mut capture).pixels;
+    let current = capture_settled(renderer, &mut capture).pixels;
     assert_eq!(
-        passes[1], passes[2],
+        previous, current,
         "same-graph control passes must be byte-stable before the cross-arm compare"
     );
-    passes.pop().unwrap()
+    current
 }
 
 pub fn distinct_colors(pixels: &[u8]) -> usize {
