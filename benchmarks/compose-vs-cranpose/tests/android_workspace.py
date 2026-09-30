@@ -73,10 +73,12 @@ class WorkspaceCheck:
         path.with_suffix('.json').write_text(json.dumps(rows, indent=2) + '\n')
         return ' '.join(row['text'] for row in rows)
 
-    def require_text(self, image, region, expected, name):
+    def require_text(self, image, region, expected, name, exact=False):
         text = self.text(image, region, name)
         normalized = re.sub(r'\bO(?= updates\b)', '0', text)
-        if expected.casefold() not in normalized.casefold():
+        matches = (expected == normalized.strip() if exact
+                   else expected.casefold() in normalized.casefold())
+        if not matches:
             raise AssertionError(f'{name}: expected {expected!r}; saw {text!r}')
         self.steps.append({'check': name, 'visible_text': text})
 
@@ -122,7 +124,7 @@ class WorkspaceCheck:
         self.key('KEYCODE_BACK')
         self.ime(False)
         image, _ = self.capture('search')
-        self.require_text(image, 'search', 'AAPL', 'typed search text')
+        self.require_text(image, 'search', 'AAPL', 'typed search text', exact=True)
         self.tap(875, 152)
         self.ime(True)
         self.key('KEYCODE_BACK')
@@ -139,7 +141,7 @@ class WorkspaceCheck:
             time.sleep(0.1)
         else:
             raise AssertionError('Stream shortcut did not change the visible quote')
-        self.require_text(after, 'search', 'AAPL', 'preview shortcut preserves search text')
+        self.require_text(after, 'search', 'AAPL', 'preview shortcut preserves search text', exact=True)
         self.key('KEYCODE_Q')
         stopped, _ = self.capture('stream-stopped')
         time.sleep(0.4)

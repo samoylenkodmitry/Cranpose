@@ -27,12 +27,9 @@ impl WorkspaceHarness {
         Self { shell }
     }
 
-    fn semantics(&mut self) -> SemanticsTree {
+    fn semantics(&mut self) -> &SemanticsTree {
         self.shell.update();
-        self.shell
-            .semantics_tree()
-            .expect("workspace semantics")
-            .clone()
+        self.shell.semantics_tree().expect("workspace semantics")
     }
 
     fn click(&mut self, label: &str) {
@@ -40,9 +37,10 @@ impl WorkspaceHarness {
         let control = find(semantics.root(), &|node| {
             !node.actions.is_empty() && contains_text(node, label)
         })
-        .unwrap_or_else(|| panic!("{label} has an activation action"));
+        .unwrap_or_else(|| panic!("{label} has an activation action"))
+        .node_id;
         assert!(
-            self.shell.accessibility_activate(control.node_id, None),
+            self.shell.accessibility_activate(control, None),
             "{label} activates"
         );
     }
@@ -77,6 +75,43 @@ impl WorkspaceHarness {
         .bounds
         .y
     }
+
+    fn assert_search_text(&mut self, expected: &str) {
+        let tree = self.semantics();
+        let field = find(tree.root(), &|node| node.editable_text).expect("editable search");
+        assert_eq!(field.text.as_deref(), Some(expected));
+    }
+}
+
+#[test]
+fn workspace_shortcuts_control_the_workspace_while_search_has_focus() {
+    use cranpose_ui::{KeyCode, KeyEvent};
+    let mut app = WorkspaceHarness::new();
+    app.click("Search symbols");
+    assert!(app.shell.on_paste("AAPL"));
+    for (key, text, label) in [
+        (KeyCode::Digit2, "2", "Auto-scroll Sidebar"),
+        (KeyCode::Digit6, "6", "Auto-scroll Watchlist"),
+        (KeyCode::Digit1, "1", "Auto-scroll Off"),
+    ] {
+        assert!(app.shell.on_key_event(&KeyEvent::key_down(key, text)));
+        let tree = app.semantics();
+        let control = find(tree.root(), &|node| {
+            node.description.as_deref() == Some(label)
+        })
+        .expect("scroll control");
+        assert_eq!(control.selected, Some(true));
+    }
+    for enabled in [true, false] {
+        assert!(app.shell.on_key_event(&KeyEvent::key_down(KeyCode::Q, "q")));
+        let tree = app.semantics();
+        let control = find(tree.root(), &|node| {
+            node.description.as_deref() == Some("Stream quotes") && node.toggled.is_some()
+        })
+        .expect("stream control");
+        assert_eq!(control.toggled, Some(enabled));
+    }
+    app.assert_search_text("AAPL");
 }
 
 #[test]
@@ -147,15 +182,11 @@ fn workspace_search_accepts_typed_text() {
     let search = find(tree.root(), &|node| {
         node.editable_text && contains_text(node, "Search symbols")
     })
-    .expect("editable symbol search");
-    assert!(app.shell.accessibility_activate(search.node_id, None));
+    .expect("editable symbol search")
+    .node_id;
+    assert!(app.shell.accessibility_activate(search, None));
     assert!(app.shell.on_paste("AAPL"));
-    let tree = app.semantics();
-    assert!(
-        find(tree.root(), &|node| node.editable_text
-            && node.text.as_deref() == Some("AAPL"))
-        .is_some()
-    );
+    app.assert_search_text("AAPL");
 }
 
 #[test]
@@ -163,11 +194,7 @@ fn workspace_hover_moves_between_visible_rows() {
     let mut app = WorkspaceHarness::with_mode(WorkspaceMode::Hover, false);
     app.shell
         .update_after_exact_interval(std::time::Duration::ZERO);
-    let tree = app
-        .shell
-        .semantics_tree()
-        .expect("workspace semantics")
-        .clone();
+    let tree = app.shell.semantics_tree().expect("workspace semantics");
     let row = find(tree.root(), &|node| {
         node.description.as_deref() == Some("Watchlist row 0")
     })

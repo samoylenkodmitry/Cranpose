@@ -9,11 +9,15 @@ fn has_text(shell: &mut AppShell<TestRenderer>, value: &str) -> bool {
     contains_text(shell.semantics_tree().expect("semantics").root(), value)
 }
 
-fn transformed_modifier(width: f32, height: f32, scale: f32) -> cranpose_ui::Modifier {
+fn transformed_modifier(
+    width: f32,
+    height: f32,
+    scale: impl Fn() -> f32 + 'static,
+) -> cranpose_ui::Modifier {
     cranpose_ui::Modifier::empty()
         .size_points(width, height)
-        .graphics_layer_value(cranpose_ui::GraphicsLayer {
-            scale,
+        .graphics_layer(move || cranpose_ui::GraphicsLayer {
+            scale: scale(),
             translation_x: 20.0,
             translation_y: 30.0,
             transform_origin: cranpose_ui::TransformOrigin::new(0.0, 0.0),
@@ -36,14 +40,18 @@ fn reported_window_bounds_reach_a_scaled_hover_target() {
     let report = bounds.clone();
     let mouse = Rc::new(RefCell::new(None));
     let mouse_slot = mouse.clone();
+    let scale = Rc::new(Cell::new(None::<cranpose_core::MutableState<f32>>));
+    let scale_slot = scale.clone();
     let mut shell = AppShell::new_with_size(
         TestRenderer::default(),
         cranpose_core::location_key(file!(), line!(), column!()),
         move || {
             let report = report.clone();
+            let current_scale = cranpose_core::rememberMutableStateOf(|| 0.5);
+            scale_slot.set(Some(current_scale));
             *mouse_slot.borrow_mut() = Some(cranpose_ui::mouse_input::local_mouse_input());
             Box(
-                transformed_modifier(200.0, 200.0, 0.5),
+                transformed_modifier(200.0, 200.0, move || current_scale.get()),
                 BoxSpec::default(),
                 move || {
                     let interaction = rememberMutableInteractionSource();
@@ -71,29 +79,35 @@ fn reported_window_bounds_reach_a_scaled_hover_target() {
     );
     shell.set_semantics_enabled(true);
     shell.update();
-    let rect = bounds.get();
     let mouse = mouse.borrow().as_ref().expect("app mouse input").clone();
-    mouse.move_to(
-        cranpose_ui::mouse_input::MouseInputTarget::Primary,
-        cranpose_ui::Point {
-            x: rect.x + rect.width / 2.0,
-            y: rect.y + rect.height / 2.0,
-        },
-    );
-    shell.update();
-    assert!(
-        has_text(&mut shell, "hovered"),
-        "window coordinates reach the displayed target"
-    );
-    mouse.move_to(
-        cranpose_ui::mouse_input::MouseInputTarget::Primary,
-        cranpose_ui::Point { x: 190.0, y: 190.0 },
-    );
-    shell.update();
-    assert!(
-        has_text(&mut shell, "idle"),
-        "injected mouse movement also dispatches exit"
-    );
+    for value in [0.5, 1.0] {
+        shell.app_context().enter(|| {
+            scale.get().expect("layer scale").set(value);
+        });
+        shell.update();
+        let rect = bounds.get();
+        mouse.move_to(
+            cranpose_ui::mouse_input::MouseInputTarget::Primary,
+            cranpose_ui::Point {
+                x: rect.x + rect.width / 2.0,
+                y: rect.y + rect.height / 2.0,
+            },
+        );
+        shell.update();
+        assert!(
+            has_text(&mut shell, "hovered"),
+            "window coordinates reach the displayed target at scale {value}"
+        );
+        mouse.move_to(
+            cranpose_ui::mouse_input::MouseInputTarget::Primary,
+            cranpose_ui::Point { x: 190.0, y: 190.0 },
+        );
+        shell.update();
+        assert!(
+            has_text(&mut shell, "idle"),
+            "injected mouse movement also dispatches exit"
+        );
+    }
 }
 
 fn focused_field(scale: f32, decorated: bool) -> AppShell<TestRenderer> {
@@ -107,7 +121,7 @@ fn focused_field(scale: f32, decorated: bool) -> AppShell<TestRenderer> {
         cranpose_core::location_key(file!(), line!(), column!()),
         move || {
             Box(
-                transformed_modifier(200.0, 100.0, scale),
+                transformed_modifier(200.0, 100.0, move || scale),
                 BoxSpec::default(),
                 move || {
                     let state =
@@ -178,7 +192,7 @@ fn scaled_scroll_container_reveals_a_target_in_window_coordinates() {
             let target = content_target.clone();
             let responder = content_responder.clone();
             Box(
-                transformed_modifier(200.0, 100.0, 0.5),
+                transformed_modifier(200.0, 100.0, || 0.5),
                 BoxSpec::default(),
                 move || {
                     let target = target.clone();

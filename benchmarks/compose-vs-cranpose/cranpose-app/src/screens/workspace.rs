@@ -36,7 +36,8 @@ use cranpose_foundation::{
 };
 use cranpose_ui::{
     BasicTextFieldDecorated, BasicTextFieldOptions, DashPathEffect, DrawStyle, FocusRequester,
-    Path, ScrollState, WindowCoordinates, collect_is_hovered_as_state,
+    KeyCode, KeyEvent, KeyEventType, Path, ScrollState, WindowCoordinates,
+    collect_is_hovered_as_state,
     mouse_input::{MouseInput, MouseInputTarget, local_mouse_input},
     rememberMutableInteractionSource,
     text::{
@@ -700,7 +701,10 @@ fn WorkspaceScreen(mode: WorkspaceMode, still: bool) {
     });
 
     Column(
-        Modifier::empty().fill_max_size().background(BACKGROUND),
+        Modifier::empty()
+            .fill_max_size()
+            .background(BACKGROUND)
+            .on_preview_key_event(move |event| workspace_shortcut(event, scroll_mode, streaming)),
         ColumnSpec::default(),
         move || {
             ShowcaseToolbar(scroll_mode, streaming);
@@ -726,6 +730,24 @@ fn WorkspaceScreen(mode: WorkspaceMode, still: bool) {
             FrameStats(fps);
         },
     );
+}
+
+fn workspace_shortcut(
+    event: &KeyEvent,
+    scroll_mode: MutableState<ScrollTarget>,
+    streaming: MutableState<bool>,
+) -> bool {
+    if event.event_type != KeyEventType::KeyDown || event.modifiers.any() {
+        return false;
+    }
+    match event.key_code {
+        KeyCode::Digit1 => scroll_mode.set(ScrollTarget::Off),
+        KeyCode::Digit2 => scroll_mode.set(ScrollTarget::Sidebar),
+        KeyCode::Digit6 => scroll_mode.set(ScrollTarget::Watchlist),
+        KeyCode::Q => streaming.set(!streaming.get()),
+        _ => return false,
+    }
+    true
 }
 
 async fn run_workspace_frames(
@@ -2044,15 +2066,21 @@ fn QuoteDetail(market: Rc<Market>) {
             Row(Modifier::empty(), row_spec(8.0), move || {
                 Label(
                     price(quote.last),
-                    Modifier::empty().semantics(|config| {
-                        config.content_description = Some("Selected quote price".to_string())
-                    }),
+                    Modifier::empty()
+                        .semantics(|config| {
+                            config.content_description = Some("Selected quote price".to_string())
+                        })
+                        .align_by_baseline(),
                     style(24.0, color, Some(FontWeight::SEMI_BOLD)),
                 );
-                Label(signed(change), Modifier::empty(), sm(color));
+                Label(
+                    signed(change),
+                    Modifier::empty().align_by_baseline(),
+                    sm(color),
+                );
                 Label(
                     percent(change / quote.prev_close * 100.0),
-                    Modifier::empty(),
+                    Modifier::empty().align_by_baseline(),
                     sm(color),
                 );
             });
