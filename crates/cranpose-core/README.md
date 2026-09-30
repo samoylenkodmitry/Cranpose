@@ -1223,21 +1223,27 @@ pub struct NeverEqualPolicy<T>(PhantomData<T>);
 ```rust,ignore
 pub(crate) struct SlotWriteSessionState {
     root: RootFrame,
-    group_stack: Vec<GroupFrame>,
+    group_stack: GroupStack,
+}
+
+pub(in crate::slot) struct GroupStack {
+    frames: Vec<GroupFrame>,
+    active_len: usize,
 }
 
 pub(in crate::slot) struct GroupFrame {
     group_anchor: AnchorId,
-    old_children: Vec<AnchorId>,
-    old_cursor: usize,
     next_child_index: usize,
     payload_cursor: usize,
+    old_payload_len: usize,
     node_cursor: usize,
+    old_node_len: usize,
 }
 ```
 
 **Benefits:**
 - Traversal state is scoped to the active writer session instead of living inside table storage
+- Frames reuse one buffer within a writer session; closing a group clears its contents in place
 - Group reuse, movement, and restoration operate against sibling lists and anchors
 - Composition code works through semantic `begin_group`/`finish_group_body`/`end_group` operations
 
