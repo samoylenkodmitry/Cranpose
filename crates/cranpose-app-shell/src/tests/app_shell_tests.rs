@@ -1,7 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::{Mutex, MutexGuard, OnceLock},
+    sync::{Arc, Mutex, MutexGuard, OnceLock},
     time::Duration,
 };
 
@@ -11298,6 +11298,8 @@ fn a_wait_without_a_deadline_prefetches_until_the_frame_can_start() {
 #[test]
 fn a_task_woken_between_frames_runs_when_the_loop_wakes_and_its_change_waits_for_a_frame() {
     let _guard = test_guard();
+    let gate = Gate::default();
+    let task_gate = gate.clone();
     let resumed = Rc::new(Cell::new(false));
     let written = Rc::new(Cell::new(None::<MutableState<u32>>));
     let content_resumed = Rc::clone(&resumed);
@@ -11309,13 +11311,14 @@ fn a_task_woken_between_frames_runs_when_the_loop_wakes_and_its_change_waits_for
             let ticks = rememberMutableStateOf(|| 0u32);
             content_written.set(Some(ticks));
             let resumed = Rc::clone(&content_resumed);
+            let gate = task_gate.clone();
             launched_effect_async_impl(
                 location_key(file!(), line!(), column!()),
                 TaskSite::new(file!(), line!()),
                 (),
                 move |_| {
                     Box::pin(async move {
-                        cranpose_core::delay(Duration::from_millis(1)).await;
+                        gate.opened().await;
                         resumed.set(true);
                         ticks.set_value(1);
                     })
@@ -11331,14 +11334,16 @@ fn a_task_woken_between_frames_runs_when_the_loop_wakes_and_its_change_waits_for
     shell.update();
     assert!(
         !resumed.get(),
-        "the delay has not run out on the first frame"
+        "the task waits on its gate after the first frame"
     );
+    assert!(!shell.has_pending_ui());
 
-    let waited = web_time::Instant::now();
-    while !shell.has_pending_ui() && waited.elapsed() < Duration::from_secs(5) {
-        std::thread::yield_now();
-    }
-    assert!(shell.has_pending_ui(), "the timer woke the task");
+    // Opened from another thread, as a timer or a network reply wakes a task
+    // between frames.
+    std::thread::spawn(move || gate.open())
+        .join()
+        .expect("the gate opens");
+    assert!(shell.has_pending_ui(), "opening the gate woke the task");
     shell.run_pending_tasks();
 
     assert!(
@@ -11352,4 +11357,40 @@ fn a_task_woken_between_frames_runs_when_the_loop_wakes_and_its_change_waits_for
     );
     shell.update();
     assert_eq!(written.get().map(|ticks| ticks.get_non_reactive()), Some(1));
+}
+
+/// A future a test opens by hand, from any thread: it wakes the task that
+/// awaits it as a timer would, at a moment the test chooses.
+#[derive(Clone, Default)]
+struct Gate(Arc<Mutex<(bool, Option<std::task::Waker>)>>);
+
+impl Gate {
+    fn open(&self) {
+        let waker = {
+            let mut state = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.0 = true;
+            state.1.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    fn opened(&self) -> impl std::future::Future<Output = ()> + '_ {
+        std::future::poll_fn(move |context| {
+            let mut state = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.0 {
+                std::task::Poll::Ready(())
+            } else {
+                state.1 = Some(context.waker().clone());
+                std::task::Poll::Pending
+            }
+        })
+    }
 }
