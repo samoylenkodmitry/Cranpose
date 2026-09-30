@@ -1,3 +1,5 @@
+use icu_properties::{CodePointMapData, props::BidiClass};
+
 use crate::text::unit::TextUnit;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
@@ -63,6 +65,9 @@ pub enum ResolvedTextDirection {
 }
 
 impl TextDirection {
+    /// Resolves content-based directions from the first strong Unicode bidi
+    /// character outside directional isolates. Text without a strong character
+    /// uses the variant's fallback, which is LTR except for `ContentOrRtl`.
     pub fn resolve(self, text: &str) -> ResolvedTextDirection {
         match self {
             TextDirection::Ltr => ResolvedTextDirection::Ltr,
@@ -108,6 +113,8 @@ impl Hyphens {
     }
 }
 
+/// Resolves a paragraph's direction, using content with an LTR fallback when
+/// no direction is specified.
 pub fn resolve_text_direction(
     text: &str,
     text_direction: Option<TextDirection>,
@@ -116,26 +123,38 @@ pub fn resolve_text_direction(
 }
 
 fn resolve_content_direction(text: &str, fallback: ResolvedTextDirection) -> ResolvedTextDirection {
-    for ch in text.chars() {
-        if is_rtl_char(ch) {
-            return ResolvedTextDirection::Rtl;
-        }
-        if ch.is_alphabetic() {
+    for (index, byte) in text.bytes().enumerate() {
+        if byte.is_ascii_alphabetic() {
             return ResolvedTextDirection::Ltr;
+        }
+        if !byte.is_ascii() {
+            return resolve_unicode_content_direction(&text[index..], fallback);
         }
     }
     fallback
 }
 
-fn is_rtl_char(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x0590..=0x08FF |
-        0xFB1D..=0xFDFF |
-        0xFE70..=0xFEFF |
-        0x10800..=0x10FFF |
-        0x1E800..=0x1EEFF
-    )
+fn resolve_unicode_content_direction(
+    text: &str,
+    fallback: ResolvedTextDirection,
+) -> ResolvedTextDirection {
+    let classes = CodePointMapData::<BidiClass>::new();
+    let mut isolate_depth = 0usize;
+    for ch in text.chars() {
+        match ch {
+            '\u{2066}'..='\u{2068}' => isolate_depth += 1,
+            '\u{2069}' => isolate_depth = isolate_depth.saturating_sub(1),
+            _ if isolate_depth == 0 => match classes.get(ch) {
+                BidiClass::LeftToRight => return ResolvedTextDirection::Ltr,
+                BidiClass::RightToLeft | BidiClass::ArabicLetter => {
+                    return ResolvedTextDirection::Rtl;
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    fallback
 }
 
 #[cfg(test)]

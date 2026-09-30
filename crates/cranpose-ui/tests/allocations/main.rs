@@ -75,10 +75,31 @@ fn a_modifier_chain_allocates_its_elements_and_one_shared_box() {
     assert_eq!(change.allocations, 4, "{change:?}");
 }
 
+fn resolving_text_direction_does_not_allocate() {
+    use std::hint::black_box;
+
+    use cranpose_ui::text::TextDirection;
+
+    let region = Region::new(GLOBAL);
+    for text in [
+        "$1,053.980",
+        "Latin",
+        "שלום",
+        "١٢٣ Latin",
+        "\u{2067}שלום\u{2069}Latin",
+    ] {
+        black_box(TextDirection::Content.resolve(black_box(text)));
+    }
+    let change = region.change();
+    assert_eq!(change.allocations, 0, "{change:?}");
+    assert_eq!(change.reallocations, 0, "{change:?}");
+}
+
 /// One test, so no other test's allocations land in these regions: the
 /// counting allocator counts every thread.
 #[test]
 fn layout_and_modifiers_stay_within_their_allocation_budgets() {
     remeasuring_a_row_allocates_only_its_measurement();
     a_modifier_chain_allocates_its_elements_and_one_shared_box();
+    resolving_text_direction_does_not_allocate();
 }

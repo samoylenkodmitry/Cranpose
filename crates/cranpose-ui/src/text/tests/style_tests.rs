@@ -389,6 +389,13 @@ fn text_alignment_respects_physical_edges_and_paragraph_direction() {
         (TextDirection::ContentOrRtl, "123.45", true),
         (TextDirection::Unspecified, "hello", false),
         (TextDirection::Unspecified, "שלום", true),
+        (TextDirection::Content, "١٢٣ Latin", false),
+        (TextDirection::Content, "\u{200f}Latin", true),
+        (TextDirection::Content, "\u{200e}שלום", false),
+        (TextDirection::Content, "\u{2067}שלום\u{2069}Latin", false),
+        (TextDirection::Content, "\u{2066}Latin\u{2069}שלום", true),
+        (TextDirection::ContentOrLtr, "١٢٣", false),
+        (TextDirection::ContentOrRtl, "١٢٣", true),
     ];
     let alignments = [
         (TextAlign::Left, 0.0, 0.0),
