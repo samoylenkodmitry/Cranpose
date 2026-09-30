@@ -384,6 +384,9 @@ impl SoftwareTextFontSet {
             .contains(&FontFamilyKey::of(family))
     }
 
+    /// Resolves the family and style, then uses Compose's directional CSS weight
+    /// matching: lighter first below 400, heavier first above 500, and weights
+    /// up to 500 before lighter or heavier alternatives in the 400–500 interval.
     pub fn resolve(&self, style: &TextStyle) -> Option<&SoftwareTextFont> {
         let target_weight = style.span_style.font_weight.unwrap_or_default();
         let target_style = style.span_style.font_style.unwrap_or_default();
@@ -392,7 +395,7 @@ impl SoftwareTextFontSet {
             &self.registered_families,
         );
 
-        let mut best: Option<(usize, u32)> = None;
+        let mut best: Option<(usize, FontMatchScore)> = None;
         for (index, font) in self.fonts.iter().enumerate() {
             let Some(score) = font_match_score(font, target_weight, target_style, request) else {
                 continue;
@@ -535,12 +538,14 @@ impl<'a> FontFamilyRequest<'a> {
     }
 }
 
+type FontMatchScore = (u32, u8, u16);
+
 fn font_match_score(
     font: &SoftwareTextFont,
     target_weight: FontWeight,
     target_style: FontStyle,
     request: FontFamilyRequest<'_>,
-) -> Option<u32> {
+) -> Option<FontMatchScore> {
     if !request.matches(font) {
         return None;
     }
@@ -549,11 +554,32 @@ fn font_match_score(
     } else {
         10_000
     };
-    let weight_penalty = (i32::from(font.weight().0) - i32::from(target_weight.0)).unsigned_abs();
+    let (weight_group, weight_distance) = font_weight_rank(font.weight(), target_weight);
     let coverage_penalty =
         (21usize.saturating_sub(text_font_score(font).supported_latin_chars) as u32) * 1_000;
 
-    Some(style_penalty + weight_penalty + coverage_penalty)
+    Some((
+        style_penalty + coverage_penalty,
+        weight_group,
+        weight_distance,
+    ))
+}
+
+fn font_weight_rank(candidate: FontWeight, requested: FontWeight) -> (u8, u16) {
+    let candidate = candidate.value();
+    let requested = requested.value();
+    let group = if requested < 400 {
+        u8::from(candidate > requested)
+    } else if requested > 500 {
+        u8::from(candidate < requested)
+    } else if candidate < requested {
+        1
+    } else if candidate <= 500 {
+        0
+    } else {
+        2
+    };
+    (group, candidate.abs_diff(requested))
 }
 
 fn font_family_matches(font: &SoftwareTextFont, requested: &str) -> bool {
