@@ -32,7 +32,8 @@ APPS = {
         'apk': HERE / 'compose-app/app/build/outputs/apk/release/app-release.apk',
     },
 }
-SCENARIOS = ['feed', 'ticker', 'particles', 'layers', 'grid', 'grid_layer', 'deep', 'deep_layer']
+SCENARIOS = ['feed', 'ticker', 'particles', 'layers', 'grid', 'grid_layer', 'deep', 'deep_layer',
+             'workspace']
 REMOTE_WINDOW = '/data/local/tmp/perf_window.sh'
 # Loads that keep Jetpack Compose itself below 60 fps on the Huawei Mate 20 X:
 # a test both frameworks pass at 60 fps cannot tell them apart.
@@ -45,6 +46,8 @@ HEAVY = {
     'grid_layer': '--ei rows 30 --ei cols 12',
     'deep': '--ei depth 40 --ei chips 6',
     'deep_layer': '--ei depth 40 --ei chips 6',
+    # gpui-fast's trading workspace, 16 quotes every 16 ms.
+    'workspace': '--es mode quotes',
 }
 
 

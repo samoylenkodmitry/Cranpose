@@ -9,6 +9,7 @@ mod screens;
 use std::cell::Cell;
 
 use cranpose::prelude::*;
+pub use screens::workspace::FRAME_OBSERVER;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scenario {
@@ -20,6 +21,7 @@ pub enum Scenario {
     GridLayer,
     Deep,
     DeepLayer,
+    Workspace,
 }
 
 impl Scenario {
@@ -32,6 +34,7 @@ impl Scenario {
             "grid_layer" => Self::GridLayer,
             "deep" => Self::Deep,
             "deep_layer" => Self::DeepLayer,
+            "workspace" => Self::Workspace,
             _ => Self::Feed,
         }
     }
@@ -46,6 +49,7 @@ impl Scenario {
             Self::GridLayer => "Cranpose · grid + layers",
             Self::Deep => "Cranpose · deep",
             Self::DeepLayer => "Cranpose · deep + layers",
+            Self::Workspace => "Cranpose · trading workspace",
         }
     }
 }
@@ -85,10 +89,14 @@ pub fn create_app() -> AppLauncher {
     launcher()
 }
 
+/// A phone-sized window, or for the trading workspace the 1280 × 820
+/// window gpui-fast's showcase opens.
 fn launcher() -> AppLauncher {
+    let workspace = launch_args().string("scenario") == Some("workspace");
+    let (width, height) = if workspace { (1280, 820) } else { (360, 748) };
     AppLauncher::new()
         .with_title("Perf Compare")
-        .with_size(360, 748)
+        .with_size(width, height)
         .with_log_tag("PerfCompare")
 }
 
@@ -106,6 +114,7 @@ struct Launch {
     columns: usize,
     depth: usize,
     chips: usize,
+    workspace: screens::workspace::WorkspaceMode,
 }
 
 impl Launch {
@@ -137,6 +146,9 @@ impl Launch {
             columns: count("cols", 12),
             depth: count("depth", 40),
             chips: count("chips", 6),
+            workspace: screens::workspace::WorkspaceMode::from_name(
+                args.string("mode").unwrap_or("quotes"),
+            ),
         }
     }
 }
@@ -159,7 +171,10 @@ pub fn PerfCompareApp() {
             }),
         ColumnSpec::default(),
         move || {
-            screens::TopBar(launch.scenario.title());
+            // The workspace brings the showcase's own toolbar.
+            if launch.scenario != Scenario::Workspace {
+                screens::TopBar(launch.scenario.title());
+            }
             match launch.scenario {
                 Scenario::Feed => screens::feed::FeedScreen(launch.feed),
                 Scenario::Ticker => screens::ticker::TickerScreen(launch.quotes),
@@ -179,6 +194,7 @@ pub fn PerfCompareApp() {
                     launch.depth,
                     launch.chips,
                 ),
+                Scenario::Workspace => screens::workspace::WorkspaceFrame(launch.workspace),
             }
         },
     );

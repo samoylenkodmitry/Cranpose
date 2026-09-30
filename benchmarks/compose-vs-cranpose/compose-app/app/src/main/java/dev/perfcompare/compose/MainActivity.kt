@@ -22,7 +22,8 @@ enum class Scenario(val title: String) {
     Grid("Compose · grid"),
     GridLayer("Compose · grid + layers"),
     Deep("Compose · deep"),
-    DeepLayer("Compose · deep + layers");
+    DeepLayer("Compose · deep + layers"),
+    Workspace("Compose · trading workspace");
 
     companion object {
         fun fromName(name: String?): Scenario = when (name) {
@@ -33,6 +34,7 @@ enum class Scenario(val title: String) {
             "grid_layer" -> GridLayer
             "deep" -> Deep
             "deep_layer" -> DeepLayer
+            "workspace" -> Workspace
             else -> Feed
         }
     }
@@ -51,6 +53,7 @@ data class Launch(
     val columns: Int,
     val depth: Int,
     val chips: Int,
+    val workspace: WorkspaceMode,
 )
 
 private var firstFrameLogged = false
@@ -75,6 +78,7 @@ class MainActivity : ComponentActivity() {
             columns = intent.getIntExtra("cols", 12),
             depth = intent.getIntExtra("depth", 40),
             chips = intent.getIntExtra("chips", 6),
+            workspace = WorkspaceMode.fromName(intent.getStringExtra("mode")),
         )
         setContent { PerfCompareApp(launch) }
     }
@@ -93,7 +97,8 @@ fun PerfCompareApp(launch: Launch) {
                 }
             },
     ) {
-        TopBar(launch.scenario.title)
+        // The workspace brings the showcase's own toolbar.
+        if (launch.scenario != Scenario.Workspace) TopBar(launch.scenario.title)
         when (launch.scenario) {
             Scenario.Feed -> FeedScreen(launch.feed)
             Scenario.Ticker -> TickerScreen(launch.quotes)
@@ -103,6 +108,7 @@ fun PerfCompareApp(launch: Launch) {
                 GridScreen(launch.scenario == Scenario.GridLayer, launch.rows, launch.columns)
             Scenario.Deep, Scenario.DeepLayer ->
                 DeepScreen(launch.scenario == Scenario.DeepLayer, launch.depth, launch.chips)
+            Scenario.Workspace -> WorkspaceFrame(launch.workspace)
         }
     }
 }

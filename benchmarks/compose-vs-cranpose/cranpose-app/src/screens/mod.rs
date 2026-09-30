@@ -3,6 +3,7 @@ pub mod heavy;
 pub mod layers;
 pub mod particles;
 pub mod ticker;
+pub mod workspace;
 
 use cranpose::prelude::*;
 use cranpose_ui::text::{FontWeight, ParagraphStyle, SpanStyle, TextUnit};
