@@ -302,6 +302,26 @@ pub trait TextMeasurer: 'static {
         None
     }
 
+    /// Visits each displayed line's resolved font box, including styled spans.
+    /// The text must already contain its wrapping newlines. Returns `None` when
+    /// the measurer does not provide these metrics; no callbacks run in that case.
+    /// The default handles plain text and defers annotated spans to `line_height`.
+    fn visit_line_boxes(
+        &self,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+        visit: &mut dyn FnMut(crate::text::LineBox),
+    ) -> Option<()> {
+        if !text.span_styles.is_empty() {
+            return None;
+        }
+        let line_box = self.line_box(style)?;
+        for _ in text.text.split('\n') {
+            visit(line_box);
+        }
+        Some(())
+    }
+
     fn line_height_for_node(
         &self,
         node_id: Option<NodeId>,
@@ -1085,7 +1105,6 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     let build_ms = build_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
 
     let metrics_start = telemetry.then(Instant::now);
-    let line_height = measurer.line_height_for_node(node_id, text, style).max(0.0);
     let display_line_count = visible_lines.len().max(1);
     let layout_line_count = display_line_count.max(opts.min_lines);
 
@@ -1107,24 +1126,22 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     };
     let wrap_hold = WrapHold::settle(wrap_hold, measured_width, wrap_width);
 
-    let line_box = measurer.line_box(style);
-    let first_baseline = line_box
-        .map(crate::text::LineBox::first_baseline)
-        .or_else(|| measurer.first_baseline(style));
-    let alignment_lines = cranpose_ui_layout::AlignmentLines::new(
-        first_baseline,
-        first_baseline.map(|first| first + (display_line_count - 1) as f32 * line_height),
+    let vertical = prepared_line_metrics(
+        measurer,
+        node_id,
+        text,
+        &display_annotated,
+        style,
+        opts.min_lines,
     );
-    let edges = line_box.unwrap_or_else(|| crate::text::LineBox::untrimmed(line_height, 0.0));
     let prepared = PreparedTextLayout {
         text: Rc::new(display_annotated),
         visual_style: std::sync::Arc::new(style.clone()),
-        alignment_lines,
+        alignment_lines: vertical.alignment_lines,
         metrics: TextMetrics {
             width,
-            height: (layout_line_count as f32 * line_height - edges.trim_top - edges.trim_bottom)
-                .max(0.0),
-            line_height,
+            height: vertical.height,
+            line_height: vertical.line_height,
             line_count: layout_line_count,
         },
         did_overflow,
@@ -1150,6 +1167,75 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     }
 
     prepared
+}
+
+struct PreparedLineMetrics {
+    height: f32,
+    line_height: f32,
+    alignment_lines: cranpose_ui_layout::AlignmentLines,
+}
+
+fn prepared_line_metrics<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    node_id: Option<NodeId>,
+    source: &crate::text::AnnotatedString,
+    display: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    min_lines: usize,
+) -> PreparedLineMetrics {
+    let base_box = measurer.line_box(style);
+    if !display.span_styles.is_empty() {
+        let mut top = 0.0;
+        let mut trim_bottom = 0.0;
+        let mut first = None;
+        let mut last = None;
+        let mut line_height = 0.0_f32;
+        let resolved = measurer.visit_line_boxes(display, style, &mut |line| {
+            if first.is_none() {
+                top = -line.trim_top;
+                first = Some(top + line.baseline);
+            }
+            last = Some(top + line.baseline);
+            top += line.height;
+            trim_bottom = line.trim_bottom;
+            line_height = line_height.max(line.height);
+        });
+        if resolved.is_some() {
+            let min_height = if min_lines > 1 {
+                base_box.map_or(0.0, |line| line.block_height(min_lines))
+            } else {
+                0.0
+            };
+            return PreparedLineMetrics {
+                height: (top - trim_bottom).max(min_height),
+                line_height,
+                alignment_lines: cranpose_ui_layout::AlignmentLines::new(first, last),
+            };
+        }
+    }
+    let measured_text = if source.span_styles.is_empty() {
+        source
+    } else {
+        display
+    };
+    let line_height = measurer
+        .line_height_for_node(node_id, measured_text, style)
+        .max(0.0);
+    let first = base_box
+        .map(crate::text::LineBox::first_baseline)
+        .or_else(|| measurer.first_baseline(style));
+    let displayed_lines = display.text.split('\n').count().max(1);
+    let layout_line_count = displayed_lines.max(min_lines);
+    let edges = base_box.unwrap_or_else(|| crate::text::LineBox::untrimmed(line_height, 0.0));
+    PreparedLineMetrics {
+        height: (layout_line_count as f32 * line_height - edges.trim_top - edges.trim_bottom)
+            .max(0.0),
+        line_height,
+        alignment_lines: cranpose_ui_layout::AlignmentLines::new(
+            first,
+            first.map(|first| first + (displayed_lines - 1) as f32 * line_height),
+        ),
+    }
 }
 
 fn prepare_scale_down_text_layout<M: TextMeasurer + ?Sized>(

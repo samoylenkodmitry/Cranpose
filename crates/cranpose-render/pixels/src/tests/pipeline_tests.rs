@@ -5,6 +5,7 @@ use cranpose_render_common::{
     },
     raster_cache::LayerRasterCacheHashes,
 };
+use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{CornerRadii, ImageBitmap, ImageSampling};
 
 use super::*;
@@ -31,14 +32,12 @@ fn push_text_style_draws_for_test(
     with_test_app_context(|| {
         push_text_style_draws(
             scene,
-            7 as NodeId,
             rect,
             rect,
             &GraphicsLayer::default(),
             &text,
             text_style,
             14.0,
-            TextLayoutOptions::default(),
             clip,
         );
     });

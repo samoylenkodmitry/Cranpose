@@ -1,5 +1,6 @@
 mod scene_probe;
 
+mod annotated_text_baselines;
 mod app_supplied_font_raster;
 mod draw_scope_text_raster;
 mod font_tracking;
