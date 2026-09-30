@@ -160,6 +160,7 @@ impl<A: Applier + 'static> Composition<A> {
 
     fn finalize_runtime_state(&mut self) {
         let runtime_handle = self.runtime_handle();
+        self.observer.prune_dead_scopes();
         if !self.runtime.has_updates()
             && !runtime_handle.has_invalid_scopes()
             && !runtime_handle.has_frame_callbacks()

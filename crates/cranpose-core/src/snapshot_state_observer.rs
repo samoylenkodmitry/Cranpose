@@ -145,6 +145,7 @@ struct SnapshotStateObserverInner {
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
     weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
     frame_version: Cell<u64>,
+    last_scope_drop: Cell<u64>,
     next_entry_id: Cell<usize>,
     /// One `Rc` per type of callback that captures nothing: see
     /// [`SnapshotStateObserverInner::capture_free_callback`].
@@ -176,12 +177,6 @@ where
 
 impl SnapshotStateObserverInner {
     const MIN_RETAINED_SCOPE_CAPACITY: usize = 256;
-    /// Frames between sweeps for the entries of dropped scopes. A dead entry
-    /// costs only a failed weak upgrade when one of its states changes, and a
-    /// scope that takes a dropped one's address takes over its entry, so a
-    /// sweep every frame walked every observed scope to bound memory that a
-    /// sweep every 64th frame bounds as well.
-    const DEAD_SCOPE_SWEEP_FRAMES: u64 = 64;
 
     fn new(on_changed_executor: impl Fn(Box<dyn FnOnce() + 'static>) + 'static) -> Self {
         let pause_count = Rc::new(Cell::new(0));
@@ -211,6 +206,7 @@ impl SnapshotStateObserverInner {
             apply_handle: RefCell::new(None),
             weak_self: RefCell::new(Weak::new()),
             frame_version: Cell::new(0),
+            last_scope_drop: Cell::new(crate::DROPPED_RECOMPOSE_SCOPES.get()),
             next_entry_id: Cell::new(0),
             capture_free_callbacks: RefCell::new(SmallVec::new()),
         }
@@ -223,9 +219,7 @@ impl SnapshotStateObserverInner {
     fn begin_frame(&self) {
         let next = self.frame_version.get().wrapping_add(1);
         self.frame_version.set(next);
-        if next.is_multiple_of(Self::DEAD_SCOPE_SWEEP_FRAMES) {
-            self.prune_dead_scopes();
-        }
+        self.prune_dead_scopes();
     }
 
     fn observe_reads<T, R>(
@@ -447,25 +441,21 @@ impl SnapshotStateObserverInner {
     }
 
     fn prune_dead_scopes(&self) {
-        let removed_fast = {
+        loop {
+            let dropped = crate::DROPPED_RECOMPOSE_SCOPES.get();
+            if self.last_scope_drop.replace(dropped) == dropped {
+                break;
+            }
             let mut fast_scopes = self.fast_scopes.borrow_mut();
-            let removed_ids: Vec<_> = fast_scopes
-                .iter()
-                .filter(|(_, entry)| !entry.borrow().should_retain())
-                .map(|(scope_id, _)| *scope_id)
-                .collect();
-            let removed = removed_ids
-                .into_iter()
-                .filter_map(|scope_id| fast_scopes.remove(&scope_id))
-                .collect::<Vec<_>>();
+            fast_scopes.retain(|_, entry| {
+                if entry.borrow().should_retain() {
+                    true
+                } else {
+                    self.unregister_entry(entry);
+                    false
+                }
+            });
             shrink_map_if_sparse(&mut fast_scopes, Self::MIN_RETAINED_SCOPE_CAPACITY);
-            removed
-        };
-
-        let removed_owned = { self.partition_owned_scopes(|entry| !entry.should_retain()) };
-
-        for entry in removed_fast.into_iter().chain(removed_owned) {
-            self.unregister_entry(&entry);
         }
     }
 
@@ -897,7 +887,7 @@ impl ScopeEntry {
     fn should_retain(&self) -> bool {
         match &self.scope {
             ScopeStorage::Owned(_) => true,
-            ScopeStorage::RecomposeScope { weak, .. } => weak.upgrade().is_some(),
+            ScopeStorage::RecomposeScope { weak, .. } => weak.strong_count() != 0,
         }
     }
 
