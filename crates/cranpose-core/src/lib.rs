@@ -633,6 +633,7 @@ impl Hash for LocalKey {
 }
 
 thread_local! {
+    static DROPPED_RECOMPOSE_SCOPES: Cell<u64> = const { Cell::new(0) };
     #[cfg(debug_assertions)]
     static DEBUG_SCOPE_LABELS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
     #[cfg(debug_assertions)]
@@ -714,6 +715,7 @@ impl RecomposeScopeInner {
 
 impl Drop for RecomposeScopeInner {
     fn drop(&mut self) {
+        let _ = DROPPED_RECOMPOSE_SCOPES.try_with(|count| count.set(count.get().wrapping_add(1)));
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
         let subscriptions = std::mem::take(self.state_subscriptions.get_mut());

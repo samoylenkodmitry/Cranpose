@@ -709,7 +709,7 @@ fn scope_that_stops_reading_state_is_removed_immediately() {
 }
 
 #[test]
-fn begin_frame_sweeps_dropped_recompose_scope_entries_every_64th_frame() {
+fn begin_frame_releases_dropped_scopes_before_the_app_can_idle() {
     let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
@@ -730,20 +730,12 @@ fn begin_frame_sweeps_dropped_recompose_scope_entries_every_64th_frame() {
     assert_eq!(before_prune.fast_scopes_len, 1);
 
     drop(scope);
-    for _ in 1..64 {
-        observer.begin_frame();
-    }
-    let waiting = observer.debug_stats();
-    assert_eq!(
-        (waiting.scopes_len, waiting.fast_scopes_len),
-        (1, 1),
-        "a dropped scope's entry waits for the sweep instead of every frame walking every scope"
-    );
-
     observer.begin_frame();
     let after_prune = observer.debug_stats();
     assert_eq!(after_prune.scopes_len, 0);
     assert_eq!(after_prune.fast_scopes_len, 0);
+    assert_eq!(after_prune.observed_state_count, 0);
+    assert!(observer.inner.observed_to_scopes.borrow().is_empty());
 }
 
 #[test]
@@ -765,4 +757,96 @@ fn an_explicit_prune_drops_a_dead_scope_entry_at_once() {
     observer.prune_dead_scopes();
     let stats = observer.debug_stats();
     assert_eq!((stats.scopes_len, stats.fast_scopes_len), (0, 0));
+}
+
+fn observe_recompose_scope(
+    observer: &SnapshotStateObserver,
+    scope: &RecomposeScope,
+    state: &SnapshotMutableState<i32>,
+) {
+    observer.observe_reads(
+        scope.clone(),
+        |_| {},
+        || {
+            let _ = state.get();
+        },
+    );
+}
+
+#[test]
+fn unchanged_frames_do_not_scan_observer_entries() {
+    let _guard = reset_runtime_for_tests();
+    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let runtime = crate::TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    observe_recompose_scope(&observer, &scope, &state);
+    observer.prune_dead_scopes();
+    let entries = observer.inner.fast_scopes.borrow_mut();
+    for _ in 0..128 {
+        observer.begin_frame();
+        observer.prune_dead_scopes();
+    }
+    assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn every_observer_releases_a_shared_dropped_scope() {
+    let _guard = reset_runtime_for_tests();
+    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+    let observers =
+        std::array::from_fn::<_, 2, _>(|_| SnapshotStateObserver::new(|callback| callback()));
+    let runtime = crate::TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    for observer in &observers {
+        observe_recompose_scope(observer, &scope, &state);
+    }
+    drop(scope);
+    for observer in observers {
+        observer.begin_frame();
+        assert_eq!(observer.debug_stats().observed_state_count, 0);
+        assert!(observer.inner.observed_to_scopes.borrow().is_empty());
+    }
+}
+
+#[test]
+fn pruning_also_releases_scopes_owned_by_removed_callbacks() {
+    let _guard = reset_runtime_for_tests();
+    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let runtime = crate::TestRuntime::new();
+    let first = RecomposeScope::new_for_test(runtime.handle());
+    let second = RecomposeScope::new_for_test(runtime.handle());
+    observe_recompose_scope(&observer, &second, &state);
+    observer.observe_reads(
+        first.clone(),
+        move |_| {
+            let _ = second.is_active();
+        },
+        || {
+            let _ = state.get();
+        },
+    );
+    drop(first);
+    observer.prune_dead_scopes();
+    assert_eq!(observer.debug_stats().scopes_len, 0);
+    assert!(observer.inner.observed_to_scopes.borrow().is_empty());
+}
+
+#[test]
+fn composition_releases_dropped_observations_before_becoming_idle() {
+    let _guard = reset_runtime_for_tests();
+    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+    let mut composition = crate::Composition::new(crate::MemoryApplier::new());
+    let scope = RecomposeScope::new_for_test(composition.runtime_handle());
+    observe_recompose_scope(&composition.observer, &scope, &state);
+    assert_eq!(composition.debug_observer_stats().observed_state_count, 1);
+    drop(scope);
+    assert!(
+        !composition
+            .process_invalid_scopes()
+            .expect("idle reconciliation")
+    );
+    assert!(!composition.should_render());
+    assert_eq!(composition.debug_observer_stats().observed_state_count, 0);
 }
