@@ -57,6 +57,7 @@ where
         {
             let app_context = std::rc::Rc::clone(&self.app.app_context);
             let semantics_dirty = app_context.enter(|| {
+                self.app.flush_semantics_invalidations();
                 let Some(root) = self.app.composition.root() else {
                     return false;
                 };

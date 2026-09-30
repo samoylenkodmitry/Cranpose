@@ -274,6 +274,7 @@ impl<R: Renderer> RootSurface<R> {
         &mut self,
         app: &mut ShellApp,
     ) -> Option<&SemanticsTree> {
+        app.flush_semantics_invalidations();
         let root = self.root_node(app)?;
         let semantics_dirty = {
             let mut applier = app.composition.applier_mut();
