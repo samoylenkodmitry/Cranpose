@@ -235,6 +235,11 @@ impl ModifierChainHandle {
                     }
                     if let Some(alignment) = alignment_node.row_alignment() {
                         layout.row_alignment = Some(alignment);
+                        layout.row_baseline = false;
+                    }
+                    if alignment_node.row_baseline() {
+                        layout.row_alignment = None;
+                        layout.row_baseline = true;
                     }
                 } else if let Some(offset_node) = any.downcast_ref::<OffsetNode>() {
                     let delta = offset_node.offset();

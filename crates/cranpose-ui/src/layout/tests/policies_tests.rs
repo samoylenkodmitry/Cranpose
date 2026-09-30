@@ -320,7 +320,9 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
 
     let policy =
         FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start, 1.0);
-    let size = policy.measure_into(&test_scope(), &measurables, constraints, &mut placements);
+    let size = policy
+        .measure_into(&test_scope(), &measurables, constraints, &mut placements)
+        .size;
 
     assert_eq!(size.width, 60.0);
     assert_eq!(size.height, 50.0);
@@ -330,7 +332,9 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
     assert_eq!(placements.capacity(), original_capacity);
 
     let box_policy = BoxMeasurePolicy::new(Alignment::CENTER, false);
-    let size = box_policy.measure_into(&test_scope(), &measurables, constraints, &mut placements);
+    let size = box_policy
+        .measure_into(&test_scope(), &measurables, constraints, &mut placements)
+        .size;
 
     assert_eq!(size.width, 60.0);
     assert_eq!(size.height, 30.0);
@@ -341,7 +345,9 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
         width: 25.0,
         height: 10.0,
     });
-    let size = leaf_policy.measure_into(&test_scope(), &[], constraints, &mut placements);
+    let size = leaf_policy
+        .measure_into(&test_scope(), &[], constraints, &mut placements)
+        .size;
 
     assert_eq!(size.width, 25.0);
     assert_eq!(size.height, 10.0);
@@ -349,7 +355,9 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
     assert_eq!(placements.capacity(), original_capacity);
 
     let empty_policy = EmptyMeasurePolicy::new();
-    let size = empty_policy.measure_into(&test_scope(), &[], constraints, &mut placements);
+    let size = empty_policy
+        .measure_into(&test_scope(), &[], constraints, &mut placements)
+        .size;
 
     assert_eq!(size.width, 0.0);
     assert_eq!(size.height, 0.0);

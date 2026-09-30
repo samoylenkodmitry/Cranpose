@@ -50,6 +50,7 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
             },
             did_overflow: false,
             render_text: Default::default(),
+            alignment_lines: Default::default(),
             wrap_hold: None,
         }
     }
@@ -123,6 +124,7 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
             },
             did_overflow: false,
             render_text: Default::default(),
+            alignment_lines: Default::default(),
             wrap_hold: None,
         }
     }
@@ -184,6 +186,7 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
             },
             did_overflow: false,
             render_text: Default::default(),
+            alignment_lines: Default::default(),
             wrap_hold: None,
         }
     }
@@ -320,7 +323,7 @@ fn prepared_layout_cache_reuses_node_snapshot() {
             context.set_node_id(Some(88));
             node.on_attach(&mut context);
 
-            let measured = node.layout.measure_layout(Some(120.0));
+            let (measured, _) = node.layout.measure_layout(Some(120.0));
             let prepared = node
                 .prepared_layout_handle()
                 .measured_layout()
@@ -460,7 +463,7 @@ fn a_text_that_wraps_nothing_keeps_its_layout_while_its_width_grows() {
             );
             let mut prepares = Vec::new();
             for width in [Some(120.0), Some(200.0), None, Some(12.0), Some(10.0)] {
-                let measured = node.layout.measure_layout(width);
+                let (measured, _) = node.layout.measure_layout(width);
                 prepares.push((recorded.borrow().len(), measured.width));
             }
             tx.send(prepares).expect("send prepare counts");

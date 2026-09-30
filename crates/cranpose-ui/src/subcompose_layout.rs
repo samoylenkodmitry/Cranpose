@@ -88,7 +88,7 @@ type RetainedMeasureLookup<'a> = Box<dyn FnMut(NodeId) -> Option<Rc<MeasuredNode
 type RetainedMeasureRegistrar<'a> = Box<dyn FnMut(&[Rc<MeasuredNode>]) + 'a>;
 
 pub(crate) struct CachedBatchMeasureInputs<'a> {
-    pub(crate) measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
+    pub(crate) measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable + 'a>,
     pub(crate) cached_measure_batch_registrar: CachedMeasureBatchRegistrar<'a>,
     pub(crate) retained_measure_lookup: RetainedMeasureLookup<'a>,
     pub(crate) retained_measure_registrar: RetainedMeasureRegistrar<'a>,
@@ -147,7 +147,7 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
     density_scope: crate::density::DensityMeasureScope,
     state: &'a mut SubcomposeState,
     constraints: Constraints,
-    measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
+    measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable + 'a>,
     cached_measure_batch_registrar: CachedMeasureBatchRegistrar<'a>,
     retained_measure_lookup: RetainedMeasureLookup<'a>,
     retained_measure_registrar: RetainedMeasureRegistrar<'a>,
@@ -184,7 +184,7 @@ struct SubcomposeMeasureScopeInit<'a> {
     density: crate::density::Density,
     state: &'a mut SubcomposeState,
     constraints: Constraints,
-    measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
+    measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable + 'a>,
     cached_measure_batch_registrar: CachedMeasureBatchRegistrar<'a>,
     retained_measure_lookup: RetainedMeasureLookup<'a>,
     retained_measure_registrar: RetainedMeasureRegistrar<'a>,
@@ -585,18 +585,18 @@ impl SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'_> {
             return SubcomposePlaceable::value(0.0, 0.0, child.node_id);
         }
 
-        let size = (self.measurer)(child.node_id, constraints);
+        let placeable = (self.measurer)(child.node_id, constraints);
         self.register_measurement_node_id(child.node_id);
         if let Some(start) = telemetry_start {
             log::warn!(
                 "[subcompose-telemetry] child={} measure_ms={:.2} size=({:.2},{:.2})",
                 child.node_id,
                 start.elapsed().as_secs_f64() * 1000.0,
-                size.width,
-                size.height
+                placeable.width(),
+                placeable.height()
             );
         }
-        SubcomposePlaceable::value(size.width, size.height, child.node_id)
+        placeable
     }
 
     fn node_has_no_parent(&self, node_id: NodeId) -> bool {
@@ -1456,7 +1456,7 @@ impl SubcomposeLayoutNodeHandle {
         composer: &Composer,
         node_id: NodeId,
         constraints: Constraints,
-        measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
+        measurer: Box<dyn FnMut(NodeId, Constraints) -> SubcomposePlaceable + 'a>,
         mut cached_measure_registrar: Box<dyn FnMut(NodeId, Constraints) -> Option<Size> + 'a>,
         error: &'a RefCell<Option<NodeError>>,
     ) -> Result<MeasureResult, NodeError> {

@@ -53,6 +53,8 @@ pub struct PreparedTextLayout {
     /// from this layout.
     pub visual_style: std::sync::Arc<TextStyle>,
     pub metrics: TextMetrics,
+    /// The first and last drawn baselines, excluding blank height added by `min_lines`.
+    pub alignment_lines: cranpose_ui_layout::AlignmentLines,
     pub did_overflow: bool,
     /// `text` as a renderer draws it, converted on first use: see
     /// [`PreparedTextLayout::render_text`].
@@ -123,6 +125,7 @@ impl PartialEq for PreparedTextLayout {
         self.text == other.text
             && self.visual_style == other.visual_style
             && self.metrics == other.metrics
+            && self.alignment_lines == other.alignment_lines
             && self.did_overflow == other.did_overflow
     }
 }
@@ -1104,12 +1107,19 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     };
     let wrap_hold = WrapHold::settle(wrap_hold, measured_width, wrap_width);
 
-    let edges = measurer
-        .line_box(style)
-        .unwrap_or_else(|| crate::text::LineBox::untrimmed(line_height, 0.0));
+    let line_box = measurer.line_box(style);
+    let first_baseline = line_box
+        .map(crate::text::LineBox::first_baseline)
+        .or_else(|| measurer.first_baseline(style));
+    let alignment_lines = cranpose_ui_layout::AlignmentLines::new(
+        first_baseline,
+        first_baseline.map(|first| first + (display_line_count - 1) as f32 * line_height),
+    );
+    let edges = line_box.unwrap_or_else(|| crate::text::LineBox::untrimmed(line_height, 0.0));
     let prepared = PreparedTextLayout {
         text: Rc::new(display_annotated),
         visual_style: std::sync::Arc::new(style.clone()),
+        alignment_lines,
         metrics: TextMetrics {
             width,
             height: (layout_line_count as f32 * line_height - edges.trim_top - edges.trim_bottom)

@@ -86,7 +86,7 @@ pub use cranpose_ui_graphics::{
     DrawScope, DrawStyle, ImageBitmap, ImagePixelFormat, ImageSampling, Path, PointerIcon,
     PointerIconError, Stroke, StrokeCap, StrokeJoin,
 };
-pub use cranpose_ui_layout::IntrinsicSize;
+pub use cranpose_ui_layout::{AlignmentLines, IntrinsicSize, Measurement};
 pub use cursor_animation::{
     is_cursor_visible, next_cursor_blink_time, reset_cursor_blink, start_cursor_blink,
     stop_cursor_blink, tick_cursor_blink,

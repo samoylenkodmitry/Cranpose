@@ -32,8 +32,8 @@ impl MeasurePolicy for BoxMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(scope, measurables, constraints, &mut placements);
-        MeasureResult::new(size, placements)
+        let measurement = self.measure_into(scope, measurables, constraints, &mut placements);
+        MeasureResult::new(measurement, placements)
     }
 
     fn measure_into(
@@ -42,7 +42,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> crate::modifier::Size {
+    ) -> cranpose_ui_layout::Measurement {
         placements.clear();
         let child_constraints = if self.propagate_min_constraints {
             constraints
@@ -90,7 +90,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
             placements.push(Placement::new(placeable.node_id(), x, y, 0));
         }
 
-        crate::modifier::Size { width, height }
+        crate::modifier::Size { width, height }.into()
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
@@ -408,6 +408,52 @@ impl FlexMeasurePolicy {
     fn get_spacing(&self) -> f32 {
         self.main_axis_arrangement.spacing(self.density)
     }
+
+    fn measured_extents(
+        &self,
+        placeables: &[cranpose_ui_layout::Placeable],
+        parent_data: &[cranpose_ui_layout::ParentData],
+    ) -> (f32, f32, f32) {
+        let mut main = 0.0;
+        let mut before = 0.0_f32;
+        let mut after = 0.0_f32;
+        for (placeable, data) in placeables.iter().zip(parent_data) {
+            main += self.get_main_axis_size(placeable.width(), placeable.height());
+            if self.axis == Axis::Horizontal
+                && data.row_baseline
+                && let Some(baseline) = placeable.alignment_lines().first_baseline()
+            {
+                before = before.max(baseline);
+                after = after.max(placeable.height() - baseline);
+            }
+        }
+        (main, before, after)
+    }
+
+    fn cross_axis_position(
+        &self,
+        placeable: &cranpose_ui_layout::Placeable,
+        parent_data: ParentData,
+        container_cross: f32,
+        before_baseline: f32,
+    ) -> f32 {
+        if self.axis == Axis::Horizontal && parent_data.row_baseline {
+            return placeable
+                .alignment_lines()
+                .first_baseline()
+                .map_or(0.0, |baseline| before_baseline - baseline);
+        }
+        let alignment = match self.axis {
+            Axis::Horizontal => parent_data
+                .row_alignment
+                .map_or(self.cross_axis_alignment, Into::into),
+            Axis::Vertical => parent_data
+                .column_alignment
+                .map_or(self.cross_axis_alignment, Into::into),
+        };
+        let child_cross = self.get_cross_axis_size(placeable.width(), placeable.height());
+        alignment.align(container_cross, child_cross, self.density)
+    }
 }
 
 impl MeasurePolicy for FlexMeasurePolicy {
@@ -418,8 +464,8 @@ impl MeasurePolicy for FlexMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(scope, measurables, constraints, &mut placements);
-        MeasureResult::new(size, placements)
+        let measurement = self.measure_into(scope, measurables, constraints, &mut placements);
+        MeasureResult::new(measurement, placements)
     }
 
     fn measure_into(
@@ -428,11 +474,11 @@ impl MeasurePolicy for FlexMeasurePolicy {
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> crate::modifier::Size {
+    ) -> cranpose_ui_layout::Measurement {
         placements.clear();
         if measurables.is_empty() {
             let (width, height) = constraints.constrain(0.0, 0.0);
-            return crate::modifier::Size { width, height };
+            return crate::modifier::Size { width, height }.into();
         }
 
         let (min_main, max_main, min_cross, max_cross) = self.get_axis_constraints(constraints);
@@ -520,11 +566,10 @@ impl MeasurePolicy for FlexMeasurePolicy {
             })
             .collect();
 
-        let total_main: f32 = placeables
-            .iter()
-            .map(|p| self.get_main_axis_size(p.width(), p.height()))
-            .sum::<f32>()
-            + total_spacing;
+        let (total_main, before_baseline, after_baseline) =
+            self.measured_extents(&placeables, &parent_data);
+        let total_main = total_main + total_spacing;
+        max_cross_size = max_cross_size.max(before_baseline + after_baseline);
 
         let container_main = total_main.clamp(min_main, max_main);
         let container_cross = max_cross_size.clamp(min_cross, max_cross);
@@ -553,16 +598,12 @@ impl MeasurePolicy for FlexMeasurePolicy {
 
         placements.reserve(placeables.len());
         for (idx, (placeable, main_pos)) in placeables.into_iter().zip(main_positions).enumerate() {
-            let child_cross = self.get_cross_axis_size(placeable.width(), placeable.height());
-            let cross_axis_alignment = match self.axis {
-                Axis::Horizontal => parent_data[idx]
-                    .row_alignment
-                    .map_or(self.cross_axis_alignment, Into::into),
-                Axis::Vertical => parent_data[idx]
-                    .column_alignment
-                    .map_or(self.cross_axis_alignment, Into::into),
-            };
-            let cross_pos = cross_axis_alignment.align(container_cross, child_cross, self.density);
+            let cross_pos = self.cross_axis_position(
+                &placeable,
+                parent_data[idx],
+                container_cross,
+                before_baseline,
+            );
 
             let (x, y) = match self.axis {
                 Axis::Horizontal => (main_pos, cross_pos),
@@ -578,7 +619,7 @@ impl MeasurePolicy for FlexMeasurePolicy {
             Axis::Vertical => (container_cross, container_main),
         };
 
-        crate::modifier::Size { width, height }
+        crate::modifier::Size { width, height }.into()
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
@@ -745,8 +786,8 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(scope, measurables, constraints, &mut placements);
-        MeasureResult::new(size, placements)
+        let measurement = self.measure_into(scope, measurables, constraints, &mut placements);
+        MeasureResult::new(measurement, placements)
     }
 
     fn measure_into(
@@ -755,11 +796,11 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> crate::modifier::Size {
+    ) -> cranpose_ui_layout::Measurement {
         placements.clear();
         if measurables.is_empty() {
             let (width, height) = constraints.constrain(0.0, 0.0);
-            return crate::modifier::Size { width, height };
+            return crate::modifier::Size { width, height }.into();
         }
 
         let child_constraints = Constraints {
@@ -808,7 +849,7 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
 
         let width = max_line_width.clamp(constraints.min_width, constraints.max_width);
         let height = (line_top + line_height).clamp(constraints.min_height, constraints.max_height);
-        crate::modifier::Size { width, height }
+        crate::modifier::Size { width, height }.into()
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
@@ -861,8 +902,8 @@ impl MeasurePolicy for LeafMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(scope, &[], constraints, &mut placements);
-        MeasureResult::new(size, placements)
+        let measurement = self.measure_into(scope, &[], constraints, &mut placements);
+        MeasureResult::new(measurement, placements)
     }
 
     fn measure_into(
@@ -871,12 +912,12 @@ impl MeasurePolicy for LeafMeasurePolicy {
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> crate::modifier::Size {
+    ) -> cranpose_ui_layout::Measurement {
         placements.clear();
         let (width, height) =
             constraints.constrain(self.intrinsic_size.width, self.intrinsic_size.height);
 
-        crate::modifier::Size { width, height }
+        crate::modifier::Size { width, height }.into()
     }
 
     fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
@@ -924,8 +965,8 @@ impl MeasurePolicy for EmptyMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(scope, &[], constraints, &mut placements);
-        MeasureResult::new(size, placements)
+        let measurement = self.measure_into(scope, &[], constraints, &mut placements);
+        MeasureResult::new(measurement, placements)
     }
 
     fn measure_into(
@@ -934,11 +975,11 @@ impl MeasurePolicy for EmptyMeasurePolicy {
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> crate::modifier::Size {
+    ) -> cranpose_ui_layout::Measurement {
         placements.clear();
         let (width, height) = constraints.constrain(0.0, 0.0);
 
-        crate::modifier::Size { width, height }
+        crate::modifier::Size { width, height }.into()
     }
 
     fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {

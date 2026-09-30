@@ -39,6 +39,8 @@ pub struct ParentData {
     pub fill: bool,
     pub box_alignment: Option<Alignment>,
     pub row_alignment: Option<VerticalAlignment>,
+    /// Aligns this child's first baseline with other baseline-aligned Row children.
+    pub row_baseline: bool,
     pub column_alignment: Option<HorizontalAlignment>,
 }
 
@@ -92,15 +94,14 @@ pub trait Measurable {
 
 /// Result of running a measurement pass for a single child.
 ///
-/// Concrete struct replacing the former `dyn Placeable` trait object.
-/// This avoids a heap allocation per node per measure pass — the hot
-/// coordinator path (16-byte value) now lives entirely on the stack.
+/// Carries measurement and alignment lines without allocating a trait object.
 pub struct Placeable {
     width: f32,
     height: f32,
     node_id: NodeId,
     content_offset_x: f32,
     content_offset_y: f32,
+    alignment_lines: crate::AlignmentLines,
     place_target: Option<Rc<dyn PlaceTarget>>,
 }
 
@@ -125,6 +126,7 @@ impl Placeable {
             node_id,
             content_offset_x: 0.0,
             content_offset_y: 0.0,
+            alignment_lines: crate::AlignmentLines::default(),
             place_target: None,
         }
     }
@@ -142,6 +144,7 @@ impl Placeable {
             node_id,
             content_offset_x: content_offset.0,
             content_offset_y: content_offset.1,
+            alignment_lines: crate::AlignmentLines::default(),
             place_target: None,
         }
     }
@@ -161,6 +164,7 @@ impl Placeable {
             node_id,
             content_offset_x: 0.0,
             content_offset_y: 0.0,
+            alignment_lines: crate::AlignmentLines::default(),
             place_target: Some(target),
         }
     }
@@ -190,6 +194,17 @@ impl Placeable {
     /// Returns the accumulated content offset from the coordinator chain.
     pub fn content_offset(&self) -> (f32, f32) {
         (self.content_offset_x, self.content_offset_y)
+    }
+
+    /// Supplies alignment lines relative to this placeable's top edge.
+    pub fn with_alignment_lines(mut self, alignment_lines: crate::AlignmentLines) -> Self {
+        self.alignment_lines = alignment_lines;
+        self
+    }
+
+    /// Returns the text baselines relative to this placeable's top edge.
+    pub fn alignment_lines(&self) -> crate::AlignmentLines {
+        self.alignment_lines
     }
 }
 
@@ -229,11 +244,14 @@ pub trait MeasurePolicy {
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> Size {
+    ) -> Measurement {
         let result = self.measure(scope, measurables, constraints);
         placements.clear();
         placements.extend(result.placements);
-        result.size
+        Measurement {
+            size: result.size,
+            alignment_lines: result.alignment_lines,
+        }
     }
 
     /// Computes the minimum intrinsic width of this policy.
@@ -249,16 +267,48 @@ pub trait MeasurePolicy {
     fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32;
 }
 
+/// The size and explicit alignment lines produced by a measure policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Measurement {
+    /// The size occupied by the measured layout.
+    pub size: Size,
+    /// Explicit baselines in this layout's coordinates; unspecified lines are inherited.
+    pub alignment_lines: crate::AlignmentLines,
+}
+
+impl From<Size> for Measurement {
+    fn from(size: Size) -> Self {
+        Self {
+            size,
+            alignment_lines: crate::AlignmentLines::default(),
+        }
+    }
+}
+
 /// Result of a measurement operation.
 #[derive(Clone, Debug)]
 pub struct MeasureResult {
     pub size: Size,
+    /// Explicit baselines in this layout's coordinates; unspecified lines are inherited.
+    pub alignment_lines: crate::AlignmentLines,
     pub placements: Vec<Placement>,
 }
 
 impl MeasureResult {
-    pub fn new(size: Size, placements: Vec<Placement>) -> Self {
-        Self { size, placements }
+    /// Creates a result from a size or a measurement that already has alignment lines.
+    pub fn new(measurement: impl Into<Measurement>, placements: Vec<Placement>) -> Self {
+        let measurement = measurement.into();
+        Self {
+            size: measurement.size,
+            alignment_lines: measurement.alignment_lines,
+            placements,
+        }
+    }
+
+    /// Reports explicit lines relative to this layout's top edge.
+    pub fn with_alignment_lines(mut self, alignment_lines: crate::AlignmentLines) -> Self {
+        self.alignment_lines = alignment_lines;
+        self
     }
 }
 
@@ -297,6 +347,8 @@ pub struct LayoutModifierMeasureResult {
     /// to offset the child by the padding amount.
     pub placement_offset_x: f32,
     pub placement_offset_y: f32,
+    /// Explicit alignment lines. Unspecified lines are inherited from wrapped content.
+    pub alignment_lines: crate::AlignmentLines,
 }
 
 impl LayoutModifierMeasureResult {
@@ -305,6 +357,7 @@ impl LayoutModifierMeasureResult {
             size,
             placement_offset_x,
             placement_offset_y,
+            alignment_lines: crate::AlignmentLines::default(),
         }
     }
 
@@ -314,7 +367,14 @@ impl LayoutModifierMeasureResult {
             size,
             placement_offset_x: 0.0,
             placement_offset_y: 0.0,
+            alignment_lines: crate::AlignmentLines::default(),
         }
+    }
+
+    /// Overrides the wrapped content's alignment lines in this modifier's coordinates.
+    pub fn with_alignment_lines(mut self, alignment_lines: crate::AlignmentLines) -> Self {
+        self.alignment_lines = alignment_lines;
+        self
     }
 }
 

@@ -121,8 +121,8 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(scope, measurables, constraints, &mut placements);
-        MeasureResult::new(size, placements)
+        let measurement = self.measure_into(scope, measurables, constraints, &mut placements);
+        MeasureResult::new(measurement, placements)
     }
 
     fn measure_into(
@@ -131,7 +131,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> Size {
+    ) -> cranpose_ui_layout::Measurement {
         placements.clear();
         let density = Density::new(self.density, 1.0);
         let horizontal = self.horizontal(density);
@@ -168,7 +168,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
             let x = density.centre(width, placeable.width());
             placements.push(Placement::new(placeable.node_id(), x, top, 0));
         }
-        Size::new(width, height)
+        Size::new(width, height).into()
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {

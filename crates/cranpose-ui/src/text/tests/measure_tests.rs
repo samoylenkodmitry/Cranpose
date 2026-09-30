@@ -1384,6 +1384,7 @@ fn prepared_as(display: &str, width: f32, did_overflow: bool) -> PreparedTextLay
         },
         did_overflow,
         render_text: Default::default(),
+        alignment_lines: Default::default(),
         wrap_hold: None,
     }
 }
@@ -1629,6 +1630,7 @@ fn a_prepared_layout_converts_its_render_text_once() {
     let layout = PreparedTextLayout {
         text: Rc::new(crate::text::AnnotatedString::from("shown")),
         visual_style: std::sync::Arc::new(TextStyle::default()),
+        alignment_lines: Default::default(),
         metrics: TextMetrics {
             width: 10.0,
             height: 10.0,
