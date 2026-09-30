@@ -504,6 +504,12 @@ where
                 }
             }
         }
+        // A pass that names nothing still rebuilds every scene. Geometry no
+        // longer needs it: the layout setters name every move, resize and
+        // change of placement. Draw state that advances as a lowering reads
+        // it, without scheduling its node's next redraw, still leans on it: a
+        // Liquid lens relaxes only when something lowers it again, and once
+        // the lens stops travelling these rebuilds are often all that does.
         if !any_named {
             for surface in &mut self.surfaces {
                 surface.scene_dirty = true;

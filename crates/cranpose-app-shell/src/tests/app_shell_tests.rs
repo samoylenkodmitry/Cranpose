@@ -40,6 +40,9 @@ mod inspector_shell_tests;
 #[path = "reader_activation_tests.rs"]
 mod reader_activation_tests;
 
+#[path = "scoped_structural_frame_tests.rs"]
+mod scoped_structural_frame_tests;
+
 #[path = "unhandled_key_tests.rs"]
 mod unhandled_key_tests;
 

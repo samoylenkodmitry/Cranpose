@@ -65,6 +65,36 @@ fn log_layout_invalidation_dispatch(
     }
 }
 
+/// The running layout pass and how many placed nodes it has cleared and not
+/// placed again yet: the nodes it unplaces, unless their parents place them
+/// before it ends. Ids start past 0, the pass a node no pass cleared names.
+struct PlacementPass {
+    id: Cell<u64>,
+    unplaced: Cell<usize>,
+}
+
+thread_local! {
+    static PLACEMENT_PASS: PlacementPass = const {
+        PlacementPass {
+            id: Cell::new(1),
+            unplaced: Cell::new(0),
+        }
+    };
+}
+
+/// Starts the placement bookkeeping of a layout pass.
+pub(crate) fn begin_placement_pass() {
+    PLACEMENT_PASS.with(|pass| {
+        pass.id.set(pass.id.get() + 1);
+        pass.unplaced.set(0);
+    });
+}
+
+/// The running pass, when it has left a node unplaced that it found placed.
+pub(crate) fn placement_pass_with_unplaced_nodes() -> Option<u64> {
+    PLACEMENT_PASS.with(|pass| (pass.unplaced.get() > 0).then(|| pass.id.get()))
+}
+
 /// Retained layout state for a LayoutNode.
 /// This mirrors Jetpack Compose's approach where each node stores its own
 /// measured size and placed position, eliminating the need for per-frame
@@ -75,6 +105,8 @@ pub struct LayoutState {
     position: Point,
     is_placed: bool,
     node_id: Option<NodeId>,
+    /// The layout pass that cleared the placed flag while the node was placed.
+    cleared_in_pass: u64,
     /// Offset of the content box relative to the node origin (e.g. due to padding).
     pub content_offset: Point,
 }
@@ -116,20 +148,48 @@ impl LayoutState {
     }
 
     /// Writes the placed position and marks the node placed, self-reporting
-    /// an actual move to the scene phase.
+    /// an actual move to the scene phase, and a placement of a node the
+    /// scene does not draw: one the running pass did not find placed.
     pub fn place(&mut self, position: Point) {
-        if self.position != position {
-            if let Some(id) = self.node_id {
-                crate::render_state::record_geometry_scene_node(id);
-            }
-            self.position = position;
+        let newly_placed = !self.is_placed && !self.restore_placement();
+        if (newly_placed || self.position != position)
+            && let Some(id) = self.node_id
+        {
+            crate::render_state::record_geometry_scene_node(id);
         }
+        self.position = position;
         self.is_placed = true;
     }
 
-    /// Clears the placed flag at the start of a layout pass.
+    /// Whether the running pass cleared the flag of this node while it was
+    /// placed, so placing it again changes nothing the scene draws.
+    fn restore_placement(&self) -> bool {
+        PLACEMENT_PASS.with(|pass| {
+            let restored = self.cleared_in_pass == pass.id.get();
+            if restored {
+                pass.unplaced.set(pass.unplaced.get().saturating_sub(1));
+            }
+            restored
+        })
+    }
+
+    /// Clears the placed flag at the start of a layout pass. Until its parent
+    /// places it again the pass counts the node unplaced, and the pass names
+    /// it to the scene phase if it ends that way.
     pub fn clear_placed(&mut self) {
+        if !self.is_placed {
+            return;
+        }
         self.is_placed = false;
+        self.cleared_in_pass = PLACEMENT_PASS.with(|pass| {
+            pass.unplaced.set(pass.unplaced.get() + 1);
+            pass.id.get()
+        });
+    }
+
+    /// Whether `pass` found this node placed and left it unplaced.
+    pub(crate) fn unplaced_in(&self, pass: u64) -> bool {
+        !self.is_placed && self.cleared_in_pass == pass
     }
 }
 
@@ -872,7 +932,7 @@ impl LayoutNode {
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self) {
-        self.layout_state.borrow_mut().is_placed = false;
+        self.layout_state.borrow_mut().clear_placed();
     }
 
     pub fn semantics_configuration(&self) -> Option<SemanticsConfiguration> {
