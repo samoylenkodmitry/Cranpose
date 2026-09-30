@@ -10,6 +10,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+from statistics import median
 import subprocess
 import sys
 import time
@@ -20,8 +21,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from measure import app_layer
 
 
+def presented_rate(timestamps):
+    presents = sorted({int(row.split()[1]) for row in timestamps.splitlines()[1:]
+                       if len(row.split()) == 3 and row.split()[1].isdigit()
+                       and 0 < int(row.split()[1]) < 2**63 - 1})
+    if len(presents) < 2:
+        return None
+    return {'fps': (len(presents) - 1) * 1e9 / (presents[-1] - presents[0]),
+            'first_present_ns': presents[0], 'last_present_ns': presents[-1],
+            'present_count': len(presents)}
+
+
 def sample(check, mode, index):
+    capture_started = time.monotonic_ns()
     image, path = check.capture(f'{mode}-{index}')
+    capture_finished = time.monotonic_ns()
+    sf_started = time.monotonic_ns()
+    sf = check.device.shell('dumpsys', 'SurfaceFlinger', '--latency',
+                            app_layer(check.device, check.package))
+    sf_finished = time.monotonic_ns()
+    sf_path = path.with_suffix('.surfaceflinger.txt')
+    sf_path.write_text(sf)
     footer = path.with_stem(path.stem + '-footer')
     image.crop((0, 792, 1280, 820)).resize((2560, 56)).save(footer)
     rows = json.loads(subprocess.check_output([str(check.args.ocr), str(path)], text=True))
@@ -31,16 +51,33 @@ def sample(check, mode, index):
     match = re.search(r'(\d+(?:\.\d+)?)\s+(?:UI|Ul|U1)\s+updates\s*/\s*s', text)
     if not match:
         raise ValueError('Footer cadence was not readable: ' + text)
-    sf = check.device.shell('dumpsys', 'SurfaceFlinger', '--latency',
-                            app_layer(check.device, check.package))
-    sf_path = path.with_suffix('.surfaceflinger.txt')
-    sf_path.write_text(sf)
     period = int(sf.splitlines()[0])
     if not 1_000_000 <= period <= 100_000_000:
         raise ValueError('Invalid display refresh period: ' + str(period))
     return image, {'ui_updates_per_second': float(match[1]), 'footer': text,
                    'refresh_period_ns': period, 'display_hz': 1e9 / period,
-                   'screenshot': str(path), 'surfaceflinger': str(sf_path)}
+                   'screenshot': str(path), 'surfaceflinger': str(sf_path),
+                   'presentation': presented_rate(sf),
+                   'capture_started_monotonic_ns': capture_started,
+                   'capture_finished_monotonic_ns': capture_finished,
+                   'surfaceflinger_started_monotonic_ns': sf_started,
+                   'surfaceflinger_finished_monotonic_ns': sf_finished}
+
+
+def evaluate_mode(entry, tolerance):
+    rates = [reading['ui_updates_per_second'] for reading in entry['samples']]
+    limits = [reading['display_hz'] * (1 + tolerance) + 1
+              for reading in entry['samples']]
+    presentations = [reading['presentation']['fps'] for reading in entry['samples']
+                     if reading['presentation'] is not None]
+    entry['callback_median'] = median(rates)
+    entry['presentation_median'] = median(presentations) if presentations else None
+    entry['within_display_cadence'] = all(rate <= limit for rate, limit in zip(rates, limits))
+    entry['keeps_up_with_presentations'] = entry['mode'] == 'paused' or (
+        len(presentations) == len(rates)
+        and entry['callback_median'] + 1 >= entry['presentation_median'] * (1 - tolerance))
+    entry['passed'] = (entry['progress'] and entry['within_display_cadence']
+                       and entry['keeps_up_with_presentations'])
 
 
 def check_modes(check, report):
@@ -60,11 +97,8 @@ def check_modes(check, report):
                 changed |= check.changed(first, image, 'watchlist' if mode in ('scroll', 'hover') else 'price')
             time.sleep(0.61)
         rates = [reading['ui_updates_per_second'] for reading in entry['samples']]
-        limits = [reading['display_hz'] * (1 + check.args.tolerance) + 1
-                  for reading in entry['samples']]
         entry['progress'] = all(rate > 0 for rate in rates) and (mode == 'paused' or changed)
-        entry['within_display_cadence'] = all(rate <= limit for rate, limit in zip(rates, limits))
-        entry['passed'] = entry['progress'] and entry['within_display_cadence']
+        evaluate_mode(entry, check.args.tolerance)
         print(json.dumps(entry), flush=True)
         (check.args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
 

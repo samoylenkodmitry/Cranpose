@@ -761,6 +761,7 @@ impl AndroidFrameDriver {
         if let Some(instant) = instant {
             self.last_frame_timestamp.set(Some(timestamp));
             shell.dispatch_frame_at(instant);
+            self.schedule_frame(shell);
         }
     }
 }
