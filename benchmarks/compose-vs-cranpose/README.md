@@ -71,6 +71,9 @@ Knobs:
 
 ## Workspace reference and interaction checks
 
+The [GPUI reference fixture](reference/README.md) preserves the exact source patch,
+font hashes and setup steps used for the desktop comparison.
+
 The workspace follows `gpui_perf/src/showcase` from GPUI reference commit
 `7ab23f46f2ba3a040ceb27d387383a2896bc5ae1`. Its canvas is 1280 × 820 logical
 pixels, scaled uniformly to fit a narrower display. The light theme, tick-zero

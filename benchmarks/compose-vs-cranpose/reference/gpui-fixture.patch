@@ -1,0 +1,136 @@
+--- a/crates/gpui_perf/src/showcase/auto.rs
++++ b/crates/gpui_perf/src/showcase/auto.rs
+@@ -118,6 +118,7 @@
+     index: usize,
+     frame: usize,
+     started: Option<Sample>,
++    ticks_started: Option<(usize, std::time::Instant)>,
+     frame_cpu: Vec<f64>,
+     last_cpu: Option<Duration>,
+     frame_instructions: Vec<u64>,
+@@ -166,6 +167,7 @@
+             index: 0,
+             frame: 0,
+             started: None,
++            ticks_started: None,
+             frame_cpu: Vec::new(),
+             last_cpu: None,
+             frame_instructions: Vec::new(),
+@@ -257,6 +259,10 @@
+         let instructions = main_thread_instructions();
+         if self.frame == WARMUP_FRAMES {
+             self.started = Some(Sample::take(window));
++            self.ticks_started = Some((
++                super::workspace::TICKS.load(std::sync::atomic::Ordering::Relaxed),
++                std::time::Instant::now(),
++            ));
+             self.frame_cpu.clear();
+             self.frame_instructions.clear();
+         } else if self.frame > WARMUP_FRAMES {
+@@ -273,6 +279,15 @@
+         self.frame += 1;
+         if self.frame > WARMUP_FRAMES + self.measured_frames {
+             let cost = Cost::between(self.started.as_ref().unwrap(), &Sample::take(window));
++            if let Some((ticks, at)) = self.ticks_started.take() {
++                let now = super::workspace::TICKS.load(std::sync::atomic::Ordering::Relaxed);
++                eprintln!(
++                    "TICKS {:?} {:?} {:.1}/s",
++                    scenario,
++                    retention,
++                    (now - ticks) as f64 / at.elapsed().as_secs_f64()
++                );
++            }
+             let mut frame_cpu = std::mem::take(&mut self.frame_cpu);
+             frame_cpu.sort_by(f64::total_cmp);
+             let percentile = |p: f64| {
+--- a/crates/gpui_perf/src/showcase/mod.rs
++++ b/crates/gpui_perf/src/showcase/mod.rs
+@@ -243,6 +243,20 @@
+         if !example_support::load_fonts(cx) {
+             return;
+         }
++        for face in ["Regular", "Medium", "Bold"] {
++            let path = format!("/tmp/compose-gpui-parity/fonts/Roboto-{face}.ttf");
++            let bytes = match std::fs::read(&path) {
++                Ok(bytes) => bytes,
++                Err(error) => {
++                    eprintln!("{path}: {error}");
++                    return;
++                }
++            };
++            if let Err(error) = cx.text_system().add_fonts(vec![std::borrow::Cow::Owned(bytes)]) {
++                eprintln!("Could not load {path}: {error}");
++                return;
++            }
++        }
+         cx.bind_keys([
+             KeyBinding::new("1", ScrollOff, Some(KEY_CONTEXT)),
+             KeyBinding::new("2", ScrollSidebar, Some(KEY_CONTEXT)),
+@@ -459,20 +473,6 @@
+             compact: false,
+         });
+         cx.set_global(SharedAppState(app_state.clone()));
+-        let ticked = app_state.downgrade();
+-        cx.spawn(async move |_, cx| {
+-            loop {
+-                cx.background_executor().timer(APP_STATE_EVERY).await;
+-                let Some(app_state) = ticked.upgrade() else {
+-                    break;
+-                };
+-                app_state.update(cx, |state, cx| {
+-                    state.unread += 1;
+-                    cx.notify();
+-                });
+-            }
+-        })
+-        .detach();
+ 
+         let sampled = stats.downgrade();
+         cx.spawn_in(window, async move |_, cx| {
+@@ -523,6 +523,8 @@
+         if auto || demo {
+             this.start_frames(window, cx);
+         }
++        this.select(workspace_page(), cx);
++        this.focus_page(window, cx);
+         this
+     }
+ 
+@@ -915,6 +917,7 @@
+             .bg(theme.background)
+             .text_color(theme.foreground)
+             .font_features(theme.numbers.clone())
++            .font_family("Roboto")
+             .child(self.toolbar(window, cx))
+             .child(
+                 div()
+--- a/crates/gpui_perf/src/showcase/theme.rs
++++ b/crates/gpui_perf/src/showcase/theme.rs
+@@ -151,7 +151,7 @@
+ 
+     /// Sets the theme for the window's appearance, and keeps it following it.
+     pub fn follow(window: &mut Window, cx: &mut App) {
+-        cx.set_global(Self::for_appearance(window.appearance()));
++        cx.set_global(Self::light());
+     }
+ 
+     pub fn for_appearance(appearance: WindowAppearance) -> Self {
+--- a/crates/gpui_perf/src/showcase/workspace.rs
++++ b/crates/gpui_perf/src/showcase/workspace.rs
+@@ -66,6 +66,8 @@
+ 
+ /// How often the stream pushes quotes: about sixty times a second, as a busy
+ /// market's feed does.
++/// Ticks streamed since the process started, for the auto run's rate.
++pub static TICKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+ const STREAM_EVERY: Duration = Duration::from_millis(16);
+ 
+ /// Quotes the stream pushes each time, unless an automatic run says
+@@ -422,6 +424,7 @@
+     /// watchlist, and goes out on the feed to every panel. The indices tick
+     /// every thirtieth time.
+     fn tick(&mut self, cx: &mut Context<Self>) {
++        TICKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+         self.ticks += 1;
+         let tick = self.ticks;
+         for i in 0..self.quotes_per_tick {

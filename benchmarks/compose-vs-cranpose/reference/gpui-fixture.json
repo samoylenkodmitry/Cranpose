@@ -1,0 +1,59 @@
+{
+  "upstream": "https://github.com/longbridge/gpui-fast",
+  "commit": "7ab23f46f2ba3a040ceb27d387383a2896bc5ae1",
+  "patch": "gpui-fixture.patch",
+  "patch_sha256": "2917c1f1636c67002b85795773413c6bf6566e632b9566a640b405a7e2a6a9d9",
+  "build": {
+    "package": "gpui_perf",
+    "profile": "release",
+    "features": "default (fast)",
+    "locked": true,
+    "rust_toolchain": "1.98.1"
+  },
+  "files": [
+    {
+      "path": "crates/gpui_perf/src/showcase/auto.rs",
+      "base_sha256": "f93b05633dde25cb53ac5461f841b077698c733860d2a752d5b83c41eeffeb64",
+      "fixture_sha256": "6583f496d6cc8617e667931aecd6c58847791730bf31cceef657c6e543aac77b",
+      "fixture_bytes": 15787
+    },
+    {
+      "path": "crates/gpui_perf/src/showcase/mod.rs",
+      "base_sha256": "79b52eed2b724b0fd69ea80277f5af6dd7340ffcb3f46b58199876804f64b346",
+      "fixture_sha256": "ba8e928f48fe769cd09453d1154c35bfc67328d769d7e90a0debed5a2efb82bd",
+      "fixture_bytes": 33524
+    },
+    {
+      "path": "crates/gpui_perf/src/showcase/theme.rs",
+      "base_sha256": "c5721e008d87b155b5d5d30c2a237e30a226012bfff9216973f291f361682f98",
+      "fixture_sha256": "ae4b5fa2470ce16697b23ab666f1f61c1fbae96d848cf628909bd9b117455122",
+      "fixture_bytes": 6655
+    },
+    {
+      "path": "crates/gpui_perf/src/showcase/workspace.rs",
+      "base_sha256": "f88a65913e266d51b9e27aeb5a3089fbc7e2965adc3960bd8d1bbab419cef58c",
+      "fixture_sha256": "9cf5225d349b913d8a2c65a67d1cf8caaabcdf23027cdbfccd90e8863f373318",
+      "fixture_bytes": 83635
+    }
+  ],
+  "fonts": {
+    "source": "Huawei Mate 20 X, Android 10, /system/fonts",
+    "fixture_directory": "/tmp/compose-gpui-parity/fonts",
+    "sha256": {
+      "Roboto-Regular.ttf": "797e35f7f5d6020a5c6ea13b42ecd668bcfb3bbc4baa0e74773527e5b6cb3174",
+      "Roboto-Medium.ttf": "7984aafeaf437899ce89b251d2875fc5048cb7d290152eac070239cca7ff726c",
+      "Roboto-Bold.ttf": "36f3709dea3e3ce3c6aedc058079e55980825f898f1e901d091c73c40de8bab1"
+    }
+  },
+  "capture": {
+    "logical_client_size": [
+      1280,
+      820
+    ],
+    "theme": "light",
+    "market_tick": 0,
+    "streaming": false,
+    "auto_scroll": "Off",
+    "font_family": "Roboto"
+  }
+}

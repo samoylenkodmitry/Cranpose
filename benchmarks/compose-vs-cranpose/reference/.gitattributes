@@ -1,0 +1,2 @@
+# Preserve unified-diff context lines, including a single space for empty lines.
+gpui-fixture.patch -whitespace
