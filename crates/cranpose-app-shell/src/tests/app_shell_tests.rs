@@ -10689,6 +10689,102 @@ where
     })
 }
 
+fn assert_focus_semantics_before_next_frame(check_revision: bool) {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {
+            Column(Modifier::empty(), ColumnSpec::default(), || {
+                focus_box("First", 100.0)();
+                focus_box("Second", 100.0)();
+            });
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let ids = ["First", "Second"].map(|name| {
+        find_semantics_described(shell.semantics_tree().expect("tree").root(), name)
+            .expect("focus target")
+            .node_id
+    });
+    for focused in [Some(ids[0]), Some(ids[1]), None] {
+        let before = shell.semantics_snapshot_revision();
+        shell.debug_enter_app_context(|| {
+            cranpose_core::run_in_mutable_snapshot(|| {
+                if let Some(target) = focused {
+                    assert!(cranpose_ui::request_focus_from_platform(target));
+                } else {
+                    cranpose_ui::FocusManager.clear_focus();
+                }
+            })
+            .expect("focus snapshot");
+        });
+        if check_revision {
+            assert_ne!(shell.semantics_snapshot_revision(), before);
+        }
+        for (name, id) in ["First", "Second"].into_iter().zip(ids) {
+            let node = find_semantics_described(shell.semantics_tree().expect("tree").root(), name)
+                .expect("focus target");
+            assert_eq!(node.focused, focused == Some(id), "{name}");
+        }
+        let settled = shell.semantics_snapshot_revision();
+        assert_eq!(shell.semantics_snapshot_revision(), settled);
+    }
+}
+
+#[test]
+fn focus_semantics_tree_is_current_before_next_frame() {
+    assert_focus_semantics_before_next_frame(false);
+}
+
+#[test]
+fn focus_semantics_revision_is_current_before_next_frame() {
+    assert_focus_semantics_before_next_frame(true);
+}
+
+#[test]
+fn closing_modal_publishes_restored_focus_in_the_same_frame() {
+    let _guard = test_guard();
+    let open_state = Rc::new(Cell::new(None));
+    let content_state = Rc::clone(&open_state);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let open = rememberMutableStateOf(|| false);
+            content_state.set(Some(open));
+            Column(Modifier::empty(), ColumnSpec::default(), move || {
+                focus_box("Opener", 100.0)();
+                if open.value() {
+                    Column(
+                        Modifier::empty().semantics(|config| config.is_modal = true),
+                        ColumnSpec::default(),
+                        focus_box("Modal", 100.0),
+                    );
+                }
+            });
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    assert!(shell.on_key_event(&KeyEvent::key_down(KeyCode::Tab, "")));
+    shell.update();
+    let open = open_state.get().expect("modal state");
+    for (shown, expected) in [(true, "Modal"), (false, "Opener")] {
+        shell.debug_enter_app_context(|| {
+            cranpose_core::run_in_mutable_snapshot(|| open.set(shown)).expect("modal snapshot");
+        });
+        shell.update();
+        assert!(
+            find_semantics_described(shell.semantics_tree().expect("tree").root(), expected)
+                .expect("focused control")
+                .focused,
+            "{expected}"
+        );
+    }
+}
+
 #[test]
 fn pointer_text_focus_is_published_to_accessibility() {
     let _guard = test_guard();

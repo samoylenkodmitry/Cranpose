@@ -600,12 +600,7 @@ where
             });
         }
 
-        if has_pending_semantics_invalidations() {
-            let mut applier = self.app.composition.applier_mut();
-            process_semantics_invalidations(|node_id| {
-                cranpose_core::bubble_semantics_dirty(&mut *applier, node_id);
-            });
-        }
+        self.app.flush_semantics_invalidations();
     }
 
     fn take_structural_change_parents(&mut self) -> Vec<NodeId> {
