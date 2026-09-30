@@ -155,6 +155,35 @@ inside it. It reads:
   `/proc/uptime` from each poll's newest present, to within about one frame.
   The report keeps frames per second of the window and counts seconds with no
   present, so a ramp or a stall cannot hide in the mean.
+- **Presentation timestamp deltas:** Android 10 reports desired present time,
+  actual present time, and frame ready time in that order. The report names the
+  first-to-second delta `desired_to_present_p50_ms` and the first-to-third delta
+  `desired_to_ready_p50_ms`. A zero or pending timestamp excludes only the
+  affected delta; a valid actual present still counts toward FPS. No valid delay
+  samples produces JSON `null` and `n/a` in the summary.
+  The desired timestamp is selected by the producer. With Android's automatic
+  timestamp, `Surface::queueBuffer` supplies the current monotonic time; an
+  explicit timestamp can refer to a different point. Ready time comes from the
+  buffer's acquire fence, with desired time substituted when no valid fence
+  exists. These deltas measure neither GPU execution time nor input latency.
+  See the pinned Android 10 sources for
+  [field order](https://android.googlesource.com/platform/frameworks/native/+/refs/tags/android-10.0.0_r1/services/surfaceflinger/FrameTracker.cpp#234),
+  [automatic timestamps](https://android.googlesource.com/platform/frameworks/native/+/refs/tags/android-10.0.0_r1/libs/gui/Surface.cpp#700),
+  and [ready-time fallback](https://android.googlesource.com/platform/frameworks/native/+/refs/tags/android-10.0.0_r1/services/surfaceflinger/BufferLayer.cpp#367).
+  Stock Android 10 HWUI defaults to automatic timestamps; render-ahead selects
+  a future vsync timestamp. Cranpose requests Vulkan presentation time zero,
+  which leaves the automatic timestamp in place. The Huawei vendor implementation
+  has not been verified, so cross-renderer delay comparisons must not assume
+  matching origins or that HWUI measures an entire frame from its starting vsync.
+  See [HWUI timestamp selection](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-10.0.0_r1/libs/hwui/renderthread/CanvasContext.cpp#413)
+  and [Vulkan timestamp selection](https://android.googlesource.com/platform/frameworks/native/+/refs/tags/android-10.0.0_r1/vulkan/libvulkan/swapchain.cpp#1680).
+  Historical raw reports retain their original field names and values; they must
+  not be interpreted as proof of queue latency or rewritten as corrected data.
+- **Cranpose runtime telemetry:** `present_return_to_display_ms` measures from
+  the monotonic timestamp recorded after the present call returns to the actual
+  presentation time returned by `VK_GOOGLE_display_timing`. It excludes time
+  inside that call and is separate from the SurfaceFlinger deltas above. The
+  frame lead controller uses this same present-return-to-display signal.
 - **Temperature:** the thermal HAL's live readings for the GPU, both CPU
   clusters, the phone shell and the battery, plus cooling-device levels,
   every 2 s. Temperature is a result in its own right, not a precondition.

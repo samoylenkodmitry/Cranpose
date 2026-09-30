@@ -364,7 +364,7 @@ fn a_shown_frame_counts_the_presents_queued_behind_it() {
         log.shown(0, VSYNC * 5 / 2),
         Some(ShownPresent {
             queued_behind: 2,
-            presented_ns: 0
+            present_returned_ns: 0
         }),
         "presents 1 and 2 had returned by then; 3 had not"
     );
@@ -373,7 +373,7 @@ fn a_shown_frame_counts_the_presents_queued_behind_it() {
         log.shown(3, 4 * VSYNC),
         Some(ShownPresent {
             queued_behind: 0,
-            presented_ns: 3 * VSYNC
+            present_returned_ns: 3 * VSYNC
         })
     );
 }
@@ -394,7 +394,7 @@ fn a_present_log_forgets_the_oldest_beyond_its_capacity() {
 fn latency_run(pacer: &mut FramePacer, start: i64, frames: i64, latency: i64) -> i64 {
     for frame in 0..frames {
         let shown = start + frame * VSYNC;
-        pacer.record_latency(shown - latency, shown);
+        pacer.record_present_return_to_display(shown - latency, shown);
     }
     start + frames * VSYNC
 }
@@ -474,10 +474,10 @@ fn rising_a_level_drops_the_lead() {
 
     let mut pacer = shallow();
     for frame in 0..WINDOW {
-        pacer.record_latency(SETTLED + frame, SETTLED + frame + 20_000_000);
+        pacer.record_present_return_to_display(SETTLED + frame, SETTLED + frame + 20_000_000);
     }
     for frame in 0..WINDOW + i64::from(SETTLE) {
-        pacer.record_latency(SETTLED + frame, SETTLED + frame + 12_000_000);
+        pacer.record_present_return_to_display(SETTLED + frame, SETTLED + frame + 12_000_000);
     }
     assert!(
         pacer.current_lead_ns(VSYNC) > 0,
