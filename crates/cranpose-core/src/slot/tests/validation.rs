@@ -329,7 +329,7 @@ fn validate_reports_payload_count_mismatch_structurally() {
             owner,
             anchor: extra_anchor,
             type_id: TypeId::of::<i32>(),
-            type_name: std::any::type_name::<i32>(),
+            type_name: std::any::type_name::<i32>,
             source: crate::slot::BRANCH_PATH_ROOT,
             kind: super::PayloadKind::Internal,
             value: Box::new(0_i32),

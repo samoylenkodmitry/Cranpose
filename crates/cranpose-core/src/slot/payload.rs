@@ -21,7 +21,7 @@ pub(in crate::slot) struct PayloadLocationRefresh {
 
 pub(in crate::slot) struct PayloadInit<'a> {
     type_id: TypeId,
-    type_name: &'static str,
+    type_name: fn() -> &'static str,
     source: crate::Key,
     make: &'a mut dyn FnMut() -> Box<dyn std::any::Any>,
     fresh: Option<fn() -> Box<dyn std::any::Any>>,
@@ -34,7 +34,7 @@ impl<'a> PayloadInit<'a> {
     ) -> Self {
         Self {
             type_id: TypeId::of::<T>(),
-            type_name: std::any::type_name::<T>(),
+            type_name: std::any::type_name::<T>,
             source,
             make,
             fresh: None,
@@ -48,7 +48,7 @@ impl<'a> PayloadInit<'a> {
     ) -> Self {
         Self {
             type_id: TypeId::of::<T>(),
-            type_name: std::any::type_name::<T>(),
+            type_name: std::any::type_name::<T>,
             source,
             make,
             fresh: Some(fresh),
