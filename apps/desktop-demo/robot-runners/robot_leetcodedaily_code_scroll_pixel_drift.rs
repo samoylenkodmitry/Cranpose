@@ -305,6 +305,7 @@ fn CodeField(
                                                                 min_lines: 10,
                                                                 max_lines: 18,
                                                             },
+                                                        ..BasicTextFieldOptions::default()
                                                     },
                                                 );
                                             }

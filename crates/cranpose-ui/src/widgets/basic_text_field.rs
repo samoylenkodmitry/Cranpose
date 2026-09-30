@@ -222,6 +222,13 @@ pub struct BasicTextFieldOptions {
     pub cursor_color: Color,
     /// Line limits: SingleLine or MultiLine with optional min/max
     pub line_limits: TextFieldLineLimits,
+    /// Whether gaining focus opens the software keyboard. Defaults to `true`.
+    ///
+    /// When `false`, programmatic and keyboard-navigation focus leave the
+    /// software keyboard hidden. A pointer tap still explicitly opens it.
+    /// Changing this to `true` while focused also requests the keyboard.
+    /// Changing it to `false` preserves an already visible keyboard.
+    pub show_keyboard_on_focus: bool,
 }
 
 impl Default for BasicTextFieldOptions {
@@ -230,6 +237,7 @@ impl Default for BasicTextFieldOptions {
             text_style: TextStyle::default(),
             cursor_color: Color(0.0, 0.478, 1.0, 1.0),
             line_limits: TextFieldLineLimits::default(),
+            show_keyboard_on_focus: true,
         }
     }
 }
@@ -330,6 +338,7 @@ fn TextFieldNode(
     let mut text_field_element = TextFieldElement::new(state, options.text_style.clone())
         .with_cursor_color(options.cursor_color)
         .with_line_limits(options.line_limits)
+        .with_show_keyboard_on_focus(options.show_keyboard_on_focus)
         .with_handle_controller(controller.clone())
         .with_modal_depth(modal_depth);
     if let Some(refs) = decorator {

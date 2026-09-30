@@ -27,6 +27,7 @@ fn focused_state(
         None,
         None,
         line_limits,
+        true,
         CaretGeometryRefs {
             node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
             content_origin: Rc::default(),

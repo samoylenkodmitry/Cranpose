@@ -25,6 +25,7 @@ pub(crate) struct TextFieldHandler {
     node_id: Option<cranpose_core::NodeId>,
     target_node: Option<cranpose_core::NodeId>,
     line_limits: TextFieldLineLimits,
+    show_keyboard_on_focus: bool,
     geometry: CaretGeometryRefs,
 }
 
@@ -34,6 +35,7 @@ impl TextFieldHandler {
         node_id: Option<cranpose_core::NodeId>,
         target_node: Option<cranpose_core::NodeId>,
         line_limits: TextFieldLineLimits,
+        show_keyboard_on_focus: bool,
         geometry: CaretGeometryRefs,
     ) -> Rc<Self> {
         Rc::new(Self {
@@ -41,6 +43,7 @@ impl TextFieldHandler {
             node_id,
             target_node,
             line_limits,
+            show_keyboard_on_focus,
             geometry,
         })
     }
@@ -61,6 +64,10 @@ impl crate::text_field_focus::FocusedTextFieldHandler for TextFieldHandler {
 
     fn target_node(&self) -> Option<cranpose_core::NodeId> {
         self.target_node
+    }
+
+    fn show_keyboard_on_focus(&self) -> bool {
+        self.show_keyboard_on_focus
     }
 
     fn handle_key(&self, event: &crate::key_event::KeyEvent) -> bool {
