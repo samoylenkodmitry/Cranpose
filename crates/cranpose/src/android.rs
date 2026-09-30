@@ -756,7 +756,7 @@ fn start_pending_frame(
     if on_screen {
         shell.run_pending_tasks();
     }
-    if resources.surface_dirty || shell.should_render() || shell.needs_redraw() {
+    if resources.surface_dirty || shell.needs_redraw() {
         pacer.note_visual_work();
     }
     let frame_due = on_screen && shell.needs_update() && shell.renderer().has_frame_credit();

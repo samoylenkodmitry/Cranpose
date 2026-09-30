@@ -188,6 +188,7 @@ impl<R: Renderer> RootSurface<R> {
 
     pub(crate) fn needs_redraw_in_context(&self, app: &ShellApp) -> bool {
         app.has_stale_work_in_context()
+            || app.composition.should_recompose()
             || self.is_dirty
             || self.scene_dirty
             || self.renderer_warmup_due(app)
