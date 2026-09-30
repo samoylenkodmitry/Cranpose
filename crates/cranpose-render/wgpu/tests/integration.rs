@@ -23,6 +23,7 @@ mod device_limits;
 mod direct_surface_root_parity;
 mod effect_sample_domain;
 mod effect_semantics;
+mod font_feature_settings_pixels;
 mod frame_driven_layer;
 mod glass_layer_cache;
 mod glass_output_support;
