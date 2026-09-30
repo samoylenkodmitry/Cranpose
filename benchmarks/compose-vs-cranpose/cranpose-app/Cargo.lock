@@ -682,6 +682,7 @@ version = "0.1.176"
 name = "cranpose-core"
 version = "0.1.176"
 dependencies = [
+ "dispatch2",
  "foldhash",
  "futures-task",
  "log",
