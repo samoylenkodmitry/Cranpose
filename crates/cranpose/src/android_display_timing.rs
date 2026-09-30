@@ -27,7 +27,7 @@ use crate::frame_pacer::PresentLog;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct DisplayedFrame {
     pub(crate) shown_ns: i64,
-    pub(crate) queued_ns: i64,
+    pub(crate) present_returned_ns: i64,
     pub(crate) queued_behind: u32,
 }
 
@@ -126,7 +126,7 @@ impl cranpose_render_wgpu::PresentObserver for DisplayTimingObserver {
             if let (true, Some(shown)) = (shown_ns > 0, shown) {
                 let _ = self.frames.send(DisplayedFrame {
                     shown_ns,
-                    queued_ns: shown.presented_ns,
+                    present_returned_ns: shown.present_returned_ns,
                     queued_behind: shown.queued_behind,
                 });
             }

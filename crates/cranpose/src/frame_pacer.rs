@@ -105,12 +105,11 @@ pub(crate) struct PresentLog {
 }
 
 impl PresentLog {
-    /// Remembers that present `id` returned at `presented_ns`.
-    pub(crate) fn record(&mut self, id: u32, presented_ns: i64) {
+    pub(crate) fn record(&mut self, id: u32, present_returned_ns: i64) {
         if self.presents.len() == PRESENT_LOG {
             self.presents.pop_front();
         }
-        self.presents.push_back((id, presented_ns));
+        self.presents.push_back((id, present_returned_ns));
     }
 
     /// What present `id`, shown at `shown_ns`, says about the queue, or
@@ -121,7 +120,7 @@ impl PresentLog {
             .presents
             .iter()
             .position(|(present, _)| *present == id)?;
-        let presented_ns = self.presents[position].1;
+        let present_returned_ns = self.presents[position].1;
         let behind = self
             .presents
             .iter()
@@ -131,7 +130,7 @@ impl PresentLog {
         self.presents.drain(..=position);
         Some(ShownPresent {
             queued_behind: u32::try_from(behind).ok()?,
-            presented_ns,
+            present_returned_ns,
         })
     }
 }
@@ -141,7 +140,7 @@ impl PresentLog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ShownPresent {
     pub(crate) queued_behind: u32,
-    pub(crate) presented_ns: i64,
+    pub(crate) present_returned_ns: i64,
 }
 
 /// How far ahead of the display frames run.
@@ -381,14 +380,16 @@ impl FramePacer {
             .is_some_and(|until| now_ns < until)
     }
 
-    /// Records that a frame queued at `queued_ns` was shown at `shown_ns`,
-    /// so a paced loop learns how far ahead of its slots to start frames.
-    pub(crate) fn record_latency(&mut self, queued_ns: i64, shown_ns: i64) {
+    pub(crate) fn record_present_return_to_display(
+        &mut self,
+        present_returned_ns: i64,
+        shown_ns: i64,
+    ) {
         if self
             .stage
             .is_some_and(|stage| stage.level.depth().is_some())
         {
-            self.lead.record(shown_ns - queued_ns, shown_ns);
+            self.lead.record(shown_ns - present_returned_ns, shown_ns);
         }
     }
 

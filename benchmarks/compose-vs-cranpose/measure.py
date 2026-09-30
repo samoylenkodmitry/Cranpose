@@ -179,7 +179,7 @@ def presents(output):
             if len(fields) != 3:
                 continue
             desired, actual, ready = map(int, fields)
-            if actual in (0, PENDING):
+            if not 0 < actual < PENDING:
                 continue
             frames[actual] = (desired, ready)
             newest = max(newest, actual)
@@ -202,8 +202,14 @@ def frame_stats(frames, t0, t1, vsync_ms):
     if len(times) < 2:
         raise ValueError('the layer presented no frames in the window')
     intervals = [(later - earlier) / 1e6 for earlier, later in zip(times, times[1:])]
-    queue_to_present = [(time - frames[time][0]) / 1e6 for time in times]
-    queue_to_ready = [(frames[time][1] - frames[time][0]) / 1e6 for time in times]
+    desired_to_present = []
+    desired_to_ready = []
+    for actual in times:
+        desired, ready = frames[actual]
+        if 0 < desired < PENDING:
+            desired_to_present.append((actual - desired) / 1e6)
+            if 0 < ready < PENDING:
+                desired_to_ready.append((ready - desired) / 1e6)
     per_second = [0] * int(t1 - t0)
     for time in times:
         second = int(time / 1e9 - t0)
@@ -226,8 +232,8 @@ def frame_stats(frames, t0, t1, vsync_ms):
         'vsync_ms': vsync_ms,
         'janky_pct': 100.0 * sum(interval > 1.5 * vsync_ms for interval in intervals) / len(intervals),
         'missed_vsyncs': sum(max(0, round(interval / vsync_ms) - 1) for interval in intervals),
-        'queue_to_present_p50_ms': percentile(queue_to_present, 0.50),
-        'queue_to_gpu_done_p50_ms': percentile(queue_to_ready, 0.50),
+        'desired_to_present_p50_ms': percentile(desired_to_present, 0.50),
+        'desired_to_ready_p50_ms': percentile(desired_to_ready, 0.50),
     }
 
 

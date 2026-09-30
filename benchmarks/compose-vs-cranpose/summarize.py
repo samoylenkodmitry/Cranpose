@@ -18,8 +18,8 @@ METRICS = [
     ('cpu_ms_per_frame', 'App CPU per frame (ms)', '{:.2f}'),
     ('gpu_mhz', 'Mean GPU clock (MHz)', '{:.0f}'),
     ('cpu_big_mhz', 'Mean big-core clock (MHz)', '{:.0f}'),
-    ('queue_to_gpu_done_p50_ms', 'Buffer timestamp → GPU done p50 (ms)', '{:.1f}'),
-    ('queue_to_present_p50_ms', 'Buffer timestamp → on screen p50 (ms)', '{:.1f}'),
+    ('desired_to_ready_p50_ms', 'Desired timestamp → ready p50 (ms)', '{:.1f}'),
+    ('desired_to_present_p50_ms', 'Desired timestamp → present p50 (ms)', '{:.1f}'),
     ('pss_mb', 'Memory PSS (MB)', '{:.0f}'),
     ('big_rise', 'Big-core cluster rise in window (°C)', '{:+.1f}'),
     ('big_end', 'Big-core cluster at window end (°C)', '{:.0f}'),
@@ -31,7 +31,7 @@ METRICS = [
 def metric(runs, key, fmt):
     """The median of `key` over the runs that report it: a device without the
     Kirin clock files reports no clocks."""
-    values = [run[key] for run in runs if key in run]
+    values = [run[key] for run in runs if run.get(key) is not None]
     return fmt.format(median(values)) if values else 'n/a'
 
 
@@ -94,6 +94,9 @@ def main():
             values = [median([run[key] for run in startup[app] if key in run]) for app in ('cranpose', 'compose')]
             lines.append(f'| {label} | {values[0]:.0f} | {values[1]:.0f} |')
         lines.append('')
+    lines.append('Desired timestamps are producer-selected; these delays are not '
+                 'input latency or GPU execution time. Timestamp origins must be '
+                 'verified before comparing renderers. Missing samples are n/a.\n')
     lines.append(f'APK size: Cranpose {report["cranpose_apk_bytes"] / 1e6:.1f} MB, '
                  f'Compose {report["compose_apk_bytes"] / 1e6:.2f} MB.')
     if report['failures']:

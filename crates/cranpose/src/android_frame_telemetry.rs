@@ -371,7 +371,7 @@ pub(crate) struct AndroidFrameTelemetry {
     enabled: bool,
     window_frames: usize,
     samples: Vec<Sample>,
-    shown_latencies_us: Vec<i32>,
+    present_return_to_display_us: Vec<i32>,
     last_present_ns: i64,
     idle_iterations: u32,
     window_start_ns: i64,
@@ -395,7 +395,7 @@ impl AndroidFrameTelemetry {
             enabled,
             window_frames,
             samples: Vec::with_capacity(window_frames),
-            shown_latencies_us: Vec::with_capacity(window_frames),
+            present_return_to_display_us: Vec::with_capacity(window_frames),
             last_present_ns: 0,
             idle_iterations: 0,
             window_start_ns: 0,
@@ -501,11 +501,11 @@ impl AndroidFrameTelemetry {
             count(FramePacing::Unreported),
             leads,
         );
-        if !self.shown_latencies_us.is_empty() {
-            self.shown_latencies_us.sort_unstable();
-            let latencies = &self.shown_latencies_us;
+        if !self.present_return_to_display_us.is_empty() {
+            self.present_return_to_display_us.sort_unstable();
+            let latencies = &self.present_return_to_display_us;
             log::warn!(
-                "[android-frame]   queue_to_screen n={} p10={:.2} p50={:.2} p90={:.2}",
+                "[android-frame]   present_return_to_display_ms n={} p10={:.2} p50={:.2} p90={:.2}",
                 latencies.len(),
                 ms(percentile(latencies, 0.10)),
                 ms(percentile(latencies, 0.50)),
@@ -514,10 +514,10 @@ impl AndroidFrameTelemetry {
         }
     }
 
-    /// Notes how long a frame the display showed waited from being queued.
-    pub(crate) fn note_shown_latency(&mut self, latency_ns: i64) {
+    pub(crate) fn note_present_return_to_display(&mut self, present_return_to_display_ns: i64) {
         if self.enabled {
-            self.shown_latencies_us.push(us(latency_ns));
+            self.present_return_to_display_us
+                .push(us(present_return_to_display_ns));
         }
     }
 
@@ -577,7 +577,7 @@ impl AndroidFrameTelemetry {
 
     fn reset(&mut self) {
         self.samples.clear();
-        self.shown_latencies_us.clear();
+        self.present_return_to_display_us.clear();
         self.idle_iterations = 0;
         self.window_start_ns = 0;
     }

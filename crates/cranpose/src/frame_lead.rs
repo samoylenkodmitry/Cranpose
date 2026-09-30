@@ -1,18 +1,3 @@
-//! How far ahead of its vsync slot a paced frame starts.
-//!
-//! The compositor shows a frame at the earliest refresh only when the frame
-//! is ready by that refresh's deadline, its GPU work included; on a Pixel 9
-//! Pro at 120 Hz the deadline falls about 8.3 ms after the vsync callback a
-//! frame starts on, and a frame ready a little later waits a whole refresh
-//! more. Starting a share of a period early catches the earlier refresh when
-//! the frame is short enough. A longer frame only starts early and then
-//! waits as long, packed closer to the frame before it, and how early is
-//! enough depends on how long the frame and its GPU work take, so the lead
-//! is measured rather than assumed: now and then a window of frames runs at
-//! one of the other leads, and the lead whose frames reached the screen
-//! sooner after being queued is kept.
-
-/// Shown frames whose queue-to-screen times are averaged per window.
 pub(crate) const WINDOW: i64 = 90;
 
 /// Frames shown after the lead changes that started before it did, left out
@@ -93,11 +78,7 @@ impl FrameLead {
         vsync_period_ns * tenths / 10
     }
 
-    /// Records how long a frame took from being queued to being shown, at
-    /// `now_ns`: closes a window every [`WINDOW`] frames, starts a trial of
-    /// another lead once the kept one has held long enough, and keeps the
-    /// trial's lead when it brought frames to the screen sooner.
-    pub(crate) fn record(&mut self, latency_ns: i64, now_ns: i64) {
+    pub(crate) fn record(&mut self, present_return_to_display_ns: i64, now_ns: i64) {
         if self.pinned_tenths.is_some() {
             return;
         }
@@ -105,7 +86,7 @@ impl FrameLead {
             self.settle -= 1;
             return;
         }
-        self.sum_ns = self.sum_ns.saturating_add(latency_ns);
+        self.sum_ns = self.sum_ns.saturating_add(present_return_to_display_ns);
         self.count += 1;
         if self.count < WINDOW {
             return;
