@@ -229,6 +229,7 @@ pub(crate) struct FramePacer {
     hold: UnpacedHold,
     /// When a held unpaced frame may start.
     held_until_ns: Option<i64>,
+    idle_until_ns: Option<i64>,
 }
 
 impl Default for FramePacer {
@@ -246,6 +247,7 @@ impl Default for FramePacer {
             lead: FrameLead::default(),
             hold: UnpacedHold::default(),
             held_until_ns: None,
+            idle_until_ns: None,
         }
     }
 }
@@ -325,6 +327,7 @@ impl FramePacer {
         self.lead.reset();
         self.hold.reset();
         self.held_until_ns = None;
+        self.idle_until_ns = None;
     }
 
     /// Records how long an unpaced frame waited from its hand-off to the
@@ -340,9 +343,7 @@ impl FramePacer {
     /// frame due now waits out the hold from then.
     pub(crate) fn note_frame_returned(&mut self, now_ns: i64) {
         let hold_ns = self.hold.hold_ns();
-        if self.unpaced() && hold_ns > 0 {
-            self.held_until_ns = self.held_until_ns.max(Some(now_ns + hold_ns));
-        }
+        self.held_until_ns = (self.unpaced() && hold_ns > 0).then_some(now_ns + hold_ns);
     }
 
     #[cfg(target_os = "android")]
@@ -350,8 +351,13 @@ impl FramePacer {
         if self.stage.is_none_or(|stage| stage.level == Level::Unpaced) && vsync_period_ns > 0 {
             let next = next_vsync_ns(now_ns, vsync_ns, vsync_period_ns)
                 .unwrap_or_else(|| now_ns.saturating_add(vsync_period_ns));
-            self.held_until_ns = self.held_until_ns.max(Some(next));
+            self.idle_until_ns = Some(next);
         }
+    }
+
+    #[cfg(target_os = "android")]
+    pub(crate) fn note_visual_work(&mut self) {
+        self.idle_until_ns = None;
     }
 
     /// How long an unpaced frame waits after the renderer hands one back.
@@ -370,7 +376,9 @@ impl FramePacer {
 
     /// Whether an unpaced frame is still held at `now_ns`.
     fn held(&self, now_ns: i64) -> bool {
-        self.held_until_ns.is_some_and(|until| now_ns < until)
+        self.held_until_ns
+            .max(self.idle_until_ns)
+            .is_some_and(|until| now_ns < until)
     }
 
     /// Records that a frame queued at `queued_ns` was shown at `shown_ns`,
@@ -395,7 +403,7 @@ impl FramePacer {
         vsync_period_ns: i64,
     ) -> Option<i64> {
         if self.held(now_ns) {
-            return self.held_until_ns;
+            return self.held_until_ns.max(self.idle_until_ns);
         }
         let lead_ns = self.lead.lead_ns(vsync_period_ns);
         if lead_ns == 0 || now_ns < vsync_ns {
@@ -466,6 +474,7 @@ impl FramePacer {
                 return false;
             }
             self.held_until_ns = None;
+            self.idle_until_ns = None;
             self.started_slot_ns = slot_ns.or(self.started_slot_ns);
             return true;
         };
