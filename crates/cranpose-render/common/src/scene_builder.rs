@@ -412,6 +412,10 @@ fn replace_dirty_layers_from_applier(
 
     if report.updated {
         parent.refresh_child_facts();
+        // A layer's own sinks are not kept apart from its children's, so a
+        // child that stopped publishing leaves the flag set, which only keeps
+        // the scroll fast path off; a child that started must set it.
+        parent.has_origin_sinks |= children_have_origin_sinks(&parent.children);
         crate::graph_hash::refresh_layer_own_raster_cache_hashes(parent, ancestor_hashed);
         if let Some(node_id) = parent.node_id {
             changed_nodes.push(node_id);
@@ -698,7 +702,7 @@ impl TranslateGeometry {
         graphics_layer: &GraphicsLayer,
         parent_abs: AbsOrigin,
     ) -> Self {
-        let content_offset = layout_state.content_offset;
+        let content_offset = layout_state.content_offset();
         let top_left = Point {
             x: parent_abs.content_origin.x + layout_state.position().x,
             y: parent_abs.content_origin.y + layout_state.position().y,
@@ -1479,9 +1483,10 @@ fn write_node_layer(
     if let Some(geometry) = geometry {
         publish_origin_sinks(&slices, geometry.window_origin, size);
     }
+    let content_offset = layout_state.content_offset();
     let child_context = context.for_children(
         &slices,
-        layout_state.content_offset,
+        content_offset,
         geometry.map(TranslateGeometry::child_abs),
     );
     let head = node_layer_head(
@@ -1491,10 +1496,8 @@ fn write_node_layer(
             local_bounds,
             node_bounds,
             placement,
-            content_offset: layout_state.content_offset,
-            translated_content_offset: slices
-                .translated_content_offset()
-                .unwrap_or(layout_state.content_offset),
+            content_offset,
+            translated_content_offset: slices.translated_content_offset().unwrap_or(content_offset),
         },
         graphics_layer,
         context,

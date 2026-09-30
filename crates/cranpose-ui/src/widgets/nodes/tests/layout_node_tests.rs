@@ -413,6 +413,67 @@ fn modifier_child_capabilities_reflect_chain_head() {
     );
 }
 
+fn drain_semantics_layout_changes() -> Vec<NodeId> {
+    let mut changed = Vec::new();
+    crate::render_state::with_current_semantics_layout_log(|log| log.begin_sync(&mut changed));
+    changed
+}
+
+#[test]
+fn layout_state_reports_the_changes_a_semantics_tree_reads() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    drain_semantics_layout_changes();
+    let mut state = LayoutState::default();
+    state.set_node_id(9);
+    state.set_content_offset(Point::default());
+    state.set_size(Size::default());
+    state.clear_placed();
+    assert!(
+        drain_semantics_layout_changes().is_empty(),
+        "writes that change nothing report nothing"
+    );
+
+    state.place(Point::default());
+    assert_eq!(drain_semantics_layout_changes(), vec![9], "placed");
+    state.clear_placed();
+    state.place(Point::default());
+    assert_eq!(
+        drain_semantics_layout_changes(),
+        vec![9],
+        "placed again in a pass, reported once"
+    );
+    state.place(Point { x: 1.0, y: 0.0 });
+    assert_eq!(drain_semantics_layout_changes(), vec![9], "moved");
+    state.set_content_offset(Point { x: 2.0, y: 0.0 });
+    assert_eq!(state.content_offset(), Point { x: 2.0, y: 0.0 });
+    assert_eq!(drain_semantics_layout_changes(), vec![9], "content moved");
+    state.set_size(Size {
+        width: 4.0,
+        height: 4.0,
+    });
+    assert_eq!(drain_semantics_layout_changes(), vec![9], "resized");
+}
+
+#[test]
+fn a_new_child_list_is_reported_to_the_semantics_tree() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    drain_semantics_layout_changes();
+    let mut node = fresh_node();
+    node.set_node_id(4);
+    assert!(node.insert_child(5));
+    assert_eq!(drain_semantics_layout_changes(), vec![4], "a child joined");
+    node.move_child(0, 0);
+    assert!(node.remove_child(5));
+    assert_eq!(drain_semantics_layout_changes(), vec![4], "a child left");
+    node.update_children(&[6, 7]);
+    node.move_child(0, 1);
+    assert_eq!(
+        drain_semantics_layout_changes(),
+        vec![4],
+        "the children changed"
+    );
+}
+
 #[test]
 fn cloning_cache_handles_from_the_same_cache_keeps_the_handle() {
     let cache = LayoutNodeCacheHandles::default();

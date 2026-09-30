@@ -1183,11 +1183,11 @@ impl WebAccessibilityBridge {
         document: &Document,
         shell: &mut AppShell<WgpuRenderer>,
     ) -> Result<(), JsValue> {
-        let elements = accessibility::snapshot(shell, self.previous.elements.len());
+        let elements = accessibility::snapshot(shell, &mut self.previous);
         self.speak(&elements);
-        if elements == self.previous.elements && !self.dirty {
-            return self.sync_password(shell, &elements);
-        }
+        let Some(elements) = self.previous.changed(elements, self.dirty) else {
+            return self.sync_password(shell, &self.previous.elements);
+        };
         let opened_dialog = accessibility::opened_dialog(&self.previous.elements, &elements);
         let held = reader_focus(document).filter(|_| opened_dialog.is_none());
         let app_focus_before = self.focused_element;
@@ -1200,9 +1200,12 @@ impl WebAccessibilityBridge {
             scale_y: canvas_rect.height() / viewport.1.max(1.0) as f64,
         };
         let mut next_snapshot = std::mem::take(&mut self.previous);
-        if let Err(error) = next_snapshot.update(elements) {
-            self.previous = next_snapshot;
-            return Err(JsValue::from_str(&error.to_string()));
+        match next_snapshot.update(elements) {
+            Ok(replaced) => next_snapshot.recycle(replaced.elements),
+            Err(error) => {
+                self.previous = next_snapshot;
+                return Err(JsValue::from_str(&error.to_string()));
+            }
         }
         let mut result = (|| {
             self.reconcile(document, &next_snapshot, &placement)?;

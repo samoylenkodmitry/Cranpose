@@ -30,6 +30,7 @@ pub mod snapshot_state_observer;
 pub mod snapshot_v2;
 mod snapshot_weak_set;
 pub mod source_trace;
+mod stable_index;
 mod state;
 #[doc(hidden)]
 pub use source_trace::__source_scope;
@@ -633,6 +634,7 @@ impl Hash for LocalKey {
 }
 
 thread_local! {
+    static DROPPED_RECOMPOSE_SCOPES: Cell<u64> = const { Cell::new(0) };
     #[cfg(debug_assertions)]
     static DEBUG_SCOPE_LABELS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
     #[cfg(debug_assertions)]
@@ -714,6 +716,7 @@ impl RecomposeScopeInner {
 
 impl Drop for RecomposeScopeInner {
     fn drop(&mut self) {
+        let _ = DROPPED_RECOMPOSE_SCOPES.try_with(|count| count.set(count.get().wrapping_add(1)));
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
         let subscriptions = std::mem::take(self.state_subscriptions.get_mut());
@@ -1597,8 +1600,9 @@ pub trait Node: Any {
     }
     /// Mark this node as needing semantics recomputation.
     fn mark_needs_semantics(&self) {}
-    /// Mark that a node below this one needs semantics recomputation, while
-    /// this node's own semantics are unchanged.
+    /// Mark that the semantics tree has to read this node again while its
+    /// own semantics are unchanged: a node below it changed its semantics,
+    /// or its own placement or children changed.
     fn mark_descendant_needs_semantics(&self) {
         self.mark_needs_semantics();
     }
@@ -3194,8 +3198,7 @@ pub struct MemoryApplier {
     nodes: Vec<Option<Box<dyn Node>>>,
     physical_stable_ids: Vec<u32>,
     physical_warm_recycled_origins: Vec<bool>,
-    stable_to_physical: HashMap<NodeId, usize>,
-    stable_generations: HashMap<NodeId, u32>,
+    stable_index: stable_index::StableIndex,
     free_ids: BinaryHeap<Reverse<usize>>,
     high_id_nodes: HashMap<NodeId, Box<dyn Node>>,
     high_id_warm_recycled_origins: HashMap<NodeId, bool>,
@@ -3302,32 +3305,12 @@ impl MemoryApplier {
         }
     }
 
-    fn ensure_stable_index_capacity(&mut self) {
-        let len = self
-            .stable_to_physical
-            .len()
-            .max(self.stable_generations.len());
-        if len < self.stable_to_physical.capacity() && len < self.stable_generations.capacity() {
-            return;
-        }
-
-        let target = Self::next_dense_node_target_len(len);
-        let additional = target.saturating_sub(len);
-        if self.stable_to_physical.capacity() < target {
-            self.stable_to_physical.reserve(additional);
-        }
-        if self.stable_generations.capacity() < target {
-            self.stable_generations.reserve(additional);
-        }
-    }
-
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
             physical_stable_ids: Vec::new(),
             physical_warm_recycled_origins: Vec::new(),
-            stable_to_physical: HashMap::default(),
-            stable_generations: HashMap::default(),
+            stable_index: stable_index::StableIndex::default(),
             free_ids: BinaryHeap::new(),
             high_id_nodes: HashMap::default(),
             high_id_warm_recycled_origins: HashMap::default(),
@@ -3511,10 +3494,10 @@ impl MemoryApplier {
             nodes_cap: self.nodes.len(),
             physical_stable_ids_len: self.physical_stable_ids.len(),
             physical_stable_ids_cap: self.physical_stable_ids.capacity(),
-            stable_to_physical_len: self.stable_to_physical.len(),
-            stable_to_physical_cap: self.stable_to_physical.capacity(),
-            stable_generations_len: self.stable_generations.len(),
-            stable_generations_cap: self.stable_generations.capacity(),
+            stable_to_physical_len: self.stable_index.live(),
+            stable_to_physical_cap: self.stable_index.capacity(),
+            stable_generations_len: self.stable_index.occupied(),
+            stable_generations_cap: self.stable_index.capacity(),
             free_ids_len: self.free_ids.len(),
             free_ids_cap: self.free_ids.capacity(),
             high_id_nodes_len: self.high_id_nodes.len(),
@@ -3841,46 +3824,21 @@ impl MemoryApplier {
     }
 
     fn prune_stable_generations(&mut self) {
-        let retained_len = self.stable_to_physical.len() + self.total_recycled_node_count();
-        if retained_len == self.stable_generations.len() {
+        let retained_len = self.stable_index.live() + self.total_recycled_node_count();
+        if retained_len == self.stable_index.occupied() {
             return;
         }
 
-        let mut retained = HashMap::default();
-        retained.reserve(retained_len);
-        for stable_id in self.stable_to_physical.keys().copied() {
-            if let Some(generation) = self.stable_generations.get(&stable_id).copied() {
-                retained.insert(stable_id, generation);
-            }
-        }
-        for stable_id in self
-            .recycled_nodes
-            .values()
-            .flat_map(|nodes| nodes.iter().map(RecycledNode::stable_id))
-        {
-            if let Some(generation) = self.stable_generations.get(&stable_id).copied() {
-                retained.insert(stable_id, generation);
-            }
-        }
-        for stable_id in self
-            .returning_recycled_nodes
-            .values()
-            .flat_map(|nodes| nodes.iter().map(RecycledNode::stable_id))
-        {
-            if let Some(generation) = self.stable_generations.get(&stable_id).copied() {
-                retained.insert(stable_id, generation);
-            }
-        }
-        for stable_id in self
-            .cold_recycled_nodes
-            .values()
-            .flat_map(|nodes| nodes.iter().map(RecycledNode::stable_id))
-        {
-            if let Some(generation) = self.stable_generations.get(&stable_id).copied() {
-                retained.insert(stable_id, generation);
-            }
-        }
-        self.stable_generations = retained;
+        let recycled: HashSet<NodeId> = [
+            &self.recycled_nodes,
+            &self.returning_recycled_nodes,
+            &self.cold_recycled_nodes,
+        ]
+        .into_iter()
+        .flat_map(|pools| pools.values().flatten().map(RecycledNode::stable_id))
+        .collect();
+        self.stable_index
+            .retain_retired(|stable_id| recycled.contains(&stable_id));
     }
 
     pub fn dump_tree(&self, root: Option<NodeId>) -> String {
@@ -3916,7 +3874,7 @@ impl MemoryApplier {
     }
 
     fn resolve_node_index(&self, id: NodeId) -> Option<usize> {
-        self.stable_to_physical.get(&id).copied()
+        self.stable_index.slot(id)
     }
 
     fn contains_node_id(&self, id: NodeId) -> bool {
@@ -3952,10 +3910,8 @@ impl MemoryApplier {
         };
 
         self.next_stable_id = self.next_stable_id.max(stable_id.saturating_add(1));
-        self.ensure_stable_index_capacity();
-        self.stable_generations.entry(stable_id).or_insert(0);
         self.physical_stable_ids[physical_id] = Self::pack_stable_id(stable_id);
-        self.stable_to_physical.insert(stable_id, physical_id);
+        self.stable_index.set_slot(stable_id, physical_id);
     }
 
     fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
@@ -4034,12 +3990,7 @@ impl MemoryApplier {
             );
         }
         self.physical_stable_ids[physical_id] = Self::INVALID_STABLE_ID;
-        self.stable_to_physical.remove(&node_id);
-        if let Some(generation) = self.stable_generations.get_mut(&node_id) {
-            *generation = generation.wrapping_add(1);
-        } else {
-            self.stable_generations.insert(node_id, 1);
-        }
+        self.stable_index.release(node_id);
         self.free_ids.push(Reverse(physical_id));
         Ok(())
     }
@@ -4108,9 +4059,6 @@ impl Applier for MemoryApplier {
             return stable_id;
         }
 
-        self.ensure_stable_index_capacity();
-        self.stable_generations.insert(stable_id, 0);
-
         let physical_id = if let Some(Reverse(id)) = self.free_ids.pop() {
             debug_assert!(self.nodes[id].is_none(), "freelist entry {id} is not None");
             self.nodes[id] = Some(node);
@@ -4126,16 +4074,15 @@ impl Applier for MemoryApplier {
             self.physical_warm_recycled_origins.push(false);
             id
         };
-        self.stable_to_physical.insert(stable_id, physical_id);
+        self.stable_index.insert_fresh(stable_id, physical_id);
         stable_id
     }
 
     fn node_generation(&self, id: NodeId) -> u32 {
-        self.high_id_generations
-            .get(&id)
-            .copied()
-            .or_else(|| self.stable_generations.get(&id).copied())
-            .unwrap_or(0)
+        if id >= Self::HIGH_ID_THRESHOLD {
+            return self.high_id_generations.get(&id).copied().unwrap_or(0);
+        }
+        self.stable_index.generation(id)
     }
 
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
@@ -4194,8 +4141,6 @@ impl Applier for MemoryApplier {
         let mut packed_nodes = Vec::with_capacity(live_count);
         let mut packed_physical_stable_ids = Vec::with_capacity(live_count);
         let mut packed_warm_recycled_origins = Vec::with_capacity(live_count);
-        let mut stable_to_physical = HashMap::default();
-        stable_to_physical.reserve(live_count);
 
         for physical_id in 0..self.nodes.len() {
             let Some(mut node) = self.nodes[physical_id].take() else {
@@ -4217,14 +4162,19 @@ impl Applier for MemoryApplier {
             packed_nodes.push(Some(node));
             packed_physical_stable_ids.push(Self::pack_stable_id(stable_id));
             packed_warm_recycled_origins.push(self.physical_warm_recycled_origins[physical_id]);
-            stable_to_physical.insert(stable_id, packed_nodes.len() - 1);
+            self.stable_index
+                .set_slot(stable_id, packed_nodes.len() - 1);
         }
 
         self.nodes = packed_nodes;
         self.physical_stable_ids = packed_physical_stable_ids;
         self.physical_warm_recycled_origins = packed_warm_recycled_origins;
         self.free_ids = BinaryHeap::new();
-        self.stable_to_physical = stable_to_physical;
+        debug_assert_eq!(
+            self.stable_index.live(),
+            live_count,
+            "every live node keeps one indexed slot through compaction",
+        );
         self.prune_stable_generations();
     }
 
