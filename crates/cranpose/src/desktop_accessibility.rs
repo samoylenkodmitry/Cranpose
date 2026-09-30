@@ -181,17 +181,12 @@ impl DesktopAccessibilityBridge {
         }
         let mut changed = std::mem::take(&mut self.geometry_changed) || tree_owed;
         let elements = if tree_owed || self.policy.try_begin_publish(Instant::now()) {
-            accessibility::snapshot_if_changed(
-                shell,
-                &mut self.seen_revision,
-                self.previous.elements.len(),
-            )
+            accessibility::snapshot_if_changed(shell, &mut self.seen_revision, &mut self.previous)
         } else {
             None
         };
         let mut replaced = None;
-        if let Some(elements) = elements
-            && elements != self.previous.elements
+        if let Some(elements) = elements.and_then(|elements| self.previous.changed(elements, false))
         {
             announcements.extend(accessibility::pane_title_announcements(
                 &self.previous.elements,
@@ -227,6 +222,9 @@ impl DesktopAccessibilityBridge {
             self.scale_factor,
             &self.window_title,
         );
+        if let Some(replaced) = replaced {
+            self.previous.recycle(replaced.elements);
+        }
         self.adapter.update_if_active(|| update);
     }
 

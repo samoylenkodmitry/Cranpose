@@ -192,3 +192,40 @@ fn an_update_hands_back_the_snapshot_it_replaced() {
     );
     assert_eq!(snapshot.ids[1], first[0]);
 }
+
+#[test]
+fn a_snapshot_keeps_what_it_no_longer_holds_for_the_next_projection() {
+    let mut snapshot = AccessibilitySnapshot::default();
+    snapshot
+        .update(vec![element_with(1, None), element_with(2, None)])
+        .expect("first controls");
+    let room = snapshot.take_spare();
+    assert!(
+        room.is_empty() && room.capacity() >= 2,
+        "room for the controls it holds"
+    );
+
+    let replaced = snapshot
+        .update(vec![element_with(3, None)])
+        .expect("next controls");
+    let buffer = replaced.elements.as_ptr();
+    snapshot.recycle(replaced.elements);
+    let spare = snapshot.take_spare();
+    assert_eq!(spare.as_ptr(), buffer, "the replaced elements come back");
+    assert_eq!(spare.len(), 2);
+
+    let same = snapshot.elements.clone();
+    let same_buffer = same.as_ptr();
+    assert_eq!(
+        snapshot.changed(same, false),
+        None,
+        "nothing new to publish"
+    );
+    let kept = snapshot.take_spare();
+    assert_eq!(kept.as_ptr(), same_buffer);
+    assert!(snapshot.changed(snapshot.elements.clone(), true).is_some());
+    assert_eq!(
+        snapshot.changed(vec![element_with(4, None)], false),
+        Some(vec![element_with(4, None)])
+    );
+}

@@ -49,6 +49,7 @@ pub struct AppContext {
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
     modal: crate::modal::ModalState,
     modal_nodes: crate::modal_nodes::ModalNodes,
+    semantics_layout: crate::semantics_layout_log::SemanticsLayoutLog,
     hosted_popups: crate::widgets::popup::HostedPopupRegistries,
     semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState,
     cursor_animation: crate::cursor_animation::CursorAnimationState,
@@ -222,6 +223,7 @@ impl AppContext {
             focus_dispatch: crate::focus_dispatch::FocusInvalidationState::new(),
             modal: crate::modal::ModalState::new(),
             modal_nodes: crate::modal_nodes::ModalNodes::default(),
+            semantics_layout: crate::semantics_layout_log::SemanticsLayoutLog::default(),
             hosted_popups: crate::widgets::popup::HostedPopupRegistries::default(),
             semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState::new(),
             cursor_animation: crate::cursor_animation::CursorAnimationState::new(),
@@ -571,6 +573,12 @@ pub(crate) fn with_current_modal_nodes<R>(
     f: impl FnOnce(&crate::modal_nodes::ModalNodes) -> R,
 ) -> Option<R> {
     current_app_context().map(|context| f(&context.modal_nodes))
+}
+
+pub(crate) fn with_current_semantics_layout_log<R>(
+    f: impl FnOnce(&crate::semantics_layout_log::SemanticsLayoutLog) -> R,
+) -> Option<R> {
+    current_app_context().map(|context| f(&context.semantics_layout))
 }
 
 pub(crate) fn with_hosted_popup_registries<R>(

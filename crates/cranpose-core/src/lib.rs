@@ -1597,8 +1597,9 @@ pub trait Node: Any {
     }
     /// Mark this node as needing semantics recomputation.
     fn mark_needs_semantics(&self) {}
-    /// Mark that a node below this one needs semantics recomputation, while
-    /// this node's own semantics are unchanged.
+    /// Mark that the semantics tree has to read this node again while its
+    /// own semantics are unchanged: a node below it changed its semantics,
+    /// or its own placement or children changed.
     fn mark_descendant_needs_semantics(&self) {
         self.mark_needs_semantics();
     }

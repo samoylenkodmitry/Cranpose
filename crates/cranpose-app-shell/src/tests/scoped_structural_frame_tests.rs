@@ -123,16 +123,16 @@ impl MeasurePolicy for PeekPolicy {
         100.0
     }
 
-    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
-        100.0
+    fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
+        self.min_intrinsic_width(measurables, height)
     }
 
     fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
         40.0
     }
 
-    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
-        40.0
+    fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
+        self.min_intrinsic_height(measurables, width)
     }
 }
 
