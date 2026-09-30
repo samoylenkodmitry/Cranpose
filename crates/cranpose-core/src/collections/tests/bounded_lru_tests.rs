@@ -315,6 +315,48 @@ fn replacing_an_equal_key_preserves_the_stored_owner() {
 #[derive(Debug, PartialEq, Eq)]
 struct CollidingKey(u32);
 
+struct HashCountedKey {
+    value: u32,
+    hashes: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl PartialEq for HashCountedKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
+impl Eq for HashCountedKey {}
+
+impl std::hash::Hash for HashCountedKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.hashes.set(self.hashes.get() + 1);
+        state.write_u32(self.value);
+    }
+}
+
+#[test]
+fn growth_and_eviction_reuse_the_stored_hashes() {
+    let hashes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut cache = cache(256);
+    for value in 0..512 {
+        cache.put(
+            HashCountedKey {
+                value,
+                hashes: std::rc::Rc::clone(&hashes),
+            },
+            value,
+        );
+    }
+    assert_eq!(hashes.get(), 512, "each incoming key is hashed once");
+    while cache.pop_lru().is_some() {}
+    assert_eq!(
+        hashes.get(),
+        512,
+        "eviction does not hash stored keys again"
+    );
+}
+
 impl std::hash::Hash for CollidingKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write_u8(0);

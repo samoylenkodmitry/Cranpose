@@ -8,8 +8,13 @@ use hashbrown::HashTable;
 
 use crate::collections::map::RandomState;
 
-struct CacheSlot<K, V> {
+struct CacheIndexEntry<K> {
     key: K,
+    slot: usize,
+}
+
+struct CacheSlot<V> {
+    hash: u64,
     value: V,
     newer: Option<usize>,
     older: Option<usize>,
@@ -28,17 +33,17 @@ struct CacheSlot<K, V> {
 /// every glyph of every frame, and every one of those inserts was walking the
 /// whole table to decide what to drop.
 ///
-/// Each key lives in its slot. The hash index holds slot numbers and borrows
-/// their keys for comparisons and rehashing, keeping large keys out of the
-/// index without raw pointers or a second owner.
+/// Each key lives in the hash index, so a hit compares keys without visiting
+/// the recency slots. Each slot keeps the key's hash to find its index entry
+/// on eviction, without holding a second copy of the key.
 ///
 /// The index and slots grow with the entries rather than reserving the bound:
 /// most caches of a process never come near it, and a table sized for
 /// thousands of entries each is megabytes a small screen never touches.
 pub struct BoundedLruCache<K, V> {
-    index: HashTable<usize>,
+    index: HashTable<CacheIndexEntry<K>>,
     hash_builder: RandomState,
-    slots: Vec<Option<CacheSlot<K, V>>>,
+    slots: Vec<Option<CacheSlot<V>>>,
     free: Vec<usize>,
     newest: Option<usize>,
     oldest: Option<usize>,
@@ -136,7 +141,8 @@ where
     /// and the incoming key is returned with the previous value.
     pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
         let hash = self.hash_builder.hash_one(&key);
-        if let Some(&slot) = self.index.find(hash, |&slot| self.slot(slot).key == key) {
+        if let Some(entry) = self.index.find(hash, |entry| entry.key == key) {
+            let slot = entry.slot;
             self.promote(slot);
             let old_value = std::mem::replace(&mut self.slot_mut(slot).value, value);
             return Some((key, old_value));
@@ -148,13 +154,14 @@ where
             None
         };
 
-        let slot = self.claim_slot(key, value);
-        self.index.insert_unique(hash, slot, |&slot| {
-            let entry = self.slots[slot]
-                .as_ref()
-                .expect("an indexed cache slot is always occupied");
-            self.hash_builder.hash_one(&entry.key)
-        });
+        let slot = self.claim_slot(hash, value);
+        self.index
+            .insert_unique(hash, CacheIndexEntry { key, slot }, |entry| {
+                self.slots[entry.slot]
+                    .as_ref()
+                    .expect("an indexed cache slot is always occupied")
+                    .hash
+            });
         self.link_newest(slot);
         evicted
     }
@@ -166,35 +173,35 @@ where
 
     /// The least recently used entry, without touching its recency.
     pub fn peek_lru(&self) -> Option<(&K, &V)> {
-        let entry = self.slot(self.oldest?);
-        Some((&entry.key, &entry.value))
+        let slot = self.oldest?;
+        let entry = self.slot(slot);
+        Some((self.key_for_slot(slot, entry.hash), &entry.value))
     }
 
     /// Removes and returns the least recently used entry.
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
         let slot = self.oldest?;
-        let hash = self.hash_builder.hash_one(&self.slot(slot).key);
-        self.index
-            .find_entry(hash, |&index| index == slot)
+        let hash = self.slot(slot).hash;
+        let (indexed, _) = self
+            .index
+            .find_entry(hash, |entry| entry.slot == slot)
+            .ok()
             .expect("a linked cache slot is always indexed")
             .remove();
         self.unlink(slot);
         let entry = self.release_slot(slot);
-        Some((entry.key, entry.value))
+        Some((indexed.key, entry.value))
     }
 
     /// Removes the entry under `key` and returns its value.
     pub fn pop(&mut self, key: &K) -> Option<V> {
         let hash = self.hash_builder.hash_one(key);
-        let (slot, _) = self
+        let (entry, _) = self
             .index
-            .find_entry(hash, |&slot| {
-                self.slots[slot]
-                    .as_ref()
-                    .is_some_and(|entry| &entry.key == key)
-            })
+            .find_entry(hash, |entry| &entry.key == key)
             .ok()?
             .remove();
+        let slot = entry.slot;
         self.unlink(slot);
         Some(self.release_slot(slot).value)
     }
@@ -203,9 +210,10 @@ where
     pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
         let mut next = self.newest;
         std::iter::from_fn(move || {
-            let entry = self.slot(next?);
+            let slot = next?;
+            let entry = self.slot(slot);
             next = entry.older;
-            Some((&entry.key, &entry.value))
+            Some((self.key_for_slot(slot, entry.hash), &entry.value))
         })
     }
 
@@ -215,19 +223,27 @@ where
         Q: Hash + Eq + ?Sized,
     {
         self.index
-            .find(self.hash_builder.hash_one(key), |&slot| {
-                self.slot(slot).key.borrow() == key
+            .find(self.hash_builder.hash_one(key), |entry| {
+                entry.key.borrow() == key
             })
-            .copied()
+            .map(|entry| entry.slot)
     }
 
-    fn slot(&self, slot: usize) -> &CacheSlot<K, V> {
+    fn key_for_slot(&self, slot: usize, hash: u64) -> &K {
+        &self
+            .index
+            .find(hash, |entry| entry.slot == slot)
+            .expect("a linked cache slot is always indexed")
+            .key
+    }
+
+    fn slot(&self, slot: usize) -> &CacheSlot<V> {
         self.slots[slot]
             .as_ref()
             .expect("a linked cache slot is always occupied")
     }
 
-    fn slot_mut(&mut self, slot: usize) -> &mut CacheSlot<K, V> {
+    fn slot_mut(&mut self, slot: usize) -> &mut CacheSlot<V> {
         self.slots[slot]
             .as_mut()
             .expect("a linked cache slot is always occupied")
@@ -272,9 +288,9 @@ where
         }
     }
 
-    fn claim_slot(&mut self, key: K, value: V) -> usize {
+    fn claim_slot(&mut self, hash: u64, value: V) -> usize {
         let entry = CacheSlot {
-            key,
+            hash,
             value,
             newer: None,
             older: None,
@@ -291,7 +307,7 @@ where
         }
     }
 
-    fn release_slot(&mut self, slot: usize) -> CacheSlot<K, V> {
+    fn release_slot(&mut self, slot: usize) -> CacheSlot<V> {
         let entry = self.slots[slot]
             .take()
             .expect("a slot being released is always occupied");
