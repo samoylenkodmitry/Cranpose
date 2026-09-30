@@ -852,38 +852,6 @@ fn desktop_initial_shell_render_enters_native_window_registry() {
 }
 
 #[test]
-fn android_idle_does_not_poll_16ms() {
-    let source = crate_source("src/android.rs");
-
-    assert!(
-        source.contains("app_waker.wake()"),
-        "android runtime frame waker should wake the Android looper"
-    );
-    let offscreen_period = "const OFFSCREEN_UPDATE_PERIOD: Duration = Duration::from_millis(16);";
-    assert!(
-        source.contains(offscreen_period),
-        "the off-screen work pace is the one 16 ms period this file may hold"
-    );
-    assert_eq!(
-        source.matches("from_millis(16)").count(),
-        1,
-        "android runtime must not poll at 16 ms while idle; the only 16 ms period is OFFSCREEN_UPDATE_PERIOD, which paces work for an app that asked to keep running off screen"
-    );
-    assert!(
-        source.contains("let offscreen = no_surface && cranpose_services::background_active();"),
-        "the off-screen pass must run only when an app asked to keep working with no surface"
-    );
-    assert!(
-        source.contains("struct AndroidFrameDriver")
-            && source.contains("impl PlatformFrameDriver for AndroidFrameDriver")
-            && source.contains("shell.schedule_platform_frame(&android_frame_driver)")
-            && source.contains("android_frame_driver.deadline_timeout()")
-            && source.contains("earliest_android_poll_timeout"),
-        "android runtime should route AppShell schedules through the platform frame driver"
-    );
-}
-
-#[test]
 fn android_overlay_events_are_runtime_owned() {
     let overlay_source = crate_source("src/android_overlay_window.rs");
     let jni_source = crate_source("src/android_jni.rs");

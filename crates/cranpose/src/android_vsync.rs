@@ -17,6 +17,8 @@ static WAKER: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
 pub(crate) fn install_waker(waker: impl Fn() + Send + Sync + 'static) {
     CALLBACK_POSTED.store(false, Ordering::Release);
     UNAVAILABLE.store(false, Ordering::Release);
+    LAST_VSYNC_NS.store(0, Ordering::Relaxed);
+    VSYNC_PERIOD_NS.store(0, Ordering::Relaxed);
     *WAKER.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(waker));
 }
 

@@ -621,6 +621,9 @@ struct AndroidFrameDriver {
     app_waker: android_activity::AndroidAppWaker,
     loop_thread: std::thread::ThreadId,
     next_deadline: Cell<Option<web_time::Instant>>,
+    clock_anchor: (i64, web_time::Instant),
+    last_frame_timestamp: Cell<Option<i64>>,
+    vsync_available: Cell<bool>,
     displayed_tx: std::sync::mpsc::Sender<DisplayedFrame>,
     displayed_rx: std::sync::mpsc::Receiver<DisplayedFrame>,
 }
@@ -633,6 +636,12 @@ impl AndroidFrameDriver {
             app_waker,
             loop_thread: std::thread::current().id(),
             next_deadline: Cell::new(None),
+            clock_anchor: (
+                crate::android_frame_telemetry::monotonic_nanos(),
+                web_time::Instant::now(),
+            ),
+            last_frame_timestamp: Cell::new(None),
+            vsync_available: Cell::new(true),
             displayed_tx,
             displayed_rx,
         }
@@ -700,6 +709,60 @@ impl AndroidFrameDriver {
     fn deadline_timeout(&self) -> Option<Duration> {
         self.next_deadline.get().map(duration_until_frame_deadline)
     }
+
+    fn request_vsync(&self) -> bool {
+        let available = crate::android_vsync::request_wake_at_next_vsync();
+        self.vsync_available.set(available);
+        available
+    }
+
+    fn schedule_frame(&self, shell: &AppShell<WgpuRenderer>) {
+        let schedule = shell.schedule_platform_frame(self);
+        if schedule.needs_frame {
+            self.request_vsync();
+        } else if shell.needs_update_without_frame() {
+            self.clear_wake();
+            self.request_frame();
+        }
+    }
+
+    fn fallback_frame_timestamp(&self, now_ns: i64) -> i64 {
+        let period = vsync_period_ns();
+        let elapsed = now_ns.saturating_sub(self.clock_anchor.0).max(0);
+        self.clock_anchor
+            .0
+            .saturating_add(elapsed / period * period)
+    }
+
+    fn dispatch_vsync(&self, shell: &mut AppShell<WgpuRenderer>) {
+        shell.run_pending_tasks();
+        let timestamp = if self.vsync_available.get() {
+            crate::android_vsync::last_vsync_ns()
+        } else {
+            self.fallback_frame_timestamp(crate::android_frame_telemetry::monotonic_nanos())
+        };
+        if timestamp <= 0
+            || self
+                .last_frame_timestamp
+                .get()
+                .is_some_and(|last| timestamp <= last)
+        {
+            return;
+        }
+        let Some(delta) = timestamp.checked_sub(self.clock_anchor.0) else {
+            return;
+        };
+        let duration = Duration::from_nanos(delta.unsigned_abs());
+        let instant = if delta >= 0 {
+            self.clock_anchor.1.checked_add(duration)
+        } else {
+            self.clock_anchor.1.checked_sub(duration)
+        };
+        if let Some(instant) = instant {
+            self.last_frame_timestamp.set(Some(timestamp));
+            shell.dispatch_frame_at(instant);
+        }
+    }
 }
 
 impl PlatformFrameDriver for AndroidFrameDriver {
@@ -741,7 +804,7 @@ fn update_offscreen(
         && shell.needs_update()
     {
         android_host_window::with_android_host_window_registry(host_window_registry, || {
-            shell.update()
+            shell.update_without_frame()
         });
     }
     pending_ui.then(|| web_time::Instant::now() + OFFSCREEN_UPDATE_PERIOD)
@@ -753,13 +816,12 @@ fn start_pending_frame(
     pacer: &mut FramePacer,
 ) -> (bool, bool) {
     let on_screen = resources.has_surface();
-    if on_screen {
-        shell.run_pending_tasks();
-    }
     if resources.surface_dirty || shell.needs_redraw() {
         pacer.note_visual_work();
     }
-    let frame_due = on_screen && shell.needs_update() && shell.renderer().has_frame_credit();
+    let frame_due = on_screen
+        && (resources.surface_dirty || shell.needs_update_without_frame())
+        && shell.renderer().has_frame_credit();
     let frame_starts = frame_due
         && pacer.begin_frame(
             crate::android_frame_telemetry::monotonic_nanos(),
@@ -771,6 +833,7 @@ fn start_pending_frame(
 
 fn wait_for_pending_frame(
     pacer: &FramePacer,
+    driver: &AndroidFrameDriver,
     mut shell: Option<&mut AppShell<WgpuRenderer>>,
     idle_timeout: Option<Duration>,
 ) -> Option<Duration> {
@@ -779,14 +842,35 @@ fn wait_for_pending_frame(
         crate::android_vsync::last_vsync_ns(),
         vsync_period_ns(),
     );
+    let has_update = shell
+        .as_ref()
+        .is_some_and(|shell| shell.needs_update_without_frame());
     let starts_now = slot_open
+        && has_update
         && shell
             .as_mut()
             .is_some_and(|shell| shell.renderer().has_frame_credit());
-    if starts_now || !crate::android_vsync::request_wake_at_next_vsync() {
+    if starts_now {
         return Some(Duration::ZERO);
     }
-    let wait = lead_wake_timeout(pacer).or(idle_timeout);
+    let fallback_timeout = if driver.request_vsync() {
+        None
+    } else {
+        let now = crate::android_frame_telemetry::monotonic_nanos();
+        Some(duration_until_ns(
+            now,
+            driver
+                .fallback_frame_timestamp(now)
+                .saturating_add(vsync_period_ns()),
+        ))
+    };
+    let lead_timeout = (has_update && !slot_open)
+        .then(|| lead_wake_timeout(pacer))
+        .flatten();
+    let wait = earliest_android_poll_timeout(
+        earliest_android_poll_timeout(lead_timeout, idle_timeout),
+        fallback_timeout,
+    );
     match shell {
         Some(shell) => prefetch_while_waiting(shell, wait, slot_open),
         None => wait,
@@ -1543,7 +1627,7 @@ fn lead_wake_timeout(pacer: &FramePacer) -> Option<Duration> {
 }
 
 fn duration_until_ns(now_ns: i64, at_ns: i64) -> Duration {
-    Duration::from_nanos(u64::try_from(at_ns - now_ns).unwrap_or(0))
+    Duration::from_nanos(u64::try_from(at_ns.saturating_sub(now_ns)).unwrap_or(0))
 }
 
 fn android_frame_latency(requested: Option<&str>) -> u32 {
@@ -1967,7 +2051,7 @@ pub fn run(
             .is_none_or(|resources| !resources.has_surface());
         match app_shell.as_ref() {
             Some(shell) if !no_surface => {
-                shell.schedule_platform_frame(&android_frame_driver);
+                android_frame_driver.schedule_frame(shell);
             }
             _ => android_frame_driver.clear_wake(),
         }
@@ -2016,7 +2100,12 @@ pub fn run(
                 false => idle_timeout,
             }
         } else if android_frame_driver.frame_requested() || frame_waits_for_vsync {
-            wait_for_pending_frame(&frame_pacer, app_shell.as_mut(), idle_timeout)
+            wait_for_pending_frame(
+                &frame_pacer,
+                &android_frame_driver,
+                app_shell.as_mut(),
+                idle_timeout,
+            )
         } else {
             idle_timeout
         };
@@ -2520,11 +2609,7 @@ pub fn run(
             ime_session.sync_editor_state(shell.ime_editor_state());
         }
 
-        if android_frame_driver.take_frame_request()
-            && let Some(shell) = &mut app_shell
-        {
-            shell.mark_dirty();
-        }
+        android_frame_driver.take_frame_request();
 
         confirm_android_host_window_request(
             &mut pending_host_window_confirmation,
@@ -2562,6 +2647,15 @@ pub fn run(
         let mut frame_started_at: Option<web_time::Instant> = None;
         frame_waits_for_vsync = false;
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
+            frame_timings.work_start_ns = crate::android_frame_telemetry::monotonic_nanos();
+            if resources.has_surface() {
+                android_host_window::with_android_host_window_registry(
+                    &host_window_registry,
+                    || {
+                        android_frame_driver.dispatch_vsync(shell);
+                    },
+                );
+            }
             let (frame_starts, waits_for_vsync) =
                 start_pending_frame(resources, shell, &mut frame_pacer);
             frame_waits_for_vsync = waits_for_vsync;
@@ -2570,10 +2664,9 @@ pub fn run(
                 frame_timings.lead_ns =
                     frame_pacer.current_lead_ns(vsync_period_ns()) - frame_pacer.current_hold_ns();
                 frame_started_at = Some(web_time::Instant::now());
-                frame_timings.work_start_ns = crate::android_frame_telemetry::monotonic_nanos();
                 let update_result = android_host_window::with_android_host_window_registry(
                     &host_window_registry,
-                    || shell.update(),
+                    || shell.update_without_frame(),
                 );
                 frame_rate_boost.note_frame(update_result, Instant::now());
                 frame_timings.after_update_ns = frame_telemetry.now();
