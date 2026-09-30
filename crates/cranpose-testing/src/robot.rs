@@ -30,26 +30,6 @@ use cranpose_render_common::{RenderScene, Renderer, graph::RenderGraph, graph_sc
 use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Point, Rect, Size};
 
-/// How many `AppShell::update` turns a headless robot pump gives the shell
-/// before it treats the composition as wedged.
-///
-/// This budget is an iteration count rather than a wall clock on purpose, and
-/// it is the opposite call from the desktop robot's `wait_for_idle`. There the
-/// wait is on a compositor in another process, so loop turns say nothing about
-/// whether the frame is coming and only elapsed time can bound it. Here
-/// `AppShell::update` is synchronous work against an in-memory renderer --
-/// no compositor, no surface to acquire, nothing to block on -- so the number
-/// of turns a healthy app needs is a property of the app and is the same on
-/// every host. Timing it instead would hand a loaded machine fewer turns than
-/// a quiet one and decide headless results by host load, which is exactly the
-/// flakiness the desktop side had to remove.
-///
-/// The limit matches `ROOT_RENDER_REPLAY_LIMIT` and has room to spare: the
-/// loop condition is `AppShell::needs_redraw`, which reports stale pixels and
-/// renderer warm-up rather than pending composition work, and against the
-/// in-memory renderer one update clears it -- every call in the suite settles
-/// on the first turn. What the budget guards is a shell that stays dirty
-/// however many turns it is given.
 const HEADLESS_IDLE_UPDATE_LIMIT: u32 = 100;
 
 /// Main robot testing rule that provides programmatic control over a real app.
@@ -109,6 +89,8 @@ where
     }
 
     /// Pump the shell until it stops asking to be redrawn.
+    /// Each turn advances the deterministic frame clock by 1/60 second,
+    /// including animations that request their next redraw from a draw closure.
     ///
     /// The condition is `AppShell::needs_redraw` -- stale pixels and renderer
     /// warm-up. That is a weaker question than "has every pending composition,
@@ -123,7 +105,7 @@ where
     /// assertion read it next, which is the harder bug to find.
     pub fn wait_for_idle(&mut self) {
         for _ in 0..HEADLESS_IDLE_UPDATE_LIMIT {
-            self.shell.update();
+            self.advance_time(16_666_667);
             if !self.shell.needs_redraw() {
                 return;
             }

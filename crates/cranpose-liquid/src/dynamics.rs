@@ -18,7 +18,11 @@
 //! neutral on its own. Once travel, strain and swell are all within a
 //! fraction of a device pixel of rest, the integrator snaps them to exactly
 //! [`LiquidPose::default`] and stops producing new poses, so a settled lens
-//! costs nothing per frame.
+//! costs nothing per frame. Until then a pose changes with the clock alone,
+//! so each update that returns one away from rest asks for the next frame's
+//! re-record of the node being drawn
+//! ([`cranpose_ui::request_current_draw_redraw`]): a lens keeps relaxing
+//! after its input stops, and only for as long as it has to.
 
 use std::{cell::Cell, rc::Rc};
 
@@ -185,6 +189,10 @@ impl LiquidDynamics {
     }
 
     pub(crate) fn update_pointer(&self, pos: (f32, f32)) -> LiquidPose {
+        redraw_until_rest(self.integrate_pointer(pos))
+    }
+
+    fn integrate_pointer(&self, pos: (f32, f32)) -> LiquidPose {
         if self.pointer_pose_pending.replace(false) {
             self.last_pos.set(Some(pos));
             self.last_nanos.set(self.runtime.last_frame_time_nanos());
@@ -225,8 +233,14 @@ impl LiquidDynamics {
     }
 
     /// Advance with the lens ride position using the runtime's animation
-    /// clock. Multiple reads within one frame return the same pose.
+    /// clock. Multiple reads within one frame return the same pose. Read from
+    /// a draw closure: while the pose is away from rest it asks for that
+    /// node's re-record on the next frame.
     pub fn update(&self, pos: (f32, f32)) -> LiquidPose {
+        redraw_until_rest(self.integrate(pos))
+    }
+
+    fn integrate(&self, pos: (f32, f32)) -> LiquidPose {
         let Some(now) = self.runtime.last_frame_time_nanos() else {
             self.last_pos.set(Some(pos));
             return self.pose.get();
@@ -352,6 +366,13 @@ impl LiquidDynamics {
     pub fn pose(&self) -> LiquidPose {
         self.pose.get()
     }
+}
+
+fn redraw_until_rest(pose: LiquidPose) -> LiquidPose {
+    if pose.stretch != 1.0 || pose.bulge_amplitude != 0.0 || pose.speed != 0.0 {
+        cranpose_ui::request_current_draw_redraw();
+    }
+    pose
 }
 
 /// Remember one [`LiquidDynamics`] for the calling composition site.

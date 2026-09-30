@@ -1053,6 +1053,7 @@ dependencies = [
  "arboard",
  "cranpose-core",
  "cranpose-foundation",
+ "cranpose-liquid",
  "cranpose-macros",
  "cranpose-render-common",
  "cranpose-runtime-std",

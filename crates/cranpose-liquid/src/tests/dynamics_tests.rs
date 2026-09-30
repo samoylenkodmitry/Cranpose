@@ -307,3 +307,65 @@ fn reset_forgets_motion() {
     let pose = d.advance((500.0, 0.0), 1.0 / 60.0);
     assert!((pose.stretch - 1.0).abs() < 1e-4);
 }
+
+#[test]
+fn a_pose_away_from_rest_asks_for_the_next_frame_until_it_rests() {
+    const FRAME_NANOS: u64 = 16_666_667;
+    type UpdatePose = fn(&LiquidDynamics, (f32, f32)) -> LiquidPose;
+    let updates: [UpdatePose; 2] = [LiquidDynamics::update, LiquidDynamics::update_pointer];
+    for update in updates {
+        let app_context = cranpose_ui::AppContext::new();
+        let _scope = app_context.enter_scope();
+        let runtime =
+            cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
+        let clock = runtime.handle();
+        let d = LiquidDynamics::new(runtime.handle());
+        let mut now = 0;
+        let mut x = 0.0;
+        for _ in 0..20 {
+            now += FRAME_NANOS;
+            x += 12.0;
+            clock.drain_frame_callbacks(now);
+            update(&d, (x, 0.0));
+        }
+        assert!(
+            cranpose_ui::take_render_invalidation(),
+            "a travelling lens must ask for the next frame"
+        );
+
+        let mut rested_at = None;
+        for frame in 1..=240 {
+            now += FRAME_NANOS;
+            clock.drain_frame_callbacks(now);
+            let pose = update(&d, (x, 0.0));
+            let asked = cranpose_ui::take_render_invalidation();
+            if pose.stretch == 1.0 && pose.bulge_amplitude == 0.0 && pose.speed == 0.0 {
+                assert!(
+                    !asked,
+                    "the frame that reaches rest must not ask for another"
+                );
+                rested_at = Some(frame);
+                break;
+            }
+            assert!(
+                asked,
+                "frame {frame}: a lens still relaxing must ask for the next frame: {pose:?}"
+            );
+        }
+        let rested_at = rested_at.expect("a stopped lens must come to rest");
+        assert!(
+            rested_at > 5,
+            "the droplet should relax over several frames, not {rested_at}"
+        );
+
+        for _ in 0..3 {
+            now += FRAME_NANOS;
+            clock.drain_frame_callbacks(now);
+            update(&d, (x, 0.0));
+            assert!(
+                !cranpose_ui::take_render_invalidation(),
+                "a lens at rest must not ask for frames"
+            );
+        }
+    }
+}
