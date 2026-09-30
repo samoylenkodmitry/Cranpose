@@ -1,6 +1,24 @@
 use super::{DimensionConstraint, Modifier, inspector_metadata};
 use crate::modifier_nodes::FillElement;
 
+thread_local! {
+    static FILL_WIDTH: Modifier = Modifier::with_element(FillElement::width(1.0));
+    static FILL_HEIGHT: Modifier = Modifier::with_element(FillElement::height(1.0));
+    static FILL_SIZE: Modifier = Modifier::with_element(FillElement::size(1.0));
+}
+
+fn fill_modifier(
+    fraction: f32,
+    full: &'static std::thread::LocalKey<Modifier>,
+    element: fn(f32) -> FillElement,
+) -> Modifier {
+    if fraction == 1.0 {
+        full.with(Clone::clone)
+    } else {
+        Modifier::with_element(element(fraction))
+    }
+}
+
 impl Modifier {
     /// Have the content fill the maximum available width.
     ///
@@ -18,11 +36,10 @@ impl Modifier {
     /// Example: `Modifier::empty().fill_max_width_fraction(0.5)`
     pub fn fill_max_width_fraction(self, fraction: f32) -> Self {
         let clamped = fraction.clamp(0.0, 1.0);
-        let modifier = Self::with_element(FillElement::width(clamped)).with_inspector_metadata(
-            inspector_metadata("fillMaxWidth", move |info| {
+        let modifier = fill_modifier(clamped, &FILL_WIDTH, FillElement::width)
+            .with_inspector_metadata(inspector_metadata("fillMaxWidth", move |info| {
                 info.add_dimension("width", DimensionConstraint::Fraction(clamped));
-            }),
-        );
+            }));
         self.then(modifier)
     }
 
@@ -42,11 +59,10 @@ impl Modifier {
     /// Example: `Modifier::empty().fill_max_height_fraction(0.5)`
     pub fn fill_max_height_fraction(self, fraction: f32) -> Self {
         let clamped = fraction.clamp(0.0, 1.0);
-        let modifier = Self::with_element(FillElement::height(clamped)).with_inspector_metadata(
-            inspector_metadata("fillMaxHeight", move |info| {
+        let modifier = fill_modifier(clamped, &FILL_HEIGHT, FillElement::height)
+            .with_inspector_metadata(inspector_metadata("fillMaxHeight", move |info| {
                 info.add_dimension("height", DimensionConstraint::Fraction(clamped));
-            }),
-        );
+            }));
         self.then(modifier)
     }
 
@@ -66,12 +82,11 @@ impl Modifier {
     /// Example: `Modifier::empty().fill_max_size_fraction(0.8)`
     pub fn fill_max_size_fraction(self, fraction: f32) -> Self {
         let clamped = fraction.clamp(0.0, 1.0);
-        let modifier = Self::with_element(FillElement::size(clamped)).with_inspector_metadata(
-            inspector_metadata("fillMaxSize", move |info| {
+        let modifier = fill_modifier(clamped, &FILL_SIZE, FillElement::size)
+            .with_inspector_metadata(inspector_metadata("fillMaxSize", move |info| {
                 info.add_dimension("width", DimensionConstraint::Fraction(clamped));
                 info.add_dimension("height", DimensionConstraint::Fraction(clamped));
-            }),
-        );
+            }));
         self.then(modifier)
     }
 }
