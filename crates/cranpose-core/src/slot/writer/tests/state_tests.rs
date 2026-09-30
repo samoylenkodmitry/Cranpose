@@ -2,6 +2,37 @@ use super::*;
 use crate::slot::{GroupKeySeed, SlotInvariantError, SlotLifecycleCoordinator, SlotTable};
 
 #[test]
+fn ending_nested_groups_reuses_the_existing_frame_storage() {
+    let mut table = SlotTable::new();
+    let mut lifecycle = SlotLifecycleCoordinator::default();
+    let mut state = SlotWriteSessionState::default();
+    state.reset_for_pass(SlotPassMode::Compose);
+    {
+        let mut session = table.write_session(&mut lifecycle, &mut state);
+        for source in 0..32 {
+            let key = session.preview_group_key(GroupKeySeed::unkeyed(source));
+            let _ = session.begin_group(key, None, None);
+        }
+    }
+    let allocated_frames = state.group_stack.capacity();
+    {
+        let mut session = table.write_session(&mut lifecycle, &mut state);
+        for _ in 0..32 {
+            let _ = session.finish_group_body();
+            session.end_group();
+        }
+    }
+    assert!(state.group_stack.is_empty());
+    assert_eq!(
+        state.group_stack.capacity(),
+        allocated_frames,
+        "unwinding groups must not allocate a second frame buffer"
+    );
+    state.flush_payload_location_refreshes(&mut table);
+    assert_eq!(state.validate(&table), Ok(()));
+}
+
+#[test]
 fn removed_payloads_trigger_compaction_hint_at_threshold() {
     let mut state = SlotWriteSessionState::default();
 

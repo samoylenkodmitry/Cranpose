@@ -55,10 +55,7 @@ impl SlotWriteSession<'_> {
             log::error!(
                 "slot writer discarded stale value-slot group frame for anchor {group_anchor:?}"
             );
-            let Some(frame) = self.state.group_stack.pop() else {
-                return;
-            };
-            self.state.recycle_group_frame(frame);
+            self.state.pop_group_frame();
         }
     }
 

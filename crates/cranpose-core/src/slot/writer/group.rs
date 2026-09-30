@@ -81,10 +81,7 @@ impl SlotWriteSession<'_> {
             log::error!(
                 "slot writer discarded stale group frame before beginning a child for anchor {group_anchor:?}"
             );
-            let Some(frame) = self.state.group_stack.pop() else {
-                return;
-            };
-            self.state.recycle_group_frame(frame);
+            self.state.pop_group_frame();
         }
     }
 
@@ -146,9 +143,7 @@ impl SlotWriteSession<'_> {
             return started;
         }
 
-        while let Some(frame) = self.state.group_stack.pop() {
-            self.state.recycle_group_frame(frame);
-        }
+        while self.state.pop_group_frame().is_some() {}
         let root_insert_index = self.table.group_count();
         self.state.advance_parent_after_child(root_insert_index);
         let root_anchor = self
@@ -300,18 +295,15 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn end_group(&mut self) {
-        let Some(frame) = self.state.group_stack.pop() else {
+        let Some(group_anchor) = self.state.pop_group_frame() else {
             log::error!("slot writer end_group called with an empty group stack");
             return;
         };
-        let group_anchor = frame.group_anchor;
         let Some(group_index) = self.table.active_group_index(group_anchor) else {
             log::error!("slot writer end_group ignored stale group frame anchor {group_anchor:?}");
-            self.state.recycle_group_frame(frame);
             return;
         };
         let subtree_end = self.repaired_group_subtree_end(group_index, "group end cursor advance");
-        self.state.recycle_group_frame(frame);
         self.state.advance_parent_after_child(subtree_end);
     }
 

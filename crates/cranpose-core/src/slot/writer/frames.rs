@@ -9,6 +9,50 @@ pub(in crate::slot) struct RootFrame {
     pub(in crate::slot) sibling_index: Option<SiblingIndex>,
 }
 
+#[derive(Default)]
+pub(in crate::slot) struct GroupStack {
+    frames: Vec<GroupFrame>,
+    active_len: usize,
+}
+
+impl GroupStack {
+    pub(in crate::slot) fn push(&mut self) -> &mut GroupFrame {
+        if self.active_len == self.frames.len() {
+            self.frames.push(GroupFrame::default());
+        }
+        let frame = &mut self.frames[self.active_len];
+        self.active_len += 1;
+        frame
+    }
+
+    pub(in crate::slot) fn pop(&mut self) -> Option<AnchorId> {
+        self.active_len = self.active_len.checked_sub(1)?;
+        let frame = &mut self.frames[self.active_len];
+        let anchor = frame.group_anchor;
+        frame.reset(AnchorId::INVALID, 0, 0, 0);
+        Some(anchor)
+    }
+
+    #[cfg(test)]
+    pub(in crate::slot) fn capacity(&self) -> usize {
+        self.frames.capacity()
+    }
+}
+
+impl std::ops::Deref for GroupStack {
+    type Target = [GroupFrame];
+
+    fn deref(&self) -> &Self::Target {
+        &self.frames[..self.active_len]
+    }
+}
+
+impl std::ops::DerefMut for GroupStack {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.frames[..self.active_len]
+    }
+}
+
 pub(in crate::slot) struct GroupFrame {
     pub(in crate::slot) group_anchor: AnchorId,
     pub(in crate::slot) next_child_index: usize,
@@ -71,10 +115,6 @@ impl GroupFrame {
         self.fold_watermark = 0;
     }
 
-    pub(in crate::slot) fn reset_for_pool(&mut self) {
-        self.reset(AnchorId::INVALID, 0, 0, 0);
-    }
-
     pub(in crate::slot) fn mark_body_finished(&mut self) -> bool {
         if self.body_finished {
             return false;
@@ -102,3 +142,7 @@ impl GroupFrame {
         self.was_skipped = true;
     }
 }
+
+#[cfg(test)]
+#[path = "tests/frames_tests.rs"]
+mod tests;
