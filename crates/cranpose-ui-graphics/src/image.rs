@@ -23,11 +23,16 @@ pub enum ImageBitmapError {
 /// Immutable RGBA image data used by UI primitives and render backends.
 #[derive(Clone, Debug)]
 pub struct ImageBitmap {
+    data: Arc<ImageBitmapData>,
+}
+
+#[derive(Debug)]
+struct ImageBitmapData {
     width: u32,
     height: u32,
     id: u64,
     opaque: bool,
-    pixels: Arc<[u8]>,
+    pixels: Box<[u8]>,
 }
 
 /// Texture sampling mode for image primitives.
@@ -184,16 +189,25 @@ fn compose_color_matrices(first: [f32; 20], second: [f32; 20]) -> [f32; 20] {
 }
 
 impl ImageBitmap {
-    /// Creates a bitmap from tightly packed RGBA8 pixels.
+    /// Creates a bitmap by taking ownership of tightly packed RGBA8 pixels.
+    /// Any spare capacity in the pixel buffer is released.
     pub fn from_rgba8(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, ImageBitmapError> {
-        Self::from_rgba8_slice(width, height, &pixels)
+        Self::from_pixels(width, height, pixels)
     }
 
-    /// Creates a bitmap from tightly packed RGBA8 pixels.
+    /// Copies tightly packed RGBA8 pixels into a new bitmap.
     pub fn from_rgba8_slice(
         width: u32,
         height: u32,
         pixels: &[u8],
+    ) -> Result<Self, ImageBitmapError> {
+        Self::from_pixels(width, height, pixels)
+    }
+
+    fn from_pixels(
+        width: u32,
+        height: u32,
+        pixels: impl AsRef<[u8]> + Into<Box<[u8]>>,
     ) -> Result<Self, ImageBitmapError> {
         if width == 0 || height == 0 {
             return Err(ImageBitmapError::InvalidDimensions);
@@ -203,58 +217,61 @@ impl ImageBitmap {
             .and_then(|value| value.checked_mul(4))
             .ok_or(ImageBitmapError::DimensionsTooLarge)?;
 
-        if pixels.len() != expected {
+        let bytes = pixels.as_ref();
+        if bytes.len() != expected {
             return Err(ImageBitmapError::PixelDataLengthMismatch {
                 expected,
-                actual: pixels.len(),
+                actual: bytes.len(),
             });
         }
 
-        let id = bitmap_content_id(width, height, pixels);
-        let opaque = pixels
+        let id = bitmap_content_id(width, height, bytes);
+        let opaque = bytes
             .as_chunks::<4>()
             .0
             .iter()
             .all(|pixel| pixel[3] == u8::MAX);
         Ok(Self {
-            width,
-            height,
-            id,
-            opaque,
-            pixels: Arc::from(pixels),
+            data: Arc::new(ImageBitmapData {
+                width,
+                height,
+                id,
+                opaque,
+                pixels: pixels.into(),
+            }),
         })
     }
 
     /// Content-derived bitmap identity used by renderer caches.
     pub fn id(&self) -> u64 {
-        self.id
+        self.data.id
     }
 
     /// Width in pixels.
     pub fn width(&self) -> u32 {
-        self.width
+        self.data.width
     }
 
     /// Height in pixels.
     pub fn height(&self) -> u32 {
-        self.height
+        self.data.height
     }
 
     /// Returns the raw RGBA8 pixel data.
     pub fn pixels(&self) -> &[u8] {
-        &self.pixels
+        &self.data.pixels
     }
 
     /// Returns true when every source pixel has full alpha.
     pub fn is_opaque(&self) -> bool {
-        self.opaque
+        self.data.opaque
     }
 
     /// Returns intrinsic size in logical units.
     pub fn intrinsic_size(&self) -> Size {
         Size {
-            width: self.width as f32,
-            height: self.height as f32,
+            width: self.data.width as f32,
+            height: self.data.height as f32,
         }
     }
 }
