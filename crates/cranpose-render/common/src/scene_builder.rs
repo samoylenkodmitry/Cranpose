@@ -97,6 +97,7 @@ impl GraphUpdateReport {
 #[cfg(test)]
 thread_local! {
     static LOWERED_LAYER_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SNAPSHOT_NODE_READ_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
 fn note_layer_lowered() {
@@ -451,53 +452,62 @@ fn try_translate_scrolled_layer(
     let Some(node_id) = layer_identity(container) else {
         return translate_bail("no node id");
     };
-    let Some(data) = snapshot_node_data(applier, node_id) else {
+    let wrapped = container.wraps.is_some();
+    let mut inner_ancestors = ancestors;
+    if wrapped {
+        inner_ancestors.ancestor_hashed =
+            crate::graph_hash::layer_children_ancestor_hashed(container, ancestors.ancestor_hashed);
+    }
+    let content_layer = if wrapped {
+        let Some(inner) = container.children.iter_mut().find_map(|child| match child {
+            RenderNode::Layer(layer) if layer.node_id == Some(node_id) => Some(layer.as_mut()),
+            _ => None,
+        }) else {
+            return translate_bail("wrapped layer missing");
+        };
+        inner
+    } else {
+        &mut *container
+    };
+    if content_layer
+        .children
+        .iter()
+        .any(|child| !matches!(child, RenderNode::Layer(_)))
+    {
+        return translate_bail("container has own primitive children");
+    }
+    let Some(mut data) = snapshot_node_data(applier, node_id) else {
         return translate_bail("container snapshot read failed");
     };
-    if container.wraps.is_none() {
-        return translate_layer_from_data(
-            applier,
-            container,
-            dirty_nodes,
-            changed_nodes,
-            ancestors,
-            data,
-            false,
-        );
+    let placement = data.layout_state.position();
+    if data.window_root {
+        data.layout_state = data.layout_state.at_origin();
     }
     let outer_count = data.modifier_slices.outer_draw_command_count();
-    if outer_count == 0 {
+    if wrapped && outer_count == 0 {
         return translate_bail("outer draws removed");
     }
-    let size = data.layout_state.size();
-    let placement = data.layout_state.position();
-    let slices = Rc::clone(&data.modifier_slices);
-    let inner_ancestors = TranslateAncestorContext {
-        ancestor_hashed: crate::graph_hash::layer_children_ancestor_hashed(
-            container,
-            ancestors.ancestor_hashed,
-        ),
-        ..ancestors
-    };
-    let Some(inner) = container.children.iter_mut().find_map(|child| match child {
-        RenderNode::Layer(layer) if layer.node_id == Some(node_id) => Some(layer),
-        _ => None,
-    }) else {
-        return translate_bail("wrapped layer missing");
-    };
     if !translate_layer_from_data(
         applier,
-        inner,
+        content_layer,
         dirty_nodes,
         changed_nodes,
         inner_ancestors,
-        data,
-        true,
+        &data,
+        wrapped,
     ) {
         return false;
     }
-    let outer = outer_draws(node_id, slices.draw_commands(), outer_count, size)
-        .expect("outer command count is nonzero");
+    if !wrapped {
+        return true;
+    }
+    let outer = outer_draws(
+        node_id,
+        data.modifier_slices.draw_commands(),
+        outer_count,
+        data.layout_state.size(),
+    )
+    .expect("outer command count is nonzero");
     let layer = take_wrapped_layer(container, node_id).expect("the wrapped layer was found above");
     write_wrapper(
         container,
@@ -536,13 +546,6 @@ fn translated_container(
     let Some(node_id) = container.node_id else {
         return Err("no node id");
     };
-    if container
-        .children
-        .iter()
-        .any(|child| !matches!(child, RenderNode::Layer(_)))
-    {
-        return Err("container has own primitive children");
-    }
     if !layout_state.is_placed()
         || Rect::from_size(layout_state.size()) != container.node_rect()
         || modifier_slices.layer_bounds(layout_state.size()) != container.local_bounds
@@ -863,7 +866,7 @@ fn translate_layer_from_data(
     dirty_nodes: &mut HashSet<NodeId>,
     changed_nodes: &mut Vec<NodeId>,
     ancestors: TranslateAncestorContext,
-    data: SnapshotNodeData,
+    data: &SnapshotNodeData,
     wrapped: bool,
 ) -> bool {
     let TranslateAncestorContext {
@@ -873,21 +876,12 @@ fn translate_layer_from_data(
         parent_content_offset,
         parent_abs,
     } = ancestors;
-    let SnapshotNodeData {
-        layout_state,
-        modifier_slices,
-        children: fresh_children,
-        window_root,
-    } = data;
-    let layout_state = if window_root {
-        layout_state.at_origin()
-    } else {
-        layout_state
-    };
+    let layout_state = &data.layout_state;
+    let modifier_slices = &data.modifier_slices;
     let container_plan = match translated_container(
         container,
-        &layout_state,
-        &modifier_slices,
+        layout_state,
+        modifier_slices,
         inherited_motion_context_animated,
         wrapped,
     ) {
@@ -903,7 +897,7 @@ fn translate_layer_from_data(
         applier,
         container,
         dirty_nodes,
-        &fresh_children,
+        &data.children,
         &mut scratch,
     ) {
         Ok(unchanged) => unchanged,
@@ -913,7 +907,7 @@ fn translate_layer_from_data(
         }
     };
 
-    let geometry = TranslateGeometry::new(&layout_state, &graphics_layer, parent_abs);
+    let geometry = TranslateGeometry::new(layout_state, &graphics_layer, parent_abs);
     let child_inherited_translated_content_context =
         inherited_translated_content_context || container.translated_content_context;
     let children_ancestor_hashed =
@@ -934,8 +928,8 @@ fn translate_layer_from_data(
 
     apply_translated_container_state(
         container,
-        &modifier_slices,
-        &layout_state,
+        modifier_slices,
+        layout_state,
         &graphics_layer,
         parent_content_offset,
         geometry,
@@ -951,9 +945,9 @@ fn translate_layer_from_data(
     );
     TRANSLATE_SCRATCH.set(scratch);
     modifier_slices.publish_pointer_input_size(layout_state.size());
-    container.hit_test = hit_test_from_slices(&modifier_slices);
+    container.hit_test = hit_test_from_slices(modifier_slices);
 
-    container.has_origin_sinks = modifier_slices_have_origin_sinks(&modifier_slices)
+    container.has_origin_sinks = modifier_slices_have_origin_sinks(modifier_slices)
         || children_have_origin_sinks(&container.children);
     container.refresh_child_facts();
     crate::graph_hash::refresh_layer_own_raster_cache_hashes(container, container_ancestor_hashed);
@@ -1393,6 +1387,8 @@ fn lower_child(
 }
 
 fn snapshot_node_data(applier: &mut MemoryApplier, node_id: NodeId) -> Option<SnapshotNodeData> {
+    #[cfg(test)]
+    SNAPSHOT_NODE_READ_COUNT.with(|count| count.set(count.get() + 1));
     if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
         let state = node.layout_state();
         let mut children = SmallVec::new();

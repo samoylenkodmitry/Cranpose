@@ -11,6 +11,89 @@ use cranpose_ui_graphics::{Brush, DrawPrimitive, DrawScopeDefault, GraphicsLayer
 
 use super::*;
 
+fn try_translate_for_test(container: &mut LayerNode) -> bool {
+    try_translate_scrolled_layer(
+        &mut MemoryApplier::new(),
+        container,
+        &mut HashSet::default(),
+        &mut Vec::new(),
+        TranslateAncestorContext {
+            inherited_motion_context_animated: false,
+            ancestor_hashed: false,
+            inherited_translated_content_context: false,
+            parent_content_offset: Point::default(),
+            parent_abs: AbsOrigin::ROOT,
+        },
+    )
+}
+
+#[test]
+fn translation_rejects_own_draws_before_reading_live_nodes() {
+    for wrapped in [false, true] {
+        for recorded in [false, true] {
+            let child = if recorded {
+                RenderNode::DrawRun(DrawRunNode::new(
+                    PrimitivePhase::BeforeChildren,
+                    vec![DrawPrimitive::Content],
+                ))
+            } else {
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(Box::new(crate::graph::DrawPrimitiveNode {
+                        primitive: DrawPrimitive::Content,
+                        clip: None,
+                    })),
+                })
+            };
+            let content = LayerNode {
+                node_id: Some(2),
+                children: vec![child],
+                ..Default::default()
+            };
+            let mut container = if wrapped {
+                LayerNode {
+                    wraps: Some(2),
+                    children: vec![RenderNode::Layer(Box::new(content))],
+                    ..Default::default()
+                }
+            } else {
+                content
+            };
+            SNAPSHOT_NODE_READ_COUNT.set(0);
+            assert!(!try_translate_for_test(&mut container));
+            assert_eq!(SNAPSHOT_NODE_READ_COUNT.get(), 0);
+        }
+    }
+}
+
+#[test]
+fn translation_reads_live_nodes_for_a_container_without_own_draws() {
+    for wrapped in [false, true] {
+        let content = LayerNode {
+            node_id: Some(2),
+            ..Default::default()
+        };
+        let mut container = if wrapped {
+            LayerNode {
+                wraps: Some(2),
+                children: vec![
+                    RenderNode::DrawRun(DrawRunNode::new(
+                        PrimitivePhase::BeforeChildren,
+                        vec![DrawPrimitive::Content],
+                    )),
+                    RenderNode::Layer(Box::new(content)),
+                ],
+                ..Default::default()
+            }
+        } else {
+            content
+        };
+        SNAPSHOT_NODE_READ_COUNT.set(0);
+        assert!(!try_translate_for_test(&mut container));
+        assert_eq!(SNAPSHOT_NODE_READ_COUNT.get(), 1);
+    }
+}
+
 #[test]
 fn scene_snapshot_preserves_children_beyond_inline_capacity_in_order() {
     let mut composition = cranpose_ui::run_test_composition(|| {
