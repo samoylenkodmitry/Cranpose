@@ -11,6 +11,10 @@ Signed versions awaiting Marketplace review are also available from
 [GitHub Releases](https://github.com/samoylenkodmitry/cranpose-idea/releases) and
 can be installed with **Settings → Plugins → Install Plugin from Disk**.
 
+The [live runtime experiment](live-runtime.md) runs supported UI source edits
+and structured agent patches without rebuilding. Its desktop demo uses file
+watching and JSON commands; Studio integration is not wired yet.
+
 ## Register component previews
 
 Enable the `cranpose/preview` feature alongside your desktop features. Add a

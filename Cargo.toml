@@ -6,6 +6,7 @@ members = [
     "crates/cranpose-capabilities",
     "crates/cranpose-core",
     "crates/cranpose-macros",
+    "crates/cranpose-live",
     "crates/cranpose-runtime-std",
     "crates/cranpose-ui-graphics",
     "crates/cranpose-ui-layout",
@@ -31,6 +32,7 @@ members = [
     "crates/cranpose-coroflow",
     "crates/cranpose-navigation",
     "apps/coroflow-demo",
+    "apps/live-demo",
     "apps/coroflow-demo/android",
     "apps/coroflow-demo/web",
 ]

@@ -13,6 +13,7 @@ cranpose-audio
 cranpose-storekit
 cranpose-coroflow
 cranpose-ui
+cranpose-live
 cranpose-media
 cranpose-platform-desktop-winit
 cranpose-platform-web

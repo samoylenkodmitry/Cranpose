@@ -5,6 +5,7 @@ use quote::quote;
 use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input};
 
 mod branch_groups;
+mod live;
 mod preview;
 #[cfg(test)]
 #[path = "tests/preview_tests.rs"]
@@ -278,6 +279,19 @@ fn definition_key_stmt(
     }
 }
 
+/// Exposes annotated synchronous state-flow getters and actions on a view model.
+#[proc_macro_attribute]
+pub fn live_api(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new(Span::call_site(), "live_api takes no arguments")
+            .to_compile_error()
+            .into();
+    }
+    live::api(parse_macro_input!(item as syn::ItemImpl))
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
+
 /// Turns a function into a composable: its body runs inside a group keyed by
 /// the call site, and recomposition skips it while its arguments are
 /// unchanged. `#[composable(no_skip)]` always re-runs the body.
@@ -285,6 +299,9 @@ fn definition_key_stmt(
 /// Composables are named in CamelCase, as in Jetpack Compose, so the
 /// generated function carries `#[allow(non_snake_case)]` and callers need no
 /// lint allowance of their own.
+///
+/// In a crate depending on `cranpose-live`, the same annotation also exports
+/// its signature and a live adapter when its argument types are supported.
 #[proc_macro_attribute]
 pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr_tokens = TokenStream2::from(attr);
@@ -303,8 +320,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     }
-
     let mut func = parse_macro_input!(item as ItemFn);
+    let registration = live::component(&func);
 
     struct ParamInfo {
         ident: Ident,
@@ -854,6 +871,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             #recompose_fn
             #helper_fn
             #func
+            #registration
         })
     } else {
         let wrapped = quote!({
@@ -870,7 +888,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
         });
         *func.block = syn::parse2(wrapped).expect("failed to build block");
-        TokenStream::from(quote! { #func })
+        TokenStream::from(quote! { #func #registration })
     }
 }
 
