@@ -1459,12 +1459,13 @@ fn create_image_pipeline(
     shader: &SharedShader,
     blend_mode: BlendMode,
     depth: bool,
+    alpha_mask: bool,
 ) -> wgpu::RenderPipeline {
     let module = shader.module();
     create_render_pipeline_logged(
         device,
         cache,
-        &format!("image blend={blend_mode:?} depth={depth}"),
+        &format!("image blend={blend_mode:?} depth={depth} alpha_mask={alpha_mask}"),
         wgpu::RenderPipelineDescriptor {
             label: Some("Image Pipeline"),
             layout: Some(shader.layout()),
@@ -1476,7 +1477,11 @@ fn create_image_pipeline(
             },
             fragment: Some(wgpu::FragmentState {
                 module,
-                entry_point: Some("image_fs_main"),
+                entry_point: Some(if alpha_mask {
+                    "image_mask_fs_main"
+                } else {
+                    "image_fs_main"
+                }),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: surface_format,
@@ -1852,6 +1857,7 @@ fn survive_gpu_errors_enabled() -> bool {
 }
 
 struct CachedImageTexture {
+    alpha_mask: bool,
     _texture: wgpu::Texture,
     _view: wgpu::TextureView,
     nearest_bind_group: wgpu::BindGroup,
@@ -2610,8 +2616,8 @@ pub struct GpuRenderer {
     pipeline_cache: Option<wgpu::PipelineCache>,
     shape_pipelines: ShapePipelines,
     /// Image and glyph pipelines for passes without and with a depth buffer.
-    image_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
-    image_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    image_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 4],
+    image_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 4],
     /// Indexed by depth, then turned: see [`GpuRenderer::glyph_atlas_pipeline`].
     glyph_atlas_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 4],
     image_shader: SharedShader,
@@ -2885,10 +2891,14 @@ impl GpuRenderer {
             image_pipeline: [
                 LazyGpuResource::new("image/src-over"),
                 LazyGpuResource::new("image/src-over/depth"),
+                LazyGpuResource::new("image/src-over/alpha-mask"),
+                LazyGpuResource::new("image/src-over/alpha-mask/depth"),
             ],
             image_pipeline_dst_out: [
                 LazyGpuResource::new("image/dst-out"),
                 LazyGpuResource::new("image/dst-out/depth"),
+                LazyGpuResource::new("image/dst-out/alpha-mask"),
+                LazyGpuResource::new("image/dst-out/alpha-mask/depth"),
             ],
             glyph_atlas_pipeline: [
                 LazyGpuResource::new("glyph/atlas"),
@@ -2987,34 +2997,47 @@ impl GpuRenderer {
         &self,
         blend_mode: BlendMode,
         depth: bool,
+        alpha_mask: bool,
     ) -> &LazyGpuResource<wgpu::RenderPipeline> {
         let pipelines = match blend_mode {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
         };
-        &pipelines[usize::from(depth)]
+        &pipelines[usize::from(depth) + 2 * usize::from(alpha_mask)]
     }
 
     fn image_pipeline_job(
         &self,
         blend_mode: BlendMode,
         depth: bool,
+        alpha_mask: bool,
     ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
         let device = Arc::clone(&self.device);
         let cache = self.pipeline_cache.clone();
         let format = self.composition_format;
         let shader = self.image_shader.clone();
-        move || create_image_pipeline(&device, cache.as_ref(), format, &shader, blend_mode, depth)
+        move || {
+            create_image_pipeline(
+                &device,
+                cache.as_ref(),
+                format,
+                &shader,
+                blend_mode,
+                depth,
+                alpha_mask,
+            )
+        }
     }
 
     pub(crate) fn image_pipeline(
         &self,
         blend_mode: BlendMode,
         depth: bool,
+        alpha_mask: bool,
     ) -> &wgpu::RenderPipeline {
-        self.image_pipeline_resource(blend_mode, depth)
+        self.image_pipeline_resource(blend_mode, depth, alpha_mask)
             .get_or_init(self.adapter_backend, || {
-                self.image_pipeline_job(blend_mode, depth)()
+                self.image_pipeline_job(blend_mode, depth, alpha_mask)()
             })
     }
 
@@ -3092,13 +3115,23 @@ impl GpuRenderer {
             depth_or_array_layers: 1,
         };
 
+        let alpha_mask = matches!(
+            image.format(),
+            cranpose_ui_graphics::ImagePixelFormat::Alpha8 { .. }
+        );
+        let (format, bytes_per_pixel) = if alpha_mask {
+            (wgpu::TextureFormat::R8Unorm, 1)
+        } else {
+            (wgpu::TextureFormat::Rgba8Unorm, 4)
+        };
+
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Image Texture"),
             size,
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -3114,7 +3147,7 @@ impl GpuRenderer {
             image.pixels(),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(4 * image.width()),
+                bytes_per_row: Some(bytes_per_pixel * image.width()),
                 rows_per_image: Some(image.height()),
             },
             size,
@@ -3125,10 +3158,11 @@ impl GpuRenderer {
         let nearest_bind_group = self.image_bind_group(&view, &self.image_nearest_sampler);
         let linear_bind_group = self.image_bind_group(&view, &self.image_linear_sampler);
 
-        let bytes = image.width() as usize * image.height() as usize * 4;
+        let bytes = image.pixels().len();
         if let Some(replaced) = self.image_texture_cache.put(
             image.id(),
             CachedImageTexture {
+                alpha_mask,
                 _texture: texture,
                 _view: view,
                 nearest_bind_group,
@@ -4524,7 +4558,7 @@ impl GpuRenderer {
         image_slot: &ImageSlot,
         uniform_slot: usize,
         cmds: &[ImageDrawCmd],
-        pipeline: &wgpu::RenderPipeline,
+        (blend_mode, depth): (BlendMode, bool),
         bound: Option<(u32, u32, u32, u32)>,
     ) -> Result<(), String> {
         if cmds.is_empty() {
@@ -4532,7 +4566,7 @@ impl GpuRenderer {
         }
         self.frame_stats.bump_images();
         self.frame_stats.add_draw_calls(cmds.len() as u32);
-        pass.set_pipeline(pipeline);
+        let mut bound_pipeline = None;
         self.viewport_uniforms.bind(pass, uniform_slot)?;
         pass.set_index_buffer(image_slot.indices.slice(), wgpu::IndexFormat::Uint32);
         pass.set_vertex_buffer(0, image_slot.vertices.slice());
@@ -4545,6 +4579,10 @@ impl GpuRenderer {
                 .image_texture_cache
                 .peek(&cmd.image_id)
                 .ok_or_else(|| "image texture missing from cache".to_string())?;
+            if bound_pipeline != Some(cached.alpha_mask) {
+                pass.set_pipeline(self.image_pipeline(blend_mode, depth, cached.alpha_mask));
+                bound_pipeline = Some(cached.alpha_mask);
+            }
             pass.set_bind_group(1, cached.bind_group(cmd.sampling), &[]);
             pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
         }
@@ -4644,17 +4682,21 @@ impl GpuRenderer {
             return Ok(());
         }
 
-        let (tint, cpu_filter) = tint_for_image(image_draw.color_filter, image_draw.alpha);
+        let (mut tint, cpu_filter) = tint_for_image(image_draw.color_filter, image_draw.alpha);
         if tint[3] <= 0.0 {
             return Ok(());
         }
 
-        let prepared_image = if let Some(filter) = cpu_filter {
-            apply_filter_to_bitmap(&image_draw.image, filter)?
-        } else {
-            image_draw.image.clone()
-        };
-        self.ensure_image_cached(&prepared_image)?;
+        let filtered_image = cpu_filter
+            .map(|filter| apply_filter_to_bitmap(&image_draw.image, filter))
+            .transpose()?;
+        let prepared_image = filtered_image.as_ref().unwrap_or(&image_draw.image);
+        self.ensure_image_cached(prepared_image)?;
+        if let cranpose_ui_graphics::ImagePixelFormat::Alpha8 { color } = prepared_image.format() {
+            for (channel, value) in tint[..3].iter_mut().zip(color) {
+                *channel *= value as f32 / 255.0;
+            }
+        }
 
         let mut adjusted_image = ImageDraw {
             rect,
@@ -5768,7 +5810,7 @@ fn composite_text_segment(
 ) {
     let offset_x = (segment_rect.x - canvas_rect.x).round() as i32;
     let offset_y = (segment_rect.y - canvas_rect.y).round() as i32;
-    let src = segment_image.pixels();
+    let src = segment_image.rgba8_pixels();
     for sy in 0..segment_image.height() as i32 {
         let dy = offset_y + sy;
         if dy < 0 || dy >= canvas_height as i32 {
@@ -6032,8 +6074,10 @@ fn source_axis_uv(start: f32, extent: f32, image_extent: f32) -> Option<(f32, f3
 }
 
 fn apply_filter_to_bitmap(image: &ImageBitmap, filter: ColorFilter) -> Result<ImageBitmap, String> {
-    let mut filtered = Vec::with_capacity(image.pixels().len());
-    for pixel in image.pixels().as_chunks::<4>().0 {
+    let pixel_count = image.width() as usize * image.height() as usize;
+    let mut filtered = Vec::with_capacity(pixel_count * 4);
+    for index in 0..pixel_count {
+        let pixel = image.rgba8_pixel(index);
         let rgba = [
             pixel[0] as f32 / 255.0,
             pixel[1] as f32 / 255.0,

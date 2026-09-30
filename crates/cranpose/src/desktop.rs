@@ -3678,7 +3678,11 @@ fn native_window_polling_drag_pointer(
 }
 
 fn winit_window_icon(bitmap: &cranpose_ui::ImageBitmap) -> Option<Icon> {
-    match RgbaIcon::new(bitmap.pixels().to_vec(), bitmap.width(), bitmap.height()) {
+    match RgbaIcon::new(
+        bitmap.rgba8_pixels().into_owned(),
+        bitmap.width(),
+        bitmap.height(),
+    ) {
         Ok(icon) => Some(icon.into()),
         Err(error) => {
             log::warn!("cranpose: the window icon is unusable: {error}");

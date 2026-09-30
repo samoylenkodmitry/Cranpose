@@ -332,7 +332,7 @@ impl LeetcodeDailyImageCache {
         }
 
         let source =
-            RgbaImage::from_raw(bitmap.width(), bitmap.height(), bitmap.pixels().to_vec())?;
+            RgbaImage::from_raw(bitmap.width(), bitmap.height(), bitmap.rgba8_pixels().into_owned())?;
         let cropped =
             image::imageops::crop_imm(&source, key.src_x, key.src_y, key.src_width, key.src_height)
                 .to_image();

@@ -432,7 +432,7 @@ impl GpuRenderer {
                         slot,
                         *uniform_slot,
                         &cmds.images[range.clone()],
-                        self.image_pipeline(*blend_mode, frame.depth),
+                        (*blend_mode, frame.depth),
                         *scissor,
                     )?;
                 }

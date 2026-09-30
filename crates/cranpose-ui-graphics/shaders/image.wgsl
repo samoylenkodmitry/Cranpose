@@ -64,3 +64,10 @@ fn image_fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let sampled = textureSample(image_texture, image_sampler, uv);
     return sampled * input.color;
 }
+
+@fragment
+fn image_mask_fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let uv = clamp(input.uv, input.uv_bounds.xy, input.uv_bounds.zw);
+    let alpha = textureSample(image_texture, image_sampler, uv).r;
+    return vec4<f32>(1.0, 1.0, 1.0, alpha) * input.color;
+}

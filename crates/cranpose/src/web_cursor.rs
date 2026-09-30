@@ -269,8 +269,9 @@ fn encode_png_data_url(document: &Document, custom: &CustomPointerIcon) -> Resul
         .get_context("2d")?
         .ok_or_else(|| JsValue::from_str("the browser gave no 2d canvas context"))?
         .dyn_into::<web_sys::CanvasRenderingContext2d>()?;
+    let pixels = image.rgba8_pixels();
     let data = ImageData::new_with_u8_clamped_array_and_sh(
-        Clamped(image.pixels()),
+        Clamped(&pixels),
         image.width(),
         image.height(),
     )?;

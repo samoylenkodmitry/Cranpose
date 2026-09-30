@@ -1,6 +1,106 @@
 use super::*;
 
 #[test]
+fn alpha_pixels_keep_their_allocation_and_expand_exactly() {
+    let alpha: Vec<u8> = (0..=255).collect();
+    let address = alpha.as_ptr();
+    let image = ImageBitmap::from_alpha8(16, 16, [19, 127, 239], alpha).expect("mask");
+    assert_eq!(
+        image.format(),
+        ImagePixelFormat::Alpha8 {
+            color: [19, 127, 239]
+        }
+    );
+    assert_eq!(image.pixels().as_ptr(), address);
+    assert_eq!(image.pixels().len(), 256);
+    assert!(!image.is_opaque());
+    assert_eq!(image.intrinsic_size(), Size::new(16.0, 16.0));
+    let clone = image.clone();
+    assert_eq!(clone.pixels().as_ptr(), address);
+    let expanded = image.rgba8_pixels();
+    assert!(matches!(expanded, Cow::Owned(_)));
+    for (index, pixel) in expanded.as_chunks::<4>().0.iter().enumerate() {
+        assert_eq!(*pixel, [19, 127, 239, index as u8]);
+        assert_eq!(image.rgba8_pixel(index), *pixel);
+    }
+    let rgba = ImageBitmap::from_rgba8(16, 16, expanded.into_owned()).expect("rgba");
+    assert_eq!(rgba.format(), ImagePixelFormat::Rgba8);
+    assert!(matches!(rgba.rgba8_pixels(), Cow::Borrowed(_)));
+    assert_eq!(rgba.rgba8_pixels().as_ptr(), rgba.pixels().as_ptr());
+    for index in 0..256 {
+        assert_eq!(rgba.rgba8_pixel(index), image.rgba8_pixel(index));
+    }
+    assert_ne!(
+        rgba.id(),
+        image.id(),
+        "texture formats must have distinct cache identities"
+    );
+}
+
+#[test]
+fn alpha_bitmap_identity_includes_color_dimensions_and_coverage() {
+    let image = ImageBitmap::from_alpha8(2, 1, [12, 34, 56], vec![255, 255]).expect("mask");
+    let same = ImageBitmap::from_alpha8(2, 1, [12, 34, 56], vec![255, 255]).expect("same");
+    assert_eq!(image, same);
+    assert!(image.is_opaque());
+    for other in [
+        ImageBitmap::from_alpha8(1, 2, [12, 34, 56], vec![255, 255]),
+        ImageBitmap::from_alpha8(2, 1, [13, 34, 56], vec![255, 255]),
+        ImageBitmap::from_alpha8(2, 1, [12, 34, 56], vec![255, 254]),
+    ] {
+        assert_ne!(image, other.expect("distinct mask"));
+    }
+}
+
+#[test]
+fn alpha_constructor_rejects_invalid_dimensions_and_lengths() {
+    for (width, height, alpha, expected) in [
+        (0, 1, vec![], ImageBitmapError::InvalidDimensions),
+        (1, 0, vec![], ImageBitmapError::InvalidDimensions),
+        (
+            u32::MAX,
+            u32::MAX,
+            vec![],
+            ImageBitmapError::DimensionsTooLarge,
+        ),
+        (
+            2,
+            1,
+            vec![255],
+            ImageBitmapError::PixelDataLengthMismatch {
+                expected: 2,
+                actual: 1,
+            },
+        ),
+        (
+            2,
+            1,
+            vec![255; 3],
+            ImageBitmapError::PixelDataLengthMismatch {
+                expected: 2,
+                actual: 3,
+            },
+        ),
+    ] {
+        assert_eq!(
+            ImageBitmap::from_alpha8(width, height, [1, 2, 3], alpha),
+            Err(expected)
+        );
+    }
+}
+
+#[test]
+fn pixel_reads_reject_out_of_bounds_indices_in_both_formats() {
+    for image in [
+        ImageBitmap::from_alpha8(1, 1, [1, 2, 3], vec![255]).expect("mask"),
+        ImageBitmap::from_rgba8(1, 1, vec![1, 2, 3, 255]).expect("rgba"),
+    ] {
+        assert!(std::panic::catch_unwind(|| image.rgba8_pixel(1)).is_err());
+        assert!(std::panic::catch_unwind(|| image.rgba8_pixel(usize::MAX)).is_err());
+    }
+}
+
+#[test]
 fn owned_pixels_keep_their_allocation_through_clones() {
     let pixels = vec![17; 64 * 64 * 4];
     assert_eq!(pixels.len(), pixels.capacity());

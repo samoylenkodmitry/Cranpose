@@ -1,6 +1,7 @@
 //! Image bitmap primitives used by render backends.
 
 use std::{
+    borrow::Cow,
     hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
 };
@@ -20,7 +21,19 @@ pub enum ImageBitmapError {
     PixelDataLengthMismatch { expected: usize, actual: usize },
 }
 
-/// Immutable RGBA image data used by UI primitives and render backends.
+/// Storage format of an immutable bitmap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ImagePixelFormat {
+    /// Four bytes per pixel, ordered red, green, blue, alpha.
+    Rgba8,
+    /// One alpha byte per pixel and a constant, unpremultiplied RGB color.
+    Alpha8 {
+        /// RGB channels shared by every pixel, including transparent pixels.
+        color: [u8; 3],
+    },
+}
+
+/// Immutable image data used by UI primitives and render backends.
 #[derive(Clone, Debug)]
 pub struct ImageBitmap {
     data: Arc<ImageBitmapData>,
@@ -32,6 +45,7 @@ struct ImageBitmapData {
     height: u32,
     id: u64,
     opaque: bool,
+    format: ImagePixelFormat,
     pixels: Box<[u8]>,
 }
 
@@ -192,7 +206,7 @@ impl ImageBitmap {
     /// Creates a bitmap by taking ownership of tightly packed RGBA8 pixels.
     /// Any spare capacity in the pixel buffer is released.
     pub fn from_rgba8(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, ImageBitmapError> {
-        Self::from_pixels(width, height, pixels)
+        Self::from_pixels(width, height, ImagePixelFormat::Rgba8, pixels)
     }
 
     /// Copies tightly packed RGBA8 pixels into a new bitmap.
@@ -201,12 +215,24 @@ impl ImageBitmap {
         height: u32,
         pixels: &[u8],
     ) -> Result<Self, ImageBitmapError> {
-        Self::from_pixels(width, height, pixels)
+        Self::from_pixels(width, height, ImagePixelFormat::Rgba8, pixels)
+    }
+
+    /// Takes ownership of one alpha byte per pixel with a constant RGB color.
+    /// Any spare capacity in the alpha buffer is released.
+    pub fn from_alpha8(
+        width: u32,
+        height: u32,
+        color: [u8; 3],
+        alpha: Vec<u8>,
+    ) -> Result<Self, ImageBitmapError> {
+        Self::from_pixels(width, height, ImagePixelFormat::Alpha8 { color }, alpha)
     }
 
     fn from_pixels(
         width: u32,
         height: u32,
+        format: ImagePixelFormat,
         pixels: impl AsRef<[u8]> + Into<Box<[u8]>>,
     ) -> Result<Self, ImageBitmapError> {
         if width == 0 || height == 0 {
@@ -216,6 +242,10 @@ impl ImageBitmap {
             .checked_mul(height as usize)
             .and_then(|value| value.checked_mul(4))
             .ok_or(ImageBitmapError::DimensionsTooLarge)?;
+        let expected = match format {
+            ImagePixelFormat::Rgba8 => expected,
+            ImagePixelFormat::Alpha8 { .. } => expected / 4,
+        };
 
         let bytes = pixels.as_ref();
         if bytes.len() != expected {
@@ -225,18 +255,22 @@ impl ImageBitmap {
             });
         }
 
-        let id = bitmap_content_id(width, height, bytes);
-        let opaque = bytes
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .all(|pixel| pixel[3] == u8::MAX);
+        let id = bitmap_content_id(width, height, format, bytes);
+        let opaque = match format {
+            ImagePixelFormat::Rgba8 => bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| pixel[3] == u8::MAX),
+            ImagePixelFormat::Alpha8 { .. } => bytes.iter().all(|alpha| *alpha == u8::MAX),
+        };
         Ok(Self {
             data: Arc::new(ImageBitmapData {
                 width,
                 height,
                 id,
                 opaque,
+                format,
                 pixels: pixels.into(),
             }),
         })
@@ -257,9 +291,39 @@ impl ImageBitmap {
         self.data.height
     }
 
-    /// Returns the raw RGBA8 pixel data.
+    /// Returns the raw pixel bytes in [`Self::format`].
     pub fn pixels(&self) -> &[u8] {
         &self.data.pixels
+    }
+
+    /// Returns the storage format of [`Self::pixels`].
+    pub fn format(&self) -> ImagePixelFormat {
+        self.data.format
+    }
+
+    /// Returns the unpremultiplied RGBA8 pixel at a row-major index.
+    ///
+    /// # Panics
+    /// Panics when `index` is outside the image.
+    pub fn rgba8_pixel(&self, index: usize) -> [u8; 4] {
+        match self.format() {
+            ImagePixelFormat::Rgba8 => self.pixels().as_chunks::<4>().0[index],
+            ImagePixelFormat::Alpha8 { color: [r, g, b] } => [r, g, b, self.pixels()[index]],
+        }
+    }
+
+    /// Returns tightly packed RGBA8 bytes, borrowing RGBA images and expanding alpha masks.
+    pub fn rgba8_pixels(&self) -> Cow<'_, [u8]> {
+        match self.format() {
+            ImagePixelFormat::Rgba8 => Cow::Borrowed(self.pixels()),
+            ImagePixelFormat::Alpha8 { color: [r, g, b] } => {
+                let mut pixels = Vec::with_capacity(self.pixels().len() * 4);
+                for &alpha in self.pixels() {
+                    pixels.extend_from_slice(&[r, g, b, alpha]);
+                }
+                Cow::Owned(pixels)
+            }
+        }
     }
 
     /// Returns true when every source pixel has full alpha.
@@ -290,10 +354,11 @@ impl Hash for ImageBitmap {
     }
 }
 
-fn bitmap_content_id(width: u32, height: u32, pixels: &[u8]) -> u64 {
+fn bitmap_content_id(width: u32, height: u32, format: ImagePixelFormat, pixels: &[u8]) -> u64 {
     let mut hasher = foldhash::quality::FixedState::default().build_hasher();
     width.hash(&mut hasher);
     height.hash(&mut hasher);
+    format.hash(&mut hasher);
     pixels.hash(&mut hasher);
     hasher.finish()
 }

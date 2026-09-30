@@ -38,7 +38,7 @@ impl VectorPathMaskCache {
     }
 
     fn put(&mut self, key: u64, image: ImageBitmap) {
-        let bytes = image.width() as usize * image.height() as usize * 4;
+        let bytes = image.pixels().len();
         if bytes > VECTOR_PATH_MASK_CACHE_BYTES {
             return;
         }
@@ -48,9 +48,7 @@ impl VectorPathMaskCache {
             || self.bytes > VECTOR_PATH_MASK_CACHE_BYTES
         {
             let (_, dropped) = self.entries.remove(0);
-            self.bytes = self
-                .bytes
-                .saturating_sub(dropped.width() as usize * dropped.height() as usize * 4);
+            self.bytes = self.bytes.saturating_sub(dropped.pixels().len());
         }
     }
 }
@@ -1346,19 +1344,16 @@ impl DrawScopeDefault {
         let image = match cached {
             Some(image) => image,
             None => {
-                let mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE);
-                let mut pixels = Vec::with_capacity(mask.len() * 4);
-                for coverage in mask {
-                    pixels.extend_from_slice(&[
-                        red,
-                        green,
-                        blue,
-                        (alpha * coverage as f32 + 0.5) as u8,
-                    ]);
+                let mut mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE);
+                for coverage in &mut mask {
+                    *coverage = (alpha * *coverage as f32 + 0.5) as u8;
                 }
-                let Ok(image) =
-                    ImageBitmap::from_rgba8(mask_width as u32, mask_height as u32, pixels)
-                else {
+                let Ok(image) = ImageBitmap::from_alpha8(
+                    mask_width as u32,
+                    mask_height as u32,
+                    [red, green, blue],
+                    mask,
+                ) else {
                     return;
                 };
                 vector_path_mask_cache_put(key, image.clone());
