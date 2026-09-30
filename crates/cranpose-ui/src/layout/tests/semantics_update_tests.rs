@@ -140,6 +140,14 @@ impl SemanticsModifier for StableLabelNode {
     }
 }
 
+fn mounted(applier: &mut MemoryApplier, node: LayoutNode) -> NodeId {
+    let id = applier.create(Box::new(node));
+    applier
+        .with_node::<LayoutNode, _>(id, |node| node.set_node_id(id))
+        .unwrap_or_else(|err| panic!("node #{id} was just created: {err}"));
+    id
+}
+
 struct Scroller {
     applier: MemoryApplier,
     root: NodeId,
@@ -153,15 +161,18 @@ impl Scroller {
         let offset = Rc::new(Cell::new(0.0));
         let merges = Rc::new(Cell::new(0));
         let mut applier = MemoryApplier::new();
-        let root = applier.create(Box::new(LayoutNode::new(
-            Modifier::from_element(StableLabelElement {
-                label: Rc::new(Cell::new("List")),
-                merges: Rc::clone(&merges),
-            }),
-            Rc::new(ScrolledStackPolicy {
-                offset: Rc::clone(&offset),
-            }),
-        )));
+        let root = mounted(
+            &mut applier,
+            LayoutNode::new(
+                Modifier::from_element(StableLabelElement {
+                    label: Rc::new(Cell::new("List")),
+                    merges: Rc::clone(&merges),
+                }),
+                Rc::new(ScrolledStackPolicy {
+                    offset: Rc::clone(&offset),
+                }),
+            ),
+        );
         Self {
             applier,
             root,
@@ -172,13 +183,16 @@ impl Scroller {
     }
 
     fn row_with(&mut self, modifier: Modifier) -> NodeId {
-        self.applier.create(Box::new(LayoutNode::new(
-            modifier,
-            Rc::new(LeafMeasurePolicy::new(Size {
-                width: 100.0,
-                height: ROW_HEIGHT,
-            })),
-        )))
+        mounted(
+            &mut self.applier,
+            LayoutNode::new(
+                modifier,
+                Rc::new(LeafMeasurePolicy::new(Size {
+                    width: 100.0,
+                    height: ROW_HEIGHT,
+                })),
+            ),
+        )
     }
 
     fn row(&mut self, label: &Rc<Cell<&'static str>>) -> NodeId {
@@ -191,6 +205,28 @@ impl Scroller {
 
     fn labelled_row(&mut self, label: &'static str) -> NodeId {
         self.row(&Rc::new(Cell::new(label)))
+    }
+
+    fn stack(&mut self, children: &[NodeId]) -> Result<NodeId, NodeError> {
+        let mut stack = LayoutNode::new(
+            Modifier::empty(),
+            Rc::new(ScrolledStackPolicy {
+                offset: Rc::new(Cell::new(0.0)),
+            }),
+        );
+        stack.children.extend_from_slice(children);
+        let stack = mounted(&mut self.applier, stack);
+        for &child in children {
+            self.applier
+                .with_node::<LayoutNode, _>(child, |row| row.set_parent_for_bubbling(stack))?;
+        }
+        Ok(stack)
+    }
+
+    fn with_row<R>(&mut self, row: NodeId, f: impl FnOnce(&mut LayoutNode) -> R) -> R {
+        self.applier
+            .with_node::<LayoutNode, _>(row, f)
+            .unwrap_or_else(|err| panic!("row #{row} is a layout node: {err}"))
     }
 
     fn set_children(&mut self, children: &[NodeId]) -> Result<(), NodeError> {
@@ -508,4 +544,209 @@ fn the_top_modal_follows_updates() -> Result<(), NodeError> {
     scroller.update()?;
     assert_eq!(root_id(&scroller), Some(scroller.root));
     Ok(())
+}
+
+#[test]
+fn a_scrolled_subtree_moves_without_being_read() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut scroller = Scroller::new();
+    let deep = scroller.labelled_row("Deep");
+    let inner = scroller.stack(&[deep])?;
+    let card = scroller.stack(&[inner])?;
+    let other = scroller.labelled_row("Other");
+    scroller.set_children(&[card, other])?;
+    scroller.relayout()?;
+    scroller.update()?;
+
+    for offset in [0.1, 0.35, 7.3, 7.3] {
+        scroller.offset.set(offset);
+        scroller.relayout()?;
+        scroller.with_row(deep, |row| row.mark_needs_semantics());
+        assert_eq!(scroller.update()?, 0, "moving merges nothing");
+        assert!(
+            scroller.with_row(deep, |row| row.semantics_changed()),
+            "a row whose parents moved it is not read again"
+        );
+        scroller.with_row(deep, |row| row.clear_needs_semantics());
+    }
+    let deep_y = scroller
+        .tree
+        .as_ref()
+        .and_then(|tree| tree.root().children.first())
+        .and_then(|card| card.children.first())
+        .and_then(|inner| inner.children.first())
+        .map(|deep| deep.bounds.y);
+    assert_eq!(deep_y, Some(-7.3), "the deep row moved with the list");
+    Ok(())
+}
+
+#[test]
+fn a_live_recorder_below_a_clean_subtree_merges_on_every_update() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut scroller = Scroller::new();
+    let position = Rc::new(Cell::new(0));
+    let recorded = Rc::clone(&position);
+    let live = scroller.row_with(Modifier::empty().semantics(move |config| {
+        config.state_description = Some(format!("at {}", recorded.get()));
+    }));
+    let inner = scroller.stack(&[live])?;
+    let card = scroller.stack(&[inner])?;
+    scroller.set_children(&[card])?;
+    scroller.relayout()?;
+    scroller.update()?;
+
+    for at in 1..3 {
+        position.set(at);
+        scroller.update()?;
+    }
+    let state = scroller
+        .tree
+        .as_ref()
+        .and_then(|tree| tree.root().children.first())
+        .and_then(|card| card.children.first())
+        .and_then(|inner| inner.children.first())
+        .and_then(|live| live.state_description.clone());
+    assert_eq!(state.as_deref(), Some("at 2"));
+    Ok(())
+}
+
+#[test]
+fn a_modal_in_a_subtree_an_update_keeps_stays_on_top() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut scroller = Scroller::new();
+    let label = Rc::new(Cell::new("Before"));
+    let page = scroller.row(&label);
+    let dialog = scroller.row_with(Modifier::empty().stable_semantics(|config| {
+        config.is_modal = true;
+    }));
+    let card = scroller.stack(&[dialog])?;
+    scroller.set_children(&[page, card])?;
+    scroller.relayout()?;
+    scroller.update()?;
+    let root_id = |scroller: &Scroller| scroller.tree.as_ref().map(|tree| tree.root().node_id);
+    assert_eq!(root_id(&scroller), Some(dialog));
+
+    label.set("After");
+    scroller.with_row(page, |row| row.mark_needs_semantics());
+    cranpose_core::bubble_semantics_dirty(&mut scroller.applier, page);
+    assert_eq!(scroller.update()?, 1, "only the page merges");
+    assert_eq!(
+        root_id(&scroller),
+        Some(dialog),
+        "the dialog the update did not read still takes the window over"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_row_unplaced_deep_in_a_subtree_leaves_the_tree_and_comes_back() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut scroller = Scroller::new();
+    let rows: Vec<NodeId> = ["a", "b"]
+        .into_iter()
+        .map(|label| scroller.labelled_row(label))
+        .collect();
+    let inner = scroller.stack(&rows)?;
+    let card = scroller.stack(&[inner])?;
+    scroller.set_children(&[card])?;
+    scroller.relayout()?;
+    scroller.update()?;
+
+    let inner_rows = |scroller: &Scroller| {
+        scroller
+            .tree
+            .as_ref()
+            .and_then(|tree| tree.root().children.first())
+            .and_then(|card| card.children.first())
+            .map(|inner| {
+                inner
+                    .children
+                    .iter()
+                    .map(|row| row.node_id)
+                    .collect::<Vec<_>>()
+            })
+    };
+    scroller.with_row(rows[0], |row| row.clear_placed());
+    scroller.update()?;
+    assert_eq!(inner_rows(&scroller), Some(vec![rows[1]]));
+
+    scroller.with_row(inner, |stack| stack.mark_needs_measure());
+    cranpose_core::bubble_measure_dirty(&mut scroller.applier, inner);
+    scroller.relayout()?;
+    scroller.update()?;
+    assert_eq!(inner_rows(&scroller), Some(rows));
+    Ok(())
+}
+
+#[test]
+fn a_row_that_grows_moves_the_rows_after_it() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut scroller = Scroller::new();
+    let height = Rc::new(Cell::new(ROW_HEIGHT));
+    let tall = mounted(
+        &mut scroller.applier,
+        LayoutNode::new(
+            Modifier::empty().content_description("Tall"),
+            Rc::new(GrowingLeafPolicy {
+                height: Rc::clone(&height),
+            }),
+        ),
+    );
+    let below = scroller.labelled_row("Below");
+    let inner = scroller.stack(&[tall, below])?;
+    let card = scroller.stack(&[inner])?;
+    scroller.set_children(&[card])?;
+    scroller.relayout()?;
+    scroller.update()?;
+
+    height.set(ROW_HEIGHT * 1.5);
+    scroller.with_row(tall, |row| row.mark_needs_measure());
+    cranpose_core::bubble_measure_dirty(&mut scroller.applier, tall);
+    scroller.relayout()?;
+    assert_eq!(scroller.update()?, 0, "growing merges nothing");
+    let heights = scroller
+        .tree
+        .as_ref()
+        .and_then(|tree| tree.root().children.first())
+        .and_then(|card| card.children.first())
+        .map(|inner| {
+            inner
+                .children
+                .iter()
+                .map(|row| row.bounds.height)
+                .collect::<Vec<_>>()
+        });
+    assert_eq!(heights, Some(vec![ROW_HEIGHT * 1.5, ROW_HEIGHT]));
+    Ok(())
+}
+
+struct GrowingLeafPolicy {
+    height: Rc<Cell<f32>>,
+}
+
+impl MeasurePolicy for GrowingLeafPolicy {
+    fn measure(
+        &self,
+        _scope: &dyn MeasureScope,
+        _measurables: &[Box<dyn Measurable>],
+        _constraints: Constraints,
+    ) -> MeasureResult {
+        MeasureResult::new(Size::new(100.0, self.height.get()), Vec::new())
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        100.0
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        100.0
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.height.get()
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        self.height.get()
+    }
 }

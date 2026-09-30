@@ -272,8 +272,8 @@ impl HeadlessRenderer {
         }
 
         let child_offset = Point {
-            x: abs_x + layout_state.content_offset.x,
-            y: abs_y + layout_state.content_offset.y,
+            x: abs_x + layout_state.content_offset().x,
+            y: abs_y + layout_state.content_offset().y,
         };
 
         for index in first_child..child_stack.len() {

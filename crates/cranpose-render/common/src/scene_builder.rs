@@ -712,7 +712,7 @@ impl TranslateGeometry {
         graphics_layer: &GraphicsLayer,
         parent_abs: AbsOrigin,
     ) -> Self {
-        let content_offset = layout_state.content_offset;
+        let content_offset = layout_state.content_offset();
         let top_left = Point {
             x: parent_abs.content_origin.x + layout_state.position().x,
             y: parent_abs.content_origin.y + layout_state.position().y,
@@ -1371,9 +1371,10 @@ fn build_layer_node_from_data(
     let node_motion_context_animated =
         inherited_motion_context_animated || modifier_slices.motion_context_animated();
     let local_translated_content_context = modifier_slices.translated_content_context();
+    let content_offset = layout_state.content_offset();
     let local_translated_content_offset = modifier_slices
         .translated_content_offset()
-        .unwrap_or(layout_state.content_offset);
+        .unwrap_or(content_offset);
     let child_translated_content_context =
         inherited_translated_content_context || local_translated_content_context;
 
@@ -1407,8 +1408,8 @@ fn build_layer_node_from_data(
     }
     let child_abs = this_abs.map(|(top_left, layer_translation)| AbsOrigin {
         content_origin: Point {
-            x: top_left.x + layout_state.content_offset.x,
-            y: top_left.y + layout_state.content_offset.y,
+            x: top_left.x + layout_state.content_offset().x,
+            y: top_left.y + layout_state.content_offset().y,
         },
         layer_translation,
     });
@@ -1459,13 +1460,13 @@ fn build_layer_node_from_data(
         ) else {
             continue;
         };
-        if layout_state.content_offset != Point::default() {
+        if layout_state.content_offset() != Point::default() {
             child_layer.transform_to_parent =
                 child_layer
                     .transform_to_parent
                     .then(ProjectiveTransform::translation(
-                        layout_state.content_offset.x,
-                        layout_state.content_offset.y,
+                        layout_state.content_offset().x,
+                        layout_state.content_offset().y,
                     ));
         }
         render_children.push(RenderNode::Layer(crate::layer_recycling::boxed(
@@ -1498,7 +1499,7 @@ fn build_layer_node_from_data(
         local_bounds,
         node_bounds,
         transform_to_parent,
-        content_offset: layout_state.content_offset,
+        content_offset: layout_state.content_offset(),
         motion_context_animated: node_motion_context_animated,
         translated_content_context: local_translated_content_context,
         translated_content_offset: if local_translated_content_context {

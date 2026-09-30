@@ -5,6 +5,8 @@ mod frame_rate_boost;
 mod hit_path_tracker;
 pub mod inspector;
 mod modal_focus;
+#[cfg(debug_assertions)]
+mod semantics_check;
 mod shell_debug;
 mod shell_frame;
 mod shell_input;

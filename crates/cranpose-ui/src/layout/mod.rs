@@ -1,6 +1,7 @@
 pub mod core;
 pub mod policies;
 mod semantics_labels;
+mod semantics_update;
 
 use std::{
     cell::{Cell, RefCell},
@@ -26,7 +27,13 @@ use web_time::Instant;
 
 #[cfg(test)]
 use self::core::{HorizontalAlignment, VerticalAlignment};
-use self::core::{Measurable, Placeable};
+pub use self::semantics_update::{
+    build_semantics_tree_from_applier, update_semantics_tree_from_applier,
+};
+use self::{
+    core::{Measurable, Placeable},
+    semantics_update::semantics_placement,
+};
 use crate::{
     modifier::{
         DimensionConstraint, EdgeInsets, Modifier, ModifierNodeSlices,
@@ -388,6 +395,9 @@ pub struct SemanticsNode {
     /// Where the node lies in the root's coordinates: its layout rect,
     /// before graphics-layer transforms, as [`LayoutBox::rect`] holds it.
     pub bounds: GeometryRect,
+    /// Where layout put the node inside its parent's content, from which a
+    /// tree update moves a node that did not change along with its parent.
+    pub placement: SemanticsPlacement,
     /// Incarnation of the runtime node, incremented when its storage is recycled.
     pub node_generation: u32,
     /// Where this node sits in the tree (layout, text, subcomposition …).
@@ -486,6 +496,7 @@ impl Default for SemanticsNode {
         Self {
             node_id: 0,
             bounds: GeometryRect::EMPTY,
+            placement: SemanticsPlacement::default(),
             node_generation: 0,
             role: SemanticsRole::Unknown,
             widget_role: None,
@@ -537,21 +548,60 @@ impl Default for SemanticsNode {
     }
 }
 
+/// Where layout put a semantics node: its offset inside its parent's
+/// content and where its own content starts inside it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SemanticsPlacement {
+    position: Point,
+    content_offset: Point,
+}
+
+impl SemanticsPlacement {
+    fn of(state: &LayoutState) -> Self {
+        Self {
+            position: state.position(),
+            content_offset: state.content_offset(),
+        }
+    }
+
+    fn place(self, origin: Point) -> (Point, Point) {
+        let top_left = Point {
+            x: origin.x + self.position.x,
+            y: origin.y + self.position.y,
+        };
+        let content = Point {
+            x: top_left.x + self.content_offset.x,
+            y: top_left.y + self.content_offset.y,
+        };
+        (top_left, content)
+    }
+}
+
 /// Rooted semantics tree extracted after layout.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Two trees are equal when they hold the same nodes; what a tree keeps to
+/// bring itself up to date is not compared.
+#[derive(Clone, Debug)]
 pub struct SemanticsTree {
-    /// Every placed node under the surface root, kept whole so the next
-    /// update can reuse what did not change.
     full: SemanticsNode,
-    /// Child indices from `full` down to the top visible modal, when one is
-    /// open.
     modal: Option<Vec<usize>>,
+    tracking: semantics_update::SemanticsTracking,
+}
+
+impl PartialEq for SemanticsTree {
+    fn eq(&self, other: &Self) -> bool {
+        self.full == other.full && self.modal == other.modal
+    }
 }
 
 impl SemanticsTree {
     fn new(full: SemanticsNode) -> Self {
         let modal = top_modal_path(&full);
-        Self { full, modal }
+        Self {
+            full,
+            modal,
+            tracking: semantics_update::SemanticsTracking::default(),
+        }
     }
 
     /// Returns the top visible modal subtree, or the full root when no modal is open.
@@ -846,7 +896,10 @@ impl LayoutMeasurements {
 /// This is useful for consumers that need semantics on demand without forcing
 /// every layout pass to eagerly allocate a full [`SemanticsTree`].
 pub fn build_semantics_tree_from_layout_tree(layout_tree: &LayoutTree) -> SemanticsTree {
-    SemanticsTree::new(build_semantics_node_from_layout_box(layout_tree.root()))
+    SemanticsTree::new(build_semantics_node_from_layout_box(
+        layout_tree.root(),
+        Point::default(),
+    ))
 }
 
 /// Builds a layout snapshot from retained layout state in the live applier tree.
@@ -903,7 +956,11 @@ fn walk_placed_boxes(
     let mut pending: Vec<(NodeId, Point)> = Vec::new();
     let placed = read_layout_node(applier, root, |state, children| {
         if state.is_placed() {
-            pending.extend(children.iter().map(|&child| (child, state.content_offset)));
+            pending.extend(
+                children
+                    .iter()
+                    .map(|&child| (child, state.content_offset())),
+            );
         }
     })?;
     if placed.is_none() {
@@ -1057,8 +1114,8 @@ fn place_layout_box(
         parent_layer_translation,
     )?;
     let child_origin = Point {
-        x: top_left.x + state.content_offset.x,
-        y: top_left.y + state.content_offset.y,
+        x: top_left.x + state.content_offset().x,
+        y: top_left.y + state.content_offset().y,
     };
     let end = child_stack.len();
     let mut children = Vec::with_capacity(end - first_child);
@@ -1081,275 +1138,8 @@ fn place_layout_box(
 
     Ok(Some(LayoutBox {
         node_generation: applier.node_generation(node_id),
-        ..LayoutBox::new(node_id, rect, state.content_offset, data, children)
+        ..LayoutBox::new(node_id, rect, state.content_offset(), data, children)
     }))
-}
-
-/// A semantics node's rect from its placement under a parent whose content
-/// starts at `origin`, and where its own content starts: the rule
-/// [`build_layout_tree_from_applier`] places boxes by, with the root at the
-/// origin.
-fn semantics_placement(
-    state: &crate::widgets::nodes::layout_node::LayoutState,
-    origin: Option<Point>,
-) -> (GeometryRect, Point) {
-    let top_left = origin.map_or_else(Point::default, |origin| Point {
-        x: origin.x + state.position().x,
-        y: origin.y + state.position().y,
-    });
-    let content = Point {
-        x: top_left.x + state.content_offset.x,
-        y: top_left.y + state.content_offset.y,
-    };
-    (
-        GeometryRect::from_origin_size(top_left, state.size()),
-        content,
-    )
-}
-
-/// Builds a semantics snapshot from retained layout state in the live applier tree.
-///
-/// This is the on-demand counterpart to [`build_layout_tree_from_applier`].
-/// It follows the currently placed child set, including subcompose active
-/// children, and clears semantics dirty flags for nodes it visits.
-pub fn build_semantics_tree_from_applier(
-    applier: &mut MemoryApplier,
-    root: NodeId,
-) -> Result<Option<SemanticsTree>, NodeError> {
-    let mut tree = None;
-    update_semantics_tree_from_applier(applier, root, &mut tree)?;
-    Ok(tree)
-}
-
-/// Brings `tree` up to date with the placed nodes under `root`, as
-/// [`build_semantics_tree_from_applier`] would build it, reusing what `tree`
-/// held. A node that is still the same node, has not marked its semantics
-/// dirty and merges no live state keeps what it reported and only takes its
-/// new bounds, so a pass that only moved nodes merges only live semantics.
-/// `tree` is `None` afterwards when `root` is not placed.
-pub fn update_semantics_tree_from_applier(
-    applier: &mut MemoryApplier,
-    root: NodeId,
-    tree: &mut Option<SemanticsTree>,
-) -> Result<(), NodeError> {
-    let (mut node, known) = match tree.take() {
-        Some(tree) => {
-            let known = tree.full.node_id == root;
-            (tree.full, known)
-        }
-        None => (SemanticsNode::default(), false),
-    };
-    let mut update = SemanticsUpdate {
-        applier,
-        child_stack: Vec::new(),
-        saw_modal: false,
-    };
-    if update.node(root, None, &mut node, known)? {
-        let modal = if update.saw_modal {
-            top_modal_path(&node)
-        } else {
-            None
-        };
-        *tree = Some(SemanticsTree { full: node, modal });
-    }
-    Ok(())
-}
-
-/// One walk of [`update_semantics_tree_from_applier`].
-struct SemanticsUpdate<'a> {
-    applier: &'a mut MemoryApplier,
-    /// The children of every node on the walk's path, each node's above its
-    /// parent's, so no node's child list is copied out of the applier.
-    child_stack: Vec<NodeId>,
-    /// Whether any node of the tree is modal, so the top one is looked for.
-    saw_modal: bool,
-}
-
-/// What a visit reads off a placed node: its role and configuration when
-/// they are merged again, whether it asks to be modal, and its placement.
-type SemanticsVisit = (
-    Option<(SemanticsRole, Option<SemanticsConfiguration>)>,
-    bool,
-    (GeometryRect, Point),
-);
-
-impl SemanticsUpdate<'_> {
-    /// Brings `node` up to date with `node_id` placed under `origin`, where
-    /// `known` says `node` holds what `node_id` reported last. Answers
-    /// whether `node_id` is placed.
-    fn node(
-        &mut self,
-        node_id: NodeId,
-        origin: Option<Point>,
-        node: &mut SemanticsNode,
-        known: bool,
-    ) -> Result<bool, NodeError> {
-        let generation = self.applier.node_generation(node_id);
-        let same = known && node.node_generation == generation;
-        let first_child = self.child_stack.len();
-        let Some((content, requests_modal, (bounds, content_origin))) =
-            self.visit(node_id, origin, same)?
-        else {
-            return Ok(false);
-        };
-        match content {
-            Some((role, config)) => {
-                let mut children = std::mem::take(&mut node.children);
-                if !same {
-                    children.clear();
-                }
-                *node =
-                    semantics_node_from_parts(node_id, generation, role, config, children, bounds);
-            }
-            None => {
-                node.is_modal = requests_modal
-                    && modal_takes_space(Size {
-                        width: bounds.width,
-                        height: bounds.height,
-                    });
-                node.bounds = bounds;
-            }
-        }
-        self.saw_modal |= node.is_modal;
-        self.children(&mut node.children, first_child, content_origin)?;
-        Ok(true)
-    }
-
-    /// Reads a placed node and pushes its children onto the stack, merging
-    /// its semantics again unless `same` says the tree holds its last report
-    /// and nothing since could have changed it.
-    fn visit(
-        &mut self,
-        node_id: NodeId,
-        origin: Option<Point>,
-        same: bool,
-    ) -> Result<Option<SemanticsVisit>, NodeError> {
-        let child_stack = &mut self.child_stack;
-        match self.applier.with_node::<LayoutNode, _>(node_id, |layout| {
-            let state = layout.layout_state();
-            if !state.is_placed() {
-                return None;
-            }
-            // Only a node that may keep its report reads its reach: one
-            // merged again takes its modality from its configuration.
-            let reach = (same && !layout.semantics_changed()).then(|| layout.semantics_reach());
-            let content = match reach {
-                Some(reach) if !reach.merges_live_state => None,
-                _ => Some((
-                    role_from_modifier_slices(&layout.modifier_slices_snapshot()),
-                    layout.semantics_configuration(),
-                )),
-            };
-            child_stack.extend_from_slice(&layout.children);
-            layout.clear_needs_semantics();
-            let requests_modal = reach.is_some_and(|reach| reach.is_modal);
-            Some((content, requests_modal, semantics_placement(&state, origin)))
-        }) {
-            Ok(visit) => return Ok(visit),
-            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
-            Err(err) => return Err(err),
-        }
-        // A subcompose node merges again on every update: lists and
-        // constraint readers are few, and their semantics follow live state.
-        match self
-            .applier
-            .with_node::<SubcomposeLayoutNode, _>(node_id, |subcompose| {
-                let state = subcompose.layout_state();
-                if !state.is_placed() {
-                    return None;
-                }
-                let config = subcompose.semantics_configuration();
-                subcompose.with_active_children(|children| child_stack.extend_from_slice(children));
-                subcompose.clear_needs_semantics();
-                Some((
-                    Some((SemanticsRole::Subcompose, config)),
-                    false,
-                    semantics_placement(&state, origin),
-                ))
-            }) {
-            Ok(visit) => Ok(visit),
-            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),
-            Err(err) => Err(err),
-        }
-    }
-
-    /// Brings `children` up to date with the placed nodes a parent's visit
-    /// pushed above `first_child`, matching each to what it reported last by
-    /// id. Children stay where they are while they come in the order they
-    /// did, those skipped over set aside; from the first that is not ahead,
-    /// the rest are found by id and moved into place. Whatever is left over
-    /// left the parent and is dropped.
-    fn children(
-        &mut self,
-        children: &mut Vec<SemanticsNode>,
-        first_child: usize,
-        content: Point,
-    ) -> Result<(), NodeError> {
-        let end = self.child_stack.len();
-        let mut held = HeldChildren::default();
-        let mut in_place = true;
-        let mut kept = 0;
-        for index in first_child..end {
-            let child_id = self.child_stack[index];
-            if crate::modifier::is_window_root(self.applier, child_id) {
-                continue;
-            }
-            if in_place {
-                if let Some(offset) = children[kept..]
-                    .iter()
-                    .position(|child| child.node_id == child_id)
-                {
-                    held.extend(children.drain(kept..kept + offset));
-                    if self.node(child_id, Some(content), &mut children[kept], true)? {
-                        kept += 1;
-                    } else {
-                        children.remove(kept);
-                    }
-                    continue;
-                }
-                held.extend(children.drain(kept..));
-                in_place = false;
-            }
-            let taken = held.take(child_id);
-            let known = taken.is_some();
-            let mut child = taken.unwrap_or_default();
-            if self.node(child_id, Some(content), &mut child, known)? {
-                children.push(child);
-            }
-        }
-        if in_place {
-            children.truncate(kept);
-        }
-        self.child_stack.truncate(first_child);
-        Ok(())
-    }
-}
-
-/// The children a node reported last that an update skipped over or has not
-/// reached yet, found by id.
-#[derive(Default)]
-struct HeldChildren {
-    nodes: Vec<SemanticsNode>,
-    positions: cranpose_core::collections::map::HashMap<NodeId, usize>,
-}
-
-impl HeldChildren {
-    fn extend(&mut self, nodes: impl Iterator<Item = SemanticsNode>) {
-        for node in nodes {
-            self.positions.insert(node.node_id, self.nodes.len());
-            self.nodes.push(node);
-        }
-    }
-
-    /// Takes out what `node_id` reported last, if it was held.
-    fn take(&mut self, node_id: NodeId) -> Option<SemanticsNode> {
-        let position = self.positions.remove(&node_id)?;
-        let node = self.nodes.swap_remove(position);
-        if let Some(moved) = self.nodes.get(position) {
-            self.positions.insert(moved.node_id, position);
-        }
-        Some(node)
-    }
 }
 
 /// Writes a node's coordinator geometry with `write`, and reports the node
@@ -1367,7 +1157,7 @@ fn write_node_geometry(
 
 /// The modal the semantics tree of `root` would be rooted at, found without
 /// building the tree: the topmost placed, visible modal that takes space,
-/// or `None` when no modal is open. Unlike a tree build, it leaves the
+/// or `None` when no modal is open. Unlike a tree update, it leaves the
 /// nodes' semantics dirty flags alone.
 pub fn top_modal_from_applier(
     applier: &mut MemoryApplier,
@@ -3817,25 +3607,29 @@ fn build_semantics_node_from_live_nodes(
     node: &MeasuredNode,
     origin: Option<Point>,
 ) -> Result<SemanticsNode, NodeError> {
-    let (role, config, (bounds, content)) =
+    let (role, config, (bounds, content), placement) =
         match applier.with_node::<LayoutNode, _>(node.node_id, |layout| {
             let role = role_from_modifier_slices(&layout.modifier_slices_snapshot());
             let config = layout.semantics_configuration();
             layout.clear_needs_semantics();
+            let state = layout.layout_state();
             (
                 role,
                 config,
-                semantics_placement(&layout.layout_state(), origin),
+                semantics_placement(&state, origin),
+                SemanticsPlacement::of(&state),
             )
         }) {
             Ok(data) => data,
             Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {
                 match applier.with_node::<SubcomposeLayoutNode, _>(node.node_id, |subcompose| {
                     subcompose.clear_needs_semantics();
+                    let state = subcompose.layout_state();
                     (
                         SemanticsRole::Subcompose,
                         subcompose.semantics_configuration(),
-                        semantics_placement(&subcompose.layout_state(), origin),
+                        semantics_placement(&state, origin),
+                        SemanticsPlacement::of(&state),
                     )
                 }) {
                     Ok(data) => data,
@@ -3848,6 +3642,7 @@ fn build_semantics_node_from_live_nodes(
                                 GeometryRect::from_origin_size(top_left, node.size),
                                 top_left,
                             ),
+                            SemanticsPlacement::default(),
                         )
                     }
                     Err(err) => return Err(err),
@@ -3865,14 +3660,17 @@ fn build_semantics_node_from_live_nodes(
         )?);
     }
 
-    Ok(semantics_node_from_parts(
-        node.node_id,
-        applier.node_generation(node.node_id),
-        role,
-        config,
-        children,
-        bounds,
-    ))
+    Ok(SemanticsNode {
+        placement,
+        ..semantics_node_from_parts(
+            node.node_id,
+            applier.node_generation(node.node_id),
+            role,
+            config,
+            children,
+            bounds,
+        )
+    })
 }
 
 fn record_semantics_allocation_stats(node: &SemanticsNode, stats: &mut LayoutAllocationDebugStats) {
@@ -3977,21 +3775,35 @@ fn semantics_role_from_layout_box(layout_box: &LayoutBox) -> SemanticsRole {
     }
 }
 
-fn build_semantics_node_from_layout_box(layout_box: &LayoutBox) -> SemanticsNode {
+fn build_semantics_node_from_layout_box(layout_box: &LayoutBox, origin: Point) -> SemanticsNode {
+    let rect = layout_box.rect;
+    let content = Point {
+        x: rect.x + layout_box.content_offset.x,
+        y: rect.y + layout_box.content_offset.y,
+    };
     let children = layout_box
         .children
         .iter()
-        .map(build_semantics_node_from_layout_box)
+        .map(|child| build_semantics_node_from_layout_box(child, content))
         .collect();
 
-    semantics_node_from_parts(
-        layout_box.node_id,
-        layout_box.node_generation,
-        semantics_role_from_layout_box(layout_box),
-        layout_box.node_data.semantics().cloned(),
-        children,
-        layout_box.rect,
-    )
+    SemanticsNode {
+        placement: SemanticsPlacement {
+            position: Point {
+                x: rect.x - origin.x,
+                y: rect.y - origin.y,
+            },
+            content_offset: layout_box.content_offset,
+        },
+        ..semantics_node_from_parts(
+            layout_box.node_id,
+            layout_box.node_generation,
+            semantics_role_from_layout_box(layout_box),
+            layout_box.node_data.semantics().cloned(),
+            children,
+            rect,
+        )
+    }
 }
 
 fn layout_kind_from_metadata(_node_id: NodeId, info: &RuntimeNodeMetadata) -> LayoutNodeKind {

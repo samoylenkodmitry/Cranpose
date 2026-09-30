@@ -75,8 +75,8 @@ pub struct LayoutState {
     position: Point,
     is_placed: bool,
     node_id: Option<NodeId>,
-    /// Offset of the content box relative to the node origin (e.g. due to padding).
-    pub content_offset: Point,
+    content_offset: Point,
+    semantics_stamp: u64,
 }
 
 impl LayoutState {
@@ -86,6 +86,21 @@ impl LayoutState {
 
     pub fn position(&self) -> Point {
         self.position
+    }
+
+    /// Offset of the content box relative to the node origin (e.g. due to
+    /// padding).
+    pub fn content_offset(&self) -> Point {
+        self.content_offset
+    }
+
+    /// Writes the content offset, reporting an actual change to the
+    /// semantics tree.
+    pub fn set_content_offset(&mut self, offset: Point) {
+        if self.content_offset != offset {
+            self.content_offset = offset;
+            self.note_semantics_change();
+        }
     }
 
     /// The same state placed at the origin: what a window root's own scene
@@ -112,24 +127,38 @@ impl LayoutState {
                 crate::render_state::record_geometry_scene_node(id);
             }
             self.size = size;
+            self.note_semantics_change();
         }
     }
 
     /// Writes the placed position and marks the node placed, self-reporting
     /// an actual move to the scene phase.
     pub fn place(&mut self, position: Point) {
-        if self.position != position {
+        let moved = self.position != position;
+        if moved {
             if let Some(id) = self.node_id {
                 crate::render_state::record_geometry_scene_node(id);
             }
             self.position = position;
         }
-        self.is_placed = true;
+        if moved || !self.is_placed {
+            self.is_placed = true;
+            self.note_semantics_change();
+        }
     }
 
     /// Clears the placed flag at the start of a layout pass.
     pub fn clear_placed(&mut self) {
-        self.is_placed = false;
+        if self.is_placed {
+            self.is_placed = false;
+            self.note_semantics_change();
+        }
+    }
+
+    pub(crate) fn note_semantics_change(&mut self) {
+        if let Some(id) = self.node_id {
+            crate::semantics_layout_log::record_layout_change(id, &mut self.semantics_stamp);
+        }
     }
 }
 
@@ -280,8 +309,9 @@ pub struct LayoutNode {
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
     needs_semantics: Cell<bool>,
-    /// A node below this one needs semantics recomputation; this node's own
-    /// semantics are unchanged.
+    /// The semantics tree has to read this node again, though its own
+    /// semantics are unchanged: a node below it changed, or its placement
+    /// or children did.
     descendant_needs_semantics: Cell<bool>,
     /// The chain's modal and hidden flags, read by the modal count and the
     /// modal walk: dropped whenever the chain syncs or semantics are
@@ -439,6 +469,13 @@ impl LayoutNode {
         self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
         self.modifier_capabilities = self.modifier_chain.capabilities();
         self.modifier_child_capabilities = self.modifier_chain.aggregate_child_capabilities();
+        if prev_caps.contains(NodeCapabilities::WINDOW_ROOT)
+            != self
+                .modifier_capabilities
+                .contains(NodeCapabilities::WINDOW_ROOT)
+        {
+            self.note_semantics_layout_change();
+        }
         self.forget_semantics_reach();
         self.modifier_slices_dirty.set(true);
 
@@ -848,12 +885,18 @@ impl LayoutNode {
 
     /// Records the content offset (e.g. from padding).
     pub fn set_content_offset(&self, offset: Point) {
-        self.layout_state.borrow_mut().content_offset = offset;
+        self.layout_state.borrow_mut().set_content_offset(offset);
     }
 
     /// Clears the is_placed flag. Called at the start of a layout pass.
     pub fn clear_placed(&self) {
-        self.layout_state.borrow_mut().is_placed = false;
+        self.layout_state.borrow_mut().clear_placed();
+    }
+
+    fn note_semantics_layout_change(&self) {
+        if let Ok(mut state) = self.layout_state.try_borrow_mut() {
+            state.note_semantics_change();
+        }
     }
 
     pub fn semantics_configuration(&self) -> Option<SemanticsConfiguration> {
@@ -984,6 +1027,7 @@ impl Node for LayoutNode {
         self.children.push(child);
         self.cache.clear();
         self.mark_needs_measure();
+        self.note_semantics_layout_change();
         true
     }
 
@@ -1000,6 +1044,7 @@ impl Node for LayoutNode {
             }
             self.cache.clear();
             self.mark_needs_measure();
+            self.note_semantics_layout_change();
         }
         removed
     }
@@ -1013,6 +1058,7 @@ impl Node for LayoutNode {
         self.children.insert(target, child);
         self.cache.clear();
         self.mark_needs_measure();
+        self.note_semantics_layout_change();
     }
 
     fn update_children(&mut self, children: &[NodeId]) {
@@ -1020,6 +1066,7 @@ impl Node for LayoutNode {
         self.children.extend_from_slice(children);
         self.cache.clear();
         self.mark_needs_measure();
+        self.note_semantics_layout_change();
     }
 
     fn collect_children_into(&self, out: &mut smallvec::SmallVec<[NodeId; 8]>) {
