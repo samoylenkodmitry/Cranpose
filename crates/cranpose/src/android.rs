@@ -747,6 +747,28 @@ fn update_offscreen(
     pending_ui.then(|| web_time::Instant::now() + OFFSCREEN_UPDATE_PERIOD)
 }
 
+fn start_pending_frame(
+    resources: &GpuResources,
+    shell: &mut AppShell<WgpuRenderer>,
+    pacer: &mut FramePacer,
+) -> (bool, bool) {
+    let on_screen = resources.has_surface();
+    if on_screen {
+        shell.run_pending_tasks();
+    }
+    if resources.surface_dirty || shell.needs_redraw() {
+        pacer.note_visual_work();
+    }
+    let frame_due = on_screen && shell.needs_update() && shell.renderer().has_frame_credit();
+    let frame_starts = frame_due
+        && pacer.begin_frame(
+            crate::android_frame_telemetry::monotonic_nanos(),
+            crate::android_vsync::last_vsync_ns(),
+            vsync_period_ns(),
+        );
+    (frame_starts, frame_due && !frame_starts)
+}
+
 fn wait_for_pending_frame(
     pacer: &FramePacer,
     mut shell: Option<&mut AppShell<WgpuRenderer>>,
@@ -2540,21 +2562,9 @@ pub fn run(
         let mut frame_started_at: Option<web_time::Instant> = None;
         frame_waits_for_vsync = false;
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
-            let on_screen = resources.has_surface();
-            if on_screen {
-                // Tasks woken since the last pass, a delay that ran out, run
-                // now rather than at the next frame that starts.
-                shell.run_pending_tasks();
-            }
-            let frame_due =
-                on_screen && shell.needs_update() && shell.renderer().has_frame_credit();
-            let frame_starts = frame_due
-                && frame_pacer.begin_frame(
-                    crate::android_frame_telemetry::monotonic_nanos(),
-                    crate::android_vsync::last_vsync_ns(),
-                    vsync_period_ns(),
-                );
-            frame_waits_for_vsync = frame_due && !frame_starts;
+            let (frame_starts, waits_for_vsync) =
+                start_pending_frame(resources, shell, &mut frame_pacer);
+            frame_waits_for_vsync = waits_for_vsync;
             if frame_starts {
                 frame_timings.pacing = frame_pacing(frame_pacer.current_level());
                 frame_timings.lead_ns =
@@ -2593,6 +2603,11 @@ pub fn run(
                                 ));
                             }
                             PublishOutcome::NoGraph | PublishOutcome::NoCredit => {
+                                frame_pacer.note_empty_frame(
+                                    crate::android_frame_telemetry::monotonic_nanos(),
+                                    crate::android_vsync::last_vsync_ns(),
+                                    vsync_period_ns(),
+                                );
                                 frame_telemetry.note_idle_iteration();
                             }
                         }
@@ -2604,6 +2619,11 @@ pub fn run(
                         }
                     }
                 } else {
+                    frame_pacer.note_empty_frame(
+                        crate::android_frame_telemetry::monotonic_nanos(),
+                        crate::android_vsync::last_vsync_ns(),
+                        vsync_period_ns(),
+                    );
                     frame_telemetry.note_idle_iteration();
                 }
             } else {

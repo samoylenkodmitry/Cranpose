@@ -11454,6 +11454,10 @@ fn a_task_woken_between_frames_runs_when_the_loop_wakes_and_its_change_waits_for
         shell.needs_update(),
         "the state it wrote is drawn by the next frame"
     );
+    assert!(
+        shell.needs_redraw(),
+        "a task's state change makes the displayed text stale before the next frame"
+    );
     shell.update();
     assert_eq!(written.get().map(|ticks| ticks.get_non_reactive()), Some(1));
 }
