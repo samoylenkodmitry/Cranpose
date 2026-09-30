@@ -22,7 +22,7 @@ fn scene_for(rule: &mut ComposeTestRule) -> Scene {
     applier
         .compute_layout(root, VIEWPORT)
         .expect("layout succeeds");
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("scene graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("scene graph");
     collect_hits_from_graph(
         &graph.root,
         ProjectiveTransform::identity(),

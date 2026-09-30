@@ -88,7 +88,7 @@ fn scaling_list_scene() -> LayerNode {
             },
         )
         .expect("layout");
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
     applier.clear_runtime_handle();
     graph.root
 }
@@ -173,7 +173,7 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<usize>, Rc<RefCell<Vec<usize
             },
         )
         .expect("layout");
-    let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+    let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
     applier.clear_runtime_handle();
 
     let mut scene = Scene::default();

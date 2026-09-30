@@ -588,7 +588,7 @@ fn active_children_follow_last_rendered_placements() {
     {
         let mut inner = node.inner.borrow_mut();
         inner.children = vec![11, 22];
-        inner.last_placements = (33..45).collect();
+        inner.last_placements = Rc::new((33..45).collect());
     }
 
     let expected: Vec<_> = (33..45).collect();
@@ -631,6 +631,34 @@ fn subcompose_reuses_measured_children_scratch_map() {
         second.borrow().capacity() >= retained_capacity,
         "SubcomposeLayout should retain measured-child scratch capacity"
     );
+}
+
+#[test]
+fn active_child_storage_is_shared_only_until_the_reader_returns() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let policy: Rc<MeasurePolicy> =
+        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
+    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), policy);
+    let handle = node.handle();
+    handle.set_active_children(1..13);
+    let original = node.with_active_children(<[NodeId]>::as_ptr);
+    node.with_active_children(|children| {
+        handle.set_active_children(children.iter().copied());
+        node.with_active_children(|unchanged| assert_eq!(unchanged.as_ptr(), original));
+        handle.set_active_children([7, 8, 9]);
+        assert_eq!(children, &(1..13).collect::<Vec<_>>());
+        node.with_active_children(|changed| {
+            assert_eq!(changed, &[7, 8, 9]);
+            assert_ne!(changed.as_ptr(), original);
+        });
+    });
+    assert_eq!(Rc::strong_count(&node.inner.borrow().last_placements), 1);
+    let exclusive = node.with_active_children(<[NodeId]>::as_ptr);
+    handle.set_active_children([9, 8, 7]);
+    node.with_active_children(|children| {
+        assert_eq!(children, &[9, 8, 7]);
+        assert_eq!(children.as_ptr(), exclusive);
+    });
 }
 
 #[test]

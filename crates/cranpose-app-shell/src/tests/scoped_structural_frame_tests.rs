@@ -227,7 +227,7 @@ fn rebuilt_picture(shell: &mut AppShell<ScopedUpdateCountingRenderer>) -> Vec<St
     let root = shell.app.composition.root().expect("composition root");
     let app_context = Rc::clone(&shell.app.app_context);
     let graph = app_context
-        .enter(|| build_graph_from_applier(&mut shell.app.composition.applier_mut(), root, 1.0))
+        .enter(|| build_graph_from_applier(&shell.app.composition.applier_mut(), root, 1.0))
         .expect("a whole-scene rebuild should lower the root");
     let mut picture = Vec::new();
     scene_picture(&graph.root, 0, &mut picture);

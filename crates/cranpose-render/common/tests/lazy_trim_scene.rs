@@ -95,7 +95,7 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
         let mut applier = composition.applier_mut();
         applier.set_runtime_handle(handle.clone());
         applier.compute_layout(root, VIEWPORT).expect("layout");
-        let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+        let graph = build_graph_from_applier(&applier, root, 1.0).expect("render graph");
         applier.clear_runtime_handle();
         graph
     };
@@ -132,9 +132,9 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
                 "dropping row {} told the scene phase nothing had moved",
                 count - 1
             );
-            if !update_graph_from_applier_report(&mut applier, &mut graph, &dirty, 1.0).applied() {
-                graph = build_graph_from_applier(&mut applier, root, 1.0)
-                    .expect("rebuilt render graph");
+            if !update_graph_from_applier_report(&applier, &mut graph, &dirty, 1.0).applied() {
+                graph =
+                    build_graph_from_applier(&applier, root, 1.0).expect("rebuilt render graph");
             }
             applier.clear_runtime_handle();
         }

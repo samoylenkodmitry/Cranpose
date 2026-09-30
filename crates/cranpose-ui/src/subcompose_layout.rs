@@ -1038,8 +1038,11 @@ impl SubcomposeLayoutNode {
 
     /// Calls `f` with the children this node placed in its last layout, in
     /// placement order, without copying them.
+    /// Changes through a node handle during `f` become visible to the next
+    /// read; this read keeps its original children.
     pub fn with_active_children<R>(&self, f: impl FnOnce(&[NodeId]) -> R) -> R {
-        f(&self.inner.borrow().last_placements)
+        let children = Rc::clone(&self.inner.borrow().last_placements);
+        f(&children)
     }
 
     /// Mark this node as needing measure. Also marks it as needing layout.
@@ -1584,7 +1587,7 @@ struct SubcomposeLayoutNodeInner {
     debug_modifiers: bool,
     virtual_nodes: HashMap<NodeId, Rc<LayoutNode>>,
     node_id: Option<NodeId>,
-    last_placements: Vec<NodeId>,
+    last_placements: Rc<Vec<NodeId>>,
     placement_scratch: Vec<Placement>,
     measured_children_scratch: Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>>,
     captured_context: Option<cranpose_core::CapturedCompositionContext>,
@@ -1612,18 +1615,18 @@ impl SubcomposeLayoutNodeInner {
             match self.last_placements.get(count) {
                 Some(&placed) if placed == child => {}
                 Some(_) => {
-                    self.last_placements[count] = child;
+                    Rc::make_mut(&mut self.last_placements)[count] = child;
                     changed = true;
                 }
                 None => {
-                    self.last_placements.push(child);
+                    Rc::make_mut(&mut self.last_placements).push(child);
                     changed = true;
                 }
             }
             count += 1;
         }
         if self.last_placements.len() > count {
-            self.last_placements.truncate(count);
+            Rc::make_mut(&mut self.last_placements).truncate(count);
             changed = true;
         }
         if changed && let Some(id) = self.node_id {
@@ -1644,7 +1647,7 @@ impl SubcomposeLayoutNodeInner {
             debug_modifiers: false,
             virtual_nodes: HashMap::new(),
             node_id: None,
-            last_placements: Vec::new(),
+            last_placements: Rc::new(Vec::new()),
             placement_scratch: Vec::new(),
             measured_children_scratch: Rc::new(RefCell::new(HashMap::default())),
             captured_context: None,

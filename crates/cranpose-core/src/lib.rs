@@ -3914,7 +3914,9 @@ impl MemoryApplier {
         self.stable_index.set_slot(stable_id, physical_id);
     }
 
-    fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
+    /// Borrows a live node without requiring exclusive access to the tree.
+    /// Returns [`NodeError::Missing`] when `id` does not name a live node.
+    pub fn get_ref(&self, id: NodeId) -> Result<&dyn Node, NodeError> {
         if let Some(physical_id) = self.resolve_node_index(id) {
             let slot = self
                 .nodes

@@ -1,7 +1,7 @@
-use std::{cell::Cell, rc::Rc};
+use std::{any::Any, cell::Cell, rc::Rc};
 
 use cranpose_core::{
-    MemoryApplier, Node, NodeId,
+    MemoryApplier, NodeId,
     collections::map::{HashMap, HashSet},
 };
 use cranpose_ui::{
@@ -12,7 +12,6 @@ use cranpose_ui_graphics::{
     CommandRecording, CompositingStrategy, GraphicsLayer, LayerShape, RoundedCornerShape,
     rounded_corner_alpha_mask_effect,
 };
-use smallvec::SmallVec;
 
 use crate::{
     graph::{
@@ -41,10 +40,10 @@ struct BuildNodeSnapshot {
     children: Vec<Self>,
 }
 
-struct SnapshotNodeData {
+struct SnapshotNodeData<'a> {
     layout_state: cranpose_ui::widgets::LayoutState,
     modifier_slices: Rc<ModifierNodeSlices>,
-    children: SmallVec<[NodeId; 8]>,
+    children: &'a [NodeId],
     window_root: bool,
 }
 
@@ -125,7 +124,7 @@ pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGrap
 }
 
 pub fn build_graph_from_applier(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     root: NodeId,
     _scale: f32,
 ) -> Option<RenderGraph> {
@@ -139,7 +138,7 @@ pub fn build_graph_from_applier(
 /// Builds `root`'s graph again, its layers taking the allocations of
 /// `previous`, the graph it replaces.
 pub fn rebuild_graph_from_applier(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     root: NodeId,
     scale: f32,
     previous: Option<RenderGraph>,
@@ -157,7 +156,7 @@ pub fn rebuild_graph_from_applier(
 }
 
 pub fn update_graph_from_applier(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     graph: &mut RenderGraph,
     dirty_nodes: &[NodeId],
     scale: f32,
@@ -166,7 +165,7 @@ pub fn update_graph_from_applier(
 }
 
 pub fn update_graph_from_applier_report(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     graph: &mut RenderGraph,
     dirty_nodes: &[NodeId],
     scale: f32,
@@ -176,7 +175,7 @@ pub fn update_graph_from_applier_report(
 }
 
 pub fn update_graph_from_applier_report_into(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     graph: &mut RenderGraph,
     dirty_nodes: &[NodeId],
     _scale: f32,
@@ -197,7 +196,7 @@ pub fn update_graph_from_applier_report_into(
 }
 
 fn update_graph_from_applier_report_into_inner(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     graph: &mut RenderGraph,
     dirty_nodes: &[NodeId],
     changed_nodes: &mut Vec<NodeId>,
@@ -320,7 +319,7 @@ struct ReplaceDirtyLayersReport {
 }
 
 fn replace_dirty_layers_from_applier(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     parent: &mut LayerNode,
     parent_children: AbsOrigin,
     dirty_nodes: &mut HashSet<NodeId>,
@@ -383,8 +382,9 @@ fn replace_dirty_layers_from_applier(
                 parent_abs: Some(parent_children),
                 parent_content_offset: parent.content_offset,
             };
-            let data = placed_node_data(applier, node_id, false)?;
-            write_node_layer(applier, node_id, data, context, child_layer);
+            read_placed_node_data(applier, node_id, false, |data| {
+                write_node_layer(applier, node_id, data, context, child_layer);
+            })?;
             report.hit_graph_dirty |= previous.dirty_against(&HitGraphState::of(child_layer));
             remove_dirty_descendants(child_layer, dirty_nodes);
             collect_layer_node_ids(child_layer, changed_nodes);
@@ -442,7 +442,7 @@ struct TranslateAncestorContext {
 }
 
 fn try_translate_scrolled_layer(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     container: &mut LayerNode,
     dirty_nodes: &mut HashSet<NodeId>,
     changed_nodes: &mut Vec<NodeId>,
@@ -451,71 +451,75 @@ fn try_translate_scrolled_layer(
     let Some(node_id) = layer_identity(container) else {
         return translate_bail("no node id");
     };
-    let Some(data) = snapshot_node_data(applier, node_id) else {
-        return translate_bail("container snapshot read failed");
-    };
-    if container.wraps.is_none() {
-        return translate_layer_from_data(
-            applier,
-            container,
-            dirty_nodes,
-            changed_nodes,
-            ancestors,
-            data,
-            false,
-        );
-    }
-    let outer_count = data.modifier_slices.outer_draw_command_count();
-    if outer_count == 0 {
-        return translate_bail("outer draws removed");
-    }
-    let size = data.layout_state.size();
-    let placement = data.layout_state.position();
-    let slices = Rc::clone(&data.modifier_slices);
-    let inner_ancestors = TranslateAncestorContext {
-        ancestor_hashed: crate::graph_hash::layer_children_ancestor_hashed(
-            container,
-            ancestors.ancestor_hashed,
-        ),
-        ..ancestors
-    };
-    let Some(inner) = container.children.iter_mut().find_map(|child| match child {
-        RenderNode::Layer(layer) if layer.node_id == Some(node_id) => Some(layer),
-        _ => None,
-    }) else {
-        return translate_bail("wrapped layer missing");
-    };
-    if !translate_layer_from_data(
-        applier,
-        inner,
-        dirty_nodes,
-        changed_nodes,
-        inner_ancestors,
-        data,
-        true,
-    ) {
-        return false;
-    }
-    let outer = outer_draws(node_id, slices.draw_commands(), outer_count, size)
-        .expect("outer command count is nonzero");
-    let layer = take_wrapped_layer(container, node_id).expect("the wrapped layer was found above");
-    write_wrapper(
-        container,
-        layer,
-        placement,
-        outer,
-        ancestors.parent_content_offset,
-    );
-    for child in &mut container.children {
-        if let RenderNode::Layer(layer) = child {
-            crate::graph_hash::refresh_layer_own_raster_cache_hashes(
-                layer,
-                inner_ancestors.ancestor_hashed,
+    read_node_data(applier, node_id, |data| {
+        if container.wraps.is_none() {
+            return translate_layer_from_data(
+                applier,
+                container,
+                dirty_nodes,
+                changed_nodes,
+                ancestors,
+                data,
+                false,
             );
         }
-    }
-    crate::graph_hash::refresh_layer_own_raster_cache_hashes(container, ancestors.ancestor_hashed);
-    true
+        let outer_count = data.modifier_slices.outer_draw_command_count();
+        if outer_count == 0 {
+            return translate_bail("outer draws removed");
+        }
+        let size = data.layout_state.size();
+        let placement = data.layout_state.position();
+        let slices = Rc::clone(&data.modifier_slices);
+        let inner_ancestors = TranslateAncestorContext {
+            ancestor_hashed: crate::graph_hash::layer_children_ancestor_hashed(
+                container,
+                ancestors.ancestor_hashed,
+            ),
+            ..ancestors
+        };
+        let Some(inner) = container.children.iter_mut().find_map(|child| match child {
+            RenderNode::Layer(layer) if layer.node_id == Some(node_id) => Some(layer),
+            _ => None,
+        }) else {
+            return translate_bail("wrapped layer missing");
+        };
+        if !translate_layer_from_data(
+            applier,
+            inner,
+            dirty_nodes,
+            changed_nodes,
+            inner_ancestors,
+            data,
+            true,
+        ) {
+            return false;
+        }
+        let outer = outer_draws(node_id, slices.draw_commands(), outer_count, size)
+            .expect("outer command count is nonzero");
+        let layer =
+            take_wrapped_layer(container, node_id).expect("the wrapped layer was found above");
+        write_wrapper(
+            container,
+            layer,
+            placement,
+            outer,
+            ancestors.parent_content_offset,
+        );
+        for child in &mut container.children {
+            if let RenderNode::Layer(layer) = child {
+                crate::graph_hash::refresh_layer_own_raster_cache_hashes(
+                    layer,
+                    inner_ancestors.ancestor_hashed,
+                );
+            }
+        }
+        crate::graph_hash::refresh_layer_own_raster_cache_hashes(
+            container,
+            ancestors.ancestor_hashed,
+        );
+        true
+    })
+    .unwrap_or_else(|| translate_bail("container snapshot read failed"))
 }
 
 struct TranslatedContainer {
@@ -604,7 +608,7 @@ thread_local! {
 /// previous ones, and returns whether they are the same children in the
 /// same order.
 fn translated_children(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     container: &LayerNode,
     dirty_nodes: &HashSet<NodeId>,
     fresh_children: &[NodeId],
@@ -613,12 +617,7 @@ fn translated_children(
     let placed_fresh = &mut scratch.placed_fresh;
     placed_fresh.clear();
     for child_id in fresh_children {
-        let state = applier
-            .with_node::<LayoutNode, _>(*child_id, |node| node.layout_state())
-            .or_else(|_| {
-                applier.with_node::<SubcomposeLayoutNode, _>(*child_id, |node| node.layout_state())
-            });
-        let Ok(state) = state else {
+        let Some(state) = scene_layout_state(applier, *child_id) else {
             continue;
         };
         if !state.is_placed() {
@@ -766,7 +765,7 @@ fn recycle_leaving_children(
 }
 
 fn build_entering_children(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     container: &LayerNode,
     scratch: &mut TranslateScratch,
     geometry: TranslateGeometry,
@@ -858,12 +857,12 @@ fn reconcile_translated_children(
 }
 
 fn translate_layer_from_data(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     container: &mut LayerNode,
     dirty_nodes: &mut HashSet<NodeId>,
     changed_nodes: &mut Vec<NodeId>,
     ancestors: TranslateAncestorContext,
-    data: SnapshotNodeData,
+    data: SnapshotNodeData<'_>,
     wrapped: bool,
 ) -> bool {
     let TranslateAncestorContext {
@@ -903,7 +902,7 @@ fn translate_layer_from_data(
         applier,
         container,
         dirty_nodes,
-        &fresh_children,
+        fresh_children,
         &mut scratch,
     ) {
         Ok(unchanged) => unchanged,
@@ -1357,71 +1356,83 @@ impl AbsOrigin {
     }
 }
 
-fn placed_node_data(
-    applier: &mut MemoryApplier,
+fn read_placed_node_data<R>(
+    applier: &MemoryApplier,
     node_id: NodeId,
     root: bool,
-) -> Option<SnapshotNodeData> {
-    let mut data = snapshot_node_data(applier, node_id)?;
-    if data.window_root {
-        if !root {
+    read: impl FnOnce(SnapshotNodeData<'_>) -> R,
+) -> Option<R> {
+    read_node_data(applier, node_id, |mut data| {
+        if data.window_root {
+            if !root {
+                return None;
+            }
+            data.layout_state = data.layout_state.at_origin();
+        }
+        note_layer_lowered();
+        if !data.layout_state.is_placed() {
             return None;
         }
-        data.layout_state = data.layout_state.at_origin();
-    }
-    note_layer_lowered();
-    data.layout_state.is_placed().then_some(data)
+        Some(read(data))
+    })?
 }
 
-fn lower_root_into(applier: &mut MemoryApplier, node_id: NodeId, target: &mut LayerNode) -> bool {
-    let Some(data) = placed_node_data(applier, node_id, true) else {
-        return false;
-    };
-    write_node_layer(applier, node_id, data, LowerContext::ROOT, target);
-    true
+fn lower_root_into(applier: &MemoryApplier, node_id: NodeId, target: &mut LayerNode) -> bool {
+    read_placed_node_data(applier, node_id, true, |data| {
+        write_node_layer(applier, node_id, data, LowerContext::ROOT, target);
+    })
+    .is_some()
 }
 
 fn lower_child(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     node_id: NodeId,
     context: LowerContext,
 ) -> Option<Box<LayerNode>> {
-    let data = placed_node_data(applier, node_id, false)?;
-    let mut layer = crate::layer_recycling::layer_box();
-    write_node_layer(applier, node_id, data, context, &mut layer);
-    Some(layer)
+    read_placed_node_data(applier, node_id, false, |data| {
+        let mut layer = crate::layer_recycling::layer_box();
+        write_node_layer(applier, node_id, data, context, &mut layer);
+        layer
+    })
 }
 
-fn snapshot_node_data(applier: &mut MemoryApplier, node_id: NodeId) -> Option<SnapshotNodeData> {
-    if let Ok(data) = applier.with_node::<LayoutNode, _>(node_id, |node| {
-        let state = node.layout_state();
-        let mut children = SmallVec::new();
-        node.collect_children_into(&mut children);
-        let modifier_slices = node.modifier_slices_snapshot();
-        SnapshotNodeData {
-            layout_state: state,
+fn scene_layout_state(
+    applier: &MemoryApplier,
+    node_id: NodeId,
+) -> Option<cranpose_ui::widgets::LayoutState> {
+    let node: &dyn Any = applier.get_ref(node_id).ok()?;
+    if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        return Some(node.layout_state());
+    }
+    node.downcast_ref::<SubcomposeLayoutNode>()
+        .map(SubcomposeLayoutNode::layout_state)
+}
+
+fn read_node_data<R>(
+    applier: &MemoryApplier,
+    node_id: NodeId,
+    read: impl FnOnce(SnapshotNodeData<'_>) -> R,
+) -> Option<R> {
+    let node: &dyn Any = applier.get_ref(node_id).ok()?;
+    if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        return Some(read(SnapshotNodeData {
+            layout_state: node.layout_state(),
+            modifier_slices: node.modifier_slices_snapshot(),
+            children: &node.children,
+            window_root: node.is_window_root(),
+        }));
+    }
+    let node = node.downcast_ref::<SubcomposeLayoutNode>()?;
+    let layout_state = node.layout_state();
+    let modifier_slices = node.modifier_slices_snapshot();
+    Some(node.with_active_children(|children| {
+        read(SnapshotNodeData {
+            layout_state,
             modifier_slices,
             children,
-            window_root: node.is_window_root(),
-        }
-    }) {
-        return Some(data);
-    }
-
-    applier
-        .with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-            let state = node.layout_state();
-            let mut children = SmallVec::new();
-            node.collect_children_into(&mut children);
-            let modifier_slices = node.modifier_slices_snapshot();
-            SnapshotNodeData {
-                layout_state: state,
-                modifier_slices,
-                children,
-                window_root: false,
-            }
+            window_root: false,
         })
-        .ok()
+    }))
 }
 
 fn hit_test_from_slices(slices: &Rc<ModifierNodeSlices>) -> Option<HitTestNode> {
@@ -1449,9 +1460,9 @@ fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
 }
 
 fn write_node_layer(
-    applier: &mut MemoryApplier,
+    applier: &MemoryApplier,
     node_id: NodeId,
-    data: SnapshotNodeData,
+    data: SnapshotNodeData<'_>,
     context: LowerContext,
     target: &mut LayerNode,
 ) {
@@ -1516,7 +1527,7 @@ fn write_node_layer(
         context.parent_content_offset,
         |list| {
             write_node_content(list, node_id, &slices, size, children.len(), |list| {
-                for child_id in children {
+                for &child_id in children {
                     if let Some(child) = lower_child(applier, child_id, child_context) {
                         list.push(RenderNode::Layer(child));
                     }
