@@ -393,6 +393,7 @@ struct NativeWindowSurface {
     last_cursor_position: Option<(f32, f32)>,
     last_cursor_physical_position: Option<PhysicalPosition<f64>>,
     last_frame_start_time: Option<Instant>,
+    last_redraw_empty: bool,
     vsync_interval: Duration,
     pending_outer_positions: PendingNativeWindowPositions,
     active_drag: Option<NativeWindowPollingDragSession>,
@@ -584,7 +585,7 @@ impl PendingNativeWindowPositions {
 
 impl NativeWindowSurface {
     fn frame_interval(&self, mode: FramePacingMode) -> Option<Duration> {
-        frame_interval_for_mode(mode, self.vsync_interval)
+        frame_cap_interval(mode, self.vsync_interval, self.last_redraw_empty)
     }
 
     fn root_id(&self) -> RootId {
@@ -636,6 +637,7 @@ struct App {
     event_proxy: EventLoopProxy,
     applied_frame_pacing_mode: FramePacingMode,
     last_frame_start_time: Option<Instant>,
+    last_redraw_empty: bool,
     primary_redraw_pending: bool,
     primary_surface_dirty: bool,
     primary_initial_present_pending: bool,
@@ -710,6 +712,7 @@ impl App {
             event_proxy,
             applied_frame_pacing_mode,
             last_frame_start_time: None,
+            last_redraw_empty: false,
             primary_redraw_pending: false,
             primary_surface_dirty: false,
             primary_initial_present_pending: false,
@@ -742,7 +745,11 @@ impl App {
     }
 
     fn frame_interval(&self) -> Option<Duration> {
-        frame_interval_for_mode(self.frame_pacing_mode(), self.vsync_interval)
+        frame_cap_interval(
+            self.frame_pacing_mode(),
+            self.vsync_interval,
+            self.last_redraw_empty,
+        )
     }
 
     fn sync_frame_pacing(&mut self) {
@@ -1686,6 +1693,7 @@ impl App {
             last_cursor_position: None,
             last_cursor_physical_position: None,
             last_frame_start_time: None,
+            last_redraw_empty: false,
             vsync_interval: default_vsync_interval(),
             pending_outer_positions: PendingNativeWindowPositions::default(),
             active_drag: None,
@@ -2993,6 +3001,7 @@ impl App {
             surface_present_required(native.surface_dirty, frame_owed, surface.needs_redraw());
         pace_after_empty_redraw(
             &mut native.last_frame_start_time,
+            &mut native.last_redraw_empty,
             frame_started_at,
             present_required,
         );
@@ -3014,7 +3023,12 @@ impl App {
             }
             SurfaceFrame::Skip => {
                 trace_native_window!("redraw surface unavailable key={:?}", native.key);
-                pace_after_empty_redraw(&mut native.last_frame_start_time, frame_started_at, false);
+                pace_after_empty_redraw(
+                    &mut native.last_frame_start_time,
+                    &mut native.last_redraw_empty,
+                    frame_started_at,
+                    false,
+                );
                 return false;
             }
         };
@@ -3376,12 +3390,28 @@ fn native_window_drag_poll_deadline(
 
 fn pace_after_empty_redraw(
     last_frame_start_time: &mut Option<Instant>,
+    last_redraw_empty: &mut bool,
     attempt_started_at: Instant,
     presented_something: bool,
 ) {
+    *last_redraw_empty = !presented_something;
     if !presented_something {
         *last_frame_start_time = Some(attempt_started_at);
     }
+}
+
+/// How long the next frame waits after the last one started: the pacing
+/// mode's frame interval, and when unpaced, a vsync interval after a redraw
+/// that presented nothing. Frame callbacks that change nothing on screen then
+/// tick at the display's rate instead of the event loop's; time-based
+/// animations finish in the same real time either way.
+fn frame_cap_interval(
+    mode: FramePacingMode,
+    vsync_interval: Duration,
+    last_redraw_empty: bool,
+) -> Option<Duration> {
+    frame_interval_for_mode(mode, vsync_interval)
+        .or_else(|| last_redraw_empty.then_some(vsync_interval))
 }
 
 fn primary_wrap_request(
@@ -5728,6 +5758,7 @@ impl ApplicationHandler for App {
                 );
                 pace_after_empty_redraw(
                     &mut self.last_frame_start_time,
+                    &mut self.last_redraw_empty,
                     frame_started_at,
                     present_required,
                 );
@@ -5763,6 +5794,7 @@ impl ApplicationHandler for App {
                             // retries at once and spins a core.
                             pace_after_empty_redraw(
                                 &mut self.last_frame_start_time,
+                                &mut self.last_redraw_empty,
                                 frame_started_at,
                                 false,
                             );
@@ -6430,7 +6462,6 @@ impl ApplicationHandler for App {
             if robot_visual_dirty {
                 self.robot_visible_surface_dirty = true;
                 if primary_surface_redraw_drives_app(primary_visible, self.settings.headless) {
-                    self.last_frame_start_time = None;
                     request_redraw_once(&window, &mut self.primary_redraw_pending);
                 }
             }
@@ -6604,7 +6635,11 @@ impl ApplicationHandler for App {
             }
         }
 
-        let frame_interval = frame_interval_for_mode(app.frame_pacing_mode(), self.vsync_interval);
+        let frame_interval = frame_cap_interval(
+            app.frame_pacing_mode(),
+            self.vsync_interval,
+            self.last_redraw_empty,
+        );
         let frame_schedule = app.frame_schedule();
         let has_active_animations = app.has_active_animations();
         let needs_update = frame_schedule.needs_update;
