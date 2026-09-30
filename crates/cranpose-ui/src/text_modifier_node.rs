@@ -9,6 +9,7 @@ use cranpose_foundation::{
     Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
     NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
+use smallvec::SmallVec;
 
 use crate::{
     density::Density,
@@ -48,7 +49,7 @@ struct TextPreparedLayoutOwner {
     options: TextLayoutOptions,
     node_id: Cell<Option<cranpose_core::NodeId>>,
     measured_max_width: Cell<Option<Option<f32>>>,
-    cache: RefCell<Vec<TextPreparedLayoutCacheEntry>>,
+    cache: RefCell<SmallVec<[TextPreparedLayoutCacheEntry; 1]>>,
 }
 
 #[derive(Clone, Debug)]
@@ -70,7 +71,7 @@ impl TextPreparedLayoutOwner {
             options: options.normalized(),
             node_id: Cell::new(node_id),
             measured_max_width: Cell::new(measured_max_width),
-            cache: RefCell::new(Vec::new()),
+            cache: RefCell::new(SmallVec::new()),
         }
     }
 
