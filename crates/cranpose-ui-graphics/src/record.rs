@@ -12,6 +12,7 @@ use crate::{
     Point, Rect, RenderHash, ShapeRecordBody, ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap,
     StrokeJoin, TAU, TileMode, arc_band,
     float::{at_least, within},
+    vertex_gradient,
 };
 
 /// The kind bits of [`ShapeRecord::flags`]: a plain rect.
@@ -34,6 +35,8 @@ const ARC_RECT_LOOSE_BIT: u32 = 1 << 19;
 const ARC_BANDED_BIT: u32 = 1 << 20;
 const BAND_CLASS_SHIFT: u32 = 21;
 const BAND_CLASS_MASK: u32 = 0b111;
+const VERTEX_GRADIENT_BIT: u32 = 1 << 24;
+const RECT_FILL_MASK: u32 = STROKED_BIT | (RECORD_KIND_ARC << KIND_SHIFT);
 const NO_SEGMENT_KEY: u32 = u32::MAX;
 
 /// How many segment-count buckets band-drawn arcs fall into: one per
@@ -362,6 +365,16 @@ impl ShapeRecord {
         self.brush != 0
     }
 
+    /// A rect or rounded-rect fill whose brush is a linear gradient of two
+    /// stops, clamped or mirrored, with every corner of the rect within the
+    /// stops' span and within `0..=1`: its colour is affine over the whole
+    /// quad. The renderer may interpolate corner colours for an aligned,
+    /// unturned placement while preserving gradient dithering.
+    /// It is still [`Self::is_gradient`].
+    pub fn is_vertex_gradient(&self) -> bool {
+        self.flags & VERTEX_GRADIENT_BIT != 0
+    }
+
     /// An arc wide enough to draw as a band strip from the vertex stage;
     /// its band class sits in its flags.
     pub fn is_banded(&self) -> bool {
@@ -570,6 +583,23 @@ pub struct BrushRecord {
 
 const NO_EXPLICIT_STOPS: u32 = u32::MAX;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BrushShading {
+    Solid,
+    Fragment,
+    Vertex,
+}
+
+impl BrushShading {
+    fn flag(self) -> u32 {
+        if self == Self::Vertex {
+            VERTEX_GRADIENT_BIT
+        } else {
+            0
+        }
+    }
+}
+
 /// One gradient stop in the layout the shader reads.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
@@ -601,6 +631,10 @@ pub struct RecordSegment {
     pub count: u32,
     pub blend: BlendMode,
     pub gradient: bool,
+    /// Whether the segment's records are gradients their vertices shade
+    /// (see [`ShapeRecord::is_vertex_gradient`]), which are not `gradient`:
+    /// the draw that takes them dithers their fragments.
+    pub vertex_gradient: bool,
     /// One bit per `BRUSH_KIND_*` present in the segment; bit 0 stands for
     /// the records drawn without a brush.
     pub brushes: u8,
@@ -978,6 +1012,7 @@ impl ShapeRecorder {
             count: 1,
             blend: BlendMode::SrcOver,
             gradient: false,
+            vertex_gradient: false,
             brushes: 0,
             kinds: 0,
             band_class: 0,
@@ -1215,7 +1250,8 @@ impl ShapeRecorder {
         let coverage = expand_rect(row_rect(body.rect), half_stroke);
         self.include_bounds(coverage);
         let index = self.tables.shapes.len() as u32;
-        let gradient = body.brush != 0;
+        let shading = self.brush_shading(&body);
+        body.flags |= shading.flag();
         let brush_bit = 1u8
             << match body.brush {
                 0 => 0,
@@ -1224,7 +1260,7 @@ impl ShapeRecorder {
         let kind_bit = 1u8 << fragment_kind(body.flags);
         let band_class = band_bucket.unwrap_or(0) as u8;
         body.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
-        let extend = self.note_segment_key(RecordLane::Shapes, blend, gradient)
+        let extend = self.note_segment_key(RecordLane::Shapes, blend, shading)
             && self.segment_takes_class(band_class);
         if !extend {
             self.segment_waste = 0;
@@ -1251,7 +1287,8 @@ impl ShapeRecorder {
                 start: index,
                 count: 1,
                 blend,
-                gradient,
+                gradient: shading == BrushShading::Fragment,
+                vertex_gradient: shading == BrushShading::Vertex,
                 brushes: brush_bit,
                 kinds: kind_bit,
                 band_class,
@@ -1263,15 +1300,8 @@ impl ShapeRecorder {
         coverage
     }
 
-    fn extend_segment(
-        &mut self,
-        lane: RecordLane,
-        index: u32,
-        blend: BlendMode,
-        gradient: bool,
-        kind_bit: u8,
-    ) {
-        let extend = self.note_segment_key(lane, blend, gradient);
+    fn extend_segment(&mut self, lane: RecordLane, index: u32, blend: BlendMode, kind_bit: u8) {
+        let extend = self.note_segment_key(lane, blend, BrushShading::Solid);
         if !extend {
             self.segment_waste = 0;
         }
@@ -1283,7 +1313,8 @@ impl ShapeRecorder {
                 start: index,
                 count: 1,
                 blend,
-                gradient,
+                gradient: false,
+                vertex_gradient: false,
                 brushes: 0,
                 kinds: kind_bit,
                 band_class: 0,
@@ -1318,8 +1349,13 @@ impl ShapeRecorder {
     /// Whether the next record continues the open segment, and makes its
     /// key the open one.
     #[inline]
-    fn note_segment_key(&mut self, lane: RecordLane, blend: BlendMode, gradient: bool) -> bool {
-        let key = ((lane as u32) << 16) | ((blend as u32) << 1) | gradient as u32;
+    fn note_segment_key(
+        &mut self,
+        lane: RecordLane,
+        blend: BlendMode,
+        shading: BrushShading,
+    ) -> bool {
+        let key = ((lane as u32) << 16) | ((blend as u32) << 2) | shading as u32;
         let extend = key == self.last_segment_key;
         self.last_segment_key = key;
         extend
@@ -1342,6 +1378,24 @@ impl ShapeRecorder {
         }
         if bottom > self.max[1] {
             self.max[1] = bottom;
+        }
+    }
+
+    #[inline]
+    fn brush_shading(&self, body: &ShapeRecordBody) -> BrushShading {
+        if body.brush == 0 {
+            return BrushShading::Solid;
+        }
+        let tables = &self.tables;
+        let spans = body.flags & RECT_FILL_MASK == 0
+            && tables
+                .brushes
+                .get(body.brush as usize - 1)
+                .is_some_and(|brush| vertex_gradient::spans_quad(brush, &tables.stops, body.rect));
+        if spans {
+            BrushShading::Vertex
+        } else {
+            BrushShading::Fragment
         }
     }
 
@@ -2034,7 +2088,7 @@ impl CommandRecorder {
         let index = self.content.others.len() as u32;
         self.content.others.push(primitive);
         self.shapes
-            .extend_segment(RecordLane::Others, index, BlendMode::SrcOver, false, 0);
+            .extend_segment(RecordLane::Others, index, BlendMode::SrcOver, 0);
     }
 
     /// Folds `other`'s summary into this recording's, for callers that

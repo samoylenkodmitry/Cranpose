@@ -184,11 +184,25 @@ composites the resolved textures.
   the Mali cut deep's GPU clock by a fifth. Only a batch with a rounded
   fill whose interior covers half its rect runs that test
   (`SHAPE_INTERIOR`); a batch of small circles and plain rects folds it
-  out, since there it only costs, as it did the watch's Megaboss. A draw
-  takes the next records whose key differs only in that test, up to 16
-  that did not ask for it, so a card's chips share its background's draw.
-  Contract `shape_variant_parity.rs` (zero bytes; a wrong varying or fixed
-  brush fails by 10^5 bytes).
+  out, since there it only costs, as it did the watch's Megaboss. A
+  two-stop linear gradient fill whose band spans its rect is affine over
+  its quad, so the recorder marks it (`ShapeRecord::is_vertex_gradient`)
+  and files it apart from the per-fragment gradients. For an unturned,
+  canonically aligned placement with an integer viewport origin, the
+  vertex stage computes its colour at each corner and it draws with the
+  solid fills on `fs_dithered_fill`
+  (4 locations; on Mali-G76 1.75 varying and 2.2 arithmetic cycles a
+  fragment against the gradient fill's 5.0 and 6.5), whose dither position,
+  parked at `UNDITHERED` for the solid records, keeps the gradient's
+  dither. Other placements use fragment sampling; this avoids assuming a
+  device-specific rasterization grid. A draw
+  takes the next records whose key differs only in that interior test or
+  that dither, up to 16 that did not ask for it, so a card's chips share
+  its background's draw and a chart's bars its gradient's. Contracts
+  `shape_variant_parity.rs` (zero bytes; a wrong varying or fixed brush
+  fails by 10^5 bytes) and `vertex_gradient_parity.rs` (at most 16 bytes a
+  level off the per-fragment ramp; replacing the vertex colour with zero
+  fails every optimized scene).
 - **Opaque interiors first**: a pass without composites that draws an
   occluder (a solid opaque fill whose interior spans `OCCLUDER_MIN_AREA`,
   1024 logical px², marked per segment at record time) gets a transient

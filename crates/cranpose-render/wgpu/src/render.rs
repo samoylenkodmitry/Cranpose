@@ -1112,8 +1112,20 @@ pub(crate) struct ShapeVariant {
     solid: bool,
     clipped: bool,
     interior: bool,
+    dither: bool,
     ablation: ShapeAblation,
 }
+
+const FLAT_FILL_ENTRIES: [[(&str, &str); 2]; 2] = [
+    [
+        ("vs_record_plain_fill", "fs_plain_fill"),
+        ("vs_record_dithered_fill", "fs_dithered_fill"),
+    ],
+    [
+        ("vs_record_clipped_fill", "fs_clipped_fill"),
+        ("vs_record_solid", "fs_solid"),
+    ],
+];
 
 impl ShapeVariant {
     const GENERAL: Self = Self {
@@ -1122,26 +1134,19 @@ impl ShapeVariant {
         solid: false,
         clipped: true,
         interior: true,
+        dither: false,
         ablation: ShapeAblation {
             material: false,
             fill: false,
         },
     };
 
-    /// The variant `segment`'s records draw with, `clipped` or not. A solid
-    /// batch never tests a fill's interior: its fragments load every varying
-    /// ahead of their branches and are bound by those loads, so the test
-    /// saves arithmetic only and costs each fragment the interior's vector
-    /// (on Mali-G76, 1.5 varying cycles a fill fragment becomes 1.75–2.0).
-    /// `laid` says a depth pre-pass lays the opaque interiors of a segment
-    /// holding an occluder down ahead of its paint, so the depth test
-    /// already skips them and the interior's fast path would only cost its
-    /// other fragments a varying.
     pub(crate) fn of_segment(
         segment: &RecordSegment,
         clipped: bool,
         ablation: ShapeAblation,
         laid: bool,
+        vertex_gradients: bool,
     ) -> Self {
         if !shape_variants_enabled() {
             return Self {
@@ -1149,18 +1154,19 @@ impl ShapeVariant {
                 ..Self::GENERAL
             };
         }
+        let gradient = segment.gradient || (segment.vertex_gradient && !vertex_gradients);
         Self {
             kind: segment.uniform_kind().map(|kind| kind as u8),
-            brush: segment
-                .gradient
+            brush: gradient
                 .then(|| segment.uniform_brush())
                 .flatten()
                 .map(|brush| brush as u8),
-            solid: !segment.gradient,
+            solid: !gradient,
             clipped,
-            interior: segment.gradient
+            interior: gradient
                 && segment.interiors
                 && !(laid && segment.occluders && !segment.bare_interiors),
+            dither: segment.vertex_gradient && vertex_gradients,
             ablation,
         }
     }
@@ -1169,10 +1175,8 @@ impl ShapeVariant {
     /// drawn `flat` (none of them turned).
     fn entries(self, flat: bool) -> (&'static str, &'static str) {
         let fill = self.kind == Some(FRAGMENT_KIND_FILL as u8);
-        if self.solid && fill && flat && self.clipped {
-            ("vs_record_clipped_fill", "fs_clipped_fill")
-        } else if self.solid && fill && flat {
-            ("vs_record_plain_fill", "fs_plain_fill")
+        if self.solid && fill && flat {
+            FLAT_FILL_ENTRIES[usize::from(self.clipped)][usize::from(self.dither)]
         } else if self.solid {
             ("vs_record_solid", "fs_solid")
         } else if fill && !self.ablation.material {
@@ -1186,6 +1190,20 @@ impl ShapeVariant {
         Self {
             ablation: self.ablation,
             ..Self::GENERAL
+        }
+    }
+
+    fn joined(self) -> Self {
+        if self.solid {
+            Self {
+                dither: true,
+                ..self
+            }
+        } else {
+            Self {
+                interior: true,
+                ..self
+            }
         }
     }
 }
@@ -1342,13 +1360,9 @@ impl ShapePipelineKey {
         self.variant == self.variant.general()
     }
 
-    /// The key with the fill interior test on or off.
-    pub(crate) fn with_interior(self, interior: bool) -> Self {
+    pub(crate) fn joined(self) -> Self {
         Self {
-            variant: ShapeVariant {
-                interior,
-                ..self.variant
-            },
+            variant: self.variant.joined(),
             ..self
         }
     }
@@ -1375,6 +1389,7 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_SOLID", f64::from(u8::from(variant.solid))),
         ("SHAPE_CLIPPED", f64::from(u8::from(variant.clipped))),
         ("SHAPE_INTERIOR", f64::from(u8::from(variant.interior))),
+        ("SHAPE_DITHER", f64::from(u8::from(variant.dither))),
         ("SHAPE_TURNS", turns.constant()),
         ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
@@ -4173,6 +4188,7 @@ impl GpuRenderer {
         ablation: ShapeAblation,
         turns: ShapeTurns,
         (depth, clipped): (bool, bool),
+        viewport: ViewportUniformParams,
     ) -> ShapePipelineKey {
         let blend_mode = supported_blend_mode(segment.blend);
         let laid = depth
@@ -4183,7 +4199,15 @@ impl GpuRenderer {
         ShapePipelineKey {
             blend_mode,
             tier,
-            variant: ShapeVariant::of_segment(segment, clipped, ablation, laid),
+            variant: ShapeVariant::of_segment(
+                segment,
+                clipped,
+                ablation,
+                laid,
+                turns == ShapeTurns::None
+                    && placement.snap_anchor.is_some()
+                    && viewport.offset.iter().all(|value| value.fract() == 0.0),
+            ),
             turns,
             depth: if depth {
                 ShapeDepth::Tested
@@ -4231,6 +4255,7 @@ impl GpuRenderer {
                     ablation,
                     turns,
                     (depth, clipped),
+                    viewport,
                 )
             },
             &mut draws,
@@ -4295,12 +4320,13 @@ impl GpuRenderer {
         run: &RunDraw,
         window: std::ops::Range<u32>,
         root_scale: f32,
-        turn: SegmentTransform,
+        viewport: ViewportUniformParams,
         mixed_turns: bool,
         (depth, clipped): (bool, bool),
     ) -> u32 {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
+        let turn = viewport.transform;
         let turns = ShapeTurns::of(turn, mixed_turns);
         let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
         let taken =
@@ -4313,6 +4339,7 @@ impl GpuRenderer {
                         ablation,
                         turns,
                         (depth, clipped),
+                        viewport,
                     );
                     if !keys.contains(&key) {
                         keys.push(key);
@@ -6272,3 +6299,7 @@ mod glyph_kind_tests;
 #[cfg(test)]
 #[path = "tests/glyph_run_bounds_tests.rs"]
 mod glyph_run_bounds_tests;
+
+#[cfg(test)]
+#[path = "tests/shape_variant_tests.rs"]
+mod shape_variant_tests;

@@ -25,6 +25,7 @@ mod stroke;
 mod typography;
 pub mod unit;
 mod vector_path;
+mod vertex_gradient;
 
 pub use alpha_mask::*;
 pub use brush::*;

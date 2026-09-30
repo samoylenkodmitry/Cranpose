@@ -1308,7 +1308,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         draw,
                         from..total,
                         run.segment.scale,
-                        run.viewport.transform,
+                        run.viewport,
                         self.mixed_turns,
                         (self.depth, clipped),
                     );

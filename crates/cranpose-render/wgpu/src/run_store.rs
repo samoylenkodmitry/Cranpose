@@ -454,9 +454,6 @@ pub(crate) struct StoredRun {
     last_used_frame: u64,
 }
 
-/// Most records a draw that tests fill interiors takes on without needing
-/// the test: a card's chips join its background's draw, while a field of
-/// small shapes keeps the pipeline without it.
 const JOINED_PLAIN_RECORDS: u32 = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -464,8 +461,6 @@ pub(crate) struct RunDrawCall {
     pub(crate) key: crate::render::ShapePipelineKey,
     pub(crate) band_class: u8,
     pub(crate) records: std::ops::Range<u32>,
-    /// The records whose own key did not test interiors, when the draw's
-    /// key does.
     plain: u32,
     /// Whether one of the draw's records is an opaque fill with an
     /// interior worth laying down ahead of the paint.
@@ -488,10 +483,6 @@ impl RunDrawCall {
         }
     }
 
-    /// Extends the draw by `records`, keyed `key`, when they follow it and
-    /// one pipeline draws both: the same one, or the one testing interiors
-    /// when that is all the keys differ in and the records it takes on
-    /// without needing the test stay within [`JOINED_PLAIN_RECORDS`].
     fn absorb(
         &mut self,
         key: crate::render::ShapePipelineKey,
@@ -502,10 +493,10 @@ impl RunDrawCall {
         if self.band_class != band_class || self.records.end != records.start {
             return false;
         }
-        let joined = self.key.with_interior(true);
+        let joined = self.key.joined();
         let plain = if key == self.key {
             self.plain
-        } else if key.with_interior(true) != joined {
+        } else if key.joined() != joined {
             return false;
         } else if self.key == joined {
             self.plain + (records.end - records.start)

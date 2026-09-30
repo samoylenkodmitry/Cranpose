@@ -97,7 +97,7 @@ fn full_from_clipped_fill(fill: ClippedFillOutput) -> VertexOutput {
     var solid: SolidOutput;
     solid.clip_position = fill.clip_position;
     solid.color = fill.color;
-    solid.world_pos = vec4<f32>(0.0);
+    solid.world_pos = vec4<f32>(0.0, 0.0, vec2<f32>(UNDITHERED));
     solid.rect = fill.rect;
     solid.radii = fill.radii;
     solid.clip_rect = fill.clip_rect;
@@ -122,6 +122,24 @@ fn full_from_plain_fill(plain: PlainFillOutput) -> VertexOutput {
     return full_from_clipped_fill(
         ClippedFillOutput(plain.clip_position, plain.color, plain.rect, plain.radii, vec4<f32>(0.0)),
     );
+}
+
+struct DitheredFillOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) dither: vec2<f32>,
+    @location(3) @interpolate(flat) rect: vec4<f32>,
+    @location(4) @interpolate(flat) radii: vec4<f32>,
+}
+
+fn dithered_fill_output(full: VertexOutput) -> DitheredFillOutput {
+    return DitheredFillOutput(full.clip_position, full.color, full.world_pos.zw, full.rect, full.radii);
+}
+
+fn full_from_dithered_fill(fill: DitheredFillOutput) -> VertexOutput {
+    var output = full_from_plain_fill(PlainFillOutput(fill.clip_position, fill.color, fill.rect, fill.radii));
+    output.world_pos = vec4<f32>(0.0, 0.0, fill.dither);
+    return output;
 }
 
 struct GradientFillOutput {
@@ -276,6 +294,7 @@ const RECORD_ARC_DEGENERATE: u32 = 262144u;
 const RECORD_ARC_BANDED: u32 = 1048576u;
 const RECORD_BAND_CLASS_SHIFT: u32 = 21u;
 const RECORD_BAND_CLASS_MASK: u32 = 7u;
+const RECORD_VERTEX_GRADIENT: u32 = 16777216u;
 
 const BRUSH_LINEAR: u32 = 1u;
 const BRUSH_RADIAL: u32 = 2u;
@@ -459,6 +478,28 @@ fn fill_interior(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
 // corner never leaves a pixel just short of full coverage.
 const ARC_INSET_SLACK: f32 = 0.015625;
 
+fn linear_gradient_line(params: vec4<f32>, geometry: RecordGeometry) -> vec4<f32> {
+    let rect = geometry.rect;
+    let canonicalize = geometry.canonicalize;
+    return vec4<f32>(
+        device_coordinate(resolve_gradient_point(rect.x, rect.z, params.x), canonicalize),
+        device_coordinate(resolve_gradient_point(rect.y, rect.w, params.y), canonicalize),
+        device_coordinate(resolve_gradient_point(rect.x, rect.z, params.z), canonicalize),
+        device_coordinate(resolve_gradient_point(rect.y, rect.w, params.w), canonicalize),
+    );
+}
+
+fn vertex_gradient_color(record: ShapeRecord, geometry: RecordGeometry, position: vec2<f32>) -> vec4<f32> {
+    let brush = brushes[record.brush - 1u];
+    let line = linear_gradient_line(brush.params * geometry.scale, geometry);
+    let dir = line.zw - line.xy;
+    let t = dot(position - line.xy, dir) / max(dot(dir, dir), 0.00001);
+    let first = gradient_stops[brush.stop_start];
+    let last = gradient_stops[brush.stop_start + 1u];
+    let span = max(last.position.x - first.position.x, 0.00001);
+    return mix(first.color, last.color, (t - first.position.x) / span);
+}
+
 fn shape_output(
     record: ShapeRecord,
     placement: Placement,
@@ -556,12 +597,7 @@ fn shape_output(
         let canonicalize = geometry.canonicalize;
         let params = brush.params * scale;
         if (brush.kind == BRUSH_LINEAR) {
-            output.gradient_params = vec4<f32>(
-                device_coordinate(resolve_gradient_point(rect.x, rect.z, params.x), canonicalize),
-                device_coordinate(resolve_gradient_point(rect.y, rect.w, params.y), canonicalize),
-                device_coordinate(resolve_gradient_point(rect.x, rect.z, params.z), canonicalize),
-                device_coordinate(resolve_gradient_point(rect.y, rect.w, params.w), canonicalize),
-            );
+            output.gradient_params = linear_gradient_line(params, geometry);
         } else if (brush.kind == BRUSH_RADIAL) {
             output.gradient_params = vec4<f32>(
                 device_coordinate(rect.x + params.x, canonicalize),
@@ -584,6 +620,12 @@ fn shape_output(
         output.stop_color1 = stops.color1;
         output.stop_color2 = stops.color2;
         output.stop_color3 = stops.color3;
+    } else if (SHAPE_DITHER) {
+        if ((record.flags & RECORD_VERTEX_GRADIENT) != 0u) {
+            output.color = vertex_gradient_color(record, geometry, position);
+        } else {
+            output.world_pos = vec4<f32>(position, vec2<f32>(UNDITHERED));
+        }
     }
     return output;
 }
@@ -723,6 +765,15 @@ fn vs_record_clipped_fill(
     record: ShapeRecord,
 ) -> ClippedFillOutput {
     return clipped_fill_output(placed_record_vertex(record, vertex_idx, instance));
+}
+
+@vertex
+fn vs_record_dithered_fill(
+    @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
+    record: ShapeRecord,
+) -> DitheredFillOutput {
+    return dithered_fill_output(placed_record_vertex(record, vertex_idx, instance));
 }
 
 @vertex
@@ -936,6 +987,8 @@ override SHAPE_CLIPPED: bool = true;
 override SHAPE_FLAT: bool = false;
 override SHAPE_DISCARD: bool = false;
 override BRUSH_KIND_FIXED: i32 = -1;
+override SHAPE_DITHER: bool = false;
+const UNDITHERED: f32 = -1.0e30;
 
 const STROKE_CAP_BUTT: u32 = 0u;
 const STROKE_CAP_ROUND: u32 = 1u;
@@ -1366,6 +1419,11 @@ fn fs_plain_fill(input: PlainFillOutput) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_dithered_fill(input: DitheredFillOutput) -> @location(0) vec4<f32> {
+    return fragment(full_from_dithered_fill(input));
+}
+
+@fragment
 fn fs_gradient_fill(input: GradientFillOutput) -> @location(0) vec4<f32> {
     return fragment(full_from_gradient_fill(input));
 }
@@ -1436,7 +1494,8 @@ fn fragment(input: VertexOutput) -> vec4<f32> {
     // Dither the gradient, and only the gradient — a solid brush has no ramp
     // to band, and Skia leaves it alone too, which is why solid fills already
     // land byte-for-byte on the Compose build's.
-    if (is_gradient && color.a > 0.0) {
+    let vertex_gradient = SHAPE_DITHER && input.world_pos.z > UNDITHERED * 0.5;
+    if ((is_gradient || vertex_gradient) && color.a > 0.0) {
         let offset = gradient_dither(input.world_pos.zw) * (1.0 / 255.0);
         color = vec4<f32>(clamp(color.rgb + vec3<f32>(offset), vec3<f32>(0.0), vec3<f32>(1.0)),
                           color.a);
