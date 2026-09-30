@@ -33,7 +33,10 @@ use std::sync::Arc;
 use ab_glyph::{CodepointIdIter, Font, FontArc, GlyphId, GlyphSvg, Outline, v2};
 use ttf_parser::{Face, NormalizedCoordinate, Tag};
 
-use crate::ascii_glyphs::AsciiGlyphs;
+use crate::{
+    ascii_glyphs::AsciiGlyphs,
+    font_features::{FeatureVariants, GlyphSubstitutions},
+};
 
 const VALUE_FIELDS: [u16; 8] = [
     0x0001, 0x0002, 0x0004, 0x0008, 0x0010, 0x0020, 0x0040, 0x0080,
@@ -472,7 +475,9 @@ fn class_def(gpos: &[u8], offset: usize) -> Option<ClassDef> {
     Some(ClassDef::from_pairs(pairs))
 }
 
-/// A face paired with the pair kerning `ab_glyph` cannot read for itself.
+/// A face paired with the pair kerning `ab_glyph` cannot read for itself,
+/// and with the single glyph substitutions of the OpenType features a text
+/// style enables.
 ///
 /// This is a `Font` rather than a lookup the call sites reach for, because
 /// there are nine of them across measuring, line breaking, alignment and
@@ -480,21 +485,65 @@ fn class_def(gpos: &[u8], offset: usize) -> Option<ClassDef> {
 /// `SoftwareTextFont`. Overriding `kern_unscaled` puts the rule under every
 /// existing `scaled_font.kern(..)` at once — including any this change did not
 /// go looking for — and keeps a caller from having to remember which width is
-/// the kerned one.
+/// the kerned one. Overriding `glyph_id` does the same for substitution: every
+/// glyph a run measures, kerns and draws is the substituted one.
+///
+/// Substitution covers `GSUB` single substitutions only (lookup type 1, and
+/// type 7 extensions of it), which is what `tnum`, `pnum`, `onum`, `lnum`,
+/// `zero`, `smcp`, `c2sc`, `case`, `sups`, `subs`, `salt` and `ss01`–`ss20`
+/// use. A feature with any other lookup type (ligature, multiple, alternate,
+/// contextual) is not applied at all, so none is ever half applied, and no
+/// feature is on unless the style's `font_feature_settings` turns it on.
 #[derive(Clone)]
 pub struct KernedFont {
     font: FontArc,
     kerning: Option<Arc<GposKerning>>,
     ascii: Arc<AsciiGlyphs>,
+    substitutions: Option<Arc<GlyphSubstitutions>>,
+    variants: Arc<FeatureVariants>,
 }
 
 impl KernedFont {
     pub fn new(font: FontArc, kerning: Option<Arc<GposKerning>>) -> Self {
+        let ascii = Arc::new(AsciiGlyphs::new());
         Self {
             font,
             kerning,
-            ascii: Arc::new(AsciiGlyphs::new()),
+            variants: Arc::new(FeatureVariants::new(Arc::clone(&ascii))),
+            ascii,
+            substitutions: None,
         }
+    }
+
+    pub(crate) fn with_feature_settings(&self, settings: Option<&str>) -> Option<Self> {
+        let wanted =
+            settings.and_then(|settings| self.variants.get(settings, self.font.font_data()));
+        let (substitutions, ascii) = match wanted {
+            Some(wanted)
+                if self
+                    .substitutions
+                    .as_ref()
+                    .is_some_and(|current| current.tags() == wanted.substitutions.tags()) =>
+            {
+                return None;
+            }
+            Some(wanted) => (Some(wanted.substitutions), wanted.ascii),
+            None if self.substitutions.is_none() => return None,
+            None => (None, Arc::clone(self.variants.base_ascii())),
+        };
+        Some(Self {
+            font: self.font.clone(),
+            kerning: self.kerning.clone(),
+            ascii,
+            substitutions,
+            variants: Arc::clone(&self.variants),
+        })
+    }
+
+    pub(crate) fn feature_key(&self) -> u64 {
+        self.substitutions
+            .as_ref()
+            .map_or(0, |substitutions| substitutions.key())
     }
 
     /// The glyph of `ch` and its advance in font units.
@@ -559,7 +608,11 @@ impl Font for KernedFont {
     }
 
     fn glyph_id(&self, c: char) -> GlyphId {
-        self.font.glyph_id(c)
+        let id = self.font.glyph_id(c);
+        match &self.substitutions {
+            Some(substitutions) => substitutions.apply(id),
+            None => id,
+        }
     }
 
     fn h_advance_unscaled(&self, id: GlyphId) -> f32 {
