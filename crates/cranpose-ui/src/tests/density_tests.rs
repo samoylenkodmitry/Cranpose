@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+#[ignore = "manual release timing probe"]
+fn density_read_timing() {
+    use std::hint::black_box;
+
+    use cranpose_core::{Composition, MemoryApplier, location_key};
+    use web_time::Instant;
+
+    fn probe(label: &str, iterations: usize) {
+        for _ in 0..1000 {
+            black_box(density());
+        }
+        let start = Instant::now();
+        for _ in 0..iterations {
+            black_box(density());
+        }
+        let ns_per_read = start.elapsed().as_nanos() as f64 / iterations as f64;
+        println!("DENSITY_READ {label} iterations={iterations} ns_per_read={ns_per_read:.3}");
+    }
+
+    let _context = crate::render_state::app_context_test_scope();
+    let iterations = std::env::var("DENSITY_READ_ITERATIONS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(5_000_000);
+    for provided in [false, true] {
+        let mut composition = Composition::new(MemoryApplier::new());
+        composition
+            .render(location_key(file!(), line!(), column!()), move || {
+                if provided {
+                    ProvideDensity(Density::new(2.5, 1.3), || probe("provided", iterations));
+                } else {
+                    probe("host", iterations);
+                }
+            })
+            .expect("density timing composition");
+    }
+}
+
+#[test]
 fn a_surviving_density_scope_keeps_its_entry_when_a_sibling_leaves() {
     use std::{cell::Cell, rc::Rc};
 

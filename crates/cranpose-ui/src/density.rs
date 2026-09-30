@@ -186,6 +186,10 @@ impl cranpose_ui_layout::MeasureScope for DensityMeasureScope {
     }
 }
 
+thread_local! {
+    static LOCAL_DENSITY: CompositionLocal<Density> = compositionLocalOf(Density::from_host);
+}
+
 /// The [`CompositionLocal`] carrying the device pixel grid.
 ///
 /// Compose's `LocalDensity`. Its default is whatever grid the host installed on
@@ -193,20 +197,12 @@ impl cranpose_ui_layout::MeasureScope for DensityMeasureScope {
 /// the real screen; providing one scopes a different grid to a subtree, which
 /// is what a preview, a scaled container or a density-specific golden needs.
 pub fn local_density() -> CompositionLocal<Density> {
-    thread_local! {
-        static LOCAL: std::cell::RefCell<Option<CompositionLocal<Density>>> =
-            const { std::cell::RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(Density::from_host))
-            .clone()
-    })
+    LOCAL_DENSITY.with(Clone::clone)
 }
 
 /// The device pixel grid in force here.
 pub fn density() -> Density {
-    local_density().current()
+    LOCAL_DENSITY.with(CompositionLocal::current)
 }
 
 /// Runs `content` on `density`.
