@@ -22,8 +22,9 @@ rules to framework code, generated code and shaders. Use the
 | GPU | Count shaded pixels, samples, transferred bytes and attachment loads/stores. Preserve dependencies and blend order. | Exact captures and device timing. Fewer passes can repeat shading; fewer vertices can increase overdraw. CPU savings cannot resolve a saturated GPU. |
 
 **Experiment contract:** name the cost, remove it diagnostically, confirm the path
-runs, then implement. Prove a correctness guard fails when the optimization is
-broken. Use a focused check before paired device acceptance. Retain failed legs
+runs, then implement. Use integration tests to preserve observable behavior and
+benchmarks to measure performance; do not assert implementation details. Use a
+focused check before paired device acceptance. Retain failed legs
 and temperatures. Publish the decision and evidence, not a diary. Run required
 repository gates on the final change; avoid repeated whole suites per hypothesis.
 

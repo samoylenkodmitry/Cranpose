@@ -23,7 +23,7 @@ Read only the sections required by the current operation. These are project requ
 - Suppress a lint with `#[expect]`, which fails once nothing needs it; use `#[allow]` only where the lint fires in some build configurations and not in others.
 - Prefer `async`/`await` and Tokio for asynchronous work.
 - Document every public API reachable from a published crate root; all other code comments are forbidden (`scripts/dev/strip_private_docs.py <file>...` removes the rest).
-- Write unit tests for all public functions and methods; put integration tests in `tests/`.
+- Write integration tests for observable behavior through public entry points; put them in `tests/`. Do not test implementation details such as private storage, type sizes, allocation capacities or pointer reuse. Measure performance with benchmarks and profiles.
 - do not write tests in the same file with the implementation; all tests should be under `/test*/` folder, declared with `#[cfg(test)] #[path = "tests/<name>.rs"] mod tests;` (`scripts/dev/move_inline_tests.py <file>...` moves an inline module out)
 - Do not hardcode configuration; consider parallelism and SIMD where measured benefits hold, including wasm.
 - `#[cfg(feature = "robot-app")]` is forbidden.
@@ -58,8 +58,8 @@ Read only the sections required by the current operation. These are project requ
 
 - Follow the [performance coding guide](performance_coding_guide.md); reduce measured work and preserve exact pictures on shipped targets.
 - For nontrivial bugs: explore, record evidence, rank causes, compare architecture options, implement, verify and iterate.
-- Start bugs with a failing regression test; for a device UI bug, write the robot e2e test first.
-- Prove every optimization's correctness test fails when the optimization is deliberately broken; correctness takes priority over speed.
+- Start bugs with a failing integration regression that exercises observable behavior; for a device UI bug, write the robot e2e test first.
+- Verify optimizations with integration tests of observable behavior and measured performance. When using a deliberate correctness mutation, it must change an observable result rather than an internal representation.
 - Hold the shared per-device lock for the entire FPS sequence; run ABAB then BABA without cooling waits and log temperatures before and after every run.
 - Measure production FPS on a physical display; Xvfb presentation measures software presentation.
 
