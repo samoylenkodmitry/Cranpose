@@ -18,6 +18,190 @@ fn corners(width: f32, height: f32, radius: f32) -> RoundedClipCorners {
     })
 }
 
+fn drawn_node(primitive: DrawPrimitive) -> RenderNode {
+    RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(Box::new(cranpose_render_common::graph::DrawPrimitiveNode {
+            primitive,
+            clip: None,
+        })),
+    })
+}
+
+fn snap_test_text() -> DrawPrimitive {
+    DrawPrimitive::Text(Box::new(cranpose_ui_graphics::TextPrimitive {
+        rect: rect(0.0, 0.0, 60.0, 20.0),
+        text: std::rc::Rc::from("pixel"),
+        style: cranpose_ui_graphics::DrawTextStyle::new(16.0),
+        color: cranpose_ui_graphics::Color::WHITE,
+    }))
+}
+
+fn snap_test_rect() -> DrawPrimitive {
+    DrawPrimitive::Rect {
+        rect: rect(0.0, 0.0, 60.0, 20.0),
+        brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
+        stroke: None,
+    }
+}
+
+fn phase_draw(x: f32, phase: PrimitivePhase, recorded: bool) -> RenderNode {
+    let primitive = solid(rect(x, 0.0, 1.0, 1.0));
+    if recorded {
+        RenderNode::DrawRun(DrawRunNode::new(phase, vec![primitive]))
+    } else {
+        RenderNode::Primitive(PrimitiveEntry {
+            phase,
+            node: PrimitiveNode::Draw(Box::new(cranpose_render_common::graph::DrawPrimitiveNode {
+                primitive,
+                clip: None,
+            })),
+        })
+    }
+}
+
+#[test]
+fn deferred_draws_keep_their_order_after_interleaved_children() {
+    let before = PrimitivePhase::BeforeChildren;
+    let after = PrimitivePhase::AfterChildren;
+    let layer = |children| LayerNode {
+        local_bounds: rect(0.0, 0.0, 20.0, 20.0),
+        children,
+        ..Default::default()
+    };
+    let cases = [
+        (Vec::new(), Vec::new()),
+        (vec![phase_draw(1.0, before, true)], vec![1.0]),
+        (vec![phase_draw(1.0, after, false)], vec![1.0]),
+        (
+            vec![
+                phase_draw(1.0, before, true),
+                phase_draw(2.0, after, false),
+                RenderNode::Layer(Box::new(layer(vec![phase_draw(3.0, before, true)]))),
+                phase_draw(4.0, after, true),
+                phase_draw(5.0, before, true),
+                phase_draw(6.0, after, false),
+            ],
+            vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0],
+        ),
+        (
+            vec![
+                phase_draw(1.0, after, true),
+                RenderNode::Layer(Box::new(layer(vec![phase_draw(2.0, after, true)]))),
+                phase_draw(3.0, before, true),
+            ],
+            vec![2.0, 3.0, 1.0],
+        ),
+    ];
+    for (children, expected) in cases {
+        let collected = collect_root(
+            &layer(children),
+            &mut crate::pipeline::UiTextLayoutResolver,
+            &mut LayerMotion::default(),
+            SceneCapacityHint::default(),
+        );
+        let positions: Vec<_> = collected
+            .scene
+            .runs
+            .iter()
+            .map(|run| run.bounds.x)
+            .collect();
+        assert_eq!(positions, expected);
+    }
+}
+
+#[test]
+fn rigid_snap_distinguishes_own_draws_from_descendant_text() {
+    let cases = [
+        (Vec::new(), false, false),
+        (vec![drawn_node(DrawPrimitive::Content)], false, false),
+        (vec![drawn_node(snap_test_rect())], false, true),
+        (vec![drawn_node(snap_test_text())], true, true),
+        (
+            vec![drawn_node(DrawPrimitive::Blend {
+                primitive: Box::new(snap_test_text()),
+                blend_mode: BlendMode::Multiply,
+            })],
+            true,
+            true,
+        ),
+        (
+            vec![RenderNode::DrawRun(DrawRunNode::new(
+                PrimitivePhase::BeforeChildren,
+                vec![snap_test_rect(), snap_test_text()],
+            ))],
+            true,
+            true,
+        ),
+        (
+            vec![RenderNode::Layer(Box::new(LayerNode {
+                children: vec![drawn_node(snap_test_text())],
+                ..Default::default()
+            }))],
+            false,
+            false,
+        ),
+        (
+            vec![
+                drawn_node(DrawPrimitive::Content),
+                drawn_node(snap_test_text()),
+                drawn_node(DrawPrimitive::Content),
+            ],
+            true,
+            true,
+        ),
+    ];
+    for (children, stationary, translated) in cases {
+        let layer = LayerNode {
+            children,
+            ..Default::default()
+        };
+        assert_eq!(layer_needs_rigid_snap(&layer, false), stationary);
+        assert_eq!(layer_needs_rigid_snap(&layer, true), translated);
+    }
+}
+
+#[test]
+fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
+    let context = cranpose_ui::AppContext::new();
+    context.enter(|| {
+        for (node, translated, expected) in [
+            (drawn_node(snap_test_text()), false, true),
+            (
+                RenderNode::Layer(Box::new(LayerNode {
+                    local_bounds: rect(0.0, 0.0, 60.0, 20.0),
+                    transform_to_parent: ProjectiveTransform::translation(2.5, 3.5),
+                    children: vec![drawn_node(snap_test_text())],
+                    ..Default::default()
+                })),
+                false,
+                true,
+            ),
+            (drawn_node(snap_test_rect()), false, false),
+            (drawn_node(snap_test_rect()), true, true),
+        ] {
+            let layer = LayerNode {
+                local_bounds: rect(0.0, 0.0, 100.0, 60.0),
+                children: vec![node],
+                ..Default::default()
+            };
+            let child = isolated_child(
+                &layer,
+                &mut crate::pipeline::UiTextLayoutResolver,
+                &mut LayerMotion::default(),
+                WalkContext {
+                    offset: Point::new(0.3, 0.7),
+                    visual_clip: None,
+                    snap_anchor: None,
+                    translated,
+                },
+                &mut CompositorScene::new(),
+            );
+            assert_eq!(child.snap_anchor.is_some(), expected);
+        }
+    });
+}
+
 #[test]
 fn content_clear_of_every_corner_square_is_admitted() {
     assert!(corners(200.0, 100.0, 20.0).admits(rect(20.0, 20.0, 160.0, 60.0)));

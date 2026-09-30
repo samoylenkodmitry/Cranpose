@@ -199,12 +199,6 @@ fn primitive_is_drawn(primitive: &DrawPrimitive) -> bool {
     !matches!(primitive, DrawPrimitive::Content | DrawPrimitive::Shadow(_))
 }
 
-/// Whether the layer's own primitives must move as one rigid raster: any text
-/// or image, and under a translated content context any drawn primitive at all.
-/// Whether any pixel-sensitive draw (text, image) sits in this layer or in a
-/// descendant that only translates against it: compositing such a subtree's
-/// raster at a fractional device offset resamples every glyph and texel, so
-/// the composite must land on whole device pixels.
 fn layer_has_pixel_sensitive_subtree(layer: &LayerNode) -> bool {
     layer.children.iter().any(|child| match child {
         RenderNode::Primitive(entry) => match &entry.node {
@@ -220,30 +214,21 @@ fn layer_has_pixel_sensitive_subtree(layer: &LayerNode) -> bool {
 }
 
 fn layer_needs_rigid_snap(layer: &LayerNode, translated: bool) -> bool {
-    let mut has_text = false;
-    let mut has_drawn = false;
-    let mut has_pixel_sensitive = false;
-    for child in &layer.children {
-        match child {
-            RenderNode::Primitive(entry) => match &entry.node {
-                PrimitiveNode::Text(_) => {
-                    has_text = true;
-                    has_drawn = true;
-                }
-                PrimitiveNode::Draw(draw) => {
-                    has_drawn |= primitive_is_drawn(&draw.primitive);
-                    has_pixel_sensitive |= primitive_is_pixel_sensitive(&draw.primitive);
-                }
-            },
-            RenderNode::DrawRun(run) => {
-                has_drawn |= run.summary.has_non_shadow;
-                has_pixel_sensitive |= run.summary.has_pixel_sensitive;
-                has_text |= run.summary.has_text;
+    layer.children.iter().any(|child| match child {
+        RenderNode::Primitive(entry) => match &entry.node {
+            PrimitiveNode::Text(_) => true,
+            PrimitiveNode::Draw(draw) => {
+                primitive_is_pixel_sensitive(&draw.primitive)
+                    || (translated && primitive_is_drawn(&draw.primitive))
             }
-            RenderNode::Layer(_) => {}
+        },
+        RenderNode::DrawRun(run) => {
+            run.summary.has_text
+                || run.summary.has_pixel_sensitive
+                || (translated && run.summary.has_non_shadow)
         }
-    }
-    (translated && has_drawn) || has_text || has_pixel_sensitive
+        RenderNode::Layer(_) => false,
+    })
 }
 
 pub(crate) fn rounded_clip_for_layer(layer: &LayerNode) -> Option<LayerRoundedClip> {
@@ -616,9 +601,7 @@ fn isolated_child(
             context.offset.y,
         ));
     let parent_bounds = quad_bounds(transform.map_rect(layer.local_bounds));
-    let rigid = context.translated
-        || layer_needs_rigid_snap(layer, context.translated)
-        || layer_has_pixel_sensitive_subtree(layer);
+    let rigid = context.translated || layer_has_pixel_sensitive_subtree(layer);
     let snap_anchor = context.snap_anchor.or_else(|| {
         rigid
             .then(|| rigid_snap_anchor(parent_bounds, &local_layer))
@@ -758,9 +741,9 @@ fn collect_into(
         anchor: layer_anchor,
         motion_context_animated: layer.motion_context_animated || translated,
     };
-    let mut deferred: Vec<&RenderNode> = Vec::new();
+    let mut first_deferred = layer.children.len();
 
-    for child in &layer.children {
+    for (index, child) in layer.children.iter().enumerate() {
         match child {
             RenderNode::Layer(child_layer) => {
                 let child_context = WalkContext {
@@ -771,13 +754,17 @@ fn collect_into(
                 };
                 collect_child(child_layer, text_layout, motion, child_context, out);
             }
-            _ if content_phase(child) == PrimitivePhase::AfterChildren => deferred.push(child),
+            _ if content_phase(child) == PrimitivePhase::AfterChildren => {
+                first_deferred = first_deferred.min(index);
+            }
             _ => push_content(out, text_layout, child, &content),
         }
     }
 
-    for child in deferred {
-        push_content(out, text_layout, child, &content);
+    for child in &layer.children[first_deferred..] {
+        if content_phase(child) == PrimitivePhase::AfterChildren {
+            push_content(out, text_layout, child, &content);
+        }
     }
 }
 
