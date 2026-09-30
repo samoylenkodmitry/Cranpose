@@ -98,6 +98,7 @@ const RETAINED_TEXT_GLYPH_RUN_MIN_QUADS: usize = 64;
 
 const TEXT_GLYPH_ATLAS_MIN_SIZE: u32 = 512;
 const TEXT_GLYPH_ATLAS_MAX_SIZE: u32 = 4096;
+const _: () = assert!(TEXT_GLYPH_ATLAS_MAX_SIZE <= u16::MAX as u32);
 const TEXT_GLYPH_ATLAS_PADDING: u32 = 1;
 const MAX_TEXT_LINE_INDEX_CACHE_ITEMS: usize = 512;
 const MIN_MULTILINE_TEXT_LINES_FOR_CLIPPED_RASTER: usize = 2;
@@ -1876,10 +1877,10 @@ impl CachedImageTexture {
 
 #[derive(Clone, Copy)]
 struct GlyphAtlasEntry {
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
 }
 
 fn next_glyph_atlas_size(current: u32, max: u32) -> u32 {
@@ -2065,11 +2066,8 @@ impl TextGlyphAtlas {
     }
 
     fn allocate(&mut self, width: u32, height: u32) -> Option<GlyphAtlasEntry> {
-        if width == 0
-            || height == 0
-            || width + TEXT_GLYPH_ATLAS_PADDING * 2 > self.size
-            || height + TEXT_GLYPH_ATLAS_PADDING * 2 > self.size
-        {
+        let max_extent = self.size.saturating_sub(TEXT_GLYPH_ATLAS_PADDING * 2);
+        if width == 0 || height == 0 || width > max_extent || height > max_extent {
             return None;
         }
 
@@ -2081,15 +2079,15 @@ impl TextGlyphAtlas {
                 .saturating_add(TEXT_GLYPH_ATLAS_PADDING);
             self.row_height = 0;
         }
-        if self.cursor_y + height + TEXT_GLYPH_ATLAS_PADDING > self.size {
+        if self.cursor_y > self.size - height - TEXT_GLYPH_ATLAS_PADDING {
             return None;
         }
 
         let entry = GlyphAtlasEntry {
-            x: self.cursor_x,
-            y: self.cursor_y,
-            width,
-            height,
+            x: self.cursor_x as u16,
+            y: self.cursor_y as u16,
+            width: width as u16,
+            height: height as u16,
         };
         self.cursor_x = self
             .cursor_x
@@ -2138,8 +2136,8 @@ impl TextGlyphAtlas {
                 texture: &self.texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d {
-                    x: entry.x,
-                    y: entry.y,
+                    x: u32::from(entry.x),
+                    y: u32::from(entry.y),
                     z: 0,
                 },
                 aspect: wgpu::TextureAspect::All,
@@ -2147,17 +2145,17 @@ impl TextGlyphAtlas {
             &self.upload_scratch,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(entry.width),
-                rows_per_image: Some(entry.height),
+                bytes_per_row: Some(width),
+                rows_per_image: Some(height),
             },
             wgpu::Extent3d {
-                width: entry.width,
-                height: entry.height,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
         );
         frame_stats.record_command_stats(upload_stats);
-        frame_stats.record_text_glyph_atlas_miss(entry.width, entry.height);
+        frame_stats.record_text_glyph_atlas_miss(width, height);
         self.entries.put(key, entry);
         Some(entry)
     }

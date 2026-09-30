@@ -20,6 +20,77 @@ fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
     (lock, renderer)
 }
 
+#[test]
+fn retained_glyph_atlas_coordinates_use_eight_bytes() {
+    assert_eq!(std::mem::size_of::<GlyphAtlasEntry>(), 8);
+}
+
+#[test]
+fn glyph_atlas_allocation_preserves_edges_and_rejects_oversized_masks() {
+    let (_lock, renderer) = test_renderer();
+    let mut atlas = TextGlyphAtlas::new(
+        &renderer.device,
+        &renderer.image_bind_group_layout,
+        GlyphSamplers {
+            nearest: &renderer.image_nearest_sampler,
+            linear: &renderer.image_linear_sampler,
+        },
+        u32::MAX,
+    );
+    let size = atlas.size();
+    assert_eq!(
+        size,
+        TEXT_GLYPH_ATLAS_MAX_SIZE.min(renderer.device.limits().max_texture_dimension_2d)
+    );
+    let padding = TEXT_GLYPH_ATLAS_PADDING;
+    let extent = size - 2 * padding;
+    for (width, height) in [
+        (0, 1),
+        (1, 0),
+        (size, 1),
+        (1, size),
+        (u32::MAX, 1),
+        (1, u32::MAX),
+    ] {
+        assert!(atlas.allocate(width, height).is_none());
+        assert_eq!((atlas.cursor_x, atlas.cursor_y), (padding, padding));
+    }
+    let top = atlas.allocate(extent, 1).expect("full-width top row fits");
+    assert_eq!(u32::from(top.x), padding);
+    assert_eq!(u32::from(top.y), padding);
+    assert_eq!(u32::from(top.width), extent);
+    assert_eq!(u32::from(top.height), 1);
+    let bottom = atlas
+        .allocate(1, size - 3 * padding - 1)
+        .expect("next row reaches the bottom padding");
+    assert_eq!(u32::from(bottom.x), padding);
+    assert_eq!(u32::from(bottom.y), 2 * padding + 1);
+    assert_eq!(
+        u32::from(bottom.y) + u32::from(bottom.height),
+        size - padding
+    );
+    let uv = glyph_atlas_uv_rect(top, size);
+    assert_eq!(uv.min, [padding as f32 / size as f32; 2]);
+    assert_eq!(
+        uv.max,
+        [
+            (size - padding) as f32 / size as f32,
+            (padding + 1) as f32 / size as f32
+        ]
+    );
+    assert_eq!(
+        uv.sample_bounds,
+        [
+            (padding as f32 + 0.5) / size as f32,
+            (padding as f32 + 0.5) / size as f32,
+            (size as f32 - padding as f32 - 0.5) / size as f32,
+            (padding as f32 + 0.5) / size as f32,
+        ]
+    );
+    assert!(atlas.allocate(extent, 1).is_none());
+    assert_eq!(renderer.device_error_count(), 0);
+}
+
 fn test_quads() -> [CachedTextGlyphQuad; 1] {
     [CachedTextGlyphQuad {
         x: 0,
