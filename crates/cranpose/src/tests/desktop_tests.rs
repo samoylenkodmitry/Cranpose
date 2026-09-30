@@ -118,15 +118,47 @@ fn a_build_that_cannot_read_the_pointer_never_polls_a_drag() {
 fn a_redraw_that_presents_nothing_still_paces_the_next_one() {
     let attempt = Instant::now();
     let mut last_frame_start_time = None;
-    pace_after_empty_redraw(&mut last_frame_start_time, attempt, false);
+    let mut empty = false;
+    pace_after_empty_redraw(&mut last_frame_start_time, &mut empty, attempt, false);
     assert_eq!(last_frame_start_time, Some(attempt));
+    assert!(empty);
     let mut presented = Some(attempt);
     pace_after_empty_redraw(
         &mut presented,
+        &mut empty,
         attempt + std::time::Duration::from_millis(5),
         true,
     );
     assert_eq!(presented, Some(attempt), "a present keeps its own anchor");
+    assert!(!empty);
+}
+
+#[test]
+fn an_unpaced_window_waits_a_vsync_after_a_redraw_that_presented_nothing() {
+    let vsync = std::time::Duration::from_micros(16_667);
+    assert_eq!(
+        frame_cap_interval(FramePacingMode::NoVsync, vsync, false),
+        None,
+        "after a present an unpaced window draws again at once"
+    );
+    assert_eq!(
+        frame_cap_interval(FramePacingMode::NoVsync, vsync, true),
+        Some(vsync),
+        "frame callbacks that change nothing tick at the display's rate, not the loop's"
+    );
+    for mode in [
+        FramePacingMode::Vsync,
+        FramePacingMode::Hard60,
+        FramePacingMode::Hard120,
+    ] {
+        for empty in [false, true] {
+            assert_eq!(
+                frame_cap_interval(mode, vsync, empty),
+                frame_interval_for_mode(mode, vsync),
+                "{mode:?}: a paced window keeps its own interval"
+            );
+        }
+    }
 }
 
 #[test]
@@ -301,14 +333,15 @@ use super::{
     NativeWindowPositionObservation, NativeWindowPositionOrigin, PendingNativeWindowPositions,
     PressBelongsHere, PressToHandOver, PrimaryPointerGesturePollAction, RootId, WindowFocus,
     WinitWindowId, clamp_rect_to_monitor_delta, desired_frame_latency, event_loop_control_flow,
-    frame_interval_for_mode, free_running_frame, held_press_after_step, held_press_step,
-    held_press_to_hand_over, initial_present_redraw_needed, native_window_drag_poll_deadline,
-    native_window_options_change_is_position_only, native_window_position_poll_needed,
-    native_window_redraw_held_while_hidden, nearest_monitor_to_rect, next_frame_anchor,
-    occlusion_leaves_a_frame_owed, pace_after_empty_redraw, physical_outer_origin_from_surface,
-    physical_surface_local_pointer, physical_surface_origin_from_outer,
-    physical_surface_rect_contains_pointer, pointer_button_frame_request, press_belongs_here,
-    press_to_hand_over, primary_declaration_host_needs_direct_update, primary_frame_waker,
+    frame_cap_interval, frame_interval_for_mode, free_running_frame, held_press_after_step,
+    held_press_step, held_press_to_hand_over, initial_present_redraw_needed,
+    native_window_drag_poll_deadline, native_window_options_change_is_position_only,
+    native_window_position_poll_needed, native_window_redraw_held_while_hidden,
+    nearest_monitor_to_rect, next_frame_anchor, occlusion_leaves_a_frame_owed,
+    pace_after_empty_redraw, physical_outer_origin_from_surface, physical_surface_local_pointer,
+    physical_surface_origin_from_outer, physical_surface_rect_contains_pointer,
+    pointer_button_frame_request, press_belongs_here, press_to_hand_over,
+    primary_declaration_host_needs_direct_update, primary_frame_waker,
     primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
     primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
     primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
