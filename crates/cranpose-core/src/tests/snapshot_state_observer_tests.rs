@@ -709,7 +709,7 @@ fn scope_that_stops_reading_state_is_removed_immediately() {
 }
 
 #[test]
-fn begin_frame_prunes_dropped_recompose_scope_entries() {
+fn begin_frame_sweeps_dropped_recompose_scope_entries_every_64th_frame() {
     let _guard = reset_runtime_for_tests();
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
@@ -730,9 +730,39 @@ fn begin_frame_prunes_dropped_recompose_scope_entries() {
     assert_eq!(before_prune.fast_scopes_len, 1);
 
     drop(scope);
-    observer.begin_frame();
+    for _ in 1..64 {
+        observer.begin_frame();
+    }
+    let waiting = observer.debug_stats();
+    assert_eq!(
+        (waiting.scopes_len, waiting.fast_scopes_len),
+        (1, 1),
+        "a dropped scope's entry waits for the sweep instead of every frame walking every scope"
+    );
 
+    observer.begin_frame();
     let after_prune = observer.debug_stats();
     assert_eq!(after_prune.scopes_len, 0);
     assert_eq!(after_prune.fast_scopes_len, 0);
+}
+
+#[test]
+fn an_explicit_prune_drops_a_dead_scope_entry_at_once() {
+    let _guard = reset_runtime_for_tests();
+
+    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let runtime = crate::TestRuntime::new();
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    observer.observe_reads(
+        scope.clone(),
+        |_| {},
+        || {
+            let _ = state.get();
+        },
+    );
+    drop(scope);
+    observer.prune_dead_scopes();
+    let stats = observer.debug_stats();
+    assert_eq!((stats.scopes_len, stats.fast_scopes_len), (0, 0));
 }
