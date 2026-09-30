@@ -346,7 +346,7 @@ fn composer_retention_uses_checked_detached_root_key() {
 #[test]
 fn memory_applier_dump_tree_reports_stale_physical_mapping() {
     let mut applier = MemoryApplier::new();
-    applier.stable_to_physical.insert(42, usize::MAX);
+    applier.stable_index.set_slot(42, 4_096);
 
     let tree = applier.dump_tree(Some(42));
 
