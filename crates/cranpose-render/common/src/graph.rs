@@ -419,6 +419,15 @@ impl LayerNode {
         })
     }
 
+    pub(crate) fn refresh_child_facts(&mut self) {
+        self.has_hit_targets = self.hit_test.is_some()
+            || self.children.iter().any(|child| match child {
+                RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
+            });
+        self.draws_within_bounds = self.content_draws_within_bounds();
+    }
+
     /// Whether this layer, drawn as a child, puts nothing outside `bounds`:
     /// it draws within its own bounds, casts no shadow, applies no effect,
     /// and its bounds placed in its parent lie inside.
