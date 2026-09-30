@@ -1470,6 +1470,7 @@ impl Composer {
         drop(guard);
     }
 
+    #[inline(never)]
     fn with_group_seed_dyn(&self, key: crate::slot::GroupKeySeed, f: &mut dyn FnMut(&Composer)) {
         let host = self.active_slots_host();
         if host.has_active_pass() {
