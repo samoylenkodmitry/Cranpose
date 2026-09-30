@@ -26,13 +26,13 @@ thread_local! {
 
 impl Pool {
     fn recycle_layer(&mut self, mut layer: Box<LayerNode>) {
-        let replaced = std::mem::take(layer.as_mut());
-        self.recycle_list(replaced.children);
+        self.recycle_children(&mut layer);
+        layer.hit_test = None;
         self.layers.push(layer);
     }
 
-    fn recycle_list(&mut self, mut list: Vec<RenderNode>) {
-        for child in list.drain(..) {
+    fn recycle_children(&mut self, layer: &mut LayerNode) {
+        while let Some(child) = layer.children.pop() {
             match child {
                 RenderNode::Layer(layer) => self.recycle_layer(layer),
                 RenderNode::Primitive(PrimitiveEntry {
@@ -42,21 +42,16 @@ impl Pool {
                 RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
             }
         }
-        if list.capacity() > 0 {
-            self.lists.push(list);
-        }
     }
 }
 
-/// Moves `layer`'s children, and every layer box and child list beneath
-/// them, into the pool, before the layer is built again.
+/// Moves every layer box beneath `layer` into the pool, before the layer is
+/// built again in its emptied child list.
 pub(crate) fn recycle_children(layer: &mut LayerNode) {
-    let children = std::mem::take(&mut layer.children);
-    POOL.with(|pool| pool.borrow_mut().recycle_list(children));
+    POOL.with(|pool| pool.borrow_mut().recycle_children(layer));
 }
 
-/// Moves `layer`'s box, and every layer box and child list beneath it,
-/// into the pool.
+/// Moves `layer`'s box, and every layer box beneath it, into the pool.
 pub(crate) fn recycle(layer: Box<LayerNode>) {
     POOL.with(|pool| pool.borrow_mut().recycle_layer(layer));
 }
@@ -79,23 +74,19 @@ pub(crate) fn child_list(capacity: usize) -> Vec<RenderNode> {
     list
 }
 
-/// `layer` in a recycled box when the pool has one.
-pub(crate) fn boxed(layer: LayerNode) -> Box<LayerNode> {
-    refill(POOL.with(|pool| pool.borrow_mut().layers.pop()), layer)
+pub(crate) fn layer_box() -> Box<LayerNode> {
+    POOL.with(|pool| pool.borrow_mut().layers.pop())
+        .unwrap_or_default()
 }
 
 /// `text` in a recycled box when the pool has one.
 pub(crate) fn boxed_text(text: TextPrimitiveNode) -> Box<TextPrimitiveNode> {
-    refill(POOL.with(|pool| pool.borrow_mut().texts.pop()), text)
-}
-
-fn refill<T>(recycled: Option<Box<T>>, value: T) -> Box<T> {
-    match recycled {
+    match POOL.with(|pool| pool.borrow_mut().texts.pop()) {
         Some(mut recycled) => {
-            *recycled = value;
+            *recycled = text;
             recycled
         }
-        None => Box::new(value),
+        None => Box::new(text),
     }
 }
 
