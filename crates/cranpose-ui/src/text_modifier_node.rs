@@ -105,9 +105,6 @@ impl TextPreparedLayoutOwner {
         }
     }
 
-    /// Reads the layout at `max_width` in place in the cache: measuring reads
-    /// only its size, and copying the whole layout on every measure cost a
-    /// grid of wrapping labels more than wrapping them.
     fn with_prepared<R>(
         &self,
         max_width: Option<f32>,
@@ -164,9 +161,14 @@ impl TextPreparedLayoutOwner {
         })
     }
 
-    fn measure_layout(&self, max_width: Option<f32>) -> Size {
+    fn measure_layout(&self, max_width: Option<f32>) -> (Size, cranpose_ui_layout::AlignmentLines) {
         self.measured_max_width.set(Some(max_width));
-        self.measure_text_content(max_width)
+        self.with_prepared(max_width, |prepared| {
+            (
+                Size::new(prepared.metrics.width, prepared.metrics.height),
+                prepared.alignment_lines,
+            )
+        })
     }
 
     fn measured_layout(&self) -> Option<Rc<crate::text::PreparedTextLayout>> {
@@ -308,7 +310,8 @@ impl LayoutModifierNode for TextModifierNode {
             .max_width
             .is_finite()
             .then_some(constraints.max_width);
-        let text_size = self.pixel_size(self.layout.measure_layout(max_width));
+        let (text_size, alignment_lines) = self.layout.measure_layout(max_width);
+        let text_size = self.pixel_size(text_size);
 
         let width = text_size
             .width
@@ -318,6 +321,7 @@ impl LayoutModifierNode for TextModifierNode {
             .clamp(constraints.min_height, constraints.max_height);
 
         cranpose_ui_layout::LayoutModifierMeasureResult::with_size(Size { width, height })
+            .with_alignment_lines(alignment_lines)
     }
 
     fn min_intrinsic_width(

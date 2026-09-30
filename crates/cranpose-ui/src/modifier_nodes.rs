@@ -2554,6 +2554,7 @@ pub struct AlignmentNode {
     box_alignment: Option<Alignment>,
     column_alignment: Option<HorizontalAlignment>,
     row_alignment: Option<VerticalAlignment>,
+    row_baseline: bool,
     state: NodeState,
 }
 
@@ -2562,11 +2563,13 @@ impl AlignmentNode {
         box_alignment: Option<Alignment>,
         column_alignment: Option<HorizontalAlignment>,
         row_alignment: Option<VerticalAlignment>,
+        row_baseline: bool,
     ) -> Self {
         Self {
             box_alignment,
             column_alignment,
             row_alignment,
+            row_baseline,
             state: NodeState::new(),
         }
     }
@@ -2581,6 +2584,11 @@ impl AlignmentNode {
 
     pub fn row_alignment(&self) -> Option<VerticalAlignment> {
         self.row_alignment
+    }
+
+    /// Whether this node requests first-baseline alignment in its parent Row.
+    pub fn row_baseline(&self) -> bool {
+        self.row_baseline
     }
 }
 
@@ -2601,6 +2609,7 @@ pub struct AlignmentElement {
     box_alignment: Option<Alignment>,
     column_alignment: Option<HorizontalAlignment>,
     row_alignment: Option<VerticalAlignment>,
+    row_baseline: bool,
 }
 
 impl AlignmentElement {
@@ -2609,6 +2618,7 @@ impl AlignmentElement {
             box_alignment: Some(alignment),
             column_alignment: None,
             row_alignment: None,
+            row_baseline: false,
         }
     }
 
@@ -2617,6 +2627,7 @@ impl AlignmentElement {
             box_alignment: None,
             column_alignment: Some(alignment),
             row_alignment: None,
+            row_baseline: false,
         }
     }
 
@@ -2625,6 +2636,17 @@ impl AlignmentElement {
             box_alignment: None,
             column_alignment: None,
             row_alignment: Some(alignment),
+            row_baseline: false,
+        }
+    }
+
+    /// Requests first-baseline alignment with siblings in a Row.
+    pub fn row_baseline() -> Self {
+        Self {
+            box_alignment: None,
+            column_alignment: None,
+            row_alignment: None,
+            row_baseline: true,
         }
     }
 }
@@ -2649,6 +2671,7 @@ impl Hash for AlignmentElement {
         } else {
             state.write_u8(0);
         }
+        self.row_baseline.hash(state);
     }
 }
 
@@ -2660,6 +2683,7 @@ impl ModifierNodeElement for AlignmentElement {
             self.box_alignment,
             self.column_alignment,
             self.row_alignment,
+            self.row_baseline,
         )
     }
 
@@ -2673,6 +2697,7 @@ impl ModifierNodeElement for AlignmentElement {
         if node.row_alignment != self.row_alignment {
             node.row_alignment = self.row_alignment;
         }
+        node.row_baseline = self.row_baseline;
     }
 
     fn capabilities(&self) -> NodeCapabilities {

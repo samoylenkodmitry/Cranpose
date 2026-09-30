@@ -539,8 +539,8 @@ impl MeasurePolicy for ImageMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(scope, &[], constraints, &mut placements);
-        MeasureResult::new(size, placements)
+        let measurement = self.measure_into(scope, &[], constraints, &mut placements);
+        MeasureResult::new(measurement, placements)
     }
 
     fn measure_into(
@@ -549,7 +549,7 @@ impl MeasurePolicy for ImageMeasurePolicy {
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> Size {
+    ) -> cranpose_ui_layout::Measurement {
         placements.clear();
         let iw = self.intrinsic_size.width;
         let ih = self.intrinsic_size.height;
@@ -559,7 +559,8 @@ impl MeasurePolicy for ImageMeasurePolicy {
             return Size {
                 width: w,
                 height: h,
-            };
+            }
+            .into();
         }
 
         let cw = iw.clamp(constraints.min_width, constraints.max_width);
@@ -577,7 +578,7 @@ impl MeasurePolicy for ImageMeasurePolicy {
             (cw, ch)
         };
 
-        Size { width, height }
+        Size { width, height }.into()
     }
 
     fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {

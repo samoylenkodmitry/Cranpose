@@ -22,7 +22,7 @@ use cranpose_foundation::{
     SemanticsMagicTap, SemanticsScrollBy, SemanticsScrollToIndex, SemanticsSetProgress,
     SemanticsSetSelection, SemanticsSetText, SemanticsWidgetRole, text::TextRange,
 };
-use cranpose_ui_layout::{Constraints, MeasurePolicy, PlaceTarget, Placement};
+use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
 use web_time::Instant;
 
 #[cfg(test)]
@@ -268,6 +268,7 @@ struct ModifierChainInputs {
 
 struct ModifierChainMeasurement {
     size: Size,
+    alignment_lines: AlignmentLines,
     content_offset: Point,
     offset: Point,
     window_root: bool,
@@ -1745,20 +1746,22 @@ impl LayoutBuilderState {
             node_id,
             inner_constraints,
             CachedBatchMeasureInputs {
-                measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| -> Size {
+                measurer: Box::new(|child_id: NodeId, child_constraints: Constraints| {
                     match self.measure_node(child_id, child_constraints) {
                         Ok(measured) => {
                             measured_children
                                 .borrow_mut()
                                 .insert(child_id, Rc::clone(&measured));
-                            measured.size
+                            let size = measured.size_for_parent();
+                            Placeable::value(size.width, size.height, child_id)
+                                .with_alignment_lines(measured.alignment_lines_for_parent())
                         }
                         Err(err) => {
                             let mut slot = measure_error.borrow_mut();
                             if slot.is_none() {
                                 *slot = Some(err);
                             }
-                            Size::default()
+                            Placeable::value(0.0, 0.0, child_id)
                         }
                     }
                 }),
@@ -1817,6 +1820,7 @@ impl LayoutBuilderState {
 
         let cranpose_ui_layout::MeasureResult {
             size: measured_size,
+            alignment_lines: explicit_lines,
             placements,
         } = measure_result;
 
@@ -1841,6 +1845,7 @@ impl LayoutBuilderState {
         );
 
         let mut children = Vec::with_capacity(placements.len());
+        let mut alignment_lines = AlignmentLines::default();
         let mut measured_children_by_id = measured_children.borrow_mut();
 
         if let Ok(mut applier) = self.applier.try_borrow_typed() {
@@ -1865,6 +1870,11 @@ impl LayoutBuilderState {
                 x: policy_position.x + child.offset.x,
                 y: policy_position.y + child.offset.y,
             };
+            alignment_lines.merge(
+                child
+                    .alignment_lines_for_parent()
+                    .translated(policy_position.y),
+            );
 
             if let Ok(mut applier) = self.applier.try_borrow_typed()
                 && applier
@@ -1887,13 +1897,20 @@ impl LayoutBuilderState {
         node_handle.set_active_children(children.iter().map(|c| c.node.node_id));
         node_handle.recycle_placement_scratch(placements);
 
-        Ok(Some(Rc::new(MeasuredNode::new(
-            node_id,
-            Size { width, height },
-            offset,
-            Point::default(),
-            children,
-        ))))
+        Ok(Some(Rc::new(
+            MeasuredNode::new(
+                node_id,
+                Size { width, height },
+                offset,
+                Point::default(),
+                children,
+            )
+            .with_alignment_lines(
+                alignment_lines
+                    .with_overrides(explicit_lines.translated(padding.top))
+                    .translated(offset.y),
+            ),
+        )))
     }
 
     fn measure_layout_node(
@@ -1922,6 +1939,7 @@ impl LayoutBuilderState {
         };
         self.bind_layout_children(&mut applier, &runtime_state, &pools.child_ids)?;
         drop(applier);
+        pools.child_ids.clear();
 
         let runtime_state = runtime_state.borrow();
         let measurement = self.measure_through_modifier_chain(
@@ -1930,6 +1948,7 @@ impl LayoutBuilderState {
             chain,
             constraints,
             &mut pools.placements,
+            &mut pools.child_ids,
         );
 
         if let Some(err) = runtime_state.frame.error.borrow_mut().take() {
@@ -1951,8 +1970,13 @@ impl LayoutBuilderState {
                 measurement.size,
                 measurement.offset,
                 measurement.content_offset,
-                runtime_state.measured_children(&pools.placements, measurement.content_offset),
+                runtime_state.measured_children(
+                    &pools.placements,
+                    &pools.child_ids,
+                    measurement.content_offset,
+                ),
             )
+            .with_alignment_lines(measurement.alignment_lines)
             .with_window_root(measurement.window_root),
         );
 
@@ -2030,7 +2054,9 @@ impl LayoutBuilderState {
                 LayoutChildBinding {
                     cache: child.cache_handles(),
                     layout_state: Some(child.layout_state_handle()),
-                    parent_data: Some(parent_data_of(child)),
+                    parent_data: Some(parent_data_of(
+                        child.resolved_modifiers().layout_properties(),
+                    )),
                     dirty: child.needs_layout() || child.needs_measure(),
                 },
                 self,
@@ -2044,7 +2070,9 @@ impl LayoutBuilderState {
                         LayoutChildBinding {
                             cache: child.cache_handles(),
                             layout_state: None,
-                            parent_data: None,
+                            parent_data: Some(parent_data_of(
+                                child.resolved_modifiers().layout_properties(),
+                            )),
                             dirty: child.needs_layout() || child.needs_measure(),
                         },
                         self,
@@ -2067,18 +2095,25 @@ impl LayoutBuilderState {
         chain: ModifierChainInputs,
         constraints: Constraints,
         placements: &mut Vec<Placement>,
+        placement_indices: &mut Vec<usize>,
     ) -> ModifierChainMeasurement {
         let scope = crate::density::DensityMeasureScope::new(chain.density);
 
         if !chain.uses_chain {
-            let size = runtime_state.measure_policy.measure_into(
+            let measurement = runtime_state.measure_policy.measure_into(
                 &scope,
                 runtime_state.child_measurables.as_slice(),
                 constraints,
                 placements,
             );
             return ModifierChainMeasurement {
-                size,
+                size: measurement.size,
+                alignment_lines: inherited_alignment_lines(
+                    &runtime_state.child_states,
+                    placements,
+                    placement_indices,
+                )
+                .with_overrides(measurement.alignment_lines),
                 content_offset: Point::default(),
                 offset: chain.offset,
                 window_root: chain.window_root,
@@ -2090,7 +2125,9 @@ impl LayoutBuilderState {
             &runtime_state.measure_policy,
             &scope,
             runtime_state.child_measurables.as_slice(),
+            &runtime_state.child_states,
             placements,
+            placement_indices,
         );
         let placeable = runtime_state
             .coordinator_chain
@@ -2116,6 +2153,7 @@ impl LayoutBuilderState {
         }
 
         ModifierChainMeasurement {
+            alignment_lines: placeable.alignment_lines(),
             size: Size {
                 width: placeable.width(),
                 height: placeable.height(),
@@ -2201,6 +2239,7 @@ pub(crate) struct MeasuredNode {
     size: Size,
     offset: Point,
     content_offset: Point,
+    alignment_lines: AlignmentLines,
     children: Vec<MeasuredChild>,
     window_root: bool,
 }
@@ -2218,6 +2257,7 @@ impl MeasuredNode {
             size,
             offset,
             content_offset,
+            alignment_lines: AlignmentLines::default(),
             children,
             window_root: false,
         }
@@ -2226,6 +2266,19 @@ impl MeasuredNode {
     fn with_window_root(mut self, window_root: bool) -> Self {
         self.window_root = window_root;
         self
+    }
+
+    fn with_alignment_lines(mut self, alignment_lines: AlignmentLines) -> Self {
+        self.alignment_lines = alignment_lines;
+        self
+    }
+
+    pub(crate) fn alignment_lines_for_parent(&self) -> AlignmentLines {
+        if self.window_root {
+            AlignmentLines::default()
+        } else {
+            self.alignment_lines
+        }
     }
 
     pub(crate) fn size_for_parent(&self) -> Size {
@@ -2266,7 +2319,9 @@ struct CoordinatorFrame<'a> {
     measure_policy: &'a Rc<dyn MeasurePolicy>,
     scope: &'a dyn cranpose_ui_layout::MeasureScope,
     measurables: &'a [Box<dyn Measurable>],
+    child_states: &'a [Rc<LayoutChildMeasureState>],
     placements: RefCell<&'a mut Vec<Placement>>,
+    placement_indices: RefCell<&'a mut Vec<usize>>,
     context: RefCell<LayoutNodeContext>,
 }
 
@@ -2275,13 +2330,17 @@ impl<'a> CoordinatorFrame<'a> {
         measure_policy: &'a Rc<dyn MeasurePolicy>,
         scope: &'a dyn cranpose_ui_layout::MeasureScope,
         measurables: &'a [Box<dyn Measurable>],
+        child_states: &'a [Rc<LayoutChildMeasureState>],
         placements: &'a mut Vec<Placement>,
+        placement_indices: &'a mut Vec<usize>,
     ) -> Self {
         Self {
             measure_policy,
             scope,
             measurables,
+            child_states,
             placements: RefCell::new(placements),
+            placement_indices: RefCell::new(placement_indices),
             context: RefCell::new(LayoutNodeContext::new(scope.density())),
         }
     }
@@ -2295,11 +2354,29 @@ struct CoordinatorLink<'chain, 'frame_ref, 'frame_data> {
     chain: &'chain CoordinatorChain,
     frame: &'frame_ref CoordinatorFrame<'frame_data>,
     index: usize,
+    alignment_lines: Cell<AlignmentLines>,
+}
+
+impl<'chain, 'frame_ref, 'frame_data> CoordinatorLink<'chain, 'frame_ref, 'frame_data> {
+    fn new(
+        chain: &'chain CoordinatorChain,
+        frame: &'frame_ref CoordinatorFrame<'frame_data>,
+        index: usize,
+    ) -> Self {
+        Self {
+            chain,
+            frame,
+            index,
+            alignment_lines: Cell::default(),
+        }
+    }
 }
 
 impl Measurable for CoordinatorLink<'_, '_, '_> {
     fn measure(&self, constraints: Constraints) -> Placeable {
-        self.chain.measure_from(self.index, self.frame, constraints)
+        let placeable = self.chain.measure_from(self.index, self.frame, constraints);
+        self.alignment_lines.set(placeable.alignment_lines());
+        placeable
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
@@ -2442,21 +2519,29 @@ impl CoordinatorChain {
     ) -> Placeable {
         let Some(node) = self.nodes.get(index) else {
             let mut placements = frame.placements.borrow_mut();
-            let size = frame.measure_policy.measure_into(
+            let measurement = frame.measure_policy.measure_into(
                 frame.scope,
                 frame.measurables,
                 constraints,
                 &mut placements,
             );
-            self.inner_size.set(size);
-            return Placeable::value(size.width, size.height, NodeId::default());
+            self.inner_size.set(measurement.size);
+            return Placeable::value(
+                measurement.size.width,
+                measurement.size.height,
+                NodeId::default(),
+            )
+            .with_alignment_lines(
+                inherited_alignment_lines(
+                    frame.child_states,
+                    &placements,
+                    &mut frame.placement_indices.borrow_mut(),
+                )
+                .with_overrides(measurement.alignment_lines),
+            );
         };
 
-        let wrapped = CoordinatorLink {
-            chain: self,
-            frame,
-            index: index + 1,
-        };
+        let wrapped = CoordinatorLink::new(self, frame, index + 1);
         let node_borrow = node.node.borrow();
 
         let Some(layout_node) = node_borrow.as_layout_node() else {
@@ -2467,12 +2552,7 @@ impl CoordinatorChain {
             });
             let child_accumulated = self.total_content_offset_from(index + 1);
             node.accumulated_offset.set(child_accumulated);
-            return Placeable::value_with_offset(
-                placeable.width(),
-                placeable.height(),
-                NodeId::default(),
-                (child_accumulated.x, child_accumulated.y),
-            );
+            return placeable;
         };
 
         let result = match frame.context.try_borrow_mut() {
@@ -2507,6 +2587,13 @@ impl CoordinatorChain {
             NodeId::default(),
             (accumulated.x, accumulated.y),
         )
+        .with_alignment_lines(
+            wrapped
+                .alignment_lines
+                .get()
+                .translated(local_offset.y)
+                .with_overrides(result.alignment_lines),
+        )
     }
 
     fn min_intrinsic_width_from(
@@ -2520,11 +2607,7 @@ impl CoordinatorChain {
                 .measure_policy
                 .min_intrinsic_width(frame.measurables, height);
         };
-        let wrapped = CoordinatorLink {
-            chain: self,
-            frame,
-            index: index + 1,
-        };
+        let wrapped = CoordinatorLink::new(self, frame, index + 1);
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.min_intrinsic_width(height),
@@ -2543,11 +2626,7 @@ impl CoordinatorChain {
                 .measure_policy
                 .max_intrinsic_width(frame.measurables, height);
         };
-        let wrapped = CoordinatorLink {
-            chain: self,
-            frame,
-            index: index + 1,
-        };
+        let wrapped = CoordinatorLink::new(self, frame, index + 1);
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.max_intrinsic_width(height),
@@ -2566,11 +2645,7 @@ impl CoordinatorChain {
                 .measure_policy
                 .min_intrinsic_height(frame.measurables, width);
         };
-        let wrapped = CoordinatorLink {
-            chain: self,
-            frame,
-            index: index + 1,
-        };
+        let wrapped = CoordinatorLink::new(self, frame, index + 1);
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.min_intrinsic_height(width),
@@ -2589,11 +2664,7 @@ impl CoordinatorChain {
                 .measure_policy
                 .max_intrinsic_height(frame.measurables, width);
         };
-        let wrapped = CoordinatorLink {
-            chain: self,
-            frame,
-            index: index + 1,
-        };
+        let wrapped = CoordinatorLink::new(self, frame, index + 1);
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
             || wrapped.max_intrinsic_height(width),
@@ -2638,6 +2709,52 @@ impl CoordinatorChain {
     fn debug_ptrs(&self) -> Vec<usize> {
         self.nodes.iter().map(CoordinatorNode::ptr).collect()
     }
+}
+
+fn inherited_alignment_lines(
+    child_states: &[Rc<LayoutChildMeasureState>],
+    placements: &[Placement],
+    placement_indices: &mut Vec<usize>,
+) -> AlignmentLines {
+    placement_indices.clear();
+    let in_child_order = placements.len() == child_states.len()
+        && placements
+            .iter()
+            .zip(child_states)
+            .all(|(placement, child)| placement.node_id == child.node_id);
+    if !in_child_order {
+        placement_indices.extend(0..placements.len());
+        placement_indices.sort_unstable_by_key(|&index| (placements[index].node_id, index));
+    }
+    let mut lines = AlignmentLines::default();
+    for (index, child) in child_states.iter().enumerate() {
+        let placement = placement_for_child(placements, placement_indices, index, child.node_id);
+        if let Some(measured) = child.measured.borrow().as_ref() {
+            lines.merge(
+                measured
+                    .alignment_lines_for_parent()
+                    .translated(child.placement_position(placement).y),
+            );
+        }
+    }
+    lines
+}
+
+fn placement_for_child<'a>(
+    placements: &'a [Placement],
+    indices: &[usize],
+    child_index: usize,
+    node_id: NodeId,
+) -> Option<&'a Placement> {
+    let index = if indices.is_empty() {
+        child_index
+    } else {
+        let first = indices.partition_point(|&index| placements[index].node_id < node_id);
+        *indices.get(first)?
+    };
+    placements
+        .get(index)
+        .filter(|placement| placement.node_id == node_id)
 }
 
 pub(crate) struct LayoutRuntimeState {
@@ -2700,29 +2817,23 @@ impl LayoutRuntimeState {
     fn measured_children(
         &self,
         placements: &[Placement],
+        placement_indices: &[usize],
         content_offset: Point,
     ) -> Vec<MeasuredChild> {
         let mut measured_children = Vec::with_capacity(self.child_states.len());
-        for child_state in &self.child_states {
+        for (index, child_state) in self.child_states.iter().enumerate() {
             let Some(measured) = child_state.measured.borrow_mut().take() else {
                 continue;
             };
-            let placed = placements
-                .iter()
-                .find(|placement| placement.node_id == child_state.node_id)
-                .map(|placement| Point {
-                    x: placement.x,
-                    y: placement.y,
-                });
-            if let Some(raw) = placed {
+            let placement =
+                placement_for_child(placements, placement_indices, index, child_state.node_id);
+            let base_position = child_state.placement_position(placement);
+            if placement.is_some() {
                 child_state.place_retained(Point {
-                    x: raw.x + measured.offset.x,
-                    y: raw.y + measured.offset.y,
+                    x: base_position.x + measured.offset.x,
+                    y: base_position.y + measured.offset.y,
                 });
             }
-            let base_position = placed
-                .or_else(|| child_state.last_position.get())
-                .unwrap_or(Point { x: 0.0, y: 0.0 });
             measured_children.push(MeasuredChild {
                 node: measured,
                 offset: Point {
@@ -2825,14 +2936,14 @@ struct LayoutChildBinding<'a> {
     dirty: bool,
 }
 
-fn parent_data_of(node: &LayoutNode) -> cranpose_ui_layout::ParentData {
-    let props = node.resolved_modifiers().layout_properties();
+fn parent_data_of(props: crate::modifier::LayoutProperties) -> cranpose_ui_layout::ParentData {
     let weight = props.weight().unwrap_or_default();
     cranpose_ui_layout::ParentData {
         weight: weight.weight,
         fill: weight.fill,
         box_alignment: props.box_alignment(),
         row_alignment: props.row_alignment(),
+        row_baseline: props.row_baseline(),
         column_alignment: props.column_alignment(),
     }
 }
@@ -2850,6 +2961,16 @@ struct LayoutChildMeasureState {
 }
 
 impl LayoutChildMeasureState {
+    fn placement_position(&self, placement: Option<&Placement>) -> Point {
+        placement
+            .map(|placement| Point {
+                x: placement.x,
+                y: placement.y,
+            })
+            .or_else(|| self.last_position.get())
+            .unwrap_or_default()
+    }
+
     fn new(node_id: NodeId, frame: Rc<LayoutChildFrame>) -> Rc<Self> {
         Rc::new(Self {
             node_id,
@@ -3009,6 +3130,11 @@ impl Measurable for LayoutChildMeasurable {
         if let Some(layout_state) = state.layout_state.borrow().as_ref() {
             layout_state.borrow_mut().set_size(measured_size);
         }
+        let alignment_lines = measured
+            .as_ref()
+            .map_or_else(AlignmentLines::default, |node| {
+                node.alignment_lines_for_parent()
+            });
         *state.measured.borrow_mut() = measured;
 
         Placeable::with_place_target(
@@ -3017,6 +3143,7 @@ impl Measurable for LayoutChildMeasurable {
             state.node_id,
             Rc::clone(&self.state) as Rc<dyn PlaceTarget>,
         )
+        .with_alignment_lines(alignment_lines)
     }
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {

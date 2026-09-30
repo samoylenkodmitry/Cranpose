@@ -2,6 +2,15 @@ use super::{Alignment, HorizontalAlignment, Modifier, VerticalAlignment, inspect
 use crate::modifier_nodes::AlignmentElement;
 
 impl Modifier {
+    /// Aligns this child's first text baseline with siblings that also request
+    /// baseline alignment in a Row. A child without a baseline is placed at the top.
+    pub fn align_by_baseline(self) -> Self {
+        self.then(
+            Self::with_element(AlignmentElement::row_baseline())
+                .with_inspector_metadata(inspector_metadata("alignByBaseline", |_| {})),
+        )
+    }
+
     pub fn align(self, alignment: Alignment) -> Self {
         self.then(
             Self::with_element(AlignmentElement::box_alignment(alignment)).with_inspector_metadata(

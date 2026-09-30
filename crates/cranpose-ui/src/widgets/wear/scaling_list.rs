@@ -1091,8 +1091,8 @@ impl MeasurePolicy for WearItemMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(scope, measurables, constraints, &mut placements);
-        MeasureResult::new(size, placements)
+        let measurement = self.measure_into(scope, measurables, constraints, &mut placements);
+        MeasureResult::new(measurement, placements)
     }
 
     fn measure_into(
@@ -1101,7 +1101,7 @@ impl MeasurePolicy for WearItemMeasurePolicy {
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> Size {
+    ) -> cranpose_ui_layout::Measurement {
         placements.clear();
         let mut width = constraints.min_width;
         let mut height = constraints.min_height;
@@ -1115,6 +1115,7 @@ impl MeasurePolicy for WearItemMeasurePolicy {
             width.clamp(constraints.min_width, constraints.max_width),
             height.clamp(constraints.min_height, constraints.max_height),
         )
+        .into()
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {

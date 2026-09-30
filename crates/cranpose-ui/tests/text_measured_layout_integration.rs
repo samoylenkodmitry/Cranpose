@@ -23,22 +23,37 @@ fn find_box<'a>(
 }
 
 fn lay_out_in_column<R>(content: impl Fn() + 'static, inspect: impl FnOnce(&LayoutTree) -> R) -> R {
+    lay_out_in_column_with_measurer(content, ContractMeasurer, inspect)
+}
+
+pub(crate) fn lay_out_in_column_with_measurer<R>(
+    content: impl Fn() + 'static,
+    measurer: impl cranpose_ui::TextMeasurer,
+    inspect: impl FnOnce(&LayoutTree) -> R,
+) -> R {
     let content: Rc<dyn Fn()> = Rc::new(content);
     let mut composition = cranpose_ui::run_test_composition(move || {
         let content = Rc::clone(&content);
         Column(Modifier::empty(), ColumnSpec::default(), move || content());
     });
-    set_text_measurer(ContractMeasurer);
+    set_text_measurer(measurer);
+    inspect(&layout_composition(
+        &mut composition,
+        Size::new(300.0, 300.0),
+    ))
+}
+
+pub(crate) fn layout_composition(
+    composition: &mut cranpose_ui::TestComposition,
+    viewport: Size,
+) -> LayoutTree {
     let root = composition.root().expect("composition root");
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    let layout = applier
-        .compute_layout(root, Size::new(300.0, 300.0))
-        .expect("layout");
-    let inspected = inspect(&layout);
+    let layout = applier.compute_layout(root, viewport).expect("layout");
     applier.clear_runtime_handle();
-    inspected
+    layout
 }
 
 fn measured_body_lines(layout: &LayoutTree) -> Vec<String> {

@@ -875,7 +875,7 @@ impl TextFieldModifierNode {
             .then_some(available_width)
     }
 
-    fn measure_text_content(&self, wrap_width: Option<f32>) -> Size {
+    fn measure_text_content(&self, wrap_width: Option<f32>) -> crate::text::TextMetrics {
         let text = self.state.text();
         let node_id = self.refs.node_id.get();
         let annotated = crate::text::AnnotatedString::from(text.as_str());
@@ -890,20 +890,20 @@ impl TextFieldModifierNode {
             None => crate::text::measure_text_for_node(node_id, &annotated, &self.style),
         };
         self.measured_line_height.set(metrics.line_height);
-        Size {
-            width: metrics.width,
-            height: metrics.height,
-        }
+        metrics
     }
 
     /// The text's size on `density`'s grid: Compose sizes a field's layout
     /// as its paragraph's size, `ceil`ed to whole pixels.
-    fn text_size(&self, wrap_width: Option<f32>, density: f32) -> Size {
-        let size = self.measure_text_content(wrap_width);
-        Size {
-            width: ceil_to_px(size.width, density),
-            height: ceil_to_px(size.height, density),
-        }
+    fn text_size(&self, wrap_width: Option<f32>, density: f32) -> (Size, crate::text::TextMetrics) {
+        let metrics = self.measure_text_content(wrap_width);
+        (
+            Size {
+                width: ceil_to_px(metrics.width, density),
+                height: ceil_to_px(metrics.height, density),
+            },
+            metrics,
+        )
     }
 
     /// The smallest box the field takes, as Compose's `textFieldMinSize`
@@ -1022,7 +1022,7 @@ impl LayoutModifierNode for TextFieldModifierNode {
         let density = context.density();
         let wrap_width = self.wrap_width(constraints.max_width);
         self.measured_wrap_width.set(wrap_width);
-        let text = self.text_size(wrap_width, density);
+        let (text, metrics) = self.text_size(wrap_width, density);
         let min = self.min_size(density);
         // The minimum joins the constraints' own, as a floor they bound.
         let fit = |length: f32, min: f32, low: f32, high: f32| {
@@ -1046,17 +1046,26 @@ impl LayoutModifierNode for TextFieldModifierNode {
 
         let _ = (self.cached_pan_resolver)(size.width);
 
-        cranpose_ui_layout::LayoutModifierMeasureResult::with_size(size)
+        let first = crate::text::measure::text_line_box(&self.style)
+            .map(crate::text::LineBox::first_baseline)
+            .or_else(|| crate::text::measure::first_baseline(&self.style));
+        let lines = cranpose_ui_layout::AlignmentLines::new(
+            first,
+            first.map(|baseline| {
+                baseline + metrics.line_count.saturating_sub(1) as f32 * metrics.line_height
+            }),
+        );
+        cranpose_ui_layout::LayoutModifierMeasureResult::with_size(size).with_alignment_lines(lines)
     }
 
     // Compose's minimum size is a plain layout modifier, which leaves the
     // intrinsics to the text; an empty text is still a line tall.
     fn min_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32, density: f32) -> f32 {
-        self.text_size(None, density).width
+        self.text_size(None, density).0.width
     }
 
     fn max_intrinsic_width(&self, _measurable: &dyn Measurable, _height: f32, density: f32) -> f32 {
-        self.text_size(None, density).width
+        self.text_size(None, density).0.width
     }
 
     fn min_intrinsic_height(&self, _measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
@@ -1071,6 +1080,7 @@ impl LayoutModifierNode for TextFieldModifierNode {
 impl TextFieldModifierNode {
     fn intrinsic_height(&self, width: f32, density: f32) -> f32 {
         self.text_size(self.wrap_width(width), density)
+            .0
             .height
             .max(self.min_size(density).height)
     }

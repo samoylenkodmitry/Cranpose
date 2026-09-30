@@ -1,6 +1,7 @@
 //! Layout contracts & policies for Cranpose
 
 mod alignment;
+mod alignment_lines;
 mod arrangement;
 mod axis;
 mod constraints;
@@ -11,6 +12,7 @@ mod pixels;
 pub use core::*;
 
 pub use alignment::*;
+pub use alignment_lines::*;
 pub use arrangement::*;
 pub use axis::*;
 pub use constraints::*;

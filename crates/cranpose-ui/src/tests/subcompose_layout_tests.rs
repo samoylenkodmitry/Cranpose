@@ -94,8 +94,11 @@ fn measure_once(
             .expect("subcompose layout node");
         typed.handle()
     };
-    let measurer =
-        Box::new(|_child_id: cranpose_core::NodeId, _constraints: Constraints| Size::default());
+    let measurer = Box::new(
+        |child_id: cranpose_core::NodeId, _constraints: Constraints| {
+            SubcomposePlaceable::value(0.0, 0.0, child_id)
+        },
+    );
     let cached_measure_registrar =
         Box::new(|_child_id: cranpose_core::NodeId, _constraints: Constraints| None);
     let error = Rc::new(RefCell::new(None));
@@ -148,7 +151,7 @@ fn density_and_font_scale_do_not_require_an_active_composer() {
         density,
         state: &mut state,
         constraints: Constraints::tight(0.0, 0.0),
-        measurer: Box::new(|_child_id, _constraints| Size::default()),
+        measurer: Box::new(|child_id, _constraints| SubcomposePlaceable::value(0.0, 0.0, child_id)),
         cached_measure_batch_registrar: Box::new(|_node_ids, _constraints, out| out.clear()),
         retained_measure_lookup: Box::new(|_| None),
         retained_measure_registrar: Box::new(|_| {}),
@@ -217,9 +220,9 @@ fn cached_measurement_node_ids_are_registered_in_one_batch() {
             node_id,
             Constraints::tight(0.0, 0.0),
             CachedBatchMeasureInputs {
-                measurer: Box::new(move |_child_id, _constraints| {
+                measurer: Box::new(move |child_id, _constraints| {
                     *measure_calls_for_measurer.borrow_mut() += 1;
-                    Size::default()
+                    SubcomposePlaceable::value(0.0, 0.0, child_id)
                 }),
                 cached_measure_batch_registrar: Box::new(move |node_ids, _constraints, out| {
                     *batch_calls_for_registrar.borrow_mut() += 1;
@@ -306,7 +309,7 @@ fn retained_measurements_skip_cached_batch_registration() {
             node_id,
             Constraints::tight(0.0, 0.0),
             CachedBatchMeasureInputs {
-                measurer: Box::new(|_, _| Size::default()),
+                measurer: Box::new(|child_id, _| SubcomposePlaceable::value(0.0, 0.0, child_id)),
                 cached_measure_batch_registrar: Box::new(move |node_ids, _constraints, out| {
                     batch_nodes_for_registrar
                         .borrow_mut()

@@ -1448,6 +1448,7 @@ pub struct LayoutProperties {
     box_alignment: Option<Alignment>,
     column_alignment: Option<HorizontalAlignment>,
     row_alignment: Option<VerticalAlignment>,
+    row_baseline: bool,
 }
 
 impl LayoutProperties {
@@ -1493,6 +1494,11 @@ impl LayoutProperties {
 
     pub fn row_alignment(&self) -> Option<VerticalAlignment> {
         self.row_alignment
+    }
+
+    /// Whether the parent Row aligns this child's first baseline with its siblings.
+    pub fn row_baseline(&self) -> bool {
+        self.row_baseline
     }
 }
 

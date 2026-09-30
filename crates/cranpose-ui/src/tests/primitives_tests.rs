@@ -102,7 +102,9 @@ fn run_subcompose_measure(
             .expect("subcompose layout node");
         typed.handle()
     };
-    let measurer = Box::new(|_child_id: NodeId, _constraints: Constraints| Size::default());
+    let measurer = Box::new(|child_id: NodeId, _constraints: Constraints| {
+        cranpose_ui_layout::Placeable::value(0.0, 0.0, child_id)
+    });
     let cached_measure_registrar = Box::new(|_child_id: NodeId, _constraints: Constraints| None);
     let error = Rc::new(RefCell::new(None));
     node_handle
@@ -202,9 +204,9 @@ fn capture_subcompose_child_constraints(
     let captured = Rc::new(RefCell::new(Vec::new()));
     let captured_handle = Rc::clone(&captured);
     let error = Rc::new(RefCell::new(None));
-    let measurer = Box::new(move |_child_id: NodeId, child_constraints: Constraints| {
+    let measurer = Box::new(move |child_id: NodeId, child_constraints: Constraints| {
         captured_handle.borrow_mut().push(child_constraints);
-        Size::default()
+        cranpose_ui_layout::Placeable::value(0.0, 0.0, child_id)
     });
     let cached_measure_registrar = Box::new(|_child_id: NodeId, _constraints: Constraints| None);
     node_handle

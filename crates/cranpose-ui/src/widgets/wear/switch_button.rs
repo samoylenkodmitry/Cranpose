@@ -398,8 +398,8 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(scope, measurables, constraints, &mut placements);
-        MeasureResult::new(size, placements)
+        let measurement = self.measure_into(scope, measurables, constraints, &mut placements);
+        MeasureResult::new(measurement, placements)
     }
 
     fn measure_into(
@@ -408,7 +408,7 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
-    ) -> Size {
+    ) -> cranpose_ui_layout::Measurement {
         placements.clear();
         let density = Density::new(self.density, 1.0);
         let horizontal = density.dp(self.spec.padding_horizontal) * 2.0;
@@ -471,7 +471,7 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
             placements.push(Placement::new(switch.node_id(), switch_x, slot_top, 0));
         }
 
-        Size::new(width, height)
+        Size::new(width, height).into()
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
