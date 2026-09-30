@@ -822,6 +822,7 @@ dependencies = [
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "futures-task",
+ "icu_properties",
  "log",
  "smallvec",
  "thiserror 2.0.21",
