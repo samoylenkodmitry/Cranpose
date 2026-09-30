@@ -4684,7 +4684,7 @@ impl SlotsHost {
 
         active_pass.state.flush_payload_location_refreshes(table);
 
-        #[cfg(debug_assertions)]
+        #[cfg(any(test, debug_assertions))]
         if let Err(err) = active_pass.state.validate(table) {
             log::error!("slot writer invariant violation before finalize_pass: {err:?}");
             return Err(NodeError::SlotHostUnavailable {
