@@ -1,6 +1,5 @@
 use smallvec::SmallVec;
 
-use super::super::GroupKey;
 use crate::{
     Key,
     collections::map::{HashMap, HashSet},
@@ -12,8 +11,8 @@ const INLINE_KEY_STATE_CAPACITY: usize = 8;
 pub(in crate::slot) struct FrameKeyState {
     ordinal_entries: SmallVec<[(Key, u32); INLINE_KEY_STATE_CAPACITY]>,
     ordinal_map: Option<HashMap<Key, u32>>,
-    seen_entries: SmallVec<[GroupKey; INLINE_KEY_STATE_CAPACITY]>,
-    seen_set: Option<HashSet<GroupKey>>,
+    seen_entries: SmallVec<[(Key, Key); INLINE_KEY_STATE_CAPACITY]>,
+    seen_set: Option<HashSet<(Key, Key)>>,
 }
 
 impl FrameKeyState {
@@ -65,7 +64,7 @@ impl FrameKeyState {
         0
     }
 
-    pub(in crate::slot) fn insert_seen(&mut self, key: GroupKey) -> bool {
+    pub(in crate::slot) fn insert_seen(&mut self, key: (Key, Key)) -> bool {
         if let Some(set) = &mut self.seen_set {
             return set.insert(key);
         }
@@ -91,7 +90,7 @@ impl FrameKeyState {
         self.ordinal_map.insert(map)
     }
 
-    fn promote_seen(&mut self) -> &mut HashSet<GroupKey> {
+    fn promote_seen(&mut self) -> &mut HashSet<(Key, Key)> {
         let mut set = HashSet::default();
         set.reserve(self.seen_entries.len() * 2);
         for key in self.seen_entries.drain(..) {
@@ -103,6 +102,13 @@ impl FrameKeyState {
     #[cfg(test)]
     fn ordinals_are_promoted(&self) -> bool {
         self.ordinal_map.is_some()
+    }
+
+    #[cfg(test)]
+    pub(in crate::slot) fn seen_key_count(&self) -> usize {
+        self.seen_set
+            .as_ref()
+            .map_or(self.seen_entries.len(), HashSet::len)
     }
 
     #[cfg(test)]

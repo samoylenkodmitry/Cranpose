@@ -1,7 +1,7 @@
 use super::*;
 
-fn group_key(key: Key) -> GroupKey {
-    GroupKey::new(key, None, 0)
+fn group_key(key: Key) -> (Key, Key) {
+    (key, key)
 }
 
 #[test]

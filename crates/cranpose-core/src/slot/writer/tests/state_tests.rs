@@ -2,6 +2,64 @@ use super::*;
 use crate::slot::{GroupKeySeed, SlotInvariantError, SlotLifecycleCoordinator, SlotTable};
 
 #[test]
+fn unkeyed_groups_do_not_fill_duplicate_key_storage() {
+    let mut state = SlotWriteSessionState::default();
+    for _ in 0..2 {
+        for source in 0..32 {
+            let key = state.preview_group_key(GroupKeySeed::unkeyed(source));
+            state.consume_group_key(key);
+        }
+    }
+    assert_eq!(state.root.keys.seen_key_count(), 0);
+}
+
+#[test]
+fn explicit_group_duplicate_storage_uses_source_and_key() {
+    let mut state = SlotWriteSessionState::default();
+    for source in [1, 2] {
+        for explicit in [0, crate::Key::MAX] {
+            let key = state.preview_group_key(GroupKeySeed::keyed(source, explicit));
+            state.consume_group_key(key);
+        }
+    }
+    assert_eq!(state.root.keys.seen_key_count(), 4);
+    let duplicate = state.preview_group_key(GroupKeySeed::keyed(1, 0));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.consume_group_key(duplicate);
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn reused_unkeyed_ordinal_is_rejected() {
+    let mut state = SlotWriteSessionState::default();
+    let key = state.preview_group_key(GroupKeySeed::unkeyed(7));
+    state.consume_group_key(key);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            state.consume_group_key(key);
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn reserved_group_ordinals_are_checked_for_all_key_kinds() {
+    for explicit in [None, Some(37)] {
+        let mut state = SlotWriteSessionState::default();
+        let key = crate::slot::GroupKey::new(7, explicit, 9);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                state.consume_group_key(key);
+            }))
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn removed_payloads_trigger_compaction_hint_at_threshold() {
     let mut state = SlotWriteSessionState::default();
 
