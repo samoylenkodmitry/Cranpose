@@ -39,15 +39,11 @@ fn slots_host_finish_pass_reports_writer_invariant_violation() {
     }
 
     let mut applier = MemoryApplier::new();
-    let result = panic::catch_unwind(AssertUnwindSafe(|| slots_host.finish_pass(&mut applier)));
-
-    assert!(
-        result.is_ok(),
-        "SlotsHost::finish_pass should report writer invariant failures without panicking"
-    );
+    let result = panic::catch_unwind(AssertUnwindSafe(|| slots_host.finish_pass(&mut applier)))
+        .expect("SlotsHost::finish_pass should report writer invariant failures without panicking");
     assert!(matches!(
-        result.unwrap().err(),
-        Some(crate::NodeError::SlotHostUnavailable {
+        result,
+        Err(crate::NodeError::SlotHostUnavailable {
             operation: "SlotsHost::finish_pass",
             reason: "slot writer invariant violation",
         })

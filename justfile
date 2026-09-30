@@ -261,6 +261,7 @@ hooks:
 test: _disk-guard
     cargo nextest run --cargo-profile ci --workspace --no-fail-fast
     cargo test --profile ci --workspace --exclude desktop-app-platform --doc
+    cargo nextest run --release -p cranpose-core --no-fail-fast
 
 # Feature permutations that the default build does not cover. The workspace
 # build turns on the desktop features of `cranpose`, so `cranpose` on its own
