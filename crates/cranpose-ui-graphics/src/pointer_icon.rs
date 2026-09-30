@@ -50,7 +50,7 @@ pub enum PointerIconError {
     },
 }
 
-/// An application-drawn pointer shape: RGBA pixels plus the hotspot, the pixel
+/// An application-drawn pointer shape: a bitmap plus the hotspot, the pixel
 /// inside the image that sits exactly on the pointer's position.
 ///
 /// The alpha channel is **not** premultiplied, which is what both winit and the
@@ -89,8 +89,7 @@ impl CustomPointerIcon {
         })
     }
 
-    /// The icon's pixels, tightly packed RGBA8 with straight (not
-    /// premultiplied) alpha.
+    /// The icon's bitmap, with unpremultiplied alpha in its declared pixel format.
     pub fn image(&self) -> &ImageBitmap {
         &self.image
     }

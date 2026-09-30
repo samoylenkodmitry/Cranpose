@@ -349,7 +349,6 @@ fn draw_image(
     if img_width == 0 || img_height == 0 {
         return;
     }
-    let src_pixels = draw.image.pixels();
 
     let (sr_x, sr_y, sr_w, sr_h) = if let Some(sr) = draw.src_rect {
         (sr.x, sr.y, sr.width, sr.height)
@@ -368,15 +367,11 @@ fn draw_image(
                 cranpose_ui_graphics::ImageSampling::Nearest => {
                     let src_x = ((sr_x + u * sr_w).floor() as i32).clamp(0, img_width as i32 - 1);
                     let src_y = ((sr_y + v * sr_h).floor() as i32).clamp(0, img_height as i32 - 1);
-                    sample_image_nearest(src_pixels, img_width, src_x as u32, src_y as u32)
+                    sample_image_nearest(&draw.image, src_x as u32, src_y as u32)
                 }
-                cranpose_ui_graphics::ImageSampling::Linear => sample_image_linear(
-                    src_pixels,
-                    img_width,
-                    img_height,
-                    sr_x + u * sr_w - 0.5,
-                    sr_y + v * sr_h - 0.5,
-                ),
+                cranpose_ui_graphics::ImageSampling::Linear => {
+                    sample_image_linear(&draw.image, sr_x + u * sr_w - 0.5, sr_y + v * sr_h - 0.5)
+                }
             };
 
             if let Some(filter) = draw.color_filter {
@@ -399,23 +394,19 @@ fn draw_image(
     }
 }
 
-fn sample_image_nearest(src_pixels: &[u8], img_width: u32, src_x: u32, src_y: u32) -> [f32; 4] {
-    let src_idx = ((src_y * img_width + src_x) * 4) as usize;
-    [
-        src_pixels[src_idx] as f32 / 255.0,
-        src_pixels[src_idx + 1] as f32 / 255.0,
-        src_pixels[src_idx + 2] as f32 / 255.0,
-        src_pixels[src_idx + 3] as f32 / 255.0,
-    ]
+fn sample_image_nearest(
+    image: &cranpose_ui_graphics::ImageBitmap,
+    src_x: u32,
+    src_y: u32,
+) -> [f32; 4] {
+    image
+        .rgba8_pixel(src_y as usize * image.width() as usize + src_x as usize)
+        .map(|channel| channel as f32 / 255.0)
 }
 
-fn sample_image_linear(
-    src_pixels: &[u8],
-    img_width: u32,
-    img_height: u32,
-    x: f32,
-    y: f32,
-) -> [f32; 4] {
+fn sample_image_linear(image: &cranpose_ui_graphics::ImageBitmap, x: f32, y: f32) -> [f32; 4] {
+    let img_width = image.width();
+    let img_height = image.height();
     let x = x.clamp(0.0, img_width.saturating_sub(1) as f32);
     let y = y.clamp(0.0, img_height.saturating_sub(1) as f32);
     let x0 = x.floor();
@@ -426,10 +417,10 @@ fn sample_image_linear(
     let y0 = (y0 as i32).clamp(0, img_height as i32 - 1) as u32;
     let x1 = (x0 + 1).min(img_width - 1);
     let y1 = (y0 + 1).min(img_height - 1);
-    let top_left = sample_image_nearest(src_pixels, img_width, x0, y0);
-    let top_right = sample_image_nearest(src_pixels, img_width, x1, y0);
-    let bottom_left = sample_image_nearest(src_pixels, img_width, x0, y1);
-    let bottom_right = sample_image_nearest(src_pixels, img_width, x1, y1);
+    let top_left = sample_image_nearest(image, x0, y0);
+    let top_right = sample_image_nearest(image, x1, y0);
+    let bottom_left = sample_image_nearest(image, x0, y1);
+    let bottom_right = sample_image_nearest(image, x1, y1);
 
     let mut out = [0.0; 4];
     for channel in 0..4 {
@@ -641,7 +632,6 @@ fn blit_rasterized_text_image(
     if img_width == 0 || img_height == 0 {
         return;
     }
-    let src_pixels = image.pixels();
 
     for py in clip_bounds.min_y..clip_bounds.max_y {
         for px in clip_bounds.min_x..clip_bounds.max_x {
@@ -651,9 +641,7 @@ fn blit_rasterized_text_image(
             let v = ((sample_y - rect.y) / rect.height).clamp(0.0, 1.0);
 
             let src = sample_image_linear(
-                src_pixels,
-                img_width,
-                img_height,
+                image,
                 u * img_width.saturating_sub(1) as f32,
                 v * img_height.saturating_sub(1) as f32,
             );

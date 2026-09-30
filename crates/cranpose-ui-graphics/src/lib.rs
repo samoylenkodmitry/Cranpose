@@ -53,7 +53,7 @@ pub mod prelude {
         brush::Brush,
         color::Color,
         geometry::{CornerRadii, EdgeInsets, Point, Rect, RoundedCornerShape, Size},
-        image::{ColorFilter, ImageBitmap, ImageBitmapError, ImageSampling},
+        image::{ColorFilter, ImageBitmap, ImageBitmapError, ImagePixelFormat, ImageSampling},
         pointer_icon::{CursorIcon, CustomPointerIcon, PointerIcon, PointerIconError},
         stroke::{ArcGeometry, Stroke, StrokeCap, StrokeJoin},
         unit::{Dp, Sp},

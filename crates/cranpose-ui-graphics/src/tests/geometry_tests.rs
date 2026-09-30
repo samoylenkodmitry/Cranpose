@@ -174,8 +174,13 @@ fn draw_svg_path_emits_supersampled_image_over_path_bounds() {
     assert_eq!((rect.x, rect.y), (3.0, 3.0));
     assert_eq!((rect.width, rect.height), (18.0, 18.0));
     assert_eq!((image.width(), image.height()), (36, 36));
+    assert_eq!(
+        image.pixels().len(),
+        36 * 36,
+        "a vector mask stores one alpha byte per pixel"
+    );
 
-    let pixels = image.pixels();
+    let pixels = image.rgba8_pixels();
     let index = (18 * 36 + 18) * 4;
     assert_eq!(
         &pixels[index..index + 4],
@@ -193,6 +198,35 @@ fn draw_svg_path_ignores_invalid_data() {
 }
 
 #[test]
+fn vector_mask_pixels_preserve_quantized_color_and_coverage() {
+    let path = crate::VectorPath::parse("M 1.25 1.75 Q 23.25 0.5 16.75 21.5 L 3.5 18.25 Z")
+        .expect("curved path");
+    for alpha in [0.003, 0.371, 0.5, 1.0] {
+        let color = Color::rgba(0.123, 0.456, 0.789, alpha);
+        let mut scope = DrawScopeDefault::new(Size::new(32.0, 32.0));
+        scope.draw_vector_path(&path, Brush::solid(color));
+        let primitives = scope.into_primitives();
+        let DrawPrimitive::Image { image, rect, .. } = &primitives[0] else {
+            panic!("vector image");
+        };
+        let mask = path.coverage_mask(
+            image.width() as usize,
+            image.height() as usize,
+            Point::new(rect.x, rect.y),
+            2.0,
+        );
+        assert_eq!(image.pixels().len(), mask.len());
+        assert!(mask.iter().any(|coverage| *coverage > 0 && *coverage < 255));
+        for (index, coverage) in mask.into_iter().enumerate() {
+            assert_eq!(
+                image.rgba8_pixel(index),
+                [31, 116, 201, (alpha * coverage as f32 + 0.5) as u8]
+            );
+        }
+    }
+}
+
+#[test]
 fn draw_vector_path_applies_brush_alpha() {
     let path = crate::VectorPath::parse("M 0 0 H 8 V 8 H 0 Z").expect("valid path");
     let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
@@ -202,7 +236,7 @@ fn draw_vector_path_applies_brush_alpha() {
     let DrawPrimitive::Image { image, .. } = &primitives[0] else {
         panic!("expected image primitive");
     };
-    let pixels = image.pixels();
+    let pixels = image.rgba8_pixels();
     let width = image.width() as usize;
     let index = ((image.height() as usize / 2) * width + width / 2) * 4;
     assert_eq!(&pixels[index..index + 3], &[0, 0, 255]);
@@ -241,6 +275,32 @@ fn the_same_path_and_color_reuse_one_raster() {
         panic!("expected image primitive");
     };
     assert_ne!(first.id(), image.id());
+}
+
+#[test]
+fn vector_mask_cache_accounts_for_stored_bytes_on_insert_and_eviction() {
+    let mut cache = VectorPathMaskCache::new();
+    for key in 0..128 {
+        let image = if key % 2 == 0 {
+            ImageBitmap::from_alpha8(2, 2, [31, 116, 201], vec![127; 4])
+        } else {
+            ImageBitmap::from_rgba8(2, 2, vec![127; 16])
+        }
+        .expect("cache image");
+        cache.put(key, image);
+        assert_eq!(
+            cache.bytes,
+            cache
+                .entries
+                .iter()
+                .map(|(_, image)| image.pixels().len())
+                .sum::<usize>()
+        );
+    }
+    assert_eq!(cache.entries.len(), VECTOR_PATH_MASK_CACHE_ENTRIES);
+    assert_eq!(cache.bytes, 48 * (4 + 16));
+    assert!(cache.get(0).is_none());
+    assert!(cache.get(127).is_some());
 }
 
 #[test]

@@ -156,7 +156,7 @@ impl DesktopCursors {
             std::collections::hash_map::Entry::Vacant(slot) => {
                 let image = custom.image();
                 let Some(cursor) = crate::macos_cursor::as_drawn(
-                    image.pixels(),
+                    &image.rgba8_pixels(),
                     image.width(),
                     image.height(),
                     (custom.hotspot_x(), custom.hotspot_y()),
@@ -231,7 +231,7 @@ impl DesktopCursors {
         let hotspot = (custom.hotspot_x(), custom.hotspot_y());
         let (pixels, width, height, hotspot) = if crate::cursor_scale::rescales(factor) {
             crate::cursor_scale::scaled_image(
-                image.pixels(),
+                &image.rgba8_pixels(),
                 image.width(),
                 image.height(),
                 hotspot,
@@ -239,7 +239,7 @@ impl DesktopCursors {
             )
         } else {
             (
-                image.pixels().to_vec(),
+                image.rgba8_pixels().into_owned(),
                 image.width(),
                 image.height(),
                 hotspot,

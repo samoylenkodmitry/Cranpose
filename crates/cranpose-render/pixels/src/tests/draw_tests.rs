@@ -11,6 +11,60 @@ use cranpose_ui_graphics::{Color, TileMode};
 
 use super::*;
 
+#[test]
+fn alpha_masks_render_exactly_as_rgba_images() {
+    use cranpose_ui_graphics::{ColorFilter, ImageBitmap, ImageSampling};
+    let mask = ImageBitmap::from_alpha8(16, 16, [19, 127, 239], (0..=255).collect()).expect("mask");
+    let rgba = ImageBitmap::from_rgba8(16, 16, mask.rgba8_pixels().into_owned()).expect("rgba");
+    for sampling in [ImageSampling::Nearest, ImageSampling::Linear] {
+        for blend_mode in [BlendMode::SrcOver, BlendMode::DstOut] {
+            for color_filter in [
+                None,
+                Some(ColorFilter::Modulate(Color(0.7, 0.5, 0.3, 0.8))),
+                Some(ColorFilter::Tint(Color(0.4, 0.2, 0.9, 0.6))),
+            ] {
+                let render = |image: &ImageBitmap| {
+                    let draw = ImageDraw {
+                        rect: Rect {
+                            x: 1.25,
+                            y: 2.75,
+                            width: 28.5,
+                            height: 26.25,
+                        },
+                        snap_anchor: None,
+                        image: image.clone(),
+                        alpha: 0.7,
+                        color_filter,
+                        sampling,
+                        z_index: 0,
+                        clip: Some(Rect {
+                            x: 3.0,
+                            y: 4.0,
+                            width: 24.0,
+                            height: 24.0,
+                        }),
+                        blend_mode,
+                        src_rect: Some(Rect {
+                            x: 14.0,
+                            y: 1.0,
+                            width: -12.0,
+                            height: 13.0,
+                        }),
+                    };
+                    let mut frame = [41, 71, 101, 255].repeat(32 * 32);
+                    draw_image(&mut frame, 32, 32, &draw, &RenderDiagnostics::new());
+                    frame
+                };
+                assert_eq!(
+                    render(&mask),
+                    render(&rgba),
+                    "{sampling:?} {blend_mode:?} {color_filter:?}"
+                );
+            }
+        }
+    }
+}
+
 fn draw_raster_scene_for_test(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
     let diagnostics = RenderDiagnostics::new();
     let text_resources = SoftwareTextResources::default();
