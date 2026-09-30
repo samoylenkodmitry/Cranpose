@@ -28,6 +28,7 @@ cranpose-ui-layout = { workspace = true }
 cranpose-ui-graphics = { workspace = true }
 smallvec = "1.16"
 futures-task = "0.3"
+icu_properties = { version = "2.3", default-features = false, features = ["compiled_data"] }
 # WASM-compatible time - web-time is what winit uses internally
 web-time = { workspace = true }
 log = "0.4"

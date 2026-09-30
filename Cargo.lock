@@ -1326,6 +1326,7 @@ dependencies = [
  "cranpose-ui-layout",
  "criterion",
  "futures-task",
+ "icu_properties",
  "log",
  "smallvec",
  "stats_alloc",
