@@ -13,7 +13,7 @@ use std::{
 
 use cranpose_core::{
     Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
-    Phase, RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
+    Phase, RuntimeHandle, SlotTable, SlotsHost,
 };
 use cranpose_foundation::{
     CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
@@ -1727,7 +1727,7 @@ impl LayoutBuilderState {
         let mut slots_guard = SlotsGuard::take(&self.slots);
         let slots_host = slots_guard.host();
         let applier_host_dyn: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
-        let observer = SnapshotStateObserver::new(|callback| callback());
+        let observer = node_handle.observer_for_measure();
         let composer = Composer::new(
             Rc::clone(&slots_host),
             applier_host_dyn,
