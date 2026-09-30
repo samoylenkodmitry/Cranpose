@@ -807,6 +807,13 @@ impl RuntimeInner {
     }
 
     fn drain_frame_callbacks(&self, frame_time_nanos: u64) {
+        if self
+            .last_frame_time_nanos
+            .get()
+            .is_some_and(|previous| frame_time_nanos <= previous)
+        {
+            return;
+        }
         self.last_frame_time_nanos.set(Some(frame_time_nanos));
         let next_frame_id = self.next_frame_callback_id.get();
         if self.has_frame_callbacks() {
@@ -1289,6 +1296,9 @@ impl RuntimeHandle {
         }
     }
 
+    /// Delivers callbacks registered before this display frame. Timestamps use
+    /// one monotonic nanosecond epoch; duplicate or older timestamps are ignored.
+    /// A callback registered during delivery waits for a newer frame timestamp.
     pub fn drain_frame_callbacks(&self, frame_time_nanos: u64) {
         if let Some(inner) = self.inner.upgrade() {
             inner.drain_frame_callbacks(frame_time_nanos);

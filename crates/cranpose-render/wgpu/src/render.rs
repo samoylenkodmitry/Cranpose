@@ -19,8 +19,7 @@ use cranpose_render_common::{
     software_text_raster::{
         SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
         SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
-        collect_solid_text_atlas_run, measure_text_with_font,
-        rasterize_annotated_text_to_image_with_glyph_cache,
+        collect_solid_text_atlas_run, rasterize_annotated_text_region,
         rasterize_text_to_image_with_glyph_cache,
     },
     text_mask_gamma::TextLuminance,
@@ -3938,7 +3937,7 @@ impl GpuRenderer {
             width: target_rect.2 / root_scale,
             height: target_rect.3 / root_scale,
         };
-        let Some(visible) = visible.intersect(target_logical) else {
+        let Some(visible) = visible.intersect(expand_rect(target_logical, margin, margin)) else {
             return;
         };
         let max_texture_dim = self.max_texture_dim();
@@ -4082,7 +4081,11 @@ impl GpuRenderer {
             width,
             height,
         };
-        let scene = shadow_scene(shadow.shapes.as_ref(), &shadow.texts);
+        let scene = shadow_scene(
+            shadow.shapes.as_ref(),
+            &shadow.texts,
+            blur_reach(shadow.blur_radius, root_scale),
+        );
         let segment = PassSegment {
             scene: &scene,
             ops: &scene.draw_ops,
@@ -4158,7 +4161,7 @@ impl GpuRenderer {
             }
         }
         if let Some(cutout_run) = &shadow.post_blur_cutouts {
-            let cutouts = shadow_scene(Some(cutout_run), &[]);
+            let cutouts = shadow_scene(Some(cutout_run), &[], 0.0);
             let segment = PassSegment {
                 scene: &cutouts,
                 ops: &cutouts.draw_ops,
@@ -5432,21 +5435,40 @@ impl GpuRenderer {
         );
         let source_draw = raster_source.draw.as_ref();
         let source_raster_rect = raster_source.raster_rect;
+        let source_origin = if source_draw.text.span_styles().is_empty() {
+            Point::new(source_raster_rect.x, source_raster_rect.y)
+        } else {
+            Point::new(raster_rect.x, raster_rect.y)
+        };
 
-        let cache_key = Self::text_image_cache_key(
+        let mut cache_key = Self::text_image_cache_key(
             source_draw,
             source_raster_rect,
             text_scale,
             static_text_motion,
         );
+        if !source_draw.text.span_styles().is_empty() {
+            let mut state = default_hash::new();
+            cache_key.0.hash(&mut state);
+            (source_origin.x - source_raster_rect.x)
+                .to_bits()
+                .hash(&mut state);
+            (source_origin.y - source_raster_rect.y)
+                .to_bits()
+                .hash(&mut state);
+            cache_key = TextImageCacheKey(state.finish());
+        }
         let image = if let Some(cached) = self.text_image_cache.get(&cache_key) {
             self.frame_stats
                 .record_text_image_cache_hit(cached.image.width(), cached.image.height());
             cached.image.clone()
         } else {
-            let Some(image) =
-                self.rasterize_text_draw_to_image(source_draw, source_raster_rect, text_scale)
-            else {
+            let Some(image) = self.rasterize_text_draw_to_image(
+                source_draw,
+                source_raster_rect,
+                source_origin,
+                text_scale,
+            ) else {
                 return Ok(());
             };
             self.frame_stats
@@ -5509,6 +5531,20 @@ impl GpuRenderer {
             };
         }
 
+        if !text_draw.text.span_styles().is_empty() {
+            let device_clip = Rect {
+                x: (clip.x * root_scale).floor(),
+                y: (clip.y * root_scale).floor(),
+                width: ((clip.x + clip.width) * root_scale).ceil() - (clip.x * root_scale).floor(),
+                height: ((clip.y + clip.height) * root_scale).ceil()
+                    - (clip.y * root_scale).floor(),
+            };
+            return TextRasterSource {
+                draw: Cow::Borrowed(text_draw),
+                raster_rect: raster_rect.intersect(device_clip).unwrap_or(raster_rect),
+            };
+        }
+
         let line_starts = self.text_line_index_cache.line_starts(&text_draw.text);
         clipped_text_raster_source_with_line_starts(
             text_draw,
@@ -5539,6 +5575,23 @@ impl GpuRenderer {
         text_draw.text_style.render_hash().hash(&mut state);
         text_draw.color.render_hash().hash(&mut state);
         hash_text_raster_geometry_for_cache(raster_rect, static_text_motion, &mut state);
+        if std::iter::once(&text_draw.text_style.span_style)
+            .chain(text_draw.text.span_styles().iter().map(|span| &span.item))
+            .any(|span| {
+                span.brush
+                    .as_ref()
+                    .is_some_and(|brush| !matches!(brush, cranpose_ui_graphics::Brush::Solid(_)))
+            })
+        {
+            for coordinate in [raster_rect.x, raster_rect.y] {
+                let phase = if coordinate >= 0.0 {
+                    coordinate.rem_euclid(4.0)
+                } else {
+                    coordinate
+                };
+                phase.to_bits().hash(&mut state);
+            }
+        }
         text_draw.font_size.to_bits().hash(&mut state);
         text_scale.to_bits().hash(&mut state);
         text_draw.layout_options.hash(&mut state);
@@ -5560,6 +5613,7 @@ impl GpuRenderer {
         &mut self,
         text_draw: &TextDraw,
         raster_rect: Rect,
+        source_origin: Point,
         text_scale: f32,
     ) -> Option<ImageBitmap> {
         if text_draw.text.span_styles().is_empty() {
@@ -5576,118 +5630,18 @@ impl GpuRenderer {
             );
         }
 
-        if let Some(image) = rasterize_annotated_text_to_image_with_glyph_cache(
+        rasterize_annotated_text_region(
             text_draw.text.as_ref(),
             raster_rect,
+            source_origin,
             &text_draw.text_style,
             text_draw.color,
             text_draw.font_size,
             text_scale,
             &self.text_fonts,
-            &mut self.text_glyph_mask_cache,
-        ) {
-            return Some(image);
-        }
-
-        rasterize_spanned_text_to_image(
-            text_draw,
-            raster_rect,
-            text_scale,
-            &self.text_fonts,
-            &mut self.text_glyph_mask_cache,
+            Some(&mut self.text_glyph_mask_cache),
         )
     }
-}
-
-fn rasterize_spanned_text_to_image(
-    text_draw: &TextDraw,
-    raster_rect: Rect,
-    text_scale: f32,
-    fonts: &SoftwareTextFontSet,
-    glyph_cache: &mut SoftwareGlyphRasterCache,
-) -> Option<ImageBitmap> {
-    let width = raster_rect.width.ceil().max(1.0) as u32;
-    let height = raster_rect.height.ceil().max(1.0) as u32;
-    let mut canvas = vec![0_u8; (width as usize) * (height as usize) * 4];
-    let boundaries = text_draw.text.span_boundaries();
-    let base_line_height = text_draw
-        .text_style
-        .resolve_line_height(14.0, text_draw.font_size)
-        .max(1.0);
-    let mut current_line_height = base_line_height;
-    let mut cursor_x = raster_rect.x;
-    let mut cursor_y = raster_rect.y;
-
-    for window in boundaries.windows(2) {
-        let start = window[0];
-        let end = window[1];
-        if start == end {
-            continue;
-        }
-
-        let chunk = &text_draw.text.text()[start..end];
-        let mut merged_span = text_draw.text_style.span_style.clone();
-        for span in text_draw.text.span_styles() {
-            if span.range.start <= start && span.range.end >= end {
-                merged_span = merged_span.merge(&span.item);
-            }
-        }
-
-        let mut chunk_style = cranpose_ui::TextStyle::clone(&text_draw.text_style);
-        chunk_style.span_style = merged_span;
-
-        for part in chunk.split_inclusive('\n') {
-            let has_newline = part.ends_with('\n');
-            let content = if has_newline {
-                &part[..part.len().saturating_sub(1)]
-            } else {
-                part
-            };
-
-            if !content.is_empty() {
-                let chunk_font_size = chunk_style.resolve_font_size(text_draw.font_size);
-                let Some(font) = fonts.resolve(&chunk_style) else {
-                    continue;
-                };
-                let metrics = measure_text_with_font(content, &chunk_style, chunk_font_size, font);
-                let segment_rect = Rect {
-                    x: cursor_x,
-                    y: cursor_y,
-                    width: (metrics.width * text_scale).ceil().max(1.0),
-                    height: (metrics.height * text_scale).ceil().max(1.0),
-                };
-                if let Some(segment_image) = rasterize_text_to_image_with_glyph_cache(
-                    content,
-                    segment_rect,
-                    &chunk_style,
-                    chunk_style.resolve_text_color(text_draw.color),
-                    chunk_font_size,
-                    text_scale,
-                    font,
-                    glyph_cache,
-                ) {
-                    composite_text_segment(
-                        &mut canvas,
-                        width,
-                        height,
-                        raster_rect,
-                        segment_rect,
-                        &segment_image,
-                    );
-                }
-                cursor_x += metrics.width * text_scale;
-                current_line_height = current_line_height.max(metrics.line_height.max(1.0));
-            }
-
-            if has_newline {
-                cursor_x = raster_rect.x;
-                cursor_y += current_line_height * text_scale;
-                current_line_height = base_line_height;
-            }
-        }
-    }
-
-    ImageBitmap::from_rgba8(width, height, canvas).ok()
 }
 
 struct TextRasterSource<'a> {
@@ -5789,61 +5743,6 @@ fn line_start_offsets(text: &str) -> Vec<usize> {
 
 fn line_end_offset(text: &str, line_starts: &[usize], line: usize) -> usize {
     line_starts.get(line + 1).copied().unwrap_or(text.len())
-}
-
-fn composite_text_segment(
-    canvas: &mut [u8],
-    canvas_width: u32,
-    canvas_height: u32,
-    canvas_rect: Rect,
-    segment_rect: Rect,
-    segment_image: &ImageBitmap,
-) {
-    let offset_x = (segment_rect.x - canvas_rect.x).round() as i32;
-    let offset_y = (segment_rect.y - canvas_rect.y).round() as i32;
-    let src = segment_image.rgba8_pixels();
-    for sy in 0..segment_image.height() as i32 {
-        let dy = offset_y + sy;
-        if dy < 0 || dy >= canvas_height as i32 {
-            continue;
-        }
-        for sx in 0..segment_image.width() as i32 {
-            let dx = offset_x + sx;
-            if dx < 0 || dx >= canvas_width as i32 {
-                continue;
-            }
-            let src_index = ((sy as u32 * segment_image.width() + sx as u32) * 4) as usize;
-            let dst_index = ((dy as u32 * canvas_width + dx as u32) * 4) as usize;
-            blend_rgba_pixel(
-                &mut canvas[dst_index..dst_index + 4],
-                &src[src_index..src_index + 4],
-            );
-        }
-    }
-}
-
-fn blend_rgba_pixel(dst: &mut [u8], src: &[u8]) {
-    let src_alpha = src[3] as f32 / 255.0;
-    if src_alpha <= 0.0 {
-        return;
-    }
-    let dst_alpha = dst[3] as f32 / 255.0;
-    let out_alpha = src_alpha + dst_alpha * (1.0 - src_alpha);
-    if out_alpha <= f32::EPSILON {
-        dst.copy_from_slice(&[0, 0, 0, 0]);
-        return;
-    }
-
-    for channel in 0..3 {
-        let src_channel = src[channel] as f32 / 255.0;
-        let dst_channel = dst[channel] as f32 / 255.0;
-        let src_premult = src_channel * src_alpha;
-        let dst_premult = dst_channel * dst_alpha;
-        dst[channel] =
-            (((src_premult + dst_premult * (1.0 - src_alpha)) / out_alpha).clamp(0.0, 1.0) * 255.0)
-                .round() as u8;
-    }
-    dst[3] = (out_alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
 }
 
 fn align_to(value: u32, alignment: u32) -> u32 {
@@ -6126,7 +6025,11 @@ fn shadow_composite_mask(
 /// A scene holding just a shadow's own draws, in the order they arrive, so
 /// the shadow source renders through the same pass encoder as everything
 /// else.
-fn shadow_scene(shapes: Option<&RunDraw>, texts: &[TextDraw]) -> CompositorScene {
+fn shadow_scene(
+    shapes: Option<&RunDraw>,
+    texts: &[TextDraw],
+    input_margin: f32,
+) -> CompositorScene {
     let mut scene = CompositorScene::new();
     if let Some(run) = shapes {
         scene.push_run(run.clone());
@@ -6137,7 +6040,11 @@ fn shadow_scene(shapes: Option<&RunDraw>, texts: &[TextDraw]) -> CompositorScene
             z_index,
             kind: DrawOpKind::Text(scene.texts.len()),
         });
-        scene.texts.push(text.clone());
+        let mut source_text = text.clone();
+        source_text.clip = source_text
+            .clip
+            .map(|clip| expand_rect(clip, input_margin, input_margin));
+        scene.texts.push(source_text);
         scene.next_z += 1;
     }
     scene

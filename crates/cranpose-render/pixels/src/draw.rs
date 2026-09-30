@@ -1,13 +1,14 @@
-use std::rc::Rc;
-
 #[cfg(test)]
 use cranpose_render_common::text_measure::{
     fallback_char_width, fallback_cursor_x_for_byte_offset, fallback_line_height,
     fallback_text_metrics,
 };
 use cranpose_render_common::{
-    brush_sampling::sample_brush_rgba, graph_scene::RenderDiagnostics, shape_sdf,
-    software_text_raster::rasterize_text_to_image, text_measure::SoftwareTextResources,
+    brush_sampling::sample_brush_rgba,
+    graph_scene::RenderDiagnostics,
+    shape_sdf,
+    software_text_raster::{rasterize_annotated_text_region, rasterize_text_to_image},
+    text_measure::SoftwareTextResources,
 };
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{
@@ -439,112 +440,10 @@ fn draw_text(
     diagnostics: &RenderDiagnostics,
     text_resources: &SoftwareTextResources,
 ) {
-    if draw.text.span_styles.is_empty() {
-        draw_text_plain(frame, width, height, draw, diagnostics, text_resources);
-        return;
-    }
-
-    draw_text_with_span_styles(frame, width, height, draw, diagnostics, text_resources);
-}
-
-fn draw_text_with_span_styles(
-    frame: &mut [u8],
-    width: u32,
-    height: u32,
-    draw: &TextDraw,
-    diagnostics: &RenderDiagnostics,
-    text_resources: &SoftwareTextResources,
-) {
-    let boundaries = draw.text.span_boundaries();
-    let mut cursor_x = draw.rect.x;
-    let mut cursor_y = draw.rect.y;
-    let base_line_height = draw
-        .text_style
-        .resolve_line_height(14.0, draw.font_size)
-        .max(1.0);
-    let mut current_line_height = base_line_height;
-
-    for window in boundaries.windows(2) {
-        let start = window[0];
-        let end = window[1];
-        if start == end {
-            continue;
-        }
-
-        let chunk = &draw.text.text[start..end];
-        let mut merged_span = draw.text_style.span_style.clone();
-        for span in &draw.text.span_styles {
-            if span.range.start <= start && span.range.end >= end {
-                merged_span = merged_span.merge(&span.item);
-            }
-        }
-
-        let mut chunk_style = draw.text_style.clone();
-        chunk_style.span_style = merged_span;
-
-        for part in chunk.split_inclusive('\n') {
-            let has_newline = part.ends_with('\n');
-            let content = if has_newline {
-                &part[..part.len().saturating_sub(1)]
-            } else {
-                part
-            };
-
-            if !content.is_empty() {
-                let segment = cranpose_ui::text::AnnotatedString::from(content);
-                let metrics = cranpose_ui::text::measure_text(&segment, &chunk_style);
-                let segment_draw = TextDraw {
-                    node_id: draw.node_id,
-                    rect: Rect {
-                        x: cursor_x,
-                        y: cursor_y,
-                        width: metrics.width.max(1.0),
-                        height: metrics.height.max(1.0),
-                    },
-                    snap_anchor: draw.snap_anchor,
-                    text: Rc::new(segment),
-                    color: chunk_style.resolve_text_color(draw.color),
-                    text_style: chunk_style.clone(),
-                    font_size: chunk_style.resolve_font_size(draw.font_size),
-                    scale: draw.scale,
-                    layout_options: draw.layout_options,
-                    z_index: draw.z_index,
-                    clip: draw.clip,
-                };
-                draw_text_plain(
-                    frame,
-                    width,
-                    height,
-                    &segment_draw,
-                    diagnostics,
-                    text_resources,
-                );
-                cursor_x += metrics.width;
-                current_line_height = current_line_height.max(metrics.line_height.max(1.0));
-            }
-
-            if has_newline {
-                cursor_x = draw.rect.x;
-                cursor_y += current_line_height;
-                current_line_height = base_line_height;
-            }
-        }
-    }
-}
-
-fn draw_text_plain(
-    frame: &mut [u8],
-    width: u32,
-    height: u32,
-    draw: &TextDraw,
-    diagnostics: &RenderDiagnostics,
-    text_resources: &SoftwareTextResources,
-) {
     let text_scale = draw.scale.max(0.0);
     if text_scale == 0.0 {
         return;
     }
-
     let static_text_motion = draw
         .text_style
         .paragraph_style
@@ -559,8 +458,6 @@ fn draw_text_plain(
         Point::default()
     };
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    let clip = draw.clip;
-
     let raster_rect = if static_text_motion {
         Rect {
             x: rect.x.round(),
@@ -579,23 +476,35 @@ fn draw_text_plain(
     } else {
         rect
     };
-
-    let Some(font) = text_resources.fonts().resolve(&draw.text_style) else {
+    let image = if draw.text.span_styles.is_empty() {
+        let Some(font) = text_resources.fonts().resolve(&draw.text_style) else {
+            return;
+        };
+        rasterize_text_to_image(
+            &draw.text.text,
+            raster_rect,
+            &draw.text_style,
+            draw.color,
+            draw.font_size,
+            text_scale,
+            font,
+        )
+    } else {
+        rasterize_annotated_text_region(
+            draw.text.as_ref(),
+            raster_rect,
+            Point::new(raster_rect.x, raster_rect.y),
+            &draw.text_style,
+            draw.color,
+            draw.font_size,
+            text_scale,
+            text_resources.fonts(),
+            None,
+        )
+    };
+    let Some(image) = image else {
         return;
     };
-
-    let Some(image) = rasterize_text_to_image(
-        draw.text.text.as_str(),
-        raster_rect,
-        &draw.text_style,
-        draw.color,
-        draw.font_size,
-        text_scale,
-        font,
-    ) else {
-        return;
-    };
-
     let blit_origin = if static_text_motion {
         Point::new(raster_rect.x, raster_rect.y)
     } else {
@@ -607,8 +516,15 @@ fn draw_text_plain(
         width: image.width() as f32,
         height: image.height() as f32,
     };
-
-    blit_rasterized_text_image(frame, width, height, blit_rect, clip, &image, diagnostics);
+    blit_rasterized_text_image(
+        frame,
+        width,
+        height,
+        blit_rect,
+        draw.clip,
+        &image,
+        diagnostics,
+    );
 }
 
 fn blit_rasterized_text_image(

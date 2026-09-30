@@ -554,9 +554,15 @@ fn rasterize_reference_dilation_stroke(
             width,
             height,
             &reference,
-            &Brush::solid(Color::WHITE),
-            1.0,
-            rect,
+            &GlyphPaint {
+                brush: &Brush::solid(Color::WHITE),
+                alpha: 1.0,
+                shadow: None,
+                brush_rect: rect,
+                canvas_origin: Point::new(rect.x, rect.y),
+                scale: 1.0,
+                static_text_motion: true,
+            },
         );
     }
 

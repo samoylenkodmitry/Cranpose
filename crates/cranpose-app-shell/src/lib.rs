@@ -1032,6 +1032,24 @@ where
         })
     }
 
+    /// Returns whether queued UI, state, layout, semantics, or due cursor work can be processed
+    /// without advancing the frame clock. Awaiting a display frame alone is false.
+    pub fn needs_update_without_frame(&self) -> bool {
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| {
+            self.any_surface_dirty()
+                || self.app.has_stale_work_in_context()
+                || self.app.composition.should_recompose()
+                || self.app.composition.runtime_handle().has_pending_ui()
+                || has_pending_semantics_invalidations()
+                || cranpose_ui::next_cursor_blink_time().is_some_and(|at| at <= Instant::now())
+                || self
+                    .surfaces
+                    .iter()
+                    .any(|surface| surface.renderer_warmup_due(&self.app))
+        })
+    }
+
     /// Returns true when the runtime holds work for the UI thread: posted tasks,
     /// continuations from worker threads, or async tasks ready to poll.
     ///
@@ -1257,18 +1275,53 @@ where
         self.update_at_frame_time_nanos(frame_time)
     }
 
+    /// Delivers a display frame at a monotonic platform instant, then runs the
+    /// continuations it wakes. This is independent of renderer availability.
+    /// The instant is normalized to the shell's start, sharing the input clock's epoch.
+    /// Repeated or older frame timestamps do not wake frame awaiters again.
+    /// Use [`Self::update_without_frame`] to compose and draw the resulting state.
+    pub fn dispatch_frame_at(&mut self, frame_time: Instant) {
+        let frame_time = self.app.frame_time_nanos_at(frame_time);
+        let app_context = Rc::clone(&self.app.app_context);
+        app_context.enter(|| {
+            let runtime_handle = self.app.runtime.runtime_handle();
+            runtime_handle.with_deferred_state_releases(|| {
+                self.app.last_frame_time_nanos = frame_time.max(self.app.last_frame_time_nanos);
+                self.app
+                    .runtime
+                    .drain_frame_callbacks(self.app.last_frame_time_nanos);
+                runtime_handle.drain_ui();
+                self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
+            });
+        });
+    }
+
+    /// Processes pending state, input, layout, drawing, and semantics work without
+    /// waking frame awaiters. Platforms use this for work between display frames.
+    pub fn update_without_frame(&mut self) -> FrameUpdateResult {
+        self.update_with_frame_time(None)
+    }
+
+    /// Processes one update at a frame timestamp in nanoseconds since this shell
+    /// started. Duplicate or older timestamps process UI work without delivering
+    /// another frame callback.
     pub fn update_at_frame_time_nanos(&mut self, frame_time: u64) -> FrameUpdateResult {
+        self.update_with_frame_time(Some(frame_time))
+    }
+
+    fn update_with_frame_time(&mut self, frame_time: Option<u64>) -> FrameUpdateResult {
         let app_context = Rc::clone(&self.app.app_context);
         app_context.enter(|| {
             let update_started_at = Instant::now();
-            let frame_time = frame_time.max(self.app.last_frame_time_nanos);
-            self.app.last_frame_time_nanos = frame_time;
             let runtime_handle = self.app.runtime.runtime_handle();
             runtime_handle.with_deferred_state_releases(|| {
-                self.app.runtime.drain_frame_callbacks(frame_time);
+                if let Some(frame_time) = frame_time {
+                    self.app.last_frame_time_nanos = frame_time.max(self.app.last_frame_time_nanos);
+                    self.app.runtime.drain_frame_callbacks(self.app.last_frame_time_nanos);
+                }
                 let after_frame_callbacks = Instant::now();
                 runtime_handle.drain_ui();
-                self.dispatch_requested_mouse_moves(frame_time);
+                self.dispatch_requested_mouse_moves(self.app.last_frame_time_nanos);
                 let after_ui_drain = Instant::now();
                 let should_render = self.app.composition.should_recompose();
                 let mut reconcile_attempted = false;

@@ -467,7 +467,7 @@ impl EmbeddedHost {
         self.sync_windows();
         self.sync_overlays();
         if self.surfaces_added {
-            with_native_window_registry(&registry, || self.shell.update());
+            with_native_window_registry(&registry, || self.shell.update_without_frame());
         }
     }
 

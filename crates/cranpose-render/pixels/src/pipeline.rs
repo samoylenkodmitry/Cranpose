@@ -18,7 +18,7 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui::{
-    LayoutBox, TextLayoutOptions, measure_text,
+    LayoutBox, measure_text,
     text::{TextDecoration, TextStyle},
 };
 use cranpose_ui_graphics::{
@@ -402,14 +402,12 @@ fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default:
 #[expect(clippy::too_many_arguments)]
 fn push_text_style_draws(
     scene: &mut RasterScene,
-    node_id: NodeId,
     rect: Rect,
     text_rect: Rect,
     node_layer: &GraphicsLayer,
     text: &cranpose_ui::text::AnnotatedString,
     text_style: &TextStyle,
     font_size: f32,
-    options: TextLayoutOptions,
     text_clip: Option<Rect>,
 ) {
     let baseline_shift_px = text_style
@@ -469,27 +467,23 @@ fn push_text_style_draws(
             blur_radius: shadow.blur_radius,
         });
         scene.push_text(
-            node_id,
             transformed_shadow_rect,
             Rc::new(text.clone()),
             Color::TRANSPARENT,
             shadow_text_style,
             font_size,
             layer_uniform_scale(node_layer),
-            options,
             text_clip,
         );
     }
 
     scene.push_text(
-        node_id,
         transformed_shifted_text_rect,
         Rc::new(text.clone()),
         transformed_text_color,
         transformed_text_style,
         font_size,
         layer_uniform_scale(node_layer),
-        options,
         text_clip,
     );
 
@@ -980,19 +974,15 @@ fn render_graph_text(
 
     push_text_style_draws(
         scene,
-        text.node_id,
         rect,
         text_rect,
         node_layer,
         &text.text,
         &text.text_style,
         text.font_size,
-        text.layout_options,
         text_clip,
     );
 }
-
-const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
 
 pub(crate) fn push_draw_primitive(
     primitive: &DrawPrimitive,
@@ -1039,14 +1029,12 @@ pub(crate) fn push_draw_primitive(
 
         fn push_text(&mut self, params: TextDrawParams) {
             self.scene.push_text(
-                DRAW_PRIMITIVE_TEXT_NODE_ID,
                 params.rect,
                 params.text,
                 params.color,
                 params.text_style,
                 params.font_size,
                 params.scale,
-                params.layout_options,
                 params.clip,
             );
         }

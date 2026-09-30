@@ -1,6 +1,7 @@
 mod button_clickable_test;
 mod composition_switching_test;
 mod conditional_rendering_test;
+mod frame_clock_test;
 mod integration_modifier_tests;
 mod intrinsics_test;
 mod keyboard_focus_test;

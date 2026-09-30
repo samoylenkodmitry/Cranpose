@@ -46,7 +46,9 @@ fn a_single_line_needs_no_per_line_alignment_offsets() {
     ] {
         let mut style = centred_style(alignment);
         style.paragraph_style.text_direction = TextDirection::Rtl;
-        assert!(annotated_line_alignment_offsets(&text, &style, 20.0, 1.0, &fonts).is_none());
+        let layout =
+            AnnotatedTextLayout::new(text, &style, 20.0, 1.0, 1.0, &fonts).expect("font metrics");
+        assert!(annotated_line_alignment_offsets(&layout, &text, &style, 1.0).is_none());
     }
 }
 

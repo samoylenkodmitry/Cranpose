@@ -120,6 +120,24 @@ preserve the original reference checkout and benchmark executable.
 
 ## Measurement
 
+Check the animation clock before comparing frame-driven workloads:
+
+```bash
+python3 tests/android_frame_clock.py --serial SERIAL --app cranpose \
+  --apk PATH --sha256 SHA256 --ocr OCR_EXECUTABLE \
+  --viewport X Y WIDTH HEIGHT --output results/FRAME_CLOCK
+```
+
+This device check warms the paused, quote, scroll and hover workspaces, then
+compares three public `UI updates/s` readings with the display refresh rate.
+It allows 15% sampling tolerance plus one update, requires positive callback
+progress and visible changes in active modes, and saves screenshots, capture
+times and separate SurfaceFlinger timestamps. In active modes, the median callback
+rate must also keep up with the median presentation rate within that tolerance.
+This catches delayed animation delivery without requiring an overloaded app to
+sustain the display rate. A paused workspace only repaints its footer and does
+not need to present at the display rate. The same command supports `--app compose`.
+
 `perf_window.sh` runs on the device for one window, so no adb round trip lands
 inside it. It reads:
 
