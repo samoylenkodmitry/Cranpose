@@ -388,6 +388,9 @@ impl<'a> SemanticsUpdate<'a> {
             let known = taken.is_some();
             let mut child = taken.unwrap_or_default();
             if self.child(child_id, peek, content, &mut child, known)? {
+                if children.capacity() == 0 {
+                    children.reserve_exact((end - index).min(4));
+                }
                 children.push(child);
             }
         }
