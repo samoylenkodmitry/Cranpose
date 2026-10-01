@@ -8,7 +8,7 @@
 - Record the consuming workspace's effective release profile, full toolchain, resolved framework paths and packaged native hashes.
 - Refresh extracted source timestamps and verify the complete inventory; matching source hashes alone do not prove Cargo rebuilt the library.
 - Compare the actual packaged native payloads; Gradle stripping can legitimately change a build-output hash.
-- Cranscan uses `-PcranscanTestInstall=true` for `.codex`; native libraries belong in its configured `target/android` packaging directory.
+- Cranscan uses `-PcranscanTestInstall=true` for `.codex`; inspect the variant's configured JNI packaging input; Cranpose's Gradle plugin exports it under the Android module's `build/generated/cranpose/<variant>/jniLibs`.
 - Cranscan's ARMv7 release excludes `ai-inprocess`; its ARM64 release includes it, so compare like-for-like within each device.
 - Check background inference, indexing and sync before each route; record their state instead of attributing their CPU load to rendering.
 - Prove the first gesture moves content and verify every run's starting and ending labels, including hot runs.

@@ -2882,35 +2882,6 @@ fn android_service_registration_replaces_the_relaunch_waker() {
 }
 
 #[test]
-fn the_gradle_plugin_declares_the_jni_library_directory_cargo_writes() {
-    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
-
-    assert!(
-        plugin.contains("jniLibs.directories.add(nativeOutput.absolutePath)"),
-        "the plugin must point the Android source sets at the directory cargo-ndk writes"
-    );
-    assert!(
-        plugin.contains("outputs.dir(nativeOutput)"),
-        "the cargo-ndk task must declare the directory it writes as its output, or Gradle \
-         keeps a stale snapshot of the jniLibs directory and the APK ships the previous \
-         build's .so"
-    );
-    assert!(
-        plugin.contains("outputs.upToDateWhen { false }"),
-        "the cargo-ndk task declares an output directory, so it also needs \
-         outputs.upToDateWhen {{ false }} or Gradle will skip the cargo build whenever that \
-         directory happens to be unchanged"
-    );
-
-    assert!(
-        plugin.contains("task.name.contains(\"NativeLibs\")")
-            && plugin.contains("task.name.contains(\"JniLibFolders\")"),
-        "the cargo build must be wired to mergeJniLibFolders as well as mergeNativeLibs -- \
-         both consume the directory it writes"
-    );
-}
-
-#[test]
 fn android_applications_build_their_native_library_through_the_plugin() {
     for relative in ANDROID_APPLICATION_BUILD_FILES {
         let source = workspace_source(relative);
@@ -3708,22 +3679,6 @@ fn no_framework_receiver_takes_intents_from_other_applications() {
                 path.display()
             );
         }
-    }
-}
-
-#[test]
-fn the_plugin_drives_abi_splits_from_the_architectures_it_builds() {
-    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
-    assert!(
-        plugin.contains("split.include(*releaseAbis.toTypedArray())"),
-        "the plugin must write the release architectures into an enabled ABI split"
-    );
-    for relative in ANDROID_APPLICATION_BUILD_FILES {
-        let source = workspace_source(relative);
-        assert!(
-            !source.contains("abiFilters"),
-            "{relative} sets abiFilters; the plugin constrains packaging to what it builds"
-        );
     }
 }
 

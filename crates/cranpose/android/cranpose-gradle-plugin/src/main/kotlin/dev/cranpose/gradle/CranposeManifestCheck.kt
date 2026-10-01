@@ -80,17 +80,19 @@ internal data class RustDeclaration(
  * What the application declared in Rust, or nothing when it has not.
  */
 internal fun readRustDeclaration(declaration: ConfigurableFileCollection): RustDeclaration {
-    val file = declaration.files.firstOrNull { candidate -> candidate.isFile }
-        ?: return RustDeclaration(emptyList(), emptyList(), emptyList(), emptyList())
-    val parsed = JsonSlurper().parse(file) as? Map<*, *>
-        ?: throw GradleException("${file.path} is not the declaration cranpose wrote")
+    val declarations = declaration.files.filter { it.isFile }.sortedBy { it.name }.map { file ->
+        JsonSlurper().parse(file) as? Map<*, *>
+            ?: throw GradleException("${file.path} is not the declaration cranpose wrote")
+    }
     return RustDeclaration(
-        services = (parsed["services"] as? List<*>).orEmpty().mapNotNull { entry ->
-            (entry as? Map<*, *>)?.get("name")?.toString()
-        },
-        permissions = names(parsed["permissions"]),
-        demands = names(parsed["demands"]),
-        opens = names(parsed["opens"]),
+        services = declarations.flatMap { parsed ->
+            (parsed["services"] as? List<*>).orEmpty().mapNotNull { entry ->
+                (entry as? Map<*, *>)?.get("name")?.toString()
+            }
+        }.distinct(),
+        permissions = declarations.flatMap { names(it["permissions"]) }.distinct(),
+        demands = declarations.flatMap { names(it["demands"]) }.distinct(),
+        opens = declarations.flatMap { names(it["opens"]) }.distinct(),
     )
 }
 

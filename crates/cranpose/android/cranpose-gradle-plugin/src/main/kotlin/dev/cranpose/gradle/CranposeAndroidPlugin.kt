@@ -4,13 +4,14 @@ import com.android.build.api.artifact.SingleArtifact
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import com.android.build.api.variant.ApplicationVariant
+import com.android.build.api.variant.FilterConfiguration
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
-import org.gradle.api.Task
-import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.TaskProvider
 import java.io.File
+import java.security.MessageDigest
+import java.util.HexFormat
 
 /**
  * Configures an Android application built on Cranpose.
@@ -120,7 +121,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
         // `cranpose { }` blocks and before the Android plugin locks its DSL,
         // which is the only window in which both are true.
         androidComponents.finalizeDsl { android ->
-            configureAndroid(cranpose, nativeOutput(project, cranpose), android)
+            configureAndroid(cranpose, android)
         }
 
         // Contributes the framework's Java, manifest entries and ProGuard
@@ -130,21 +131,16 @@ class CranposeAndroidPlugin : Plugin<Project> {
         androidComponents.onVariants { variant ->
             val minSdk = variant.minSdk.apiLevel
             minimumVariantSdk = minOf(minimumVariantSdk ?: minSdk, minSdk)
-            contributeCranposeSources(project, cranpose, variant)
-            checkManifest(project, cranpose, variant)
+            val native = registerVariantNativeBuild(project, cranpose, variant)
+            variant.sources.jniLibs?.addGeneratedSourceDirectory(native, CranposeNativeBuild::outputDir)
+            contributeCranposeSources(project, cranpose, variant, native)
+            checkManifest(project, cranpose, variant, native)
         }
 
         project.afterEvaluate {
-            val cargoPackage = requireCargoPackage(cranpose)
-            val workspace = requireWorkspace(project, cranpose)
+            requireCargoPackage(cranpose)
+            requireWorkspace(project, cranpose)
             addDependencies(project, cranpose)
-            registerNativeBuilds(
-                project,
-                cranpose,
-                cargoPackage,
-                workspace,
-                nativeOutput(project, cranpose),
-            )
         }
     }
 
@@ -162,6 +158,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
         project: Project,
         cranpose: CranposeExtension,
         variant: ApplicationVariant,
+        native: TaskProvider<CranposeNativeBuild>,
     ) {
         val root = androidRoot()
         contributeManifest(variant, root, "base")
@@ -183,7 +180,9 @@ class CranposeAndroidPlugin : Plugin<Project> {
             CranposeDeclaredSources::class.java,
         ) {
             description = "Copies the framework Java for the services ${variant.name} declares"
-            declaration.from(declarationFile(project, cranpose))
+            declaration.from(native.flatMap(CranposeNativeBuild::declarationDir).map { directory ->
+                directory.asFileTree
+            })
             serviceSources.set(
                 DECLARED_SERVICES.mapValues { (_, service) ->
                     File(root, service.javaSource).absolutePath
@@ -221,6 +220,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
         project: Project,
         cranpose: CranposeExtension,
         variant: ApplicationVariant,
+        native: TaskProvider<CranposeNativeBuild>,
     ) {
         val name = variant.name.replaceFirstChar { first -> first.uppercase() }
         val task = project.tasks.register(
@@ -234,7 +234,9 @@ class CranposeAndroidPlugin : Plugin<Project> {
             description = "Checks ${variant.name}'s permissions and the features they carry"
             requiredFeatures.set(cranpose.requiredFeatures)
             servicePermissions.set(needed)
-            declaration.from(declarationFile(project, cranpose))
+            declaration.from(native.flatMap(CranposeNativeBuild::declarationDir).map { directory ->
+                directory.asFileTree
+            })
         }
         variant.artifacts
             .use(task)
@@ -262,13 +264,8 @@ class CranposeAndroidPlugin : Plugin<Project> {
         return workspace
     }
 
-    /** Where `cargo ndk` writes the ABI directories the APK packages. */
-    private fun nativeOutput(project: Project, cranpose: CranposeExtension): File =
-        File(requireWorkspace(project, cranpose), "target/android")
-
     private fun configureAndroid(
         cranpose: CranposeExtension,
-        nativeOutput: File,
         android: ApplicationExtension,
     ) {
         requireCargoPackage(cranpose)
@@ -278,9 +275,6 @@ class CranposeAndroidPlugin : Plugin<Project> {
         android.defaultConfig.manifestPlaceholders["cranposeLibName"] = cranpose.libraryName.get()
         android.defaultConfig.manifestPlaceholders["cranposeLabel"] = cranpose.label.get()
         android.defaultConfig.manifestPlaceholders["cranposeTheme"] = cranpose.theme.get()
-
-        android.sourceSets.getByName("debug").jniLibs.directories.add(nativeOutput.absolutePath)
-        android.sourceSets.getByName("release").jniLibs.directories.add(nativeOutput.absolutePath)
 
         configureAbis(cranpose, android)
 
@@ -293,29 +287,35 @@ class CranposeAndroidPlugin : Plugin<Project> {
         }
     }
 
-    /**
-     * Constrains packaging to the architectures the native build produces.
-     *
-     * `cranpose { releaseAbis }` is the single statement of which architectures
-     * a release carries, so it drives packaging in both shapes an application
-     * can take. One APK per architecture is expressed as an ABI split, and AGP
-     * refuses to have both a split and `ndk.abiFilters`; the split's own filter
-     * list is therefore written from the same value. An application that splits
-     * says only that it does — `isEnable` and `isUniversalApk` — and never
-     * repeats the architectures, which is what stops it from splitting off an
-     * APK the native build never produced a library for.
-     */
-    private fun configureAbis(cranpose: CranposeExtension, android: ApplicationExtension) {
-        val releaseAbis = cranpose.releaseAbis.get()
-        val split = android.splits.abi
-        if (split.isEnable) {
-            split.reset()
-            split.include(*releaseAbis.toTypedArray())
-            return
+    private fun usesDebugSettings(buildType: String?, debuggable: Boolean): Boolean =
+        when (buildType) {
+            "debug" -> true
+            "release" -> false
+            else -> debuggable
         }
 
-        android.buildTypes.getByName("debug").ndk.abiFilters.addAll(cranpose.debugAbis.get())
-        android.buildTypes.getByName("release").ndk.abiFilters.addAll(releaseAbis)
+    private fun configureAbis(cranpose: CranposeExtension, android: ApplicationExtension) {
+        val split = android.splits.abi
+        if (split.isEnable) {
+            val abis = android.buildTypes.flatMap { type ->
+                if (usesDebugSettings(type.name, type.isDebuggable)) {
+                    cranpose.debugAbis.get()
+                } else {
+                    cranpose.releaseAbis.get()
+                }
+            }.distinct()
+            split.reset()
+            split.include(*abis.toTypedArray())
+        } else {
+            android.buildTypes.forEach { type ->
+                val abis = if (usesDebugSettings(type.name, type.isDebuggable)) {
+                    cranpose.debugAbis.get()
+                } else {
+                    cranpose.releaseAbis.get()
+                }
+                type.ndk.abiFilters.addAll(abis)
+            }
+        }
     }
 
     private fun addDependencies(project: Project, cranpose: CranposeExtension) {
@@ -338,117 +338,98 @@ class CranposeAndroidPlugin : Plugin<Project> {
         return services
     }
 
-    private fun registerNativeBuilds(
+    private fun registerVariantNativeBuild(
         project: Project,
         cranpose: CranposeExtension,
-        cargoPackage: String,
-        workspace: File,
-        nativeOutput: File,
-    ) {
-        val debug = registerVariantNativeBuild(
-            project,
-            variant = "Debug",
-            abis = cranpose.debugAbis.get(),
-            abiFeatures = cranpose.debugAbiFeatures.get(),
-            profile = cranpose.debugProfile.get(),
-            cranpose = cranpose,
-            cargoPackage = cargoPackage,
-            workspace = workspace,
-            nativeOutput = nativeOutput,
-        )
-        val release = registerVariantNativeBuild(
-            project,
-            variant = "Release",
-            abis = cranpose.releaseAbis.get(),
-            abiFeatures = cranpose.releaseAbiFeatures.get(),
-            profile = cranpose.releaseProfile.get(),
-            cranpose = cranpose,
-            cargoPackage = cargoPackage,
-            workspace = workspace,
-            nativeOutput = nativeOutput,
-        )
-
-        // Both merge tasks read the native output: `mergeJniLibFolders`
-        // collects the source directories and `mergeNativeLibs` collects the
-        // libraries inside them. Wiring only the second leaves the first racing
-        // the Cargo build, and the APK silently ships the previous build.
-        project.tasks.matching { task ->
-            task.name.startsWith("merge") &&
-                (task.name.contains("NativeLibs") || task.name.contains("JniLibFolders"))
-        }.configureEach {
-            when {
-                name.contains("Debug", ignoreCase = true) -> dependsOn(debug)
-                name.contains("Release", ignoreCase = true) -> dependsOn(release)
+        variant: ApplicationVariant,
+    ): TaskProvider<CranposeNativeBuild> {
+        val debug = usesDebugSettings(variant.buildType, variant.debuggable)
+        val settings = if (debug) "Debug" else "Release"
+        val abis = if (debug) cranpose.debugAbis.get() else cranpose.releaseAbis.get()
+        val abiFeatures = if (debug) cranpose.debugAbiFeatures.get() else cranpose.releaseAbiFeatures.get()
+        val profile = if (debug) cranpose.debugProfile.get() else cranpose.releaseProfile.get()
+        val groups = nativeBuildGroups(cranpose, settings, abis, abiFeatures)
+        val cargoPackage = requireCargoPackage(cranpose)
+        val workspace = requireWorkspace(project, cranpose)
+        val name = variant.name.replaceFirstChar { it.uppercase() }
+        val cargo = project.gradle.sharedServices.registerIfAbsent(
+            "cranposeNativeBuilds",
+            CranposeCargoBuildService::class.java,
+        ) {
+            maxParallelUsages.set(1)
+        }
+        for (output in variant.outputs) {
+            val abi = output.filters.find { it.filterType == FilterConfiguration.FilterType.ABI }
+            if (abi != null && abi.identifier !in abis) {
+                output.enabled.set(false)
             }
         }
-
-        // The capabilities an application declares in Rust are written by its
-        // build script, so the manifest check and the declared services' Java
-        // read them only after Cargo has run. Packaging waits for that build
-        // anyway; this moves both steps behind it as well.
-        for (type in listOf(CranposeManifestCheck::class.java, CranposeDeclaredSources::class.java)) {
-            project.tasks.withType(type).configureEach {
-                when {
-                    name.contains("Debug", ignoreCase = true) -> dependsOn(debug)
-                    name.contains("Release", ignoreCase = true) -> dependsOn(release)
+        return project.tasks.register("cranposeBuildNative$name", CranposeNativeBuild::class.java) {
+            description = "Builds ${variant.name}'s Rust library for ${abis.joinToString(", ")}"
+            group = "cranpose"
+            outputDir.set(project.layout.buildDirectory.dir("generated/cranpose/${variant.name}/jniLibs"))
+            declarationDir.set(project.layout.buildDirectory.dir("generated/cranpose/${variant.name}/capabilities"))
+            outputs.upToDateWhen { false }
+            usesService(cargo)
+            doLast {
+                requireCargoNdk(project)
+                val nativeOutput = outputDir.get().asFile
+                val stagedDeclarations = declarationDir.get().asFile
+                for (output in listOf(nativeOutput, stagedDeclarations)) {
+                    if (output.exists() && !output.deleteRecursively()) {
+                        throw GradleException("Cannot clear native output ${output.absolutePath}")
+                    }
+                }
+                stagedDeclarations.mkdirs()
+                val api = cranpose.androidApiLevel.orNull
+                val defaultFeatures = cranpose.defaultFeatures.get()
+                val environment = cranpose.environment.get().filterKeys { it != CAPABILITIES_DIR_VARIABLE }
+                for (pass in groups) {
+                    for (abi in pass.abis) {
+                        val configuration = listOf(
+                            "package=$cargoPackage", "profile=$profile", "abi=$abi",
+                            "api=$api", "defaultFeatures=$defaultFeatures",
+                        ) + pass.features.sorted().map { "feature=$it" } +
+                            environment.toSortedMap().map { (key, value) -> "env=$key=$value" }
+                        val key = HexFormat.of().formatHex(
+                            MessageDigest.getInstance("SHA-256").digest(
+                                configuration.joinToString("\u0000").toByteArray(Charsets.UTF_8)
+                            )
+                        )
+                        val declarations = File(workspace, "target/cranpose/android/$cargoPackage/$key")
+                        declarations.mkdirs()
+                        val arguments = mutableListOf("ndk")
+                        api?.let { level -> arguments += listOf("--platform", level.toString()) }
+                        arguments += listOf("-t", abi, "-o", nativeOutput.absolutePath, "build", "-p", cargoPackage, "--lib")
+                        if (profile != "dev") {
+                            arguments += listOf("--profile", profile)
+                        }
+                        if (!defaultFeatures) {
+                            arguments += "--no-default-features"
+                        }
+                        if (pass.features.isNotEmpty()) {
+                            arguments += listOf("--features", pass.features.joinToString(","))
+                        }
+                        logger.lifecycle(
+                            "cranpose: building $cargoPackage for $abi " +
+                                "with the $profile profile and ${pass.features.joinToString(",")}"
+                        )
+                        execOperations.exec {
+                            workingDir = workspace
+                            commandLine(listOf("cargo") + arguments)
+                            environment(environment)
+                            environment(CAPABILITIES_DIR_VARIABLE, declarations.absolutePath)
+                        }
+                        val declaration = File(declarations, "$cargoPackage-capabilities.json")
+                        if (declaration.isFile) {
+                            declaration.copyTo(File(stagedDeclarations, "$abi.json"), overwrite = true)
+                        }
+                    }
                 }
             }
         }
     }
 
-    /**
-     * Registers the Cargo work one variant needs, as one task per feature set.
-     *
-     * Architectures usually share a feature set and a single `cargo ndk` pass
-     * builds them all. They do not always: a native dependency can be
-     * unbuildable on one architecture, and the application then ships that
-     * architecture without the feature rather than not at all. Grouping by the
-     * effective feature set expresses both cases with the same code, and the
-     * `cranposeBuildNative<Variant>` task the packaging depends on stays one
-     * name however many passes it takes.
-     */
-    private fun registerVariantNativeBuild(
-        project: Project,
-        variant: String,
-        abis: List<String>,
-        abiFeatures: Map<String, List<String>>,
-        profile: String,
-        cranpose: CranposeExtension,
-        cargoPackage: String,
-        workspace: File,
-        nativeOutput: File,
-    ): TaskProvider<out Task> {
-        val groups = nativeBuildGroups(cranpose, variant, abis, abiFeatures)
-        val passes = groups.mapIndexed { index, group ->
-            registerNativeBuild(
-                project,
-                // A single pass keeps the plain name; several are numbered in
-                // the order the architectures were declared.
-                taskName = "cranposeBuildNative$variant" +
-                    if (groups.size == 1) "" else "Pass${index + 1}",
-                description = "Builds this application's Rust cdylib for Android " +
-                    "(${variant.lowercase()}: ${group.abis.joinToString(", ")})",
-                pass = group,
-                variantAbis = abis,
-                profile = profile,
-                cranpose = cranpose,
-                cargoPackage = cargoPackage,
-                workspace = workspace,
-                nativeOutput = nativeOutput,
-            )
-        }
-        if (passes.size == 1) {
-            return passes.single()
-        }
-        return project.tasks.register("cranposeBuildNative$variant") {
-            this.description =
-                "Builds this application's Rust cdylib for Android (${variant.lowercase()} ABIs)"
-            this.group = "cranpose"
-            dependsOn(passes)
-        }
-    }
-
-    /** One Cargo pass: the architectures that share a feature set. */
     private data class NativeBuildGroup(val abis: List<String>, val features: List<String>)
 
     private fun nativeBuildGroups(
@@ -469,91 +450,6 @@ class CranposeAndroidPlugin : Plugin<Project> {
         return abis
             .groupBy { abi -> (base + abiFeatures[abi].orEmpty()).distinct() }
             .map { (features, grouped) -> NativeBuildGroup(grouped, features) }
-    }
-
-    /** Where a build script writes what the application declared. */
-    private fun declarationDir(workspace: File): File = File(workspace, "target/cranpose")
-
-    private fun declarationFile(project: Project, cranpose: CranposeExtension): File =
-        File(
-            declarationDir(requireWorkspace(project, cranpose)),
-            "${requireCargoPackage(cranpose)}-capabilities.json",
-        )
-
-    private fun registerNativeBuild(
-        project: Project,
-        taskName: String,
-        description: String,
-        pass: NativeBuildGroup,
-        variantAbis: List<String>,
-        profile: String,
-        cranpose: CranposeExtension,
-        cargoPackage: String,
-        workspace: File,
-        nativeOutput: File,
-    ): TaskProvider<Exec> = project.tasks.register(taskName, Exec::class.java) {
-        this.description = description
-        this.group = "cranpose"
-        workingDir = workspace
-
-        // Cargo is authoritative about what changed, so the task always runs
-        // and lets Cargo decide. The output directory is still declared: without
-        // it the packaging tasks read a pre-Cargo snapshot, report up to date,
-        // and ship the previous build's library — a failure that looks like a
-        // device bug rather than a build bug.
-        outputs.dir(nativeOutput)
-        outputs.upToDateWhen { false }
-
-        // Where the build script writes the application's declaration. The
-        // build says it rather than letting the build script work it out: a
-        // checkout inside another checkout of the same repository has two
-        // workspace manifests above the crate, and the two sides then disagree
-        // about which one holds the declaration.
-        environment(CAPABILITIES_DIR_VARIABLE, declarationDir(workspace).absolutePath)
-        for ((name, value) in cranpose.environment.get()) {
-            environment(name, value)
-        }
-
-        doFirst {
-            requireCargoNdk(project)
-            val arguments = mutableListOf("ndk")
-            cranpose.androidApiLevel.orNull?.let { level ->
-                arguments += listOf("--platform", level.toString())
-            }
-            for (abi in pass.abis) {
-                arguments += listOf("-t", abi)
-            }
-            arguments += listOf("-o", nativeOutput.absolutePath, "build", "-p", cargoPackage, "--lib")
-            if (profile != "dev") {
-                arguments += listOf("--profile", profile)
-            }
-            if (!cranpose.defaultFeatures.get()) {
-                arguments += "--no-default-features"
-            }
-            if (pass.features.isNotEmpty()) {
-                arguments += listOf("--features", pass.features.joinToString(","))
-            }
-            commandLine(listOf("cargo") + arguments)
-            // `cargo ndk` writes one directory per ABI and removes none, so a
-            // build for a different ABI than last time would leave the previous
-            // one's library here to be packaged alongside the new one — an APK
-            // carrying a stale library for an architecture nobody rebuilt. The
-            // whole variant's list is what survives, not this pass's: a second
-            // pass must not delete what the first one just wrote.
-            clearStaleAbis(nativeOutput, variantAbis)
-            project.logger.lifecycle(
-                "cranpose: building $cargoPackage for ${pass.abis.joinToString(", ")} " +
-                    "with the $profile profile and ${pass.features.joinToString(",")}"
-            )
-        }
-    }
-
-    /** Removes the ABI directories this build is not about to rewrite. */
-    private fun clearStaleAbis(nativeOutput: File, abis: List<String>) {
-        val current = abis.toSet()
-        nativeOutput.listFiles()
-            ?.filter { entry -> entry.isDirectory && entry.name !in current }
-            ?.forEach { stale -> stale.deleteRecursively() }
     }
 
     private fun requireCargoNdk(project: Project) {

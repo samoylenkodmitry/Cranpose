@@ -439,6 +439,9 @@ fn rerun_directives(outputs: &[PathBuf]) -> Vec<String> {
 }
 
 fn write_file(path: &Path, text: &str) {
+    if fs::read(path).is_ok_and(|contents| contents == text.as_bytes()) {
+        return;
+    }
     fs::write(path, text).unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
 }
 
