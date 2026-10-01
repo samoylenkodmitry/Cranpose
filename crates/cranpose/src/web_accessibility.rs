@@ -12,12 +12,12 @@ use web_sys::{
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
 fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    if (element.role != AccessibilityRole::StaticText || element.pane_title.is_some())
+    if (element.role != AccessibilityRole::StaticText || element.details().pane_title.is_some())
         && !edits_text(element)
     {
         node.set_attribute("role", accessibility::web_role(element))?;
     }
-    if let Some(title) = &element.pane_title {
+    if let Some(title) = &element.details().pane_title {
         node.set_attribute("aria-label", title)?;
     }
     apply_role_extras(node, element)?;
@@ -28,7 +28,8 @@ fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> R
 /// The value an adjustable control holds, and the stops an arrow key moves it
 /// by. A screen reader reads the value and offers its own way to change it.
 fn apply_progress(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    let Some(progress) = element.progress else {
+    let details = element.details();
+    let Some(progress) = details.progress else {
         return Ok(());
     };
     node.set_attribute("aria-valuenow", &progress.current.to_string())?;
@@ -40,10 +41,10 @@ fn apply_progress(node: &HtmlElement, element: &AccessibilityElement) -> Result<
         "aria-valuemax",
         &progress.start.max(progress.end).to_string(),
     )?;
-    if let Some(text) = &element.state_description {
+    if let Some(text) = &details.state_description {
         node.set_attribute("aria-valuetext", text)?;
     }
-    if element.adjustable && element.enabled {
+    if details.adjustable && element.enabled {
         node.set_attribute("data-cranpose-value", &progress.current.to_string())?;
         node.set_attribute("data-cranpose-min", &progress.start.to_string())?;
         node.set_attribute("data-cranpose-max", &progress.end.to_string())?;
@@ -102,7 +103,7 @@ fn apply_page(
 /// text field moves its caret with those two keys and a slider moves its
 /// value, so inside a list those two keep them.
 fn takes_home_and_end(element: &AccessibilityElement) -> bool {
-    !element.role.is_text_field() && !element.adjustable
+    !element.role.is_text_field() && !element.details().adjustable
 }
 
 /// Pages the scroll container around the focused mirror node on Page Down and
@@ -226,7 +227,11 @@ fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Resu
         }
         AccessibilityRole::Dialog => node.set_attribute(
             "aria-modal",
-            if element.is_modal { "true" } else { "false" },
+            if element.details().is_modal {
+                "true"
+            } else {
+                "false"
+            },
         )?,
         _ => {}
     }
@@ -243,10 +248,10 @@ fn apply_aria_description(
     if let Some(state) = accessibility::state_with_error(element) {
         node.set_attribute("aria-description", &state)?;
     }
-    if element.password {
+    if element.details().password {
         node.set_attribute("aria-roledescription", "password")?;
     }
-    if element.error.is_some() {
+    if element.details().error.is_some() {
         node.set_attribute("aria-invalid", "true")?;
     }
     if let Some(item) = element.collection_item {
@@ -259,7 +264,7 @@ fn apply_aria_description(
 /// The checked or selected flag, and whether the control is disabled.
 fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
     apply_aria_description(node, element)?;
-    if let Some(expanded) = element.expanded {
+    if let Some(expanded) = element.details().expanded {
         node.set_attribute("aria-expanded", if expanded { "true" } else { "false" })?;
     }
     if let Some(toggled) = element.toggled {
@@ -287,15 +292,17 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
 }
 
 fn edits_text(element: &AccessibilityElement) -> bool {
-    element.role.is_text_field() && (element.text_selection.is_some() || element.password)
+    element.role.is_text_field()
+        && (element.details().text_selection.is_some() || element.details().password)
 }
 
 fn is_mirror_container(element: &AccessibilityElement) -> bool {
+    let details = element.details();
     element.role.is_named_container()
         || element.role == AccessibilityRole::Dialog
-        || element.vertical_scroll.is_some()
-        || element.horizontal_scroll.is_some()
-        || element.pane_title.is_some()
+        || details.vertical_scroll.is_some()
+        || details.horizontal_scroll.is_some()
+        || details.pane_title.is_some()
 }
 
 /// The element a control is mirrored as: a text field is an input or a text
@@ -303,7 +310,7 @@ fn is_mirror_container(element: &AccessibilityElement) -> bool {
 /// field; a control a click reaches is a button; anything else is a span.
 fn mirror_tag(element: &AccessibilityElement) -> &'static str {
     if edits_text(element) {
-        if element.multiline && !element.password {
+        if element.details().multiline && !element.details().password {
             "textarea"
         } else {
             "input"
@@ -322,7 +329,8 @@ fn mirror_tag(element: &AccessibilityElement) -> &'static str {
 /// counts. The same ends go on the node, so the selection listener can tell
 /// a move the app made from one the reader made.
 fn apply_field_text(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    let (Some(value), Some((anchor, focus))) = (&element.value, element.text_selection) else {
+    let (Some(value), Some((anchor, focus))) = (&element.value, element.details().text_selection)
+    else {
         return Ok(());
     };
     apply_editor_text(node, value, anchor, focus)
@@ -486,12 +494,12 @@ fn mirror_node(
         node.set_attribute("disabled", "")?;
     }
     apply_activation_identity(&node, id, element)?;
-    if let Some(language) = &element.language {
+    if let Some(language) = &element.details().language {
         node.set_attribute("lang", language)?;
     }
     apply_role_and_state(&node, element)?;
     if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
-        input.set_type(if element.password {
+        input.set_type(if element.details().password {
             "password"
         } else if element.role == AccessibilityRole::SearchField {
             "search"
@@ -526,7 +534,7 @@ fn apply_activation_identity(
 fn tab_index(element: &AccessibilityElement) -> &'static str {
     if element.enabled
         && element.tab_stop
-        && (element.focusable || element.adjustable || element.clickable)
+        && (element.focusable || element.details().adjustable || element.clickable)
     {
         "0"
     } else {
@@ -1237,7 +1245,7 @@ impl WebAccessibilityBridge {
     ) -> Result<(), JsValue> {
         let mut passwords = elements
             .iter()
-            .filter(|element| element.password)
+            .filter(|element| element.details().password)
             .peekable();
         if passwords.peek().is_none() {
             return Ok(());
@@ -1250,7 +1258,7 @@ impl WebAccessibilityBridge {
             if let Some(node) = fields.get(&element.node_id)
                 && let Some(field) =
                     accessibility::find_semantics_node(tree.root(), element.node_id)
-                && let (Some(text), Some(selection)) = (&field.text, field.text_selection)
+                && let (Some(text), Some(selection)) = (&field.text, field.details().text_selection)
             {
                 apply_editor_text(node, text, selection.start, selection.end)?;
             }

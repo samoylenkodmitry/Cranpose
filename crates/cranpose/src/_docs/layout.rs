@@ -13,6 +13,7 @@
 //! #     composable_definition_key, composable_identity_key, debug_label_current_scope,
 //! #     location_key,
 //! #     with_current_composer, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
+//! #     refresh_param, refresh_shared_param,
 //! # };
 //!
 //! #[composable]
@@ -53,6 +54,7 @@
 //! #     composable_definition_key, composable_identity_key, debug_label_current_scope,
 //! #     location_key,
 //! #     with_current_composer, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
+//! #     refresh_param, refresh_shared_param,
 //! # };
 //!
 //! #[composable]
