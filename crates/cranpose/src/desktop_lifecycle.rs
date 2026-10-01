@@ -38,13 +38,17 @@ impl WindowPresence {
     }
 
     pub(crate) fn settled(&mut self) -> Option<LifecycleState> {
-        let visible = !self.occluded && !self.minimized;
+        let visible = self.presentable();
         let state = window_lifecycle_state(visible, !self.focused.is_empty());
         if state == self.published {
             return None;
         }
         self.published = state;
         Some(state)
+    }
+
+    pub(crate) fn presentable(&self) -> bool {
+        !self.occluded && !self.minimized
     }
 }
 
