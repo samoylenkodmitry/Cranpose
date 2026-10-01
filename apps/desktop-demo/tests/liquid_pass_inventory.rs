@@ -23,6 +23,10 @@ fn scrolling_liquid_cards_adds_no_blur_passes_over_the_existing_page_budget() {
             stats.blur_passes <= 4,
             "scroll step {step} re-blurred an unchanged card: {stats:?}"
         );
+        assert!(
+            stats.pass_count <= 17,
+            "scroll step {step} added a pass for unchanged controls: {stats:?}"
+        );
         cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
         let uncached = page.capture();
         cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);

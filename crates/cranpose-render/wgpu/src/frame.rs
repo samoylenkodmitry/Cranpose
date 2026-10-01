@@ -1128,16 +1128,14 @@ fn draws_nothing(content: &LayerScene) -> bool {
         && content.scene.effect_layers.is_empty()
 }
 
-/// Whether the child's composite leaves the page as it is: it draws nothing,
-/// its effect keeps that transparent, and source-over of a transparent
-/// source is the identity. Its backdrop, resolved apart, is not in question.
 fn composites_nothing(child: &ChildLayer) -> bool {
-    draws_nothing(&child.content)
-        && child.blend_mode == BlendMode::SrcOver
-        && child
-            .effect
-            .as_ref()
-            .is_none_or(RenderEffect::preserves_transparency)
+    child.blend_mode == BlendMode::SrcOver
+        && (child.alpha == 0.0
+            || (draws_nothing(&child.content)
+                && child
+                    .effect
+                    .as_ref()
+                    .is_none_or(RenderEffect::preserves_transparency)))
 }
 
 fn shader_tail_composites(child: &ChildLayer, shader: &RuntimeShader) -> bool {
