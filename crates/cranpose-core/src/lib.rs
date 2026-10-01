@@ -676,9 +676,12 @@ pub(crate) struct RecomposeScopeInner {
     source_trace: RefCell<Rc<[source_trace::SourceLocation]>>,
     slots_storage_key: Cell<usize>,
     slots_runtime_state: RefCell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
-    state_subscriptions: RefCell<HashSet<StateId>>,
-    invalidation_sources: RefCell<Option<HashSet<StateId>>>,
+    state_subscriptions: RefCell<StateIds>,
+    invalidation_sources: RefCell<StateIds>,
+    unknown_invalidation_source: Cell<bool>,
 }
+
+type StateIds = SmallVec<[StateId; 2]>;
 
 impl RecomposeScopeInner {
     fn new(runtime: RuntimeHandle) -> Self {
@@ -704,13 +707,20 @@ impl RecomposeScopeInner {
             source_trace: RefCell::new(Rc::from([])),
             slots_storage_key: Cell::new(0),
             slots_runtime_state: RefCell::new(None),
-            state_subscriptions: RefCell::new(HashSet::default()),
-            invalidation_sources: RefCell::new(Some(HashSet::default())),
+            state_subscriptions: RefCell::new(StateIds::new()),
+            invalidation_sources: RefCell::new(StateIds::new()),
+            unknown_invalidation_source: Cell::new(false),
         }
     }
 
     fn id(&self) -> ScopeId {
         std::ptr::from_ref(self).addr()
+    }
+}
+
+fn push_unique_state_id(ids: &mut StateIds, state_id: StateId) {
+    if !ids.contains(&state_id) {
+        ids.push(state_id);
     }
 }
 
@@ -841,17 +851,17 @@ impl RecomposeScope {
     }
 
     fn record_state_subscription(&self, state_id: StateId) {
-        self.inner.state_subscriptions.borrow_mut().insert(state_id);
+        push_unique_state_id(&mut self.inner.state_subscriptions.borrow_mut(), state_id);
     }
 
     fn record_unknown_invalidation_source(&self) {
-        *self.inner.invalidation_sources.borrow_mut() = None;
+        self.inner.unknown_invalidation_source.set(true);
+        self.inner.invalidation_sources.borrow_mut().clear();
     }
 
     fn record_state_invalidation_source(&self, state_id: StateId) {
-        let mut sources = self.inner.invalidation_sources.borrow_mut();
-        if let Some(source_set) = sources.as_mut() {
-            source_set.insert(state_id);
+        if !self.inner.unknown_invalidation_source.get() {
+            push_unique_state_id(&mut self.inner.invalidation_sources.borrow_mut(), state_id);
         }
     }
 
@@ -881,10 +891,8 @@ impl RecomposeScope {
         self.inner.invalid.set(false);
         self.inner.force_reuse.set(false);
         self.inner.force_recompose.set(false);
-        self.inner
-            .invalidation_sources
-            .borrow_mut()
-            .replace(HashSet::default());
+        self.inner.unknown_invalidation_source.set(false);
+        self.inner.invalidation_sources.borrow_mut().clear();
         if self.inner.enqueued.replace(false) {
             self.inner.runtime.mark_scope_recomposed(self.id());
         }
@@ -1096,8 +1104,10 @@ impl RecomposeScope {
     }
 
     fn invalidated_only_by(&self, allowed_sources: &HashSet<StateId>) -> Option<bool> {
+        if self.inner.unknown_invalidation_source.get() {
+            return None;
+        }
         let sources = self.inner.invalidation_sources.borrow();
-        let sources = sources.as_ref()?;
         if sources.is_empty() {
             return None;
         }
@@ -1109,7 +1119,7 @@ impl RecomposeScope {
     }
 
     fn has_unknown_invalidation_source(&self) -> bool {
-        self.inner.invalidation_sources.borrow().is_none()
+        self.inner.unknown_invalidation_source.get()
     }
 }
 
