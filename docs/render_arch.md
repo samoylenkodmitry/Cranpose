@@ -321,8 +321,19 @@ composites the resolved textures.
   its source changes; every later launch creates the pipeline objects from
   a cache. Android keeps the driver's compiled
   pipelines in the `pipeline_disk_cache` blob (Pixel Watch 3: ~20 ms per
-  glass pipeline from the blob, 650-990 ms cold). Mesa on Linux serializes
-  nothing into that blob (Intel ANV 26.2: a 96 B header, the same from
+  glass pipeline from the blob, 650-990 ms cold). The driver keeps every
+  pipeline of a loaded blob in the one it saves, so a blob kept across
+  shader changes only grows, and the driver holds all of it resident (a Mate
+  20 X dev install had collected 4.9 MB, about 10 MB of PSS, against a
+  239 KB fresh blob). The blob is therefore keyed by the framework's WGSL
+  sources and the crate version, and one under another key loads cold. A
+  change to the Rust shader rewrites, pipeline layouts, translator or an
+  application's runtime shaders within one release keeps the key, so those
+  pipelines still collect until the next release. The cost is one cold
+  launch per key change: on the Mate workspace, ~770 ms of pipeline
+  creation on the present thread against ~26 ms warm.
+  Mesa on Linux serializes nothing into that blob (Intel ANV 26.2: a 96 B
+  header, the same from
   unpatched CI runs) and keeps its own `mesa_shader_cache` instead, which
   brings a relaunch to ~25 ms per glass pipeline. Metal offers wgpu no
   cache (`PIPELINE_CACHE` is Vulkan-only in wgpu 29 and 30) but macOS
