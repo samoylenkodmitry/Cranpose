@@ -901,6 +901,7 @@ fn hash_placement<H: Hasher>(
         Some(clip) => {
             1u8.hash(state);
             hash_shadow_device_rect(clip, origin_x, origin_y, root_scale, state);
+            hash_f32_for_cache(placement.clip_radius * root_scale, state);
         }
         None => 0u8.hash(state),
     }
@@ -1110,7 +1111,9 @@ pub(crate) struct ShapeVariant {
     kind: Option<u8>,
     brush: Option<u8>,
     solid: bool,
-    clipped: bool,
+    /// How its records meet their placements' clips. A rounded clip gives
+    /// every fragment its coverage, on the general entry points.
+    clip: SegmentClip,
     interior: bool,
     dither: bool,
     ablation: ShapeAblation,
@@ -1132,7 +1135,7 @@ impl ShapeVariant {
         kind: None,
         brush: None,
         solid: false,
-        clipped: true,
+        clip: SegmentClip::Tested,
         interior: true,
         dither: false,
         ablation: ShapeAblation {
@@ -1143,16 +1146,17 @@ impl ShapeVariant {
 
     pub(crate) fn of_segment(
         segment: &RecordSegment,
-        clipped: bool,
+        clip: SegmentClip,
         ablation: ShapeAblation,
         laid: bool,
         vertex_gradients: bool,
     ) -> Self {
-        if !shape_variants_enabled() {
+        if !shape_variants_enabled() || clip == SegmentClip::Rounded {
             return Self {
                 ablation,
                 ..Self::GENERAL
-            };
+            }
+            .clipped_by(clip);
         }
         let gradient = segment.gradient || (segment.vertex_gradient && !vertex_gradients);
         Self {
@@ -1162,7 +1166,7 @@ impl ShapeVariant {
                 .flatten()
                 .map(|brush| brush as u8),
             solid: !gradient,
-            clipped,
+            clip,
             interior: gradient
                 && segment.interiors
                 && !(laid && segment.occluders && !segment.bare_interiors),
@@ -1175,8 +1179,11 @@ impl ShapeVariant {
     /// drawn `flat` (none of them turned).
     fn entries(self, flat: bool) -> (&'static str, &'static str) {
         let fill = self.kind == Some(FRAGMENT_KIND_FILL as u8);
-        if self.solid && fill && flat {
-            FLAT_FILL_ENTRIES[usize::from(self.clipped)][usize::from(self.dither)]
+        if self.rounded() {
+            ("vs_record", "fs_main")
+        } else if self.solid && fill && flat {
+            FLAT_FILL_ENTRIES[usize::from(self.clip == SegmentClip::Tested)]
+                [usize::from(self.dither)]
         } else if self.solid {
             ("vs_record_solid", "fs_solid")
         } else if fill && !self.ablation.material {
@@ -1191,6 +1198,21 @@ impl ShapeVariant {
             ablation: self.ablation,
             ..Self::GENERAL
         }
+        .clipped_by(self.clip)
+    }
+
+    /// The variant, keeping the rounded clip `clip` names: the general
+    /// variant tests every rect clip, but no fallback may drop a rounding.
+    fn clipped_by(self, clip: SegmentClip) -> Self {
+        if clip == SegmentClip::Rounded {
+            Self { clip, ..self }
+        } else {
+            self
+        }
+    }
+
+    fn rounded(self) -> bool {
+        self.clip == SegmentClip::Rounded
     }
 
     fn joined(self) -> Self {
@@ -1204,6 +1226,30 @@ impl ShapeVariant {
                 interior: true,
                 ..self
             }
+        }
+    }
+}
+
+/// How a segment's draw meets its placement's clip: a scissor or no clip
+/// leaves the shader nothing to test, a rect clip off the scissor's grid is
+/// tested per fragment, and a rounded clip gives every fragment coverage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum SegmentClip {
+    Untested,
+    Tested,
+    Rounded,
+}
+
+impl SegmentClip {
+    /// The clip a draw under `placement` tests, given whether its rect clip
+    /// became the draw's scissor.
+    pub(crate) fn of(placement: &crate::scene::Placement, scissored: bool) -> Self {
+        if placement.clip_rounded() {
+            Self::Rounded
+        } else if placement.clip.is_some() && !scissored {
+            Self::Tested
+        } else {
+            Self::Untested
         }
     }
 }
@@ -1339,6 +1385,7 @@ impl ShapePipelineKey {
     /// interior's half-pixel inset from the fill's edge exact.
     pub(crate) fn interior(self) -> Option<Self> {
         (self.depth == ShapeDepth::Tested
+            && !self.variant.rounded()
             && self.blend_mode == BlendMode::SrcOver
             && !self.variant.ablation.material
             && !self.variant.ablation.fill)
@@ -1387,8 +1434,15 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_KIND_FIXED", variant.kind.map_or(-1.0, f64::from)),
         ("BRUSH_KIND_FIXED", variant.brush.map_or(-1.0, f64::from)),
         ("SHAPE_SOLID", f64::from(u8::from(variant.solid))),
-        ("SHAPE_CLIPPED", f64::from(u8::from(variant.clipped))),
-        ("SHAPE_INTERIOR", f64::from(u8::from(variant.interior))),
+        (
+            "SHAPE_CLIPPED",
+            f64::from(u8::from(variant.clip != SegmentClip::Untested)),
+        ),
+        ("SHAPE_ROUNDED_CLIP", f64::from(u8::from(variant.rounded()))),
+        (
+            "SHAPE_INTERIOR",
+            f64::from(u8::from(variant.interior && !variant.rounded())),
+        ),
         ("SHAPE_DITHER", f64::from(u8::from(variant.dither))),
         ("SHAPE_TURNS", turns.constant()),
         ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
@@ -4228,13 +4282,14 @@ impl GpuRenderer {
         tier: RunTier,
         ablation: ShapeAblation,
         turns: ShapeTurns,
-        (depth, clipped): (bool, bool),
+        (depth, clip): (bool, SegmentClip),
         viewport: ViewportUniformParams,
     ) -> ShapePipelineKey {
         let blend_mode = supported_blend_mode(segment.blend);
         let laid = depth
             && blend_mode == BlendMode::SrcOver
             && !placement.paints()
+            && clip != SegmentClip::Rounded
             && !ablation.material
             && !ablation.fill;
         ShapePipelineKey {
@@ -4242,7 +4297,7 @@ impl GpuRenderer {
             tier,
             variant: ShapeVariant::of_segment(
                 segment,
-                clipped,
+                clip,
                 ablation,
                 laid,
                 turns == ShapeTurns::None
@@ -4282,8 +4337,8 @@ impl GpuRenderer {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
         let turns = ShapeTurns::of(viewport.transform, false);
-        let clip = clip_scissor(placement, root_scale, viewport);
-        let clipped = placement.clip.is_some() && clip.is_none();
+        let scissor = clip_scissor(placement, root_scale, viewport);
+        let clip = SegmentClip::of(placement, scissor.is_some());
         let mut draws = SmallVec::new();
         self.run_store.stored_run_draws(
             &self.device,
@@ -4295,7 +4350,7 @@ impl GpuRenderer {
                     RunTier::Store,
                     ablation,
                     turns,
-                    (depth, clipped),
+                    (depth, clip),
                     viewport,
                 )
             },
@@ -4331,7 +4386,7 @@ impl GpuRenderer {
             command,
             uniform_slot,
             draws,
-            clip,
+            clip: scissor,
         }
     }
 
@@ -4352,9 +4407,9 @@ impl GpuRenderer {
     /// placement under `turn`, keyed for a pass whose flat and turned
     /// records alternate often when `mixed_turns`.
     #[expect(clippy::too_many_arguments)]
-    /// Appends `run`'s records at `window` to the open arena chunk. `clipped`
-    /// says its variant tests its clip, which an unturned run leaves to its
-    /// paint's scissor.
+    /// Appends `run`'s records at `window` to the open arena chunk. `clip`
+    /// says how its variant tests its clip: an unturned run leaves a rect
+    /// clip to its paint's scissor, never a rounded one.
     pub(crate) fn append_arena_run(
         &mut self,
         chunk: usize,
@@ -4363,7 +4418,7 @@ impl GpuRenderer {
         root_scale: f32,
         viewport: ViewportUniformParams,
         mixed_turns: bool,
-        (depth, clipped): (bool, bool),
+        (depth, clip): (bool, SegmentClip),
     ) -> u32 {
         let placement = &run.placement;
         let ablation = self.ablation.shape;
@@ -4379,7 +4434,7 @@ impl GpuRenderer {
                         RunTier::Arena,
                         ablation,
                         turns,
-                        (depth, clipped),
+                        (depth, clip),
                         viewport,
                     );
                     if !keys.contains(&key) {

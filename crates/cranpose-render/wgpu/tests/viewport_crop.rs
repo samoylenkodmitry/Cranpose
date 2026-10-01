@@ -31,7 +31,8 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 }
 
 /// A glass layer: a blurred backdrop under rounded corners, which its
-/// full-size content reaches, so the layer is isolated as a card is.
+/// full-size fill reaches. The card, which the frame cuts, keeps a surface;
+/// the button inside it draws in place, its fill taking the rounded clip.
 fn glass(blur: f32) -> GraphicsLayer {
     GraphicsLayer {
         backdrop_effect: Some(RenderEffect::blur_with_edge_treatment(
@@ -109,14 +110,14 @@ fn a_backdrop_reading_card_larger_than_the_frame_renders_its_visible_part() {
     );
     let stats = renderer.last_frame_stats().expect("stats");
     assert_eq!(
-        stats.isolated_layer_renders, 2,
-        "the card and its button are isolated: {stats:?}"
+        stats.isolated_layer_renders, 1,
+        "the card is isolated; its button, whose rounded clip's corners hold only its fill, \
+         draws in place inside it: {stats:?}"
     );
-    let budget = u64::from(FRAME + 2 * CROP_REACH).pow(2) + 90 * 50;
+    let budget = u64::from(FRAME + 2 * CROP_REACH).pow(2);
     assert!(
         stats.isolated_layer_pixels <= budget,
-        "the card and button surfaces are {} pixels; the frame with the glasses' reach plus the \
-         button is {budget}",
+        "the card surface is {} pixels; the frame with the glasses' reach is {budget}",
         stats.isolated_layer_pixels
     );
     let whole = capture_graph(

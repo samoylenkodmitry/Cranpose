@@ -31,7 +31,7 @@ fn arena_key(segment: &RecordSegment) -> crate::render::ShapePipelineKey {
         tier: crate::render::RunTier::Arena,
         variant: crate::render::ShapeVariant::of_segment(
             segment,
-            false,
+            crate::render::SegmentClip::Untested,
             Default::default(),
             false,
             true,
@@ -245,6 +245,7 @@ fn a_placement_folds_its_snap_delta_clip_and_filter_into_the_uniform() {
             width: 3.0,
             height: 4.0,
         }),
+        clip_radius: 0.0,
         alpha: 0.5,
         color_filter: Some(ColorFilter::modulate(Color(0.5, 0.25, 1.0, 1.0))),
     };
@@ -304,13 +305,13 @@ fn shape_turns_follow_the_placement_unless_the_pass_mixes_flat_and_turned_record
 
 #[test]
 fn a_solid_segment_never_tests_its_interiors() {
-    use crate::render::ShapeVariant;
-    for clipped in [false, true] {
+    use crate::render::{SegmentClip, ShapeVariant};
+    for clip in [SegmentClip::Untested, SegmentClip::Tested] {
         let variant = |interiors: bool| {
             let segment = shape_segment(1, BlendMode::SrcOver, (interiors, false, false));
-            ShapeVariant::of_segment(&segment, clipped, Default::default(), false, true)
+            ShapeVariant::of_segment(&segment, clip, Default::default(), false, true)
         };
-        assert_eq!(variant(true), variant(false), "clipped: {clipped}");
+        assert_eq!(variant(true), variant(false), "clip: {clip:?}");
     }
 }
 
@@ -324,8 +325,9 @@ fn a_segment_whose_interiors_a_pre_pass_lays_down_skips_the_interior_fast_path()
     // Whether a pre-pass laying interiors down changes the variant: only by
     // dropping the interior's fast path, which the test cannot read apart.
     let drops_fast_path = |segment: &RecordSegment| {
-        ShapeVariant::of_segment(segment, false, Default::default(), true, true)
-            != ShapeVariant::of_segment(segment, false, Default::default(), false, true)
+        let clip = crate::render::SegmentClip::Untested;
+        ShapeVariant::of_segment(segment, clip, Default::default(), true, true)
+            != ShapeVariant::of_segment(segment, clip, Default::default(), false, true)
     };
     assert!(drops_fast_path(&segment(true, false)), "laid down ahead");
     assert!(

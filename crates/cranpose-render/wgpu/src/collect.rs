@@ -144,6 +144,8 @@ impl ChildLayer {
 struct WalkContext {
     offset: Point,
     visual_clip: Option<Rect>,
+    /// The corner radius `visual_clip` is rounded with; `0.0` for a rect.
+    clip_radius: f32,
     snap_anchor: Option<SnapAnchor>,
     translated: bool,
 }
@@ -376,11 +378,13 @@ fn node_admits_corners(
     match node {
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Draw(draw) => {
-                primitive_coverage_rect(&draw.primitive).is_none_or(|rect| check(rect, draw.clip))
+                primitive_stays_clear(&draw.primitive, |rect| check(rect, draw.clip))
             }
             PrimitiveNode::Text(text) => check(text.rect, text.clip),
         },
-        RenderNode::DrawRun(run) => run.coverage_rects().all(|rect| check(rect, None)),
+        RenderNode::DrawRun(run) => {
+            !run.summary.has_shadow && run.coverage_rects().all(|rect| check(rect, None))
+        }
         RenderNode::Layer(child) => {
             let Some(translation) = direct_translation(child.transform_to_parent) else {
                 return true;
@@ -485,8 +489,12 @@ fn content_draws_in_place(content: &LayerScene) -> bool {
             .all(|child| child.in_place && child.clip.is_none())
 }
 
+#[derive(Clone, Copy)]
 enum Placement {
     Direct(Point),
+    /// Drawn in place under its own clip rounded at the radius, every
+    /// shape in the clip's corners taking the clip's coverage.
+    DirectRounded(Point, f32),
     Isolated,
 }
 
@@ -497,12 +505,164 @@ fn child_placement(layer: &LayerNode) -> Placement {
     if child_needs_surface(layer) {
         return Placement::Isolated;
     }
-    if let Some(clip) = rounded_clip_for_layer(layer)
-        && !content_admits_rounded_clip(layer, clip)
-    {
-        return Placement::Isolated;
+    match rounded_clip_for_layer(layer) {
+        Some(clip) if !content_admits_rounded_clip(layer, clip) => {
+            content_takes_rounded_clip(layer, clip).map_or(Placement::Isolated, |radius| {
+                Placement::DirectRounded(translation, radius)
+            })
+        }
+        _ => Placement::Direct(translation),
     }
-    Placement::Direct(translation)
+}
+
+/// The radius the layer's clip keeps: the rounding it entered with, while
+/// its own clip, `layer_clip`, holds the rounded one. A clip that cuts the
+/// rounded one is a rect nothing under it may round; what reaches its
+/// corners kept the rounded layer on a surface.
+fn radius_within(layer_clip: Option<Rect>, context: &WalkContext) -> f32 {
+    let keeps = match (layer_clip, context.visual_clip) {
+        (None, _) => true,
+        (Some(own), Some(rounded)) => clip_holds(own, rounded),
+        (Some(_), None) => false,
+    };
+    if keeps { context.clip_radius } else { 0.0 }
+}
+
+/// Edges this close count as one: a clip met through other sums lands a few
+/// ulps away from the rect it bounds.
+const CLIP_HOLD_SLACK: f32 = 1e-3;
+
+/// Whether `outer` holds `inner` whole, its edges taken within
+/// [`CLIP_HOLD_SLACK`].
+fn clip_holds(outer: Rect, inner: Rect) -> bool {
+    inner.x >= outer.x - CLIP_HOLD_SLACK
+        && inner.y >= outer.y - CLIP_HOLD_SLACK
+        && inner.x + inner.width <= outer.x + outer.width + CLIP_HOLD_SLACK
+        && inner.y + inner.height <= outer.y + outer.height + CLIP_HOLD_SLACK
+}
+
+/// How `child` places under `context`: a rounded clip draws in place only
+/// where nothing above clips into it, and never inside another rounded
+/// clip, whose radius a placement could not carry beside its own.
+fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
+    match child_placement(child) {
+        Placement::DirectRounded(translation, radius) => {
+            let clip = child.visual_clip_rect().map(|clip| {
+                clip.translate(
+                    context.offset.x + translation.x,
+                    context.offset.y + translation.y,
+                )
+            });
+            let whole = context
+                .visual_clip
+                .is_none_or(|outer| clip.is_some_and(|clip| clip_holds(outer, clip)));
+            if whole && context.clip_radius == 0.0 {
+                Placement::DirectRounded(translation, radius)
+            } else {
+                Placement::Isolated
+            }
+        }
+        placement => placement,
+    }
+}
+
+/// The radius a layer whose rounded clip cuts into its content draws in
+/// place with, its records taking the clip's coverage as its surface's
+/// composite would: a uniform one, with nothing in the corners but shapes
+/// drawn straight under that clip. Text, images, shadows, layers that
+/// composite and anything under a clip of its own stay out of the corners,
+/// which the rect clip alone then leaves whole.
+fn content_takes_rounded_clip(layer: &LayerNode, clip: LayerRoundedClip) -> Option<f32> {
+    let radius = clip.radii[0];
+    let uniform = clip
+        .radii
+        .iter()
+        .all(|corner| (corner - radius).abs() <= AFFINE_TOLERANCE);
+    (uniform
+        && layer.visual_clip_rect() == Some(clip.rect)
+        && layer_takes_corners(layer, Point::default(), &RoundedClipCorners::of(clip)))
+    .then_some(radius)
+}
+
+fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+    layer.children.iter().all(|node| match node {
+        RenderNode::Primitive(entry) => match &entry.node {
+            PrimitiveNode::Draw(draw) if draw.clip.is_none() && is_shape(&draw.primitive) => true,
+            PrimitiveNode::Draw(draw) => {
+                primitive_stays_clear(&draw.primitive, |rect| stays_clear(rect, offset, corners))
+            }
+            PrimitiveNode::Text(text) => stays_clear(text.rect, offset, corners),
+        },
+        RenderNode::DrawRun(run) => run_takes_corners(run, offset, corners),
+        RenderNode::Layer(child) => child_takes_corners(child, offset, corners),
+    })
+}
+
+fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+    let plain = child.visual_clip_rect().is_none()
+        && rounded_clip_for_layer(child).is_none()
+        && child.graphics_layer.shadow_elevation <= 0.0
+        && !child_needs_surface(child);
+    match direct_translation(child.transform_to_parent) {
+        Some(translation) if plain => layer_takes_corners(
+            child,
+            Point::new(offset.x + translation.x, offset.y + translation.y),
+            corners,
+        ),
+        _ => {
+            child.draws_within_bounds
+                && child.graphics_layer.shadow_elevation <= 0.0
+                && stays_clear(
+                    quad_bounds(child.transform_to_parent.map_rect(child.local_bounds)),
+                    offset,
+                    corners,
+                )
+        }
+    }
+}
+
+/// Whether a run's shapes may take the corners: its other lanes (text,
+/// images, shadows) stay out of them.
+fn run_takes_corners(run: &DrawRunNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+    let recording = &*run.recording;
+    recording
+        .segments_in(&run.segments)
+        .all(|segment| match segment.lane {
+            RecordLane::Shapes | RecordLane::Content => true,
+            RecordLane::Others => recording.others()[segment.range()].iter().all(|primitive| {
+                primitive_stays_clear(primitive, |rect| stays_clear(rect, offset, corners))
+            }),
+        })
+}
+
+/// Whether `primitive` stays out of a rounded clip's corner cuts, as
+/// `clear` judges its coverage rect. A shadow has none: its blur reaches
+/// past any rect it holds, and it draws under a rect clip, so it never
+/// counts as clear. Only the content marker, which draws nothing, does.
+fn primitive_stays_clear(primitive: &DrawPrimitive, clear: impl Fn(Rect) -> bool) -> bool {
+    match primitive_coverage_rect(primitive) {
+        Some(rect) => clear(rect),
+        None => matches!(primitive, DrawPrimitive::Content),
+    }
+}
+
+fn stays_clear(rect: Rect, offset: Point, corners: &RoundedClipCorners) -> bool {
+    corners.admits(expand_rect(
+        rect.translate(offset.x, offset.y),
+        ROUNDED_CLIP_AA_MARGIN,
+    ))
+}
+
+/// Whether a primitive draws as a shape record, which takes a rounded clip's
+/// coverage in the shape shader.
+fn is_shape(primitive: &DrawPrimitive) -> bool {
+    matches!(
+        primitive,
+        DrawPrimitive::Rect { .. }
+            | DrawPrimitive::RoundRect { .. }
+            | DrawPrimitive::Arc { .. }
+            | DrawPrimitive::Line { .. }
+    )
 }
 
 pub(crate) fn collect_root(
@@ -518,6 +678,7 @@ pub(crate) fn collect_root(
     let context = WalkContext {
         offset: Point::default(),
         visual_clip: None,
+        clip_radius: 0.0,
         snap_anchor: None,
         translated: false,
     };
@@ -585,6 +746,7 @@ fn isolated_child(
     let content_context = WalkContext {
         offset: Point::default(),
         visual_clip: None,
+        clip_radius: 0.0,
         snap_anchor: None,
         translated: context.translated || layer.translated_content_context,
     };
@@ -709,6 +871,7 @@ fn collect_into(
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
         return;
     }
+    let clip_radius = radius_within(layer_clip, &context);
     let translated = context.translated || layer.translated_content_context;
     let allow_rigid_snap = translated || !layer.motion_context_animated;
     let boundary_anchor =
@@ -738,6 +901,7 @@ fn collect_into(
             .translate(context.offset.x, context.offset.y),
         local_layer: &local_layer,
         visual_clip,
+        clip_radius,
         anchor: layer_anchor,
         motion_context_animated: layer.motion_context_animated || translated,
     };
@@ -749,6 +913,7 @@ fn collect_into(
                 let child_context = WalkContext {
                     offset: context.offset,
                     visual_clip,
+                    clip_radius,
                     snap_anchor: translated_anchor,
                     translated,
                 };
@@ -771,10 +936,12 @@ fn collect_into(
 /// Where a layer's own primitives land: the layer's bounds and local
 /// graphics layer, the clip and anchor they inherit, and whether their
 /// motion context animates.
+#[derive(Clone, Copy)]
 struct ContentContext<'a> {
     layer_bounds: Rect,
     local_layer: &'a GraphicsLayer,
     visual_clip: Option<Rect>,
+    clip_radius: f32,
     anchor: Option<SnapAnchor>,
     motion_context_animated: bool,
 }
@@ -794,25 +961,8 @@ fn push_content(
     content: &ContentContext<'_>,
 ) {
     match node {
-        RenderNode::Primitive(entry) => push_primitive(
-            out,
-            text_layout,
-            entry,
-            content.layer_bounds,
-            content.local_layer,
-            content.visual_clip,
-            content.anchor,
-            content.motion_context_animated,
-        ),
-        RenderNode::DrawRun(run) => push_draw_run(
-            out,
-            run,
-            content.layer_bounds,
-            content.local_layer,
-            content.visual_clip,
-            content.anchor,
-            content.motion_context_animated,
-        ),
+        RenderNode::Primitive(entry) => push_primitive(out, text_layout, entry, content),
+        RenderNode::DrawRun(run) => push_draw_run(out, run, content),
         RenderNode::Layer(_) => {}
     }
 }
@@ -824,8 +974,8 @@ fn collect_child(
     context: WalkContext,
     out: &mut LayerScene,
 ) {
-    match child_placement(child) {
-        Placement::Direct(translation) => {
+    match placement_in(child, &context) {
+        placement @ (Placement::Direct(translation) | Placement::DirectRounded(translation, _)) => {
             let child_offset = Point::new(
                 context.offset.x + translation.x,
                 context.offset.y + translation.y,
@@ -856,9 +1006,22 @@ fn collect_child(
                 shadow_clip,
             );
             assign_shadow_anchor(&mut out.scene, shadows_before, child_anchor);
+            let (visual_clip, clip_radius) = match placement {
+                Placement::DirectRounded(_, radius) => (
+                    resolve_clip(
+                        context.visual_clip,
+                        child
+                            .visual_clip_rect()
+                            .map(|clip| clip.translate(child_offset.x, child_offset.y)),
+                    ),
+                    radius,
+                ),
+                _ => (context.visual_clip, context.clip_radius),
+            };
             let child_context = WalkContext {
                 offset: child_offset,
-                visual_clip: context.visual_clip,
+                visual_clip,
+                clip_radius,
                 snap_anchor: child_anchor,
                 translated: context.translated,
             };
@@ -985,17 +1148,20 @@ fn assign_snap_anchor_since(
     }
 }
 
-#[expect(clippy::too_many_arguments)]
 fn push_primitive(
     out: &mut LayerScene,
     text_layout: &mut impl TextLayoutResolver,
     entry: &PrimitiveEntry,
-    layer_bounds: Rect,
-    local_layer: &GraphicsLayer,
-    visual_clip: Option<Rect>,
-    snap_anchor: Option<SnapAnchor>,
-    motion_context_animated: bool,
+    content: &ContentContext<'_>,
 ) {
+    let ContentContext {
+        layer_bounds,
+        local_layer,
+        visual_clip,
+        clip_radius,
+        anchor: snap_anchor,
+        motion_context_animated,
+    } = *content;
     let counts = scene_counts(&out.scene);
     match &entry.node {
         PrimitiveNode::Draw(draw) => {
@@ -1014,6 +1180,11 @@ fn push_primitive(
                 layer_bounds,
                 local_layer,
                 clip,
+                if clip == visual_clip {
+                    clip_radius
+                } else {
+                    0.0
+                },
                 snap_anchor,
                 &mut out.scene,
                 None,
@@ -1055,22 +1226,23 @@ fn push_primitive(
 /// one run draw under the layer's placement, and the primitives of the
 /// other lane (text, images, shadows) take their own item paths between
 /// them, in the order the command drew.
-fn push_draw_run(
-    out: &mut LayerScene,
-    run: &DrawRunNode,
-    layer_bounds: Rect,
-    local_layer: &GraphicsLayer,
-    visual_clip: Option<Rect>,
-    snap_anchor: Option<SnapAnchor>,
-    motion_context_animated: bool,
-) {
+fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentContext<'_>) {
+    let ContentContext {
+        layer_bounds,
+        local_layer,
+        visual_clip,
+        clip_radius,
+        anchor: snap_anchor,
+        motion_context_animated,
+    } = *content;
     let counts = scene_counts(&out.scene);
     let placement = RunPlacement::painted(
         Point::new(layer_bounds.x, layer_bounds.y),
         snap_anchor,
         visual_clip,
         local_layer,
-    );
+    )
+    .with_clip_radius(clip_radius);
     let recording = &*run.recording;
     let mut shapes_from: Option<u32> = None;
     let flush_shapes = |out: &mut LayerScene, end: u32, from: &mut Option<u32>| {
@@ -1094,6 +1266,7 @@ fn push_draw_run(
                         layer_bounds,
                         local_layer,
                         visual_clip,
+                        clip_radius,
                         snap_anchor,
                         &mut out.scene,
                         None,

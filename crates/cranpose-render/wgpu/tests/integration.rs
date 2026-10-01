@@ -60,6 +60,7 @@ mod renderer_startup;
 mod rotate_scale_pixels;
 mod rotated_grid_relayout;
 mod rotating_record_upload;
+mod rounded_clip_in_place;
 mod run_store_upload;
 mod runtime_shader_override_updates;
 mod scaled_glass_child_mask;

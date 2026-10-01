@@ -192,6 +192,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                 WalkContext {
                     offset: Point::new(0.3, 0.7),
                     visual_clip: None,
+                    clip_radius: 0.0,
                     snap_anchor: None,
                     translated,
                 },
@@ -222,38 +223,269 @@ fn content_touching_the_edge_between_corners_is_admitted() {
     assert!(corners(200.0, 100.0, 20.0).admits(rect(40.0, 0.0, 100.0, 100.0)));
 }
 
-#[test]
-fn a_rounded_layer_whose_content_enters_a_corner_isolates() {
-    let mut layer = LayerNode {
+fn rounded_layer(radius: f32, content: RenderNode) -> LayerNode {
+    LayerNode {
         local_bounds: rect(0.0, 0.0, 200.0, 100.0),
         graphics_layer: GraphicsLayer {
             clip: true,
-            shape: LayerShape::Rounded(RoundedCornerShape::uniform(20.0)),
+            shape: LayerShape::Rounded(RoundedCornerShape::uniform(radius)),
             ..Default::default()
         },
+        children: vec![content],
+        ..Default::default()
+    }
+}
+
+fn white_rect(bounds: Rect) -> DrawPrimitive {
+    DrawPrimitive::Rect {
+        rect: bounds,
+        brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
+        stroke: None,
+    }
+}
+
+fn shapes_run(primitives: Vec<DrawPrimitive>) -> RenderNode {
+    RenderNode::DrawRun(DrawRunNode::new(PrimitivePhase::BeforeChildren, primitives))
+}
+
+#[test]
+fn a_rounded_layer_whose_shapes_enter_a_corner_draws_in_place_rounded() {
+    let full = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    assert!(matches!(
+        child_placement(&full),
+        Placement::DirectRounded(_, radius) if radius == 20.0
+    ));
+    let loose = rounded_layer(20.0, drawn_node(white_rect(rect(0.0, 0.0, 120.0, 100.0))));
+    assert!(matches!(
+        child_placement(&loose),
+        Placement::DirectRounded(..)
+    ));
+    let inside = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(14.0, 14.0, 172.0, 72.0))]),
+    );
+    assert!(
+        matches!(child_placement(&inside), Placement::Direct(_)),
+        "content clear of the corners needs no rounding at all"
+    );
+}
+
+#[test]
+fn a_rounded_layer_whose_text_or_image_enters_a_corner_isolates() {
+    let text = rounded_layer(20.0, drawn_node(snap_test_text()));
+    assert!(matches!(child_placement(&text), Placement::Isolated));
+    let mut mixed = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    mixed.children.push(drawn_node(snap_test_text()));
+    assert!(matches!(child_placement(&mixed), Placement::Isolated));
+}
+
+#[test]
+fn a_rounded_layer_with_uneven_corners_isolates_shapes_in_a_corner() {
+    let mut layer = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    layer.graphics_layer.shape = LayerShape::Rounded(RoundedCornerShape::new(20.0, 20.0, 4.0, 4.0));
+    assert!(matches!(child_placement(&layer), Placement::Isolated));
+}
+
+#[test]
+fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() {
+    let layer = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    let context = |visual_clip: Option<Rect>, clip_radius: f32| WalkContext {
+        offset: Point::new(10.0, 10.0),
+        visual_clip,
+        clip_radius,
+        snap_anchor: None,
+        translated: false,
+    };
+    assert!(matches!(
+        placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 0.0)),
+        Placement::DirectRounded(..)
+    ));
+    assert!(matches!(
+        placement_in(&layer, &context(Some(rect(0.0, 0.0, 150.0, 400.0)), 0.0)),
+        Placement::Isolated
+    ));
+    assert!(matches!(
+        placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 8.0)),
+        Placement::Isolated
+    ));
+}
+
+#[test]
+fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums() {
+    // From the workspace port on a phone: the bar lies inside the panel's
+    // clip, but the panel clip met with the bar's rect sums its width an
+    // ulp away from the bar's own.
+    let bar = LayerNode {
+        local_bounds: rect(0.0, 0.0, 218.33333, 4.0),
+        graphics_layer: GraphicsLayer {
+            clip: true,
+            shape: LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
+            ..Default::default()
+        },
+        transform_to_parent: ProjectiveTransform::translation(979.3333, 220.33334),
+        children: vec![shapes_run(vec![white_rect(rect(0.0, 0.0, 218.33333, 4.0))])],
         ..Default::default()
     };
-    layer.children.push(RenderNode::DrawRun(DrawRunNode::new(
-        PrimitivePhase::BeforeChildren,
-        vec![DrawPrimitive::Rect {
-            rect: rect(0.0, 0.0, 200.0, 100.0),
-            brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
-            stroke: None,
-        }],
-    )));
-    assert!(matches!(child_placement(&layer), Placement::Isolated));
-    let RenderNode::DrawRun(run) = &mut layer.children[0] else {
-        unreachable!()
+    let panel = WalkContext {
+        offset: Point::default(),
+        visual_clip: Some(rect(900.0, 204.33334, 380.0, 147.66666)),
+        clip_radius: 0.0,
+        snap_anchor: None,
+        translated: false,
     };
-    *run = DrawRunNode::new(
-        PrimitivePhase::BeforeChildren,
-        vec![DrawPrimitive::Rect {
-            rect: rect(14.0, 14.0, 172.0, 72.0),
-            brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
-            stroke: None,
-        }],
+    assert!(matches!(
+        placement_in(&bar, &panel),
+        Placement::DirectRounded(..)
+    ));
+    let rounded = WalkContext {
+        visual_clip: Some(rect(979.3333, 220.33334, 218.33333, 4.0)),
+        clip_radius: 2.0,
+        ..panel
+    };
+    assert_eq!(
+        radius_within(Some(rect(979.3333, 220.33334, 218.33333, 4.0)), &rounded),
+        2.0
     );
-    assert!(matches!(child_placement(&layer), Placement::Direct(_)));
+    assert_eq!(
+        radius_within(None, &rounded),
+        2.0,
+        "a layer with no clip keeps the rounding"
+    );
+    assert_eq!(
+        radius_within(Some(rect(979.3333, 220.33334, 100.0, 4.0)), &rounded),
+        0.0,
+        "a clip that cuts the rounded one keeps none"
+    );
+}
+
+fn drop_shadow(caster: Rect) -> DrawPrimitive {
+    DrawPrimitive::Shadow(cranpose_ui_graphics::ShadowPrimitive::Drop {
+        shape: Box::new(DrawPrimitive::Rect {
+            rect: caster,
+            brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::BLACK),
+            stroke: None,
+        }),
+        cutout: None,
+        blur_radius: 4.0,
+        blend_mode: BlendMode::SrcOver,
+    })
+}
+
+#[test]
+fn a_shadow_under_a_rounded_clip_keeps_the_layer_on_a_surface() {
+    // A shadow draws under a rect clip and has no coverage rect to hold
+    // clear of the corners, whatever the rest of the content does.
+    let mut reaching = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    reaching
+        .children
+        .push(drawn_node(drop_shadow(rect(0.0, 0.0, 20.0, 20.0))));
+    assert!(matches!(child_placement(&reaching), Placement::Isolated));
+    let mut clear = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(30.0, 30.0, 40.0, 40.0))]),
+    );
+    clear
+        .children
+        .push(drawn_node(drop_shadow(rect(40.0, 40.0, 20.0, 20.0))));
+    assert!(
+        matches!(child_placement(&clear), Placement::Isolated),
+        "a shadow is never admitted as clear of the corners"
+    );
+    let recorded = rounded_layer(
+        20.0,
+        shapes_run(vec![
+            white_rect(rect(30.0, 30.0, 40.0, 40.0)),
+            drop_shadow(rect(40.0, 40.0, 20.0, 20.0)),
+        ]),
+    );
+    assert!(
+        matches!(child_placement(&recorded), Placement::Isolated),
+        "nor is a shadow a run recorded"
+    );
+}
+
+#[test]
+fn a_runs_hash_follows_its_clips_radius() {
+    let parent = LayerNode {
+        local_bounds: rect(0.0, 0.0, 400.0, 300.0),
+        children: vec![RenderNode::Layer(Box::new(rounded_layer(
+            20.0,
+            shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+        )))],
+        ..Default::default()
+    };
+    let scene = collect_root(
+        &parent,
+        &mut crate::pipeline::UiTextLayoutResolver,
+        &mut LayerMotion::default(),
+        SceneCapacityHint::default(),
+    );
+    let hash = |radius: f32| {
+        let mut run = scene.scene.runs[0].clone();
+        run.placement.clip_radius = radius;
+        let mut hasher = cranpose_ui_graphics::FxHasher::default();
+        crate::render::hash_run_item(&run, 0.0, 0.0, 2.0, &mut hasher);
+        std::hash::Hasher::finish(&hasher)
+    };
+    assert_ne!(
+        hash(20.0),
+        hash(4.0),
+        "a backdrop over the run must see its corners change"
+    );
+    assert_eq!(hash(20.0), hash(20.0));
+}
+
+#[test]
+fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_does() {
+    let mut parent = LayerNode {
+        local_bounds: rect(0.0, 0.0, 400.0, 300.0),
+        ..Default::default()
+    };
+    parent
+        .children
+        .push(RenderNode::Layer(Box::new(rounded_layer(
+            20.0,
+            shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+        ))));
+    parent
+        .children
+        .push(shapes_run(vec![white_rect(rect(0.0, 200.0, 50.0, 50.0))]));
+    let scene = collect_root(
+        &parent,
+        &mut crate::pipeline::UiTextLayoutResolver,
+        &mut LayerMotion::default(),
+        SceneCapacityHint::default(),
+    );
+    assert!(
+        scene.children.is_empty(),
+        "the rounded layer composites nothing"
+    );
+    let radii: Vec<f32> = scene
+        .scene
+        .runs
+        .iter()
+        .map(|run| run.placement.clip_radius)
+        .collect();
+    assert_eq!(radii, vec![20.0, 0.0]);
+    assert_eq!(
+        scene.scene.runs[0].placement.clip,
+        Some(rect(0.0, 0.0, 200.0, 100.0))
+    );
 }
 
 #[test]

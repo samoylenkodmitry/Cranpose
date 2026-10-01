@@ -35,6 +35,10 @@ pub(crate) struct Placement {
     pub offset: Point,
     pub snap_anchor: Option<SnapAnchor>,
     pub clip: Option<Rect>,
+    /// The corner radius `clip` is rounded with, in logical units; `0.0`
+    /// for a rect clip. Records take the rounded rect's coverage, as a layer
+    /// clipped to it composites through the same mask.
+    pub clip_radius: f32,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
 }
@@ -51,9 +55,23 @@ impl Placement {
             offset,
             snap_anchor,
             clip,
+            clip_radius: 0.0,
             alpha: 1.0,
             color_filter: None,
         }
+    }
+
+    /// The placement with `clip` rounded at `radius`.
+    pub(crate) fn with_clip_radius(self, radius: f32) -> Self {
+        Self {
+            clip_radius: radius,
+            ..self
+        }
+    }
+
+    /// Whether the clip has rounded corners the records take coverage from.
+    pub(crate) fn clip_rounded(&self) -> bool {
+        self.clip.is_some() && self.clip_radius > 0.0
     }
 
     /// A placement that paints its records with the layer's alpha and
@@ -69,6 +87,7 @@ impl Placement {
             offset,
             snap_anchor,
             clip,
+            clip_radius: 0.0,
             alpha: layer.alpha.clamp(0.0, 1.0),
             color_filter: layer.color_filter,
         }

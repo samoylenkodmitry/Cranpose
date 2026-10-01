@@ -99,7 +99,7 @@ fn candidate<'a>(scene: &'a CompositorScene, op: &DrawOp) -> Option<Candidate<'a
     };
     let run = &scene.runs[index];
     let command = run.command?;
-    if run.placement.alpha != 1.0 || run.placement.color_filter.is_some() {
+    if run.placement.paints() || run.placement.clip_rounded() {
         return None;
     }
     let tables = run.tables();
