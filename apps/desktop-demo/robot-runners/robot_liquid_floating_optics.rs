@@ -94,6 +94,9 @@ pub(crate) fn main() -> anyhow::Result<()> {
             } else {
                 assert_optics(&frames, control, initial, backdrop);
             }
+            if control == Control::FilterChip {
+                assert_chip_reversals(&robot, &output);
+            }
             robot.exit().expect("exit floating glass regression");
         })
         .try_run(move || {
@@ -104,6 +107,52 @@ pub(crate) fn main() -> anyhow::Result<()> {
             );
         })?;
     Ok(())
+}
+
+fn assert_chip_reversals(robot: &crate::RobotHandle, output: &std::path::Path) {
+    let mut steps = Vec::new();
+    for elapsed in [0, 1, 3, 9, 21] {
+        steps.push(RobotTimelineStep {
+            advance_ms: 0.0,
+            actions: vec![RobotTimelineAction::MouseDown, RobotTimelineAction::MouseUp],
+            capture: false,
+        });
+        wait_and_capture(&mut steps, elapsed);
+        steps.push(RobotTimelineStep {
+            advance_ms: 0.0,
+            actions: vec![RobotTimelineAction::MouseDown, RobotTimelineAction::MouseUp],
+            capture: true,
+        });
+        wait_and_capture(&mut steps, 36);
+    }
+    let reversals = robot
+        .capture_interaction_keyframes(3.0, &steps)
+        .expect("capture interrupted chip transitions");
+    for (index, pair) in reversals.chunks_exact(3).enumerate() {
+        for (frame, suffix) in pair.iter().zip(["before", "after", "settled"]) {
+            robot_shot::save_checked(
+                &output.join(format!("reversal-{index}-{suffix}.png")),
+                frame,
+            )
+            .expect("save chip reversal");
+        }
+        let changed: usize = (390 * 3..515 * 3)
+            .map(|y| {
+                let start = (y * pair[0].width as usize + 130 * 3) * 4;
+                let end = start + 142 * 3 * 4;
+                pair[0].pixels[start..end]
+                    .iter()
+                    .zip(&pair[1].pixels[start..end])
+                    .filter(|(before, after)| before.abs_diff(**after) > 1)
+                    .count()
+            })
+            .sum();
+        println!("robot-metric: chip_reversal={index} changed_channels={changed}");
+        assert_eq!(
+            changed, 0,
+            "retargeting a chip without advancing time must preserve its rendered appearance"
+        );
+    }
 }
 
 fn assert_optics(
