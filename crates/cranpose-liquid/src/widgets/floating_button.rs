@@ -21,11 +21,13 @@ fn lighting_shader() -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
     SHADER
         .get_or_init(|| {
-            RuntimeShader::new(&format!(
+            let mut shader = RuntimeShader::new(&format!(
                 "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
                 cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
                 include_str!("floating_lighting.wgsl")
-            ))
+            ));
+            shader.set_position_independent(true);
+            shader
         })
         .clone()
 }

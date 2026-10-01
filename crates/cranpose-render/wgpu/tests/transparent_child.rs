@@ -18,16 +18,19 @@ fn identity_shader(declared: bool) -> RenderEffect {
          @location(0) vec4<f32> {{\n    return textureSample(input_texture, input_sampler, \
          input.uv);\n}}\n"
     ));
+    shader.set_position_independent(true);
     shader.set_preserves_transparency(declared);
     RenderEffect::runtime_shader(shader)
 }
 
 /// A shader painting red whatever its source holds.
 fn painting_shader() -> RenderEffect {
-    RenderEffect::runtime_shader(RuntimeShader::new(&format!(
+    let mut shader = RuntimeShader::new(&format!(
         "{RUNTIME_SHADER_PRELUDE_WGSL}\n@fragment\nfn effect_fs(input: VertexOutput) -> \
          @location(0) vec4<f32> {{\n    return vec4<f32>(1.0, 0.0, 0.0, 1.0);\n}}\n"
-    )))
+    ));
+    shader.set_position_independent(true);
+    RenderEffect::runtime_shader(shader)
 }
 
 /// The striped page with an empty layer over `BAR` carrying `effect`.

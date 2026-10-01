@@ -170,11 +170,13 @@ fn shader(foreground: bool) -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
     let mut shader = SHADER
         .get_or_init(|| {
-            RuntimeShader::new(&format!(
+            let mut shader = RuntimeShader::new(&format!(
                 "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
                 cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
                 include_str!("control_content.wgsl"),
-            ))
+            ));
+            shader.set_position_independent(true);
+            shader
         })
         .clone();
     shader.set_override("CONTROL_FOREGROUND", f64::from(foreground));

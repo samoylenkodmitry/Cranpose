@@ -1090,7 +1090,8 @@ fn composites_nothing(child: &ChildLayer) -> bool {
 
 fn shader_tail_composites(child: &ChildLayer, shader: &RuntimeShader) -> bool {
     let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
-    shader.substrates().is_empty()
+    shader.position_independent()
+        && shader.substrates().is_empty()
         && child.blend_mode == BlendMode::SrcOver
         && (plain || shader.batched_source())
 }
@@ -1137,14 +1138,9 @@ fn shader_tail_composite(
     }
 }
 
-/// A translated child's runtime shader drawn in the final pass over its
-/// rendered content, so an animated shader over cached content costs no
-/// pass; none when the child is not on the parent grid or the shader cannot
-/// apply the child's clip and alpha.
 fn shader_tail_over_surface(
     child: &ChildLayer,
     surface: &SurfaceRender,
-    translation: Option<Point>,
     snap: Point,
     z: usize,
     scale: f32,
@@ -1153,7 +1149,7 @@ fn shader_tail_over_surface(
     let Some(RenderEffect::Shader { shader }) = &child.effect else {
         return None;
     };
-    let dest = surface.grid_dest.filter(|_| translation.is_some())?;
+    let dest = surface.grid_dest?;
     shader_tail_composites(child, shader).then(|| {
         shader_tail_composite(
             child,
@@ -3942,8 +3938,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(surface) = resolved else {
             return Ok(());
         };
-        if let Some(composite) =
-            shader_tail_over_surface(child, &surface, translation, snap, z, scale, visible)
+        if let Some(composite) = shader_tail_over_surface(child, &surface, snap, z, scale, visible)
         {
             pass.pending.push(composite);
             return Ok(());

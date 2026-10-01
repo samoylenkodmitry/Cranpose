@@ -571,6 +571,7 @@ fn shaded_runtime_shader_layer(node_id: NodeId, time: f32) -> LayerNode {
         height: 48.0,
     };
     let mut shader = cranpose_ui_graphics::RuntimeShader::new(&animated_shader_wgsl());
+    shader.set_position_independent(true);
     shader.set_float(0, time);
     let mut shaded = support::contract_layer(
         Some(node_id),
@@ -731,6 +732,115 @@ fn an_animated_shader_keeps_animating_inside_a_cacheable_container() {
         "an animated shader inside a cacheable container must still animate: \
          the container cannot cache a subtree whose output changes every frame"
     );
+}
+
+fn scaled_shader_graph(
+    scale: f32,
+    separate_pass: bool,
+    pixel_position: bool,
+    empty: bool,
+) -> RenderGraph {
+    let mut shaded = shaded_runtime_shader_layer(30_201, 0.25);
+    shaded.cache_policy = CachePolicy::None;
+    shaded.graphics_layer.scale_x = scale;
+    shaded.graphics_layer.scale_y = scale;
+    shaded.transform_to_parent = ProjectiveTransform::uniform_scale(scale)
+        .then(ProjectiveTransform::translation(13.25, 9.5));
+    shaded.children = if empty {
+        Vec::new()
+    } else {
+        vec![
+            painted_rect(shaded.local_bounds, Color(0.2, 0.6, 0.9, 0.7)),
+            painted_rect(
+                Rect {
+                    x: 7.25,
+                    y: 4.5,
+                    width: 29.5,
+                    height: 21.25,
+                },
+                Color(0.9, 0.3, 0.1, 0.6),
+            ),
+        ]
+    };
+    let source = format!(
+        "{}\n{}",
+        cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
+        r"@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let source = textureSample(input_texture, input_sampler, input.uv);
+    let light = 0.1 + 0.4 * input.uv.x * input.uv.y;
+    return vec4<f32>(mix(source.rgb * source.rgb, vec3<f32>(source.a), light), source.a);
+}"
+    );
+    let source = if pixel_position {
+        source
+            .replace(
+                "input.uv.x * input.uv.y",
+                "fract(input.position.x / 17.0) * fract(input.position.y / 11.0)",
+            )
+            .replace(
+                "textureSample(input_texture, input_sampler, input.uv)",
+                "vec4<f32>(0.2, 0.3, 0.4, 0.7)",
+            )
+    } else {
+        source
+    };
+    let mut shader = cranpose_ui_graphics::RuntimeShader::new(&source);
+    if !pixel_position {
+        shader.set_position_independent(true);
+    }
+    let effect = RenderEffect::runtime_shader(shader);
+    shaded.graphics_layer.render_effect = Some(if separate_pass {
+        effect.then(RenderEffect::offset(0.0, 0.0))
+    } else {
+        effect
+    });
+    support::page_graph(180, 140, vec![RenderNode::Layer(Box::new(shaded))])
+}
+
+#[test]
+fn child_shader_compositing_preserves_coordinates_at_the_display_scale() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    for density in [1.0, 1.5, 3.0] {
+        let width = (180.0 * density) as u32;
+        let height = (140.0 * density) as u32;
+        renderer.scene_mut().graph = Some(scaled_shader_graph(1.0, false, false, false));
+        renderer
+            .capture_frame_with_scale(width, height, density)
+            .expect("translated shader composite");
+        let translated_passes = renderer
+            .last_frame_stats()
+            .expect("translated stats")
+            .pass_count;
+        for (pixel_position, empty) in [(false, false), (true, false), (true, true)] {
+            for scale in [1.0, 0.85, 1.03, 1.25, 2.0] {
+                renderer.scene_mut().graph =
+                    Some(scaled_shader_graph(scale, true, pixel_position, empty));
+                let expected = renderer
+                    .capture_frame_with_scale(width, height, density)
+                    .expect("separate shader pass");
+                renderer.scene_mut().graph =
+                    Some(scaled_shader_graph(scale, false, pixel_position, empty));
+                let actual = renderer
+                    .capture_frame_with_scale(width, height, density)
+                    .expect("shader composite");
+                support::assert_bytes_within(
+                    "child shader composite",
+                    width,
+                    &expected.pixels,
+                    &actual.pixels,
+                    1,
+                );
+                if !pixel_position {
+                    let stats = renderer.last_frame_stats().expect("frame stats");
+                    assert_eq!(
+                        stats.pass_count, translated_passes,
+                        "a position-independent shader already on the display grid needs no extra pass: scale={scale}, density={density}, {stats:?}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 fn clipped_text_graph(y: f32) -> RenderGraph {

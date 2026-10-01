@@ -52,6 +52,7 @@ pub fn gradient_blur_effect(
     let start_radius_px = start_radius_px.max(0.0);
     let end_radius_px = end_radius_px.max(0.0);
     let mut shader = RuntimeShader::new(GRADIENT_BLUR_WGSL);
+    shader.set_position_independent(true);
     shader.set_float(0, start_radius_px);
     shader.set_float(1, end_radius_px);
     shader.set_float(2, direction.uniform_code());

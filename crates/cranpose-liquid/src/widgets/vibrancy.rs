@@ -45,6 +45,7 @@ fn shader(pass: InkPass) -> RuntimeShader {
                 cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
                 include_str!("vibrancy.wgsl")
             ));
+            shader.set_position_independent(true);
             shader.set_float(0, 0.9);
             shader
         })

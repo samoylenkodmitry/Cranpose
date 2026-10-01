@@ -447,6 +447,7 @@ struct StageUniforms {
 
 fn stage_effect(uniforms: &StageUniforms) -> RenderEffect {
     let mut shader = RuntimeShader::from_shared_source(controls_wgsl());
+    shader.set_position_independent(true);
     shader.set_float(0, uniforms.kind);
     shader.set_float(1, uniforms.value);
     shader.set_float(2, uniforms.press);

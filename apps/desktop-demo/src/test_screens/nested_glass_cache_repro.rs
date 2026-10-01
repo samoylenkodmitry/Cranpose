@@ -39,6 +39,7 @@ fn flat_color_shader(phase: f32) -> RuntimeShader {
         crate::app::shader_rect::WGSL_HELPERS
     );
     let mut shader = RuntimeShader::new(&source);
+    shader.set_position_independent(true);
     shader.set_float(0, phase);
     shader
 }

@@ -457,6 +457,7 @@ pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
 }
 
 fn glass_shader_effect(mut shader: RuntimeShader) -> RenderEffect {
+    shader.set_position_independent(true);
     specialize_liquid_glass(&mut shader);
     if matches!(
         slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM),
