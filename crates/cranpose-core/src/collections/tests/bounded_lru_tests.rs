@@ -2,7 +2,7 @@ use super::BoundedLruCache;
 
 fn cache<K, V>(cap: usize) -> BoundedLruCache<K, V>
 where
-    K: Clone + Eq + std::hash::Hash,
+    K: Eq + std::hash::Hash,
 {
     BoundedLruCache::with_capacity_at_least_one(cap)
 }
