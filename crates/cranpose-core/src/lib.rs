@@ -718,7 +718,31 @@ pub(crate) struct RecomposeScopeInner {
 
 type StateIds = SmallVec<[StateId; 2]>;
 
+enum ScopeOwner {
+    Root,
+    Live(Rc<RecomposeScopeInner>),
+    Dropped,
+}
+
 impl RecomposeScopeInner {
+    fn owner(&self) -> ScopeOwner {
+        let parent = self.parent_scope.borrow();
+        let lifetime_owner;
+        let owner = match parent.as_ref() {
+            Some(parent) => parent,
+            None => {
+                lifetime_owner = self.lifetime_owner_scope.borrow();
+                match lifetime_owner.as_ref() {
+                    Some(owner) => owner,
+                    None => return ScopeOwner::Root,
+                }
+            }
+        };
+        owner
+            .upgrade()
+            .map_or(ScopeOwner::Dropped, ScopeOwner::Live)
+    }
+
     fn new(runtime: RuntimeHandle) -> Self {
         runtime.increment_live_recompose_scope_count();
         Self {
@@ -855,40 +879,32 @@ impl RecomposeScope {
     /// once to restart them — no flag on the slot's own scopes carries that
     /// trace, because deactivation walks stop at slot-host boundaries.
     pub fn owner_chain_deactivation_epoch(&self) -> u64 {
-        let mut total = 0u64;
-        let mut current = Some(self.clone());
-        while let Some(scope) = current {
-            total = total.wrapping_add(scope.inner.deactivations.get());
-            let structural_parent = scope.inner.parent_scope.borrow().clone();
-            let lifetime_owner = scope.inner.lifetime_owner_scope.borrow().clone();
-            let next = structural_parent.or(lifetime_owner);
-            current = next
-                .and_then(|parent| parent.upgrade())
-                .map(|inner| RecomposeScope { inner });
+        let mut total = self.inner.deactivations.get();
+        let mut owner = self.inner.owner();
+        while let ScopeOwner::Live(scope) = owner {
+            total = total.wrapping_add(scope.deactivations.get());
+            owner = scope.owner();
         }
         total
     }
 
     pub(crate) fn is_effectively_active(&self) -> bool {
-        let mut current = Some(self.clone());
-        while let Some(scope) = current {
-            if !scope.is_active() {
-                return false;
-            }
-            let structural_parent = scope.inner.parent_scope.borrow().clone();
-            let lifetime_owner = scope.inner.lifetime_owner_scope.borrow().clone();
-            let next = structural_parent.or(lifetime_owner);
-            current = match next {
-                Some(parent) => {
-                    let Some(inner) = parent.upgrade() else {
-                        return false;
-                    };
-                    Some(RecomposeScope { inner })
-                }
-                None => None,
-            };
+        if !self.is_active() {
+            return false;
         }
-        true
+        let mut owner = self.inner.owner();
+        loop {
+            match owner {
+                ScopeOwner::Root => return true,
+                ScopeOwner::Dropped => return false,
+                ScopeOwner::Live(scope) => {
+                    if !scope.active.get() {
+                        return false;
+                    }
+                    owner = scope.owner();
+                }
+            }
+        }
     }
 
     fn record_state_subscription(&self, state_id: StateId) {
