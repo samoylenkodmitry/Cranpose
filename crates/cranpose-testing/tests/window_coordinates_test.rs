@@ -149,7 +149,7 @@ fn focused_field(scale: f32, decorated: bool) -> AppShell<TestRenderer> {
     shell.update();
     let field = find(
         shell.semantics_tree().expect("field semantics").root(),
-        &|node| node.editable_text,
+        &|node| node.details().editable_text,
     )
     .expect("editable field")
     .node_id;
@@ -244,7 +244,7 @@ fn decorated_field_exposes_pasted_text_to_accessibility() {
     assert!(shell.on_paste("Z"));
     shell.update();
     let tree = shell.semantics_tree().expect("field semantics");
-    let field = find(tree.root(), &|node| node.editable_text).expect("editable field");
+    let field = find(tree.root(), &|node| node.details().editable_text).expect("editable field");
     assert!(field.text.as_deref().is_some_and(|text| text.contains('Z')));
     assert!(
         !field.actions.is_empty(),
@@ -258,7 +258,8 @@ fn decorated_field_exposes_pasted_text_to_accessibility() {
 }
 
 fn editable_fields(node: &SemanticsNode) -> usize {
-    usize::from(node.editable_text) + node.children.iter().map(editable_fields).sum::<usize>()
+    usize::from(node.details().editable_text)
+        + node.children.iter().map(editable_fields).sum::<usize>()
 }
 
 #[test]

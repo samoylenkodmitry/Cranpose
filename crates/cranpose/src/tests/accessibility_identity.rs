@@ -1,5 +1,5 @@
 use super::*;
-use crate::accessibility::element_with;
+use crate::accessibility::{AccessibilityDetails, element_with};
 
 #[test]
 fn recycled_node_generations_never_retain_accessibility_ids() {
@@ -32,8 +32,11 @@ fn recycled_generation_updates_structure_and_announcements() {
         node_id: 7,
         label: "Receipt".into(),
         role: AccessibilityRole::Dialog,
-        live_region: Some(cranpose_ui::LiveRegionMode::Polite),
-        pane_title: Some("Receipt".into()),
+        details: Some(Box::new(AccessibilityDetails {
+            live_region: Some(cranpose_ui::LiveRegionMode::Polite),
+            pane_title: Some("Receipt".into()),
+            ..Default::default()
+        })),
         ..Default::default()
     };
     let replacement = AccessibilityElement {

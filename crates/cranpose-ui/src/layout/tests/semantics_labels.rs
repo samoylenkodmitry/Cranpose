@@ -1,4 +1,5 @@
 use super::*;
+use crate::layout::SemanticsDetails;
 
 #[test]
 fn controls_and_containers_define_merge_boundaries() {
@@ -83,7 +84,10 @@ fn a_written_label_is_the_label() {
         ..SemanticsNode::default()
     };
     let field = SemanticsNode {
-        editable_text: true,
+        details: Some(Box::new(SemanticsDetails {
+            editable_text: true,
+            ..SemanticsDetails::NONE
+        })),
         ..SemanticsNode::default()
     };
     let hidden = SemanticsNode {
@@ -108,11 +112,14 @@ fn a_written_label_is_the_label() {
 #[test]
 fn accessible_labels_hide_secrets_and_preserve_an_empty_field() {
     let mut node = SemanticsNode {
-        editable_text: true,
+        details: Some(Box::new(SemanticsDetails {
+            editable_text: true,
+            ..SemanticsDetails::NONE
+        })),
         ..SemanticsNode::default()
     };
     assert_eq!(node.accessibility_label().as_deref(), Some(""));
-    node.password = true;
+    node.update_details(|details| details.password = true);
     node.description = Some("secret".into());
     node.text = node.description.clone();
     assert_eq!(node.accessibility_label().as_deref(), Some("password"));
@@ -125,7 +132,10 @@ fn accessible_labels_hide_secrets_and_preserve_an_empty_field() {
 #[test]
 fn password_semantics_never_use_the_displayed_text_as_a_name() {
     let node = SemanticsNode {
-        password: true,
+        details: Some(Box::new(SemanticsDetails {
+            password: true,
+            ..SemanticsDetails::NONE
+        })),
         role: SemanticsRole::Text {
             value: "secret".into(),
         },
