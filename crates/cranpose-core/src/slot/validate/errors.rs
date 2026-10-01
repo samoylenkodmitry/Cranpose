@@ -7,12 +7,6 @@ pub(crate) enum SlotTreeContext {
     Detached { root_key: GroupKey },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PayloadAnchorRecord {
-    pub(crate) owner: AnchorId,
-    pub(crate) payload_anchor: PayloadAnchor,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SlotInvariantError {
     GroupAnchorCountMismatch {
@@ -96,12 +90,6 @@ pub(crate) enum SlotInvariantError {
         expected: usize,
         actual: usize,
     },
-    PayloadOwnerMismatch {
-        tree: SlotTreeContext,
-        payload_anchor: usize,
-        expected: AnchorId,
-        actual: AnchorId,
-    },
     DuplicatePayloadAnchor {
         tree: SlotTreeContext,
         payload_anchor: PayloadAnchor,
@@ -115,7 +103,7 @@ pub(crate) enum SlotInvariantError {
         payload_anchor: PayloadAnchor,
         expected_owner: AnchorId,
         expected_payload_index: usize,
-        actual: Option<PayloadAnchorRecord>,
+        actual: Option<PayloadAnchor>,
     },
     NodeStartMismatch {
         tree: SlotTreeContext,

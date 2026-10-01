@@ -1,6 +1,6 @@
 use std::mem;
 
-use super::dense_id_map::DenseIdMap;
+use super::{dense_id_map::DenseIdMap, growth::GrowthSlack};
 use crate::collections::map::HashMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -116,6 +116,13 @@ impl<S> GenerationalRegistryStorage<S> {
 
     fn uses_dense_storage(id: usize) -> bool {
         id <= Self::DENSE_STORAGE_ID_LIMIT
+    }
+}
+
+impl<S> GrowthSlack for GenerationalRegistryStorage<S> {
+    fn trim_growth_slack(&mut self) {
+        self.dense_states.trim_growth_slack();
+        self.sparse_states.trim_growth_slack();
     }
 }
 

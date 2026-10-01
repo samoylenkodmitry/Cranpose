@@ -3,8 +3,9 @@ use std::{cmp::Reverse, collections::BinaryHeap, mem};
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
 use super::{
-    DetachedSubtree, GroupRecord, SlotTable,
+    DetachedSubtree, GroupRecord, SlotTable, checked_usize_to_u32,
     generational_registry::{GenerationalRegistryStorage, RegistryState},
+    growth::GrowthSlack,
 };
 #[cfg(any(test, debug_assertions))]
 use crate::collections::map::HashSet;
@@ -12,7 +13,7 @@ use crate::{AnchorId, collections::map::HashMap, retention::RetentionManager};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AnchorState {
-    Active(usize),
+    Active(u32),
     Detached,
     Invalidated,
 }
@@ -83,7 +84,7 @@ impl AnchorRegistry {
 
     pub(super) fn active_index(&self, anchor: AnchorId) -> Option<usize> {
         match self.state(anchor) {
-            Some(AnchorState::Active(index)) => Some(index),
+            Some(AnchorState::Active(index)) => Some(index as usize),
             _ => None,
         }
     }
@@ -132,7 +133,7 @@ impl AnchorRegistry {
                             id,
                             generation: slot.generation,
                         },
-                        group_index,
+                        group_index as usize,
                     ))
                 }
                 AnchorState::Detached | AnchorState::Invalidated => None,
@@ -211,7 +212,10 @@ impl AnchorRegistry {
     }
 
     pub(super) fn set_active(&mut self, anchor: AnchorId, group_index: usize) {
-        let previous = self.set_state(anchor, AnchorState::Active(group_index));
+        let previous = self.set_state(
+            anchor,
+            AnchorState::Active(checked_usize_to_u32(group_index, "group index")),
+        );
         if previous.is_none() {
             log::error!("slot table ignored active-state update for stale group anchor {anchor:?}");
         }
@@ -311,6 +315,12 @@ impl AnchorRegistry {
             expected,
             actual,
         })
+    }
+}
+
+impl GrowthSlack for AnchorRegistry {
+    fn trim_growth_slack(&mut self) {
+        self.storage.trim_growth_slack();
     }
 }
 

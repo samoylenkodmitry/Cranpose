@@ -702,9 +702,12 @@ pub(crate) struct RecomposeScopeInner {
     source_trace: RefCell<Rc<[source_trace::SourceLocation]>>,
     slots_storage_key: Cell<usize>,
     slots_runtime_state: RefCell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
-    state_subscriptions: RefCell<HashSet<StateId>>,
-    invalidation_sources: RefCell<Option<HashSet<StateId>>>,
+    state_subscriptions: RefCell<StateIds>,
+    invalidation_sources: RefCell<StateIds>,
+    unknown_invalidation_source: Cell<bool>,
 }
+
+type StateIds = SmallVec<[StateId; 2]>;
 
 impl RecomposeScopeInner {
     fn new(runtime: RuntimeHandle) -> Self {
@@ -730,13 +733,20 @@ impl RecomposeScopeInner {
             source_trace: RefCell::new(Rc::from([])),
             slots_storage_key: Cell::new(0),
             slots_runtime_state: RefCell::new(None),
-            state_subscriptions: RefCell::new(HashSet::default()),
-            invalidation_sources: RefCell::new(Some(HashSet::default())),
+            state_subscriptions: RefCell::new(StateIds::new()),
+            invalidation_sources: RefCell::new(StateIds::new()),
+            unknown_invalidation_source: Cell::new(false),
         }
     }
 
     fn id(&self) -> ScopeId {
         std::ptr::from_ref(self).addr()
+    }
+}
+
+fn push_unique_state_id(ids: &mut StateIds, state_id: StateId) {
+    if !ids.contains(&state_id) {
+        ids.push(state_id);
     }
 }
 
@@ -867,17 +877,17 @@ impl RecomposeScope {
     }
 
     fn record_state_subscription(&self, state_id: StateId) {
-        self.inner.state_subscriptions.borrow_mut().insert(state_id);
+        push_unique_state_id(&mut self.inner.state_subscriptions.borrow_mut(), state_id);
     }
 
     fn record_unknown_invalidation_source(&self) {
-        *self.inner.invalidation_sources.borrow_mut() = None;
+        self.inner.unknown_invalidation_source.set(true);
+        self.inner.invalidation_sources.borrow_mut().clear();
     }
 
     fn record_state_invalidation_source(&self, state_id: StateId) {
-        let mut sources = self.inner.invalidation_sources.borrow_mut();
-        if let Some(source_set) = sources.as_mut() {
-            source_set.insert(state_id);
+        if !self.inner.unknown_invalidation_source.get() {
+            push_unique_state_id(&mut self.inner.invalidation_sources.borrow_mut(), state_id);
         }
     }
 
@@ -907,10 +917,8 @@ impl RecomposeScope {
         self.inner.invalid.set(false);
         self.inner.force_reuse.set(false);
         self.inner.force_recompose.set(false);
-        self.inner
-            .invalidation_sources
-            .borrow_mut()
-            .replace(HashSet::default());
+        self.inner.unknown_invalidation_source.set(false);
+        self.inner.invalidation_sources.borrow_mut().clear();
         if self.inner.enqueued.replace(false) {
             self.inner.runtime.mark_scope_recomposed(self.id());
         }
@@ -1122,8 +1130,10 @@ impl RecomposeScope {
     }
 
     fn invalidated_only_by(&self, allowed_sources: &HashSet<StateId>) -> Option<bool> {
+        if self.inner.unknown_invalidation_source.get() {
+            return None;
+        }
         let sources = self.inner.invalidation_sources.borrow();
-        let sources = sources.as_ref()?;
         if sources.is_empty() {
             return None;
         }
@@ -1135,7 +1145,7 @@ impl RecomposeScope {
     }
 
     fn has_unknown_invalidation_source(&self) -> bool {
-        self.inner.invalidation_sources.borrow().is_none()
+        self.inner.unknown_invalidation_source.get()
     }
 }
 
@@ -4351,6 +4361,7 @@ pub(crate) struct SlotPassOutcome {
     pub(crate) compacted: bool,
     pub(crate) compact_anchor_registry_storage: bool,
     pub(crate) compact_payload_storage: bool,
+    pub(crate) trim_growth_slack: bool,
 }
 
 #[derive(Default)]
@@ -4361,6 +4372,7 @@ pub(crate) struct FinishedSlotPass {
 
 struct ActivePassState {
     state: slot::SlotWriteSessionState,
+    storage_capacity: usize,
 }
 
 struct SlotsHostInner {
@@ -4638,7 +4650,11 @@ impl SlotsHost {
         }
         let mut state = slot::SlotWriteSessionState::default();
         state.reset_for_pass(mode);
-        inner.active_pass = Some(ActivePassState { state });
+        let storage_capacity = inner.table.storage_capacity();
+        inner.active_pass = Some(ActivePassState {
+            state,
+            storage_capacity,
+        });
     }
 
     pub(crate) fn has_active_pass(&self) -> bool {
@@ -4733,6 +4749,8 @@ impl SlotsHost {
                     .state
                     .request_anchor_storage_compaction,
                 compact_payload_storage: active_pass.state.request_payload_storage_compaction,
+                trim_growth_slack: active_pass.state.removed_nothing()
+                    && table.storage_capacity() > active_pass.storage_capacity,
             },
             detached_root_children,
         })
@@ -4754,6 +4772,8 @@ impl SlotsHost {
         if outcome.compacted {
             table.compact_storage();
             lifecycle.compact_storage();
+        } else if outcome.trim_growth_slack {
+            table.trim_growth_slack();
         }
         if let Some(state) = runtime_state.clone() {
             state.compact_table_identity_storage_for_host(

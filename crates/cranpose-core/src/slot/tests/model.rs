@@ -565,7 +565,7 @@ fn assert_active_payload_value(table: &SlotTable, slot: ValueSlotId, expected: &
 fn assert_payload_record_value(record: &PayloadRecord, expected: &ModelPayloadValue) {
     match expected {
         ModelPayloadValue::I32(value) => {
-            assert_eq!(record.type_id, TypeId::of::<i32>());
+            assert_eq!(record.payload_type.type_id, TypeId::of::<i32>());
             assert_eq!(
                 *record
                     .value
@@ -575,7 +575,7 @@ fn assert_payload_record_value(record: &PayloadRecord, expected: &ModelPayloadVa
             );
         }
         ModelPayloadValue::U32(value) => {
-            assert_eq!(record.type_id, TypeId::of::<u32>());
+            assert_eq!(record.payload_type.type_id, TypeId::of::<u32>());
             assert_eq!(
                 *record
                     .value
@@ -646,7 +646,9 @@ fn assert_model_matches_slot_table(
         model.assert_group_anchor_not_retired(group.anchor);
         assert_eq!(
             harness.table.group_anchor_state(group.anchor),
-            Some(AnchorState::Active(group.index)),
+            Some(AnchorState::Active(
+                u32::try_from(group.index).expect("test group index fits u32")
+            )),
             "active group anchor must resolve to the current table index for key {key}"
         );
         assert_eq!(

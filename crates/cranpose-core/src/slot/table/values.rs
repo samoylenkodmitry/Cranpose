@@ -27,11 +27,6 @@ pub(crate) enum ValueSlotError {
         payload_len: usize,
         payload_count: usize,
     },
-    OwnerMismatch {
-        anchor: PayloadAnchor,
-        expected: AnchorId,
-        actual: AnchorId,
-    },
     AnchorMismatch {
         expected: PayloadAnchor,
         actual: PayloadAnchor,
@@ -70,14 +65,6 @@ impl fmt::Display for ValueSlotError {
             } => write!(
                 f,
                 "value slot anchor {anchor:?} points at payload index {payload_index} for owner {owner:?} in group {group_index}, but the group has {payload_len} payloads and the table has {payload_count} payload records"
-            ),
-            ValueSlotError::OwnerMismatch {
-                anchor,
-                expected,
-                actual,
-            } => write!(
-                f,
-                "value slot anchor {anchor:?} points at owner {expected:?}, but the payload record belongs to {actual:?}"
             ),
             ValueSlotError::AnchorMismatch { expected, actual } => write!(
                 f,
@@ -145,13 +132,6 @@ impl SlotTable {
                 payload_count: self.payloads.len(),
             });
         };
-        if record.owner != owner {
-            return Err(ValueSlotError::OwnerMismatch {
-                anchor: slot.anchor(),
-                expected: owner,
-                actual: record.owner,
-            });
-        }
         if record.anchor != slot.anchor() {
             return Err(ValueSlotError::AnchorMismatch {
                 expected: slot.anchor(),
@@ -181,7 +161,7 @@ impl SlotTable {
             .ok_or_else(|| ValueSlotError::TypeMismatch {
                 anchor: slot.anchor(),
                 expected: std::any::type_name::<T>(),
-                actual: (record.type_name)(),
+                actual: (record.payload_type.type_name)(),
             })
     }
 
@@ -207,7 +187,7 @@ impl SlotTable {
             .ok_or_else(|| ValueSlotError::TypeMismatch {
                 anchor: slot.anchor(),
                 expected: std::any::type_name::<T>(),
-                actual: (record.type_name)(),
+                actual: (record.payload_type.type_name)(),
             })
     }
 

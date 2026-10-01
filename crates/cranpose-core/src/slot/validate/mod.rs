@@ -16,7 +16,7 @@ mod scopes;
 mod writer;
 
 #[cfg(any(test, debug_assertions))]
-pub(crate) use errors::{PayloadAnchorRecord, SlotInvariantError, SlotTreeContext};
+pub(crate) use errors::{SlotInvariantError, SlotTreeContext};
 #[cfg(any(test, debug_assertions))]
 use groups::{ActiveSlotTreeChecks, SlotTreeView, validate_slot_tree};
 

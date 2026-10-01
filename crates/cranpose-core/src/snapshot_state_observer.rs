@@ -270,8 +270,7 @@ impl SnapshotStateObserverInner {
         impl Drop for ActiveObservationGuard<'_> {
             fn drop(&mut self) {
                 let target = self.stack.borrow_mut().pop();
-                let discarded = target.replace(ObservedIds::new());
-                drop(discarded);
+                target.borrow_mut().clear();
             }
         }
         let _guard = ActiveObservationGuard {
@@ -287,10 +286,6 @@ impl SnapshotStateObserverInner {
             return result;
         }
 
-        let observed = {
-            let mut observed = observed.borrow_mut();
-            std::mem::replace(&mut *observed, ObservedIds::new())
-        };
         let callback = Rc::clone(&on_changed);
         drop(on_changed);
         let entry = existing_entry
@@ -304,7 +299,7 @@ impl SnapshotStateObserverInner {
                 u64::MAX
             };
         }
-        self.replace_observed_ids(&entry, observed);
+        self.replace_observed_ids(&entry, &mut observed.borrow_mut());
 
         result
     }
@@ -610,17 +605,19 @@ impl SnapshotStateObserverInner {
         }
     }
 
-    fn replace_observed_ids(&self, entry: &Rc<RefCell<ScopeEntry>>, observed: ObservedIds) {
+    fn replace_observed_ids(&self, entry: &Rc<RefCell<ScopeEntry>>, collected: &mut ObservedIds) {
         let (entry_id, previous) = {
             let mut entry_mut = entry.borrow_mut();
+            if entry_mut.observed.iter().eq(collected.iter()) {
+                entry_mut.observed.take_leases(collected);
+                collected.clear();
+                return;
+            }
             let entry_id = entry_mut.id;
-            let previous = std::mem::replace(&mut entry_mut.observed, observed);
+            let previous = std::mem::replace(&mut entry_mut.observed, collected.take_sized());
             (entry_id, previous)
         };
         let entry_ref = entry.borrow();
-        if previous.iter().eq(entry_ref.observed.iter()) {
-            return;
-        }
         self.unregister_observed_ids(entry_id, &previous);
         self.register_observed_ids(entry_id, &entry_ref.observed);
     }
@@ -703,8 +700,8 @@ impl ReadObservationStack {
 }
 
 enum ObservedIds {
-    Small(SmallVec<[ObservedState; MAX_OBSERVED_STATES]>),
-    Large(HashMap<StateObjectId, Option<Rc<dyn Any>>>),
+    Small(SmallVec<[ObservedState; 1]>),
+    Large(Box<HashMap<StateObjectId, Option<Rc<dyn Any>>>>),
 }
 
 struct ObservedState {
@@ -736,12 +733,41 @@ impl ObservedIds {
                         large.insert(observed.id, observed._lease);
                     }
                     large.insert(id, state.observation_lease());
-                    *self = ObservedIds::Large(large);
+                    *self = ObservedIds::Large(Box::new(large));
                 }
             }
             ObservedIds::Large(large) => {
                 large.entry(id).or_insert_with(|| state.observation_lease());
             }
+        }
+    }
+
+    fn clear(&mut self) {
+        match self {
+            ObservedIds::Small(small) => small.clear(),
+            ObservedIds::Large(_) => *self = ObservedIds::new(),
+        }
+    }
+
+    /// Keeps `fresh`'s observation leases for the states both name, leaving
+    /// the old ones in `fresh` to drop. An id is a state's address, which a
+    /// new state can take after the old one is dropped, and only its own
+    /// lease keeps the new one observed.
+    fn take_leases(&mut self, fresh: &mut ObservedIds) {
+        match (self, fresh) {
+            (ObservedIds::Small(kept), ObservedIds::Small(fresh)) => {
+                for (kept, fresh) in kept.iter_mut().zip(fresh.iter_mut()) {
+                    std::mem::swap(&mut kept._lease, &mut fresh._lease);
+                }
+            }
+            (kept, fresh) => std::mem::swap(kept, fresh),
+        }
+    }
+
+    fn take_sized(&mut self) -> ObservedIds {
+        match self {
+            ObservedIds::Small(small) => ObservedIds::Small(small.drain(..).collect()),
+            ObservedIds::Large(_) => std::mem::replace(self, ObservedIds::new()),
         }
     }
 

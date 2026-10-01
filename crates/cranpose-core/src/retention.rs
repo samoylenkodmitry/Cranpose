@@ -319,7 +319,7 @@ impl RetentionManager {
                         return Err(SlotInvariantError::RetainedSubtreeAnchorStillActive {
                             root_key,
                             anchor,
-                            active_index,
+                            active_index: active_index as usize,
                         });
                     }
                     actual => {

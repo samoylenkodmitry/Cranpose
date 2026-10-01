@@ -219,29 +219,6 @@ fn validate_reports_bad_depth_structurally() {
 }
 
 #[test]
-fn validate_reports_payload_owner_mismatch_structurally() {
-    let mut table = composed_group_with_value_and_node_table(478);
-    let payload_anchor = table
-        .group_payload_record_at(0, 0)
-        .expect("test payload should resolve")
-        .anchor;
-    table
-        .group_payload_record_at_mut(0, 0)
-        .expect("test payload should resolve")
-        .owner = AnchorId::INVALID;
-
-    assert_eq!(
-        table.validate(),
-        Err(SlotInvariantError::PayloadOwnerMismatch {
-            tree: SlotTreeContext::Active,
-            payload_anchor: payload_anchor.id(),
-            expected: table.groups[0].anchor,
-            actual: AnchorId::INVALID,
-        })
-    );
-}
-
-#[test]
 fn validate_reports_duplicate_payload_anchor_structurally() {
     let mut harness = SlotHarness::new();
 
@@ -326,14 +303,11 @@ fn validate_reports_payload_count_mismatch_structurally() {
     table.payloads.insert_item(
         table.payloads.len(),
         super::PayloadRecord {
-            owner,
             anchor: extra_anchor,
-            type_id: TypeId::of::<i32>(),
-            type_name: std::any::type_name::<i32>,
+            payload_type: crate::slot::PayloadType::of::<i32>(),
             source: crate::slot::BRANCH_PATH_ROOT,
             kind: super::PayloadKind::Internal,
             value: Box::new(0_i32),
-            fresh: None,
         },
     );
     table.payload_anchors.set_active(extra_anchor, owner, 1);
@@ -385,10 +359,6 @@ fn validate_reports_payload_anchor_registry_stale_owner_structurally() {
         .anchor;
 
     table.groups[0].anchor = new_anchor;
-    table
-        .group_payload_record_at_mut(0, 0)
-        .expect("test payload should resolve")
-        .owner = new_anchor;
     table.anchors.mark_detached(old_anchor);
     table.anchors.set_active(new_anchor, 0);
 
@@ -573,13 +543,14 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
     harness.table.compact_anchor_registry_storage(None);
 
     assert_eq!(harness.table.groups[1].parent_anchor, parent_anchor);
+    let child_payload = harness
+        .table
+        .group_payload_record_at(1, 0)
+        .expect("test payload should resolve")
+        .anchor;
     assert_eq!(
-        harness
-            .table
-            .group_payload_record_at(1, 0)
-            .expect("test payload should resolve")
-            .owner,
-        child_anchor
+        harness.table.payload_anchor_active_location(child_payload),
+        Some((child_anchor, 0))
     );
     assert_eq!(harness.table.group_node_record_at(1, 0).owner, child_anchor);
     assert_eq!(

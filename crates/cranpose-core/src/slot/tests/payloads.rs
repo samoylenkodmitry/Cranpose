@@ -95,7 +95,7 @@ fn payload_cleanup_with_stale_owner_anchor_does_not_panic() {
 
     let mut harness = SlotHarness::new();
     let _slot = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
-    let owner = harness.table.payload_owner_at(0, 0);
+    let owner = harness.table.groups[0].anchor;
 
     harness.table.anchors.mark_detached(owner);
 
@@ -303,7 +303,7 @@ fn payload_location_refresh_ignores_corrupt_group_payload_range() {
 
     let mut harness = SlotHarness::new();
     let _slot = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
-    let owner = harness.table.payload_owner_at(0, 0);
+    let owner = harness.table.groups[0].anchor;
 
     harness.table.groups[0].payload_start = u32::MAX;
 
@@ -846,7 +846,7 @@ fn value_slot_type_replacement_recovers_stale_payload_anchor_record() {
         harness
             .table
             .payload_anchor_active_location(second_slot.anchor()),
-        Some((harness.table.payload_owner_at(0, 0), 0))
+        Some((harness.table.groups[0].anchor, 0))
     );
     assert_eq!(*harness.table.read_value::<u32>(second_slot), 11);
 }

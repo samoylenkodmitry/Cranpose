@@ -1,8 +1,6 @@
-use std::any::TypeId;
-
 use super::{
     GroupPayloadRange, GroupRange, GroupRecord, PayloadAnchor, PayloadKind, PayloadRange,
-    PayloadRecord, SlotTable, SlotWriteSessionState, ValueSlotId,
+    PayloadRecord, PayloadType, SlotTable, SlotWriteSessionState, ValueSlotId,
     segments::{
         PayloadSegment, SegmentItems, extract_subtree_segment, group_segment_len,
         group_segment_range_checked, group_segment_start, group_segment_subrange_at,
@@ -20,11 +18,9 @@ pub(in crate::slot) struct PayloadLocationRefresh {
 }
 
 pub(in crate::slot) struct PayloadInit<'a> {
-    type_id: TypeId,
-    type_name: fn() -> &'static str,
+    payload_type: &'static PayloadType,
     source: crate::Key,
     make: &'a mut dyn FnMut() -> Box<dyn std::any::Any>,
-    fresh: Option<fn() -> Box<dyn std::any::Any>>,
 }
 
 impl<'a> PayloadInit<'a> {
@@ -33,26 +29,25 @@ impl<'a> PayloadInit<'a> {
         make: &'a mut dyn FnMut() -> Box<dyn std::any::Any>,
     ) -> Self {
         Self {
-            type_id: TypeId::of::<T>(),
-            type_name: std::any::type_name::<T>,
+            payload_type: PayloadType::of::<T>(),
             source,
             make,
-            fresh: None,
         }
     }
 
-    pub(in crate::slot) fn new_startable<T: 'static>(
+    pub(in crate::slot) fn new_effect<T: Default + 'static>(
         source: crate::Key,
         make: &'a mut dyn FnMut() -> Box<dyn std::any::Any>,
-        fresh: fn() -> Box<dyn std::any::Any>,
     ) -> Self {
         Self {
-            type_id: TypeId::of::<T>(),
-            type_name: std::any::type_name::<T>,
+            payload_type: PayloadType::effect::<T>(),
             source,
             make,
-            fresh: Some(fresh),
         }
+    }
+
+    fn matches(&self, payload: &PayloadRecord) -> bool {
+        payload.payload_type.type_id == self.payload_type.type_id && payload.source == self.source
     }
 
     pub(in crate::slot) fn mix_source(&mut self, fold: crate::Key) {
@@ -73,11 +68,9 @@ fn replace_payload_record(
     init: &mut PayloadInit<'_>,
 ) -> Box<dyn std::any::Any> {
     let old_value = std::mem::replace(&mut record.value, init.make_value());
-    record.type_id = init.type_id;
-    record.type_name = init.type_name;
+    record.payload_type = init.payload_type;
     record.source = init.source;
     record.kind = kind;
-    record.fresh = init.fresh;
     old_value
 }
 
@@ -226,12 +219,6 @@ impl SlotTable {
             .map_or(PayloadAnchor::INVALID, |payload| payload.anchor)
     }
 
-    #[cfg(test)]
-    pub(super) fn payload_owner_at(&self, group_index: usize, payload_index: usize) -> AnchorId {
-        self.group_payload_record_at(group_index, payload_index)
-            .map_or(AnchorId::INVALID, |payload| payload.owner)
-    }
-
     fn find_matching_payload_from(
         &self,
         group_index: usize,
@@ -242,7 +229,7 @@ impl SlotTable {
         let start = self.group_payload_start_at(group_index);
         self.payloads
             .range(start + from_index..start + payload_len)
-            .position(|payload| payload.type_id == init.type_id && payload.source == init.source)
+            .position(|payload| init.matches(payload))
             .map(|offset| from_index + offset)
     }
 
@@ -293,7 +280,7 @@ impl SlotTable {
         init: &PayloadInit<'_>,
     ) -> Option<PayloadAnchor> {
         let payload = self.group_payload_record_at_mut(group_index, payload_index)?;
-        if payload.type_id != init.type_id || payload.source != init.source {
+        if !init.matches(payload) {
             return None;
         }
         payload.kind = kind;
@@ -323,14 +310,11 @@ impl SlotTable {
             owner_index,
             insert_index,
             PayloadRecord {
-                owner,
                 anchor,
-                type_id: init.type_id,
-                type_name: init.type_name,
+                payload_type: init.payload_type,
                 source: init.source,
                 kind,
                 value: init.make_value(),
-                fresh: init.fresh,
             },
         );
         if refresh_index {
