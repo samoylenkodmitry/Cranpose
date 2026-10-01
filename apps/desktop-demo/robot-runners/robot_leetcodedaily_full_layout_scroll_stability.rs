@@ -46,6 +46,7 @@ const BUTTON_PRESS_TRANSLATION_Y: f32 = 1.4;
 
 const WINDOW_TITLE: &str = "Robot LeetcodeDaily Full Layout Scroll Stability";
 const VIEWPORT_TAG: &str = "LeetcodeDailyFullWorkspaceViewport";
+const BOTTOM_GAP_TAG: &str = "LeetcodeDailyFullBottomGap";
 const TARGET_TEXT: &str = "Rust Code";
 const SCROLL_STEPS: usize = 2;
 const SCROLL_DELTA_Y: f32 = -4.0;
@@ -1261,7 +1262,7 @@ fn LeetcodeDailyFullLayoutApp() {
                                         root_horizontal_padding,
                                         30.0,
                                         root_horizontal_padding,
-                                        APP_BOTTOM_LIST_GAP,
+                                        0.0,
                                     ),
                                     ColumnSpec::default()
                                         .vertical_arrangement(LinearArrangement::spaced_by(14.0)),
@@ -4379,6 +4380,9 @@ fn BottomListGapMask(theme: ThemeMode) {
         Modifier::empty()
             .fill_max_width()
             .height(APP_BOTTOM_LIST_GAP)
+            .semantics(|config: &mut SemanticsConfiguration| {
+                config.content_description = Some(BOTTOM_GAP_TAG.to_string());
+            })
             .draw_behind(move |scope| draw_bottom_list_gap_mask(scope, theme)),
         BoxSpec::default(),
         || {},
@@ -8656,6 +8660,23 @@ fn assert_leetcodedaily_full_frame_color_health(
 }
 
 fn assert_initial_leetcodedaily_frame_health(robot: &cranpose::Robot) {
+    let viewport = workspace_viewport_bounds(robot);
+    let semantics = robot.get_semantics().expect("initial layout semantics");
+    let footer =
+        find_semantic_text_bounds(&semantics, BOTTOM_GAP_TAG).expect("bottom gap semantics");
+    let window = stable_window_bounds();
+    if (viewport.y + viewport.height - footer.y).abs() > WORKSPACE_RIGID_DELTA_EPSILON
+        || (footer.height - APP_BOTTOM_LIST_GAP).abs() > WORKSPACE_RIGID_DELTA_EPSILON
+        || (footer.y + footer.height - window.height).abs() > WORKSPACE_RIGID_DELTA_EPSILON
+    {
+        fail_with_robot(
+            robot,
+            &format!(
+                "workspace must meet the {APP_BOTTOM_LIST_GAP}px bottom gap: viewport={viewport:?} footer={footer:?} window={window:?}"
+            ),
+        );
+    }
+    println!("workspace_footer_geometry viewport={viewport:?} footer={footer:?}");
     let screenshot = capture_visible_window_screenshot("initial-frame-health");
     assert_leetcodedaily_full_frame_color_health(robot, "initial frame", &screenshot);
 }
@@ -8816,6 +8837,19 @@ fn sanitize_capture_name(input: &str) -> String {
 
 fn fail_with_robot(robot: &cranpose::Robot, message: &str) -> ! {
     eprintln!("FATAL: {message}");
+    let dir = leetcodedaily_diagnostic_dir("cranpose-leetcodedaily-full-layout-failure");
+    let screenshot = capture_visible_window_screenshot("failure");
+    let screenshot_path = dir.join("window.png");
+    scroll_stability_external_helpers::save_robot_screenshot(&screenshot_path, &screenshot);
+    let semantics_path = dir.join("semantics.txt");
+    if let Ok(semantics) = robot.get_semantics() {
+        let _ = std::fs::write(&semantics_path, format!("{semantics:#?}"));
+    }
+    eprintln!(
+        "failure_artifacts screenshot={} semantics={}",
+        screenshot_path.display(),
+        semantics_path.display()
+    );
     let _ = robot.exit();
     std::process::exit(1);
 }
