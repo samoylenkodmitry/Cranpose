@@ -3,14 +3,14 @@ use std::{cmp::Reverse, collections::BinaryHeap, mem};
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
 use super::{
-    DetachedSubtree, PayloadAnchor, PayloadRecord, SlotTable,
+    DetachedSubtree, PayloadAnchor, PayloadRecord, SlotTable, checked_usize_to_u32,
     generational_registry::{GenerationalRegistryStorage, RegistryState},
 };
 use crate::{AnchorId, collections::map::HashMap};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PayloadAnchorState {
-    Active { owner: AnchorId, index: usize },
+    Active { owner: AnchorId, index: u32 },
     Detached,
 }
 
@@ -122,7 +122,11 @@ impl PayloadAnchorRegistry {
     }
 
     pub(super) fn set_active(&mut self, anchor: PayloadAnchor, owner: AnchorId, index: usize) {
-        let previous = self.set_state(anchor, PayloadAnchorState::Active { owner, index });
+        let state = PayloadAnchorState::Active {
+            owner,
+            index: checked_usize_to_u32(index, "payload index"),
+        };
+        let previous = self.set_state(anchor, state);
         if previous.is_none() {
             log::error!(
                 "slot table ignored active-state update for stale payload anchor {anchor:?}"
@@ -145,7 +149,7 @@ impl PayloadAnchorRegistry {
             return None;
         }
         match slot.state {
-            PayloadAnchorState::Active { owner, index } => Some((owner, index)),
+            PayloadAnchorState::Active { owner, index } => Some((owner, index as usize)),
             PayloadAnchorState::Detached => None,
         }
     }
@@ -194,9 +198,10 @@ impl PayloadAnchorRegistry {
         self.storage
             .slots()
             .filter_map(|(id, slot)| match slot.state {
-                PayloadAnchorState::Active { owner, index } => {
-                    Some((PayloadAnchor::new(id, slot.generation), (owner, index)))
-                }
+                PayloadAnchorState::Active { owner, index } => Some((
+                    PayloadAnchor::new(id, slot.generation),
+                    (owner, index as usize),
+                )),
                 PayloadAnchorState::Detached => None,
             })
     }

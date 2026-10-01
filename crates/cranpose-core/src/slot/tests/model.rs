@@ -646,7 +646,9 @@ fn assert_model_matches_slot_table(
         model.assert_group_anchor_not_retired(group.anchor);
         assert_eq!(
             harness.table.group_anchor_state(group.anchor),
-            Some(AnchorState::Active(group.index)),
+            Some(AnchorState::Active(
+                u32::try_from(group.index).expect("test group index fits u32")
+            )),
             "active group anchor must resolve to the current table index for key {key}"
         );
         assert_eq!(
