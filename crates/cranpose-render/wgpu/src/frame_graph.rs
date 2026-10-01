@@ -116,10 +116,11 @@ pub(crate) struct FrameGraphExecution {
     pub(crate) stats: FrameCommandStats,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum FrameGraphError {
     EmptyGraph,
     NoDeclaredPasses,
+    DevicePollFailed(wgpu::PollError),
     ScheduledPassTwice {
         pass_index: usize,
     },
@@ -139,6 +140,7 @@ impl fmt::Display for FrameGraphError {
         match self {
             Self::EmptyGraph => f.write_str("frame graph contains no passes"),
             Self::NoDeclaredPasses => f.write_str("frame graph declares no WGPU passes"),
+            Self::DevicePollFailed(error) => write!(f, "frame graph device poll failed: {error}"),
             Self::ScheduledPassTwice { pass_index } => {
                 write!(f, "frame graph scheduled pass {pass_index} more than once")
             }
@@ -163,7 +165,14 @@ impl fmt::Display for FrameGraphError {
     }
 }
 
-impl std::error::Error for FrameGraphError {}
+impl std::error::Error for FrameGraphError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::DevicePollFailed(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 pub(crate) struct WgpuFrameGraph<'graph> {
     label: Option<&'static str>,
@@ -719,6 +728,9 @@ impl WgpuFrameGraphExecutor {
         if graph.node_count() == 0 {
             return Err(FrameGraphError::EmptyGraph);
         }
+        device
+            .poll(wgpu::PollType::Poll)
+            .map_err(FrameGraphError::DevicePollFailed)?;
         let _profile_frame = fence_profile::enabled().then(|| fence_profile::FrameRecording);
         let mut pass_count = 0u32;
         let mut transient_texture_bytes = 0u64;
