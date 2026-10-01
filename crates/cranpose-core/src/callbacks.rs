@@ -26,36 +26,19 @@ impl<T: ?Sized> SharedParam for std::sync::Arc<T> {
 }
 
 impl<T> ParamState<T> {
-    pub fn update(&mut self, new_value: &T) -> bool
-    where
-        T: PartialEq + Clone,
-    {
-        self.update_unless(new_value, |old, new| old == new)
-    }
-
-    /// [`update`](Self::update) for an `Rc` or `Arc` parameter: the same
-    /// allocation is unchanged without comparing its contents, which
-    /// `PartialEq` on a pointer to a type that is not `Eq` otherwise walks
-    /// in full on every recomposition.
-    pub fn update_shared(&mut self, new_value: &T) -> bool
-    where
-        T: SharedParam + PartialEq + Clone,
-    {
-        self.update_unless(new_value, |old, new| old.same_allocation(new) || old == new)
-    }
-
-    fn update_unless(&mut self, new_value: &T, unchanged: impl FnOnce(&T, &T) -> bool) -> bool
-    where
-        T: Clone,
-    {
+    /// Brings a call's stored parameters up to date: `fresh` stores them on
+    /// the call's first composition, and `refresh` updates each stored field
+    /// that differs and says whether any did. Unchanged fields are not
+    /// cloned again.
+    pub fn update_fields(
+        &mut self,
+        fresh: impl FnOnce() -> T,
+        refresh: impl FnOnce(&mut T) -> bool,
+    ) -> bool {
         match self.value.as_mut() {
-            Some(old) if unchanged(old, new_value) => false,
-            Some(old) => {
-                old.clone_from(new_value);
-                true
-            }
+            Some(stored) => refresh(stored),
             None => {
-                self.value = Some(new_value.clone());
+                self.value = Some(fresh());
                 true
             }
         }
@@ -67,6 +50,27 @@ impl<T> ParamState<T> {
     {
         self.value.clone()
     }
+}
+
+/// Updates one stored parameter to `new` and says whether it differed,
+/// reusing the stored value's allocations where `Clone::clone_from` can.
+pub fn refresh_param<T: PartialEq + Clone>(stored: &mut T, new: &T) -> bool {
+    if stored == new {
+        return false;
+    }
+    stored.clone_from(new);
+    true
+}
+
+/// [`refresh_param`] for an `Rc` or `Arc` parameter: the same allocation is
+/// unchanged without comparing its contents, which `PartialEq` on a pointer
+/// to a type that is not `Eq` otherwise walks in full on every recomposition.
+pub fn refresh_shared_param<T: SharedParam + PartialEq + Clone>(stored: &mut T, new: &T) -> bool {
+    if stored.same_allocation(new) || stored == new {
+        return false;
+    }
+    stored.clone_from(new);
+    true
 }
 
 /// ParamSlot holds function/closure parameters by ownership (no PartialEq/Clone required).

@@ -42,7 +42,8 @@ pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
 pub use callbacks::{
-    CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot, SharedParam,
+    CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot, SharedParam, refresh_param,
+    refresh_shared_param,
 };
 pub use composer::{BranchGroupGuard, CapturedCompositionContext, Composer, ValueSlotHandle};
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
