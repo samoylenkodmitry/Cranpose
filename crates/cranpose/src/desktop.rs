@@ -102,6 +102,23 @@ fn update_app_with_native_window_registry(
     native_window::with_native_window_registry(registry, || app.update())
 }
 
+fn defer_window_redraw(
+    event_loop: &dyn ActiveEventLoop,
+    frames_enabled: bool,
+    frame_cap_deadline: Option<Instant>,
+) -> bool {
+    if !frames_enabled {
+        return true;
+    }
+    if let Some(deadline) = frame_cap_deadline
+        && deadline > Instant::now()
+    {
+        event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+        return true;
+    }
+    false
+}
+
 fn desktop_frame_telemetry_threshold_ms() -> Option<f64> {
     static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
     *THRESHOLD_MS.get_or_init(|| {
@@ -388,6 +405,8 @@ struct NativeWindowSurface {
     surface_config: wgpu::SurfaceConfiguration,
     surface_caps: wgpu::SurfaceCapabilities,
     surface_dirty: bool,
+    occluded: bool,
+    minimized: bool,
     root: native_window::NativeWindowRootHandle,
     platform: DesktopWinitPlatform,
     last_cursor_position: Option<(f32, f32)>,
@@ -584,6 +603,10 @@ impl PendingNativeWindowPositions {
 }
 
 impl NativeWindowSurface {
+    fn presentable(&self) -> bool {
+        self.options.visible && !self.occluded && !self.minimized
+    }
+
     fn frame_interval(&self, mode: FramePacingMode) -> Option<Duration> {
         frame_cap_interval(mode, self.vsync_interval, self.last_redraw_empty)
     }
@@ -811,8 +834,15 @@ impl App {
 
     fn refresh_native_window_requests(&mut self) {
         let registry = Rc::clone(&self.native_window_registry);
+        let frames_enabled = self.frames_enabled();
         if let Some(app) = &mut self.app {
-            update_app_with_native_window_registry(app, &registry);
+            if frames_enabled {
+                update_app_with_native_window_registry(app, &registry);
+            } else {
+                native_window::with_native_window_registry(&registry, || {
+                    app.update_without_frame()
+                });
+            }
         }
     }
 
@@ -822,6 +852,9 @@ impl App {
     }
 
     fn handle_primary_frame_requested(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if !self.primary_frames_enabled() {
+            return;
+        }
         let registry = Rc::clone(&self.native_window_registry);
         let frame_interval = self.frame_interval();
         let waiting_for_frame_cap = self
@@ -1327,6 +1360,78 @@ impl App {
         native_windows_to_create
     }
 
+    fn frames_enabled(&self) -> bool {
+        self.primary_frames_enabled()
+            || self
+                .native_windows
+                .values()
+                .any(NativeWindowSurface::presentable)
+    }
+
+    fn update_primary_before_wait(
+        &mut self,
+        primary_frames_enabled: bool,
+        needs_update: bool,
+        needs_redraw: bool,
+        waiting_for_frame_cap: bool,
+        frame_interval: Option<Duration>,
+    ) -> bool {
+        let primary_visible = self.primary_visible();
+        let direct_declaration_update = primary_declaration_host_needs_direct_update(
+            primary_visible,
+            self.settings.headless,
+            needs_redraw,
+            waiting_for_frame_cap,
+        );
+        let Some(app) = &mut self.app else {
+            return false;
+        };
+        let Some(window) = &self.window else {
+            return false;
+        };
+        let registry = &self.native_window_registry;
+        let updated_without_frame = !primary_frames_enabled && app.needs_update_without_frame();
+        if updated_without_frame {
+            native_window::with_native_window_registry(registry, || app.update_without_frame());
+        } else if primary_frames_enabled && needs_update && !needs_redraw && !waiting_for_frame_cap
+        {
+            record_pacing_event(|diag| &mut diag.updates);
+            update_app_with_native_window_registry(app, registry);
+            if app.frame_owed() || app.needs_redraw() {
+                request_redraw_once(window, &mut self.primary_redraw_pending);
+            }
+        } else if needs_redraw && !waiting_for_frame_cap {
+            if direct_declaration_update {
+                trace_native_window!(
+                    "primary declaration host direct update visible={} headless={}",
+                    primary_visible,
+                    self.settings.headless
+                );
+                record_pacing_event(|diag| &mut diag.direct_updates);
+                update_declaration_host_frame(
+                    app,
+                    registry,
+                    &mut self.last_frame_start_time,
+                    frame_interval,
+                );
+            } else {
+                request_redraw_once(window, &mut self.primary_redraw_pending);
+            }
+        }
+        direct_declaration_update || updated_without_frame
+    }
+
+    fn primary_frames_enabled(&self) -> bool {
+        self.settings.headless
+            || if self.primary_visible() {
+                self.primary_presence
+                    .as_ref()
+                    .is_none_or(crate::desktop_lifecycle::WindowPresence::presentable)
+            } else {
+                self.native_windows.is_empty()
+            }
+    }
+
     fn primary_visible(&self) -> bool {
         self.primary_shown
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -1688,6 +1793,8 @@ impl App {
             surface_config,
             surface_caps,
             surface_dirty: true,
+            occluded: false,
+            minimized: false,
             root: Rc::clone(&request.root),
             platform,
             last_cursor_position: None,
@@ -2937,13 +3044,12 @@ impl App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Some(deadline) = native.last_frame_start_time.and_then(|started_at| {
+                let frame_cap_deadline = native.last_frame_start_time.and_then(|started_at| {
                     native
                         .frame_interval(app.frame_pacing_mode())
                         .map(|interval| started_at + interval)
-                }) && deadline > Instant::now()
-                {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                });
+                if defer_window_redraw(event_loop, native.presentable(), frame_cap_deadline) {
                     return (true, NativeWindowEventSettlement::default());
                 }
                 Self::redraw_native_window(app, native, &self.native_window_registry);
@@ -2987,7 +3093,7 @@ impl App {
         native: &mut NativeWindowSurface,
         registry: &Rc<native_window::NativeWindowRegistry>,
     ) -> bool {
-        if native_window_redraw_held_while_hidden(native.options.visible) {
+        if native_window_redraw_held_while_hidden(native.presentable()) {
             return false;
         }
         let frame_started_at = Instant::now();
@@ -4770,6 +4876,7 @@ fn present_primary_frame_owed_while_hidden(
         && occlusion_leaves_a_frame_owed(*occluded)
     {
         *surface_dirty = true;
+        *redraw_pending = false;
         request_redraw_once(window, redraw_pending);
     }
 }
@@ -4957,6 +5064,7 @@ fn apply_primary_surface_resize(
     );
     configure_app_surface_size(app, surface, surface_config, width, height, viewport);
     *primary_surface_dirty = true;
+    *primary_redraw_pending = false;
     request_redraw_once(window, primary_redraw_pending);
 }
 
@@ -5209,6 +5317,15 @@ impl cranpose_app_shell::PlatformTextInputHandler for DesktopTextInput {
 
 impl App {
     fn observe_presence(&mut self, window_id: WinitWindowId, event: &WindowEvent) {
+        if let Some(native) = self.native_windows.get_mut(&window_id) {
+            match event {
+                WindowEvent::Occluded(occluded) => native.occluded = *occluded,
+                WindowEvent::SurfaceResized(size) => {
+                    native.minimized = size.width == 0 || size.height == 0;
+                }
+                _ => {}
+            }
+        }
         if let Some(presence) = &mut self.primary_presence {
             presence.observe(window_id, event);
         }
@@ -5466,6 +5583,7 @@ impl ApplicationHandler for App {
             return;
         }
         self.relay_primary_held_press(event_loop, &event);
+        let primary_frames_enabled = self.primary_frames_enabled();
         let Some(window) = &self.window else {
             return;
         };
@@ -5736,10 +5854,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 record_pacing_event(|diag| &mut diag.redraw_events);
                 self.primary_redraw_pending = false;
-                if let Some(deadline) = frame_cap_deadline
-                    && deadline > Instant::now()
-                {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                if defer_window_redraw(event_loop, primary_frames_enabled, frame_cap_deadline) {
                     return;
                 }
                 log::trace!(target: "cranpose::input", "desktop redraw requested");
@@ -5945,6 +6060,8 @@ impl ApplicationHandler for App {
         let last_frame_start_time = self.last_frame_start_time;
         let registry = Rc::clone(&self.native_window_registry);
         let primary_visible = self.primary_visible();
+        let primary_frames_enabled = self.primary_frames_enabled();
+        let frames_enabled = self.frames_enabled();
         let Some(app) = &mut self.app else { return };
         let Some(window) = self.window.clone() else {
             return;
@@ -5955,10 +6072,12 @@ impl ApplicationHandler for App {
             request_redraw_once(&window, &mut self.primary_redraw_pending);
         }
 
-        if initial_present_redraw_needed(
-            self.primary_initial_present_pending,
-            self.primary_redraw_pending,
-        ) {
+        if primary_frames_enabled
+            && initial_present_redraw_needed(
+                self.primary_initial_present_pending,
+                self.primary_redraw_pending,
+            )
+        {
             request_redraw_once(&window, &mut self.primary_redraw_pending);
         }
 
@@ -6668,9 +6787,10 @@ impl ApplicationHandler for App {
             self.last_redraw_empty,
         );
         let frame_schedule = app.frame_schedule();
-        let has_active_animations = app.has_active_animations();
+        let has_active_animations = frames_enabled && app.has_active_animations();
         let needs_update = frame_schedule.needs_update;
-        let needs_redraw = frame_schedule.needs_frame || app.frame_owed();
+        let needs_redraw =
+            primary_frames_enabled && (frame_schedule.needs_frame || app.frame_owed());
         if needs_redraw {
             log::trace!(
                 target: "cranpose::input",
@@ -6681,40 +6801,19 @@ impl ApplicationHandler for App {
             .and_then(|started_at| frame_interval.map(|interval| started_at + interval));
         let waiting_for_frame_cap =
             needs_redraw && next_frame_time.is_some_and(|deadline| deadline > now);
-        let direct_declaration_update = primary_declaration_host_needs_direct_update(
-            primary_visible,
-            self.settings.headless,
+        let primary_next_event_time = primary_frames_enabled
+            .then_some(frame_schedule.next_deadline)
+            .flatten();
+        let sync_native_windows = self.update_primary_before_wait(
+            primary_frames_enabled,
+            needs_update,
             needs_redraw,
             waiting_for_frame_cap,
+            frame_interval,
         );
-        if needs_update && !needs_redraw && !waiting_for_frame_cap {
-            record_pacing_event(|diag| &mut diag.updates);
-            update_app_with_native_window_registry(app, &registry);
-            if app.frame_owed() || app.needs_redraw() {
-                request_redraw_once(&window, &mut self.primary_redraw_pending);
-            }
-        } else if needs_redraw && !waiting_for_frame_cap {
-            if direct_declaration_update {
-                trace_native_window!(
-                    "primary declaration host direct update visible={} headless={}",
-                    primary_visible,
-                    self.settings.headless
-                );
-                record_pacing_event(|diag| &mut diag.direct_updates);
-                update_declaration_host_frame(
-                    app,
-                    &registry,
-                    &mut self.last_frame_start_time,
-                    frame_interval,
-                );
-            } else {
-                request_redraw_once(&window, &mut self.primary_redraw_pending);
-            }
-        }
-        let primary_next_event_time = frame_schedule.next_deadline;
         self.sync_primary_size();
         self.sync_primary_visibility();
-        if direct_declaration_update {
+        if sync_native_windows {
             self.sync_native_windows(event_loop);
         }
 
@@ -6735,7 +6834,7 @@ impl ApplicationHandler for App {
         let mut native_next_event_time: Option<Instant> = None;
         let pacing_mode = app.frame_pacing_mode();
         for native in self.native_windows.values_mut() {
-            if !native.options.visible {
+            if !native.presentable() {
                 continue;
             }
             let Some(surface) = native_surface(app, native) else {
@@ -6795,11 +6894,12 @@ impl ApplicationHandler for App {
             now,
             LoopControlInputs {
                 robot_needs_poll,
-                free_running: free_running_frame(
-                    frame_interval,
-                    needs_redraw,
-                    self.primary_redraw_pending,
-                ),
+                free_running: primary_frames_enabled
+                    && free_running_frame(
+                        frame_interval,
+                        needs_redraw,
+                        self.primary_redraw_pending,
+                    ),
                 primary_pointer_polled,
                 drag_poll_deadline: native_drag_deadline,
                 position_poll_deadline: native_position_poll_deadline,
