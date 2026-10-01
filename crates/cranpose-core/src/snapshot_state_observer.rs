@@ -609,6 +609,7 @@ impl SnapshotStateObserverInner {
         let (entry_id, previous) = {
             let mut entry_mut = entry.borrow_mut();
             if entry_mut.observed.iter().eq(collected.iter()) {
+                entry_mut.observed.take_leases(collected);
                 collected.clear();
                 return;
             }
@@ -745,6 +746,21 @@ impl ObservedIds {
         match self {
             ObservedIds::Small(small) => small.clear(),
             ObservedIds::Large(_) => *self = ObservedIds::new(),
+        }
+    }
+
+    /// Keeps `fresh`'s observation leases for the states both name, leaving
+    /// the old ones in `fresh` to drop. An id is a state's address, which a
+    /// new state can take after the old one is dropped, and only its own
+    /// lease keeps the new one observed.
+    fn take_leases(&mut self, fresh: &mut ObservedIds) {
+        match (self, fresh) {
+            (ObservedIds::Small(kept), ObservedIds::Small(fresh)) => {
+                for (kept, fresh) in kept.iter_mut().zip(fresh.iter_mut()) {
+                    std::mem::swap(&mut kept._lease, &mut fresh._lease);
+                }
+            }
+            (kept, fresh) => std::mem::swap(kept, fresh),
         }
     }
 
