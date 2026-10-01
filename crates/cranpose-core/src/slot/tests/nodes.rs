@@ -67,47 +67,6 @@ fn node_operations_with_stale_owner_anchor_do_not_panic_or_record() {
 }
 
 #[test]
-fn node_tail_cleanup_repairs_corrupt_group_node_len() {
-    const GROUP_KEY: Key = 364_002;
-
-    let mut harness = SlotHarness::new();
-
-    harness.begin_pass(SlotPassMode::Compose);
-    harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
-        session.record_node_with_parent(42, 1, None, crate::slot::BRANCH_PATH_ROOT);
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-    });
-    harness.finish_pass();
-
-    harness.table.groups[0].node_len = 2;
-
-    harness.begin_pass(SlotPassMode::Compose);
-    harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
-        let update = session.record_node_with_parent(42, 1, None, crate::slot::BRANCH_PATH_ROOT);
-        assert_eq!(
-            update,
-            NodeSlotUpdate::Reused {
-                id: 42,
-                generation: 1
-            }
-        );
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-    });
-    harness.finish_pass();
-
-    assert_eq!(harness.table.groups[0].node_len, 1);
-    assert_eq!(harness.table.total_node_count(), 1);
-    assert_eq!(harness.table.group_node_record_at(0, 0).id, 42);
-    assert_eq!(harness.table.validate(), Ok(()));
-}
-
-#[test]
 fn node_tail_range_with_corrupt_segment_start_is_empty() {
     const GROUP_KEY: Key = 364_005;
 

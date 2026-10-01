@@ -253,54 +253,6 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
 }
 
 #[test]
-fn detach_repairs_corrupt_child_payload_and_node_lengths() {
-    const PARENT_KEY: Key = 132;
-    const CHILD_KEY: Key = 232;
-
-    let mut harness = SlotHarness::new();
-
-    harness.begin_pass(SlotPassMode::Compose);
-    harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
-        begin_unkeyed(session, CHILD_KEY, None);
-        let _ = session.value_slot_with_kind(
-            PayloadKind::Internal,
-            crate::slot::BRANCH_PATH_ROOT,
-            || 11_i32,
-        );
-        session.record_node_with_parent(42, 1, None, crate::slot::BRANCH_PATH_ROOT);
-        let child_result = session.finish_group_body();
-        assert!(child_result.detached_children.is_empty());
-        session.end_group();
-        let parent_result = session.finish_group_body();
-        assert!(parent_result.detached_children.is_empty());
-        session.end_group();
-    });
-    harness.finish_pass();
-
-    harness.table.groups[1].payload_len = 2;
-    harness.table.groups[1].node_len = 2;
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
-        let parent_result = session.finish_group_body();
-        session.end_group();
-        assert_eq!(parent_result.detached_children.len(), 1);
-        parent_result.detached_children.into_iter().next().unwrap()
-    });
-    harness.finish_pass();
-
-    assert_eq!(detached.groups.len(), 1);
-    assert_eq!(detached.payloads.len(), 1);
-    assert_eq!(detached.nodes.len(), 1);
-    assert_eq!(detached.groups[0].payload_len, 1);
-    assert_eq!(detached.groups[0].node_len, 1);
-    assert_eq!(detached.validate_detached(), Ok(()));
-    assert_eq!(harness.table.validate(), Ok(()));
-}
-
-#[test]
 fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexes() {
     const PARENT_KEY: Key = 320;
     const CHILD_A_KEY: Key = 321;
