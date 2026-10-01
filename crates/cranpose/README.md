@@ -211,7 +211,8 @@ control of the Android build; `cranpose { }` only ever adds to it.
 - The Cargo build always runs and lets Cargo decide what changed, while still
   declaring its output directory — without that declaration the packaging tasks
   read a pre-Cargo snapshot and the APK silently ships the previous build.
-- The native library links against the application's own `minSdk`. `cargo-ndk`
+- The native library links against the lowest effective `minSdk` among enabled
+  application variants, including product flavors. `cargo-ndk`
   otherwise picks API 21, whose sysroot has no `libaaudio.so`, so an app that
   enables Cranpose's audio backend fails to link over an API level its build
   never mentioned. Override with `androidApiLevel`.

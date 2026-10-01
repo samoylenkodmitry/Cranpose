@@ -521,8 +521,9 @@ android: _disk-guard
 # strips a copy to give the size the APK carries. Only the report goes to
 # stdout, so a caller can append it to a Markdown summary.
 android-size-report: _disk-guard
-    CARGO_PROFILE_RELEASE_STRIP=false scripts/ci/with_host_lock.sh --shared \
-      cargo ndk -t arm64-v8a build --release -p desktop-app-platform --lib --features android,renderer-wgpu >&2
+    cd apps/android-demo/android && CI=true CARGO_PROFILE_RELEASE_STRIP=false \
+      ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon :app:cranposeBuildNativeRelease -PcranposeReleaseAbis=arm64-v8a >&2
     python3 scripts/ci/so_crate_sizes.py \
       "${CARGO_TARGET_DIR:-target}/aarch64-linux-android/release/libdesktop_app.so" \
       --llvm-bin "$(echo "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin)"
