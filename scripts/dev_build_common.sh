@@ -502,25 +502,35 @@ readonly HOST_CAPACITY_LOCK_FILE="${CRANPOSE_HOST_LOCK_FILE:-/tmp/cranpose-host-
 readonly HOST_CAPACITY_TURNSTILE_FILE="${CRANPOSE_HOST_LOCK_TURNSTILE_FILE:-/tmp/cranpose-host-capacity.turnstile.lock}"
 
 host_capacity_lock_available() {
-    command -v flock >/dev/null 2>&1 \
+    { command -v flock >/dev/null 2>&1 || command -v python3 >/dev/null 2>&1; } \
         && : >>"$HOST_CAPACITY_LOCK_FILE" 2>/dev/null \
         && : >>"$HOST_CAPACITY_TURNSTILE_FILE" 2>/dev/null
+}
+
+host_capacity_flock() {
+    if command -v flock >/dev/null 2>&1; then
+        command flock "$@"
+    else
+        python3 "${BASH_SOURCE[0]%/*}/ci/host_flock.py" "$@"
+    fi
 }
 
 # Reader side: fd 7, tapped and released immediately. Call this before
 # requesting the real lock in shared mode.
 host_capacity_turnstile_pass() {
-    exec 7>"$HOST_CAPACITY_TURNSTILE_FILE"
-    flock -x 7
-    exec 7>&-
+    host_capacity_turnstile_hold || return
+    host_capacity_turnstile_release
 }
 
 # Writer side: fd 7, held open on return. Call this before requesting the
 # real lock in exclusive mode, and call host_capacity_turnstile_release once
 # that exclusive acquire succeeds.
 host_capacity_turnstile_hold() {
-    exec 7>"$HOST_CAPACITY_TURNSTILE_FILE"
-    flock -x 7
+    exec 7>"$HOST_CAPACITY_TURNSTILE_FILE" || return
+    if ! host_capacity_flock -x 7; then
+        exec 7>&-
+        return 1
+    fi
 }
 
 host_capacity_turnstile_release() {
@@ -540,18 +550,31 @@ host_capacity_turnstile_release() {
 # gate beats a silently-wrong number that gets diagnosed as a regression.
 host_capacity_flock_wait() {
     local fd="$1" flock_mode="$2" max_wait_secs="$3" label="$4" fail_on_timeout="${5:-0}"
+    local status
 
-    if flock -n "$flock_mode" "$fd"; then
+    if host_capacity_flock -n "$flock_mode" "$fd"; then
         echo "host lock: took $label immediately"
         return 0
+    else
+        status=$?
+    fi
+    if [ "$status" -ne 1 ]; then
+        echo "host lock: backend failed for $label (status $status)" >&2
+        return "$status"
     fi
 
     echo "host lock: busy -- waiting for $label..."
     local started_at
     started_at=$(date +%s)
-    if flock -w "$max_wait_secs" "$flock_mode" "$fd"; then
+    if host_capacity_flock -w "$max_wait_secs" "$flock_mode" "$fd"; then
         echo "host lock: took $label after $(( $(date +%s) - started_at ))s"
         return 0
+    else
+        status=$?
+    fi
+    if [ "$status" -ne 1 ]; then
+        echo "host lock: backend failed for $label (status $status)" >&2
+        return "$status"
     fi
 
     if [ "$fail_on_timeout" = "1" ]; then

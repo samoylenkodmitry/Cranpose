@@ -122,12 +122,6 @@ case_overridden_paths() {
 $CRANPOSE_HOST_LOCK_TURNSTILE_FILE" "$resolved"
 }
 
-# --- the lock, through the overrides ---------------------------------------
-#
-# Everything below needs flock(1). macOS has none, which is why
-# host_capacity_lock_available exists at all: there the wrapper runs its
-# command unlocked, and there is no lock behaviour left to assert.
-
 # Runs $@ under the wrapper in $mode, with its narration in the case log.
 with_lock() {
     local mode="$1"
@@ -150,11 +144,16 @@ case_lock_lands_on_the_overridden_file() {
     local default_before default_after
     default_before="$(file_fingerprint "$DEFAULT_LOCK_FILE")"
 
-    # `flock -n -x` from outside the wrapper is the only honest way to ask
-    # whether the wrapper really holds the lock: the file existing proves
-    # nothing, and the wrapper closes its own fds in the child.
     if with_lock --exclusive \
-        bash -c '! flock -n -x "$CRANPOSE_HOST_LOCK_FILE" true'; then
+        python3 -c '
+import fcntl, os
+with open(os.environ["CRANPOSE_HOST_LOCK_FILE"], "a") as lock:
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit(0)
+raise SystemExit(1)
+'; then
         pass "the exclusive side holds the overridden lock file"
     else
         fail "the exclusive side holds the overridden lock file" \
@@ -263,14 +262,11 @@ echo "host lock suite: locks under $SCRATCH_DIR"
 case_default_paths
 case_overridden_paths
 
-if command -v flock >/dev/null 2>&1; then
-    case_lock_lands_on_the_overridden_file
-    case_exclusive_waits_for_a_shared_holder
-    case_writer_is_not_starved_by_a_reader_stream
-    case_nested_shared_take_inside_a_shared_holder_does_not_wait_for_a_queued_exclusive
-else
-    skip "the lock cases" "no flock(1) on this host, so the wrapper runs unlocked here"
-fi
+case_lock_lands_on_the_overridden_file
+case_exclusive_waits_for_a_shared_holder
+case_writer_is_not_starved_by_a_reader_stream
+case_nested_shared_take_inside_a_shared_holder_does_not_wait_for_a_queued_exclusive
+python3 "$REPO_ROOT/scripts/ci/tests/test_host_lock.py" -v
 
 echo "host lock suite: $cases_run run, $failures failed, $cases_skipped skipped"
 
