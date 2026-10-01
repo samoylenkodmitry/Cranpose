@@ -78,11 +78,14 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
     /**
      * The Android API level the native library is linked against.
      *
-     * Defaults to the application's own `minSdk`, which is the level the APK is
-     * supported on anyway. It matters because `cargo-ndk` otherwise links
-     * against API 21, whose sysroot has no `libaaudio.so` — an application that
-     * enables Cranpose's audio backend then fails to link with `unable to find
-     * library -laaudio`, on a build that never mentioned an API level.
+     * Defaults to the lowest effective `minSdk` among enabled application
+     * variants, including product flavors, because their native output is
+     * shared. With no enabled variants, uses `defaultConfig.minSdk` when set.
+     * An explicit value overrides this default. It matters because `cargo-ndk`
+     * otherwise links against API 21, whose sysroot has no `libaaudio.so`.
+     * An application that enables Cranpose's audio backend then fails to link
+     * with `unable to find library -laaudio`, on a build that never mentioned
+     * an API level.
      */
     val androidApiLevel: Property<Int> = objects.property(Int::class.java)
 

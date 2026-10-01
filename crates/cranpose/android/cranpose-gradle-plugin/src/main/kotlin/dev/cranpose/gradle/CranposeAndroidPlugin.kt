@@ -108,6 +108,13 @@ class CranposeAndroidPlugin : Plugin<Project> {
     private fun configureApplication(project: Project, cranpose: CranposeExtension) {
         val androidComponents =
             project.extensions.getByType(ApplicationAndroidComponentsExtension::class.java)
+        var minimumVariantSdk: Int? = null
+        cranpose.androidApiLevel.convention(
+            project.providers.provider<Int> {
+                minimumVariantSdk
+                    ?: project.extensions.getByType(ApplicationExtension::class.java).defaultConfig.minSdk
+            }
+        )
 
         // `finalizeDsl` runs after the application's own `android { }` and
         // `cranpose { }` blocks and before the Android plugin locks its DSL,
@@ -121,6 +128,8 @@ class CranposeAndroidPlugin : Plugin<Project> {
         // -- except read straight from this crate's source instead of resolved
         // from a repository.
         androidComponents.onVariants { variant ->
+            val minSdk = variant.minSdk.apiLevel
+            minimumVariantSdk = minOf(minimumVariantSdk ?: minSdk, minSdk)
             contributeCranposeSources(project, cranpose, variant)
             checkManifest(project, cranpose, variant)
         }
@@ -266,14 +275,6 @@ class CranposeAndroidPlugin : Plugin<Project> {
 
         // The library's activity declaration reads these, so an application
         // never repeats the activity, the lib_name, or the launcher filter.
-        // `cargo-ndk` links against API 21 unless told otherwise, and that
-        // sysroot is missing libraries an application's minSdk guarantees.
-        // The application already stated the level it supports; taking it from
-        // there is what keeps the two from disagreeing.
-        android.defaultConfig.minSdk?.let { minSdk ->
-            cranpose.androidApiLevel.convention(minSdk)
-        }
-
         android.defaultConfig.manifestPlaceholders["cranposeLibName"] = cranpose.libraryName.get()
         android.defaultConfig.manifestPlaceholders["cranposeLabel"] = cranpose.label.get()
         android.defaultConfig.manifestPlaceholders["cranposeTheme"] = cranpose.theme.get()
@@ -503,24 +504,6 @@ class CranposeAndroidPlugin : Plugin<Project> {
         outputs.dir(nativeOutput)
         outputs.upToDateWhen { false }
 
-        val arguments = mutableListOf("ndk")
-        cranpose.androidApiLevel.orNull?.let { level ->
-            arguments += listOf("--platform", level.toString())
-        }
-        for (abi in pass.abis) {
-            arguments += listOf("-t", abi)
-        }
-        arguments += listOf("-o", nativeOutput.absolutePath, "build", "-p", cargoPackage, "--lib")
-        if (profile != "dev") {
-            arguments += listOf("--profile", profile)
-        }
-        if (!cranpose.defaultFeatures.get()) {
-            arguments += "--no-default-features"
-        }
-        if (pass.features.isNotEmpty()) {
-            arguments += listOf("--features", pass.features.joinToString(","))
-        }
-        commandLine(listOf("cargo") + arguments)
         // Where the build script writes the application's declaration. The
         // build says it rather than letting the build script work it out: a
         // checkout inside another checkout of the same repository has two
@@ -533,6 +516,24 @@ class CranposeAndroidPlugin : Plugin<Project> {
 
         doFirst {
             requireCargoNdk(project)
+            val arguments = mutableListOf("ndk")
+            cranpose.androidApiLevel.orNull?.let { level ->
+                arguments += listOf("--platform", level.toString())
+            }
+            for (abi in pass.abis) {
+                arguments += listOf("-t", abi)
+            }
+            arguments += listOf("-o", nativeOutput.absolutePath, "build", "-p", cargoPackage, "--lib")
+            if (profile != "dev") {
+                arguments += listOf("--profile", profile)
+            }
+            if (!cranpose.defaultFeatures.get()) {
+                arguments += "--no-default-features"
+            }
+            if (pass.features.isNotEmpty()) {
+                arguments += listOf("--features", pass.features.joinToString(","))
+            }
+            commandLine(listOf("cargo") + arguments)
             // `cargo ndk` writes one directory per ABI and removes none, so a
             // build for a different ABI than last time would leave the previous
             // one's library here to be packaged alongside the new one — an APK
