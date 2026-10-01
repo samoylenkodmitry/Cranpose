@@ -14,6 +14,11 @@ import javax.inject.Inject
  * Everything has a default that is right for an ordinary application, so a
  * build file states only what is genuinely specific to it: which Cargo package
  * holds its `cdylib`, and which optional services it uses.
+ *
+ * The `debug` and `release` Android build types select the corresponding ABI,
+ * profile and feature settings regardless of flavor names or debuggability.
+ * Custom build types use debug settings when debuggable and release settings
+ * otherwise.
  */
 abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
 
@@ -40,7 +45,7 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
      * an inference or codec backend has no port for, say. Naming the feature
      * per architecture ships that architecture without it rather than dropping
      * the architecture or the feature. Architectures that end up with the same
-     * feature set are still built in one `cargo ndk` pass.
+     * feature set reuse the same Cargo dependencies.
      *
      * Debug and release are stated separately for the same reason their ABIs
      * and profiles are: an expensive backend a release ships is not something
@@ -79,7 +84,7 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
      * The Android API level the native library is linked against.
      *
      * Defaults to the lowest effective `minSdk` among enabled application
-     * variants, including product flavors, because their native output is
+     * variants, including product flavors, because their Cargo build cache is
      * shared. With no enabled variants, uses `defaultConfig.minSdk` when set.
      * An explicit value overrides this default. It matters because `cargo-ndk`
      * otherwise links against API 21, whose sysroot has no `libaaudio.so`.
@@ -96,6 +101,8 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
      * build identifier, an API endpoint chosen per flavour. Cargo rebuilds when
      * a variable the build script marked changes, so a value that comes from
      * Gradle reaches the binary rather than the last one that did.
+     * `CRANPOSE_CAPABILITIES_DIR` is reserved for the plugin's configuration
+     * cache directory and cannot be overridden here.
      */
     val environment: MapProperty<String, String> =
         objects.mapProperty(String::class.java, String::class.java)

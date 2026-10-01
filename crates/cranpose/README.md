@@ -198,8 +198,8 @@ control of the Android build; `cranpose { }` only ever adds to it.
 
 - Cargo features `android,renderer-wgpu` with `--no-default-features`.
 - Debug builds one `x86_64` ABI, which is the emulator.
-- Release builds `arm64-v8a` locally and all four ABIs on continuous
-  integration, detected from `CI` / `GITHUB_ACTIONS`.
+- Release builds `arm64-v8a`. Override with `releaseAbis` or the
+  `cranposeReleaseAbis` Gradle property.
 - The `release` Cargo profile, the one profile Cargo defines for every project.
   A plugin that picked anything else would be naming a profile the application
   has to declare in its own `Cargo.toml`, and a release build that stops at
@@ -208,28 +208,42 @@ control of the Android build; `cranpose { }` only ever adds to it.
   `releaseProfile` and declares the profile itself; a profile other than
   `release` keeps its debug symbols in the APK, because a profile chosen over
   `release` exists to be profiled or crash-reported on a real device.
-- The Cargo build always runs and lets Cargo decide what changed, while still
-  declaring its output directory — without that declaration the packaging tasks
-  read a pre-Cargo snapshot and the APK silently ships the previous build.
+- The Android build type selects the native settings. `debug` uses
+  `debugProfile`, `debugAbis` and `debugAbiFeatures`; `release` uses their release
+  counterparts, including when the APK is debuggable. Custom build types use
+  debug settings when debuggable and release settings otherwise. Flavor names
+  do not affect this selection.
+- Each variant has one `cranposeBuildNative<Variant>` task. Its generated JNI
+  libraries and capability declarations belong to that variant under the Android
+  module's `build/generated/cranpose/<variant>/` directory. Packaging, manifest
+  checks and declared Java sources depend on the same producer.
+- Cargo builds share their normal build cache. Native producers run one at a
+  time within a Gradle build, including the cargo-ndk export step, so one
+  variant cannot replace another's library while it is being copied. Cargo
+  still decides what needs recompiling on every invocation.
 - The native library links against the lowest effective `minSdk` among enabled
   application variants, including product flavors. `cargo-ndk`
   otherwise picks API 21, whose sysroot has no `libaaudio.so`, so an app that
   enables Cranpose's audio backend fails to link over an API level its build
   never mentioned. Override with `androidApiLevel`.
-- ABI directories no build is about to rewrite are removed first, so switching
-  ABIs cannot leave a previous run's library to be packaged alongside the new
-  one.
+- Each native build clears its own generated JNI output before export, so
+  switching ABIs or library names cannot package an earlier library.
 - Packaging is constrained to the architectures the native build produces. An
   application that ships one APK per architecture enables `splits { abi }` and
-  states nothing more: the plugin writes `releaseAbis` into the split, which is
-  the only way a split cannot name an architecture nothing was built for.
-- Architectures normally share one Cargo pass. `debugAbiFeatures` and
-  `releaseAbiFeatures` add features to individual architectures — for a native
-  dependency with no port to one of them — and the plugin then runs one pass
-  per distinct feature set rather than dropping the architecture or the
-  feature.
+  states nothing more: the plugin enables only the split outputs matching
+  that variant's selected ABIs.
+- `debugAbiFeatures` and `releaseAbiFeatures` add features to individual
+  architectures. Each ABI builds with its selected features and contributes its
+  declared permissions, hardware requirements and services to the APK.
+  ABI split APKs share this variant manifest and service Java, so the combined
+  requirements apply to every split.
+- Declaration writers use stable directories for each native configuration.
+  Equivalent flavors reuse Cargo's cached build script results; each variant
+  receives its own declaration copies before manifest and Java processing.
 
-Override any of them in the `cranpose { }` block.
+Override build settings in the `cranpose { }` block. The plugin owns
+`CRANPOSE_CAPABILITIES_DIR`; other Cargo environment variables can be set through
+`environment`.
 
 ## Android Host Window Sizing
 
