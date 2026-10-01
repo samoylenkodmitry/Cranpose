@@ -334,12 +334,15 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
     }
     let uniforms = shader.uniforms();
     let flags = specialization_flags(uniforms, folds);
-    let substrate_radius = (slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0).then(|| {
-        (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
+    let content_mask = slot(uniforms, 112) > 0.5;
+    let substrate_radius = (!content_mask && slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0)
+        .then(|| {
+            (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
+                * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
             .to_bits()
-    });
-    let mean_tone = slot(uniforms, GLASS_ADAPTIVE_TONE_UNIFORM) > 0.5;
-    let pane_radius = (slot(uniforms, GLASS_PANE_BLEND_UNIFORM) > 0.0)
+        });
+    let mean_tone = !content_mask && slot(uniforms, GLASS_ADAPTIVE_TONE_UNIFORM) > 0.5;
+    let pane_radius = (!content_mask && slot(uniforms, GLASS_PANE_BLEND_UNIFORM) > 0.0)
         .then(|| slot(uniforms, GLASS_PANE_BLEND_UNIFORM).to_bits());
     let projection = [
         slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM),
@@ -347,9 +350,10 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
     ];
     let projected = projection.iter().all(|v| *v > 0.0) && projection != [1.0, 1.0];
     let stage = slot(uniforms, GLASS_OPTICAL_STAGE_UNIFORM) as u8;
-    let backdrop_radius = (stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
-        .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
-    shader.set_preserves_transparency(slot(uniforms, 112) > 0.5);
+    let backdrop_radius =
+        (!content_mask && stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
+            .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
+    shader.set_preserves_transparency(content_mask);
     CACHE.with_borrow_mut(|cache| {
         cache.apply(
             shader,
@@ -379,29 +383,33 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
                     shader.clear_override(GLASS_OPTICAL_STAGE_OVERRIDE);
                 }
                 shader.set_specialization_exact(true);
-                let substrate = radius.map(|radius| SubstrateSpec::Blur {
-                    radius_px: f32::from_bits(radius),
-                });
-                let mut substrates = arrayvec::ArrayVec::<SubstrateSpec, 3>::new();
-                substrates.extend(substrate);
-                if mean_tone {
-                    substrates.push(SubstrateSpec::Mean);
-                }
-                if let Some(radius) = pane_radius {
-                    substrates.push(SubstrateSpec::Blur {
-                        radius_px: f32::from_bits(radius),
-                    });
-                }
-                if matches!(stage, 1 | 2) {
-                    substrates.clear();
-                    if let Some(radius) = backdrop_radius {
-                        substrates.push(SubstrateSpec::Blur { radius_px: f32::from_bits(radius) });
-                    }
-                }
-                shader.set_substrates(&substrates);
+                shader.set_substrates(&glass_substrates(radius, mean_tone, pane_radius, stage, backdrop_radius));
             },
         );
     });
+}
+
+fn glass_substrates(
+    radius: Option<u32>,
+    mean_tone: bool,
+    pane_radius: Option<u32>,
+    stage: u8,
+    backdrop_radius: Option<u32>,
+) -> arrayvec::ArrayVec<SubstrateSpec, 3> {
+    let blur = |radius| SubstrateSpec::Blur {
+        radius_px: f32::from_bits(radius),
+    };
+    let mut substrates = arrayvec::ArrayVec::new();
+    if matches!(stage, 1 | 2) {
+        substrates.extend(backdrop_radius.map(blur));
+    } else {
+        substrates.extend(radius.map(blur));
+        if mean_tone {
+            substrates.push(SubstrateSpec::Mean);
+        }
+        substrates.extend(pane_radius.map(blur));
+    }
+    substrates
 }
 
 /// The `override NAME: i32` of `liquid_glass.wgsl` the renderer sets to

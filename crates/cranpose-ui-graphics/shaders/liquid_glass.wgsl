@@ -1874,9 +1874,10 @@ fn material_tint(rgb: vec3<f32>, tint: vec4<f32>, opacity: f32) -> vec3<f32> {
         color *= mix(get_float(202u), 1.0, luma);
     }
     let tinted = mix(rgb, color, opacity);
-    if fixed_or(get_float(215u), 0.0, GLASS_TINT_TRANSMISSION_OFF) > 0.0 {
+    let crossfade = fixed_or(get_float(215u), 0.0, GLASS_TINT_TRANSMISSION_OFF);
+    if crossfade > 0.0 {
         let previous = get_vec4(216u);
-        return mix(mix(rgb, previous.rgb, previous.a), tinted, get_float(215u) - 1.0);
+        return mix(mix(rgb, previous.rgb, previous.a), tinted, crossfade - 1.0);
     }
     return tinted;
 }

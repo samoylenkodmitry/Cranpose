@@ -988,7 +988,7 @@ fn animated_substrate_scene(
     identified: bool,
 ) -> RenderGraph {
     let mut shader = RuntimeShader::new(&format!(
-        r#"{RUNTIME_SHADER_PRELUDE_WGSL}
+        r"{RUNTIME_SHADER_PRELUDE_WGSL}
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     let region = u[58u];
@@ -996,7 +996,7 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
     let source = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     return vec4<f32>(mix(source.rgb, vec3<f32>(0.1, 0.7, 0.9), u[0u].x), 1.0);
 }}
-"#
+"
     ));
     shader.set_batched_source(true);
     shader.set_substrates(&[SubstrateSpec::Blur { radius_px: 12.0 }]);
@@ -1029,6 +1029,51 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
         children.push(node);
     }
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+fn glass_content_mask_scene(with_material: bool) -> RenderGraph {
+    let RenderEffect::Shader { mut shader } = glass_shader() else {
+        panic!("glass shader fixture");
+    };
+    let configured = std::sync::Arc::make_mut(&mut shader);
+    configured.set_float(112, 1.0);
+    if with_material {
+        configured.set_float(cranpose_ui_graphics::GLASS_ADAPTIVE_FROST_UNIFORM, 0.5);
+        configured.set_float(cranpose_ui_graphics::GLASS_ADAPTIVE_TONE_UNIFORM, 1.0);
+        configured.set_float2(cranpose_ui_graphics::GLASS_PANE_BLEND_UNIFORM, 32.0, 0.5);
+    }
+    cranpose_ui_graphics::specialize_liquid_glass(configured);
+    let bounds = rect(0.0, 0.0, GLASS_WIDTH, GLASS_HEIGHT);
+    let mut children = striped_page();
+    children.push(RenderNode::Layer(Box::new(
+        shared_test_support::layer_node(
+            bounds,
+            ProjectiveTransform::translation(GLASS_LEFT, GLASS_TOP),
+            GraphicsLayer {
+                render_effect: Some(RenderEffect::Shader { shader }),
+                ..Default::default()
+            },
+            vec![solid_rect(bounds, Color::from_rgb_u8(35, 120, 190))],
+        ),
+    )));
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+#[test]
+fn a_glass_content_mask_does_not_blur_inputs_it_cannot_sample() {
+    let mut renderer = support::headless_renderer().expect("mask renderer");
+    let plain = capture(&mut renderer, glass_content_mask_scene(false));
+    let material = capture(&mut renderer, glass_content_mask_scene(true));
+    let stats = renderer.last_frame_stats().expect("mask frame stats");
+    assert_eq!(
+        support::max_channel_delta(&plain.pixels, &material.pixels),
+        0,
+        "the material's unused blur inputs must not change the content mask"
+    );
+    assert_eq!(
+        stats.blur_passes, 0,
+        "a content mask must not run unused blur passes: {stats:?}"
+    );
 }
 
 #[test]
