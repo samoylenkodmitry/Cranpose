@@ -101,12 +101,7 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
         )],
     )));
     let original = renderer.capture_frame(16, 16).expect("original frame");
-    assert!(
-        original
-            .pixels
-            .chunks_exact(4)
-            .any(|pixel| pixel == [255; 4])
-    );
+    assert!(original.pixels.as_chunks::<4>().0.contains(&[255; 4]));
     wait_for_cache(&previous_cache);
 
     let graph = renderer.scene_mut().graph.take();
