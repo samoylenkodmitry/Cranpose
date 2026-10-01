@@ -14,6 +14,8 @@ mod search_field;
 mod segmented;
 mod selection;
 mod slider;
+mod slider_gesture;
+mod slider_motion;
 mod tab_bar;
 mod tab_lighting;
 mod toggle;

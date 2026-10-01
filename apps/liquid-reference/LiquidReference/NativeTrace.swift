@@ -30,6 +30,31 @@ struct MotionSample: Codable {
     let phase: String
     let layers: [LayerSample]
     var controlValue: Double? = nil
+    var gestures: [PanSample]? = nil
+}
+
+struct PanSample: Codable {
+    let kind: String
+    let state: Int
+    let translation: [Double]
+    let velocity: [Double]
+}
+
+@MainActor
+private func samplePans(in root: UIView) -> [PanSample] {
+    var samples: [PanSample] = []
+    func collect(_ view: UIView) {
+        for recognizer in view.gestureRecognizers ?? [] {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { continue }
+            let translation = pan.translation(in: root)
+            let velocity = pan.velocity(in: root)
+            samples.append(PanSample(kind: String(describing: type(of: pan)), state: pan.state.rawValue,
+                                     translation: [translation.x, translation.y], velocity: [velocity.x, velocity.y]))
+        }
+        for child in view.subviews { collect(child) }
+    }
+    collect(root)
+    return samples
 }
 
 struct TouchSample: Codable {
@@ -50,6 +75,7 @@ final class NativeTrace: NSObject {
     var frameCount = 0
     var error: String?
     @ObservationIgnored var controlValue: Double?
+    @ObservationIgnored private let captureGestures = ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_GESTURES"] == "1"
     @ObservationIgnored private weak var window: UIWindow?
     @ObservationIgnored private var displayLink: CADisplayLink?
     @ObservationIgnored private var touches: [TouchSample] = []
@@ -172,7 +198,8 @@ final class NativeTrace: NSObject {
         if !optics.enabled {
             let layers = sampleTabBar(in: window)
             frames.append(MotionSample(timestamp: link.timestamp, targetTimestamp: link.targetTimestamp,
-                                       phase: phase, layers: layers, controlValue: controlValue))
+                                        phase: phase, layers: layers, controlValue: controlValue,
+                                        gestures: captureGestures ? samplePans(in: window) : nil))
             if frames.count.isMultiple(of: 12) { frameCount = frames.count }
         }
         if !held && now - released >= settlingSeconds {
