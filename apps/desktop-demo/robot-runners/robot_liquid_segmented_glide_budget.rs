@@ -87,6 +87,15 @@ pub(crate) fn main() -> ExitCode {
                 }));
                 let frames = robot.capture_interaction_keyframes(1.0, &timeline)
                     .expect("capture exact-clock glide");
+                if name == "toggle-on" {
+                    let released = &frames[20];
+                    let scale = released.width as f32 / released.logical_width;
+                    let x = (371.0 * scale) as usize;
+                    let y = (154.0 * scale) as usize;
+                    let red = released.pixels[(y * released.width as usize + x) * 4];
+                    assert!(red >= 230,
+                        "native switch restores its white thumb within 333 ms of release; red={red}");
+                }
                 let shot = frames.last().expect("glide shot");
                 robot_shot::save(shot, &shot_dir, &format!("{}-{name}.png", index + 1));
                 let stats = robot.fps_stats().expect("glide fps stats");

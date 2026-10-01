@@ -1,0 +1,53 @@
+{
+  "sources": [
+    {
+      "component": "slider",
+      "environment": {
+        "architecture": "arm64",
+        "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+        "deviceName": "Cranpose Liquid Motion iOS27",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "24A434",
+        "osVersion": "27.0",
+        "platform": "iOS Simulator"
+      },
+      "touches": "native-1790819594228-touches.json",
+      "layers": "native-1790819594228-layers.json",
+      "touches_sha256": "9378b9af54160e4cb91166859862029b26e5675764991078f9e4c5975de7c809",
+      "layers_sha256": "56eaa49fdfc1bf770fe5a7b593f2afe045f5ad905d1d0a2fa978eb83926a17ee"
+    },
+    {
+      "component": "toggle",
+      "environment": {
+        "architecture": "arm64",
+        "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+        "deviceName": "Cranpose Liquid Motion iOS27",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "24A434",
+        "osVersion": "27.0",
+        "platform": "iOS Simulator"
+      },
+      "touches": "native-1790819640578-touches.json",
+      "layers": "native-1790819640578-layers.json",
+      "touches_sha256": "062aa0016fb64c78aace16f06148f98fabc72f4006f13c783994694f4612cb72",
+      "layers_sha256": "56fe59938208f64622083614d60138c1827b95f716eee4e664f75908d8570f75"
+    },
+    {
+      "component": "segmented",
+      "environment": {
+        "architecture": "arm64",
+        "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+        "deviceName": "Cranpose Liquid Motion iOS27",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "24A434",
+        "osVersion": "27.0",
+        "platform": "iOS Simulator"
+      },
+      "touches": "native-1790819707882-touches.json",
+      "layers": "native-1790819707882-layers.json",
+      "touches_sha256": "7a753aa8b5f9fe8be5ebc216e488ef521b2841595adefc26b50cd02d77c11418",
+      "layers_sha256": "c6cff7a376c98a23f767c6b5a3c873c2e4a4859648868c3b6b2e37310d7851f8"
+    }
+  ],
+  "clock": "CADisplayLink timestamp relative to application input delivery; first callback can precede delivery. No sample registration or timing adjustment."
+}

@@ -97,6 +97,9 @@ pub(crate) fn LiquidControlReference(
                         BoxSpec::default().content_alignment(Alignment::CENTER),
                         move || ControlContent(control, initial),
                     );
+                    if std::env::var("REFERENCE_RECORDING").as_deref() == Ok("1") {
+                        super::liquid_tab_reference::RecordingOverlay();
+                    }
                 },
             );
         },

@@ -32,7 +32,8 @@ def _pairs(timelines):
         events = gestures[0]["planned_events"]
         if events != gestures[1]["planned_events"]:
             raise ValueError("both recordings must execute the same planned touch path")
-        content_label = " / ".join(cases[route]["titles"]) if cases and cases[route] else "Original content"
+        content_label = (" / ".join(cases[route]["titles"]) if cases and cases[route]
+                         else (timelines[0].get("viewport") or {}).get("component", "Original content"))
         label = content_label + " · " + _gesture_label(events)
         sequences = [item["frames"] for item in gestures]
         times = [[frame["gesture_seconds"] for frame in frames] for frames in sequences]

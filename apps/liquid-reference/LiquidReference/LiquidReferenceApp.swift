@@ -120,9 +120,10 @@ private struct ReferenceControl: View {
         .overlay(alignment: component == "nav-bar" ? .bottom : .top) {
             Text("Reference control").font(.caption).padding(.vertical, 24)
         }
-        .overlay {
-            if environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" {
-                TouchProbe(trace: trace).frame(width: 0, height: 0).allowsHitTesting(false)
+        .overlay(alignment: .topLeading) {
+            if environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" || environment["REFERENCE_RECORDING"] == "1" {
+                TouchProbe(trace: trace).frame(width: environment["REFERENCE_RECORDING"] == "1" ? 128 : 0, height: 8)
+                    .offset(x: 16, y: 100).ignoresSafeArea().allowsHitTesting(false)
             }
         }
     }
@@ -131,6 +132,7 @@ private struct ReferenceControl: View {
         switch component {
         case "slider":
             Slider(value: $value).frame(width: 300).accessibilityIdentifier("reference-slider")
+                .onChange(of: value, initial: true) { _, current in trace.controlValue = current }
         case "toggle":
             Toggle("Enabled", isOn: $checked).labelsHidden().accessibilityIdentifier("reference-toggle")
         case "segmented":

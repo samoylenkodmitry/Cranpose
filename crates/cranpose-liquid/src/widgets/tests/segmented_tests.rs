@@ -11,14 +11,12 @@ fn pointer_position_is_the_clamped_lens_center() {
 }
 
 #[test]
-fn raised_lens_lifts_in_depth_without_becoming_a_wide_worm() {
-    let resting = segmented_lens_base_size(120.0, 0.0);
-    let raised = segmented_lens_base_size(120.0, 1.0);
-    assert_eq!(resting.width, 116.0);
-    assert_eq!(resting.height, 28.0);
-    assert!(raised.width < resting.width * 1.10);
-    assert!(raised.height > resting.height * 1.20);
-    assert!(segmented_strain(crate::dynamics::STRETCH_MAX) < 1.20);
+fn segmented_contact_matches_native_presentation_bounds() {
+    for (progress, width, height) in [(0.0, 96.0, 28.0), (0.5, 108.0, 36.0), (1.0, 120.0, 44.0)] {
+        let size = segmented_lens_base_size(100.0, progress);
+        assert_eq!(size.width, width);
+        assert_eq!(size.height, height);
+    }
 }
 
 #[test]

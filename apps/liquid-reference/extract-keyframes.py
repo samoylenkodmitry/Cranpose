@@ -174,6 +174,18 @@ def _frame_index(frame_times, time, duration):
     return bisect.bisect_right(frame_times, time) - 1
 
 
+def _crop_filter(viewport):
+    width, height = viewport["width"], viewport["height"]
+    crop = viewport.get("crop", [0, height - 120, width, 120])
+    if (not isinstance(crop, list) or len(crop) != 4
+            or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in crop)):
+        raise ValueError("capture crop needs four finite coordinates")
+    x, y, w, h = crop
+    if min(x, y) < 0 or min(w, h) <= 0 or x + w > width or y + h > height:
+        raise ValueError("capture crop must fit the viewport")
+    return f"crop=iw*{w}/{width}:ih*{h}/{height}:iw*{x}/{width}:ih*{y}/{height}"
+
+
 def _extract(bundle, output, suite, traces):
     output.mkdir(parents=True, exist_ok=False)
     _run("xcrun", "xcresulttool", "export", "attachments", "--path", str(bundle),
@@ -245,7 +257,7 @@ def _extract(bundle, output, suite, traces):
     directory = output / "frames"
     directory.mkdir(exist_ok=False)
     _run("ffmpeg", "-v", "error", "-i", str(movie), "-vf",
-         f"crop=iw:ih*120/{viewport['height']}:0:ih-oh,setpts=N/(60*TB)",
+         _crop_filter(viewport) + ",setpts=N/(60*TB)",
          "-fps_mode", "passthrough", "-enc_time_base", "1/60000", "-start_number", "0", str(directory / "%06d.png"))
     files = sorted(directory.glob("*.png"))
     if len(files) != len(frame_times):

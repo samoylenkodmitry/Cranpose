@@ -34,21 +34,6 @@ fn constant_speed_elongates_along_axis_and_conserves_area() {
 }
 
 #[test]
-fn subpixel_pointer_jitter_cannot_invent_extreme_strain() {
-    let d = dynamics();
-    d.anchor_pointer((0.0, 0.0));
-    let mut pose = d.pose();
-    for sample in 1..=12 {
-        pose = d.advance_pointer((sample as f32 * 0.20, 0.0), 1.0 / 60.0);
-    }
-    assert!(
-        (pose.stretch - 1.0).abs() < 0.025,
-        "subpixel travel must stay near equilibrium: {pose:?}"
-    );
-    assert!((pose.stretch * pose.ortho - 1.0).abs() < 1e-4);
-}
-
-#[test]
 fn launch_compresses_before_cruise_stretch_wins() {
     let d = dynamics();
     d.advance((0.0, 0.0), 1.0 / 60.0);
@@ -82,23 +67,6 @@ fn launch_acceleration_leaves_a_persistent_trailing_material_wake() {
         (cruise.bulge_direction.abs() - std::f32::consts::PI).abs() < 0.2,
         "the remembered wake cannot flip on the next sample: {cruise:?}"
     );
-}
-
-#[test]
-fn direct_drag_cadence_remains_launch_compressed() {
-    let d = dynamics();
-    d.anchor_pointer((0.0, 0.0));
-    d.advance_pointer((-20.0, 0.0), 0.08);
-    let pose = d.advance_pointer((-40.0, 0.0), 0.03);
-    assert!(
-        pose.stretch <= 0.92,
-        "the target's two-event launch must compress along travel: {pose:?}"
-    );
-    assert!(
-        pose.ortho >= 1.08,
-        "launch must expand across travel: {pose:?}"
-    );
-    assert!((pose.stretch * pose.ortho - 1.0).abs() < 1e-4);
 }
 
 #[test]
@@ -312,7 +280,7 @@ fn reset_forgets_motion() {
 fn a_pose_away_from_rest_asks_for_the_next_frame_until_it_rests() {
     const FRAME_NANOS: u64 = 16_666_667;
     type UpdatePose = fn(&LiquidDynamics, (f32, f32)) -> LiquidPose;
-    let updates: [UpdatePose; 2] = [LiquidDynamics::update, LiquidDynamics::update_pointer];
+    let updates: [UpdatePose; 1] = [LiquidDynamics::update];
     for update in updates {
         let app_context = cranpose_ui::AppContext::new();
         let _scope = app_context.enter_scope();

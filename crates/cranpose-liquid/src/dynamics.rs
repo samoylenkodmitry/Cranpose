@@ -41,9 +41,6 @@ const BULGE_PER_ACCELERATION: f32 = 4.5e-4;
 pub const BULGE_MAX: f32 = 8.0;
 const ATTACK_TAU: f32 = 0.03;
 const RELEASE_TAU: f32 = 0.11;
-const POINTER_VELOCITY_TAU: f32 = 0.045;
-const POINTER_STOP_HORIZON_NANOS: u64 = 40_000_000;
-const POINTER_COAST_TAU: f32 = 0.10;
 const AXIS_MIN_SPEED: f32 = 60.0;
 const REST_SPEED: f32 = 1.0;
 const REST_STRETCH: f32 = 5.0e-4;
@@ -111,9 +108,6 @@ pub struct LiquidDynamics {
     speed: Cell<f32>,
     axis: Cell<(f32, f32)>,
     pose: Cell<LiquidPose>,
-    pointer_pose_pending: Cell<bool>,
-    pointer_active: Cell<bool>,
-    last_pointer_nanos: Cell<Option<u64>>,
 }
 
 impl LiquidDynamics {
@@ -128,9 +122,6 @@ impl LiquidDynamics {
             speed: Cell::new(0.0),
             axis: Cell::new((1.0, 0.0)),
             pose: Cell::new(LiquidPose::default()),
-            pointer_pose_pending: Cell::new(false),
-            pointer_active: Cell::new(false),
-            last_pointer_nanos: Cell::new(None),
         }
     }
 
@@ -147,89 +138,6 @@ impl LiquidDynamics {
             axis: self.axis.get(),
             ..LiquidPose::default()
         });
-        self.pointer_pose_pending.set(false);
-        self.pointer_active.set(false);
-        self.last_pointer_nanos.set(None);
-    }
-
-    pub(crate) fn anchor_pointer(&self, pos: (f32, f32)) {
-        self.reset();
-        self.last_pos.set(Some(pos));
-        let now = self.runtime.last_frame_time_nanos();
-        self.last_nanos.set(now);
-        self.last_pointer_nanos.set(now);
-        self.pointer_active.set(true);
-    }
-
-    pub(crate) fn advance_pointer(&self, pos: (f32, f32), dt: f32) -> LiquidPose {
-        let Some(last_pos) = self.last_pos.get() else {
-            self.last_pos.set(Some(pos));
-            return self.pose.get();
-        };
-        let dt = dt.clamp(DT_MIN, DT_MAX);
-        let raw_velocity = ((pos.0 - last_pos.0) / dt, (pos.1 - last_pos.1) / dt);
-        self.last_pos.set(Some(pos));
-        let previous = self.velocity.get();
-        let follow = 1.0 - (-dt / POINTER_VELOCITY_TAU).exp();
-        let filtered_velocity = (
-            previous.0 + (raw_velocity.0 - previous.0) * follow,
-            previous.1 + (raw_velocity.1 - previous.1) * follow,
-        );
-        let pose = self.advance_velocity(filtered_velocity, dt);
-        let now = self.runtime.last_frame_time_nanos();
-        self.last_nanos.set(now);
-        self.last_pointer_nanos.set(now);
-        self.pointer_active.set(true);
-        self.pointer_pose_pending.set(true);
-        pose
-    }
-
-    pub(crate) fn release_pointer(&self) {
-        self.pointer_active.set(false);
-    }
-
-    pub(crate) fn update_pointer(&self, pos: (f32, f32)) -> LiquidPose {
-        redraw_until_rest(self.integrate_pointer(pos))
-    }
-
-    fn integrate_pointer(&self, pos: (f32, f32)) -> LiquidPose {
-        if self.pointer_pose_pending.replace(false) {
-            self.last_pos.set(Some(pos));
-            self.last_nanos.set(self.runtime.last_frame_time_nanos());
-            return self.pose.get();
-        }
-        let Some(now) = self.runtime.last_frame_time_nanos() else {
-            self.last_pos.set(Some(pos));
-            return self.pose.get();
-        };
-        let Some(last) = self.last_nanos.get() else {
-            self.last_nanos.set(Some(now));
-            self.last_pos.set(Some(pos));
-            return self.pose.get();
-        };
-        if last == now {
-            return self.pose.get();
-        }
-        let dt = (now.saturating_sub(last)) as f32 / 1_000_000_000.0;
-        self.last_nanos.set(Some(now));
-        let stationary = self.last_pos.get().is_some_and(|last_pos| {
-            (last_pos.0 - pos.0).abs() < 0.001 && (last_pos.1 - pos.1).abs() < 0.001
-        });
-        if !stationary {
-            return self.advance(pos, dt);
-        }
-        let within_pointer_horizon = self.pointer_active.get()
-            && self
-                .last_pointer_nanos
-                .get()
-                .is_some_and(|sample| now.saturating_sub(sample) <= POINTER_STOP_HORIZON_NANOS);
-        if within_pointer_horizon {
-            return self.pose.get();
-        }
-        let dt = dt.clamp(DT_MIN, DT_MAX);
-        let decay = (-dt / POINTER_COAST_TAU).exp();
-        let velocity = self.velocity.get();
-        self.advance_velocity((velocity.0 * decay, velocity.1 * decay), dt)
     }
 
     /// Advance with the lens ride position using the runtime's animation

@@ -92,43 +92,6 @@ fn direct_manipulation_owns_visual_selection_until_the_lens_reaches_state() {
 }
 
 #[test]
-fn pointer_sample_excites_the_incompressible_pose_before_render() {
-    let app_context = cranpose_ui::AppContext::new();
-    let _scope = app_context.enter_scope();
-    let (_runtime, axis) = axis(0.0);
-    axis.begin(0.0, Some(0));
-    axis.move_to(14.0, Some(16));
-    let pose = axis.liquid_pose();
-    let deformation = (pose.stretch - 1.0).abs();
-    assert!(
-        (0.08..=0.12).contains(&deformation),
-        "the direct-input frame must deform visibly without treating one sample as extreme acceleration: {pose:?}"
-    );
-    assert!((pose.stretch * pose.ortho - 1.0).abs() < 1e-4);
-    assert_eq!(axis.value(), 14.0);
-}
-
-#[test]
-fn render_without_a_new_pointer_sample_preserves_velocity_continuity() {
-    let app_context = cranpose_ui::AppContext::new();
-    let _scope = app_context.enter_scope();
-    let (_runtime, axis) = axis(0.0);
-    axis.runtime.drain_frame_callbacks(1_000_000);
-    axis.begin(0.0, Some(0));
-    axis.move_to(14.0, Some(16));
-    let sampled = axis.liquid_pose();
-
-    axis.runtime.drain_frame_callbacks(17_000_000);
-    let next_frame = axis.liquid_pose();
-
-    assert!(
-        (next_frame.stretch - sampled.stretch).abs() < 0.08,
-        "a render frame without input must not synthesize a brake impulse: {sampled:?} -> {next_frame:?}"
-    );
-    assert!((next_frame.stretch * next_frame.ortho - 1.0).abs() < 1e-4);
-}
-
-#[test]
 fn controlled_retargets_wait_until_direct_manipulation_ends() {
     let (_runtime, axis) = axis(10.0);
     axis.begin(40.0, Some(0));
@@ -140,30 +103,19 @@ fn controlled_retargets_wait_until_direct_manipulation_ends() {
 }
 
 #[test]
-fn continuous_release_stops_translation_without_erasing_fluid_velocity() {
-    let app_context = cranpose_ui::AppContext::new();
-    let _scope = app_context.enter_scope();
+fn continuous_release_stops_translation_without_backtracking() {
     let (_runtime, axis) = axis(0.0);
     axis.runtime.drain_frame_callbacks(1_000_000);
     axis.begin(0.0, Some(0));
     axis.move_to(80.0, Some(16));
-    let moving = axis.liquid_pose();
 
     axis.finish_at(80.0, Some(17));
     assert!(!axis.is_dragging());
     assert_eq!(axis.value(), 80.0);
-    assert!(moving.speed > 0.0);
-
-    let mut relaxed = moving;
     for frame in 2..=12 {
         axis.runtime.drain_frame_callbacks(frame * 17_000_000);
         assert_eq!(axis.value(), 80.0, "frame {frame} backtracked");
-        relaxed = axis.liquid_pose();
     }
-    assert!(
-        relaxed.speed < moving.speed,
-        "shape velocity must relax even though translation stops"
-    );
 }
 
 #[test]

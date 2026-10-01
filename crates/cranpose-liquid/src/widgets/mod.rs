@@ -4,7 +4,10 @@ mod button;
 mod card;
 mod chip;
 mod content_scope;
+mod control_lens;
+mod control_motion;
 mod glass_surface;
+mod lens_motion;
 mod menu;
 mod nav_bar;
 mod search_field;
@@ -13,7 +16,6 @@ mod selection;
 mod slider;
 mod tab_bar;
 mod tab_lighting;
-mod tab_motion;
 mod toggle;
 mod vibrancy;
 

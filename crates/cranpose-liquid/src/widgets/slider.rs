@@ -1,7 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_animation::{animateFloatAsState, spring};
-use cranpose_core::{mutableStateOf, remember};
+use cranpose_core::remember;
 use cranpose_foundation::{PointerEventKind, PointerId};
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -19,13 +18,9 @@ const TRACK_HEIGHT: f32 = 6.0;
 const THUMB_WIDTH: f32 = 37.0;
 const THUMB_HEIGHT: f32 = 24.0;
 const SLIDER_HEIGHT: f32 = 32.0;
-const LENS_WIDTH: f32 = 58.0;
-const LENS_HEIGHT: f32 = 37.0;
+const LENS_WIDTH: f32 = THUMB_WIDTH * 1.55;
+const LENS_HEIGHT: f32 = THUMB_HEIGHT * 1.55;
 const LENS_PAD: f32 = 10.0;
-
-fn slider_deformation(pose: crate::dynamics::LiquidPose) -> crate::material::GlassDeformation {
-    pose.deformation()
-}
 
 /// A 0..=1 slider. The caller owns `value`; `on_change` streams new values
 /// while dragging or on tap.
@@ -34,18 +29,12 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
     let colors = liquid_colors();
     let value = value.clamp(0.0, 1.0);
     let on_change: Rc<dyn Fn(f32)> = Rc::new(on_change);
-    let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
     let active_pointer = remember(|| Rc::new(Cell::new(Option::<PointerId>::None))).with(Rc::clone);
 
-    let lens_progress = animateFloatAsState(
-        if pressed.get() { 1.0 } else { 0.0 },
-        if pressed.get() {
-            spring(0.9, 1400.0)
-        } else {
-            spring(1.0, 170.0)
-        },
-        "slider-lens",
+    let contact = super::control_motion::remember_control_contact(
+        super::control_motion::ControlContactKind::Thumb,
     );
+    let (lens_progress, material_progress) = contact.states();
 
     Box(
         modifier
@@ -55,17 +44,22 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
         move || {
             let on_change = Rc::clone(&on_change);
             let active_pointer = Rc::clone(&active_pointer);
+            let contact = Rc::clone(&contact);
             BoxWithConstraints(Modifier::empty(), move |scope| {
                 let width = scope.constraints().max_width.max(THUMB_WIDTH);
                 let usable = (width - THUMB_WIDTH).max(1.0);
                 let controlled_x = usable * value;
                 let lens_axis = crate::motion::remember_liquid_drag_axis(controlled_x);
+                let shape = super::lens_motion::remember_lens_shape(
+                    super::lens_motion::LensShapeKind::Thumb,
+                );
                 lens_axis.settle_to(controlled_x, crate::motion::LiquidMotion::snappy());
                 let thumb_x = lens_axis.value();
 
                 let on_drag = Rc::clone(&on_change);
                 let active_pointer = Rc::clone(&active_pointer);
                 let gesture_axis = Rc::clone(&lens_axis);
+                let contact = Rc::clone(&contact);
                 let surface = Modifier::empty()
                     .size(Size::new(width, SLIDER_HEIGHT))
                     .pointer_input((width.to_bits(), value.to_bits()), {
@@ -73,6 +67,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                             let on_drag = Rc::clone(&on_drag);
                             let active_pointer = Rc::clone(&active_pointer);
                             let lens_axis = Rc::clone(&gesture_axis);
+                            let contact = Rc::clone(&contact);
                             async move {
                                 pointer_scope
                                     .await_pointer_event_scope(|await_scope| async move {
@@ -88,7 +83,8 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                                     active_pointer.set(Some(event.id));
                                                     lens_axis
                                                         .begin(usable * fraction, event.time_ms);
-                                                    pressed.set(true);
+                                                    contact
+                                                        .pressed(true, event.animation_time_nanos);
                                                     event.consume();
                                                     on_drag(fraction);
                                                 }
@@ -110,7 +106,8 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                                     on_drag(fraction);
                                                     event.consume();
                                                     active_pointer.set(None);
-                                                    pressed.set(false);
+                                                    contact
+                                                        .pressed(false, event.animation_time_nanos);
                                                 }
                                                 PointerEventKind::Cancel
                                                     if active_pointer.get() == Some(event.id) =>
@@ -122,7 +119,8 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                                     );
                                                     event.consume();
                                                     active_pointer.set(None);
-                                                    pressed.set(false);
+                                                    contact
+                                                        .pressed(false, event.animation_time_nanos);
                                                 }
                                                 _ => {}
                                             }
@@ -134,6 +132,15 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                     });
 
                 Box(surface, BoxSpec::default(), move || {
+                    let Size {
+                        width: node_w,
+                        height: node_h,
+                    } = super::control_lens::node_size(
+                        Size::new(THUMB_WIDTH, THUMB_HEIGHT),
+                        Size::new(LENS_WIDTH, LENS_HEIGHT),
+                        LENS_PAD,
+                    );
+                    let shape = Rc::clone(&shape);
                     let track_fill = colors.label.with_alpha(25.0 / 255.0);
                     let track = Modifier::empty()
                         .size(Size::new(width, TRACK_HEIGHT))
@@ -159,15 +166,25 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                         });
                     Box(filled, BoxSpec::default(), || {});
 
-                    let lens_for_thumb = lens_progress;
+                    let lens_for_thumb = material_progress;
+                    let thumb_shape = Rc::clone(&shape);
+                    let thumb_axis = Rc::clone(&lens_axis);
                     let thumb = Modifier::empty()
                         .size(Size::new(THUMB_WIDTH, THUMB_HEIGHT))
                         .offset(0.0, (SLIDER_HEIGHT - THUMB_HEIGHT) * 0.5)
                         .graphics_layer(move || {
                             let lens = lens_for_thumb.get();
+                            let grow = lens_progress.get().clamp(-0.1, 1.2);
+                            let projection = thumb_shape.projection(thumb_axis.value());
                             GraphicsLayer {
                                 translation_x: thumb_x.round(),
-                                alpha: ((0.30 - lens) / 0.22).clamp(0.0, 1.0),
+                                scale_x: (THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow)
+                                    / THUMB_WIDTH
+                                    * projection.0,
+                                scale_y: (THUMB_HEIGHT + (LENS_HEIGHT - THUMB_HEIGHT) * grow)
+                                    / THUMB_HEIGHT
+                                    * projection.1,
+                                alpha: (1.0 - lens).clamp(0.0, 1.0),
                                 ..Default::default()
                             }
                         })
@@ -182,17 +199,9 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                 scope.offset.y = 2.0;
                                 scope.color = Color::BLACK.with_alpha(0.16);
                             },
-                        )
-                        .draw_behind(move |scope| {
-                            scope.draw_round_rect(
-                                Brush::solid(Color::WHITE),
-                                CornerRadii::uniform(THUMB_HEIGHT * 0.5),
-                            );
-                        });
-                    Box(thumb, BoxSpec::default(), || {});
+                        );
+                    super::control_lens::WhiteControlThumb(thumb, THUMB_HEIGHT);
 
-                    let node_w = LENS_WIDTH + LENS_PAD * 2.0;
-                    let node_h = LENS_HEIGHT + LENS_PAD * 2.0;
                     let lens_for_layer = lens_progress;
                     let physics_axis = Rc::clone(&lens_axis);
                     let lens = Modifier::empty()
@@ -200,7 +209,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                         .offset(0.0, (SLIDER_HEIGHT - node_h) * 0.5)
                         .graphics_layer(move || GraphicsLayer {
                             translation_x: thumb_x + (THUMB_WIDTH - node_w) * 0.5,
-                            alpha: (lens_for_layer.get() * 2.5).clamp(0.0, 1.0),
+                            alpha: material_progress.get().clamp(0.0, 1.0),
                             ..Default::default()
                         })
                         .glass_effect_with(
@@ -211,12 +220,13 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                 .highlight(0.15)
                                 .no_clip(),
                             move || {
-                                let grow = lens_for_layer.get().clamp(0.0, 1.2);
+                                let grow = lens_for_layer.get().clamp(-0.1, 1.2);
                                 let w = THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow;
                                 let h = THUMB_HEIGHT + (LENS_HEIGHT - THUMB_HEIGHT) * grow;
-                                let pose = physics_axis.liquid_pose();
+                                let projection = shape.projection(physics_axis.value());
                                 GlassDynamics {
-                                    activity: Some(grow.clamp(0.0, 1.0)),
+                                    optical_projection: Some(projection),
+                                    activity: Some(material_progress.get().clamp(0.0, 1.0)),
                                     morph: Some(GlassMorph {
                                         node_size: (node_w, node_h),
                                         primary: (node_w * 0.5, node_h * 0.5, w, h, -1.0),
@@ -224,14 +234,11 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                         glue: 0.0,
                                         wobble_amplitude: 0.0,
                                         wobble_phase: 0.0,
-                                        bulge_amplitude: pose
-                                            .bulge_amplitude
-                                            .max(2.5 * pose.energy())
-                                            .min(4.0),
-                                        bulge_direction: pose.bulge_direction,
+                                        bulge_amplitude: 0.0,
+                                        bulge_direction: 0.0,
                                         ellipse_blend: 0.0,
                                         capsule_smoothing_dp: 0.0,
-                                        deformation: Some(slider_deformation(pose)),
+                                        deformation: None,
                                         zoom_anchor: (0.0, 0.0),
                                     }),
                                     ..Default::default()

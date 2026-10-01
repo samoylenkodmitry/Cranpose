@@ -29,6 +29,7 @@ struct MotionSample: Codable {
     let targetTimestamp: TimeInterval
     let phase: String
     let layers: [LayerSample]
+    var controlValue: Double? = nil
 }
 
 struct TouchSample: Codable {
@@ -48,6 +49,7 @@ final class NativeTrace: NSObject {
     var speed = 0.0
     var frameCount = 0
     var error: String?
+    @ObservationIgnored var controlValue: Double?
     @ObservationIgnored private weak var window: UIWindow?
     @ObservationIgnored private var displayLink: CADisplayLink?
     @ObservationIgnored private var touches: [TouchSample] = []
@@ -63,8 +65,11 @@ final class NativeTrace: NSObject {
     @ObservationIgnored private var pendingContactFilters: [(Int, [Any])] = []
     @ObservationIgnored private var pendingContactEffects: [(Int, Any)] = []
     @ObservationIgnored private var contactFiltersSaved = false
+    @ObservationIgnored private var releaseFiltersSaved = false
     @ObservationIgnored private let contactFilterTime = ProcessInfo.processInfo.environment["REFERENCE_CONTACT_FILTER_TIME"].flatMap(Double.init)
     @ObservationIgnored private let settlingSeconds = ProcessInfo.processInfo.environment["REFERENCE_SETTLING_SECONDS"].flatMap(Double.init) ?? 0.8
+    @ObservationIgnored private let component = ProcessInfo.processInfo.environment["REFERENCE_COMPONENT"]
+    @ObservationIgnored private let captureAnimations = ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_ANIMATIONS"] == "1"
 
     func install(on window: UIWindow) {
         guard self.window !== window else { return }
@@ -101,7 +106,7 @@ final class NativeTrace: NSObject {
         guard let window else { return }
         let point = touch.location(in: window)
         if phase == "Touch down" {
-            guard point.y > window.bounds.height - 120 else { return }
+            guard component != nil || point.y > window.bounds.height - 120 else { return }
             if ProcessInfo.processInfo.environment["REFERENCE_EXPORT_CONTENT"] == "1", let bar = findTabBar(in: window) {
                 do { try exportContent(bar) } catch { self.error = String(describing: error) }
             }
@@ -116,6 +121,8 @@ final class NativeTrace: NSObject {
             touches = []
             frames = []
             saved = false
+            contactFiltersSaved = false
+            releaseFiltersSaved = false
         }
         guard held else { return }
         if phase == "Sliding", let previous = touches.last {
@@ -143,6 +150,10 @@ final class NativeTrace: NSObject {
                 try recordContactFilters(in: window, elapsed: now - began)
                 contactFiltersSaved = true
             }
+            if captureAnimations, !held, !touches.isEmpty, !releaseFiltersSaved, now - released >= 0.07 {
+                try recordContactFilters(in: window, elapsed: now - began)
+                releaseFiltersSaved = true
+            }
             if held && optics.enabled && now - began > 1.5 && configuredProbe != optics.index {
                 try isolateOpticalLayer(in: window)
                 configuredProbe = optics.index
@@ -161,7 +172,7 @@ final class NativeTrace: NSObject {
         if !optics.enabled {
             let layers = sampleTabBar(in: window)
             frames.append(MotionSample(timestamp: link.timestamp, targetTimestamp: link.targetTimestamp,
-                                       phase: phase, layers: layers))
+                                       phase: phase, layers: layers, controlValue: controlValue))
             if frames.count.isMultiple(of: 12) { frameCount = frames.count }
         }
         if !held && now - released >= settlingSeconds {
@@ -480,7 +491,7 @@ final class NativeTrace: NSObject {
     }
 
     private func sampleTabBar(in window: UIWindow) -> [LayerSample] {
-        if ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" {
+        if component != nil {
             let root = window.layer.presentation() ?? window.layer
             var layers: [LayerSample] = []
             sample(root, root: root, path: "Window", into: &layers)
@@ -519,10 +530,11 @@ final class NativeTrace: NSObject {
         let tag = profile.map { "tint\($0)-" } ?? ""
         let environment = ProcessInfo.processInfo.environment
         let name: String
-        if let component = environment["REFERENCE_COMPONENT"], environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" {
+        if let component, environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" || captureAnimations {
             let scheme = environment["REFERENCE_SCHEME"] ?? "light"
             let backdrop = environment["REFERENCE_BACKDROP"] ?? "checkerboard"
-            name = "native-control-\(component)-\(scheme)-\(backdrop)-layers.json"
+            let phase = captureAnimations ? (held ? "-contact" : "-release") : ""
+            name = "native-control-\(component)-\(scheme)-\(backdrop)\(phase)-layers.json"
         } else {
             name = "native-contact-filters-\(tag)\(Int((contactFilterTime ?? elapsed) * 1000)).json"
         }

@@ -1,25 +1,15 @@
 use super::*;
 
 #[test]
-fn slider_strain_uses_the_shared_incompressible_pose() {
-    let pose = crate::dynamics::LiquidPose {
-        stretch: 1.05,
-        ortho: 1.0 / 1.05,
-        ..Default::default()
-    };
-    let deformation = slider_deformation(pose);
-    assert!((deformation.along() - pose.stretch).abs() < 1e-6);
-    assert!((deformation.along() * deformation.across() - 1.0).abs() < 1e-6);
-}
-
-#[test]
-fn slider_strain_preserves_acceleration_axis_compression() {
-    let pose = crate::dynamics::LiquidPose {
-        stretch: 0.95,
-        ortho: 1.0 / 0.95,
-        ..Default::default()
-    };
-    let deformation = slider_deformation(pose);
-    assert!((deformation.along() - pose.stretch).abs() < 1e-6);
-    assert!(deformation.across() > 1.0);
+fn slider_accessibility_exposes_the_controlled_value_without_calling_back() {
+    let requested = Rc::new(Cell::new(-1.0));
+    let observed = Rc::clone(&requested);
+    let mut config = cranpose_ui::SemanticsConfiguration::default();
+    slider_semantics(0.25, Rc::new(move |value| observed.set(value)))(&mut config);
+    assert_eq!(config.state_description.as_deref(), Some("25%"));
+    assert_eq!(
+        config.progress,
+        Some(cranpose_ui::ProgressBarRangeInfo::new(0.25, 0.0, 1.0, 0))
+    );
+    assert_eq!(requested.get(), -1.0);
 }
