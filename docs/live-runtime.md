@@ -28,6 +28,7 @@ response per stdout line. For example:
 ```json
 {"method":"catalogue"}
 {"method":"snapshot"}
+{"method":"state","api":"counter","member":"count"}
 {"method":"dispatch","node":"increment","event":"on_click"}
 {"method":"patch","patch":{"base_revision":0,"edits":[{"kind":"set_argument","target":"increment","name":"label","value":{"kind":"literal","value":"Changed by an agent"}}]}}
 ```
@@ -132,8 +133,10 @@ still requires a build.
 ## Editor and agent integration
 
 `Session::handle(Request)` is the transport-independent entry point on the UI
-thread. Commands are `catalogue`, `snapshot`, `source`, `patch`, and `dispatch`.
+thread. Commands are `catalogue`, `snapshot`, `state`, `source`, `patch`, and `dispatch`.
 A `source` request carries `base_revision`, `source`, and `function`.
+A `state` request carries `api` and `member`, and reads only an explicitly exported
+flow. It does not subscribe, invoke actions, or advance the document revision.
 
 An editor can send supported source edits through this entry point. An agent can
 read the catalogue and snapshot, then submit a revision-checked patch. Natural
@@ -172,13 +175,62 @@ Source/patch commands still require their document's `base_revision`; invalid or
 stale edits preserve the last good UI and model state. Studio checkpoints retain
 request sequencing when its UI reconnects to the same application.
 
-The demo does not expose an MCP server or embed an AI model. Agents can use the
-same runtime command protocol through a host integration or the stdin transport.
+## MCP clients
+
+Build the demo, then configure an MCP client to launch its binary with `--mcp`
+and the absolute path of the UI file:
+
+```sh
+cargo build -p cranpose-live-demo
+./target/debug/cranpose-live-demo --mcp /absolute/path/to/screen.rs
+```
+
+The client owns the process's stdin/stdout; stdout contains only MCP messages.
+The window remains interactive, and source-file saves reach the same session.
+Closing the MCP connection exits the demo. Each launch creates its own application;
+this does not attach to an existing Studio preview. Studio retains its host-message
+route to the same runtime operations. The application does not embed an AI model.
+
+The MCP tool is `cranpose_ui`. Its input schema is generated from the runtime's
+actual request, expression, node, and patch types. Example tool arguments:
+
+```json
+{"request":{"method":"catalogue"}}
+{"request":{"method":"snapshot"}}
+{"request":{"method":"state","api":"counter","member":"count"}}
+{"request":{"method":"dispatch","node":"increment","event":"on_click"}}
+{"request":{"method":"patch","patch":{"base_revision":0,"edits":[{"kind":"set_argument","target":"increment","name":"label","value":{"kind":"literal","value":"Agent edited"}}]}}}
+```
+
+An agent should discover the catalogue and snapshot, construct an edit from the
+available contracts, use the current revision, then inspect the resulting document
+and model state. Invalid and stale edits return tool errors and leave the UI intact.
+Agent edits affect the running document; they do not overwrite source files. A later
+file save replaces the document with that file's supported UI source.
+
+Actions may have application side effects. Do not retry an action whose outcome is
+unknown; inspect the relevant state first. Cancellation and transport EOF discard
+commands that have not reached the UI thread; they cannot undo a completed action.
+
+For other application hosts, enable `cranpose-live`'s optional `mcp` feature, create
+`mcp::McpServer::new` with a nonzero queue capacity, run `serve_stdio` on a Tokio
+executor, and drain its receiver on the UI thread using `McpCall::respond(&session)`.
+`serve_io` supports asynchronous reader/writer pairs. Queue saturation rejects work
+without executing it. The MCP SDK is excluded when the feature is disabled.
+
+The real desktop smoke test exercises discovery, source and patch edits, model
+actions, preserved state, atomic editor saves, clean stdout, and client-disconnect
+exit. It requires a graphical session:
+
+```sh
+python3 apps/live-demo/tests/mcp_smoke.py --binary target/debug/cranpose-live-demo --log /tmp/cranpose-mcp.log
+```
 
 ## Validation and measurement
 
 ```sh
 cargo test -p cranpose-live
+cargo test -p cranpose-live --features mcp
 cargo test -p cranpose-live --test reload_latency -- --ignored --nocapture
 cargo clippy -p cranpose-live -p cranpose-live-demo --all-targets -- -D warnings
 ```

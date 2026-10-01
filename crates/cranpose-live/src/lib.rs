@@ -7,6 +7,8 @@ mod api;
 mod error;
 pub mod host;
 mod limits;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 mod program;
 mod protocol;
 mod registry;

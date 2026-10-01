@@ -558,6 +558,41 @@ fn transport_catalogue_snapshot_and_patch_share_one_revision() {
 }
 
 #[test]
+fn state_requests_read_current_flows_and_never_invoke_actions() {
+    let (model, registry) = setup();
+    let session = session(registry, INITIAL);
+    let read = || {
+        serde_json::to_value(
+            session
+                .handle(cranpose_live::Request::State {
+                    api: "counter".into(),
+                    member: "count".into(),
+                })
+                .expect("read state"),
+        )
+        .expect("serialize state")
+    };
+    assert_eq!(read()["value"], 0);
+    model.add(7);
+    assert_eq!(read(), json!({"kind":"state","revision":0,"value":7}));
+    for (api, member) in [
+        ("counter", "reset"),
+        ("missing", "count"),
+        ("counter", "missing"),
+    ] {
+        assert!(
+            session
+                .handle(cranpose_live::Request::State {
+                    api: api.into(),
+                    member: member.into()
+                })
+                .is_err()
+        );
+    }
+    assert_eq!(read()["value"], 7);
+}
+
+#[test]
 fn unsupported_rust_reports_a_diagnostic_without_committing() {
     let (_, registry) = setup();
     let session = session(registry, INITIAL);

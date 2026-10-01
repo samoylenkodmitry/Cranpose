@@ -14,8 +14,9 @@ coroflow.workspace = true
 cranpose = { workspace = true, features = ["desktop", "embed", "embedded-default-font", "renderer-wgpu"] }
 cranpose-core.workspace = true
 cranpose-coroflow.workspace = true
-cranpose-live = { version = "0.1.176", path = "../../crates/cranpose-live" }
+cranpose-live = { version = "0.1.176", path = "../../crates/cranpose-live", features = ["mcp"] }
+cranpose-services.workspace = true
 cranpose-ui.workspace = true
 notify = "8.2.0"
 serde_json = "1.0.151"
-tokio = { version = "1.53.1", features = ["sync"] }
+tokio = { version = "1.53.1", features = ["rt", "sync"] }

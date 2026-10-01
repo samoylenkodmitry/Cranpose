@@ -5,6 +5,7 @@ use serde_json::Value;
 
 /// An expression evaluated against registered view-model state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Expression {
     /// A scalar constant.
@@ -37,6 +38,7 @@ pub enum Expression {
 
 /// One component invocation with a stable document identity.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Node {
     /// Identity retained across source and structured edits.
@@ -61,6 +63,7 @@ pub struct Program {
 
 /// An atomic document edit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Edit {
     /// Replace a subtree, preserving sibling identities.
@@ -83,6 +86,7 @@ pub enum Edit {
 
 /// A version-checked transaction submitted by an editor or agent.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct Patch {
     /// Document revision the edits were based on.

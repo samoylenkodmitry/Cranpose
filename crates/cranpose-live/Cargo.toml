@@ -19,7 +19,17 @@ cranpose-macros.workspace = true
 cranpose-services = { version = "0.1.176", path = "../cranpose-services" }
 cranpose-ui.workspace = true
 inventory = "0.3.24"
+rmcp = { version = "3.5.0", default-features = false, features = ["server", "transport-io"], optional = true }
+schemars = { version = "1.2.2", optional = true }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 syn = { version = "3.0.6", features = ["full"] }
 thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["macros", "sync"], optional = true }
+tokio-util = { version = "0.7.19", features = ["rt"], optional = true }
+
+[features]
+mcp = ["dep:rmcp", "dep:tokio", "dep:schemars", "dep:tokio-util"]
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt", "macros", "io-util", "time"] }

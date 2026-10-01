@@ -14,6 +14,7 @@ use cranpose_live::{
     Registry, Request, Session, composable,
     host::{HostedSession, LiveHost, original_source_path},
     live_api,
+    mcp::{McpCall, McpServer},
 };
 use cranpose_ui::{Column, ColumnSpec, Modifier, Text, TextStyle};
 use notify::{RecursiveMode, Watcher};
@@ -53,6 +54,8 @@ fn CounterLabel(count: i64) {
 enum Input {
     Json(String),
     FileChanged,
+    Mcp(McpCall),
+    Disconnected,
 }
 
 fn watch(
@@ -86,14 +89,24 @@ fn source_request(path: &std::path::Path, session: &Session) -> Result<Request> 
     })
 }
 
-fn process(input: Input, path: &std::path::Path, session: &Session) -> Result<String> {
+fn process(input: Input, path: &std::path::Path, session: &Session, mcp: bool) -> Result<String> {
     let started = Instant::now();
     let request = match input {
         Input::Json(line) => serde_json::from_str(&line)?,
         Input::FileChanged => source_request(path, session)?,
+        Input::Mcp(call) => {
+            call.respond(session);
+            return Ok(format!("MCP connected · revision {}", session.revision()));
+        }
+        Input::Disconnected => {
+            cranpose_services::request_exit();
+            return Ok("MCP client disconnected".into());
+        }
     };
     let response = session.handle(request)?;
-    println!("{}", serde_json::to_string(&response)?);
+    if !mcp {
+        println!("{}", serde_json::to_string(&response)?);
+    }
     Ok(format!(
         "Revision {} · applied in {:.2} ms",
         session.revision(),
@@ -119,7 +132,15 @@ fn read_stdin(sender: mpsc::Sender<Input>) {
 }
 
 fn main() -> Result<()> {
-    let path = original_source_path(std::env::args_os().nth(1).map_or_else(
+    let mut arguments = std::env::args_os().skip(1);
+    let first = arguments.next();
+    let mcp = first.as_deref() == Some(std::ffi::OsStr::new("--mcp"));
+    let source = if mcp { arguments.next() } else { first };
+    anyhow::ensure!(
+        arguments.next().is_none(),
+        "usage: cranpose-live-demo [--mcp] [source.rs]"
+    );
+    let path = original_source_path(source.map_or_else(
         || PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/screen.rs")),
         PathBuf::from,
     ))?
@@ -138,39 +159,102 @@ fn main() -> Result<()> {
     let hosted = HostedSession::new(session.clone(), path.clone(), "Screen".into());
     let (sender, receiver) = mpsc::channel(32);
     let _watcher = watch(&path, sender.clone())?;
-    std::thread::spawn(move || read_stdin(sender));
+    if mcp {
+        start_mcp(sender)?;
+    } else {
+        std::thread::spawn(move || read_stdin(sender));
+    }
     eprintln!(
-        "Watching {}. Send JSON requests on stdin; responses use stdout.",
+        "Watching {}. Requests use stdin; responses use stdout.",
         path.display()
     );
     let receiver = Rc::new(RefCell::new(Some(receiver)));
     let status =
         MutableStateFlow::new("Ready · edit the source file or send a JSON command".to_owned());
-    AppLauncher::new().with_title("Cranpose · live runtime").with_size(700, 420).try_run(move || {
-        {
-            let session = session.clone();
-            let path = path.clone();
-            let status = status.clone();
-            let receiver = Rc::clone(&receiver);
-            LaunchedEffectAsync((), move |_scope| Box::pin(async move {
-                let Some(mut receiver) = receiver.borrow_mut().take() else { return; };
-                while let Some(input) = receiver.recv().await {
-                    match process(input, &path, &session) {
-                        Ok(message) => status.set(message),
-                        Err(error) => {
-                            println!("{}", serde_json::json!({"error": error.to_string(), "revision": session.revision()}));
-                            status.set(error.to_string());
-                        }
+    AppLauncher::new()
+        .with_title("Cranpose · live runtime")
+        .with_size(700, 420)
+        .try_run(move || {
+            {
+                let session = session.clone();
+                let path = path.clone();
+                let status = status.clone();
+                let receiver = Rc::clone(&receiver);
+                LaunchedEffectAsync((), move |_scope| {
+                    Box::pin(async move {
+                        let Some(receiver) = receiver.borrow_mut().take() else {
+                            return;
+                        };
+                        process_inputs(receiver, &path, &session, &status, mcp).await;
+                    })
+                });
+            }
+            let status_text = status.as_state_flow().collectAsState().get();
+            let view = hosted.clone();
+            let live = session.clone();
+            Column(
+                Modifier::empty().padding(24.0),
+                ColumnSpec::default(),
+                move || {
+                    Text(status_text.clone(), Modifier::empty(), TextStyle::default());
+                    if mcp {
+                        cranpose_live::LiveView(live.clone());
+                    } else {
+                        LiveHost(view.clone());
                     }
-                }
-            }));
-        }
-        let status_text = status.as_state_flow().collectAsState().get();
-        let view = hosted.clone();
-        Column(Modifier::empty().padding(24.0), ColumnSpec::default(), move || {
-            Text(status_text.clone(), Modifier::empty(), TextStyle::default());
-            LiveHost(view.clone());
-        });
-    })?;
+                },
+            );
+        })?;
     Ok(())
+}
+
+fn start_mcp(sender: mpsc::Sender<Input>) -> Result<()> {
+    let (server, mut requests) =
+        McpServer::new(std::num::NonZeroUsize::new(32).context("queue capacity")?);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    std::thread::Builder::new()
+        .name("cranpose-live-mcp".into())
+        .spawn(move || {
+            runtime.block_on(async {
+                tokio::select! {
+                    result = server.serve_stdio() => {
+                        if let Err(error) = result { eprintln!("MCP: {error}"); }
+                    }
+                    () = async {
+                        while let Some(call) = requests.recv().await {
+                            if sender.send(Input::Mcp(call)).await.is_err() { break; }
+                        }
+                    } => {}
+                }
+                let _ = sender.send(Input::Disconnected).await;
+            });
+        })?;
+    Ok(())
+}
+
+async fn process_inputs(
+    mut receiver: mpsc::Receiver<Input>,
+    path: &std::path::Path,
+    session: &Session,
+    status: &MutableStateFlow<String>,
+    mcp: bool,
+) {
+    while let Some(input) = receiver.recv().await {
+        match process(input, path, session, mcp) {
+            Ok(message) => status.set(message),
+            Err(error) => {
+                if mcp {
+                    eprintln!("live source: {error}");
+                } else {
+                    println!(
+                        "{}",
+                        serde_json::json!({"error": error.to_string(), "revision": session.revision()})
+                    );
+                }
+                status.set(error.to_string());
+            }
+        }
+    }
 }
