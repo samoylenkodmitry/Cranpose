@@ -65,32 +65,28 @@ where
         }
         Rc::clone(&holder.policy)
     };
-    let modifier_for_reset = modifier.clone();
-    let policy_for_reset = Rc::clone(&policy);
     let id = cranpose_core::with_current_composer(|composer| {
         composer.emit_recyclable_node(
             || LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
-            move |node| {
-                *node = LayoutNode::new(modifier_for_reset.clone(), Rc::clone(&policy_for_reset));
-            },
+            |node| *node = LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
         )
     });
+    let provided = modifier.provided_composition_locals();
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
-        node.set_modifier(modifier.clone());
-        node.set_measure_policy(Rc::clone(&policy));
+        node.set_modifier(modifier);
+        node.set_measure_policy(policy);
         node.set_density(composed_density);
     }) {
         debug_assert!(false, "failed to update Layout node: {err}");
     }
     cranpose_core::push_parent(id);
-    compose_under_modifier_locals(&modifier, &mut content);
+    compose_under_locals(provided, &mut content);
     cranpose_core::pop_parent();
     id
 }
 
-fn compose_under_modifier_locals(modifier: &Modifier, content: &mut dyn FnMut()) {
-    let provided = modifier.provided_composition_locals();
+fn compose_under_locals(provided: Vec<cranpose_core::ProvidedValue>, content: &mut dyn FnMut()) {
     if provided.is_empty() {
         content();
         return;
@@ -139,9 +135,9 @@ pub fn SubcomposeLayout(
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut SubcomposeLayoutNode| {
-        node.set_modifier(modifier.clone());
-        node.set_measure_policy(Rc::clone(&policy));
-        node.set_captured_context(captured_context.clone());
+        node.set_modifier(modifier);
+        node.set_measure_policy(policy);
+        node.set_captured_context(captured_context);
         node.set_density(composed_density);
         if policy_captures_changed {
             node.invalidate_subcomposition();
