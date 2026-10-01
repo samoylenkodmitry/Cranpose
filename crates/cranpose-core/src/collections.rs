@@ -6,12 +6,15 @@ pub mod pass_aged;
 
 #[cfg(feature = "std-hash")]
 pub mod map {
-    pub use std::collections::{HashMap, HashSet, hash_map::Entry};
+    pub use std::collections::{
+        HashMap, HashSet,
+        hash_map::{Entry, RandomState},
+    };
 }
 
 #[cfg(not(feature = "std-hash"))]
 pub mod map {
     pub use std::collections::hash_map::Entry;
 
-    pub use foldhash::{HashMap, HashSet};
+    pub use foldhash::{HashMap, HashSet, fast::RandomState};
 }
