@@ -57,23 +57,25 @@ impl Drop for CacheFiles {
     }
 }
 
-fn wait_for_cache(path: &Path) {
+fn wait_until(what: &str, path: &Path, done: impl Fn(&[u8]) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !fs::metadata(path).is_ok_and(|metadata| metadata.len() > 0) {
-        assert!(
-            Instant::now() < deadline,
-            "live renderer did not persist its pipeline cache: {}",
-            path.display()
-        );
+    while !fs::read(path).is_ok_and(|bytes| done(&bytes)) {
+        assert!(Instant::now() < deadline, "{what}: {}", path.display());
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
-#[test]
-fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
-    let _lock = support::gpu_test_lock();
-    let files = CacheFiles::new();
-    let previous_cache = files.select("previous.bin");
+fn wait_for_cache(path: &Path) {
+    wait_until(
+        "live renderer did not persist its pipeline cache",
+        path,
+        |bytes| !bytes.is_empty(),
+    );
+}
+
+/// A renderer drawing a white square, or `None` where its backend keeps no
+/// pipeline cache.
+fn caching_renderer() -> Option<support::LockedRenderer> {
     let mut renderer = support::LockedRenderer::beside_locked().expect("GPU required");
     if !renderer
         .try_device()
@@ -82,7 +84,7 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
         .contains(wgpu::Features::PIPELINE_CACHE)
     {
         eprintln!("pipeline cache lifecycle requires PIPELINE_CACHE support");
-        return;
+        return None;
     }
     renderer.scene_mut().graph = Some(RenderGraph::new(support::layer_node(
         None,
@@ -102,6 +104,38 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
             None,
         )],
     )));
+    Some(renderer)
+}
+
+#[test]
+fn a_cache_file_another_build_left_is_replaced_with_this_renderers_pipelines() {
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("another-build.bin");
+    let stale = vec![0xa5; 64 * 1024];
+    fs::write(&cache, &stale).expect("write another build's cache file");
+    let Some(mut renderer) = caching_renderer() else {
+        return;
+    };
+    let frame = renderer
+        .capture_frame(16, 16)
+        .expect("frame over a stale cache");
+    assert!(frame.pixels.as_chunks::<4>().0.contains(&[255; 4]));
+    wait_until(
+        "the renderer kept another build's pipeline cache",
+        &cache,
+        |bytes| !bytes.is_empty() && bytes != stale.as_slice(),
+    );
+}
+
+#[test]
+fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let previous_cache = files.select("previous.bin");
+    let Some(mut renderer) = caching_renderer() else {
+        return;
+    };
     let original = renderer.capture_frame(16, 16).expect("original frame");
     assert!(original.pixels.as_chunks::<4>().0.contains(&[255; 4]));
     wait_for_cache(&previous_cache);
