@@ -378,11 +378,13 @@ fn node_admits_corners(
     match node {
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Draw(draw) => {
-                primitive_coverage_rect(&draw.primitive).is_none_or(|rect| check(rect, draw.clip))
+                primitive_stays_clear(&draw.primitive, |rect| check(rect, draw.clip))
             }
             PrimitiveNode::Text(text) => check(text.rect, text.clip),
         },
-        RenderNode::DrawRun(run) => run.coverage_rects().all(|rect| check(rect, None)),
+        RenderNode::DrawRun(run) => {
+            !run.summary.has_shadow && run.coverage_rects().all(|rect| check(rect, None))
+        }
         RenderNode::Layer(child) => {
             let Some(translation) = direct_translation(child.transform_to_parent) else {
                 return true;
@@ -586,8 +588,9 @@ fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCo
     layer.children.iter().all(|node| match node {
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Draw(draw) if draw.clip.is_none() && is_shape(&draw.primitive) => true,
-            PrimitiveNode::Draw(draw) => primitive_coverage_rect(&draw.primitive)
-                .is_none_or(|rect| stays_clear(rect, offset, corners)),
+            PrimitiveNode::Draw(draw) => {
+                primitive_stays_clear(&draw.primitive, |rect| stays_clear(rect, offset, corners))
+            }
             PrimitiveNode::Text(text) => stays_clear(text.rect, offset, corners),
         },
         RenderNode::DrawRun(run) => run_takes_corners(run, offset, corners),
@@ -627,10 +630,20 @@ fn run_takes_corners(run: &DrawRunNode, offset: Point, corners: &RoundedClipCorn
         .all(|segment| match segment.lane {
             RecordLane::Shapes | RecordLane::Content => true,
             RecordLane::Others => recording.others()[segment.range()].iter().all(|primitive| {
-                primitive_coverage_rect(primitive)
-                    .is_none_or(|rect| stays_clear(rect, offset, corners))
+                primitive_stays_clear(primitive, |rect| stays_clear(rect, offset, corners))
             }),
         })
+}
+
+/// Whether `primitive` stays out of a rounded clip's corner cuts, as
+/// `clear` judges its coverage rect. A shadow has none: its blur reaches
+/// past any rect it holds, and it draws under a rect clip, so it never
+/// counts as clear. Only the content marker, which draws nothing, does.
+fn primitive_stays_clear(primitive: &DrawPrimitive, clear: impl Fn(Rect) -> bool) -> bool {
+    match primitive_coverage_rect(primitive) {
+        Some(rect) => clear(rect),
+        None => matches!(primitive, DrawPrimitive::Content),
+    }
 }
 
 fn stays_clear(rect: Rect, offset: Point, corners: &RoundedClipCorners) -> bool {

@@ -901,6 +901,7 @@ fn hash_placement<H: Hasher>(
         Some(clip) => {
             1u8.hash(state);
             hash_shadow_device_rect(clip, origin_x, origin_y, root_scale, state);
+            hash_f32_for_cache(placement.clip_radius * root_scale, state);
         }
         None => 0u8.hash(state),
     }
