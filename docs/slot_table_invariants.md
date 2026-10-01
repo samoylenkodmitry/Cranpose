@@ -59,21 +59,21 @@ This document is the short operational checklist for the slot table implementati
 - A retained subtree root key matches the retention key used to store it.
 - Retained subtree payload owners refer to anchors inside the detached subtree.
 - Retained subtree node owners refer to anchors inside the detached subtree.
-- Retained subtree scopes are inactive and are not present in the active scope index.
-- Restoring a subtree preflights the target cursor, root key, detached anchors, retained node lifecycle, spans, and active scope-index availability before removing it from retention; the actual restore reactivates anchors, scopes, and nodes before the group participates in recomposition.
-- Disposing a detached subtree invalidates anchors, unregisters scopes, drops payloads, and removes nodes.
+- Retained subtree scopes are inactive and reach no active group.
+- Restoring a subtree preflights the target cursor, root key, detached anchors, retained node lifecycle, and spans before removing it from retention; the actual restore reactivates anchors, scopes, and nodes before the group participates in recomposition.
+- Disposing a detached subtree invalidates anchors, deactivates its scopes, drops payloads, and removes nodes.
 
 ## Scope Lookup
 
-- Active scope lookup is indexed by `ScopeId`.
-- Slot storage never scans all groups to find a scope.
-- The active scope index maps every active group `scope_id` to the exact active group anchor.
-- Detached scopes are routed by runtime retention state, not by active slot-table lookup.
+- A group record holds its scope, so a group start reads the scope without a lookup.
+- A scope records its group's anchor, so recomposition reaches the group without scanning or hashing.
+- Every active group's scope records that group's anchor, and a scope belongs to one group.
+- Detached scopes keep detached anchors and reach no active group.
 - Invalidating an inactive retained scope keeps it dirty and recomposes it when it is restored.
 
 ## Validation Expectations
 
-- `SlotTable::validate()` covers active preorder, parent/depth structure, subtree spans, payload/node ranges, ownership, active anchors, active scope index, and duplicate sibling keys.
+- `SlotTable::validate()` covers active preorder, parent/depth structure, subtree spans, payload/node ranges, ownership, active anchors, scope anchors, and duplicate sibling keys.
 - Retained-state validation must cover detached anchors, retained scopes, retained node lifecycle, retained root parentage, and retained-key/root-key agreement.
 - Debug and test builds should validate after composition operations that mutate slot structure.
 - A validation failure should identify the violated invariant locally instead of allowing a later recomposition panic.
