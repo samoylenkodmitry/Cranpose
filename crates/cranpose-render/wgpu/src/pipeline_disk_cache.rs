@@ -1,6 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{OnceLock, mpsc},
 };
 
 use web_time::Instant;
@@ -124,16 +124,14 @@ impl PersistWatch {
 
 const PERSIST_TICK: std::time::Duration = std::time::Duration::from_secs(2);
 
-pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) {
-    let Some(path) = file_path() else {
-        return;
-    };
+pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) -> Option<mpsc::Sender<()>> {
+    let path = file_path()?;
+    let (lifetime, stopped) = mpsc::channel();
     let spawned = std::thread::Builder::new()
         .name("cranpose-pl-cache".into())
         .spawn(move || {
             let mut watch = PersistWatch::default();
-            loop {
-                std::thread::sleep(PERSIST_TICK);
+            while let Err(mpsc::RecvTimeoutError::Timeout) = stopped.recv_timeout(PERSIST_TICK) {
                 if watch.observe(
                     crate::render::pipelines_created()
                         + crate::render::pipelines_created_off_frame(),
@@ -142,8 +140,12 @@ pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) {
                 }
             }
         });
-    if let Err(error) = spawned {
-        log::warn!("[pipeline-cache] persist thread failed to spawn: {error}");
+    match spawned {
+        Ok(_) => Some(lifetime),
+        Err(error) => {
+            log::warn!("[pipeline-cache] persist thread failed to spawn: {error}");
+            None
+        }
     }
 }
 

@@ -48,6 +48,7 @@ mod nested_rotated_relayout;
 mod opaque_interiors;
 mod opaque_prefix_cache;
 mod pass_timing_report;
+mod pipeline_cache_lifecycle;
 mod present_runtime_contract;
 mod probe_passes;
 mod projective_layer_clip;

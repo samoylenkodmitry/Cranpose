@@ -2604,6 +2604,8 @@ pub struct GpuRenderer {
     screenshot_converter: OutputConverter,
     adapter_backend: wgpu::Backend,
     pipeline_cache: Option<wgpu::PipelineCache>,
+    #[cfg(not(target_arch = "wasm32"))]
+    _pipeline_cache_watcher: Option<std::sync::mpsc::Sender<()>>,
     shape_pipelines: ShapePipelines,
     /// Image and glyph pipelines for passes without and with a depth buffer.
     image_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 4],
@@ -2809,9 +2811,9 @@ impl GpuRenderer {
         #[cfg(target_arch = "wasm32")]
         let pipeline_cache: Option<wgpu::PipelineCache> = None;
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(cache) = pipeline_cache.clone() {
-            crate::pipeline_disk_cache::spawn_persist_watcher(cache);
-        }
+        let pipeline_cache_watcher = pipeline_cache
+            .clone()
+            .and_then(crate::pipeline_disk_cache::spawn_persist_watcher);
 
         let effects_started = Instant::now();
         let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
@@ -2877,6 +2879,8 @@ impl GpuRenderer {
             screenshot_converter,
             adapter_backend,
             pipeline_cache,
+            #[cfg(not(target_arch = "wasm32"))]
+            _pipeline_cache_watcher: pipeline_cache_watcher,
             shape_pipelines,
             image_pipeline: [
                 LazyGpuResource::new("image/src-over"),
