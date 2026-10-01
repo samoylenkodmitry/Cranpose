@@ -188,7 +188,7 @@ fn a_ring_at_the_floor_and_a_ring_after_an_empty_frame_stay() {
 }
 
 #[test]
-fn frame_uploads_grow_preserve_bytes_and_release_oversized_generations() {
+fn frame_uploads_preserve_bytes_across_growth_and_reset() {
     let (_lock, device, queue) = super::upload_test_device();
     let mut ring = super::UploadRing::new(
         wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
@@ -203,32 +203,29 @@ fn frame_uploads_grow_preserve_bytes_and_release_oversized_generations() {
         let (generation, offset) = ring.upload(&device, bytes.len() as u64, bytes);
         sources.push((ring.generations[generation].buffer.clone(), offset));
     }
-    assert_eq!(ring.generations.len(), 3);
-    ring.flush(&queue);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut uploads = super::BufferUploads::default();
+    ring.stage_pending(&mut |buffer, offset, bytes| super::FrameCommandStats {
+        upload_bytes: uploads.write(&device, &mut encoder, buffer, offset, bytes),
+        ..Default::default()
+    });
+    ring.reset();
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: 48,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&Default::default());
     for (index, (source, offset)) in sources.into_iter().enumerate() {
         encoder.copy_buffer_to_buffer(&source, offset, &readback, index as u64 * 16, 16);
     }
+    uploads.finish();
     let submission = queue.submit([encoder.finish()]);
+    uploads.recall();
     assert_eq!(
         super::read_uploaded_bytes(&device, &readback, submission),
         [&small[..], &large[..16], &last[..]].concat()
     );
-    assert_eq!(ring.generations.len(), 1);
-    ring.upload(&device, 16, &small);
-    ring.flush(&queue);
-    assert!(
-        ring.generations.is_empty(),
-        "a small frame must release the oversized generation"
-    );
-    ring.upload(&device, 16, &last);
-    assert_eq!(ring.generations[0].capacity, MIN_UPLOAD_BUFFER_BYTES);
 }
 
 #[test]

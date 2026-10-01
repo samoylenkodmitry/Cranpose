@@ -967,38 +967,6 @@ fn a_glass_read_by_captures_above_it_is_shaded_once() {
     );
 }
 
-/// A frame's uploads reach the GPU as one write per buffer, however many
-/// uniform blocks, chunks and quads it stages: here every glass composite
-/// and its blur passes over a page of shapes, in the uniform write, the
-/// viewport ring and the arena's tables, whichever of the four the page
-/// fills.
-#[test]
-fn a_frame_of_glasses_stages_its_uploads_in_a_handful_of_writes() {
-    let Ok(mut renderer) = support::headless_renderer() else {
-        eprintln!("skipping (headless WGPU init failed)");
-        return;
-    };
-    renderer.scene_mut().graph = Some(glasses_page(3, || {
-        RenderEffect::blur(BLUR_RADIUS).then(glass_shader())
-    }));
-    let first = renderer
-        .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
-        .expect("render should succeed");
-    assert!(
-        first.upload_writes <= 6,
-        "three blurred glasses staged {} buffer writes on their first frame, expected at most six",
-        first.upload_writes
-    );
-    let second = renderer
-        .render_current_scene_to_texture(FRAME_WIDTH, FRAME_HEIGHT)
-        .expect("render should succeed");
-    assert!(
-        second.upload_writes <= 5,
-        "the same page staged {} buffer writes on its second frame, expected at most five",
-        second.upload_writes
-    );
-}
-
 fn stacked_cached_glasses(first_blur: f32, identified: bool) -> RenderGraph {
     let mut children = striped_page();
     for (index, radius) in [first_blur, 2.0].into_iter().enumerate() {

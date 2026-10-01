@@ -2444,8 +2444,14 @@ impl ViewportUniforms {
         Ok(())
     }
 
-    fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
-        self.uploads.flush(queue)
+    fn stage_pending(
+        &mut self,
+        device: &wgpu::Device,
+        recorder: &mut impl FrameCommandRecorder,
+    ) -> FrameCommandStats {
+        self.uploads.stage_pending(|buffer, offset, bytes| {
+            recorder.stage_buffer_copy(device, buffer, offset, bytes)
+        })
     }
 }
 
@@ -3786,6 +3792,8 @@ impl GpuRenderer {
         };
         if !submitted {
             self.run_store.invalidate_uploads();
+            self.text_glyph_gpu_run_cache.clear();
+            self.text_glyph_run_arena = GlyphRunArena::default();
         }
         returns.scene = Some(root.scene);
         result
@@ -3827,16 +3835,17 @@ impl GpuRenderer {
             );
             recorder.record_pass();
         }
-        self.flush_frame_uploads();
+        self.viewport_uniforms.uploads.finish_frame();
+        self.run_store.finish_frame();
         Ok(())
     }
 
-    /// Writes what the frame's draws read from buffers the renderer keeps:
-    /// viewport uniforms, arena run tables and new retained glyph runs.
-    pub(crate) fn flush_frame_uploads(&mut self) {
-        let mut upload = self.viewport_uniforms.flush(&self.queue);
-        upload += self.run_store.flush(&self.queue);
-        upload += self.text_glyph_run_arena.flush(&self.queue);
+    pub(crate) fn stage_frame_uploads(&mut self, recorder: &mut impl FrameCommandRecorder) {
+        let mut upload = self.viewport_uniforms.stage_pending(&self.device, recorder);
+        upload += self.run_store.stage_pending(&self.device, recorder);
+        upload += self
+            .text_glyph_run_arena
+            .stage_pending(&self.device, recorder);
         self.frame_stats.record_command_stats(upload);
     }
     /// Claims this frame's next viewport uniform slot for `params`.

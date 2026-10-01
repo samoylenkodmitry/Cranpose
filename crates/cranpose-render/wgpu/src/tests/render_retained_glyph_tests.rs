@@ -111,7 +111,7 @@ fn queue_glyph(renderer: &mut GpuRenderer, key: u64, x: f32, commands: &mut Vec<
 }
 
 fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::Texture {
-    renderer.flush_frame_uploads();
+    let (device, queue) = (Arc::clone(&renderer.device), Arc::clone(&renderer.queue));
     let target = crate::offscreen::create_2d_texture(
         &renderer.device,
         composition_format(),
@@ -123,6 +123,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
     let view = target.create_view(&Default::default());
     let mut graph = WgpuFrameGraph::new(None);
     graph.add_fallible_command_pass(None, &[], &[], |recorder| {
+        renderer.stage_frame_uploads(recorder);
         let mut pass = recorder.begin_color_pass(
             "Queued glyph test",
             &view,
@@ -141,7 +142,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
         )
     });
     WgpuFrameGraphExecutor::new()
-        .execute_recorded_graph(&renderer.device, &renderer.queue, graph)
+        .execute_recorded_graph(&device, &queue, graph)
         .expect("draw queued glyphs");
     target
 }
@@ -246,15 +247,12 @@ fn queued_glyph_draw_keeps_its_quads_after_cache_eviction() {
 }
 
 #[test]
-fn retained_glyph_runs_of_a_frame_draw_from_one_upload() {
+fn retained_glyph_runs_draw_together_and_again_on_later_frames() {
     let (_lock, mut renderer) = test_renderer();
     whiten_atlas(&renderer);
     let mut commands = Vec::new();
     queue_glyph(&mut renderer, 1, 0.0, &mut commands);
     queue_glyph(&mut renderer, 2, 4.0, &mut commands);
-    crate::frame_graph::take_upload_write_calls();
-    renderer.text_glyph_run_arena.flush(&renderer.queue);
-    assert_eq!(crate::frame_graph::take_upload_write_calls(), 1);
     let target = draw_queued(&mut renderer, &commands);
     assert_white_columns(
         &renderer,
@@ -624,7 +622,6 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
             "Batched text test",
         )?;
-        renderer.flush_frame_uploads();
         Ok(())
     });
     WgpuFrameGraphExecutor::new()

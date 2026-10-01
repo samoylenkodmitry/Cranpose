@@ -63,11 +63,6 @@ fn texture_uploads_are_owned_by_frame_graph_executor() {
 }
 
 #[test]
-fn buffer_uploads_are_owned_by_frame_graph_executor() {
-    assert_frame_graph_owns_calls(&[".write_buffer("], Some("pub(crate) fn write_buffer("));
-}
-
-#[test]
 fn frame_graph_executor_does_not_export_submit_or_encoder_creation_helpers() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source = std::fs::read_to_string(crate_dir.join("src/frame_graph.rs"))
