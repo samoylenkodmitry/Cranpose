@@ -141,10 +141,12 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         slots: &[
             GLASS_CONTOUR_HIGHLIGHT_UNIFORM,
             GLASS_CONTOUR_HIGHLIGHT_UNIFORM + 2,
+            GLASS_SPECULAR_HIGHLIGHT_UNIFORM,
         ],
         inactive: |u| {
-            slot(u, GLASS_CONTOUR_HIGHLIGHT_UNIFORM) <= 0.0
-                || slot(u, GLASS_CONTOUR_HIGHLIGHT_UNIFORM + 2) <= 0.0
+            (slot(u, GLASS_CONTOUR_HIGHLIGHT_UNIFORM) <= 0.0
+                || slot(u, GLASS_CONTOUR_HIGHLIGHT_UNIFORM + 2) <= 0.0)
+                && slot(u, GLASS_SPECULAR_HIGHLIGHT_UNIFORM) <= 0.0
         },
     },
     LiquidGlassSpecialization {
@@ -224,6 +226,11 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         flag: "GLASS_INTERIOR_GUARD",
         slots: &[],
         inactive: |_| true,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_TINT_TRANSMISSION_OFF",
+        slots: &[GLASS_TINT_TRANSMISSION_UNIFORM + 1],
+        inactive: |u| slot(u, GLASS_TINT_TRANSMISSION_UNIFORM + 1) <= 0.5,
     },
 ];
 
@@ -531,6 +538,13 @@ pub const GLASS_RESTING_EDGE_SHARPNESS_UNIFORM: usize = 175;
 pub const GLASS_FACE_TONE_UNIFORM: usize = 176;
 /// Inward amplitude and falloff depth in dp for a fused layered-surface projection.
 pub const GLASS_LAYERED_RETURN_UNIFORM: usize = 181;
+/// Minimum tinted transmission luminance followed by a presence flag.
+pub const GLASS_TINT_TRANSMISSION_UNIFORM: usize = 202;
+/// Selects white contact illumination in place of the standard touch glow.
+pub const GLASS_CONTACT_LIGHT_UNIFORM: usize = 204;
+/// Ten slots for specular height, angle, spread, curvature, diffuse amount, height, spread,
+/// reflected chroma gain, luminance gain and color bias.
+pub const GLASS_SPECULAR_HIGHLIGHT_UNIFORM: usize = 205;
 /// RGB of the surface shadow; its alpha is stored in the shadow strength slot.
 pub const GLASS_SHADOW_COLOR_UNIFORM: usize = 183;
 /// RGBA, Gaussian radius, vertical offset, stroke width, presence and spread of a ring shadow.

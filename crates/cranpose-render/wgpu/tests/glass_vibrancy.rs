@@ -1659,10 +1659,10 @@ fn native_touch_light_uses_a_gaussian_disk() {
     let source = include_str!("../../../cranpose-liquid/src/widgets/tab_lighting.wgsl")
         .replace("fn effect_fs(", "fn lighting_fs(");
     let mut shader = RuntimeShader::new(&format!(
-        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{source}\n@fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{source}\n@fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
             let p = input.position.xy - vec2<f32>(160.0);
             return vec4<f32>(vec3<f32>(blurred_disk(length(p), 46.5)), 1.0);
-        }}"
+        }}", cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL
     ));
     shader.set_float(0, 1.0);
     let bounds = Rect {

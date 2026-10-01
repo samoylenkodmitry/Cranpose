@@ -189,7 +189,10 @@ final class NativeTrace: NSObject {
                 configuredProbe = optics.index
             }
             try optics.advance(now: now, viewport: window.bounds.size) { sampleTabBar(in: window) }
-        } catch { self.error = String(describing: error) }
+        } catch {
+            self.error = String(describing: error)
+            try? String(describing: error).write(to: URL.documentsDirectory.appending(path: "control-probe-error.txt"), atomically: true, encoding: .utf8)
+        }
         guard !touches.isEmpty, !saved else {
             if !optics.running { link.isPaused = true }
             return
@@ -410,7 +413,8 @@ final class NativeTrace: NSObject {
             let container = CALayer()
             container.name = "Control highlight probe"
             container.frame = window.bounds
-            container.backgroundColor = UIColor.black.cgColor
+            container.backgroundColor = ProcessInfo.processInfo.environment["REFERENCE_CONTROL_HIGHLIGHT_BACKGROUND"] == "blue"
+                ? UIColor(red: 0, green: 0.48, blue: 1, alpha: 1).cgColor : UIColor.black.cgColor
             container.zPosition = 1000
             source.position = CGPoint(x: container.bounds.midX + (source.anchorPoint.x - 0.5) * source.bounds.width,
                                       y: container.bounds.midY + (source.anchorPoint.y - 0.5) * source.bounds.height)
@@ -564,8 +568,9 @@ final class NativeTrace: NSObject {
         if let component, environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" || captureAnimations {
             let scheme = environment["REFERENCE_SCHEME"] ?? "light"
             let backdrop = environment["REFERENCE_BACKDROP"] ?? "checkerboard"
+            let captureCase = environment["REFERENCE_CAPTURE_CASE"].map { "-\($0)" } ?? ""
             let phase = captureAnimations ? (held ? "-contact" : "-release") : ""
-            name = "native-control-\(component)-\(scheme)-\(backdrop)\(phase)-layers.json"
+            name = "native-control-\(component)-\(scheme)-\(backdrop)\(captureCase)\(phase)-layers.json"
         } else {
             name = "native-contact-filters-\(tag)\(Int((contactFilterTime ?? elapsed) * 1000)).json"
         }
@@ -576,7 +581,75 @@ final class NativeTrace: NSObject {
     }
 
     private func disableControlWarp(_ probe: String, in window: UIWindow) throws {
+        if ["floating-global", "floating-local", "floating-local-plain", "floating-rim"].contains(probe) {
+            let index = probe == "floating-global" ? 0 : 1
+            var layer = window.layer
+            let path = probe == "floating-rim" ? [0, 0, 0, 1, 0, 1] : [0, 0, 0, 1, 0, 0, 0, 1, index]
+            for child in path {
+                guard let children = layer.sublayers, children.indices.contains(child) else {
+                    throw OpticalLayerError.missingLayer(probe)
+                }
+                layer = children[child]
+            }
+            if probe == "floating-rim" {
+                guard let highlight = layer.sublayers?.first(where: { child in
+                    guard String(describing: type(of: child)) == "CASDFLayer",
+                          let effect = child.value(forKey: "effect") as? NSObject else { return false }
+                    return String(describing: type(of: effect)) == "CASDFKeyFillHighlightEffect"
+                }) else { throw OpticalLayerError.missingLayer(probe) }
+                layer = highlight
+            }
+            guard (layer.filters ?? []).contains(where: { String(describing: $0) == "vibrantColorMatrix" }) else {
+                throw OpticalLayerError.missingFilter(probe)
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            if probe == "floating-local-plain" {
+                layer.filters = nil
+            } else {
+                layer.isHidden = true
+            }
+            CATransaction.commit()
+            guard layer.isHidden || layer.filters == nil else { throw OpticalLayerError.missingLayer(probe) }
+            try JSONEncoder().encode(["hidden": layer.isHidden, "filterRemoved": layer.filters == nil]).write(
+                to: URL.documentsDirectory.appending(path: "control-optical-probe-\(component ?? "unknown")-\(probe).json"), options: .atomic)
+            let observedLayer = layer
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self else { return }
+                do {
+                    let filtersRemoved = observedLayer.filters == nil
+                    guard probe == "floating-local-plain" ? filtersRemoved : observedLayer.isHidden else {
+                        throw OpticalLayerError.missingLayer("probe mutation was replaced: \(probe)")
+                    }
+                    let name = "control-optical-probe-\(self.component ?? "unknown")-\(probe)-verified"
+                    let metadata = ["hidden": String(observedLayer.isHidden),
+                                    "filterRemoved": String(filtersRemoved),
+                                    "contents": String(describing: observedLayer.contents),
+                                    "layer": String(describing: observedLayer),
+                                    "presentation": String(describing: observedLayer.presentation()),
+                                    "presentationFilters": String(describing: observedLayer.presentation()?.filters),
+                                    "mask": String(describing: observedLayer.mask),
+                                    "sublayers": String(describing: observedLayer.sublayers),
+                                    "compositingFilter": String(describing: observedLayer.compositingFilter),
+                                    "backgroundFilters": String(describing: observedLayer.backgroundFilters)]
+                    try JSONEncoder().encode(metadata).write(to: URL.documentsDirectory.appending(path: name + ".json"), options: .atomic)
+                    if probe == "floating-local-plain" {
+                        let image = UIGraphicsImageRenderer(size: observedLayer.bounds.size).image { context in
+                            observedLayer.render(in: context.cgContext)
+                        }
+                        try image.pngData()?.write(to: URL.documentsDirectory.appending(path: name + ".png"), options: .atomic)
+                    }
+                } catch {
+                    self.error = String(describing: error)
+                }
+            }
+            return
+        }
         let isolatedInputs = [
+            "refraction-opacity": [("glassBackground", "inputRefractionOpacity")],
+            "fill-blur": [("glassBackground", "inputBlurFillBlurRadius")],
+            "fill-blur-half": [("glassBackground", "inputBlurFillBlurRadius")],
+            "outer-surface": [("glassBackground", "inputOuterRefractionAmount")],
             "surface": [("glassBackground", "inputInnerRefractionAmount")],
             "ring-shadow": [("glassBackground", "inputRingShadowOpacity")],
             "highlight": [("glassBackground", "inputKeyFillHighlightAmount")],
@@ -595,9 +668,10 @@ final class NativeTrace: NSObject {
                        let original = filters[index] as? NSCopying,
                        let filter = original.copy(with: nil) as? NSObject {
                         let amount = String(describing: filter.value(forKey: key))
-                        filter.setValue(0.0, forKey: key)
+                        let value = probe == "fill-blur-half" ? 4.0 : 0.0
+                        filter.setValue(value, forKey: key)
                         filters[index] = filter
-                        changes.append(["path": path, "key": key, "from": amount, "to": "0"])
+                        changes.append(["path": path, "key": key, "from": amount, "to": String(value)])
                         continue
                     }
                     if isolatedInputs[probe] != nil { continue }

@@ -1,6 +1,6 @@
-use crate::{liquid_tab_reference, robot_exit, robot_shot};
-
 use cranpose::{AppLauncher, RobotScreenshot};
+
+use crate::{liquid_tab_reference, robot_exit, robot_shot};
 
 pub(crate) fn main() -> anyhow::Result<()> {
     let output = std::path::PathBuf::from(
@@ -32,7 +32,12 @@ pub(crate) fn main() -> anyhow::Result<()> {
             }
             robot.exit().expect("exit");
         })
-        .try_run(|| liquid_tab_reference::LiquidTabReference(true, false))?;
+        .try_run(|| {
+            liquid_tab_reference::LiquidTabReference(
+                liquid_tab_reference::ReferenceBackdrop::Rainbow,
+                false,
+            );
+        })?;
     Ok(())
 }
 

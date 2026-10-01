@@ -192,6 +192,8 @@ impl GlassShadow {
 /// scene-build time (no recomposition per frame).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct GlassDynamics {
+    /// Uses a global color transfer and a white blurred contact light in place of touch glow.
+    pub contact_lighting: bool,
     /// Per-frame source mapping. Layered surfaces use this to animate the backdrop
     /// and material independently of the opaque resting fill.
     pub refraction: Option<GlassRefraction>,
@@ -429,6 +431,56 @@ impl GlassContourHighlight {
     }
 }
 
+/// Backdrop-dependent reflections from opposing lights, with a sharp rim and a softer inward lobe.
+/// Invalid dimensions or nonfinite fields disable the reflection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassSpecularHighlight {
+    /// Width of the sharp reflection in dp.
+    pub height_dp: f32,
+    /// Direction of the first light in screen-space radians; the second is opposite.
+    pub angle_radians: f32,
+    /// Angular extent of each sharp reflection, in radians.
+    pub spread_radians: f32,
+    /// Exponent of the angular response; must be positive.
+    pub curvature: f32,
+    /// Opacity of the diffuse reflection, clamped to zero through one.
+    pub diffuse_amount: f32,
+    /// Inward extent of the diffuse reflection, in dp.
+    pub diffuse_height_dp: f32,
+    /// Angular extent of each diffuse reflection, in radians.
+    pub diffuse_spread_radians: f32,
+    /// Gain applied to the transmitted surface's chroma in the reflected color.
+    pub saturation: f32,
+    /// Gain applied to the transmitted surface's luminance in the reflected color.
+    pub luma_gain: f32,
+    /// Additive brightness of the reflected color.
+    pub color_bias: f32,
+}
+
+impl GlassSpecularHighlight {
+    fn uniforms(self) -> Option<[f32; 10]> {
+        let values = [
+            self.height_dp,
+            self.angle_radians,
+            self.spread_radians,
+            self.curvature,
+            self.diffuse_amount,
+            self.diffuse_height_dp,
+            self.diffuse_spread_radians,
+            self.saturation,
+            self.luma_gain,
+            self.color_bias,
+        ];
+        (values.iter().all(|value| value.is_finite())
+            && self.height_dp > 0.0
+            && self.spread_radians > 0.0
+            && self.curvature > 0.0
+            && self.diffuse_height_dp > 0.0
+            && self.diffuse_spread_radians > 0.0)
+            .then_some(values)
+    }
+}
+
 /// Opposing edge lights whose color responds to the backdrop.
 /// Nonfinite fields or nonpositive height or curvature disable this treatment.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -546,15 +598,16 @@ impl GlassFaceResponse {
     }
 }
 
-/// A fixed face transfer: saturate and clamp each input channel to zero–one,
-/// then apply `black + (white - black) * x - (1 - max_luminance) * x²`.
+/// A fixed luminance transfer with an independent chroma gain.
+/// Luminance `y` becomes `black + (white - black) * y - (1 - max_luminance) * y²`;
+/// chroma is scaled by `saturation` and the combined RGB is clamped to zero–one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlassFaceTone {
     /// Black input's output, from zero to one.
     pub black: f32,
     /// White endpoint before quadratic highlight compression; greater than black.
     pub white: f32,
-    /// Chroma gain before the transfer; finite and nonnegative.
+    /// Chroma gain independent of the luminance transfer; finite and nonnegative.
     pub saturation: f32,
     /// Highlight compression endpoint, from zero to one. One disables compression.
     pub max_luminance: f32,
@@ -588,8 +641,12 @@ pub struct Glass {
     pub shape: LiquidShape,
     /// Tint over the refracted backdrop; defaults to the theme's glass tint.
     pub tint: Option<Color>,
+    /// Minimum transmitted luminance for a colored tint. `None` uses alpha tinting.
+    pub tint_transmission: Option<f32>,
     /// Optional sharp/blurred pane blend, separate from the color tint.
     pub tint_amount: Option<GlassTintAmount>,
+    /// Diffuse pane kernel reach in dp; its Gaussian standard deviation is half this value.
+    pub pane_blur_radius: f32,
     /// Backdrop blur radius in dp (defaults per variant).
     pub blur_radius: Option<f32>,
     /// Radius in dp and opacity of the blurred backdrop mixed with an edge lens’s outer warp.
@@ -641,6 +698,8 @@ pub struct Glass {
     pub key_fill: Option<GlassKeyFill>,
     /// Contour reflection applied before the foreground's spectral dispersion.
     pub contour_highlight: Option<GlassContourHighlight>,
+    /// Directional rim reflection applied above the transmitted and tinted surface.
+    pub specular_highlight: Option<GlassSpecularHighlight>,
     /// Attenuation and illumination applied around the edge-light pass.
     pub face_response: Option<GlassFaceResponse>,
     /// Inset shadow on the transmitted face, covered by the chromatic foreground.
@@ -680,7 +739,9 @@ impl Glass {
             face_tone: None,
             shape: LiquidShape::Capsule,
             tint: None,
+            tint_transmission: None,
             tint_amount: None,
+            pane_blur_radius: 8.0,
             blur_radius: None,
             backdrop_blur: None,
             saturation: None,
@@ -700,6 +761,7 @@ impl Glass {
             face_lighting: true,
             key_fill: None,
             contour_highlight: None,
+            specular_highlight: None,
             face_response: None,
             inner_shadow: None,
             lift: None,
@@ -726,40 +788,14 @@ impl Glass {
     pub fn lens() -> Self {
         Self {
             variant: GlassVariant::Lens,
-            face_tone: None,
-            shape: LiquidShape::Capsule,
             tint: Some(Color::rgba(1.0, 1.0, 1.0, 0.07)),
-            tint_amount: None,
-            blur_radius: None,
-            backdrop_blur: None,
-            saturation: None,
             refraction_depth: 0.34,
-            refraction_depth_dp: None,
-            refraction: GlassRefraction::Radial,
             refraction_curve: 1.0,
             dispersion: 0.30,
-            edge_spectrum: None,
             transmission_refraction: 1.0,
-            meniscus_absorption: 1.0,
-            fold_depth: 0.0,
-            optical_zoom: 1.0,
-            rim_reflection: 1.0,
-            ink_recolor: None,
             highlight: 1.15,
-            face_lighting: true,
-            key_fill: None,
-            contour_highlight: None,
-            face_response: None,
-            inner_shadow: None,
-            lift: None,
-            contrast: None,
-            shadow: true,
-            shadow_style: None,
-            clip: true,
-            foreground: None,
             adaptive_frost: 0.0,
-            adaptive_tone: false,
-            resting_edge_sharpness: 0.0,
+            ..Self::regular()
         }
     }
 
@@ -804,6 +840,15 @@ impl Glass {
 
     pub fn tint(mut self, tint: Color) -> Self {
         self.tint = Some(tint);
+        self
+    }
+
+    /// Colors transmitted light while retaining the backdrop's luminance structure.
+    pub fn transmission_tint(mut self, tint: Color, black: f32) -> Self {
+        if black.is_finite() {
+            self.tint = Some(tint);
+            self.tint_transmission = Some(black.clamp(0.0, 1.0));
+        }
         self
     }
 
@@ -974,6 +1019,14 @@ impl Glass {
         self
     }
 
+    /// Sets the diffuse pane's kernel reach, independently of its sharp transmitted image.
+    pub fn pane_blur_radius(mut self, radius: f32) -> Self {
+        if radius.is_finite() && radius >= 0.0 {
+            self.pane_blur_radius = radius;
+        }
+        self
+    }
+
     /// Crossfades the edge lens’s outer warp with a fixed-radius blurred backdrop.
     /// Radius uses the renderer's Gaussian convention: twice the standard deviation, in dp.
     /// Nonfinite values disable the blend; finite radius is nonnegative and opacity is clamped to 0–1.
@@ -1060,7 +1113,9 @@ impl Glass {
             face_tone: self.face_tone,
             shape: self.shape,
             tint: self.tint.unwrap_or(colors.glass_tint),
+            tint_transmission: self.tint_transmission,
             tint_amount: self.tint_amount,
+            pane_blur_radius: self.pane_blur_radius,
             backdrop_blur: self.backdrop_blur,
             blur_radius_dp: self
                 .blur_radius
@@ -1082,6 +1137,7 @@ impl Glass {
             face_lighting: self.face_lighting,
             key_fill: self.key_fill,
             contour_highlight: self.contour_highlight,
+            specular_highlight: self.specular_highlight,
             face_response: self.face_response,
             inner_shadow: self.inner_shadow,
             lift,
@@ -1118,11 +1174,14 @@ impl Default for Glass {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedGlass {
+    specular_highlight: Option<GlassSpecularHighlight>,
     face_tone: Option<GlassFaceTone>,
     resting_edge_sharpness: f32,
     pub shape: LiquidShape,
     pub tint: Color,
+    tint_transmission: Option<f32>,
     tint_amount: Option<GlassTintAmount>,
+    pane_blur_radius: f32,
     backdrop_blur: Option<(f32, f32)>,
     pub blur_radius_dp: f32,
     pub saturation: f32,
@@ -1173,10 +1232,12 @@ impl ResolvedGlass {
     /// and no spectrum, the shape and the shadow as they were.
     pub(crate) fn without_transparency(mut self, colors: &LiquidColors) -> Self {
         self.tint = colors.surface;
+        self.tint_transmission = None;
         self.tint_amount = None;
         self.backdrop_blur = None;
         self.face_tone = None;
         self.contour_highlight = None;
+        self.specular_highlight = None;
         self.adaptive_tone = false;
         self.blur_radius_dp = 0.0;
         self.saturation = 1.0;
@@ -1564,7 +1625,7 @@ impl ResolvedGlass {
         if let Some(amount) = self.tint_amount {
             shader.set_float(
                 cranpose_ui_graphics::GLASS_PANE_BLEND_UNIFORM,
-                8.0 * density,
+                self.pane_blur_radius * density,
             );
             shader.set_float(
                 cranpose_ui_graphics::GLASS_PANE_BLEND_UNIFORM + 1,
@@ -1595,6 +1656,28 @@ impl ResolvedGlass {
     }
 
     fn set_lighting_uniforms(&self, shader: &mut RuntimeShader, dynamics: &GlassDynamics) {
+        if let Some(values) = self
+            .specular_highlight
+            .and_then(GlassSpecularHighlight::uniforms)
+        {
+            for (index, value) in values.into_iter().enumerate() {
+                shader.set_float(
+                    cranpose_ui_graphics::GLASS_SPECULAR_HIGHLIGHT_UNIFORM + index,
+                    value,
+                );
+            }
+        }
+        shader.set_float(
+            cranpose_ui_graphics::GLASS_CONTACT_LIGHT_UNIFORM,
+            f32::from(dynamics.contact_lighting),
+        );
+        if let Some(black) = self.tint_transmission.filter(|value| value.is_finite()) {
+            shader.set_float2(
+                cranpose_ui_graphics::GLASS_TINT_TRANSMISSION_UNIFORM,
+                black.clamp(0.0, 1.0),
+                1.0,
+            );
+        }
         let (touch_x, touch_y, touch_intensity) = dynamics.touch.unwrap_or((0.0, 0.0, 0.0));
         shader.set_float(118, touch_x);
         shader.set_float(119, touch_y);
@@ -1782,6 +1865,7 @@ fn cached_glass_layers<T: Clone>(
 fn glass_dynamics_match(a: &GlassDynamics, b: &GlassDynamics) -> bool {
     let bits = |d: &GlassDynamics| {
         let GlassDynamics {
+            contact_lighting,
             refraction,
             shadow,
             ring_shadow,
@@ -1798,7 +1882,10 @@ fn glass_dynamics_match(a: &GlassDynamics, b: &GlassDynamics) -> bool {
             press_depth,
         } = d;
         (
-            ring_shadow.map(|(ring, width)| (shadow_bits(ring), width.to_bits())),
+            (
+                *contact_lighting,
+                ring_shadow.map(|(ring, width)| (shadow_bits(ring), width.to_bits())),
+            ),
             refraction.map(|refraction| {
                 match refraction {
                     GlassRefraction::Radial => [0.0, 0.0, 0.0, 0.0],

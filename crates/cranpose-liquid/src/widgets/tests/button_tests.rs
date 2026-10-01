@@ -1,15 +1,6 @@
 use super::*;
 
 #[test]
-fn glass_buttons_expose_button_semantics_to_every_platform_bridge() {
-    let semantics =
-        cranpose_ui::collect_semantics_from_modifier(&with_button_semantics(Modifier::empty()))
-            .expect("glass button semantics");
-    assert_eq!(semantics.role, Some(SemanticsWidgetRole::Button));
-    assert!(semantics.is_clickable);
-}
-
-#[test]
 fn icon_backplate_colors_only_the_compact_foreground_core() {
     let blue = Color::from_rgb_u8(0, 122, 255);
     let spec = GlassButtonSpec::glass()
@@ -24,7 +15,7 @@ fn icon_backplate_colors_only_the_compact_foreground_core() {
 
     let colors = crate::theme::LiquidColors::light(blue);
     let material = GlassButtonSpec::glass()
-        .resolve_material(&colors, colors.label)
+        .resolve_material(&colors, colors.label, 44.0)
         .expect("glass button material");
     assert_eq!(material.resolve(&colors).tint, Color::WHITE.with_alpha(0.2));
 }
@@ -37,7 +28,7 @@ fn neutral_button_surface_has_no_foreground_color_wash() {
         (crate::theme::LiquidColors::dark(accent), 0.0),
     ] {
         let material = GlassButtonSpec::glass()
-            .resolve_material(&colors, accent)
+            .resolve_material(&colors, accent, 34.0)
             .expect("glass button material");
         assert_eq!(
             material.resolve(&colors).tint,

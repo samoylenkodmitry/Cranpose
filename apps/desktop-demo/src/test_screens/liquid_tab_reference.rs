@@ -171,7 +171,7 @@ fn TintControls(amount: cranpose_core::MutableState<GlassTintAmount>, top: f32) 
 }
 
 #[composable]
-pub(crate) fn LiquidTabReference(checkerboard: bool, dark: bool) {
+pub(crate) fn LiquidTabReference(backdrop: ReferenceBackdrop, dark: bool) {
     let scheme = if dark {
         SchemeMode::Dark
     } else {
@@ -195,7 +195,7 @@ pub(crate) fn LiquidTabReference(checkerboard: bool, dark: bool) {
             let selected = rememberMutableStateOf(initial_destination);
             let colors = liquid_colors();
             let insets = local_safe_area_insets().current();
-            BoxWithConstraints(reference_background(checkerboard, dark), move |scope| {
+            BoxWithConstraints(reference_background(backdrop, dark), move |scope| {
                 let symbols = cranpose::remember(|| {
                     [
                         include_bytes!("../../../liquid-reference/reference-content/discover.png")
@@ -281,10 +281,65 @@ pub(crate) fn LiquidTabReference(checkerboard: bool, dark: bool) {
     );
 }
 
-pub(crate) fn reference_background(checkerboard: bool, dark: bool) -> Modifier {
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum ReferenceBackdrop {
+    Solid,
+    Rainbow,
+    Monochrome,
+    Gray(f32),
+    Rgb(Color),
+}
+
+impl ReferenceBackdrop {
+    pub(crate) fn parse(name: &str) -> anyhow::Result<Self> {
+        match name {
+            "solid" => Ok(Self::Solid),
+            "checkerboard" => Ok(Self::Rainbow),
+            "checkerboard-mono" => Ok(Self::Monochrome),
+            _ => {
+                if let Some(rgb) = name.strip_prefix("rgb-") {
+                    let values = rgb
+                        .split(',')
+                        .map(str::parse::<f32>)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    anyhow::ensure!(
+                        values.len() == 3
+                            && values
+                                .iter()
+                                .all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+                        "invalid RGB reference background"
+                    );
+                    return Ok(Self::Rgb(Color::rgb(values[0], values[1], values[2])));
+                }
+                let gray = name
+                    .strip_prefix("gray-")
+                    .and_then(|value| value.parse::<f32>().ok());
+                match gray {
+                    Some(value) if value.is_finite() && (0.0..=1.0).contains(&value) => {
+                        Ok(Self::Gray(value))
+                    }
+                    _ => anyhow::bail!("unknown reference backdrop: {name}"),
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn reference_background(backdrop: ReferenceBackdrop, dark: bool) -> Modifier {
     Modifier::empty().fill_max_size().draw_behind(move |scope| {
+        if let ReferenceBackdrop::Rgb(color) = backdrop {
+            scope.draw_rect(Brush::solid(color));
+            return;
+        }
+        if let ReferenceBackdrop::Gray(value) = backdrop {
+            scope.draw_rect(Brush::solid(Color::rgba(value, value, value, 1.0)));
+            return;
+        }
         scope.draw_rect(Brush::solid(if dark { Color::BLACK } else { Color::WHITE }));
-        if checkerboard {
+        if matches!(
+            backdrop,
+            ReferenceBackdrop::Rainbow | ReferenceBackdrop::Monochrome
+        ) {
             let palette = ReferenceContent::colors();
             let cell = 8.0;
             for row in 0..(scope.size().height / cell).ceil() as usize {
@@ -295,9 +350,21 @@ pub(crate) fn reference_background(checkerboard: bool, dark: bool) -> Modifier {
                         width: cell,
                         height: cell,
                     };
-                    scope.draw_rect_at(rect, Brush::solid(palette[(column + row) % palette.len()]));
-                    if (row + column) % 2 == 0 {
-                        scope.draw_rect_at(rect, Brush::solid(Color::WHITE.with_alpha(0.55)));
+                    if matches!(backdrop, ReferenceBackdrop::Monochrome) {
+                        let color = if (row + column) % 2 == 0 {
+                            Color::WHITE
+                        } else {
+                            Color::BLACK
+                        };
+                        scope.draw_rect_at(rect, Brush::solid(color));
+                    } else {
+                        scope.draw_rect_at(
+                            rect,
+                            Brush::solid(palette[(column + row) % palette.len()]),
+                        );
+                        if (row + column) % 2 == 0 {
+                            scope.draw_rect_at(rect, Brush::solid(Color::WHITE.with_alpha(0.55)));
+                        }
                     }
                 }
             }

@@ -1,6 +1,6 @@
-use crate::{liquid_tab_reference, robot_exit, robot_shot};
-
 use cranpose::{AppLauncher, RobotScreenshot};
+
+use crate::{liquid_tab_reference, robot_exit, robot_shot};
 
 pub(crate) fn main() -> anyhow::Result<()> {
     let json = std::env::var("REFERENCE_CONTENT").unwrap_or_else(|_| {
@@ -42,7 +42,7 @@ pub(crate) fn main() -> anyhow::Result<()> {
             robot.touch_up(240.0, 904.0).expect("release bookmark");
             robot.exit().expect("exit");
         })
-        .try_run(|| liquid_tab_reference::LiquidTabReference(false, false))?;
+        .try_run(|| liquid_tab_reference::LiquidTabReference(liquid_tab_reference::ReferenceBackdrop::Solid, false))?;
     Ok(())
 }
 

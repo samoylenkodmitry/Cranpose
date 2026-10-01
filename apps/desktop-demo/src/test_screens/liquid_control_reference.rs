@@ -14,6 +14,7 @@ pub(crate) enum Control {
     Button,
     ProminentButton,
     Chip,
+    FilterChip,
     Card,
     Menu,
     IconButton,
@@ -31,6 +32,7 @@ impl Control {
             "button" => Self::Button,
             "prominent-button" => Self::ProminentButton,
             "chip" => Self::Chip,
+            "filter-chip" => Self::FilterChip,
             "card" => Self::Card,
             "menu" => Self::Menu,
             "icon-button" => Self::IconButton,
@@ -45,11 +47,11 @@ impl Control {
 #[composable]
 pub(crate) fn LiquidControlReference(
     control: Control,
-    checkerboard: bool,
+    backdrop: super::liquid_tab_reference::ReferenceBackdrop,
     dark: bool,
     initial: f32,
-    gray: Option<f32>,
 ) {
+    let activations = rememberMutableStateOf(|| 0usize);
     LiquidTheme(
         LiquidThemeSpec {
             scheme: if dark {
@@ -63,14 +65,7 @@ pub(crate) fn LiquidControlReference(
         move || {
             let insets = local_safe_area_insets().current();
             Box(
-                gray.map_or_else(
-                    || super::liquid_tab_reference::reference_background(checkerboard, dark),
-                    |value| {
-                        Modifier::empty()
-                            .fill_max_size()
-                            .background(Color::rgba(value, value, value, 1.0))
-                    },
-                ),
+                super::liquid_tab_reference::reference_background(backdrop, dark),
                 BoxSpec::default(),
                 move || {
                     Text(
@@ -95,7 +90,12 @@ pub(crate) fn LiquidControlReference(
                             },
                         ),
                         BoxSpec::default().content_alignment(Alignment::CENTER),
-                        move || ControlContent(control, initial),
+                        move || ControlContent(control, initial, activations),
+                    );
+                    Text(
+                        format!("Activations: {}", activations.get()),
+                        Modifier::empty().offset(150.0, 800.0),
+                        liquid_typography().caption1,
                     );
                     if std::env::var("REFERENCE_RECORDING").as_deref() == Ok("1") {
                         super::liquid_tab_reference::RecordingOverlay();
@@ -107,17 +107,17 @@ pub(crate) fn LiquidControlReference(
 }
 
 #[composable]
-fn ControlContent(control: Control, initial: f32) {
+fn ControlContent(control: Control, initial: f32, activations: cranpose::MutableState<usize>) {
     match control {
-        Control::Slider | Control::Toggle | Control::Segmented | Control::Chip => {
-            ReferenceSelection(control, initial);
+        Control::Slider | Control::Toggle | Control::Segmented | Control::FilterChip => {
+            ReferenceSelection(control, initial, activations);
         }
-        _ => ReferenceSurface(control, initial),
+        _ => ReferenceSurface(control, initial, activations),
     }
 }
 
 #[composable]
-fn ReferenceSelection(control: Control, initial: f32) {
+fn ReferenceSelection(control: Control, initial: f32, activations: cranpose::MutableState<usize>) {
     let value = rememberMutableStateOf(move || initial);
     let selected = rememberMutableStateOf(move || initial as usize);
     let checked = rememberMutableStateOf(move || initial == 1.0);
@@ -140,10 +140,13 @@ fn ReferenceSelection(control: Control, initial: f32) {
                 scope.segment("Saved");
             },
         ),
-        Control::Chip => LiquidActionChip(
+        Control::FilterChip => LiquidChip(
             Modifier::empty(),
             checked.get(),
-            move || checked.set(!checked.get()),
+            move || {
+                checked.set(!checked.get());
+                activations.set(activations.get() + 1);
+            },
             "Unread",
         ),
         _ => unreachable!("selection controls are dispatched by ControlContent"),
@@ -151,7 +154,7 @@ fn ReferenceSelection(control: Control, initial: f32) {
 }
 
 #[composable]
-fn ReferenceSurface(control: Control, initial: f32) {
+fn ReferenceSurface(control: Control, initial: f32, activations: cranpose::MutableState<usize>) {
     match control {
         Control::Button | Control::ProminentButton => {
             let spec = if matches!(control, Control::ProminentButton) {
@@ -159,8 +162,22 @@ fn ReferenceSurface(control: Control, initial: f32) {
             } else {
                 GlassButtonSpec::glass()
             };
-            ReferenceButton("Continue", spec.with_size(GlassButtonSize::Large), || {});
+            ReferenceButton(
+                "Continue",
+                spec.with_size(GlassButtonSize::Large),
+                move || {
+                    activations.set(activations.get() + 1);
+                },
+            );
         }
+        Control::Chip => LiquidActionChip(
+            Modifier::empty(),
+            false,
+            move || {
+                activations.set(activations.get() + 1);
+            },
+            "Unread",
+        ),
         Control::Card => LiquidCard(Modifier::empty().size_points(300.0, 160.0), || {
             Box(
                 Modifier::empty().fill_max_size(),
@@ -177,7 +194,7 @@ fn ReferenceSurface(control: Control, initial: f32) {
             Modifier::empty().content_description("Search"),
             GlassButtonSpec::glass(),
             44.0,
-            || {},
+            move || activations.set(activations.get() + 1),
             icons::SEARCH,
         ),
         Control::Search => {

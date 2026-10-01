@@ -9,6 +9,7 @@ fn reference_control_names_are_validated() {
         "button",
         "prominent-button",
         "chip",
+        "filter-chip",
         "card",
         "menu",
         "icon-button",

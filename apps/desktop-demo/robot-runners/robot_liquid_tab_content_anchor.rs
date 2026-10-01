@@ -1,8 +1,8 @@
-use crate::{liquid_tab_reference, robot_exit, robot_shot};
-
 use std::path::PathBuf;
 
 use cranpose::{AppLauncher, RobotScreenshot};
+
+use crate::{liquid_tab_reference, robot_exit, robot_shot};
 
 pub(crate) fn main() -> anyhow::Result<()> {
     let output = PathBuf::from(
@@ -36,11 +36,16 @@ pub(crate) fn main() -> anyhow::Result<()> {
             for (axis, message) in [
                 "the lens translated the icon relative to neighboring tab anchors",
                 "the moving lens shifted the caption relative to its icon",
-            ].into_iter().enumerate() {
-                let (min, max) = anchors.iter().map(|anchor| anchor[axis]).fold(
-                    (f32::INFINITY, f32::NEG_INFINITY),
-                    |(min, max), value| (min.min(value), max.max(value)),
-                );
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let (min, max) = anchors
+                    .iter()
+                    .map(|anchor| anchor[axis])
+                    .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), value| {
+                        (min.min(value), max.max(value))
+                    });
                 let drift = max - min;
                 println!("Browse anchor axis {axis}: {min}..{max}; drift {drift} pt");
                 if drift > 0.5 {
@@ -49,7 +54,12 @@ pub(crate) fn main() -> anyhow::Result<()> {
             }
             robot.exit().expect("exit");
         })
-        .try_run(|| liquid_tab_reference::LiquidTabReference(false, false))?;
+        .try_run(|| {
+            liquid_tab_reference::LiquidTabReference(
+                liquid_tab_reference::ReferenceBackdrop::Solid,
+                false,
+            );
+        })?;
     Ok(())
 }
 
@@ -59,8 +69,9 @@ fn capture_anchor(robot: &cranpose::Robot, output: &std::path::Path, index: usiz
         .expect("save pixels");
     let browse = ink_center(&shot, 172.417, true, false);
     let caption = ink_center(&shot, 172.417, true, true);
-    let neighbors =
-        (ink_center(&shot, 77.25, false, false).0 + ink_center(&shot, 267.583, false, false).0) * 0.5;
+    let neighbors = (ink_center(&shot, 77.25, false, false).0
+        + ink_center(&shot, 267.583, false, false).0)
+        * 0.5;
     [browse.0 - neighbors, caption.1 - browse.1]
 }
 
@@ -68,7 +79,11 @@ fn ink_center(shot: &RobotScreenshot, center: f32, accent: bool, caption: bool) 
     let scale = shot.width as f32 / shot.logical_width;
     let mut sum = (0.0, 0.0);
     let mut weight = 0.0;
-    let (top, bottom, radius) = if caption { (912.0, 932.0, 40.0) } else { (884.0, 910.0, 24.0) };
+    let (top, bottom, radius) = if caption {
+        (912.0, 932.0, 40.0)
+    } else {
+        (884.0, 910.0, 24.0)
+    };
     for y in (top * scale) as u32..(bottom * scale) as u32 {
         for x in ((center - radius) * scale) as u32..((center + radius) * scale) as u32 {
             let pixel = &shot.pixels[((y * shot.width + x) * 4) as usize..];

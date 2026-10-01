@@ -29,7 +29,8 @@ pub use dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics};
 pub use material::{
     Glass, GlassContourHighlight, GlassDeformation, GlassDynamics, GlassFaceResponse,
     GlassFaceTone, GlassKeyFill, GlassMorph, GlassRefraction, GlassShadow, GlassSpectrum,
-    GlassVariant, LiquidModifierExt, LiquidShape, glass_light_direction, set_glass_light_direction,
+    GlassSpecularHighlight, GlassVariant, LiquidModifierExt, LiquidShape, glass_light_direction,
+    set_glass_light_direction,
 };
 pub use motion::{LiquidMotion, liquid_press_scale};
 pub use theme::{
@@ -47,7 +48,7 @@ pub mod prelude {
         material::{
             Glass, GlassContourHighlight, GlassDeformation, GlassDynamics, GlassFaceResponse,
             GlassFaceTone, GlassKeyFill, GlassMorph, GlassRefraction, GlassShadow, GlassSpectrum,
-            GlassVariant, LiquidModifierExt, LiquidShape,
+            GlassSpecularHighlight, GlassVariant, LiquidModifierExt, LiquidShape,
         },
         motion::{LiquidMotion, liquid_press_scale},
         theme::{

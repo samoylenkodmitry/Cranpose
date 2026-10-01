@@ -107,6 +107,7 @@ private struct ReferenceControl: View {
     @State private var value = Double(ProcessInfo.processInfo.environment["REFERENCE_VALUE"] ?? "0.5") ?? 0.5
     @State private var selection = Int(ProcessInfo.processInfo.environment["REFERENCE_VALUE"] ?? "0") ?? 0
     @State private var checked = ProcessInfo.processInfo.environment["REFERENCE_VALUE"] == "1"
+    @State private var activations = 0
     private let environment = ProcessInfo.processInfo.environment
 
     var body: some View {
@@ -119,6 +120,14 @@ private struct ReferenceControl: View {
         .preferredColorScheme(environment["REFERENCE_SCHEME"] == "dark" ? .dark : .light)
         .overlay(alignment: component == "nav-bar" ? .bottom : .top) {
             Text("Reference control").font(.caption).padding(.vertical, 24)
+        }
+        .overlay(alignment: .bottom) {
+            VStack {
+                Text("Activations: \(activations)")
+                if let error = trace.error {
+                    Text(error).accessibilityIdentifier("trace-error")
+                }
+            }.font(.caption).padding(.bottom, 24)
         }
         .overlay(alignment: .topLeading) {
             if environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" || environment["REFERENCE_RECORDING"] == "1" {
@@ -143,13 +152,17 @@ private struct ReferenceControl: View {
             }
             .pickerStyle(.segmented).frame(width: 300).accessibilityIdentifier("reference-segmented")
         case "button":
-            Button("Continue") {}.buttonStyle(.glass).controlSize(.large)
+            Button("Continue") { activations += 1 }.buttonStyle(.glass).controlSize(.large)
         case "prominent-button":
-            Button("Continue") {}.buttonStyle(.glassProminent).controlSize(.large)
+            Button("Continue") { activations += 1 }.buttonStyle(.glassProminent).controlSize(.large)
         case "chip":
-            Button("Unread") {}.buttonStyle(.glass).controlSize(.small)
+            Button("Unread") { activations += 1 }.buttonStyle(.glass).controlSize(.small)
+        case "filter-chip":
+            Toggle("Unread", isOn: $checked).toggleStyle(.button)
+                .buttonStyle(.glass).controlSize(.small)
+                .onChange(of: checked) { _, _ in activations += 1 }
         case "icon-button":
-            Button("Search", systemImage: "magnifyingglass") {}.labelStyle(.iconOnly)
+            Button("Search", systemImage: "magnifyingglass") { activations += 1 }.labelStyle(.iconOnly)
                 .foregroundStyle(.primary)
                 .frame(width: 44, height: 44).glassEffect(.regular.interactive(), in: .circle)
         case "search":
@@ -239,9 +252,11 @@ private struct ReferenceBackdrop: View {
     var body: some View {
         Canvas { context, size in
             let gray = pattern.hasPrefix("gray-") ? Double(pattern.dropFirst(5)) : nil
-            let background: Color = gray.map { Color(white: min(max($0, 0), 1)) } ?? (colorScheme == .dark ? .black : .white)
+            let rgb = pattern.hasPrefix("rgb-") ? pattern.dropFirst(4).split(separator: ",").compactMap { Double($0) } : []
+            let background: Color = rgb.count == 3 ? Color(red: rgb[0], green: rgb[1], blue: rgb[2])
+                : gray.map { Color(white: min(max($0, 0), 1)) } ?? (colorScheme == .dark ? .black : .white)
             context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(background))
-            if pattern == "checkerboard" {
+            if pattern == "checkerboard" || pattern == "checkerboard-mono" {
                 let colors: [Color] = ReferenceContent.active.palette.map { $0.map(ReferenceContent.color) } ?? [
                     Color(red: 1, green: 0.23, blue: 0.19),
                     Color(red: 1, green: 0.58, blue: 0),
@@ -254,12 +269,15 @@ private struct ReferenceBackdrop: View {
                 let cell: CGFloat = 8
                 for row in 0..<Int(ceil(size.height / cell)) {
                     for column in 0..<Int(ceil(size.width / cell)) {
-                        let color = colors[(column + row) % colors.count]
                         let rect = CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * cell,
                                           width: cell, height: cell)
-                        context.fill(Path(rect), with: .color(color))
-                        if (row + column).isMultiple(of: 2) {
-                            context.fill(Path(rect), with: .color(.white.opacity(0.55)))
+                        if pattern == "checkerboard-mono" {
+                            context.fill(Path(rect), with: .color((row + column).isMultiple(of: 2) ? .white : .black))
+                        } else {
+                            context.fill(Path(rect), with: .color(colors[(column + row) % colors.count]))
+                            if (row + column).isMultiple(of: 2) {
+                                context.fill(Path(rect), with: .color(.white.opacity(0.55)))
+                            }
                         }
                     }
                 }

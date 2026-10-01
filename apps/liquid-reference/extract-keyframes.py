@@ -186,12 +186,13 @@ def _crop_filter(viewport):
     return f"crop=iw*{w}/{width}:ih*{h}/{height}:iw*{x}/{width}:ih*{y}/{height}"
 
 
-def _extract(bundle, output, suite, traces):
+def _extract(bundle, output, suite, traces, test="testInteractionKeyframes()"):
     output.mkdir(parents=True, exist_ok=False)
+    test_id = f"{suite}/{test}"
     _run("xcrun", "xcresulttool", "export", "attachments", "--path", str(bundle),
-         "--output-path", str(output / "attachments"))
+         "--test-id", test_id, "--output-path", str(output / "attachments"))
     activities = json.loads(_run("xcrun", "xcresulttool", "get", "test-results", "activities",
-                                "--path", str(bundle), "--test-id", f"{suite}/testInteractionKeyframes()"))
+                                "--path", str(bundle), "--test-id", test_id))
     (output / "activities.json").write_text(json.dumps(activities, indent=2) + "\n")
     runs = activities["testRuns"]
     if len(runs) != 1:
@@ -295,6 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("bundle", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--suite", default="TabBarTests")
+    parser.add_argument("--test", default="testInteractionKeyframes()")
     parser.add_argument("--traces", type=Path, required=True)
     args = parser.parse_args()
-    _extract(args.bundle, args.output, args.suite, args.traces)
+    _extract(args.bundle, args.output, args.suite, args.traces, args.test)

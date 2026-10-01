@@ -1,3 +1,12 @@
+fn blurred_disk(distance: f32, radius: f32) -> f32 {
+    let z = 0.5 * pow(distance / max(radius, 0.001), 2.0);
+    let p = 0.3934693403 + z * (0.09020401043 + z * (0.007193838983
+        + z * (0.0002919370927 + z * (0.000007171484581 + z * (0.0000001180411444
+        + z * (1.392193893e-9 + z * (1.234065648e-11 + z * (8.520561128e-14
+        + z * (4.711392277e-16 + z * (2.133168193e-18 + z * 8.053494527e-21))))))))));
+    return exp(-z) * p;
+}
+
 fn circular_displacement_profile(depth: f32, height: f32) -> f32 {
     let elevation = clamp(1.0 - depth / max(height, 0.001), 0.0, 1.0);
     return 1.0 - sqrt(max(1.0 - elevation * elevation, 0.0));
@@ -34,4 +43,9 @@ fn smoothed_capsule_distance(position: vec2<f32>, half_size: vec2<f32>, smoothin
     }
     let gradient = q * vec2<f32>(clamp((x + span) / max(2.0 * span, 0.001), 0.0, 1.0), 1.0) / q_length;
     return (q_length - h.y) / max(length(gradient), 0.001);
+}
+fn floating_contact_light(rgb: vec3<f32>, distance: f32, radius: f32, strength: f32) -> vec3<f32> {
+    let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let global = clamp((rgb - vec3<f32>(luma)) * 1.2 + vec3<f32>(luma + 0.05), vec3<f32>(0.0), vec3<f32>(1.0));
+    return mix(mix(rgb, global, strength), vec3<f32>(1.0), blurred_disk(distance, radius) * strength);
 }

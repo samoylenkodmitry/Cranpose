@@ -9,16 +9,16 @@ use cranpose_macros::composable;
 use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{
     Modifier, PointerEventKind, PointerInputScope, SemanticsWidgetRole, Size,
-    rememberMutableInteractionSource,
     text::TextStyle,
     widgets::{Box, BoxSpec, Text},
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 
+use super::floating_button::FloatingButtonSurface;
 use crate::{
     material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape},
-    motion::{LiquidMotion, liquid_press_scale},
+    motion::LiquidMotion,
     theme::{liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
 };
@@ -26,13 +26,6 @@ use crate::{
 const ICON_BACKPLATE_DIAMETER_RATIO: f32 = 0.50;
 const ICON_BACKPLATE_GLYPH_RATIO: f32 = 0.28;
 const TAP_EXIT_SLOP: f32 = 12.0;
-
-fn with_button_semantics(modifier: Modifier) -> Modifier {
-    modifier.stable_semantics(|config| {
-        config.role = Some(SemanticsWidgetRole::Button);
-        config.is_clickable = true;
-    })
-}
 
 /// Visual style of a [`GlassButton`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -177,6 +170,7 @@ impl GlassButtonSpec {
         &self,
         colors: &crate::theme::LiquidColors,
         foreground: Color,
+        height: f32,
     ) -> Option<Glass> {
         if let Some(glass) = &self.glass {
             return Some(if glass.foreground.is_some() {
@@ -188,18 +182,13 @@ impl GlassButtonSpec {
             });
         }
         match self.style {
-            GlassButtonStyle::Glass => {
-                Some(super::glass_surface::control_surface_material(colors.label))
-            }
+            GlassButtonStyle::Glass => Some(super::glass_surface::floating_material(
+                colors.label,
+                height,
+            )),
             GlassButtonStyle::Prominent => Some(
-                super::glass_surface::control_surface_material(colors.label)
-                    .tint(colors.accent)
-                    .face_response(crate::material::GlassFaceResponse {
-                        gain: 1.0,
-                        start_dp: 0.0,
-                        end_dp: 0.0,
-                        illumination: 0.0,
-                    }),
+                super::glass_surface::floating_material(colors.label, height)
+                    .transmission_tint(colors.accent, 0.6),
             ),
             GlassButtonStyle::Plain | GlassButtonStyle::Destructive => None,
         }
@@ -394,70 +383,71 @@ pub fn GlassButton(
     on_click: impl Fn() + 'static,
     content: impl FnMut() + 'static,
 ) {
-    let colors = liquid_colors();
-    let interaction = rememberMutableInteractionSource();
-    let (pressed_modifier, pressed, content_alpha) =
-        liquid_press_scale(Modifier::empty(), interaction, 1.18);
+    GlassButtonWithFeedback(
+        modifier,
+        spec,
+        HapticFeedback::ImpactLight,
+        on_click,
+        content,
+    );
+}
 
-    let material = spec.resolve_material(&colors, spec.content_color(&colors));
-    let mut base = Modifier::empty();
-    if let Some(glass) = material {
-        let pressed_for_glass = pressed;
-        let glow_size = cranpose_core::remember(|| {
-            std::rc::Rc::new(std::cell::Cell::new(cranpose_ui_graphics::Size {
-                width: 0.0,
-                height: 0.0,
-            }))
-        })
-        .with(std::rc::Rc::clone);
-        let glow_size_for_glass = std::rc::Rc::clone(&glow_size);
-        base = base
-            .report_size(std::rc::Rc::clone(&glow_size))
-            .glass_effect_with(glass, move || {
-                let size = glow_size_for_glass.get();
-                let press = if pressed_for_glass.get() { 1.0 } else { 0.0 };
-                let dynamics = GlassDynamics::default();
-                if size.width > 0.0 && size.height > 0.0 {
-                    dynamics.touched_up(press, None, (size.width * 0.5, size.height * 0.5))
-                } else {
-                    dynamics
-                }
-            });
-    }
+#[composable]
+pub(crate) fn GlassButtonWithFeedback(
+    modifier: Modifier,
+    spec: GlassButtonSpec,
+    feedback: HapticFeedback,
+    on_click: impl Fn() + 'static,
+    content: impl FnMut() + 'static,
+) {
+    let colors = liquid_colors();
+    let material = spec.resolve_material(
+        &colors,
+        spec.content_color(&colors),
+        spec.size.minimum_height(),
+    );
+    let (pressed_modifier, base, gesture, illumination, content_activity) =
+        FloatingButtonSurface(material, spec.glass.is_none(), 0.0, feedback, on_click);
 
     let (horizontal_padding, vertical_padding) = spec.size.padding();
-    let base = with_button_semantics(
-        base.press_interaction_source(interaction)
-            .clickable(move |_point| {
-                default_haptics().perform(HapticFeedback::ImpactLight);
-                on_click();
-            })
-            .height_in(spec.size.minimum_height(), f32::INFINITY)
-            .padding_symmetric(horizontal_padding, vertical_padding),
-    );
+    let base = base
+        .height_in(spec.size.minimum_height(), f32::INFINITY)
+        .padding_symmetric(horizontal_padding, vertical_padding);
 
-    let content_layer = Modifier::empty().graphics_layer(move || GraphicsLayer {
-        alpha: content_alpha.get().clamp(0.0, 1.0),
+    let content_fade = if matches!(
+        spec.style,
+        GlassButtonStyle::Glass | GlassButtonStyle::Prominent
+    ) {
+        0.0
+    } else {
+        0.35
+    };
+    let content_layer = illumination.graphics_layer(move || GraphicsLayer {
+        alpha: (1.0 - content_fade * content_activity.get()).clamp(0.0, 1.0),
         ..Default::default()
     });
     let content = Rc::new(RefCell::new(content));
-    let button = modifier.then(base);
-    Box(pressed_modifier, BoxSpec::default(), move || {
-        let content = Rc::clone(&content);
-        let content_layer = content_layer.clone();
-        Box(
-            button.clone(),
-            BoxSpec::default().content_alignment(Alignment::CENTER),
-            move || {
-                let content = Rc::clone(&content);
-                Box(
-                    content_layer.clone(),
-                    BoxSpec::default().content_alignment(Alignment::CENTER),
-                    move || (content.borrow_mut())(),
-                );
-            },
-        );
-    });
+    let button = pressed_modifier.then(base);
+    Box(
+        modifier.then(gesture),
+        BoxSpec::default().propagate_min_constraints(true),
+        move || {
+            let content = Rc::clone(&content);
+            let content_layer = content_layer.clone();
+            Box(
+                button.clone(),
+                BoxSpec::default().content_alignment(Alignment::CENTER),
+                move || {
+                    let content = Rc::clone(&content);
+                    Box(
+                        content_layer.clone(),
+                        BoxSpec::default().content_alignment(Alignment::CENTER),
+                        move || (content.borrow_mut())(),
+                    );
+                },
+            );
+        },
+    );
 }
 
 /// Convenience text label styled for the enclosing button.
@@ -525,52 +515,45 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
     icon_path: &'static str,
 ) {
     let colors = liquid_colors();
-    let interaction = rememberMutableInteractionSource();
-    let (pressed_modifier, pressed, content_alpha) =
-        liquid_press_scale(Modifier::empty(), interaction, 1.20);
-
     let material = spec
-        .resolve_material(&colors, spec.icon_color(&colors))
+        .resolve_material(&colors, spec.icon_color(&colors), diameter)
         .map(|glass| glass.shape(LiquidShape::Circle));
-    let mut base = Modifier::empty();
-    if let Some(glass) = material {
-        let pressed_for_glass = pressed;
-        let half = diameter * 0.5;
-        base = base.glass_effect_with(glass, move || {
-            let press = if pressed_for_glass.get() { 1.0 } else { 0.0 };
-            GlassDynamics::default().touched_up(press, None, (half, half))
-        });
-    }
+    let (pressed_modifier, base, gesture, illumination, content_activity) = FloatingButtonSurface(
+        material,
+        spec.glass.is_none(),
+        diameter * 0.25,
+        HapticFeedback::ImpactLight,
+        on_click,
+    );
 
-    let base = base
-        .press_interaction_source(interaction)
-        .clickable(move |_point| {
-            default_haptics().perform(HapticFeedback::ImpactLight);
-            on_click();
-        })
-        .size(Size::new(diameter, diameter));
+    let base = base.size(Size::new(diameter, diameter));
 
-    let content_layer = Modifier::empty().graphics_layer(move || GraphicsLayer {
-        alpha: content_alpha.get().clamp(0.0, 1.0) * foreground_alpha.clamp(0.0, 1.0),
+    let content_layer = illumination.graphics_layer(move || GraphicsLayer {
+        alpha: (1.0 - 0.85 * content_activity.get()).clamp(0.0, 1.0)
+            * foreground_alpha.clamp(0.0, 1.0),
         ..Default::default()
     });
-    let button = modifier.then(base);
-    Box(pressed_modifier, BoxSpec::default(), move || {
-        let foreground_spec = spec.clone();
-        let content_layer = content_layer.clone();
-        Box(
-            button.clone(),
-            BoxSpec::default().content_alignment(Alignment::CENTER),
-            move || {
-                let foreground_spec = foreground_spec.clone();
-                Box(
-                    content_layer.clone(),
-                    BoxSpec::default().content_alignment(Alignment::CENTER),
-                    move || GlassIconForeground(foreground_spec.clone(), diameter, icon_path),
-                );
-            },
-        );
-    });
+    let button = pressed_modifier.then(base);
+    Box(
+        modifier.then(gesture),
+        BoxSpec::default().propagate_min_constraints(true),
+        move || {
+            let foreground_spec = spec.clone();
+            let content_layer = content_layer.clone();
+            Box(
+                button.clone(),
+                BoxSpec::default().content_alignment(Alignment::CENTER),
+                move || {
+                    let foreground_spec = foreground_spec.clone();
+                    Box(
+                        content_layer.clone(),
+                        BoxSpec::default().content_alignment(Alignment::CENTER),
+                        move || GlassIconForeground(foreground_spec.clone(), diameter, icon_path),
+                    );
+                },
+            );
+        },
+    );
 }
 
 /// A row of circular actions whose pressed glass can join adjacent members.
@@ -756,7 +739,7 @@ pub fn GlassIconButtonGroup(
             .get(active_index)
             .and_then(|item| {
                 item.spec
-                    .resolve_material(&colors, item.spec.icon_color(&colors))
+                    .resolve_material(&colors, item.spec.icon_color(&colors), spec.diameter)
             })
             .and_then(|material| material.tint)
             .map_or(Color(1.0, 1.0, 1.0, 0.035), |tint| tint.with_alpha(0.85));
@@ -847,9 +830,9 @@ pub fn GlassIconButtonGroup(
                 }
             });
             let mut surface = Modifier::empty().size(Size::new(spec.diameter, spec.diameter));
-            if let Some(material) = item
-                .spec
-                .resolve_material(&colors, item.spec.icon_color(&colors))
+            if let Some(material) =
+                item.spec
+                    .resolve_material(&colors, item.spec.icon_color(&colors), spec.diameter)
             {
                 let surface_progress = press_progress;
                 let dynamics_orphaned = Rc::clone(&press_orphaned);
@@ -939,7 +922,7 @@ pub fn GlassIconButtonGroup(
             let ghost_icon = ghost.icon_path;
             let surface = ghost
                 .spec
-                .resolve_material(&colors, ghost.spec.icon_color(&colors))
+                .resolve_material(&colors, ghost.spec.icon_color(&colors), spec.diameter)
                 .map(|material| {
                     Modifier::empty()
                         .size(Size::new(spec.diameter, spec.diameter))

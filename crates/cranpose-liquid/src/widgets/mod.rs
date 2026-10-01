@@ -7,6 +7,7 @@ mod content_scope;
 mod control_lens;
 mod control_material;
 mod control_motion;
+mod floating_button;
 mod glass_surface;
 mod lens_motion;
 mod menu;

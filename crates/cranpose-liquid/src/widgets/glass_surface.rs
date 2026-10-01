@@ -7,7 +7,8 @@ use cranpose_ui_graphics::Color;
 use cranpose_ui_layout::Alignment;
 
 use crate::material::{
-    Glass, GlassFaceResponse, GlassFaceTone, GlassKeyFill, GlassShadow, LiquidModifierExt,
+    Glass, GlassDynamics, GlassFaceResponse, GlassFaceTone, GlassKeyFill, GlassRefraction,
+    GlassShadow, GlassSpecularHighlight, LiquidModifierExt,
 };
 
 pub(crate) fn surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
@@ -53,6 +54,82 @@ pub(crate) fn control_surface_material(foreground: Color) -> Glass {
 
 pub(crate) fn card_surface_material(foreground: Color) -> Glass {
     control_material(foreground, true)
+}
+
+pub(crate) fn floating_material(foreground: Color, height: f32) -> Glass {
+    let dark = foreground.r() * 0.2126 + foreground.g() * 0.7152 + foreground.b() * 0.0722 > 0.5;
+    let mut glass = control_surface_material(foreground)
+        .blur_radius(0.0)
+        .tint_amount(
+            crate::appearance::GlassTintAmount::from_percent(50.0).expect("valid glass fill"),
+        )
+        .pane_blur_radius(32.0)
+        .refraction_depth_dp(16.0)
+        .face_tone(GlassFaceTone {
+            black: if dark { 0.125 } else { 0.4 },
+            white: if dark { 1.125 } else { 1.03 },
+            saturation: if dark { 1.3 } else { 1.2 },
+            max_luminance: if dark { 0.6 } else { 0.94 },
+        });
+    glass.refraction = GlassRefraction::LayeredSurface {
+        reach_dp: 0.0,
+        return_reach_dp: height * 0.5,
+        return_depth_dp: height * 0.25,
+    };
+    glass.face_response = None;
+    glass.specular_highlight = Some(GlassSpecularHighlight {
+        height_dp: 1.0,
+        angle_radians: std::f32::consts::FRAC_PI_2,
+        spread_radians: 80.0_f32.to_radians(),
+        curvature: 0.75,
+        diffuse_amount: 0.15,
+        diffuse_height_dp: 8.0,
+        diffuse_spread_radians: 52.0_f32.to_radians(),
+        saturation: 1.1765,
+        luma_gain: 0.9118,
+        color_bias: 0.1471,
+    });
+    glass
+}
+
+pub(crate) fn floating_dynamics(
+    size: cranpose_ui_graphics::Size,
+    expansion: f32,
+    press: f32,
+    center: (f32, f32),
+) -> GlassDynamics {
+    let height = size.height;
+    let lift = if size.width > 0.0 {
+        1.0 + 16.0 * expansion / size.width
+    } else {
+        1.0
+    };
+    GlassDynamics {
+        morph: Some(crate::material::GlassMorph {
+            node_size: (size.width, size.height),
+            primary: (
+                size.width * 0.5,
+                size.height * 0.5,
+                size.width,
+                size.height,
+                -1.0,
+            ),
+            ..Default::default()
+        }),
+        contact_lighting: true,
+        touch: Some((center.0, center.1, press.clamp(0.0, 1.0))),
+        touch_radius_dp: Some(height * 0.75),
+        refraction: Some(GlassRefraction::LayeredSurface {
+            reach_dp: 0.0,
+            return_reach_dp: height * 0.5 / lift,
+            return_depth_dp: height * 0.25 / lift,
+        }),
+        ring_shadow: Some((
+            GlassShadow::new(Color::BLACK.with_alpha(0.06), 5.0, 8.0, 0.0),
+            4.0,
+        )),
+        ..Default::default()
+    }
 }
 
 fn control_material(foreground: Color, card: bool) -> Glass {
