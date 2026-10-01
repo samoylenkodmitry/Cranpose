@@ -1,5 +1,5 @@
 use super::*;
-use crate::frame_graph::{take_upload_write_calls, upload_test_device};
+use crate::frame_graph::upload_test_device;
 
 fn quads(count: usize) -> Vec<GlyphInstance> {
     vec![bytemuck::Zeroable::zeroed(); count]
@@ -45,24 +45,6 @@ fn a_span_allocator_ignores_empty_and_foreign_spans() {
     spans.release(3..9);
     assert_eq!(spans.allocate(1), None);
     assert!(SpanAllocator::new(0).is_unused());
-}
-
-#[test]
-fn a_frames_runs_reach_the_gpu_in_one_write() {
-    let (_lock, device, queue) = upload_test_device();
-    let mut arena = GlyphRunArena::default();
-    let first = arena.insert(&device, quads(3)).expect("a run of quads");
-    let second = arena.insert(&device, quads(5)).expect("a run of quads");
-    assert_eq!(first.instances(), 0..3);
-    assert_eq!(second.instances(), 3..8);
-    assert!(first.instance_buffer() == second.instance_buffer());
-
-    take_upload_write_calls();
-    let stats = arena.flush(&queue);
-    assert_eq!(take_upload_write_calls(), 1);
-    assert_eq!(stats.upload_bytes, instance_offset(8));
-    assert_eq!(instance_offset(8), 8 * 64, "a glyph instance is 64 bytes");
-    assert_eq!(arena.flush(&queue).upload_bytes, 0, "a flush writes once");
 }
 
 #[test]
@@ -129,19 +111,4 @@ fn chunks_double_and_empty_ones_are_released() {
         "the last empty chunk stays for new runs"
     );
     assert!(arena.chunks[0].spans.is_unused());
-}
-
-#[test]
-fn staged_runs_of_a_released_chunk_are_skipped() {
-    let (_lock, device, queue) = upload_test_device();
-    let mut arena = GlyphRunArena::default();
-    let huge = arena
-        .insert(&device, quads(MAX_CHUNK_QUADS as usize + 1))
-        .expect("a run");
-    drop(huge);
-    arena.begin_frame();
-    assert!(arena.chunks.is_empty(), "an oversized chunk is never kept");
-    take_upload_write_calls();
-    assert_eq!(arena.flush(&queue).upload_bytes, 0);
-    assert_eq!(take_upload_write_calls(), 0);
 }

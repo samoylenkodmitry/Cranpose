@@ -6,7 +6,7 @@
 use std::{cell::Cell, ops::Range, rc::Rc};
 
 use crate::{
-    frame_graph::{FrameCommandStats, write_buffer},
+    frame_graph::{FrameCommandRecorder, FrameCommandStats},
     render::GlyphInstance,
 };
 /// The first chunk's quads; each later chunk doubles up to the largest,
@@ -213,9 +213,11 @@ impl GlyphRunArena {
         });
     }
 
-    /// Writes the staged spans ahead of the submit: one write per stretch of
-    /// spans that sit back to back in a chunk and in the staging.
-    pub(crate) fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
+    pub(crate) fn stage_pending(
+        &mut self,
+        device: &wgpu::Device,
+        recorder: &mut impl FrameCommandRecorder,
+    ) -> FrameCommandStats {
         let mut stats = FrameCommandStats::default();
         let mut index = 0;
         while index < self.staged.len() {
@@ -235,8 +237,8 @@ impl GlyphRunArena {
                 next += 1;
             }
             if let Some(chunk) = self.chunks.iter().find(|chunk| chunk.id == first.chunk) {
-                stats += write_buffer(
-                    queue,
+                stats += recorder.stage_buffer_copy(
+                    device,
                     &chunk.buffer,
                     instance_offset(first.first_quad),
                     bytemuck::cast_slice(&self.staged_instances[instances]),

@@ -11,9 +11,7 @@ use smallvec::SmallVec;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    frame_graph::{
-        FrameCommandRecorder, FrameCommandStats, UploadPlacement, place_upload, write_buffer,
-    },
+    frame_graph::{FrameCommandRecorder, FrameCommandStats, UploadPlacement, place_upload},
     geometry::{
         SegmentTransform, canonicalized_scaled_rect, snap_delta_for_anchor,
         snapped_anchor_device_origin,
@@ -628,12 +626,11 @@ pub(crate) struct ArenaBinding<'a> {
     pub(crate) offsets: [u32; BUFFER_COUNT],
 }
 
-/// One buffer per table with every chunk of the frame laid in it at an
-/// aligned offset, the bytes staged on the CPU until the frame's flush.
 struct ArenaGeneration {
     buffers: [wgpu::Buffer; BUFFER_COUNT],
     capacities: [u64; BUFFER_COUNT],
     staged: [Vec<u8>; BUFFER_COUNT],
+    copied: [usize; BUFFER_COUNT],
     bind_group: wgpu::BindGroup,
 }
 
@@ -658,6 +655,7 @@ impl ArenaGeneration {
             buffers,
             capacities,
             staged: Default::default(),
+            copied: [0; BUFFER_COUNT],
             bind_group,
         }
     }
@@ -687,13 +685,6 @@ impl ArenaGeneration {
     }
 }
 
-/// The frame's arena: the chunks every pass closed, each a set of offsets
-/// into the generation of buffers that held it, and the staging of the
-/// chunk being filled. A chunk that outgrows the buffers opens a larger
-/// generation; the one it left stays bound to the draws already recorded
-/// until the flush writes both. Each table is bound at a fixed size, the
-/// widest chunk seen, so a chunk's dynamic offset needs that much room
-/// after it.
 struct ArenaTables {
     mode: RunBufferMode,
     alignment: u64,
@@ -805,23 +796,42 @@ impl ArenaTables {
         }
     }
 
-    fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
+    fn stage_pending(
+        &mut self,
+        device: &wgpu::Device,
+        recorder: &mut impl FrameCommandRecorder,
+    ) -> FrameCommandStats {
         let mut stats = FrameCommandStats::default();
         for generation in &mut self.generations {
-            for (buffer, staged) in generation.buffers.iter().zip(&mut generation.staged) {
-                if staged.is_empty() {
+            for ((buffer, staged), copied) in generation
+                .buffers
+                .iter()
+                .zip(&mut generation.staged)
+                .zip(&mut generation.copied)
+            {
+                if staged.len() == *copied {
                     continue;
                 }
                 let padded = staged.len().div_ceil(wgpu::COPY_BUFFER_ALIGNMENT as usize)
                     * wgpu::COPY_BUFFER_ALIGNMENT as usize;
                 staged.resize(padded, 0);
-                stats += write_buffer(queue, buffer, 0, staged);
-                staged.clear();
+                stats +=
+                    recorder.stage_buffer_copy(device, buffer, *copied as u64, &staged[*copied..]);
+                *copied = staged.len();
             }
         }
+        stats
+    }
+
+    fn reset(&mut self) {
         let keep = self.generations.len().saturating_sub(1);
         self.generations.drain(..keep);
-        stats
+        for generation in &mut self.generations {
+            for staged in &mut generation.staged {
+                staged.clear();
+            }
+            generation.copied.fill(0);
+        }
     }
 }
 
@@ -931,6 +941,7 @@ impl RunStore {
     /// is wanted, the only reason to walk every record a second time.
     pub(crate) fn invalidate_uploads(&mut self) {
         self.stored.clear();
+        self.arena.reset();
     }
 
     pub(crate) fn begin_frame(&mut self, fill_stats: bool) {
@@ -942,10 +953,16 @@ impl RunStore {
             .retain(|_, run| frame - run.last_used_frame <= STORE_IDLE_FRAMES);
     }
 
-    /// Writes the frame's arena tables, one write per table, ahead of the
-    /// submit.
-    pub(crate) fn flush(&mut self, queue: &wgpu::Queue) -> FrameCommandStats {
-        self.arena.flush(queue)
+    pub(crate) fn finish_frame(&mut self) {
+        self.arena.reset();
+    }
+
+    pub(crate) fn stage_pending(
+        &mut self,
+        device: &wgpu::Device,
+        recorder: &mut impl FrameCommandRecorder,
+    ) -> FrameCommandStats {
+        self.arena.stage_pending(device, recorder)
     }
 
     pub(crate) fn stored_count(&self) -> usize {
