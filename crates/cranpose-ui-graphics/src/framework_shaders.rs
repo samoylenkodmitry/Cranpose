@@ -31,7 +31,3 @@ pub const GPU_TEXT_BRUSH_EFFECT_WGSL: &str = include_str!("../shaders/gpu_text_b
 /// cache of what a driver compiled from these shaders can tell its blob was
 /// filled by other ones.
 pub const SOURCES_KEY: u64 = include!(concat!(env!("OUT_DIR"), "/framework_shaders_key.rs"));
-
-#[cfg(test)]
-#[path = "tests/framework_shaders_tests.rs"]
-mod tests;

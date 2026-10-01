@@ -79,14 +79,13 @@ pub(crate) fn load(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
     Some(cache)
 }
 
-/// Names what fills a blob: the framework's shaders, and this crate's version
-/// for the shader rewrites, pipeline layouts and translator between those
-/// sources and the driver.
+/// Names what fills a blob: the framework's WGSL sources, and this crate's
+/// version, which changes with each release of the shader rewrites, pipeline
+/// layouts and translator between those sources and the driver.
 ///
 /// The driver keeps every pipeline of the blob it loads in the cache it saves,
-/// so a blob kept across builds collects the pipelines of every shader edit,
-/// and the driver holds all of it resident. A blob under another key is
-/// dropped instead, and refilled with this build's pipelines alone.
+/// so a blob kept across shader changes only grows, and the driver holds all
+/// of it resident. A blob under another key loads cold and is replaced.
 fn blob_key() -> [u8; 8] {
     let mut hasher = FxHasher::default();
     hasher.write_u64(cranpose_ui_graphics::framework_shaders::SOURCES_KEY);
