@@ -1,7 +1,9 @@
-use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
+use cranpose_render_common::graph::{
+    DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+};
 use cranpose_ui_graphics::{
-    Brush, Color, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape,
-    Point, Rect, RoundedCornerShape,
+    BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
+    LayerShape, Point, Rect, RenderEffect, RoundedCornerShape, ShadowPrimitive,
 };
 use support::{capture_graph_settled, draw_node, page_graph, solid_rect};
 
@@ -239,4 +241,153 @@ fn a_rounded_bar_a_panel_cuts_keeps_its_surface() {
         "both draw through the surface: {}",
         support::describe_differing(&differing)
     );
+}
+
+fn shadow_children(full_bleed: bool, recorded: bool, blend_depth: usize) -> Vec<RenderNode> {
+    let fill = DrawPrimitive::Rect {
+        rect: if full_bleed {
+            CLIP
+        } else {
+            Rect {
+                x: 30.0,
+                y: 14.0,
+                width: 60.0,
+                height: 12.0,
+            }
+        },
+        brush: Brush::solid(Color::WHITE),
+        stroke: None,
+    };
+    let mut shadow = DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+        shape: Box::new(DrawPrimitive::Rect {
+            rect: Rect {
+                width: 20.0,
+                height: 20.0,
+                ..CLIP
+            },
+            brush: Brush::solid(Color::BLACK),
+            stroke: None,
+        }),
+        cutout: None,
+        blur_radius: 4.0,
+        blend_mode: BlendMode::SrcOver,
+    });
+    for _ in 0..blend_depth {
+        shadow = DrawPrimitive::Blend {
+            primitive: Box::new(shadow),
+            blend_mode: BlendMode::SrcOver,
+        };
+    }
+    let primitives = vec![fill, shadow];
+    if recorded {
+        vec![RenderNode::DrawRun(DrawRunNode::new(
+            PrimitivePhase::BeforeChildren,
+            primitives,
+        ))]
+    } else {
+        primitives
+            .into_iter()
+            .map(|primitive| draw_node(primitive, None))
+            .collect()
+    }
+}
+
+#[test]
+fn shadows_in_recorded_and_loose_content_respect_rounded_clip_pixels() {
+    let mut renderer = support::headless_renderer().expect("GPU renderer");
+    for full_bleed in [false, true] {
+        for (recorded, blend_depth) in [(false, 0), (true, 0), (true, 1), (true, 2)] {
+            let children = shadow_children(full_bleed, recorded, blend_depth);
+            let reference = capture_graph_settled(
+                &mut renderer,
+                clipped(children.clone(), true),
+                WIDTH,
+                HEIGHT,
+            );
+            let actual =
+                capture_graph_settled(&mut renderer, clipped(children, false), WIDTH, HEIGHT);
+            let label =
+                format!("full_bleed={full_bleed}, recorded={recorded}, blend_depth={blend_depth}");
+            support::assert_same_bytes(&label, WIDTH, &actual.pixels, &reference.pixels);
+            let pixel = |x: u32, y: u32| {
+                let start = ((y * WIDTH + x) * 4) as usize;
+                &actual.pixels[start..start + 4]
+            };
+            assert_eq!(
+                pixel(20, 20),
+                pixel(0, 0),
+                "{label}: clipped corner shows the page"
+            );
+            assert_ne!(
+                pixel(30, 30),
+                pixel(0, 0),
+                "{label}: shadow is visible inside the arc"
+            );
+        }
+    }
+}
+
+fn backdrop_over_rounded_fill(radius: f32) -> RenderGraph {
+    let mut graph = on_page(
+        CLIP,
+        AT,
+        rounded(radius, false),
+        vec![solid_rect(CLIP, Color(0.85, 0.15, 0.2, 1.0))],
+    );
+    let mut backdrop = shared_test_support::layer_node(
+        CLIP,
+        ProjectiveTransform::translation(AT.x, AT.y),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::blur(4.0)),
+            clip: true,
+            ..GraphicsLayer::default()
+        },
+        Vec::new(),
+    );
+    backdrop.node_id = Some(901);
+    graph
+        .root
+        .children
+        .push(RenderNode::Layer(Box::new(backdrop)));
+    graph
+}
+
+#[test]
+fn a_backdrop_updates_when_only_the_captured_clip_radius_changes() {
+    let mut renderer = support::headless_renderer().expect("GPU renderer");
+    let mut fresh = support::LockedRenderer::beside_locked().expect("reference GPU renderer");
+    let initial = capture_graph_settled(
+        &mut renderer,
+        backdrop_over_rounded_fill(4.0),
+        WIDTH,
+        HEIGHT,
+    );
+    for _ in 0..3 {
+        support::capture_graph(
+            &mut renderer,
+            backdrop_over_rounded_fill(4.0),
+            WIDTH,
+            HEIGHT,
+        );
+    }
+    let expected =
+        capture_graph_settled(&mut fresh, backdrop_over_rounded_fill(20.0), WIDTH, HEIGHT);
+    assert_ne!(
+        initial.pixels, expected.pixels,
+        "the radius change must alter visible pixels"
+    );
+    for frame in 0..3 {
+        let actual = support::capture_graph(
+            &mut renderer,
+            backdrop_over_rounded_fill(20.0),
+            WIDTH,
+            HEIGHT,
+        );
+        support::assert_same_bytes(
+            &format!("radius change, frame {frame}"),
+            WIDTH,
+            &actual.pixels,
+            &expected.pixels,
+        );
+    }
 }

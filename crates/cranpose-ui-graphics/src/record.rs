@@ -752,8 +752,9 @@ impl RecordTables {
 pub struct RecordingSummary {
     /// Any text, including inside a blend: glyph masks want rigid snapping.
     pub has_text: bool,
+    /// Any shadow, including inside a blend.
     pub has_shadow: bool,
-    /// Any primitive besides a shadow.
+    /// Any drawable primitive besides a shadow, including inside a blend.
     pub has_non_shadow: bool,
     /// Any image or text, including inside a blend: content that resamples
     /// badly on a fractionally offset surface.
@@ -762,6 +763,7 @@ pub struct RecordingSummary {
 
 impl RecordingSummary {
     fn note(&mut self, primitive: &DrawPrimitive) {
+        let primitive = unwrap_blend(primitive);
         if matches!(primitive, DrawPrimitive::Shadow(_)) {
             self.has_shadow = true;
             return;
@@ -770,7 +772,7 @@ impl RecordingSummary {
             return;
         }
         self.has_non_shadow = true;
-        match unwrap_blend(primitive) {
+        match primitive {
             DrawPrimitive::Text(_) => {
                 self.has_text = true;
                 self.has_pixel_sensitive = true;
