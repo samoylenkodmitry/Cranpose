@@ -17,7 +17,9 @@ fn the_sources_key_is_the_key_of_the_shaders_on_disk() {
 
 #[test]
 fn the_key_follows_every_shader_and_nothing_else() {
-    let dir = std::env::temp_dir().join(format!("cranpose-shaders-key-{}", std::process::id()));
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/test-output")
+        .join(format!("shaders-key-{}", std::process::id()));
     fs::create_dir_all(&dir).expect("create shader directory");
     fs::write(dir.join("a.wgsl"), "fn a() {}").expect("write a");
     fs::write(dir.join("b.wgsl"), "fn b() {}").expect("write b");

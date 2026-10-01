@@ -58,9 +58,8 @@ pub(crate) fn load(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
         }
     });
     let data = file.as_deref().and_then(current_blob);
-    // SAFETY: `data` is `persist`'s own `get_data` output under this build's
-    // key, and `fallback: true` has wgpu validate the header and fall back to
-    // an empty cache.
+    // SAFETY: `data` is this build's own `get_data` output, and `fallback:
+    // true` has wgpu validate the header and fall back to an empty cache.
     #[expect(unsafe_code)]
     let cache = unsafe {
         device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {

@@ -23,7 +23,9 @@ fn a_pipeline_reached_late_in_a_session_persists_too() {
 }
 
 fn scratch_file(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("cranpose-pipeline-blob-{}", std::process::id()));
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../target/test-output")
+        .join(format!("pipeline-blob-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create blob directory");
     dir.join(name)
 }
