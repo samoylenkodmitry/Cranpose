@@ -181,7 +181,7 @@ impl SlotTable {
             .ok_or_else(|| ValueSlotError::TypeMismatch {
                 anchor: slot.anchor(),
                 expected: std::any::type_name::<T>(),
-                actual: (record.type_name)(),
+                actual: (record.payload_type.type_name)(),
             })
     }
 
@@ -207,7 +207,7 @@ impl SlotTable {
             .ok_or_else(|| ValueSlotError::TypeMismatch {
                 anchor: slot.anchor(),
                 expected: std::any::type_name::<T>(),
-                actual: (record.type_name)(),
+                actual: (record.payload_type.type_name)(),
             })
     }
 

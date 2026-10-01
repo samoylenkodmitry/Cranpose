@@ -328,12 +328,10 @@ fn validate_reports_payload_count_mismatch_structurally() {
         super::PayloadRecord {
             owner,
             anchor: extra_anchor,
-            type_id: TypeId::of::<i32>(),
-            type_name: std::any::type_name::<i32>,
+            payload_type: crate::slot::PayloadType::of::<i32>(),
             source: crate::slot::BRANCH_PATH_ROOT,
             kind: super::PayloadKind::Internal,
             value: Box::new(0_i32),
-            fresh: None,
         },
     );
     table.payload_anchors.set_active(extra_anchor, owner, 1);

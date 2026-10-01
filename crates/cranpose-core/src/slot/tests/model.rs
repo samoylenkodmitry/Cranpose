@@ -565,7 +565,7 @@ fn assert_active_payload_value(table: &SlotTable, slot: ValueSlotId, expected: &
 fn assert_payload_record_value(record: &PayloadRecord, expected: &ModelPayloadValue) {
     match expected {
         ModelPayloadValue::I32(value) => {
-            assert_eq!(record.type_id, TypeId::of::<i32>());
+            assert_eq!(record.payload_type.type_id, TypeId::of::<i32>());
             assert_eq!(
                 *record
                     .value
@@ -575,7 +575,7 @@ fn assert_payload_record_value(record: &PayloadRecord, expected: &ModelPayloadVa
             );
         }
         ModelPayloadValue::U32(value) => {
-            assert_eq!(record.type_id, TypeId::of::<u32>());
+            assert_eq!(record.payload_type.type_id, TypeId::of::<u32>());
             assert_eq!(
                 *record
                     .value

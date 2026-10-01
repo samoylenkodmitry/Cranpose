@@ -104,7 +104,7 @@ impl SlotTable {
     pub(crate) fn take_effect_drops(&mut self) -> Vec<DeferredDrop> {
         let mut drops = Vec::new();
         self.payloads.for_each_mut(|payload| {
-            if let Some(fresh) = payload.fresh {
+            if let Some(fresh) = payload.payload_type.fresh {
                 let old = std::mem::replace(&mut payload.value, fresh());
                 drops.push(DeferredDrop::payload(old));
             }
