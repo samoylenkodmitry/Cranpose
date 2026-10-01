@@ -533,16 +533,16 @@ impl AnyModifierElement for DirectElement {
         self.shared_element_type
     }
 
-    fn create_node(&self) -> Box<dyn ModifierNode> {
+    fn create_node(&self) -> Rc<RefCell<dyn ModifierNode>> {
         match self.kind {
-            DirectNodeKind::A => Box::new(DirectNodeA {
+            DirectNodeKind::A => Rc::new(RefCell::new(DirectNodeA {
                 state: NodeState::new(),
                 log: self.log.clone(),
-            }),
-            DirectNodeKind::B => Box::new(DirectNodeB {
+            })),
+            DirectNodeKind::B => Rc::new(RefCell::new(DirectNodeB {
                 state: NodeState::new(),
                 log: self.log.clone(),
-            }),
+            })),
         }
     }
 

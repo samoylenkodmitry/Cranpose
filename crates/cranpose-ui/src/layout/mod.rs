@@ -2427,7 +2427,7 @@ impl Measurable for CoordinatorLink<'_, '_, '_> {
 
 struct CoordinatorNode {
     modifier_index: usize,
-    node: Rc<RefCell<Box<dyn cranpose_foundation::ModifierNode>>>,
+    node: Rc<RefCell<dyn cranpose_foundation::ModifierNode>>,
     measured_size: Cell<Size>,
     accumulated_offset: Cell<Point>,
 }
@@ -2435,7 +2435,7 @@ struct CoordinatorNode {
 impl CoordinatorNode {
     fn new(
         modifier_index: usize,
-        node: Rc<RefCell<Box<dyn cranpose_foundation::ModifierNode>>>,
+        node: Rc<RefCell<dyn cranpose_foundation::ModifierNode>>,
     ) -> Self {
         Self {
             modifier_index,
@@ -2448,7 +2448,7 @@ impl CoordinatorNode {
     fn matches(
         &self,
         modifier_index: usize,
-        node: &Rc<RefCell<Box<dyn cranpose_foundation::ModifierNode>>>,
+        node: &Rc<RefCell<dyn cranpose_foundation::ModifierNode>>,
     ) -> bool {
         self.modifier_index == modifier_index && Rc::ptr_eq(&self.node, node)
     }
