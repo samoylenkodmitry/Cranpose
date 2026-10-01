@@ -1038,6 +1038,71 @@ fn a_bare_render_invalidation_re_presents_without_scene_work() {
 }
 
 #[test]
+fn returning_to_a_previous_viewport_restores_layout_and_hit_geometry() {
+    let _guard = test_guard();
+    let presses = Rc::new(Cell::new(0));
+    let recorded = Rc::clone(&presses);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let recorded = Rc::clone(&recorded);
+            Box(
+                Modifier::empty().fill_max_size().padding(8.0),
+                BoxSpec::new().content_alignment(Alignment::CENTER),
+                move || {
+                    let recorded = Rc::clone(&recorded);
+                    Text(
+                        "Tap",
+                        Modifier::empty()
+                            .size(Size::new(40.0, 20.0))
+                            .clickable(move |_| recorded.set(recorded.get() + 1)),
+                        TextStyle::default(),
+                    );
+                },
+            );
+        },
+    );
+
+    for size in [
+        Size::new(240.0, 120.0),
+        Size::new(160.0, 80.0),
+        Size::new(240.0, 120.0),
+    ] {
+        shell.set_viewport(size.width, size.height);
+        shell.update();
+        let tree = shell.layout_tree().expect("layout after resize");
+        assert_eq!(
+            tree.root().rect,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: size.width,
+                height: size.height,
+            }
+        );
+        let target = find_layout_box_with_text(tree.root(), "Tap").expect("clickable text");
+        assert_eq!(
+            target.rect,
+            Rect {
+                x: (size.width - 40.0) * 0.5,
+                y: (size.height - 20.0) * 0.5,
+                width: 40.0,
+                height: 20.0,
+            }
+        );
+    }
+
+    assert!(!shell.set_cursor(80.0, 40.0));
+    assert!(shell.set_cursor(120.0, 60.0));
+    assert!(shell.pointer_pressed());
+    shell.update();
+    assert!(shell.pointer_released());
+    shell.update();
+    assert_eq!(presses.get(), 1);
+}
+
+#[test]
 fn two_app_shells_do_not_share_density_or_render_invalidations() {
     let _guard = test_guard();
     reset_public_render_state_for_test();
