@@ -513,16 +513,30 @@ fn child_placement(layer: &LayerNode) -> Placement {
     }
 }
 
-/// The radius the layer's `visual_clip` keeps: the rounding it entered
-/// with, while its own clip leaves that clip whole. A clip that cuts the
+/// The radius the layer's clip keeps: the rounding it entered with, while
+/// its own clip, `layer_clip`, holds the rounded one. A clip that cuts the
 /// rounded one is a rect nothing under it may round; what reaches its
 /// corners kept the rounded layer on a surface.
-fn radius_within(visual_clip: Option<Rect>, context: &WalkContext) -> f32 {
-    if visual_clip == context.visual_clip {
-        context.clip_radius
-    } else {
-        0.0
-    }
+fn radius_within(layer_clip: Option<Rect>, context: &WalkContext) -> f32 {
+    let keeps = match (layer_clip, context.visual_clip) {
+        (None, _) => true,
+        (Some(own), Some(rounded)) => clip_holds(own, rounded),
+        (Some(_), None) => false,
+    };
+    if keeps { context.clip_radius } else { 0.0 }
+}
+
+/// Edges this close count as one: a clip met through other sums lands a few
+/// ulps away from the rect it bounds.
+const CLIP_HOLD_SLACK: f32 = 1e-3;
+
+/// Whether `outer` holds `inner` whole, its edges taken within
+/// [`CLIP_HOLD_SLACK`].
+fn clip_holds(outer: Rect, inner: Rect) -> bool {
+    inner.x >= outer.x - CLIP_HOLD_SLACK
+        && inner.y >= outer.y - CLIP_HOLD_SLACK
+        && inner.x + inner.width <= outer.x + outer.width + CLIP_HOLD_SLACK
+        && inner.y + inner.height <= outer.y + outer.height + CLIP_HOLD_SLACK
 }
 
 /// How `child` places under `context`: a rounded clip draws in place only
@@ -539,7 +553,7 @@ fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
             });
             let whole = context
                 .visual_clip
-                .is_none_or(|outer| clip.is_some_and(|clip| outer.intersect(clip) == Some(clip)));
+                .is_none_or(|outer| clip.is_some_and(|clip| clip_holds(outer, clip)));
             if whole && context.clip_radius == 0.0 {
                 Placement::DirectRounded(translation, radius)
             } else {
@@ -844,7 +858,7 @@ fn collect_into(
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
         return;
     }
-    let clip_radius = radius_within(visual_clip, &context);
+    let clip_radius = radius_within(layer_clip, &context);
     let translated = context.translated || layer.translated_content_context;
     let allow_rigid_snap = translated || !layer.motion_context_animated;
     let boundary_anchor =

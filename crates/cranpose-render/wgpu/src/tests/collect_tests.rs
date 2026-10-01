@@ -323,6 +323,54 @@ fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() 
 }
 
 #[test]
+fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums() {
+    // From the workspace port on a phone: the bar lies inside the panel's
+    // clip, but the panel clip met with the bar's rect sums its width an
+    // ulp away from the bar's own.
+    let bar = LayerNode {
+        local_bounds: rect(0.0, 0.0, 218.33333, 4.0),
+        graphics_layer: GraphicsLayer {
+            clip: true,
+            shape: LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
+            ..Default::default()
+        },
+        transform_to_parent: ProjectiveTransform::translation(979.3333, 220.33334),
+        children: vec![shapes_run(vec![white_rect(rect(0.0, 0.0, 218.33333, 4.0))])],
+        ..Default::default()
+    };
+    let panel = WalkContext {
+        offset: Point::default(),
+        visual_clip: Some(rect(900.0, 204.33334, 380.0, 147.66666)),
+        clip_radius: 0.0,
+        snap_anchor: None,
+        translated: false,
+    };
+    assert!(matches!(
+        placement_in(&bar, &panel),
+        Placement::DirectRounded(..)
+    ));
+    let rounded = WalkContext {
+        visual_clip: Some(rect(979.3333, 220.33334, 218.33333, 4.0)),
+        clip_radius: 2.0,
+        ..panel
+    };
+    assert_eq!(
+        radius_within(Some(rect(979.3333, 220.33334, 218.33333, 4.0)), &rounded),
+        2.0
+    );
+    assert_eq!(
+        radius_within(None, &rounded),
+        2.0,
+        "a layer with no clip keeps the rounding"
+    );
+    assert_eq!(
+        radius_within(Some(rect(979.3333, 220.33334, 100.0, 4.0)), &rounded),
+        0.0,
+        "a clip that cuts the rounded one keeps none"
+    );
+}
+
+#[test]
 fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_does() {
     let mut parent = LayerNode {
         local_bounds: rect(0.0, 0.0, 400.0, 300.0),
