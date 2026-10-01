@@ -635,6 +635,28 @@ enum BatchedEffect<'a> {
 }
 
 impl<'a> BatchedEffect<'a> {
+    fn shader(self) -> Option<&'a Arc<RuntimeShader>> {
+        match self {
+            Self::Shader(shader) | Self::BlurThenShader(_, shader) => Some(shader),
+            Self::Blur(_) => None,
+        }
+    }
+
+    fn input_hash(self) -> u64 {
+        let mut hasher = capture_hasher();
+        self.shader().is_some().hash(&mut hasher);
+        self.blur().is_some().hash(&mut hasher);
+        if let Some(blur) = self.blur() {
+            blur.radius_x.to_bits().hash(&mut hasher);
+            blur.radius_y.to_bits().hash(&mut hasher);
+            blur.tile_mode.hash(&mut hasher);
+        }
+        if let Some(shader) = self.shader() {
+            shader.hash_substrates(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     fn blur(self) -> Option<BlurSpec> {
         match self {
             Self::Blur(blur) | Self::BlurThenShader(blur, _) => Some(blur),
@@ -1314,14 +1336,17 @@ fn replayed_kind(
             source_viewport: *source_viewport,
         },
         ResolvedCompositeKind::Shader {
-            shader,
             source_region,
             source_logical_size,
             substrate_regions,
             alpha,
             ..
         } => ResolvedCompositeKind::Shader {
-            shader: Arc::clone(shader),
+            shader: Arc::clone(
+                item.batched
+                    .and_then(BatchedEffect::shader)
+                    .expect("cached shader inputs"),
+            ),
             layer_pixel_rect: item.layer_pixel_rect(),
             source_region: *source_region,
             source_logical_size: *source_logical_size,
@@ -3001,11 +3026,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         (kept, indices)
     }
 
-    /// The cache key of a backdrop whose result can be reused: the hash of
-    /// everything its capture reads, relative to the capture, with the
-    /// effect and the capture's size. None when the backdrop is not batched,
-    /// has no node, reads a projected parent page, or reads a texture drawn
-    /// anew every frame.
     fn backdrop_cache_key(
         &self,
         pass: &mut LayerPass<'_>,
@@ -3013,7 +3033,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         layout: u64,
     ) -> Option<LayerRasterCacheKey> {
         let node_id = item.node_id?;
-        item.batched.as_ref()?;
+        let effect = item.batched?;
         if NO_BACKDROP_CACHE.flag() {
             return None;
         }
@@ -3062,11 +3082,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             return None;
         }
         layout.hash(&mut hasher);
-        let [x, y, width, height] = item.layer_pixel_rect();
+        let [x, y, width, height] = if layout == 0
+            || effect.shader().is_none()
+            || effect.substrates().contains(&SubstrateSpec::Mean)
+        {
+            item.layer_pixel_rect()
+        } else {
+            [0.0, 0.0, item.capture_rect.width, item.capture_rect.height]
+        };
         Some(LayerRasterCacheKey::backdrop_effect(
             Some(node_id),
             hasher.finish(),
-            item.effect.render_hash(),
+            effect.input_hash(),
             Rect {
                 x,
                 y,
@@ -3246,7 +3273,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .intersect(pass.target_rect())
             .unwrap_or(visible)
             .snap_out();
-        let item = PendingBackdrop {
+        let mut item = PendingBackdrop {
             z,
             node_id: child.node_id,
             key: None,
@@ -3266,14 +3293,26 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let items = [&item];
             let layout = self.plan_stage(&items);
             if layout.placements[0].is_some() {
-                return self
-                    .run_stage(pass, &items, &layout)?
+                item.key = self.backdrop_cache_key(pass, &item, layout.signature(0));
+                if let Some(cached) = self.cached_backdrop(&item) {
+                    return Ok(cached);
+                }
+                let items = [&item];
+                let mut outputs = self.run_stage(pass, &items, &layout)?;
+                self.admit_backdrops(&items, &mut outputs);
+                return outputs
                     .pop()
                     .ok_or_else(|| "a child backdrop substrate produced no composite".into());
             }
         }
+        item.key = self.backdrop_cache_key(pass, &item, 0);
+        if let Some(cached) = self.cached_backdrop(&item) {
+            return Ok(cached);
+        }
         let capture = self.capture(pass, z, capture_rect, "Child Backdrop Capture")?;
-        self.resolve_captured_backdrop(&item, capture, scale)
+        let mut output = self.resolve_captured_backdrop(&item, capture, scale)?;
+        self.admit_backdrops(&[&item], std::slice::from_mut(&mut output));
+        Ok(output)
     }
 
     /// Places every batched member of a stage into the atlas, in item order.

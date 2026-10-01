@@ -980,6 +980,111 @@ fn stacked_cached_glasses(first_blur: f32, identified: bool) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
+fn animated_substrate_scene(
+    tint: f32,
+    changed_source: bool,
+    stacked: bool,
+    isolated: bool,
+    identified: bool,
+) -> RenderGraph {
+    let mut shader = RuntimeShader::new(&format!(
+        r#"{RUNTIME_SHADER_PRELUDE_WGSL}
+@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+    let region = u[58u];
+    let uv = (region.xy + clamp(input.uv, 0.5 / region.zw, vec2<f32>(1.0) - 0.5 / region.zw) * region.zw) / vec2<f32>(textureDimensions(input_texture));
+    let source = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
+    return vec4<f32>(mix(source.rgb, vec3<f32>(0.1, 0.7, 0.9), u[0u].x), 1.0);
+}}
+"#
+    ));
+    shader.set_batched_source(true);
+    shader.set_substrates(&[SubstrateSpec::Blur { radius_px: 12.0 }]);
+    shader.set_float(0, tint);
+    let mut children = striped_page();
+    if changed_source {
+        children.push(solid_rect(
+            rect(GLASS_LEFT, GLASS_TOP, 24.0, 30.0),
+            Color::BLACK,
+        ));
+    }
+    for (index, effect) in [
+        Some(RenderEffect::runtime_shader(shader)),
+        stacked.then(|| RenderEffect::blur(2.0)),
+    ]
+    .into_iter()
+    .flatten()
+    .enumerate()
+    {
+        let mut node = glass_layer(0, effect);
+        let RenderNode::Layer(layer) = &mut node else {
+            unreachable!()
+        };
+        layer.node_id = identified.then_some(900 + index);
+        layer.isolation.explicit_offscreen = isolated;
+        if isolated {
+            layer.graphics_layer.compositing_strategy =
+                cranpose_ui_graphics::CompositingStrategy::Offscreen;
+        }
+        children.push(node);
+    }
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+#[test]
+fn animated_shader_reuses_unchanged_substrates_and_updates_glass_above_it() {
+    let mut renderer = support::headless_renderer().expect("substrate renderer");
+    for (stacked, isolated) in [(false, false), (true, false), (false, true), (true, true)] {
+        let references = [0.2, 0.6, 1.0].map(|tint| {
+            capture(
+                &mut renderer,
+                animated_substrate_scene(tint, false, stacked, isolated, false),
+            )
+        });
+        let changed_source_reference = capture(
+            &mut renderer,
+            animated_substrate_scene(0.6, true, stacked, isolated, false),
+        );
+        let before = capture(
+            &mut renderer,
+            animated_substrate_scene(0.0, false, stacked, isolated, true),
+        );
+        for (tint, reference) in [0.2, 0.6, 1.0].into_iter().zip(references) {
+            let changed = capture(
+                &mut renderer,
+                animated_substrate_scene(tint, false, stacked, isolated, true),
+            );
+            let stats = renderer
+                .last_frame_stats()
+                .expect("animated substrate stats");
+            assert_eq!(
+                support::max_channel_delta(&changed.pixels, &reference.pixels),
+                0,
+                "live shader and dependent glass must match uncached rendering"
+            );
+            assert_ne!(
+                before.pixels, changed.pixels,
+                "the tint must visibly change"
+            );
+            if !stacked {
+                assert_eq!(
+                    stats.blur_passes, 0,
+                    "a uniform-only change must reuse the unchanged blurred source: {stats:?}"
+                );
+            }
+        }
+        let changed = capture(
+            &mut renderer,
+            animated_substrate_scene(0.6, true, stacked, isolated, true),
+        );
+        assert_eq!(
+            support::max_channel_delta(&changed.pixels, &changed_source_reference.pixels),
+            0,
+            "changed source must invalidate its substrate"
+        );
+    }
+}
+
 #[test]
 fn a_cached_backdrop_tracks_the_effect_of_the_glass_beneath_it() {
     let Ok(mut renderer) = support::headless_renderer() else {
