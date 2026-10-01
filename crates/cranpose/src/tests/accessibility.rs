@@ -54,7 +54,7 @@ fn voiceover_reorders_only_when_native_elements_change() {
     assert!(!voiceover_same_structure(&[first], &[text.clone()]));
     let mut focused = text.clone();
     focused.focused = true;
-    focused.text_selection = Some((0, 0));
+    focused.update_details(|details| details.text_selection = Some((0, 0)));
     assert!(!voiceover_same_structure(&[text], &[focused]));
 }
 
@@ -86,11 +86,11 @@ fn a_pane_title_preserves_dialog_and_control_roles_on_the_web() {
         (AccessibilityRole::Toolbar, "toolbar"),
         (AccessibilityRole::StaticText, "region"),
     ] {
-        let element = AccessibilityElement {
+        let mut element = AccessibilityElement {
             role,
-            pane_title: Some("Preferences".into()),
             ..Default::default()
         };
+        element.update_details(|details| details.pane_title = Some("Preferences".into()));
         assert_eq!(web_role(&element), expected);
     }
 }
@@ -107,9 +107,12 @@ fn opening_a_dialog_reports_its_identity_once() {
 #[test]
 fn a_named_adjustable_range_preserves_its_web_control_role() {
     let mut element = AccessibilityElement {
-        pane_title: Some("Volume".into()),
-        progress: Some(cranpose_ui::ProgressBarRangeInfo::new(40.0, 0.0, 100.0, 0)),
-        adjustable: true,
+        details: Some(Box::new(AccessibilityDetails {
+            pane_title: Some("Volume".into()),
+            progress: Some(cranpose_ui::ProgressBarRangeInfo::new(40.0, 0.0, 100.0, 0)),
+            adjustable: true,
+            ..Default::default()
+        })),
         ..Default::default()
     };
     assert_eq!(web_role(&element), "slider");
@@ -124,7 +127,10 @@ fn voiceover_values_include_control_state_without_repeating_the_label() {
         label: "Notifications".into(),
         value: Some("Notifications".into()),
         toggled: Some(true),
-        error: Some("Network unavailable".into()),
+        details: Some(Box::new(AccessibilityDetails {
+            error: Some("Network unavailable".into()),
+            ..Default::default()
+        })),
         ..Default::default()
     };
     assert_eq!(
@@ -136,7 +142,7 @@ fn voiceover_values_include_control_state_without_repeating_the_label() {
         voiceover_value(&element).as_deref(),
         Some("off, invalid, Network unavailable")
     );
-    element.state_description = Some("Paused".into());
+    element.update_details(|details| details.state_description = Some("Paused".into()));
     assert_eq!(
         voiceover_value(&element).as_deref(),
         Some("Paused, invalid, Network unavailable")
@@ -149,7 +155,10 @@ fn voiceover_values_keep_text_state_and_collection_position_together() {
         role: AccessibilityRole::TextField,
         label: "Name".into(),
         value: Some("Ada".into()),
-        state_description: Some("Required".into()),
+        details: Some(Box::new(AccessibilityDetails {
+            state_description: Some("Required".into()),
+            ..Default::default()
+        })),
         collection_item: Some(CollectionItem {
             position: 2,
             count: 3,
@@ -175,7 +184,10 @@ fn voiceover_passwords_never_read_values_and_radios_read_checked_state() {
     assert_eq!(voiceover_value(&element).as_deref(), Some("not checked"));
     element = AccessibilityElement {
         role: AccessibilityRole::TextField,
-        password: true,
+        details: Some(Box::new(AccessibilityDetails {
+            password: true,
+            ..Default::default()
+        })),
         value: Some("private".into()),
         ..Default::default()
     };
@@ -206,7 +218,7 @@ fn inspector_uses_sanitized_projection_and_reports_actions_and_state() {
     button.enabled = true;
     button.focused = true;
     button.clickable = true;
-    button.custom_actions = vec!["Archive".into()];
+    button.update_details(|details| details.custom_actions = vec!["Archive".into()]);
     let inspected = inspector_node(button);
     assert_eq!(inspected.node_id, 42);
     assert_eq!(inspected.canvas_key, Some(7));
@@ -216,7 +228,7 @@ fn inspector_uses_sanitized_projection_and_reports_actions_and_state() {
     assert!(inspected.details.contains("Activate, Archive"));
     assert!(inspected.details.contains("Enabled: true  Focused: true"));
     let mut password = element_with(43, None);
-    password.password = true;
+    password.update_details(|details| details.password = true);
     password.value = Some("private password".into());
     let inspected = inspector_node(password);
     assert!(inspected.details.contains("[protected]"));
@@ -281,8 +293,8 @@ fn merged_names_exclude_independent_controls_and_passwords() {
         handler: SemanticsCallback::new(3),
     });
     let mut password = text_node(4, "secret passphrase");
-    password.editable_text = true;
-    password.password = true;
+    password.update_details(|details| details.editable_text = true);
+    password.update_details(|details| details.password = true);
     password.text = Some("secret passphrase".into());
     let tree = merged_test_row(vec![text_node(2, "Account"), button, password]);
     let projected = project_test_tree(&tree);
@@ -299,11 +311,15 @@ fn merged_names_exclude_independent_controls_and_passwords() {
 #[test]
 fn a_merge_does_not_swallow_slider_or_custom_action_controls() {
     let mut slider = text_node(3, "Volume");
-    slider.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(|_| true));
+    slider.update_details(|details| {
+        details.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(|_| true));
+    });
     let mut action = text_node(4, "Attachment");
-    action
-        .custom_actions
-        .push(SemanticsCustomAction::new("Download", || {}));
+    action.update_details(|details| {
+        details
+            .custom_actions
+            .push(SemanticsCustomAction::new("Download", || {}));
+    });
     let tree = merged_test_row(vec![text_node(2, "Player"), slider, action]);
     let projected = project_test_tree(&tree);
     assert_eq!(
@@ -341,11 +357,17 @@ fn only_an_editable_field_publishes_an_empty_value() {
     let pane = SemanticsNode {
         node_id: 1,
         text: Some(String::new()),
-        pane_title: Some("Settings".into()),
+        details: Some(Box::new(SemanticsDetails {
+            pane_title: Some("Settings".into()),
+            ..Default::default()
+        })),
         children: vec![SemanticsNode {
             node_id: 2,
             text: Some(String::new()),
-            editable_text: true,
+            details: Some(Box::new(SemanticsDetails {
+                editable_text: true,
+                ..Default::default()
+            })),
             focusable: true,
             description: Some("Search".into()),
             ..SemanticsNode::default()
@@ -368,17 +390,20 @@ fn action_test_node() -> SemanticsNode {
     SemanticsNode {
         node_id: 2,
         text: Some("abc".into()),
-        set_progress: Some(cranpose_ui::SemanticsSetProgress::new(|_| true)),
-        set_text: Some(cranpose_ui::SemanticsSetText::new(|_| true)),
-        set_selection: Some(cranpose_ui::SemanticsSetSelection::new(|_, _| true)),
-        expand: Some(cranpose_ui::SemanticsExpand::new(|| true)),
-        collapse: Some(cranpose_ui::SemanticsExpand::new(|| true)),
-        dismiss: Some(cranpose_ui::SemanticsDismiss::new(|| true)),
-        on_long_click: Some(cranpose_ui::SemanticsLongClick::new(|| true)),
-        on_magic_tap: Some(cranpose_ui::SemanticsMagicTap::new(|| true)),
-        scroll_by: Some(cranpose_ui::SemanticsScrollBy::new(|_, _| true)),
-        scroll_to_index: Some(cranpose_ui::SemanticsScrollToIndex::new(|_| true)),
-        custom_actions: vec![SemanticsCustomAction::new("Run", || {})],
+        details: Some(Box::new(SemanticsDetails {
+            set_progress: Some(cranpose_ui::SemanticsSetProgress::new(|_| true)),
+            set_text: Some(cranpose_ui::SemanticsSetText::new(|_| true)),
+            set_selection: Some(cranpose_ui::SemanticsSetSelection::new(|_, _| true)),
+            expand: Some(cranpose_ui::SemanticsExpand::new(|| true)),
+            collapse: Some(cranpose_ui::SemanticsExpand::new(|| true)),
+            dismiss: Some(cranpose_ui::SemanticsDismiss::new(|| true)),
+            on_long_click: Some(cranpose_ui::SemanticsLongClick::new(|| true)),
+            on_magic_tap: Some(cranpose_ui::SemanticsMagicTap::new(|| true)),
+            scroll_by: Some(cranpose_ui::SemanticsScrollBy::new(|_, _| true)),
+            scroll_to_index: Some(cranpose_ui::SemanticsScrollToIndex::new(|_| true)),
+            custom_actions: vec![SemanticsCustomAction::new("Run", || {})],
+            ..Default::default()
+        })),
         ..SemanticsNode::default()
     }
 }
@@ -432,13 +457,15 @@ fn disabled_canvas_actions_do_not_invoke_the_callback() {
     let calls = Rc::new(Cell::new(0));
     let count = Rc::clone(&calls);
     let mut root = action_test_node();
-    root.canvas_children.push(
-        CanvasSemanticsNode::control(9, rect(0.0, 0.0, 48.0, 48.0), "Play").with_custom_action(
-            SemanticsCustomAction::new("Pause", move || count.set(count.get() + 1)),
-        ),
-    );
+    root.update_details(|details| {
+        details.canvas_children.push(
+            CanvasSemanticsNode::control(9, rect(0.0, 0.0, 48.0, 48.0), "Play").with_custom_action(
+                SemanticsCustomAction::new("Pause", move || count.set(count.get() + 1)),
+            ),
+        );
+    });
     assert!(perform_custom_action(&root, 2, Some(9), 0));
-    root.canvas_children[0].enabled = false;
+    root.update_details(|details| details.canvas_children[0].enabled = false);
     assert!(!perform_custom_action(&root, 2, Some(9), 0));
     assert_eq!(calls.get(), 1);
 }
@@ -540,24 +567,20 @@ fn actionable_parent_uses_descendant_text_without_duplicate_leaf() {
 #[test]
 fn drawn_controls_become_elements_positioned_inside_their_canvas() {
     let canvas_id = 7;
-    let mut root = node(
+    let mut root = canvas_node(
         canvas_id,
-        SemanticsRole::Layout,
-        Vec::new(),
-        None,
-        Vec::new(),
+        vec![
+            CanvasSemanticsNode::text(1, rect(0.0, 0.0, 200.0, 30.0), "SETTINGS")
+                .with_role(SemanticsWidgetRole::Header),
+            CanvasSemanticsNode::control(2, rect(0.0, 40.0, 200.0, 52.0), "Haptics")
+                .with_role(SemanticsWidgetRole::Switch)
+                .with_toggled(true)
+                .with_state_description("On"),
+            CanvasSemanticsNode::control(3, rect(0.0, 100.0, 200.0, 52.0), "Reset progress")
+                .with_click_label("Reset")
+                .with_enabled(false),
+        ],
     );
-    root.canvas_children = vec![
-        CanvasSemanticsNode::text(1, rect(0.0, 0.0, 200.0, 30.0), "SETTINGS")
-            .with_role(SemanticsWidgetRole::Header),
-        CanvasSemanticsNode::control(2, rect(0.0, 40.0, 200.0, 52.0), "Haptics")
-            .with_role(SemanticsWidgetRole::Switch)
-            .with_toggled(true)
-            .with_state_description("On"),
-        CanvasSemanticsNode::control(3, rect(0.0, 100.0, 200.0, 52.0), "Reset progress")
-            .with_click_label("Reset")
-            .with_enabled(false),
-    ];
     root.node_generation = 9;
     let bounds =
         HashMap::from_iter([(canvas_id, AccessibilityRect::new(20.0, 100.0, 200.0, 300.0))]);
@@ -581,11 +604,14 @@ fn drawn_controls_become_elements_positioned_inside_their_canvas() {
     assert_eq!(projected[1].label, "Haptics");
     assert_eq!(projected[1].role, AccessibilityRole::Switch);
     assert_eq!(projected[1].toggled, Some(true));
-    assert_eq!(projected[1].state_description.as_deref(), Some("On"));
+    assert_eq!(
+        projected[1].details().state_description.as_deref(),
+        Some("On")
+    );
     assert!(projected[1].clickable);
     assert_eq!(projected[1].bounds.center(), (120.0, 166.0));
 
-    assert_eq!(projected[2].click_label.as_deref(), Some("Reset"));
+    assert_eq!(projected[2].details().click_label.as_deref(), Some("Reset"));
     assert!(!projected[2].enabled);
 }
 
@@ -609,7 +635,7 @@ fn tab(node_id: NodeId, label: &str, picked: bool) -> SemanticsNode {
 
 fn tab_group(node_id: NodeId, tabs: Vec<SemanticsNode>) -> SemanticsNode {
     let mut group = node(node_id, SemanticsRole::Layout, Vec::new(), None, tabs);
-    group.selectable_group = true;
+    group.update_details(|details| details.selectable_group = true);
     group
 }
 
@@ -633,7 +659,7 @@ fn tabs_in_a_group_know_their_place() {
     let projected = project_semantics(&placed(&root, &bounds));
 
     assert_eq!(
-        projected[0].collection,
+        projected[0].details().collection,
         Some(CollectionInfo {
             rows: 1,
             columns: 3
@@ -674,7 +700,9 @@ fn a_tab_pages_the_list_around_its_group() {
         None,
         vec![tab_group(2, vec![tab(3, "Home", true)])],
     );
-    list.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false));
+    list.update_details(|details| {
+        details.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false));
+    });
     let bounds = HashMap::from_iter([
         (1, AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
         (2, AccessibilityRect::new(0.0, 0.0, 300.0, 60.0)),
@@ -694,6 +722,12 @@ fn a_tab_pages_the_list_around_its_group() {
 
 fn root_of(node: SemanticsNode) -> SemanticsNode {
     node
+}
+
+fn canvas_node(node_id: NodeId, controls: Vec<CanvasSemanticsNode>) -> SemanticsNode {
+    let mut canvas = node(node_id, SemanticsRole::Layout, Vec::new(), None, Vec::new());
+    canvas.update_details(|details| details.canvas_children = controls);
+    canvas
 }
 
 fn text_node(node_id: NodeId, label: &str) -> SemanticsNode {
@@ -734,7 +768,7 @@ fn a_pane_is_published_with_its_title_and_no_label() {
             Vec::new(),
         )],
     );
-    screen.pane_title = Some("Library".into());
+    screen.update_details(|details| details.pane_title = Some("Library".into()));
     let bounds = HashMap::from_iter([
         (1, AccessibilityRect::new(0.0, 0.0, 300.0, 600.0)),
         (2, AccessibilityRect::new(0.0, 0.0, 300.0, 40.0)),
@@ -744,7 +778,10 @@ fn a_pane_is_published_with_its_title_and_no_label() {
 
     assert_eq!(projected.len(), 2, "the pane and its text: {projected:?}");
     assert_eq!(projected[0].label, "");
-    assert_eq!(projected[0].pane_title.as_deref(), Some("Library"));
+    assert_eq!(
+        projected[0].details().pane_title.as_deref(),
+        Some("Library")
+    );
     assert_eq!(projected[1].label, "Milk");
     assert_eq!(
         projected[1].scroll_parent,
@@ -841,8 +878,8 @@ fn a_hidden_node_and_everything_under_it_stay_out() {
 
 fn projected_field(name: Option<&str>, text: &str, password: bool) -> Vec<AccessibilityElement> {
     let mut field = node(2, SemanticsRole::Layout, Vec::new(), name, Vec::new());
-    field.editable_text = true;
-    field.password = password;
+    field.update_details(|details| details.editable_text = true);
+    field.update_details(|details| details.password = password);
     field.text = Some(text.to_owned());
     let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
     let bounds = HashMap::from_iter([
@@ -877,18 +914,14 @@ fn a_named_text_field_keeps_its_name_and_carries_its_text() {
 #[test]
 fn drawn_controls_without_a_label_or_a_size_are_not_published() {
     let canvas_id = 4;
-    let mut root = node(
+    let root = canvas_node(
         canvas_id,
-        SemanticsRole::Layout,
-        Vec::new(),
-        None,
-        Vec::new(),
+        vec![
+            CanvasSemanticsNode::control(1, rect(0.0, 0.0, 100.0, 40.0), "   "),
+            CanvasSemanticsNode::control(2, rect(0.0, 40.0, 100.0, 0.0), "Off screen"),
+            CanvasSemanticsNode::control(3, rect(0.0, 60.0, 100.0, 40.0), "Visible"),
+        ],
     );
-    root.canvas_children = vec![
-        CanvasSemanticsNode::control(1, rect(0.0, 0.0, 100.0, 40.0), "   "),
-        CanvasSemanticsNode::control(2, rect(0.0, 40.0, 100.0, 0.0), "Off screen"),
-        CanvasSemanticsNode::control(3, rect(0.0, 60.0, 100.0, 40.0), "Visible"),
-    ];
     let bounds = HashMap::from_iter([(canvas_id, AccessibilityRect::new(0.0, 0.0, 100.0, 200.0))]);
 
     let projected = project_semantics(&placed(&root, &bounds));
@@ -910,17 +943,19 @@ fn a_labelled_canvas_keeps_its_own_element_ahead_of_its_drawn_controls() {
         Vec::new(),
     );
     root.widget_role = Some(SemanticsWidgetRole::RadioButton);
-    root.state_description = Some("CAMPAIGN".into());
-    root.on_click_label = Some("CAMPAIGN".into());
+    root.update_details(|details| details.state_description = Some("CAMPAIGN".into()));
+    root.update_details(|details| details.on_click_label = Some("CAMPAIGN".into()));
     root.selected = Some(true);
-    root.canvas_children = vec![
-        CanvasSemanticsNode::control(1, rect(60.0, 10.0, 80.0, 40.0), "CAMPAIGN")
-            .with_role(SemanticsWidgetRole::RadioButton)
-            .with_selected(true),
-        CanvasSemanticsNode::control(2, rect(60.0, 150.0, 80.0, 40.0), "DAILY")
-            .with_role(SemanticsWidgetRole::RadioButton)
-            .with_selected(false),
-    ];
+    root.update_details(|details| {
+        details.canvas_children = vec![
+            CanvasSemanticsNode::control(1, rect(60.0, 10.0, 80.0, 40.0), "CAMPAIGN")
+                .with_role(SemanticsWidgetRole::RadioButton)
+                .with_selected(true),
+            CanvasSemanticsNode::control(2, rect(60.0, 150.0, 80.0, 40.0), "DAILY")
+                .with_role(SemanticsWidgetRole::RadioButton)
+                .with_selected(false),
+        ];
+    });
     let bounds = HashMap::from_iter([(canvas_id, AccessibilityRect::new(0.0, 0.0, 200.0, 200.0))]);
 
     let projected = project_semantics(&placed(&root, &bounds));
@@ -928,8 +963,14 @@ fn a_labelled_canvas_keeps_its_own_element_ahead_of_its_drawn_controls() {
     assert_eq!(projected.len(), 3);
     assert_eq!(projected[0].canvas_key, None);
     assert_eq!(projected[0].role, AccessibilityRole::RadioButton);
-    assert_eq!(projected[0].state_description.as_deref(), Some("CAMPAIGN"));
-    assert_eq!(projected[0].click_label.as_deref(), Some("CAMPAIGN"));
+    assert_eq!(
+        projected[0].details().state_description.as_deref(),
+        Some("CAMPAIGN")
+    );
+    assert_eq!(
+        projected[0].details().click_label.as_deref(),
+        Some("CAMPAIGN")
+    );
     assert_eq!(projected[1].label, "CAMPAIGN");
     assert_eq!(projected[1].selected, Some(true));
     assert_eq!(projected[2].label, "DAILY");
@@ -946,16 +987,21 @@ fn custom_action_labels_reach_the_platform_in_publication_order() {
         Some("Level 4. Score 120."),
         Vec::new(),
     );
-    root.custom_actions = vec![
-        SemanticsCustomAction::new("Pause", || {}),
-        SemanticsCustomAction::new("Restart", || {}),
-    ];
+    root.update_details(|details| {
+        details.custom_actions = vec![
+            SemanticsCustomAction::new("Pause", || {}),
+            SemanticsCustomAction::new("Restart", || {}),
+        ];
+    });
     let bounds = HashMap::from_iter([(arena_id, AccessibilityRect::new(0.0, 0.0, 200.0, 200.0))]);
 
     let projected = project_semantics(&placed(&root, &bounds));
 
     assert_eq!(projected.len(), 1);
-    assert_eq!(projected[0].custom_actions, vec!["Pause", "Restart"]);
+    assert_eq!(
+        projected[0].details().custom_actions,
+        vec!["Pause", "Restart"]
+    );
 }
 
 #[test]
@@ -971,25 +1017,22 @@ fn a_custom_action_runs_the_handler_the_tree_currently_holds() {
         None,
         Vec::new(),
     );
-    root.custom_actions = vec![SemanticsCustomAction::new("Pause", {
-        let fired = Rc::clone(&fired);
-        move || fired.borrow_mut().push("pause")
-    })];
-    let mut child = node(
+    root.update_details(|details| {
+        details.custom_actions = vec![SemanticsCustomAction::new("Pause", {
+            let fired = Rc::clone(&fired);
+            move || fired.borrow_mut().push("pause")
+        })];
+    });
+    let child = canvas_node(
         canvas_id,
-        SemanticsRole::Layout,
-        Vec::new(),
-        None,
-        Vec::new(),
+        vec![
+            CanvasSemanticsNode::control(42, rect(0.0, 0.0, 40.0, 40.0), "Haptics")
+                .with_custom_action(SemanticsCustomAction::new("Toggle", {
+                    let fired = Rc::clone(&fired);
+                    move || fired.borrow_mut().push("toggle")
+                })),
+        ],
     );
-    child.canvas_children = vec![
-        CanvasSemanticsNode::control(42, rect(0.0, 0.0, 40.0, 40.0), "Haptics").with_custom_action(
-            SemanticsCustomAction::new("Toggle", {
-                let fired = Rc::clone(&fired);
-                move || fired.borrow_mut().push("toggle")
-            }),
-        ),
-    ];
     root.children = vec![child];
 
     assert!(perform_custom_action(&root, arena_id, None, 0));
@@ -1014,7 +1057,9 @@ fn rebuilding_a_custom_action_handler_is_not_a_published_change() {
             Some("Level 4."),
             Vec::new(),
         );
-        root.custom_actions = vec![SemanticsCustomAction::new("Pause", handler)];
+        root.update_details(|details| {
+            details.custom_actions = vec![SemanticsCustomAction::new("Pause", handler)];
+        });
         project_semantics(&placed(&root, &bounds))
     };
 
@@ -1026,7 +1071,10 @@ fn live_text(node_id: NodeId, text: &str) -> AccessibilityElement {
         node_id,
         label: text.into(),
         bounds: AccessibilityRect::new(0.0, 0.0, 10.0, 10.0),
-        live_region: Some(cranpose_ui::LiveRegionMode::Polite),
+        details: Some(Box::new(AccessibilityDetails {
+            live_region: Some(cranpose_ui::LiveRegionMode::Polite),
+            ..Default::default()
+        })),
         ..AccessibilityElement::default()
     }
 }
@@ -1051,7 +1099,10 @@ fn pane(node_id: NodeId, title: &str) -> AccessibilityElement {
     AccessibilityElement {
         node_id,
         bounds: AccessibilityRect::new(0.0, 0.0, 300.0, 600.0),
-        pane_title: Some(title.into()),
+        details: Some(Box::new(AccessibilityDetails {
+            pane_title: Some(title.into()),
+            ..Default::default()
+        })),
         ..AccessibilityElement::default()
     }
 }
@@ -1103,7 +1154,7 @@ fn an_element_that_kept_its_words_is_not_a_spoken_change() {
 fn a_new_error_is_a_spoken_change() {
     let before = live_text(1, "Amount");
     let mut after = live_text(1, "Amount");
-    after.error = Some("needs a number".into());
+    after.update_details(|details| details.error = Some("needs a number".into()));
     assert_eq!(spoken(&[before], &[after.clone()]), vec![true]);
     assert_eq!(
         state_with_error(&after).as_deref(),
@@ -1116,7 +1167,7 @@ fn a_password_field_never_reads_its_text_out() {
     let named = projected_field(Some("Passphrase"), "hunter2", true);
     assert_eq!(named[0].label, "Passphrase");
     assert_eq!(named[0].value, None, "the text stays unspoken");
-    assert!(named[0].password);
+    assert!(named[0].details().password);
 
     let unnamed = projected_field(None, "hunter2", true);
     assert_eq!(unnamed[0].label, "password", "no name reads no secret");
@@ -1181,7 +1232,7 @@ fn a_control_that_opens_reads_as_closed_and_back() {
         None,
         Vec::new(),
     );
-    row.expand = Some(cranpose_ui::SemanticsExpand::new(|| true));
+    row.update_details(|details| details.expand = Some(cranpose_ui::SemanticsExpand::new(|| true)));
     let root = node(
         1,
         SemanticsRole::Layout,
@@ -1196,7 +1247,7 @@ fn a_control_that_opens_reads_as_closed_and_back() {
 
     let closed = project_semantics(&placed(&root, &bounds));
     assert_eq!(
-        closed[0].expanded,
+        closed[0].details().expanded,
         Some(false),
         "a control that opens is closed"
     );
@@ -1205,11 +1256,13 @@ fn a_control_that_opens_reads_as_closed_and_back() {
     assert!(!set_expanded(&root, 2, false), "it has no way to close yet");
 
     let mut open = row;
-    open.expand = None;
-    open.collapse = Some(cranpose_ui::SemanticsExpand::new(|| true));
+    open.update_details(|details| details.expand = None);
+    open.update_details(|details| {
+        details.collapse = Some(cranpose_ui::SemanticsExpand::new(|| true));
+    });
     let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![open]);
     let projected = project_semantics(&placed(&root, &bounds));
-    assert_eq!(projected[0].expanded, Some(true));
+    assert_eq!(projected[0].details().expanded, Some(true));
     assert_eq!(expansion_word(&projected[0]), Some("expanded"));
     assert!(set_expanded(&root, 2, false));
 }
@@ -1218,13 +1271,15 @@ fn a_control_that_opens_reads_as_closed_and_back() {
 fn a_control_says_what_it_does_when_a_reader_sends_it_away() {
     let ran = Rc::new(Cell::new(0));
     let mut row = text_node(2, "Milk");
-    row.dismiss = Some(cranpose_ui::SemanticsDismiss::new({
-        let ran = Rc::clone(&ran);
-        move || {
-            ran.set(ran.get() + 1);
-            true
-        }
-    }));
+    row.update_details(|details| {
+        details.dismiss = Some(cranpose_ui::SemanticsDismiss::new({
+            let ran = Rc::clone(&ran);
+            move || {
+                ran.set(ran.get() + 1);
+                true
+            }
+        }));
+    });
     let quiet = text_node(3, "Bread");
     let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![row, quiet]);
     let bounds = HashMap::from_iter([
@@ -1234,8 +1289,14 @@ fn a_control_says_what_it_does_when_a_reader_sends_it_away() {
     ]);
 
     let projected = project_semantics(&placed(&root, &bounds));
-    assert!(projected[0].dismissable, "the row says it has a way out");
-    assert!(!projected[1].dismissable, "the other row says nothing");
+    assert!(
+        projected[0].details().dismissable,
+        "the row says it has a way out"
+    );
+    assert!(
+        !projected[1].details().dismissable,
+        "the other row says nothing"
+    );
     assert_eq!(listed_actions(&projected[0]), vec![DISMISS_LABEL]);
     assert!(listed_actions(&projected[1]).is_empty());
 
@@ -1248,17 +1309,21 @@ fn a_control_says_what_it_does_when_a_reader_sends_it_away() {
 fn the_way_out_sits_after_the_actions_the_app_named() {
     let ran = Rc::new(Cell::new(String::new()));
     let mut row = text_node(2, "Milk");
-    row.custom_actions = vec![cranpose_ui::SemanticsCustomAction::new("Pin", {
-        let ran = Rc::clone(&ran);
-        move || ran.set("Pin".into())
-    })];
-    row.dismiss = Some(cranpose_ui::SemanticsDismiss::new({
-        let ran = Rc::clone(&ran);
-        move || {
-            ran.set("Dismiss".into());
-            true
-        }
-    }));
+    row.update_details(|details| {
+        details.custom_actions = vec![cranpose_ui::SemanticsCustomAction::new("Pin", {
+            let ran = Rc::clone(&ran);
+            move || ran.set("Pin".into())
+        })];
+    });
+    row.update_details(|details| {
+        details.dismiss = Some(cranpose_ui::SemanticsDismiss::new({
+            let ran = Rc::clone(&ran);
+            move || {
+                ran.set("Dismiss".into());
+                true
+            }
+        }));
+    });
     let (root, bounds) = one_row_tree(row);
 
     let projected = project_semantics(&placed(&root, &bounds));
@@ -1274,20 +1339,24 @@ fn the_way_out_sits_after_the_actions_the_app_named() {
 fn a_long_press_is_named_and_sits_after_the_custom_actions() {
     let ran = Rc::new(Cell::new(0));
     let mut row = text_node(2, "Milk");
-    row.custom_actions = vec![cranpose_ui::SemanticsCustomAction::new("Pause", || {})];
-    row.on_long_click_label = Some("Remove receipt".into());
-    row.on_long_click = Some(cranpose_ui::SemanticsLongClick::new({
-        let ran = Rc::clone(&ran);
-        move || {
-            ran.set(ran.get() + 1);
-            true
-        }
-    }));
+    row.update_details(|details| {
+        details.custom_actions = vec![cranpose_ui::SemanticsCustomAction::new("Pause", || {})];
+    });
+    row.update_details(|details| details.on_long_click_label = Some("Remove receipt".into()));
+    row.update_details(|details| {
+        details.on_long_click = Some(cranpose_ui::SemanticsLongClick::new({
+            let ran = Rc::clone(&ran);
+            move || {
+                ran.set(ran.get() + 1);
+                true
+            }
+        }));
+    });
     let (root, bounds) = one_row_tree(row);
 
     let projected = project_semantics(&placed(&root, &bounds));
     assert_eq!(
-        projected[0].long_click_label.as_deref(),
+        projected[0].details().long_click_label.as_deref(),
         Some("Remove receipt")
     );
     assert_eq!(
@@ -1308,16 +1377,21 @@ fn a_control_with_no_long_press_offers_none_and_a_nameless_one_is_still_read() {
     let mut plain = text_node(2, "Milk");
     let (root, bounds) = one_row_tree(plain.clone());
     assert_eq!(
-        project_semantics(&placed(&root, &bounds))[0].long_click_label,
+        project_semantics(&placed(&root, &bounds))[0]
+            .details()
+            .long_click_label,
         None
     );
     assert!(!long_click(&root, 2), "there is nothing to run");
 
-    plain.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
-    plain.on_long_click_label = Some("   ".into());
+    plain.update_details(|details| {
+        details.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
+    });
+    plain.update_details(|details| details.on_long_click_label = Some("   ".into()));
     let (root, bounds) = one_row_tree(plain);
     assert_eq!(
         project_semantics(&placed(&root, &bounds))[0]
+            .details()
             .long_click_label
             .as_deref(),
         Some("long press"),
@@ -1409,11 +1483,13 @@ fn a_live_region_reaches_every_control_under_it() {
             Vec::new(),
         )],
     );
-    root.live_region = Some(cranpose_ui::LiveRegionMode::Assertive);
+    root.update_details(|details| {
+        details.live_region = Some(cranpose_ui::LiveRegionMode::Assertive);
+    });
     let elements = project_semantics(&placed(&root, &bounds));
     assert_eq!(elements.len(), 1);
     assert_eq!(
-        elements[0].live_region,
+        elements[0].details().live_region,
         Some(cranpose_ui::LiveRegionMode::Assertive)
     );
 }
@@ -1430,20 +1506,25 @@ fn an_adjustable_control_publishes_its_range_and_takes_a_new_value() {
         Some("Volume"),
         Vec::new(),
     );
-    root.progress = Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0));
-    root.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(move |value| {
-        seen.borrow_mut().push(value);
-        true
-    }));
+    root.update_details(|details| {
+        details.progress = Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0));
+    });
+    root.update_details(|details| {
+        details.set_progress = Some(cranpose_ui::SemanticsSetProgress::new(move |value| {
+            seen.borrow_mut().push(value);
+            true
+        }));
+    });
 
     let elements = project_semantics(&placed(&root, &bounds));
     assert_eq!(elements.len(), 1);
     let published = elements[0]
+        .details()
         .progress
         .expect("the range reaches the platform");
     assert_eq!(published.current, 0.4);
     assert_eq!(published.end, 1.0);
-    assert!(elements[0].adjustable);
+    assert!(elements[0].details().adjustable);
 
     assert!(set_progress(&root, 7, 0.6));
     assert_eq!(*taken.borrow(), vec![0.6]);
@@ -1455,11 +1536,13 @@ fn a_reader_hands_a_field_its_text() {
     let taken = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&taken);
     let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
-    root.editable_text = true;
-    root.set_text = Some(cranpose_ui::SemanticsSetText::new(move |text| {
-        seen.borrow_mut().push(text.to_owned());
-        true
-    }));
+    root.update_details(|details| details.editable_text = true);
+    root.update_details(|details| {
+        details.set_text = Some(cranpose_ui::SemanticsSetText::new(move |text| {
+            seen.borrow_mut().push(text.to_owned());
+            true
+        }));
+    });
 
     assert!(set_text(&root, 7, "Milk"));
     assert_eq!(*taken.borrow(), vec!["Milk".to_owned()]);
@@ -1520,23 +1603,29 @@ fn a_magic_tap_is_listed_after_the_long_press_and_runs_from_the_list() {
         Some("Shutter"),
         Vec::new(),
     );
-    root.custom_actions = vec![SemanticsCustomAction::new("Flash", || {})];
-    root.on_long_click_label = Some("Hold to focus".into());
-    root.on_long_click = Some(cranpose_ui::SemanticsLongClick::new({
-        let presses = Rc::clone(&presses);
-        move || {
-            presses.set(presses.get() + 1);
-            true
-        }
-    }));
-    root.on_magic_tap_label = Some("Take the photo".into());
-    root.on_magic_tap = Some(cranpose_ui::SemanticsMagicTap::new({
-        let taps = Rc::clone(&taps);
-        move || {
-            taps.set(taps.get() + 1);
-            true
-        }
-    }));
+    root.update_details(|details| {
+        details.custom_actions = vec![SemanticsCustomAction::new("Flash", || {})];
+    });
+    root.update_details(|details| details.on_long_click_label = Some("Hold to focus".into()));
+    root.update_details(|details| {
+        details.on_long_click = Some(cranpose_ui::SemanticsLongClick::new({
+            let presses = Rc::clone(&presses);
+            move || {
+                presses.set(presses.get() + 1);
+                true
+            }
+        }));
+    });
+    root.update_details(|details| details.on_magic_tap_label = Some("Take the photo".into()));
+    root.update_details(|details| {
+        details.on_magic_tap = Some(cranpose_ui::SemanticsMagicTap::new({
+            let taps = Rc::clone(&taps);
+            move || {
+                taps.set(taps.get() + 1);
+                true
+            }
+        }));
+    });
     let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
     let projected = project_semantics(&placed(&root, &bounds));
 
@@ -1551,8 +1640,8 @@ fn a_magic_tap_is_listed_after_the_long_press_and_runs_from_the_list() {
     assert!(!magic_tap(&root, 99));
     assert_eq!((presses.get(), taps.get()), (1, 2));
 
-    root.on_long_click = None;
-    root.on_long_click_label = None;
+    root.update_details(|details| details.on_long_click = None);
+    root.update_details(|details| details.on_long_click_label = None);
     let projected = project_semantics(&placed(&root, &bounds));
     assert_eq!(
         reader_actions(&projected[0]),
@@ -1571,15 +1660,18 @@ fn voice_control_names_and_a_language_reach_the_element() {
         Some("Importieren"),
         Vec::new(),
     );
-    root.input_labels = vec!["Import".into()];
-    root.language = Some("de".into());
+    root.update_details(|details| details.input_labels = vec!["Import".into()]);
+    root.update_details(|details| details.language = Some("de".into()));
     let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 80.0, 44.0))]);
 
     let projected = project_semantics(&placed(&root, &bounds));
 
-    assert_eq!(projected[0].input_labels, vec!["Import".to_owned()]);
-    assert_eq!(projected[0].language.as_deref(), Some("de"));
-    assert_eq!(projected[0].magic_tap_label, None);
+    assert_eq!(
+        projected[0].details().input_labels,
+        vec!["Import".to_owned()]
+    );
+    assert_eq!(projected[0].details().language.as_deref(), Some("de"));
+    assert_eq!(projected[0].details().magic_tap_label, None);
 }
 
 #[test]
@@ -1587,14 +1679,16 @@ fn a_reader_moves_the_caret_of_a_field() {
     let taken = Rc::new(RefCell::new(Vec::new()));
     let seen = Rc::clone(&taken);
     let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
-    root.editable_text = true;
+    root.update_details(|details| details.editable_text = true);
     root.text = Some("añb😀c".to_owned());
-    root.set_selection = Some(cranpose_ui::SemanticsSetSelection::new(
-        move |anchor, focus| {
-            seen.borrow_mut().push((anchor, focus));
-            true
-        },
-    ));
+    root.update_details(|details| {
+        details.set_selection = Some(cranpose_ui::SemanticsSetSelection::new(
+            move |anchor, focus| {
+                seen.borrow_mut().push((anchor, focus));
+                true
+            },
+        ));
+    });
 
     assert!(set_text_selection(&root, 7, 1, 3));
     assert!(set_text_selection_utf16(&root, 7, 2, 5));
@@ -1639,11 +1733,13 @@ fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
             Some("Name"),
             Vec::new(),
         );
-        field.editable_text = true;
-        field.password = password;
-        field.multiline = true;
+        field.update_details(|details| details.editable_text = true);
+        field.update_details(|details| details.password = password);
+        field.update_details(|details| details.multiline = true);
         field.text = Some("Milk".to_owned());
-        field.text_selection = Some(cranpose_ui::TextRange::new(1, 3));
+        field.update_details(|details| {
+            details.text_selection = Some(cranpose_ui::TextRange::new(1, 3));
+        });
         let root = node(1, SemanticsRole::Layout, Vec::new(), None, vec![field]);
         let bounds = HashMap::from_iter([
             (1, AccessibilityRect::new(0.0, 0.0, 300.0, 200.0)),
@@ -1652,8 +1748,8 @@ fn an_editable_field_publishes_where_its_caret_is_and_a_password_does_not() {
 
         let projected = project_semantics(&placed(&root, &bounds));
 
-        assert_eq!(projected[0].text_selection, expected);
-        assert!(projected[0].multiline);
+        assert_eq!(projected[0].details().text_selection, expected);
+        assert!(projected[0].details().multiline);
     }
 }
 
@@ -1674,7 +1770,10 @@ fn scroll_box(node_id: NodeId, scroll_parent: Option<NodeId>, height: f32) -> Ac
     AccessibilityElement {
         node_id,
         bounds: AccessibilityRect::new(0.0, 0.0, 400.0, height),
-        vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+        details: Some(Box::new(AccessibilityDetails {
+            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+            ..Default::default()
+        })),
         scroll_parent,
         ..AccessibilityElement::default()
     }
@@ -1719,19 +1818,25 @@ fn a_list_publishes_its_rows_and_takes_a_row_number() {
     let seen = Rc::clone(&taken);
     let bounds = HashMap::from_iter([(7, AccessibilityRect::new(0.0, 0.0, 400.0, 600.0))]);
     let mut root = node(7, SemanticsRole::Layout, Vec::new(), Some(""), Vec::new());
-    root.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 1.0, false));
-    root.collection = Some(cranpose_ui::CollectionInfo {
-        rows: 500,
-        columns: 1,
+    root.update_details(|details| {
+        details.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 1.0, false));
     });
-    root.scroll_to_index = Some(cranpose_ui::SemanticsScrollToIndex::new(move |index| {
-        seen.borrow_mut().push(index);
-        true
-    }));
+    root.update_details(|details| {
+        details.collection = Some(cranpose_ui::CollectionInfo {
+            rows: 500,
+            columns: 1,
+        });
+    });
+    root.update_details(|details| {
+        details.scroll_to_index = Some(cranpose_ui::SemanticsScrollToIndex::new(move |index| {
+            seen.borrow_mut().push(index);
+            true
+        }));
+    });
 
     let elements = project_semantics(&placed(&root, &bounds));
     assert_eq!(elements.len(), 1);
-    assert!(elements[0].scroll_to_index);
+    assert!(elements[0].details().scroll_to_index);
     assert_eq!(row_count(&elements[0]), 500, "the last row is 499");
 
     assert!(scroll_to_index(&root, 7, 300));
@@ -1743,7 +1848,7 @@ fn a_list_publishes_its_rows_and_takes_a_row_number() {
 fn a_plain_scroll_view_takes_no_row_number() {
     let list = scroll_box(1, None, 300.0);
 
-    assert!(!list.scroll_to_index);
+    assert!(!list.details().scroll_to_index);
     assert_eq!(
         row_count(&list),
         0,
@@ -1773,7 +1878,9 @@ fn the_projection_names_the_list_above_each_row() {
         None,
         vec![node(2, SemanticsRole::Button, vec![], Some("Milk"), vec![])],
     );
-    list.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false));
+    list.update_details(|details| {
+        details.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false));
+    });
     let root = node(
         0,
         SemanticsRole::Layout,
@@ -1821,8 +1928,8 @@ fn a_control_without_a_range_is_never_adjustable() {
         Vec::new(),
     );
     let elements = project_semantics(&placed(&root, &bounds));
-    assert!(elements[0].progress.is_none());
-    assert!(!elements[0].adjustable);
+    assert!(elements[0].details().progress.is_none());
+    assert!(!elements[0].details().adjustable);
 }
 
 #[test]
@@ -1831,13 +1938,15 @@ fn a_spoken_line_says_the_name_the_role_the_state_and_the_actions() {
     flash.label = "Flash".to_string();
     flash.role = AccessibilityRole::Switch;
     flash.toggled = Some(true);
-    flash.custom_actions = vec!["Reset".to_string()];
+    flash.update_details(|details| details.custom_actions = vec!["Reset".to_string()]);
     assert_eq!(spoken_line(&flash), "Flash, switch, on, actions: Reset");
 
     let mut loading = element_with(2, None);
     loading.label = "Loading".to_string();
     loading.role = AccessibilityRole::ProgressBar;
-    loading.progress = Some(ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0));
+    loading.update_details(|details| {
+        details.progress = Some(ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0));
+    });
     loading.enabled = false;
     assert_eq!(
         spoken_line(&loading),
@@ -1846,7 +1955,7 @@ fn a_spoken_line_says_the_name_the_role_the_state_and_the_actions() {
 
     let mut library = element_with(3, None);
     library.label = String::new();
-    library.pane_title = Some("Library".to_string());
+    library.update_details(|details| details.pane_title = Some("Library".to_string()));
     assert_eq!(spoken_line(&library), "Library, pane");
 
     let mut plain = element_with(4, None);
@@ -1877,23 +1986,30 @@ fn placed(root: &SemanticsNode, bounds: &HashMap<NodeId, AccessibilityRect>) -> 
 
 fn busy_screen(y: f32) -> SemanticsNode {
     let mut field = text_node(2, "Name");
-    field.editable_text = true;
+    field.update_details(|details| details.editable_text = true);
     field.text = Some("Ada".into());
-    field.text_selection = Some(cranpose_ui::TextRange::new(1, 2));
-    field.language = Some("en".into());
-    field.error = Some("Too short".into());
+    field
+        .update_details(|details| details.text_selection = Some(cranpose_ui::TextRange::new(1, 2)));
+    field.update_details(|details| details.language = Some("en".into()));
+    field.update_details(|details| details.error = Some("Too short".into()));
     let mut button = text_node(3, "Archive");
     button.actions.push(click(3));
-    button.on_click_label = Some("archive the message".into());
-    button.state_description = Some("Ready".into());
-    button.input_labels = vec!["Archive".into(), "Store".into()];
-    button.custom_actions = vec![SemanticsCustomAction::new("Delete", || {})];
-    button.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
-    let mut canvas = node(4, SemanticsRole::Layout, Vec::new(), None, Vec::new());
-    canvas.canvas_children = vec![
-        CanvasSemanticsNode::control(1, rect(0.0, 0.0, 100.0, 40.0), "Play")
-            .with_state_description("Paused"),
-    ];
+    button.update_details(|details| details.on_click_label = Some("archive the message".into()));
+    button.update_details(|details| details.state_description = Some("Ready".into()));
+    button.update_details(|details| details.input_labels = vec!["Archive".into(), "Store".into()]);
+    button.update_details(|details| {
+        details.custom_actions = vec![SemanticsCustomAction::new("Delete", || {})];
+    });
+    button.update_details(|details| {
+        details.on_long_click = Some(cranpose_ui::SemanticsLongClick::new(|| true));
+    });
+    let canvas = canvas_node(
+        4,
+        vec![
+            CanvasSemanticsNode::control(1, rect(0.0, 0.0, 100.0, 40.0), "Play")
+                .with_state_description("Paused"),
+        ],
+    );
     let row = merged_test_row(vec![text_node(5, "Inbox"), text_node(6, "3 new")]);
     let mut pane = node(
         7,
@@ -1902,7 +2018,7 @@ fn busy_screen(y: f32) -> SemanticsNode {
         None,
         vec![row, field, button, canvas],
     );
-    pane.pane_title = Some("Mail".into());
+    pane.update_details(|details| details.pane_title = Some("Mail".into()));
     let mut bounds = HashMap::default();
     for (index, id) in [7, 1, 5, 6, 2, 3, 4].into_iter().enumerate() {
         bounds.insert(
@@ -1932,7 +2048,7 @@ fn a_projection_over_another_snapshot_says_what_a_fresh_one_does() {
         .rev()
         .map(|mut element| {
             element.value = Some("stale".into());
-            element.custom_actions.push("Stale".into());
+            element.update_details(|details| details.custom_actions.push("Stale".into()));
             element.collection_item = Some(CollectionItem {
                 position: 1,
                 count: 1,

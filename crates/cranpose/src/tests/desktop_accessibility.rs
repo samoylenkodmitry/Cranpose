@@ -1,5 +1,5 @@
 use super::*;
-use crate::accessibility::{AccessibilityRect, AccessibilitySnapshot};
+use crate::accessibility::{AccessibilityDetails, AccessibilityRect, AccessibilitySnapshot};
 
 fn published(elements: &[AccessibilityElement]) -> AccessibilitySnapshot {
     let mut snapshot = AccessibilitySnapshot::default();
@@ -75,11 +75,11 @@ fn pane_titles_preserve_native_dialog_and_control_roles() {
         (AccessibilityRole::Toolbar, Role::Toolbar),
         (AccessibilityRole::StaticText, Role::Region),
     ] {
-        let element = AccessibilityElement {
+        let mut element = AccessibilityElement {
             role,
-            pane_title: Some("Preferences".into()),
             ..Default::default()
         };
+        element.update_details(|details| details.pane_title = Some("Preferences".into()));
         assert_eq!(accesskit_node(&element).role(), expected);
     }
 }
@@ -108,7 +108,7 @@ fn text_selection_cannot_redirect_an_action_to_another_field() {
 fn long_multiline_text_keeps_every_run_and_the_end_selection_accessible() {
     let value = "line\n".repeat(300);
     let mut field = field(&value, value.len(), value.len());
-    field.multiline = true;
+    field.update_details(|details| details.multiline = true);
     let elements = vec![field];
     let snapshot = published(&elements);
     let update = super::tree_update(&snapshot, TreeScope::Whole, None, false, 1.0, "CranScan");
@@ -206,7 +206,10 @@ fn the_window_node_carries_the_window_title() {
 fn a_titled_pane_is_a_named_region_with_no_value() {
     let pane = accesskit_node(&AccessibilityElement {
         role: AccessibilityRole::StaticText,
-        pane_title: Some("Settings".into()),
+        details: Some(Box::new(AccessibilityDetails {
+            pane_title: Some("Settings".into()),
+            ..Default::default()
+        })),
         ..AccessibilityElement::default()
     });
     assert_eq!(pane.role(), Role::Region);
@@ -310,14 +313,17 @@ fn every_role_has_an_accesskit_role_of_its_own() {
 fn progress_indicators_keep_their_role_and_offer_no_adjustment() {
     let mut element = AccessibilityElement {
         role: AccessibilityRole::ProgressBar,
-        progress: Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0)),
+        details: Some(Box::new(AccessibilityDetails {
+            progress: Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0)),
+            ..Default::default()
+        })),
         ..AccessibilityElement::default()
     };
     let node = accesskit_node(&element);
     assert_eq!(node.role(), Role::ProgressIndicator);
     assert!(node.numeric_value().is_some());
     assert!(!node.supports_action(Action::SetValue));
-    element.adjustable = true;
+    element.update_details(|details| details.adjustable = true);
     let node = accesskit_node(&element);
     assert_eq!(node.role(), Role::Slider);
     assert!(node.supports_action(Action::SetValue));
@@ -327,13 +333,16 @@ fn progress_indicators_keep_their_role_and_offer_no_adjustment() {
 fn disabled_controls_keep_their_state_without_offering_actions() {
     let element = AccessibilityElement {
         label: "Save".into(),
-        state_description: Some("Disabled".into()),
+        details: Some(Box::new(AccessibilityDetails {
+            state_description: Some("Disabled".into()),
+            adjustable: true,
+            expanded: Some(true),
+            custom_actions: vec!["Delete".into()],
+            ..Default::default()
+        })),
         role: AccessibilityRole::Button,
         enabled: false,
         clickable: true,
-        adjustable: true,
-        expanded: Some(true),
-        custom_actions: vec!["Delete".into()],
         ..AccessibilityElement::default()
     };
     let node = accesskit_node(&element);
@@ -402,7 +411,10 @@ fn field(value: &str, anchor: usize, focus: usize) -> AccessibilityElement {
         node_id: 7,
         label: "Note".into(),
         value: Some(value.into()),
-        text_selection: Some((anchor, focus)),
+        details: Some(Box::new(AccessibilityDetails {
+            text_selection: Some((anchor, focus)),
+            ..Default::default()
+        })),
         bounds: AccessibilityRect::new(0.0, 0.0, 200.0, 44.0),
         role: AccessibilityRole::TextField,
         focusable: true,
@@ -449,7 +461,7 @@ fn a_text_field_carries_its_text_as_runs_with_characters_words_and_a_caret() {
 #[test]
 fn a_field_with_lines_is_multiline_and_puts_the_caret_after_a_break_on_the_next_line() {
     let mut multiline = field("one\ntwo", 4, 4);
-    multiline.multiline = true;
+    multiline.update_details(|details| details.multiline = true);
     let update = tree_update(&[multiline], None, false);
 
     let input = &update.nodes[1].1;
@@ -473,7 +485,7 @@ fn a_field_with_lines_is_multiline_and_puts_the_caret_after_a_break_on_the_next_
 #[test]
 fn an_empty_multiline_field_keeps_its_native_role() {
     let mut multiline = field("", 0, 0);
-    multiline.multiline = true;
+    multiline.update_details(|details| details.multiline = true);
     let update = tree_update(&[multiline], None, false);
     assert_eq!(update.nodes[1].1.role(), Role::MultilineTextInput);
 }
@@ -487,8 +499,8 @@ fn a_single_line_fields_role_does_not_depend_on_its_value() {
 #[test]
 fn a_password_field_and_a_button_carry_no_text_runs() {
     let mut secret = field("hunter2", 0, 0);
-    secret.password = true;
-    secret.text_selection = None;
+    secret.update_details(|details| details.password = true);
+    secret.update_details(|details| details.text_selection = None);
     let elements = vec![
         secret,
         AccessibilityElement {
@@ -576,7 +588,10 @@ fn drawn_controls_sharing_a_layout_node_become_separate_accesskit_nodes() {
             node_id: 4,
             canvas_key: Some(1),
             label: "Haptics".into(),
-            state_description: Some("On".into()),
+            details: Some(Box::new(AccessibilityDetails {
+                state_description: Some("On".into()),
+                ..Default::default()
+            })),
             bounds: AccessibilityRect::new(0.0, 0.0, 100.0, 50.0),
             role: AccessibilityRole::Switch,
             clickable: true,
@@ -646,7 +661,10 @@ fn a_live_control_tells_accesskit_how_urgent_it_is() {
         node_id: 1,
         label: "3 receipts left".into(),
         bounds: AccessibilityRect::new(0.0, 0.0, 100.0, 40.0),
-        live_region: Some(LiveRegionMode::Polite),
+        details: Some(Box::new(AccessibilityDetails {
+            live_region: Some(LiveRegionMode::Polite),
+            ..Default::default()
+        })),
         ..AccessibilityElement::default()
     }];
 
@@ -659,10 +677,13 @@ fn an_adjustable_control_reads_as_a_slider_with_a_value_and_a_way_to_move_it() {
     let elements = vec![AccessibilityElement {
         node_id: 1,
         label: "Volume".into(),
-        state_description: Some("40 %".into()),
+        details: Some(Box::new(AccessibilityDetails {
+            state_description: Some("40 %".into()),
+            progress: Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0)),
+            adjustable: true,
+            ..Default::default()
+        })),
         bounds: AccessibilityRect::new(0.0, 0.0, 200.0, 40.0),
-        progress: Some(cranpose_ui::ProgressBarRangeInfo::new(0.4, 0.0, 1.0, 0)),
-        adjustable: true,
         ..AccessibilityElement::default()
     }];
 
@@ -703,7 +724,10 @@ fn rows_sit_under_their_list_in_the_desktop_tree() {
     let list = AccessibilityElement {
         node_id: 6,
         bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
-        vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+        details: Some(Box::new(AccessibilityDetails {
+            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
+            ..Default::default()
+        })),
         ..AccessibilityElement::default()
     };
     let row = AccessibilityElement {
