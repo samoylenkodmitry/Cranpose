@@ -71,7 +71,7 @@ fn the_thirteen_sp_secondary_label_is_where_multiplying_goes_wrong() {
 #[test]
 fn collinear_samples_are_dropped_and_the_curve_still_answers_the_same() {
     let curve = platform_124();
-    assert_eq!(curve.knots().len(), 8);
+    assert_eq!(curve.knot_count(), 8);
     let dense: Vec<(f32, f32)> = (1..=120)
         .map(|sp| {
             let sp = sp as f32;
