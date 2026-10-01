@@ -26,7 +26,7 @@ pub struct PassAgedCache<K, V> {
 
 impl<K, V> PassAgedCache<K, V>
 where
-    K: Clone + Eq + Hash,
+    K: Eq + Hash,
 {
     pub fn with_capacity_at_least_one(capacity: usize) -> Self {
         Self {
