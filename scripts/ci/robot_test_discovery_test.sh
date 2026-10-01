@@ -34,6 +34,8 @@ subject="$repo_root/run_robot_test.sh"
 dev_build_common="$repo_root/scripts/dev_build_common.sh"
 
 workdir="$(mktemp -d)"
+export CRANPOSE_HOST_LOCK_FILE="$workdir/host-capacity.lock"
+export CRANPOSE_HOST_LOCK_TURNSTILE_FILE="$workdir/host-capacity.turnstile.lock"
 trap 'rm -rf "$workdir"' EXIT
 
 fixture="$workdir/fixture"
@@ -67,6 +69,7 @@ chmod +x "$fixture/cargo-dev.sh"
 # against whatever host-lock and sccache logic the subject currently
 # sources, rather than a snapshot that can drift from it.
 ln -s "$dev_build_common" "$fixture/scripts/dev_build_common.sh"
+ln -s "$script_dir" "$fixture/scripts/ci"
 
 # A fresh copy of the subject, taken new on every run, so this test always
 # exercises whatever run_robot_test.sh currently does. It resolves

@@ -8,7 +8,7 @@
 - Linux runners are `samarch-1-cranpose` and `samarch-1-cranpose-2`; macm3 runners are `dmitriis-mac-Cranpose` and `macm3-cranpose-2`.
 - `mac-idle-Cranpose` is the user's signing Mac and normally stays offline while in use; do not start it for extra CI capacity.
 - Diagnose queued CI from runner `_diag/Runner_*.log` JobDispatcher entries; the jobs API can lag actual execution.
-- Host capacity locking requires `flock(1)` and does not operate on macOS; use explicit process ownership there.
+- Host capacity locking uses native `flock(1)` when available and Python `fcntl.flock` otherwise, on the same host-wide lock files. Only updated scripts that take these locks participate; coordinate old checkouts and direct commands separately.
 - APFS snapshots or shared blocks can retain space after GC; trust `df` and use another build host when space remains low.
 - Copied Git indexes can retain invalid fsmonitor state; use `git -c core.fsmonitor=false status` to check a copied checkout.
 - Pattern-based process searches can include their caller or zombies; use the repository waiter and verify exact PIDs independently.
