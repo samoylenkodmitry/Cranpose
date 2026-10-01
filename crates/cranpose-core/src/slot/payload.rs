@@ -219,12 +219,6 @@ impl SlotTable {
             .map_or(PayloadAnchor::INVALID, |payload| payload.anchor)
     }
 
-    #[cfg(test)]
-    pub(super) fn payload_owner_at(&self, group_index: usize, payload_index: usize) -> AnchorId {
-        self.group_payload_record_at(group_index, payload_index)
-            .map_or(AnchorId::INVALID, |payload| payload.owner)
-    }
-
     fn find_matching_payload_from(
         &self,
         group_index: usize,
@@ -316,7 +310,6 @@ impl SlotTable {
             owner_index,
             insert_index,
             PayloadRecord {
-                owner,
                 anchor,
                 payload_type: init.payload_type,
                 source: init.source,

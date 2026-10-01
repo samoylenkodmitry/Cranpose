@@ -1,12 +1,8 @@
 use super::*;
-use crate::{
-    AnchorId,
-    slot::{PayloadAnchor, PayloadKind, PayloadType},
-};
+use crate::slot::{PayloadAnchor, PayloadKind, PayloadType};
 
 fn payload(id: usize) -> PayloadRecord {
     PayloadRecord {
-        owner: AnchorId::new(1),
         anchor: PayloadAnchor::new(id, 1),
         payload_type: PayloadType::of::<usize>(),
         source: crate::slot::BRANCH_PATH_ROOT,

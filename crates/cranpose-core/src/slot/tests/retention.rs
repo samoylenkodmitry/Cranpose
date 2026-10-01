@@ -630,7 +630,7 @@ fn retention_validate_rejects_active_retained_payload_anchor() {
         .first()
         .expect("detached subtree must contain a payload");
     let retained_payload_anchor = payload.anchor;
-    let retained_payload_owner = payload.owner;
+    let retained_payload_owner = detached.groups[0].anchor;
     let retain_key = RetainKey {
         parent_scope: None,
         key: detached.root_key(),
@@ -864,30 +864,6 @@ fn detached_validate_rejects_subtree_len_out_of_range() {
             group_index: 0,
             expected: 0,
             actual: 3,
-        })
-    );
-}
-
-#[test]
-fn detached_validate_rejects_payload_owner_outside_subtree() {
-    const PARENT_KEY: Key = 395;
-    const CHILD_KEY: Key = 396;
-
-    let (harness, mut detached, _) =
-        detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, true, false);
-    let root_key = detached.root_key();
-    let expected_owner = detached.groups[0].anchor;
-    let outside_anchor = harness.table.groups[0].anchor;
-    let payload_anchor = detached.payloads[0].anchor;
-    detached.payloads[0].owner = outside_anchor;
-
-    assert_eq!(
-        detached.validate_detached(),
-        Err(SlotInvariantError::PayloadOwnerMismatch {
-            tree: SlotTreeContext::Detached { root_key },
-            payload_anchor: payload_anchor.id(),
-            expected: expected_owner,
-            actual: outside_anchor,
         })
     );
 }

@@ -152,7 +152,6 @@ fn payload_anchor_disposal_keeps_dense_storage_for_hot_path_reuse() {
             .payload_anchors
             .set_active(anchor, owner, value as usize);
         payloads.push(PayloadRecord {
-            owner,
             anchor,
             payload_type: crate::slot::PayloadType::of::<i32>(),
             source: crate::slot::BRANCH_PATH_ROOT,

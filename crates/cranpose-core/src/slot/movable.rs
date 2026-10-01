@@ -128,7 +128,6 @@ impl SlotTable {
             }
         }
         for payload in &mut subtree.payloads {
-            payload.owner = owner(payload.owner);
             payload.anchor = payloads
                 .get(&payload.anchor)
                 .copied()

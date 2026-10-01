@@ -195,7 +195,6 @@ pub(crate) enum NodeSlotUpdate {
 }
 
 pub(super) struct PayloadRecord {
-    pub(super) owner: AnchorId,
     pub(super) anchor: PayloadAnchor,
     pub(super) payload_type: &'static PayloadType,
     pub(super) source: crate::Key,
