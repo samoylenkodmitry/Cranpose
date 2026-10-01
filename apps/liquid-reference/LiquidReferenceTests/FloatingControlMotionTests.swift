@@ -188,3 +188,12 @@ class FloatingControlTests: ReferenceUITests {
     override var bundleIdentifier: String { "io.cranpose.liquid-cranpose" }
     override var backdrop: String { "checkerboard" }
 }
+
+@MainActor final class NativeFloatingDarkRainbowTests: NativeFloatingMonoTests {
+    override var backdrop: String { "checkerboard-dark-rainbow" }
+}
+
+@MainActor final class CranposeFloatingDarkRainbowTests: NativeFloatingMonoTests {
+    override var bundleIdentifier: String { "io.cranpose.liquid-cranpose" }
+    override var backdrop: String { "checkerboard-dark-rainbow" }
+}

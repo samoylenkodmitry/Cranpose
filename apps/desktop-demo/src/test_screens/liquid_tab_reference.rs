@@ -285,6 +285,7 @@ pub(crate) fn LiquidTabReference(backdrop: ReferenceBackdrop, dark: bool) {
 pub(crate) enum ReferenceBackdrop {
     Solid,
     Rainbow,
+    DarkRainbow,
     Monochrome,
     Gray(f32),
     Rgb(Color),
@@ -295,6 +296,7 @@ impl ReferenceBackdrop {
         match name {
             "solid" => Ok(Self::Solid),
             "checkerboard" => Ok(Self::Rainbow),
+            "checkerboard-dark-rainbow" => Ok(Self::DarkRainbow),
             "checkerboard-mono" => Ok(Self::Monochrome),
             _ => {
                 if let Some(rgb) = name.strip_prefix("rgb-") {
@@ -338,7 +340,9 @@ pub(crate) fn reference_background(backdrop: ReferenceBackdrop, dark: bool) -> M
         scope.draw_rect(Brush::solid(if dark { Color::BLACK } else { Color::WHITE }));
         if matches!(
             backdrop,
-            ReferenceBackdrop::Rainbow | ReferenceBackdrop::Monochrome
+            ReferenceBackdrop::Rainbow
+                | ReferenceBackdrop::DarkRainbow
+                | ReferenceBackdrop::Monochrome
         ) {
             let palette = ReferenceContent::colors();
             let cell = 8.0;
@@ -362,8 +366,14 @@ pub(crate) fn reference_background(backdrop: ReferenceBackdrop, dark: bool) -> M
                             rect,
                             Brush::solid(palette[(column + row) % palette.len()]),
                         );
+                        let shade = if backdrop == ReferenceBackdrop::DarkRainbow {
+                            scope.draw_rect_at(rect, Brush::solid(Color::BLACK.with_alpha(0.65)));
+                            Color::BLACK
+                        } else {
+                            Color::WHITE
+                        };
                         if (row + column) % 2 == 0 {
-                            scope.draw_rect_at(rect, Brush::solid(Color::WHITE.with_alpha(0.55)));
+                            scope.draw_rect_at(rect, Brush::solid(shade.with_alpha(0.55)));
                         }
                     }
                 }

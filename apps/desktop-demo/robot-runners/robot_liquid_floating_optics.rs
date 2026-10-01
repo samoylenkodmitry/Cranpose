@@ -64,21 +64,7 @@ pub(crate) fn main() -> anyhow::Result<()> {
                     .expect("save floating glass state");
             }
             if std::env::var_os("CRANPOSE_GPU_PASS_TIMING").is_some() {
-                let steps = motion_steps();
-                for leg in 0..24 {
-                    let measured = robot
-                        .capture_interaction_keyframes(3.0, &steps)
-                        .expect("measure floating glass animation");
-                    let changing = measured
-                        .windows(2)
-                        .filter(|pair| pair[0].pixels != pair[1].pixels)
-                        .count();
-                    println!("robot-metric: floating leg={leg} changing_frames={changing}");
-                    assert!(
-                        changing >= 20,
-                        "benchmark must render changing press and release frames"
-                    );
-                }
+                measure_motion(&robot);
             }
             if let Some(expected) = face_expected {
                 let sample = robot_shot::logical_sampler(&frames[0])(201.0, 463.0);
@@ -109,7 +95,34 @@ pub(crate) fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn assert_chip_reversals(robot: &crate::RobotHandle, output: &std::path::Path) {
+fn measure_motion(robot: &cranpose::Robot) {
+    let continuous = std::env::var_os("REFERENCE_CONTINUOUS_MOTION").is_some();
+    let steps = motion_steps(continuous);
+    let minimum = if continuous { 59 } else { 20 };
+    for leg in 0..24 {
+        let measured = robot
+            .capture_interaction_keyframes(3.0, &steps)
+            .expect("measure floating glass animation");
+        let changing = measured
+            .windows(2)
+            .filter(|pair| pair[0].pixels != pair[1].pixels)
+            .count();
+        println!("robot-metric: floating leg={leg} changing_frames={changing}");
+        if changing < minimum {
+            for (frame, pair) in measured.windows(2).enumerate() {
+                if pair[0].pixels == pair[1].pixels {
+                    println!("robot-metric: unchanged leg={leg} frame={frame}");
+                }
+            }
+        }
+        assert!(
+            (continuous && leg < 16) || changing >= minimum,
+            "benchmark must render changing press and release frames"
+        );
+    }
+}
+
+fn assert_chip_reversals(robot: &cranpose::Robot, output: &std::path::Path) {
     let mut steps = Vec::new();
     for elapsed in [0, 1, 3, 9, 21] {
         steps.push(RobotTimelineStep {
@@ -128,7 +141,12 @@ fn assert_chip_reversals(robot: &crate::RobotHandle, output: &std::path::Path) {
     let reversals = robot
         .capture_interaction_keyframes(3.0, &steps)
         .expect("capture interrupted chip transitions");
-    for (index, pair) in reversals.chunks_exact(3).enumerate() {
+    let (pairs, remainder) = reversals.as_chunks::<3>();
+    assert!(
+        remainder.is_empty(),
+        "each reversal must capture three states"
+    );
+    for (index, pair) in pairs.iter().enumerate() {
         for (frame, suffix) in pair.iter().zip(["before", "after", "settled"]) {
             robot_shot::save_checked(
                 &output.join(format!("reversal-{index}-{suffix}.png")),
@@ -220,21 +238,40 @@ fn assert_optics(
     }
 }
 
-fn motion_steps() -> Vec<RobotTimelineStep> {
+fn motion_steps(continuous: bool) -> Vec<RobotTimelineStep> {
     (0..60)
         .map(|frame| RobotTimelineStep {
             advance_ms: 1000.0 / 60.0,
-            actions: match frame {
-                0 => vec![
-                    RobotTimelineAction::MoveTo { x: 201.0, y: 451.0 },
-                    RobotTimelineAction::MouseDown,
-                ],
-                30 => vec![RobotTimelineAction::MouseUp],
-                _ => Vec::new(),
+            actions: if continuous {
+                moving_pointer(frame)
+            } else {
+                match frame {
+                    0 => vec![
+                        RobotTimelineAction::MoveTo { x: 201.0, y: 451.0 },
+                        RobotTimelineAction::MouseDown,
+                    ],
+                    30 => vec![RobotTimelineAction::MouseUp],
+                    _ => Vec::new(),
+                }
             },
             capture: true,
         })
         .collect()
+}
+
+fn moving_pointer(frame: u32) -> Vec<RobotTimelineAction> {
+    let angle = frame as f32 * std::f32::consts::TAU / 60.0;
+    let mut actions = vec![RobotTimelineAction::MoveTo {
+        x: 201.0 + 14.0 * angle.sin(),
+        y: 451.0 + 6.0 * angle.cos(),
+    }];
+    if frame.is_multiple_of(30) {
+        actions.push(RobotTimelineAction::MouseDown);
+    }
+    if frame % 30 == 15 {
+        actions.push(RobotTimelineAction::MouseUp);
+    }
+    actions
 }
 
 fn capture_steps() -> Vec<RobotTimelineStep> {

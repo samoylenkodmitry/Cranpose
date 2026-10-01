@@ -256,7 +256,7 @@ private struct ReferenceBackdrop: View {
             let background: Color = rgb.count == 3 ? Color(red: rgb[0], green: rgb[1], blue: rgb[2])
                 : gray.map { Color(white: min(max($0, 0), 1)) } ?? (colorScheme == .dark ? .black : .white)
             context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(background))
-            if pattern == "checkerboard" || pattern == "checkerboard-mono" {
+            if ["checkerboard", "checkerboard-mono", "checkerboard-dark-rainbow"].contains(pattern) {
                 let colors: [Color] = ReferenceContent.active.palette.map { $0.map(ReferenceContent.color) } ?? [
                     Color(red: 1, green: 0.23, blue: 0.19),
                     Color(red: 1, green: 0.58, blue: 0),
@@ -275,8 +275,12 @@ private struct ReferenceBackdrop: View {
                             context.fill(Path(rect), with: .color((row + column).isMultiple(of: 2) ? .white : .black))
                         } else {
                             context.fill(Path(rect), with: .color(colors[(column + row) % colors.count]))
+                            let darkRainbow = pattern == "checkerboard-dark-rainbow"
+                            if darkRainbow {
+                                context.fill(Path(rect), with: .color(.black.opacity(0.65)))
+                            }
                             if (row + column).isMultiple(of: 2) {
-                                context.fill(Path(rect), with: .color(.white.opacity(0.55)))
+                                context.fill(Path(rect), with: .color((darkRainbow ? Color.black : Color.white).opacity(0.55)))
                             }
                         }
                     }
