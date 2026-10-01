@@ -1,8 +1,11 @@
 use std::{
+    hash::Hasher,
+    io::Write,
     path::{Path, PathBuf},
     sync::{OnceLock, mpsc},
 };
 
+use cranpose_ui_graphics::FxHasher;
 use web_time::Instant;
 
 use crate::debug_toggles::DebugToggle;
@@ -46,7 +49,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
         return None;
     }
     let path = file_path();
-    let data = path.as_deref().and_then(|path| match std::fs::read(path) {
+    let file = path.as_deref().and_then(|path| match std::fs::read(path) {
         Ok(bytes) => Some(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
@@ -54,22 +57,51 @@ pub(crate) fn load(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
             None
         }
     });
-    let loaded = data.as_ref().map(Vec::len);
-    // SAFETY: `data` is `persist`'s own `get_data` output, and `fallback:
+    let data = file.as_deref().and_then(current_blob);
+    // SAFETY: `data` is this build's own `get_data` output, and `fallback:
     // true` has wgpu validate the header and fall back to an empty cache.
     #[expect(unsafe_code)]
     let cache = unsafe {
         device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
             label: Some("cranpose pipeline disk cache"),
-            data: data.as_deref(),
+            data,
             fallback: true,
         })
     };
-    match loaded {
-        Some(bytes) => log::info!("[pipeline-cache] loaded {bytes} B from disk"),
-        None => log::info!("[pipeline-cache] cold (no blob on disk)"),
+    match (data, &file) {
+        (Some(data), _) => log::info!("[pipeline-cache] loaded {} B from disk", data.len()),
+        (None, Some(file)) => log::info!(
+            "[pipeline-cache] cold: dropped {} B compiled from other shaders",
+            file.len()
+        ),
+        (None, None) => log::info!("[pipeline-cache] cold (no blob on disk)"),
     }
     Some(cache)
+}
+
+/// Names what fills a blob: the framework's WGSL sources, and this crate's
+/// version, which changes with each release of the shader rewrites, pipeline
+/// layouts and translator between those sources and the driver.
+///
+/// The driver keeps every pipeline of the blob it loads in the cache it saves,
+/// so a blob kept across shader changes only grows, and the driver holds all
+/// of it resident. A blob under another key loads cold and is replaced.
+fn blob_key() -> [u8; 8] {
+    let mut hasher = FxHasher::default();
+    hasher.write_u64(cranpose_ui_graphics::framework_shaders::SOURCES_KEY);
+    hasher.write(env!("CARGO_PKG_VERSION").as_bytes());
+    hasher.finish().to_le_bytes()
+}
+
+/// The driver's blob within a cache file, if this build's key leads it.
+fn current_blob(file: &[u8]) -> Option<&[u8]> {
+    file.strip_prefix(blob_key().as_slice())
+}
+
+fn write_blob(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(&blob_key())?;
+    file.write_all(data)
 }
 
 pub(crate) fn persist(cache: &wgpu::PipelineCache, path: &Path) {
@@ -78,7 +110,7 @@ pub(crate) fn persist(cache: &wgpu::PipelineCache, path: &Path) {
         return;
     };
     if let Ok(existing) = std::fs::read(path)
-        && existing == data
+        && current_blob(&existing) == Some(data.as_slice())
     {
         return;
     }
@@ -89,7 +121,7 @@ pub(crate) fn persist(cache: &wgpu::PipelineCache, path: &Path) {
         return;
     }
     let tmp = path.with_extension("tmp");
-    let written = std::fs::write(&tmp, &data).and_then(|()| std::fs::rename(&tmp, path));
+    let written = write_blob(&tmp, &data).and_then(|()| std::fs::rename(&tmp, path));
     match written {
         Ok(()) => log::info!(
             "[pipeline-cache] persisted {} B in {:.1} ms",
