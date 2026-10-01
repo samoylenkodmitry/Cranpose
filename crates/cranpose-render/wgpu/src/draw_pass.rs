@@ -1292,7 +1292,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     self.cut_paint(renderer, run.binding, open);
                 }
                 self.chunk_clip = clip;
-                let clipped = draw.placement.clip.is_some() && clip.is_none();
+                let segment_clip = crate::render::SegmentClip::of(&draw.placement, clip.is_some());
                 while from < total {
                     if self
                         .chunk
@@ -1311,7 +1311,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                         run.segment.scale,
                         run.viewport,
                         self.mixed_turns,
-                        (self.depth, clipped),
+                        (self.depth, segment_clip),
                     );
                     if taken == 0 {
                         self.close_chunk(renderer, run.binding);

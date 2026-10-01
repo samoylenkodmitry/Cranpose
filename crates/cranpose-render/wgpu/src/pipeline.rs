@@ -1902,6 +1902,7 @@ pub(crate) fn push_draw_primitive(
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
+    clip_radius: f32,
     snap_anchor: Option<SnapAnchor>,
     scene: &mut CompositorScene,
     blend_mode: Option<BlendMode>,
@@ -1912,7 +1913,8 @@ pub(crate) fn push_draw_primitive(
             Point::new(layer_bounds.x, layer_bounds.y),
             snap_anchor,
             clip,
-        );
+        )
+        .with_clip_radius(clip_radius);
         scene.push_loose(blended(shape, blend_mode), placement);
         return;
     }

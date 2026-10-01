@@ -2,7 +2,7 @@ use cranpose_ui_graphics::{
     BRUSH_KIND_LINEAR, BlendMode, FRAGMENT_KIND_FILL, RecordLane, RecordSegment,
 };
 
-use super::{RunTier, ShapeDepth, ShapePipelineKey, ShapeTurns, ShapeVariant};
+use super::{RunTier, SegmentClip, ShapeDepth, ShapePipelineKey, ShapeTurns, ShapeVariant};
 use crate::ablation::ShapeAblation;
 
 fn fill_segment(gradient: bool, vertex_gradient: bool, interiors: bool) -> RecordSegment {
@@ -27,7 +27,12 @@ fn fill_segment(gradient: bool, vertex_gradient: bool, interiors: bool) -> Recor
 }
 
 fn variant(segment: RecordSegment, clipped: bool) -> ShapeVariant {
-    ShapeVariant::of_segment(&segment, clipped, ShapeAblation::default(), false, true)
+    let clip = if clipped {
+        SegmentClip::Tested
+    } else {
+        SegmentClip::Untested
+    };
+    ShapeVariant::of_segment(&segment, clip, ShapeAblation::default(), false, true)
 }
 
 fn key(segment: RecordSegment) -> ShapePipelineKey {
@@ -116,7 +121,7 @@ fn vertex_shading_requires_an_aligned_placement_and_viewport_without_turns() {
                     RunTier::Arena,
                     ShapeAblation::default(),
                     turns,
-                    (false, false),
+                    (false, SegmentClip::Untested),
                     viewport,
                 );
                 let vertex = snapped && offset[0].fract() == 0.0 && turns == ShapeTurns::None;

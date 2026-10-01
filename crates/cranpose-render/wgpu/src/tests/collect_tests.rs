@@ -192,6 +192,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                 WalkContext {
                     offset: Point::new(0.3, 0.7),
                     visual_clip: None,
+                    clip_radius: 0.0,
                     snap_anchor: None,
                     translated,
                 },
@@ -222,38 +223,141 @@ fn content_touching_the_edge_between_corners_is_admitted() {
     assert!(corners(200.0, 100.0, 20.0).admits(rect(40.0, 0.0, 100.0, 100.0)));
 }
 
-#[test]
-fn a_rounded_layer_whose_content_enters_a_corner_isolates() {
-    let mut layer = LayerNode {
+fn rounded_layer(radius: f32, content: RenderNode) -> LayerNode {
+    LayerNode {
         local_bounds: rect(0.0, 0.0, 200.0, 100.0),
         graphics_layer: GraphicsLayer {
             clip: true,
-            shape: LayerShape::Rounded(RoundedCornerShape::uniform(20.0)),
+            shape: LayerShape::Rounded(RoundedCornerShape::uniform(radius)),
             ..Default::default()
         },
+        children: vec![content],
+        ..Default::default()
+    }
+}
+
+fn white_rect(bounds: Rect) -> DrawPrimitive {
+    DrawPrimitive::Rect {
+        rect: bounds,
+        brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
+        stroke: None,
+    }
+}
+
+fn shapes_run(primitives: Vec<DrawPrimitive>) -> RenderNode {
+    RenderNode::DrawRun(DrawRunNode::new(PrimitivePhase::BeforeChildren, primitives))
+}
+
+#[test]
+fn a_rounded_layer_whose_shapes_enter_a_corner_draws_in_place_rounded() {
+    let full = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    assert!(matches!(
+        child_placement(&full),
+        Placement::DirectRounded(_, radius) if radius == 20.0
+    ));
+    let loose = rounded_layer(20.0, drawn_node(white_rect(rect(0.0, 0.0, 120.0, 100.0))));
+    assert!(matches!(
+        child_placement(&loose),
+        Placement::DirectRounded(..)
+    ));
+    let inside = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(14.0, 14.0, 172.0, 72.0))]),
+    );
+    assert!(
+        matches!(child_placement(&inside), Placement::Direct(_)),
+        "content clear of the corners needs no rounding at all"
+    );
+}
+
+#[test]
+fn a_rounded_layer_whose_text_or_image_enters_a_corner_isolates() {
+    let text = rounded_layer(20.0, drawn_node(snap_test_text()));
+    assert!(matches!(child_placement(&text), Placement::Isolated));
+    let mut mixed = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    mixed.children.push(drawn_node(snap_test_text()));
+    assert!(matches!(child_placement(&mixed), Placement::Isolated));
+}
+
+#[test]
+fn a_rounded_layer_with_uneven_corners_isolates_shapes_in_a_corner() {
+    let mut layer = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    layer.graphics_layer.shape = LayerShape::Rounded(RoundedCornerShape::new(20.0, 20.0, 4.0, 4.0));
+    assert!(matches!(child_placement(&layer), Placement::Isolated));
+}
+
+#[test]
+fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() {
+    let layer = rounded_layer(
+        20.0,
+        shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+    );
+    let context = |visual_clip: Option<Rect>, clip_radius: f32| WalkContext {
+        offset: Point::new(10.0, 10.0),
+        visual_clip,
+        clip_radius,
+        snap_anchor: None,
+        translated: false,
+    };
+    assert!(matches!(
+        placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 0.0)),
+        Placement::DirectRounded(..)
+    ));
+    assert!(matches!(
+        placement_in(&layer, &context(Some(rect(0.0, 0.0, 150.0, 400.0)), 0.0)),
+        Placement::Isolated
+    ));
+    assert!(matches!(
+        placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 8.0)),
+        Placement::Isolated
+    ));
+}
+
+#[test]
+fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_does() {
+    let mut parent = LayerNode {
+        local_bounds: rect(0.0, 0.0, 400.0, 300.0),
         ..Default::default()
     };
-    layer.children.push(RenderNode::DrawRun(DrawRunNode::new(
-        PrimitivePhase::BeforeChildren,
-        vec![DrawPrimitive::Rect {
-            rect: rect(0.0, 0.0, 200.0, 100.0),
-            brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
-            stroke: None,
-        }],
-    )));
-    assert!(matches!(child_placement(&layer), Placement::Isolated));
-    let RenderNode::DrawRun(run) = &mut layer.children[0] else {
-        unreachable!()
-    };
-    *run = DrawRunNode::new(
-        PrimitivePhase::BeforeChildren,
-        vec![DrawPrimitive::Rect {
-            rect: rect(14.0, 14.0, 172.0, 72.0),
-            brush: cranpose_ui_graphics::Brush::solid(cranpose_ui_graphics::Color::WHITE),
-            stroke: None,
-        }],
+    parent
+        .children
+        .push(RenderNode::Layer(Box::new(rounded_layer(
+            20.0,
+            shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
+        ))));
+    parent
+        .children
+        .push(shapes_run(vec![white_rect(rect(0.0, 200.0, 50.0, 50.0))]));
+    let scene = collect_root(
+        &parent,
+        &mut crate::pipeline::UiTextLayoutResolver,
+        &mut LayerMotion::default(),
+        SceneCapacityHint::default(),
     );
-    assert!(matches!(child_placement(&layer), Placement::Direct(_)));
+    assert!(
+        scene.children.is_empty(),
+        "the rounded layer composites nothing"
+    );
+    let radii: Vec<f32> = scene
+        .scene
+        .runs
+        .iter()
+        .map(|run| run.placement.clip_radius)
+        .collect();
+    assert_eq!(radii, vec![20.0, 0.0]);
+    assert_eq!(
+        scene.scene.runs[0].placement.clip,
+        Some(rect(0.0, 0.0, 200.0, 100.0))
+    );
 }
 
 #[test]

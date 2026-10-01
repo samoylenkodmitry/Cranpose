@@ -62,6 +62,7 @@ pub(crate) fn apply_draw_commands(
                     layer_bounds,
                     layer,
                     clip,
+                    0.0,
                     None,
                     scene,
                     blend_mode,

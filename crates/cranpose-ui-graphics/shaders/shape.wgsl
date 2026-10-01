@@ -12,6 +12,9 @@
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
+    // The corner radius of `clip_rect` in device pixels. Only a pipeline
+    // with `SHAPE_ROUNDED_CLIP` reads it, so the others never load it.
+    @location(1) @interpolate(flat) clip_radius: f32,
     @location(2) world_pos: vec4<f32>,
     @location(3) @interpolate(flat) rect: vec4<f32>,
     @location(4) @interpolate(flat) radii: vec4<f32>,
@@ -217,7 +220,8 @@ struct Placement {
     clip: vec4<f32>,
     dither_origin: vec2<f32>,
     alpha: f32,
-    reserved: f32,
+    // The corner radius of `clip` in device pixels; `0.0` for a rect clip.
+    clip_radius: f32,
     color_matrix: mat4x4<f32>,
     color_offset: vec4<f32>,
     // The turn of the layer the records draw in place under: `transform`
@@ -585,8 +589,10 @@ fn shape_output(
 
     if (SHAPE_CLIPPED && (placement.flags & PLACEMENT_CLIPPED) != 0u) {
         output.clip_rect = placement.clip;
+        output.clip_radius = select(0.0, placement.clip_radius, SHAPE_ROUNDED_CLIP);
     } else {
         output.clip_rect = vec4<f32>(0.0);
+        output.clip_radius = 0.0;
     }
 
     output.gradient_params = vec4<f32>(0.0);
@@ -984,6 +990,10 @@ override SHAPE_SOLID: bool = false;
 // test.
 override SHAPE_INTERIOR: bool = true;
 override SHAPE_CLIPPED: bool = true;
+// The pipeline draws records whose clip is a rounded rect: each fragment
+// takes the clip's coverage, as the composite of a layer clipped to it
+// masks the layer's surface.
+override SHAPE_ROUNDED_CLIP: bool = false;
 override SHAPE_FLAT: bool = false;
 override SHAPE_DISCARD: bool = false;
 override BRUSH_KIND_FIXED: i32 = -1;
@@ -1295,6 +1305,27 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
 /// pixels apart by up to 2/255 (the macOS CI runner, on Metal, saw none of
 /// it). The pipeline constants fold branches; they never copy code.
 fn shape_coverage_alpha(input: VertexOutput) -> f32 {
+    let alpha = shape_record_coverage(input);
+    if (!SHAPE_ROUNDED_CLIP || input.clip_radius <= 0.0) {
+        return alpha;
+    }
+    // The same coverage the blit's mask takes of a rounded clip.
+    let rect_pos = segment_position(
+        input.clip_position.xy,
+        input.world_pos.xy,
+        fragment_turned(input),
+    );
+    let half_size = input.clip_rect.zw * 0.5;
+    let local_pos = rect_pos - (input.clip_rect.xy + half_size);
+    let dist = sdf_rounded_rect(local_pos, half_size, vec4<f32>(input.clip_radius));
+    let coverage = alpha * (1.0 - smoothstep(-0.5, 0.5, dist));
+    if (coverage < 0.001) {
+        discard;
+    }
+    return coverage;
+}
+
+fn shape_record_coverage(input: VertexOutput) -> f32 {
     if (SHAPE_DISCARD) {
         discard;
     }

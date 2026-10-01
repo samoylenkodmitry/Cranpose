@@ -7,6 +7,7 @@ fn placement(clip: Option<Rect>) -> crate::scene::Placement {
         offset: Point::new(0.0, 0.0),
         snap_anchor: None,
         clip,
+        clip_radius: 0.0,
         alpha: 1.0,
         color_filter: None,
     }

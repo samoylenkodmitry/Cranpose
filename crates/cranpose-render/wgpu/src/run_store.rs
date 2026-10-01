@@ -107,7 +107,8 @@ const STOP_BUFFER: usize = 3;
 const PLACEMENT_BUFFER: usize = 4;
 
 /// A placement as the vertex stage reads it: the offset with the snap
-/// delta folded in, the device clip, the dither origin and the paint.
+/// delta folded in, the device clip and its corner radius, the dither
+/// origin and the paint.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub(crate) struct PlacementData {
@@ -117,7 +118,7 @@ pub(crate) struct PlacementData {
     clip: [f32; 4],
     dither_origin: [f32; 2],
     alpha: f32,
-    reserved: f32,
+    clip_radius: f32,
     color_matrix: [[f32; 4]; 4],
     color_offset: [f32; 4],
     transform: [f32; 4],
@@ -203,7 +204,11 @@ impl PlacementData {
             clip,
             dither_origin: [dither_origin.x, dither_origin.y],
             alpha: placement.alpha,
-            reserved: 0.0,
+            clip_radius: if placement.clip_rounded() {
+                placement.clip_radius * root_scale
+            } else {
+                0.0
+            },
             color_matrix,
             color_offset,
             transform,
