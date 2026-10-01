@@ -3,6 +3,19 @@ fn circular_displacement_profile(depth: f32, height: f32) -> f32 {
     return 1.0 - sqrt(max(1.0 - elevation * elevation, 0.0));
 }
 
+fn gaussian_erf(x: f32) -> f32 {
+    let t = 1.0 / (1.0 + 0.3275911 * abs(x));
+    let polynomial = (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
+        - 0.284496736) * t + 0.254829592) * t;
+    return sign(x) * (1.0 - polynomial * exp(-x * x));
+}
+
+fn gaussian_stroke(distance: f32, width: f32, sigma: f32) -> f32 {
+    let denominator = max(sigma, 0.001) * sqrt(2.0);
+    return 0.5 * (gaussian_erf((distance + width * 0.5) / denominator)
+        - gaussian_erf((distance - width * 0.5) / denominator));
+}
+
 fn smoothed_capsule_distance(position: vec2<f32>, half_size: vec2<f32>, smoothing: f32) -> f32 {
     let vertical = half_size.y > half_size.x;
     let h = select(half_size, half_size.yx, vertical);

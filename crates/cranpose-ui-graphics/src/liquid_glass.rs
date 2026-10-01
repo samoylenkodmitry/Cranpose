@@ -132,6 +132,22 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, 102) <= 0.0,
     },
     LiquidGlassSpecialization {
+        flag: "GLASS_RING_SHADOW_OFF",
+        slots: &[GLASS_RING_SHADOW_UNIFORM + 7],
+        inactive: |u| slot(u, GLASS_RING_SHADOW_UNIFORM + 7) <= 0.5,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_CONTOUR_HIGHLIGHT_OFF",
+        slots: &[
+            GLASS_CONTOUR_HIGHLIGHT_UNIFORM,
+            GLASS_CONTOUR_HIGHLIGHT_UNIFORM + 2,
+        ],
+        inactive: |u| {
+            slot(u, GLASS_CONTOUR_HIGHLIGHT_UNIFORM) <= 0.0
+                || slot(u, GLASS_CONTOUR_HIGHLIGHT_UNIFORM + 2) <= 0.0
+        },
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_ZOOM_OFF",
         slots: &[GLASS_OPTICAL_ZOOM_UNIFORM],
         inactive: |u| slot(u, GLASS_OPTICAL_ZOOM_UNIFORM) <= 1.0,
@@ -247,8 +263,10 @@ static GLASS_MATERIAL_FOLDS: AtomicBool = AtomicBool::new(cfg!(target_os = "andr
 /// `override` and the draw is split into interior and rim. Byte-exact: a
 /// raised flag substitutes the value the uniform already holds, and the
 /// interior guard skips only terms whose weight is zero. With folds off the
-/// shader carries no flags and draws whole, from the one pipeline every
-/// material shares. Either way an adaptive frost declares the blurred
+/// shader skips zero-weight interior work but draws whole. Layered surfaces
+/// also fold inactive material features. Projection, partial activity, rim
+/// strength and shadows stay dynamic. Other materials share one program.
+/// Either way an adaptive frost declares the blurred
 /// substrate its neighbourhood reads whatever the activity: the declaration
 /// also sets the member's capture geometry, so a resting material keeps it
 /// although its shader returns before the read. A content mask (uniform 112)
@@ -256,6 +274,30 @@ static GLASS_MATERIAL_FOLDS: AtomicBool = AtomicBool::new(cfg!(target_os = "andr
 /// leaves a transparent source transparent.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     specialize_liquid_glass_with_folds(shader, glass_material_folds_enabled());
+}
+
+fn specialization_flags(uniforms: &[f32], folds: bool) -> u32 {
+    let layered = slot(uniforms, GLASS_REFRACTION_MODE_UNIFORM) > 2.5;
+    if !folds && !layered {
+        return 0;
+    }
+    LIQUID_GLASS_SPECIALIZATIONS
+        .iter()
+        .enumerate()
+        .filter(|(_, specialization)| {
+            folds
+                || !matches!(
+                    specialization.flag,
+                    "GLASS_PROJECTION_OFF"
+                        | "GLASS_PARTIAL_ACTIVITY_OFF"
+                        | "GLASS_RIM_STYLE_OFF"
+                        | "GLASS_SHADOW_OFF"
+                        | "GLASS_RING_SHADOW_OFF"
+                )
+        })
+        .fold(0, |flags, (index, specialization)| {
+            flags | (u32::from((specialization.inactive)(uniforms)) << index)
+        })
 }
 
 /// [`specialize_liquid_glass`] with folding decided by the caller rather
@@ -278,16 +320,7 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
             const { RefCell::new(ShaderSpecializationCache::new()) };
     }
     let uniforms = shader.uniforms();
-    let flags = if folds {
-        LIQUID_GLASS_SPECIALIZATIONS
-            .iter()
-            .enumerate()
-            .fold(0, |flags, (index, specialization)| {
-                flags | (u32::from((specialization.inactive)(uniforms)) << index)
-            })
-    } else {
-        0
-    };
+    let flags = specialization_flags(uniforms, folds);
     let substrate_radius = (slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0).then(|| {
         (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
             .to_bits()
@@ -325,6 +358,7 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
                         shader.clear_override(specialization.flag);
                     }
                 }
+                shader.set_override("GLASS_INTERIOR_GUARD", 1.0);
                 shader.set_draw_split((folds && !projected).then_some(GLASS_RIM_DRAW_OVERRIDE));
                 if folds {
                     shader.set_override(GLASS_OPTICAL_STAGE_OVERRIDE, f64::from(stage));
@@ -382,7 +416,7 @@ pub const GLASS_ADAPTIVE_NEIGHBOURHOOD_DP: f32 = 16.0;
 /// outer warp, inner warp, and chromatic lighting in three successive images.
 /// Content masks and other refraction modes use one image.
 pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
-    if slot(shader.uniforms(), GLASS_REFRACTION_MODE_UNIFORM) >= 1.5
+    if (1.5..2.5).contains(&slot(shader.uniforms(), GLASS_REFRACTION_MODE_UNIFORM))
         && slot(shader.uniforms(), 112) <= 0.5
         && slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM) == 0.0
     {
@@ -495,6 +529,14 @@ pub const GLASS_FOREGROUND_CONTENT_UNIFORM: usize = 174;
 pub const GLASS_RESTING_EDGE_SHARPNESS_UNIFORM: usize = 175;
 /// Five fixed face-transfer slots: black, white, saturation, maximum luminance and presence.
 pub const GLASS_FACE_TONE_UNIFORM: usize = 176;
+/// Inward amplitude and falloff depth in dp for a fused layered-surface projection.
+pub const GLASS_LAYERED_RETURN_UNIFORM: usize = 181;
+/// RGB of the surface shadow; its alpha is stored in the shadow strength slot.
+pub const GLASS_SHADOW_COLOR_UNIFORM: usize = 183;
+/// RGBA, Gaussian radius, vertical offset, stroke width, presence and spread of a ring shadow.
+pub const GLASS_RING_SHADOW_UNIFORM: usize = 187;
+/// Height, offset, amount, color bias, angle and angular spread of contour reflection.
+pub const GLASS_CONTOUR_HIGHLIGHT_UNIFORM: usize = 196;
 
 /// Uniform slot selecting the rim style: 0 is the regular surface rim, 1
 /// the lens rim whose meniscus reflects, transmits with loss and carries

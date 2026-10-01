@@ -123,6 +123,8 @@ override GLASS_TOUCH_OFF: bool = false;
 override GLASS_CONTENT_MASK_OFF: bool = false;
 override GLASS_OPTICAL_BLUR_OFF: bool = false;
 override GLASS_SHADOW_OFF: bool = false;
+override GLASS_RING_SHADOW_OFF: bool = false;
+override GLASS_CONTOUR_HIGHLIGHT_OFF: bool = false;
 override GLASS_ZOOM_OFF: bool = false;
 override GLASS_PHYSICAL_REFRACTION_OFF: bool = false;
 override GLASS_DISPERSION_OFF: bool = false;
@@ -1112,12 +1114,14 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // the blurred backdrop it samples, washed with the resting tint. A
     // tint-only resting output reads as an opaque plank — stars behind a
     // resting bar simply vanished instead of glowing through the frost.
-    let resting_weight = (1.0 - material_activity) * coverage;
+    let layered_surface = refraction_mode > 2.5;
+    let resting_weight = select((1.0 - material_activity) * coverage, 0.0, layered_surface);
     // The untouched backdrop feeds only terms whose weight can be zero: the
     // resting frost, the band outside the face, the key fill and a drained
     // lens. A fragment where all of them vanish -- the face of a fully
     // active glass -- skips the fetch and lands on the same bits.
-    let needs_plain = key_fill || resting_weight > 0.0 || outer_coverage > 0.0
+    let key_fill_lit = key_fill && highlight > 0.0 && -d < key_fill_height;
+    let needs_plain = key_fill_lit || resting_weight > 0.0 || outer_coverage > 0.0
         || material_activity <= 0.0;
     var plain_path = vec4<f32>(0.0);
     if needs_plain {
@@ -1126,10 +1130,8 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let resting_frost = plain_path * (1.0 - resting_tint.a)
         + vec4<f32>(resting_tint.rgb * resting_tint.a, resting_tint.a);
     let resting_output = resting_frost * resting_weight;
-    if material_activity <= 0.0 {
-        return select(resting_output, plain_path, intermediate_stage);
-    }
     let shadow_strength = clamp(fixed_or(get_float(102u), 0.0, GLASS_SHADOW_OFF), 0.0, 1.0);
+    let shadow_color = vec3<f32>(get_float(183u), get_float(184u), get_float(185u));
     var shadow_alpha = 0.0;
     if shadow_strength > 0.0 {
         let shadow_offset = vec2<f32>(0.0, get_float(104u) * s);
@@ -1138,8 +1140,28 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         let shadow_blur = max(get_float(103u) * s, 1.0);
         shadow_alpha = (1.0 - smoothstep(-0.75, shadow_blur, shadow_d)) * shadow_strength;
     }
-    if !intermediate_stage && surface_coverage <= 0.0 {
-        return vec4<f32>(0.0, 0.0, 0.0, shadow_alpha);
+    let ring_color = get_vec4(187u);
+    var ring_alpha = 0.0;
+    if fixed_or(get_float(194u), 0.0, GLASS_RING_SHADOW_OFF) > 0.5 && ring_color.a > 0.0 {
+        let ring_distance = scene_sdf(scene, p - vec2<f32>(0.0, get_float(192u) * s)) - get_float(195u) * s;
+        ring_alpha = ring_color.a * gaussian_stroke(ring_distance, get_float(193u) * s, get_float(191u) * s);
+    }
+    let surface_shadow = vec4<f32>(ring_color.rgb * ring_alpha, ring_alpha)
+        + vec4<f32>(shadow_color * shadow_alpha, shadow_alpha) * (1.0 - ring_alpha);
+    if material_activity <= 0.0 {
+        let resting = select(resting_output, resting_frost * coverage, layered_surface);
+        return select(resting, plain_path, intermediate_stage)
+            + surface_shadow * (1.0 - surface_coverage);
+    }
+    let contour_height = fixed_or(get_float(196u), 0.0, GLASS_CONTOUR_HIGHLIGHT_OFF) * optical_scale;
+    let contour_offset = get_float(197u) * optical_scale;
+    let contour_band = select(0.0,
+        clamp(-d - contour_offset + 0.5, 0.0, 1.0)
+            * clamp(contour_offset + contour_height + d + 0.5, 0.0, 1.0),
+        contour_height > 0.0);
+    let contour_alpha = contour_band * clamp(fixed_or(get_float(198u), 0.0, GLASS_CONTOUR_HIGHLIGHT_OFF), 0.0, 1.0) * material_activity;
+    if !intermediate_stage && surface_coverage <= 0.0 && contour_alpha <= 0.0 {
+        return surface_shadow;
     }
 
     // Outward SDF normal (gradient) — the lens axis at this fragment. Deep in
@@ -1147,13 +1169,25 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let edge_lens = refraction_mode >= 1.5;
     let edge_reach = max(get_float(131u), 0.0) * optical_scale;
     var outward_normal = vec2<f32>(0.0);
-    if in_rim || (refraction_mode > 0.5 && -d < lens_refraction * 1.44) {
+    if in_rim || contour_alpha > 0.0 || (refraction_mode > 0.5 && -d < lens_refraction * 1.44) {
         let eps = 0.5;
         let d_dx = scene_sdf(scene, p + vec2<f32>(eps, 0.0));
         let d_dy = scene_sdf(scene, p + vec2<f32>(0.0, eps));
         let grad = vec2<f32>(d_dx - d, d_dy - d) / eps;
         let grad_len = length(grad);
         outward_normal = select(vec2<f32>(0.0), grad / grad_len, grad_len > 0.001);
+    }
+    var contour_color = vec3<f32>(0.0);
+    if contour_alpha > 0.0 {
+        let axis = vec2<f32>(cos(get_float(200u)), sin(get_float(200u)));
+        let theta = acos(clamp(abs(dot(outward_normal, axis)), 0.0, 1.0));
+        let light = cos(min(theta / get_float(201u), 1.0) * 1.5707963268);
+        contour_color = vec3<f32>(clamp(0.5 + 0.5 * light + get_float(199u), 0.0, 1.0));
+    }
+    let contour_outside = vec4<f32>(contour_color * contour_alpha, contour_alpha)
+        + surface_shadow * (1.0 - contour_alpha);
+    if !intermediate_stage && surface_coverage <= 0.0 {
+        return contour_outside;
     }
 
     // Refraction uses the wcKSRD source mapping. Loupe focus/magnification
@@ -1331,6 +1365,15 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     }
     if edge_lens {
         base_displacement = edge_face_displacement(transmission_field, sampling_position);
+        if refraction_mode > 2.5 {
+            let inner_reach = get_float(181u) * optical_scale;
+            let inner_depth = get_float(182u) * optical_scale;
+            let inner_position = sampling_position - scene_normal(scene, sampling_position)
+                * inner_reach * transmission_refraction * circular_displacement_profile(-d, inner_depth);
+            base_displacement = inner_position
+                + edge_outer_displacement(transmission_field, inner_position) * transmission_refraction
+                - sampling_position;
+        }
     }
     let spectrum = edge_spectrum(lens_refraction, 13.132 * dispersion_strength * optical_scale, optical_scale);
     let spectral_opacity = spectral_presence(spectrum, d);
@@ -1343,6 +1386,9 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         loupe_mode > 0.5,
     );
     var pane_path = transmitted_path.rgb;
+    if layered_surface {
+        pane_path = mix(pane_path, resting_tint.rgb, resting_tint.a * (1.0 - material_activity));
+    }
     if pane_blend() > 0.0 {
         let has_frost = fixed_or(get_float(91u), 0.0, GLASS_ADAPTIVE_FROST_OFF) > 0.0;
         let region = u[58u - u32(has_frost) - u32(adaptive_tone())];
@@ -1357,6 +1403,9 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         pane_path = mix(normal, fill, min(0.675 + 0.45 * amount, 0.9));
     }
     var rgb = inset_shadow(scene, sampling_position, optical_scale, pane_path);
+    if ring_alpha > 0.0 {
+        rgb = mix(rgb, ring_color.rgb, ring_alpha);
+    }
     if edge_lens && spectrum.step != 0.0 && spectral_opacity > 0.0 {
         let dispersed = sample_chromatic_edge_lens(map, uv, tex_size, transmission_field,
             spectrum);
@@ -1747,8 +1796,11 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         rgb *= holding_tone(d);
     }
 
-    var key_fill_output = vec4<f32>(0.0);
-    if key_fill {
+    if contour_alpha > 0.0 {
+        rgb = mix(rgb, contour_color, contour_alpha);
+    }
+    var key_fill_output = vec4<f32>(rgb, alpha) * coverage;
+    if key_fill_lit {
         let angle = get_float(137u);
         let light_direction = vec2<f32>(cos(angle), sin(angle));
         let height = select(0.0, clamp(1.0 + get_float(136u) * d / key_fill_height, 0.0, 1.0), -d < key_fill_height);
@@ -1774,7 +1826,6 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
 
     // Premultiplied glass plus the shape-derived contact shadow. The shadow is
     // suppressed under the glass itself and therefore cannot darken its face.
-    let shadow_out = shadow_alpha * (1.0 - surface_coverage);
     let face_output = vec4<f32>(rgb, alpha) * coverage;
     // The band outside the face: the backdrop with the rim's reflection and
     // light, in the order the face takes them. Its weight is zero across a
@@ -1791,7 +1842,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         glass_output = fma(vec4<f32>(outer_rgb, plain_path.a), vec4<f32>(outer_coverage), face_output);
     }
     let illumination = select(0.0, get_float(145u), d <= 0.0);
-    return (select(glass_output, key_fill_output, key_fill) + vec4<f32>(vec3<f32>(illumination), 0.0)) * material_activity
+    return (select(glass_output, key_fill_output, key_fill) + vec4<f32>(vec3<f32>(illumination), 0.0)) * select(material_activity, 1.0, layered_surface)
         + resting_output
-        + vec4<f32>(0.0, 0.0, 0.0, shadow_out);
+        + contour_outside * (1.0 - surface_coverage);
 }

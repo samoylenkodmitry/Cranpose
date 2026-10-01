@@ -22,6 +22,10 @@ struct LayerSample: Codable {
     var bounds: [CGFloat]? = nil
     var scale: [CGFloat]? = nil
     var animations: [[String: String]]? = nil
+    var backgroundColor: [CGFloat]? = nil
+    var backgroundColorSpace: String? = nil
+    var sourceLayerPath: String? = nil
+    var opticalParameters: [String: Double]? = nil
 }
 
 struct MotionSample: Codable {
@@ -566,6 +570,63 @@ final class NativeTrace: NSObject {
             name = "native-contact-filters-\(tag)\(Int((contactFilterTime ?? elapsed) * 1000)).json"
         }
         try encoder.encode(frame).write(to: URL.documentsDirectory.appending(path: name), options: .atomic)
+        if held, let probe = environment["REFERENCE_CONTROL_OPTICAL_PROBE"] {
+            try disableControlWarp(probe, in: window)
+        }
+    }
+
+    private func disableControlWarp(_ probe: String, in window: UIWindow) throws {
+        let isolatedInputs = [
+            "surface": [("glassBackground", "inputInnerRefractionAmount")],
+            "ring-shadow": [("glassBackground", "inputRingShadowOpacity")],
+            "highlight": [("glassBackground", "inputKeyFillHighlightAmount")],
+            "shadow": [("glassBackground", "inputShadowOpacity")],
+            "spectral": [("glassForeground", "inputAberrationAmount")],
+            "highlight-spectral": [("glassBackground", "inputKeyFillHighlightAmount"), ("glassForeground", "inputAberrationAmount")]
+        ]
+        guard ["backdrop", "portal", "content"].contains(probe) || isolatedInputs[probe] != nil else {
+            throw OpticalLayerError.unknownProbe(probe)
+        }
+        var changes: [[String: String]] = []
+        func visit(_ layer: CALayer, path: String) {
+            if var filters = layer.filters {
+                for index in filters.indices {
+                    if let (_, key) = isolatedInputs[probe]?.first(where: { String(describing: filters[index]) == $0.0 }),
+                       let original = filters[index] as? NSCopying,
+                       let filter = original.copy(with: nil) as? NSObject {
+                        let amount = String(describing: filter.value(forKey: key))
+                        filter.setValue(0.0, forKey: key)
+                        filters[index] = filter
+                        changes.append(["path": path, "key": key, "from": amount, "to": "0"])
+                        continue
+                    }
+                    if isolatedInputs[probe] != nil { continue }
+                    guard String(describing: filters[index]) == "displacementMap",
+                          let original = filters[index] as? NSCopying,
+                          let filter = original.copy(with: nil) as? NSObject,
+                          let amount = filter.value(forKey: "inputAmount") as? NSNumber else { continue }
+                    let backdrop = String(describing: type(of: layer)) == "CABackdropLayer"
+                    let portal = !backdrop && abs(amount.doubleValue + 17.5) < 0.1
+                    let selected = probe == "backdrop" ? backdrop : probe == "portal" ? portal : !backdrop && !portal
+                    guard selected else { continue }
+                    filter.setValue(0.0, forKey: "inputAmount")
+                    filters[index] = filter
+                    changes.append(["path": path, "from": amount.stringValue, "to": "0"])
+                }
+                layer.filters = filters
+            }
+            for (index, child) in (layer.sublayers ?? []).enumerated() {
+                visit(child, path: path + "/\(index)")
+            }
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        visit(window.layer, path: "Window")
+        CATransaction.commit()
+        guard !changes.isEmpty else { throw OpticalLayerError.missingFilter("control \(probe) warp") }
+        try JSONEncoder().encode(changes).write(
+            to: URL.documentsDirectory.appending(path: "control-optical-probe-\(component ?? "unknown")-\(probe).json"),
+            options: .atomic)
     }
 
     private func findTabBar(in view: UIView) -> UITabBar? {
@@ -699,6 +760,42 @@ final class NativeTrace: NSObject {
         }
     }
 
+    private func opticalParameters(_ layer: CALayer) -> [String: Double]? {
+        guard captureAnimations else { return nil }
+        var result: [String: Double] = [:]
+        for value in layer.filters ?? [] {
+            guard let filter = value as? NSObject else { continue }
+            let name = String(describing: value)
+            let keys: [String]
+            switch name {
+            case "displacementMap": keys = ["inputAmount"]
+            case "glassBackground": keys = ["inputInnerRefractionAmount", "inputInnerRefractionHeight"]
+            case "glassForeground": keys = ["inputAberrationAmount", "inputAberrationAngle", "inputEdgeStart", "inputEdgeEnd"]
+            default: continue
+            }
+            for key in keys {
+                if let number = filter.value(forKey: key) as? NSNumber {
+                    result[name + "." + key] = number.doubleValue
+                }
+            }
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    private func sourceLayerPath(_ layer: CALayer, root: CALayer) -> String? {
+        guard recordingFilters,
+              layer.responds(to: NSSelectorFromString("sourceLayer")),
+              let source = layer.value(forKey: "sourceLayer") as? CALayer else { return nil }
+        func find(_ candidate: CALayer, path: String) -> String? {
+            if candidate.model() === source.model() { return path }
+            for (index, child) in (candidate.sublayers ?? []).enumerated() {
+                if let found = find(child, path: path + "/\(index)") { return found }
+            }
+            return nil
+        }
+        return find(root.model(), path: "Window") ?? "external: \(type(of: source)) \(source.bounds)"
+    }
+
     private func sample(_ layer: CALayer, root: CALayer, path: String, into samples: inout [LayerSample]) {
         let visible = layer
         let rect = visible.convert(visible.bounds, to: root)
@@ -718,7 +815,11 @@ final class NativeTrace: NSObject {
                                    archive: optics.enabled && String(describing: type(of: visible)).hasPrefix("CASDF") ? opticalArchive(visible) : nil,
                                    bounds: [visible.bounds.minX, visible.bounds.minY, visible.bounds.width, visible.bounds.height],
                                    scale: [visible.transform.m11, visible.transform.m22],
-                                   animations: recordingFilters ? animationValues(visible) : nil))
+                                   animations: recordingFilters ? animationValues(visible) : nil,
+                                   backgroundColor: recordingFilters ? visible.backgroundColor?.components : nil,
+                                    backgroundColorSpace: recordingFilters ? visible.backgroundColor?.colorSpace?.name as String? : nil,
+                                    sourceLayerPath: sourceLayerPath(visible, root: root),
+                                    opticalParameters: opticalParameters(visible)))
         for (index, child) in (layer.sublayers ?? []).enumerated() {
             sample(child, root: root, path: path + "/\(index)", into: &samples)
         }

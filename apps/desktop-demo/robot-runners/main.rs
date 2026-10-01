@@ -117,6 +117,7 @@ runners! {
     robot_liquid_backdrop_feedback,
     robot_liquid_bar_alignment,
     robot_liquid_bottom_bar_form_cheatsheet,
+    robot_liquid_control_refraction,
     robot_liquid_dropdown_accordion,
     robot_liquid_menu_expand_cheatsheet,
     robot_liquid_menu_open_cheatsheet,

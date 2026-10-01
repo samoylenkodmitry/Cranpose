@@ -16,7 +16,7 @@ use cranpose_ui_graphics::{
     BlendMode, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash, RuntimeShader, SubstrateSpec,
     TileMode,
 };
-use smallvec::{SmallVec, smallvec};
+use smallvec::SmallVec;
 
 use crate::{
     ablation::Ablation,
@@ -126,44 +126,6 @@ impl DeviceRect {
             width: (right - left).max(1.0),
             height: (bottom - top).max(1.0),
         }
-    }
-
-    /// What is left of the rect outside `hole`: up to four rects that
-    /// partition it exactly, none overlapping the hole.
-    fn subtract(self, hole: Self) -> SmallVec<[Self; 4]> {
-        let Some(hole) = hole.intersect(self) else {
-            return smallvec![self];
-        };
-        let right = self.x + self.width;
-        let bottom = self.y + self.height;
-        let hole_right = hole.x + hole.width;
-        let hole_bottom = hole.y + hole.height;
-        let mut parts = SmallVec::new();
-        let mut push = |x: f32, y: f32, width: f32, height: f32| {
-            if width > 0.0 && height > 0.0 {
-                parts.push(Self {
-                    x,
-                    y,
-                    width,
-                    height,
-                });
-            }
-        };
-        push(self.x, self.y, self.width, hole.y - self.y);
-        push(self.x, hole_bottom, self.width, bottom - hole_bottom);
-        push(self.x, hole.y, hole.x - self.x, hole.height);
-        push(hole_right, hole.y, right - hole_right, hole.height);
-        parts
-    }
-
-    /// The rect minus every hole, as rects that partition what is left.
-    fn subtract_all(self, holes: &[Self]) -> SmallVec<[Self; 4]> {
-        holes.iter().fold(smallvec![self], |parts, hole| {
-            parts
-                .into_iter()
-                .flat_map(|part| part.subtract(*hole))
-                .collect()
-        })
     }
 
     fn pixel_size(self) -> (u32, u32) {
@@ -448,6 +410,20 @@ struct Blocker {
     rect: DeviceRect,
 }
 
+fn blocked_coverage(holes: &mut Vec<Blocker>, z: usize, coverage: DeviceRect) -> bool {
+    let blocked = holes
+        .iter()
+        .filter(|hole| hole.z < z)
+        .find_map(|hole| hole.rect.intersect(coverage).map(|part| part == coverage));
+    let Some(fully_covered) = blocked else {
+        return false;
+    };
+    if !fully_covered {
+        holes.push(Blocker { z, rect: coverage });
+    }
+    true
+}
+
 fn release_op(
     op: DrawOp,
     scene: &CompositorScene,
@@ -456,73 +432,30 @@ fn release_op(
     deferred: &mut Vec<DrawOp>,
     now_ops: &mut Vec<DrawOp>,
 ) {
-    let bounds =
-        op_draw_bounds(scene, &op, scale).map(|bounds| DeviceRect::from_logical(bounds, scale));
-    let blocked = bounds.and_then(|bounds| {
-        holes
-            .iter()
-            .filter(|hole| hole.z < op.z_index)
-            .find_map(|hole| {
-                hole.rect
-                    .intersect(bounds)
-                    .map(|part| (bounds, part == bounds))
-            })
+    let blocked = op_draw_bounds(scene, &op, scale).is_some_and(|bounds| {
+        blocked_coverage(holes, op.z_index, DeviceRect::from_logical(bounds, scale))
     });
-    match blocked {
-        Some((rect, fully_covered)) => {
-            if !fully_covered {
-                holes.push(Blocker {
-                    z: op.z_index,
-                    rect,
-                });
-            }
-            deferred.push(op);
-        }
-        None => now_ops.push(op),
+    if blocked {
+        deferred.push(op);
+    } else {
+        now_ops.push(op);
     }
 }
 
 fn release_composite(
     composite: ResolvedComposite,
-    holes: &[Blocker],
-    covered: &mut Vec<DeviceRect>,
+    holes: &mut Vec<Blocker>,
     now: &mut Vec<ResolvedComposite>,
     pending: &mut Vec<ResolvedComposite>,
 ) {
     let Some(coverage) = composite_coverage(&composite) else {
         return;
     };
-    collect_covered_rects(holes, composite.z_index, coverage, covered);
-    if covered.is_empty() {
+    if blocked_coverage(holes, composite.z_index, coverage) {
+        pending.push(composite);
+    } else {
         now.push(composite);
-        return;
     }
-    now.extend(
-        coverage
-            .subtract_all(covered)
-            .into_iter()
-            .map(|part| with_scissor(&composite, part)),
-    );
-    for (index, hole) in covered.iter().enumerate() {
-        for part in hole.subtract_all(&covered[..index]) {
-            pending.push(with_scissor(&composite, part));
-        }
-    }
-}
-
-fn collect_covered_rects(
-    holes: &[Blocker],
-    z: usize,
-    coverage: DeviceRect,
-    covered: &mut Vec<DeviceRect>,
-) {
-    covered.clear();
-    covered.extend(
-        holes
-            .iter()
-            .filter(|hole| hole.z < z)
-            .filter_map(|hole| hole.rect.intersect(coverage)),
-    );
 }
 
 /// One thing a flush may draw, in the order the pass draws them: at one z
@@ -603,11 +536,6 @@ impl LayerPass<'_> {
         )
     }
 
-    /// Splits what a flush would draw into what draws now and what waits.
-    /// In z order, anything that touches a blocker below it waits: an op is
-    /// deferred whole, a composite is drawn outside the blockers it overlaps
-    /// and its covered parts stay pending; and what waits blocks in turn, so
-    /// nothing above it that overlaps it is drawn before it.
     fn release(
         &mut self,
         mut ops: Vec<DrawOp>,
@@ -636,8 +564,7 @@ impl LayerPass<'_> {
         candidates.sort_by_key(Candidate::order);
         let mut composites: Vec<Option<ResolvedComposite>> =
             composites.into_iter().map(Some).collect();
-        let mut holes = self.blockers.clone();
-        let mut covered = Vec::new();
+        let blocker_count = self.blockers.len();
         let mut now_ops = Vec::with_capacity(op_count);
         let mut now = Vec::with_capacity(composite_count);
         for candidate in candidates {
@@ -646,7 +573,7 @@ impl LayerPass<'_> {
                     op,
                     scene,
                     scale,
-                    &mut holes,
+                    &mut self.blockers,
                     &mut self.deferred,
                     &mut now_ops,
                 ),
@@ -654,10 +581,11 @@ impl LayerPass<'_> {
                     let composite = composites[index]
                         .take()
                         .expect("a flush releases each composite once");
-                    release_composite(composite, &holes, &mut covered, &mut now, &mut self.pending);
+                    release_composite(composite, &mut self.blockers, &mut now, &mut self.pending);
                 }
             }
         }
+        self.blockers.truncate(blocker_count);
         self.deferred.sort_by_key(|op| op.z_index);
         (now_ops, now)
     }
@@ -1276,14 +1204,6 @@ fn composite_coverage(composite: &ResolvedComposite) -> Option<DeviceRect> {
             height: sh,
         }),
         None => Some(dest),
-    }
-}
-
-/// The composite restricted to `scissor`, a part of its coverage.
-fn with_scissor(composite: &ResolvedComposite, scissor: DeviceRect) -> ResolvedComposite {
-    ResolvedComposite {
-        scissor: Some(scissor.tuple()),
-        ..composite.clone()
     }
 }
 
@@ -3122,19 +3042,23 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let pending = &segment.pending[..segment
                 .pending
                 .partition_point(|composite| composite.z_index < segment.z_end)];
-            if !hash_capture_composites(drawn, window, &mut hasher)
-                || !hash_capture_composites(pending, window, &mut hasher)
-            {
+            if !hash_capture_composites(drawn, pending, window, &mut hasher) {
                 return None;
             }
         }
         let window = capture_window(item.capture_rect);
         let ops = filtered_ops(&pass.layer.scene.draw_ops, item.z, &[]);
         hash_capture_ops(&pass.layer.scene, &ops, window, scale, &mut hasher);
-        if !hash_capture_composites(pass.drawn_below(item.z), window, &mut hasher) {
-            return None;
-        }
-        if !hash_capture_composites(pass.pending_below(item.z), window, &mut hasher) {
+        ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
+        let pending_end = pass
+            .pending
+            .partition_point(|composite| composite.z_index < item.z);
+        if !hash_capture_composites(
+            pass.drawn_below(item.z),
+            &pass.pending[..pending_end],
+            window,
+            &mut hasher,
+        ) {
             return None;
         }
         layout.hash(&mut hasher);

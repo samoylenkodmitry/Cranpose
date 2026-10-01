@@ -13,7 +13,8 @@ class DeviceTraceTests(unittest.TestCase):
             "isDirectory": False, "isSymbolicLink": False, **resources}}]}}
 
     def test_selects_only_regular_recorded_trace_files(self):
-        for name in ["native-123-touches.json", "cranpose-456-layers.json"]:
+        for name in ["native-123-touches.json", "cranpose-456-layers.json",
+                     "control-optical-probe-segmented-ring-shadow.json"]:
             self.assertEqual(collect._device_trace_names(self.listing(name)), [name])
         for listing in [self.listing("unrelated.json"), self.listing("../native-touches.json"),
                         self.listing("native-touches.json", isSymbolicLink=True),

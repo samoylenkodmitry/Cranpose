@@ -35,6 +35,26 @@ fn segment_x(index: usize) -> f32 {
     CONTROL_LEFT + width * (index as f32 + 0.5)
 }
 
+fn check_resting_track(resting: &cranpose::RobotScreenshot) {
+    let scale = resting.width as f32 / resting.logical_width;
+    let track_red = |x: f32| {
+        let x = (x * scale) as usize;
+        let y = (154.0 * scale) as usize;
+        resting.pixels[(y * resting.width as usize + x) * 4]
+    };
+    let transmitted_contrast = track_red(380.0).saturating_sub(track_red(372.0));
+    assert!(transmitted_contrast >= 120,
+        "native inactive switch track transmits the striped backdrop; red contrast={transmitted_contrast}");
+    let x = (segment_x(0) * scale) as usize;
+    let y = ((CONTROL_TOP + 4.0) * scale) as usize;
+    let red = resting.pixels[(y * resting.width as usize + x) * 4];
+    let track_x = (segment_x(2) * scale) as usize;
+    let track = resting.pixels[(y * resting.width as usize + track_x) * 4];
+    let expected = if track < 128 { 90 } else { 255 };
+    assert!(red.abs_diff(expected) <= 3, "native selection edge is opaque two points inside; got {red}, expected {expected}");
+
+}
+
 pub(crate) fn main() -> ExitCode {
     let shot_dir = PathBuf::from(
         std::env::var("ROBOT_SHOT_DIR")
@@ -53,14 +73,7 @@ pub(crate) fn main() -> ExitCode {
             robot_shot::settle(&robot, 300);
             let resting = robot.screenshot().expect("resting shot");
             robot_shot::save(&resting, &shot_dir, "0-resting.png");
-            let scale = resting.width as f32 / resting.logical_width;
-            let x = (segment_x(0) * scale) as usize;
-            let y = ((CONTROL_TOP + 4.0) * scale) as usize;
-            let red = resting.pixels[(y * resting.width as usize + x) * 4];
-            let track_x = (segment_x(2) * scale) as usize;
-            let track = resting.pixels[(y * resting.width as usize + track_x) * 4];
-            let expected = if track < 128 { 90 } else { 255 };
-            assert!(red.abs_diff(expected) <= 3, "native selection edge is opaque two points inside; got {red}, expected {expected}");
+            check_resting_track(&resting);
 
             let mut most = (0, "");
             for (index, (name, x, y)) in [

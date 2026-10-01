@@ -15,7 +15,7 @@ use cranpose_ui_graphics::{
     GLASS_EDGE_RETURN_DEPTH_UNIFORM, GLASS_EDGE_SPECTRUM_UNIFORM, GLASS_EFFECT_DENSITY_UNIFORM,
     GLASS_FACE_LIGHTING_OFF_UNIFORM, GLASS_FACE_RESPONSE_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM,
     GLASS_INNER_SHADOW_UNIFORM, GLASS_KEY_FILL_UNIFORM, GLASS_LAYER_CLIPPED_UNIFORM,
-    GLASS_LIGHT_DIRECTION_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM,
+    GLASS_LAYERED_RETURN_UNIFORM, GLASS_LIGHT_DIRECTION_UNIFORM, GLASS_MENISCUS_ABSORPTION_UNIFORM,
     GLASS_OPTICAL_PROJECTION_UNIFORM, GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM,
     GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM,
     GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
@@ -117,6 +117,17 @@ pub enum GlassRefraction {
         /// Outward warp amplitude in dp; refraction depth sets its falloff height.
         reach_dp: f32,
     },
+    /// An outward backdrop warp followed by the material's inward surface warp.
+    /// Both coordinate maps are composed before sampling, avoiding an intermediate image.
+    /// Amplitudes and depths are absolute; activity controls the resting fill separately.
+    LayeredSurface {
+        /// Outward backdrop amplitude in dp; refraction depth sets its falloff height.
+        reach_dp: f32,
+        /// Inward surface amplitude in dp.
+        return_reach_dp: f32,
+        /// Inward surface falloff height in dp.
+        return_depth_dp: f32,
+    },
 }
 
 impl GlassRefraction {
@@ -125,6 +136,7 @@ impl GlassRefraction {
             Self::Radial => (0.0, 0.0),
             Self::Surface { reach_dp } => (1.0, finite_nonnegative(reach_dp)),
             Self::EdgeLens { reach_dp } => (2.0, finite_nonnegative(reach_dp)),
+            Self::LayeredSurface { reach_dp, .. } => (3.0, finite_nonnegative(reach_dp)),
         }
     }
 }
@@ -180,6 +192,15 @@ impl GlassShadow {
 /// scene-build time (no recomposition per frame).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct GlassDynamics {
+    /// Per-frame source mapping. Layered surfaces use this to animate the backdrop
+    /// and material independently of the opaque resting fill.
+    pub refraction: Option<GlassRefraction>,
+    /// Per-frame shadow of the persistent surface, independent of optical activity.
+    pub shadow: Option<GlassShadow>,
+    /// A shadow cast by the surface contour instead of its filled silhouette.
+    /// The second value is the contour stroke width in dp; the shadow radius
+    /// is its Gaussian standard deviation. Nonfinite or nonpositive widths disable it.
+    pub ring_shadow: Option<(GlassShadow, f32)>,
     /// Independent inner return depth for an edge lens, in dp. Zero removes its depth.
     /// Nonfinite or negative values preserve the material's default depth ratio.
     pub edge_return_depth_dp: Option<f32>,
@@ -370,6 +391,42 @@ impl GlassDeformation {
 impl GlassMorph {
     /// Shader budget for extra scene shapes.
     pub const MAX_SHAPES: usize = 8;
+}
+
+/// Reflection of opposing lights across a narrow band around the surface contour.
+/// The reflected environment is brightest along the light axis and darkest between the lights.
+/// Nonfinite fields or nonpositive height or spread disable this treatment.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassContourHighlight {
+    /// Width of the reflecting band in dp.
+    pub height_dp: f32,
+    /// Signed distance of the band's outer edge; negative values extend outside the surface.
+    pub offset_dp: f32,
+    /// Reflected-light opacity, clamped to zero through one.
+    pub amount: f32,
+    /// Additive brightness of the reflected environment.
+    pub color_bias: f32,
+    /// Direction of the first light in screen-space radians; the second is opposite.
+    pub angle_radians: f32,
+    /// Angular extent of each light in radians.
+    pub spread_radians: f32,
+}
+
+impl GlassContourHighlight {
+    fn uniforms(self) -> Option<[f32; 6]> {
+        let values = [
+            self.height_dp,
+            self.offset_dp,
+            self.amount,
+            self.color_bias,
+            self.angle_radians,
+            self.spread_radians,
+        ];
+        (values.iter().all(|value| value.is_finite())
+            && self.height_dp > 0.0
+            && self.spread_radians > 0.0)
+            .then_some(values)
+    }
 }
 
 /// Opposing edge lights whose color responds to the backdrop.
@@ -582,6 +639,8 @@ pub struct Glass {
     pub face_lighting: bool,
     /// Replaces dome lighting with a pair of opposing edge lights.
     pub key_fill: Option<GlassKeyFill>,
+    /// Contour reflection applied before the foreground's spectral dispersion.
+    pub contour_highlight: Option<GlassContourHighlight>,
     /// Attenuation and illumination applied around the edge-light pass.
     pub face_response: Option<GlassFaceResponse>,
     /// Inset shadow on the transmitted face, covered by the chromatic foreground.
@@ -640,6 +699,7 @@ impl Glass {
             highlight: 0.9,
             face_lighting: true,
             key_fill: None,
+            contour_highlight: None,
             face_response: None,
             inner_shadow: None,
             lift: None,
@@ -688,6 +748,7 @@ impl Glass {
             highlight: 1.15,
             face_lighting: true,
             key_fill: None,
+            contour_highlight: None,
             face_response: None,
             inner_shadow: None,
             lift: None,
@@ -1020,6 +1081,7 @@ impl Glass {
             highlight: self.highlight,
             face_lighting: self.face_lighting,
             key_fill: self.key_fill,
+            contour_highlight: self.contour_highlight,
             face_response: self.face_response,
             inner_shadow: self.inner_shadow,
             lift,
@@ -1079,6 +1141,8 @@ pub(crate) struct ResolvedGlass {
     pub highlight: f32,
     pub face_lighting: bool,
     pub key_fill: Option<GlassKeyFill>,
+    /// Contour reflection applied before the foreground's spectral dispersion.
+    pub contour_highlight: Option<GlassContourHighlight>,
     /// Attenuation and illumination applied around the edge-light pass.
     pub face_response: Option<GlassFaceResponse>,
     pub lift: f32,
@@ -1112,6 +1176,7 @@ impl ResolvedGlass {
         self.tint_amount = None;
         self.backdrop_blur = None;
         self.face_tone = None;
+        self.contour_highlight = None;
         self.adaptive_tone = false;
         self.blur_radius_dp = 0.0;
         self.saturation = 1.0;
@@ -1154,6 +1219,163 @@ impl ResolvedGlass {
         self.runtime_effect_with_content(density, dynamics, content_mask, false)
     }
 
+    fn set_refraction_uniforms(
+        &self,
+        shader: &mut RuntimeShader,
+        dynamics: &GlassDynamics,
+        activity: f32,
+    ) -> (f32, f32, f32) {
+        let press_depth = dynamics.press_depth.unwrap_or(1.0).clamp(0.0, 1.0);
+        shader.set_float(9, self.refraction_depth * activity * press_depth);
+        let refraction = dynamics.refraction.unwrap_or(self.refraction);
+        let (refraction_mode, refraction_reach) = refraction.shader_parameters();
+        let refraction_weight = if matches!(refraction, GlassRefraction::LayeredSurface { .. }) {
+            1.0
+        } else {
+            activity * press_depth
+        };
+        shader.set_float(GLASS_REFRACTION_MODE_UNIFORM, refraction_mode);
+        if let GlassRefraction::LayeredSurface {
+            return_reach_dp,
+            return_depth_dp,
+            ..
+        } = refraction
+        {
+            shader.set_float2(
+                GLASS_LAYERED_RETURN_UNIFORM,
+                finite_nonnegative(return_reach_dp),
+                finite_nonnegative(return_depth_dp),
+            );
+        }
+        set_edge_return_depth(shader, dynamics.edge_return_depth_dp);
+        shader.set_float(
+            GLASS_EDGE_REFRACTION_REACH_UNIFORM,
+            refraction_reach * refraction_weight,
+        );
+        shader.set_float(
+            GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM,
+            self.refraction_depth_dp.unwrap_or(0.0) * refraction_weight,
+        );
+        shader.set_float(
+            GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM,
+            if self.refraction_depth_dp.is_some() {
+                1.0
+            } else {
+                0.0
+            },
+        );
+        shader.set_float(
+            GLASS_REFRACTION_CURVE_UNIFORM,
+            self.refraction_curve * activity,
+        );
+        shader.set_float(
+            GLASS_DISPERSION_UNIFORM,
+            self.dispersion * activity * press_depth,
+        );
+        let spectrum_reach = self.set_spectrum_uniforms(shader);
+        shader.set_float(
+            GLASS_TRANSMISSION_REFRACTION_UNIFORM,
+            self.transmission_refraction * if refraction_mode > 2.5 { 1.0 } else { activity },
+        );
+        shader.set_float(
+            GLASS_MENISCUS_ABSORPTION_UNIFORM,
+            self.meniscus_absorption * press_depth,
+        );
+        shader.set_float(
+            GLASS_FOLD_DEPTH_UNIFORM,
+            self.fold_depth.max(0.0) * press_depth,
+        );
+        (refraction_mode, refraction_reach, spectrum_reach)
+    }
+
+    fn set_shadow_uniforms(
+        &self,
+        shader: &mut RuntimeShader,
+        dynamics: &GlassDynamics,
+        activity: f32,
+    ) -> (f32, f32) {
+        let dynamic_shadow = !self.clip && self.shadow;
+        let shadow = dynamics
+            .shadow
+            .filter(|shadow| shadow.uniforms().is_some())
+            .unwrap_or_else(|| {
+                GlassShadow::new(
+                    self.shadow_color
+                        .with_alpha(self.shadow_color.a() * 0.55 * activity),
+                    self.shadow_radius,
+                    self.shadow_offset_y,
+                    self.shadow_spread,
+                )
+            });
+        shader.set_float(
+            102,
+            if dynamic_shadow {
+                shadow.color.a()
+            } else {
+                0.0
+            },
+        );
+        shader.set_float(103, shadow.radius);
+        shader.set_float(104, shadow.offset_y);
+        shader.set_float(105, shadow.spread);
+        shader.set_float4(
+            cranpose_ui_graphics::GLASS_SHADOW_COLOR_UNIFORM,
+            shadow.color.r(),
+            shadow.color.g(),
+            shadow.color.b(),
+            0.0,
+        );
+        let ring_shadow = dynamics.ring_shadow.filter(|(ring, width)| {
+            ring.color.a() > 0.0 && ring.uniforms().is_some() && width.is_finite() && *width > 0.0
+        });
+        if let Some((ring, width)) = ring_shadow {
+            shader.set_float4(
+                cranpose_ui_graphics::GLASS_RING_SHADOW_UNIFORM,
+                ring.color.r(),
+                ring.color.g(),
+                ring.color.b(),
+                ring.color.a(),
+            );
+            shader.set_float4(
+                cranpose_ui_graphics::GLASS_RING_SHADOW_UNIFORM + 4,
+                ring.radius,
+                ring.offset_y,
+                width,
+                1.0,
+            );
+            shader.set_float(
+                cranpose_ui_graphics::GLASS_RING_SHADOW_UNIFORM + 8,
+                ring.spread,
+            );
+        }
+        let ring_reach = ring_shadow.map_or(0.0, |(ring, width)| {
+            3.0 * ring.radius + ring.offset_y.abs() + width * 0.5 + ring.spread.abs()
+        });
+        let contour_reach = self
+            .contour_highlight
+            .and_then(GlassContourHighlight::uniforms)
+            .filter(|values| values[2] > 0.0 && activity > 0.0)
+            .map_or(0.0, |values| (-values[1]).max(0.0));
+        shader.set_output_padding(ring_reach.max(contour_reach));
+        let visible_shadow = dynamic_shadow && shadow.color.a() > 0.0;
+        let shadow_reach = if visible_shadow {
+            shadow.radius + shadow.offset_y.abs() + shadow.spread.max(0.0)
+        } else {
+            0.0
+        }
+        .max(ring_reach)
+        .max(contour_reach);
+        let offset = if visible_shadow || ring_shadow.is_some() {
+            shadow
+                .offset_y
+                .abs()
+                .max(ring_shadow.map_or(0.0, |(ring, _)| ring.offset_y.abs()))
+        } else {
+            0.0
+        };
+        (shadow_reach, offset)
+    }
+
     fn runtime_effect_with_content(
         &self,
         density: f32,
@@ -1185,48 +1407,8 @@ impl ResolvedGlass {
         }
         let projection = dynamics.projection();
         shader.set_float2(GLASS_OPTICAL_PROJECTION_UNIFORM, projection.0, projection.1);
-        let press_depth = dynamics.press_depth.unwrap_or(1.0).clamp(0.0, 1.0);
-        shader.set_float(9, self.refraction_depth * activity * press_depth);
-        let (refraction_mode, refraction_reach) = self.refraction.shader_parameters();
-        shader.set_float(GLASS_REFRACTION_MODE_UNIFORM, refraction_mode);
-        set_edge_return_depth(&mut shader, dynamics.edge_return_depth_dp);
-        shader.set_float(
-            GLASS_EDGE_REFRACTION_REACH_UNIFORM,
-            refraction_reach * activity * press_depth,
-        );
-        shader.set_float(
-            GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM,
-            self.refraction_depth_dp.unwrap_or(0.0) * activity * press_depth,
-        );
-        shader.set_float(
-            GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM,
-            if self.refraction_depth_dp.is_some() {
-                1.0
-            } else {
-                0.0
-            },
-        );
-        shader.set_float(
-            GLASS_REFRACTION_CURVE_UNIFORM,
-            self.refraction_curve * activity,
-        );
-        shader.set_float(
-            GLASS_DISPERSION_UNIFORM,
-            self.dispersion * activity * press_depth,
-        );
-        let spectrum_reach = self.set_spectrum_uniforms(&mut shader);
-        shader.set_float(
-            GLASS_TRANSMISSION_REFRACTION_UNIFORM,
-            self.transmission_refraction * activity,
-        );
-        shader.set_float(
-            GLASS_MENISCUS_ABSORPTION_UNIFORM,
-            self.meniscus_absorption * press_depth,
-        );
-        shader.set_float(
-            GLASS_FOLD_DEPTH_UNIFORM,
-            self.fold_depth.max(0.0) * press_depth,
-        );
+        let (refraction_mode, refraction_reach, spectrum_reach) =
+            self.set_refraction_uniforms(&mut shader, dynamics, activity);
         shader.set_float(
             GLASS_OPTICAL_ZOOM_UNIFORM,
             1.0 + (self.optical_zoom - 1.0).max(0.0) * activity,
@@ -1306,18 +1488,8 @@ impl ResolvedGlass {
             cranpose_ui_graphics::GLASS_FOREGROUND_CONTENT_UNIFORM,
             f32::from(separate_content),
         );
-        let dynamic_shadow = !self.clip && self.shadow;
-        shader.set_float(
-            102,
-            if dynamic_shadow {
-                self.shadow_color.a() * 0.55 * activity
-            } else {
-                0.0
-            },
-        );
-        shader.set_float(103, self.shadow_radius);
-        shader.set_float(104, self.shadow_offset_y);
-        shader.set_float(105, self.shadow_spread);
+        let (shadow_reach, shadow_offset) =
+            self.set_shadow_uniforms(&mut shader, dynamics, activity);
         let morph_pad = dynamics.morph.as_ref().map_or(0.0, |morph| {
             let (px, py, pw, ph, _) = morph.primary;
             let (left, top) = (px - pw * 0.5, py - ph * 0.5);
@@ -1343,7 +1515,9 @@ impl ResolvedGlass {
             0.0
         } else {
             (self.input_padding()
-                + if refraction_mode >= 1.5 {
+                + if refraction_mode > 2.5 {
+                    refraction_reach + spectrum_reach
+                } else if refraction_mode >= 1.5 {
                     refraction_reach * (26.5 / 9.0) + spectrum_reach
                 } else {
                     refraction_reach
@@ -1353,22 +1527,8 @@ impl ResolvedGlass {
                 * projection.0.max(projection.1).max(1.0)
         });
         if let Some(morph) = dynamics.morph.as_ref() {
-            let shadow_reach = if dynamic_shadow {
-                self.shadow_radius + self.shadow_offset_y.abs() + self.shadow_spread.max(0.0)
-            } else {
-                0.0
-            };
-            let support = morph_output_support(
-                morph,
-                activity,
-                morph_pad,
-                shadow_reach,
-                if dynamic_shadow {
-                    self.shadow_offset_y.abs()
-                } else {
-                    0.0
-                },
-            );
+            let support =
+                morph_output_support(morph, activity, morph_pad, shadow_reach, shadow_offset);
             let (cx, cy, _, _, _) = morph.primary;
             let support = Rect {
                 x: cx + (support.x - cx) * projection.0,
@@ -1462,6 +1622,17 @@ impl ResolvedGlass {
         if let Some(values) = self.face_response.and_then(GlassFaceResponse::uniforms) {
             for (index, value) in values.into_iter().enumerate() {
                 shader.set_float(GLASS_FACE_RESPONSE_UNIFORM + index, value);
+            }
+        }
+        if let Some(values) = self
+            .contour_highlight
+            .and_then(GlassContourHighlight::uniforms)
+        {
+            for (index, value) in values.into_iter().enumerate() {
+                shader.set_float(
+                    cranpose_ui_graphics::GLASS_CONTOUR_HIGHLIGHT_UNIFORM + index,
+                    value,
+                );
             }
         }
         if let Some(values) = self.inner_shadow.and_then(GlassShadow::uniforms) {
@@ -1611,6 +1782,9 @@ fn cached_glass_layers<T: Clone>(
 fn glass_dynamics_match(a: &GlassDynamics, b: &GlassDynamics) -> bool {
     let bits = |d: &GlassDynamics| {
         let GlassDynamics {
+            refraction,
+            shadow,
+            ring_shadow,
             edge_return_depth_dp,
             optical_projection,
             activity,
@@ -1624,6 +1798,21 @@ fn glass_dynamics_match(a: &GlassDynamics, b: &GlassDynamics) -> bool {
             press_depth,
         } = d;
         (
+            ring_shadow.map(|(ring, width)| (shadow_bits(ring), width.to_bits())),
+            refraction.map(|refraction| {
+                match refraction {
+                    GlassRefraction::Radial => [0.0, 0.0, 0.0, 0.0],
+                    GlassRefraction::Surface { reach_dp } => [1.0, reach_dp, 0.0, 0.0],
+                    GlassRefraction::EdgeLens { reach_dp } => [2.0, reach_dp, 0.0, 0.0],
+                    GlassRefraction::LayeredSurface {
+                        reach_dp,
+                        return_reach_dp,
+                        return_depth_dp,
+                    } => [3.0, reach_dp, return_reach_dp, return_depth_dp],
+                }
+                .map(f32::to_bits)
+            }),
+            shadow.map(shadow_bits),
             edge_return_depth_dp.map(f32::to_bits),
             optical_projection.map(|(x, y)| [x, y].map(f32::to_bits)),
             activity.map(f32::to_bits),
@@ -1641,6 +1830,19 @@ fn glass_dynamics_match(a: &GlassDynamics, b: &GlassDynamics) -> bool {
             (Some(a), Some(b)) => glass_morphs_match(a, b),
             _ => false,
         }
+}
+
+fn shadow_bits(shadow: GlassShadow) -> [u32; 7] {
+    [
+        shadow.color.r(),
+        shadow.color.g(),
+        shadow.color.b(),
+        shadow.color.a(),
+        shadow.radius,
+        shadow.offset_y,
+        shadow.spread,
+    ]
+    .map(f32::to_bits)
 }
 
 fn glass_morphs_match(a: &GlassMorph, b: &GlassMorph) -> bool {

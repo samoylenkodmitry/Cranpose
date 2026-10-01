@@ -5,6 +5,7 @@ mod card;
 mod chip;
 mod content_scope;
 mod control_lens;
+mod control_material;
 mod control_motion;
 mod glass_surface;
 mod lens_motion;

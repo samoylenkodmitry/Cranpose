@@ -9,7 +9,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{Brush, CornerRadii, GraphicsLayer};
 
 use crate::{
-    material::{Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape},
+    material::{GlassDynamics, GlassMorph, LiquidModifierExt},
     motion::LiquidMotion,
     theme::liquid_colors,
 };
@@ -27,27 +27,6 @@ const TAP_SLOP: f32 = 4.0;
 
 fn toggle_track_motion() -> AnimationType {
     AnimationType::Tween(AnimationSpec::tween(260, Easing::EaseOut))
-}
-
-fn toggle_lens_material() -> Glass {
-    Glass::lens()
-        .shape(LiquidShape::Capsule)
-        .tint(cranpose_ui_graphics::Color::WHITE.with_alpha(0.02))
-        .blur_radius(0.8)
-        .saturation(1.0)
-        .refraction_depth(0.55)
-        .refraction_curve(0.25)
-        .transmission_refraction(1.0)
-        .dispersion(0.9)
-        .highlight(0.04)
-        .lift(0.16)
-        .shadow_style(GlassShadow::new(
-            cranpose_ui_graphics::Color::BLACK.with_alpha(0.14),
-            14.0,
-            4.0,
-            -1.5,
-        ))
-        .no_clip()
 }
 
 fn lens_translation_x(thumb_x: f32, node_width: f32) -> f32 {
@@ -192,38 +171,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             LENS_PAD,
         );
         let shape = std::rc::Rc::clone(&shape);
-        let thumb_axis = std::rc::Rc::clone(&lens_axis);
-        let lens_for_thumb = material_progress;
-        let thumb_shape = std::rc::Rc::clone(&shape);
-        let thumb = Modifier::empty()
-            .size(Size::new(THUMB_WIDTH, THUMB_HEIGHT))
-            .offset(0.0, (TRACK_HEIGHT - THUMB_HEIGHT) * 0.5)
-            .graphics_layer(move || {
-                let lens = lens_for_thumb.get();
-                let alpha = (1.0 - lens).clamp(0.0, 1.0);
-                let grow = lens_progress.get().clamp(-0.1, 1.2);
-                let projection = thumb_shape.projection(thumb_axis.value());
-                GraphicsLayer {
-                    translation_x: thumb_axis.value(),
-                    scale_x: (THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow) / THUMB_WIDTH
-                        * projection.0,
-                    scale_y: (THUMB_HEIGHT + (LENS_HEIGHT - THUMB_HEIGHT) * grow) / THUMB_HEIGHT
-                        * projection.1,
-                    alpha,
-                    ..Default::default()
-                }
-            })
-            .drop_shadow(
-                cranpose_ui_graphics::LayerShape::Rounded(
-                    cranpose_ui_graphics::RoundedCornerShape::uniform(THUMB_HEIGHT * 0.5),
-                ),
-                |scope| {
-                    scope.radius = 2.0;
-                    scope.offset.y = 0.5;
-                    scope.color = cranpose_ui_graphics::Color::BLACK.with_alpha(0.10);
-                },
-            );
-        super::control_lens::WhiteControlThumb(thumb, THUMB_HEIGHT);
 
         let lens_for_layer = lens_progress;
         let physics_axis = std::rc::Rc::clone(&lens_axis);
@@ -235,32 +182,39 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                 translation_x: lens_translation_x(layer_axis.value(), node_w),
                 ..Default::default()
             })
-            .glass_effect_with(toggle_lens_material(), move || {
-                let grow = lens_for_layer.get().clamp(-0.1, 1.2);
-                let base_w = THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow;
-                let base_h = THUMB_HEIGHT + (LENS_HEIGHT - THUMB_HEIGHT) * grow;
-                let projection = shape.projection(physics_axis.value());
-                GlassDynamics {
-                    optical_projection: Some(projection),
-                    activity: Some(material_progress.get().clamp(0.0, 1.0)),
-                    press_depth: Some(0.45 + 0.55 * material_progress.get().clamp(0.0, 1.0)),
-                    morph: Some(GlassMorph {
-                        node_size: (node_w, node_h),
-                        primary: (node_w * 0.5, node_h * 0.5, base_w, base_h, -1.0),
-                        shapes: Vec::new(),
-                        glue: 0.0,
-                        wobble_amplitude: 0.0,
-                        wobble_phase: 0.0,
-                        bulge_amplitude: 0.0,
-                        bulge_direction: 0.0,
-                        ellipse_blend: 0.0,
-                        capsule_smoothing_dp: 0.0,
-                        deformation: None,
-                        zoom_anchor: (0.0, 0.0),
-                    }),
-                    ..Default::default()
-                }
-            });
+            .glass_effect_with(
+                super::control_material::material(super::control_motion::ControlContactKind::Thumb),
+                move || {
+                    let grow = lens_for_layer.get().clamp(-0.1, 1.2);
+                    let base_w = THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow;
+                    let base_h = THUMB_HEIGHT + (LENS_HEIGHT - THUMB_HEIGHT) * grow;
+                    let projection = shape.projection(physics_axis.value());
+                    let material = material_progress.get().max(0.0);
+                    GlassDynamics {
+                        optical_projection: Some(projection),
+                        resting_tint: Some(cranpose_ui_graphics::Color::WHITE),
+                        morph: Some(GlassMorph {
+                            node_size: (node_w, node_h),
+                            primary: (node_w * 0.5, node_h * 0.5, base_w, base_h, -1.0),
+                            shapes: Vec::new(),
+                            glue: 0.0,
+                            wobble_amplitude: 0.0,
+                            wobble_phase: 0.0,
+                            bulge_amplitude: 0.0,
+                            bulge_direction: 0.0,
+                            ellipse_blend: 0.0,
+                            capsule_smoothing_dp: 0.0,
+                            deformation: None,
+                            zoom_anchor: (0.0, 0.0),
+                        }),
+                        ..super::control_material::dynamics(
+                            super::control_motion::ControlContactKind::Thumb,
+                            grow,
+                            material,
+                        )
+                    }
+                },
+            );
         Box(lens, BoxSpec::default(), || {});
     });
 }

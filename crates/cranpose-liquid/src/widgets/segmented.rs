@@ -12,7 +12,7 @@ use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 
 use crate::{
-    material::{Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape},
+    material::{GlassDynamics, GlassMorph, LiquidModifierExt},
     motion::LiquidMotion,
     theme::{liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
@@ -253,6 +253,10 @@ pub fn LiquidSegmentedControl(
             let lens_for_layer = lens_progress;
             let layer_axis = Rc::clone(&lens_axis);
             let physics_axis = Rc::clone(&lens_axis);
+            let content_axis = Rc::clone(&lens_axis);
+            let content_shape = Rc::clone(&shape);
+            let foreground_shape = Rc::clone(&shape);
+            let foreground_axis = Rc::clone(&lens_axis);
             let lens = Modifier::empty()
                 .required_size(Size::new(node_w, node_h))
                 .offset(
@@ -265,34 +269,17 @@ pub fn LiquidSegmentedControl(
                     ..Default::default()
                 })
                 .glass_effect_with(
-                    Glass::lens()
-                        .resting_edge_sharpness(1.0)
-                        .shape(LiquidShape::Capsule)
-                        .tint(Color::rgba(0.0, 0.0, 0.0, 0.08))
-                        .shadow_style(GlassShadow::new(
-                            Color::BLACK.with_alpha(0.14),
-                            12.0,
-                            4.0,
-                            -2.0,
-                        ))
-                        .rim_reflection(0.04)
-                        .blur_radius(0.5)
-                        .refraction_depth(1.0)
-                        .refraction_curve(0.25)
-                        .fold_depth(5.0)
-                        .dispersion(0.85)
-                        .highlight(0.04)
-                        .lift(0.0)
-                        .no_clip(),
+                    super::control_material::material(
+                        super::control_motion::ControlContactKind::Segment,
+                    ),
                     move || {
                         let grow = lens_for_layer.get().clamp(-0.1, 1.2);
                         let base_size = segmented_lens_base_size(segment_width, grow);
                         let projection = shape.projection(physics_axis.value());
+                        let material = material_progress.get().max(0.0);
                         GlassDynamics {
                             optical_projection: Some(projection),
-                            activity: Some(material_progress.get().clamp(0.0, 1.0)),
                             resting_tint: Some(marker_fill),
-                            press_depth: Some((0.12 + 0.30 * grow.clamp(0.0, 1.0)).clamp(0.0, 1.0)),
                             morph: Some(GlassMorph {
                                 node_size: (node_w, node_h),
                                 primary: (
@@ -313,14 +300,32 @@ pub fn LiquidSegmentedControl(
                                 deformation: None,
                                 zoom_anchor: (0.0, 0.0),
                             }),
-                            ..Default::default()
+                            ..super::control_material::dynamics(
+                                super::control_motion::ControlContactKind::Segment,
+                                grow,
+                                material,
+                            )
                         }
                     },
                 );
             Box(lens, BoxSpec::default(), || {});
             let semantic_selection = Rc::clone(&on_select);
             Row(
-                Modifier::empty().selectable_group(),
+                Modifier::empty()
+                    .selectable_group()
+                    .graphics_layer(move || {
+                        let position = content_axis.value();
+                        GraphicsLayer {
+                            render_effect: super::control_material::content_effect(
+                                Size::new(total_width, SEGMENT_HEIGHT),
+                                (position + segment_width * 0.5, SEGMENT_HEIGHT * 0.5),
+                                segmented_lens_base_size(segment_width, lens_progress.get()),
+                                content_shape.projection(position),
+                                material_progress.get().max(0.0),
+                            ),
+                            ..Default::default()
+                        }
+                    }),
                 RowSpec::default(),
                 move || {
                     for (index, segment) in segments.iter().enumerate() {
@@ -345,6 +350,29 @@ pub fn LiquidSegmentedControl(
                         );
                     }
                 },
+            );
+            Box(
+                Modifier::empty()
+                    .required_size(Size::new(node_w, node_h))
+                    .offset(
+                        (segment_width - node_w) * 0.5,
+                        (SEGMENT_HEIGHT - node_h) * 0.5,
+                    )
+                    .graphics_layer(move || {
+                        let position = foreground_axis.value();
+                        GraphicsLayer {
+                            translation_x: position,
+                            backdrop_effect: super::control_material::foreground_effect(
+                                Size::new(node_w, node_h),
+                                segmented_lens_base_size(segment_width, lens_progress.get()),
+                                foreground_shape.projection(position),
+                                material_progress.get().max(0.0),
+                            ),
+                            ..Default::default()
+                        }
+                    }),
+                BoxSpec::default(),
+                || {},
             );
             Box(gesture, BoxSpec::default(), || {});
         });

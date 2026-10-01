@@ -301,12 +301,26 @@ const SOURCE_SPACE: CaptureWindow = CaptureWindow {
 /// Hashes every resolved composite that touches `window`: what its texture
 /// holds and where it lands relative to the window. Returns false when one
 /// of them is drawn anew every frame, so nothing reading it can be reused.
-pub(crate) fn hash_capture_composites<H: Hasher>(
-    composites: &[ResolvedComposite],
+pub(crate) fn hash_capture_composites<'a, H: Hasher>(
+    mut drawn: &'a [ResolvedComposite],
+    mut pending: &'a [ResolvedComposite],
     window: CaptureWindow,
     state: &mut H,
 ) -> bool {
-    for composite in composites {
+    while !drawn.is_empty() || !pending.is_empty() {
+        let stream = if drawn.first().is_some_and(|first| {
+            pending
+                .first()
+                .is_none_or(|next| first.z_index <= next.z_index)
+        }) {
+            &mut drawn
+        } else {
+            &mut pending
+        };
+        let (composite, rest) = stream
+            .split_first()
+            .expect("one composite stream is nonempty");
+        *stream = rest;
         if !window.touches_device(composite.dest)
             || composite
                 .scissor

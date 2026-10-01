@@ -30,6 +30,20 @@ fn scrolling_liquid_cards_adds_no_blur_passes_over_the_existing_page_budget() {
         cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
         let uncached = page.capture();
         cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+        if cached.pixels != uncached.pixels {
+            let output = std::path::Path::new("target/liquid-cache-parity");
+            std::fs::create_dir_all(output).expect("create cache comparison directory");
+            for (name, frame) in [("cached", &cached), ("uncached", &uncached)] {
+                image::save_buffer(
+                    output.join(format!("step-{step}-{name}.png")),
+                    &frame.pixels,
+                    frame.width,
+                    frame.height,
+                    image::ColorType::Rgba8,
+                )
+                .expect("save cache comparison");
+            }
+        }
         assert!(
             cached.pixels == uncached.pixels,
             "scroll step {step} changed pixels when reusing a backdrop"

@@ -21,8 +21,8 @@ fn primary_labels_and_toggle_tracks_match_native_colors() {
     let dark = LiquidColors::dark(Color::BLUE);
     assert_eq!(light.label, Color::BLACK);
     assert_eq!(dark.label, Color::WHITE);
-    assert_eq!(light.toggle_off, Color::from_rgb_u8(197, 197, 199));
-    assert_eq!(dark.toggle_off, Color::from_rgb_u8(70, 70, 73));
+    assert_eq!(light.toggle_off, Color::from_rgba_u8(60, 60, 67, 76));
+    assert_eq!(dark.toggle_off, Color::from_rgba_u8(235, 235, 245, 76));
 }
 
 #[test]

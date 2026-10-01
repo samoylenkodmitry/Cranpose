@@ -914,121 +914,19 @@ fn an_inverted_op_range_is_empty_even_when_an_op_sits_at_its_end() {
 }
 
 #[test]
-fn reused_coverage_scratch_replaces_prior_clips_and_respects_draw_order() {
+fn deferred_coverage_blocks_later_draws_across_its_entire_extent() {
     let rect = |x, width| DeviceRect {
         x,
         y: 0.0,
         width,
         height: 10.0,
     };
-    let holes: Vec<_> = (0..8)
-        .map(|index| Blocker {
-            z: index,
-            rect: rect(index as f32 * 3.0, 2.0),
-        })
-        .collect();
-    let mut covered = Vec::new();
-    collect_covered_rects(&holes, 7, rect(0.0, 24.0), &mut covered);
-    assert_eq!(covered.len(), 7);
-    assert_eq!(covered.last(), Some(&rect(18.0, 2.0)));
-    collect_covered_rects(&holes, 3, rect(4.0, 4.0), &mut covered);
-    assert_eq!(covered, [rect(4.0, 1.0), rect(6.0, 2.0)]);
-    collect_covered_rects(&holes, 3, rect(12.0, 6.0), &mut covered);
-    assert!(covered.is_empty());
-    collect_covered_rects(&[], usize::MAX, rect(0.0, 24.0), &mut covered);
-    assert!(covered.is_empty());
-}
-
-#[test]
-fn many_overlapping_holes_preserve_every_uncovered_pixel_once() {
-    let rect = DeviceRect {
-        x: 0.0,
-        y: 0.0,
-        width: 20.0,
-        height: 20.0,
-    };
-    let mut holes: Vec<_> = (1..=4)
-        .map(|index| DeviceRect {
-            x: (index * 4 - 2) as f32,
-            y: 2.0,
-            width: 1.0,
-            height: 16.0,
-        })
-        .collect();
-    holes.extend([
-        DeviceRect {
-            x: -2.0,
-            y: 8.0,
-            width: 14.0,
-            height: 2.0,
-        },
-        DeviceRect {
-            x: 6.0,
-            y: 8.0,
-            width: 20.0,
-            height: 2.0,
-        },
-    ]);
-    let parts = rect.subtract_all(&holes);
-    assert!(parts.len() > 4);
-    for part in &parts {
-        assert_eq!(part.intersect(rect), Some(*part));
-    }
-    for y in 0..20 {
-        for x in 0..20 {
-            let pixel = DeviceRect {
-                x: x as f32,
-                y: y as f32,
-                width: 1.0,
-                height: 1.0,
-            };
-            let covered = holes.iter().any(|hole| hole.intersect(pixel).is_some());
-            let count = parts
-                .iter()
-                .filter(|part| part.intersect(pixel).is_some())
-                .count();
-            assert_eq!(count, usize::from(!covered), "pixel=({x}, {y})");
-        }
-    }
-    holes.push(rect);
-    assert!(rect.subtract_all(&holes).is_empty());
-}
-
-#[test]
-fn subtracting_holes_partitions_a_rect_exactly() {
-    let rect = DeviceRect {
-        x: 0.0,
-        y: 0.0,
-        width: 10.0,
-        height: 10.0,
-    };
-    let holes = [
-        DeviceRect {
-            x: 2.0,
-            y: 2.0,
-            width: 3.0,
-            height: 3.0,
-        },
-        DeviceRect {
-            x: 6.0,
-            y: 6.0,
-            width: 10.0,
-            height: 10.0,
-        },
-    ];
-    let parts = rect.subtract_all(&holes);
-    assert!(rect.subtract(rect).is_empty());
-    assert_eq!(
-        rect.subtract(rect.translated(Point { x: 10.0, y: 0.0 }))
-            .as_slice(),
-        &[rect]
-    );
-    let area: f32 = parts.iter().map(|part| part.width * part.height).sum();
-    assert_eq!(area, 100.0 - 9.0 - 16.0);
-    for (index, a) in parts.iter().enumerate() {
-        assert!(holes.iter().all(|hole| a.intersect(*hole).is_none()));
-        for b in &parts[index + 1..] {
-            assert!(a.intersect(*b).is_none(), "parts overlap: {a:?} {b:?}");
-        }
-    }
+    let mut blockers = vec![Blocker {
+        z: 2,
+        rect: rect(4.25, 1.5),
+    }];
+    assert!(!blocked_coverage(&mut blockers, 1, rect(0.0, 10.0)));
+    assert!(blocked_coverage(&mut blockers, 3, rect(0.0, 10.0)));
+    assert!(blocked_coverage(&mut blockers, 4, rect(8.0, 1.0)));
+    assert!(!blocked_coverage(&mut blockers, 4, rect(12.0, 1.0)));
 }

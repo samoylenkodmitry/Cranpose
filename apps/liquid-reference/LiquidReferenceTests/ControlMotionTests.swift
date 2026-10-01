@@ -4,6 +4,10 @@ import XCTest
 class NativeSliderMotionTests: ReferenceUITests {
     var component: String { "slider" }
     var initialValue: String { "0.5" }
+    var backdrop: String { "solid" }
+    var scheme: String { "light" }
+    var captureMaterial: Bool { false }
+    var opticalProbe: String? { nil }
     var positions: [CGFloat] { [201, 280, 122, 280] }
     var offsets: [NSNumber] { [0, 0.6, 0.9, 1.5, 1.8, 2.6] }
 
@@ -12,11 +16,18 @@ class NativeSliderMotionTests: ReferenceUITests {
         let app = XCUIApplication(bundleIdentifier: bundleIdentifier)
         app.launchEnvironment = ["REFERENCE_COMPONENT": component,
                                  "REFERENCE_VALUE": initialValue,
-                                 "REFERENCE_SCHEME": "light",
-                                 "REFERENCE_BACKDROP": "solid",
+                                 "REFERENCE_SCHEME": scheme,
+                                 "REFERENCE_BACKDROP": backdrop,
                                  "REFERENCE_RECORDING": "1",
                                  "REFERENCE_CAPTURE_GESTURES": "1",
-                                 "REFERENCE_SETTLING_SECONDS": "2"]
+                                  "REFERENCE_SETTLING_SECONDS": "2"]
+        if captureMaterial {
+            app.launchEnvironment["REFERENCE_CAPTURE_ANIMATIONS"] = "1"
+            app.launchEnvironment["REFERENCE_CONTACT_FILTER_TIME"] = "0.4"
+        }
+        if let opticalProbe {
+            app.launchEnvironment["REFERENCE_CONTROL_OPTICAL_PROBE"] = opticalProbe
+        }
         app.launch()
         XCTAssertTrue(app.staticTexts["Reference control"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.frame.size, CGSize(width: 402, height: 874))
@@ -56,6 +67,74 @@ class NativeSliderMotionTests: ReferenceUITests {
     override var component: String { "segmented" }
     override var initialValue: String { "0" }
     override var positions: [CGFloat] { [101, 301, 101, 301] }
+}
+
+@MainActor final class NativeToggleDarkBackdropMotionTests: NativeToggleMotionTests {
+    override var backdrop: String { "gray-0.05" }
+    override var captureMaterial: Bool { true }
+}
+
+@MainActor final class NativeToggleMidBackdropMotionTests: NativeToggleMotionTests {
+    override var backdrop: String { "gray-0.5" }
+    override var captureMaterial: Bool { true }
+}
+
+@MainActor final class NativeTogglePatternBackdropMotionTests: NativeToggleMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var captureMaterial: Bool { true }
+}
+
+@MainActor final class NativeToggleDarkSchemeBackdropMotionTests: NativeToggleMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var scheme: String { "dark" }
+    override var captureMaterial: Bool { true }
+}
+
+@MainActor final class NativeToggleBackdropWarpProbeTests: NativeToggleMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var captureMaterial: Bool { true }
+    override var opticalProbe: String? { "backdrop" }
+}
+
+@MainActor final class NativeTogglePortalWarpProbeTests: NativeToggleMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var captureMaterial: Bool { true }
+    override var opticalProbe: String? { "portal" }
+}
+
+@MainActor final class NativeToggleSurfaceWarpProbeTests: NativeToggleMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var captureMaterial: Bool { true }
+    override var opticalProbe: String? { "surface" }
+}
+
+@MainActor final class NativeSegmentedSurfaceWarpProbeTests: NativeSegmentedMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var captureMaterial: Bool { true }
+    override var opticalProbe: String? { "surface" }
+}
+
+@MainActor final class NativeSegmentedBackdropWarpProbeTests: NativeSegmentedMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var captureMaterial: Bool { true }
+    override var opticalProbe: String? { "backdrop" }
+}
+
+@MainActor final class NativeSegmentedPortalWarpProbeTests: NativeSegmentedMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var captureMaterial: Bool { true }
+    override var opticalProbe: String? { "portal" }
+}
+
+@MainActor final class NativeSegmentedContentWarpProbeTests: NativeSegmentedMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var captureMaterial: Bool { true }
+    override var opticalProbe: String? { "content" }
+}
+
+@MainActor final class NativeSegmentedPatternBackdropMotionTests: NativeSegmentedMotionTests {
+    override var backdrop: String { "checkerboard" }
+    override var captureMaterial: Bool { true }
 }
 
 @MainActor final class CranposeSliderMotionTests: NativeSliderMotionTests {
@@ -105,6 +184,45 @@ class NativeSliderMotionTests: ReferenceUITests {
 
 @MainActor final class CranposeSegmentedMotionTests: NativeSegmentedMotionTests {
     override var bundleIdentifier: String { "io.cranpose.liquid-cranpose" }
+}
+
+@MainActor class NativeSegmentedLabelEdgeMotionTests: NativeSegmentedMotionTests {
+    override var positions: [CGFloat] { [101, 149, 149, 301] }
+    override var captureMaterial: Bool { true }
+}
+
+@MainActor final class CranposeSegmentedLabelEdgeMotionTests: NativeSegmentedLabelEdgeMotionTests {
+    override var bundleIdentifier: String { "io.cranpose.liquid-cranpose" }
+}
+
+@MainActor final class NativeToggleTrackCompressionProbeTests: NativeToggleMotionTests {
+    override var captureMaterial: Bool { true }
+    override var opticalProbe: String? { "backdrop" }
+}
+
+@MainActor final class NativeSegmentedTrackCompressionProbeTests: NativeSegmentedLabelEdgeMotionTests {
+    override var opticalProbe: String? { "backdrop" }
+}
+
+@MainActor final class NativeSegmentedRingShadowProbeTests: NativeSegmentedLabelEdgeMotionTests {
+    override var opticalProbe: String? { "ring-shadow" }
+}
+
+@MainActor final class NativeToggleRingShadowProbeTests: NativeToggleMotionTests {
+    override var captureMaterial: Bool { true }
+    override var opticalProbe: String? { "ring-shadow" }
+}
+
+@MainActor final class NativeSegmentedDispersionProbeTests: NativeSegmentedLabelEdgeMotionTests {
+    override var opticalProbe: String? { "spectral" }
+}
+
+@MainActor final class NativeSegmentedHighlightProbeTests: NativeSegmentedLabelEdgeMotionTests {
+    override var opticalProbe: String? { "highlight" }
+}
+
+@MainActor final class NativeSegmentedHighlightSpectralProbeTests: NativeSegmentedLabelEdgeMotionTests {
+    override var opticalProbe: String? { "highlight-spectral" }
 }
 
 @MainActor final class NativeControlAnimationTests: ReferenceUITests {
