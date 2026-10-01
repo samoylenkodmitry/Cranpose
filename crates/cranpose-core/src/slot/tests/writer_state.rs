@@ -1,10 +1,6 @@
 use super::*;
 use crate::slot::DirectChildRange;
 
-fn active_group_anchors(table: &SlotTable) -> Vec<AnchorId> {
-    table.groups.iter().map(|group| group.anchor).collect()
-}
-
 #[test]
 fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
     const PARENT_KEY: Key = 500;
@@ -81,7 +77,7 @@ fn scope_index_resolves_active_groups_and_omits_detached_ones() {
     harness.begin_pass(SlotPassMode::Compose);
     let group_anchor = harness.session(|session| {
         let started = begin_unkeyed(session, GROUP_KEY, None);
-        session.set_group_scope(started.group, SCOPE_ID);
+        session.set_group_scope(started.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -92,7 +88,7 @@ fn scope_index_resolves_active_groups_and_omits_detached_ones() {
     harness.begin_pass(SlotPassMode::Recompose);
     harness.session(|session| {
         let group = session
-            .begin_recompose_at_scope(SCOPE_ID)
+            .begin_recompose_at_scope(&labeled_scope(SCOPE_ID))
             .expect("active scope must resolve through the scope index");
         assert_eq!(group.index(), 0);
         session.skip_group();
@@ -119,7 +115,9 @@ fn scope_index_resolves_active_groups_and_omits_detached_ones() {
     harness.begin_pass(SlotPassMode::Recompose);
     harness.session(|session| {
         assert!(
-            session.begin_recompose_at_scope(SCOPE_ID).is_none(),
+            session
+                .begin_recompose_at_scope(&labeled_scope(SCOPE_ID))
+                .is_none(),
             "detached or disposed scopes must not resolve through the active-table scope index"
         );
     });
@@ -136,7 +134,7 @@ fn scope_lookup_ignores_anchor_with_corrupt_active_group_index() {
     harness.begin_pass(SlotPassMode::Compose);
     let group_anchor = harness.session(|session| {
         let started = begin_unkeyed(session, GROUP_KEY, None);
-        session.set_group_scope(started.group, SCOPE_ID);
+        session.set_group_scope(started.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -147,7 +145,9 @@ fn scope_lookup_ignores_anchor_with_corrupt_active_group_index() {
     harness.table.anchors.set_active(group_anchor, 99);
 
     assert_eq!(
-        harness.table.active_group_for_scope(SCOPE_ID),
+        harness
+            .table
+            .active_group_for_scope(&labeled_scope(SCOPE_ID)),
         None,
         "malformed anchor indexes must not abort scoped recomposition lookup"
     );
@@ -479,8 +479,8 @@ fn set_group_scope_replaces_previous_scope_lookup() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         let started = begin_unkeyed(session, GROUP_KEY, None);
-        session.set_group_scope(started.group, OLD_SCOPE_ID);
-        session.set_group_scope(started.group, NEW_SCOPE_ID);
+        session.set_group_scope(started.group, labeled_scope(OLD_SCOPE_ID));
+        session.set_group_scope(started.group, labeled_scope(NEW_SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -490,11 +490,13 @@ fn set_group_scope_replaces_previous_scope_lookup() {
     harness.begin_pass(SlotPassMode::Recompose);
     harness.session(|session| {
         assert!(
-            session.begin_recompose_at_scope(OLD_SCOPE_ID).is_none(),
+            session
+                .begin_recompose_at_scope(&labeled_scope(OLD_SCOPE_ID))
+                .is_none(),
             "replaced scope ids must leave no stale active lookup"
         );
         let group = session
-            .begin_recompose_at_scope(NEW_SCOPE_ID)
+            .begin_recompose_at_scope(&labeled_scope(NEW_SCOPE_ID))
             .expect("the latest scope id must resolve through the scope index");
         assert_eq!(group.index(), 0);
         session.skip_group();
@@ -527,7 +529,7 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
 
         let scoped = begin_keyed(session, STATIC_KEY, SCOPED_KEY, None);
         assert_eq!(scoped.kind, GroupStartKind::Inserted);
-        session.set_group_scope(scoped.group, SCOPE_ID);
+        session.set_group_scope(scoped.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -539,7 +541,7 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
     });
     harness.finish_pass();
     assert_eq!(
-        harness.table.scope_index_anchor(SCOPE_ID),
+        active_scope_anchor(&harness.table, SCOPE_ID),
         Some(scoped_anchor)
     );
 
@@ -556,7 +558,7 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
         let scoped = begin_keyed(session, STATIC_KEY, SCOPED_KEY, None);
         assert_eq!(scoped.kind, GroupStartKind::Reused);
         assert_eq!(scoped.anchor, scoped_anchor);
-        session.set_group_scope(scoped.group, SCOPE_ID);
+        session.set_group_scope(scoped.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -567,7 +569,7 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
     });
     harness.finish_pass();
     assert_eq!(
-        harness.table.scope_index_anchor(SCOPE_ID),
+        active_scope_anchor(&harness.table, SCOPE_ID),
         Some(scoped_anchor)
     );
 
@@ -578,7 +580,7 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
         let scoped = begin_keyed(session, STATIC_KEY, SCOPED_KEY, None);
         assert_eq!(scoped.kind, GroupStartKind::Moved);
         assert_eq!(scoped.anchor, scoped_anchor);
-        session.set_group_scope(scoped.group, SCOPE_ID);
+        session.set_group_scope(scoped.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -596,13 +598,13 @@ fn scope_index_keeps_scope_across_reuse_and_keyed_move() {
     harness.finish_pass();
 
     assert_eq!(
-        harness.table.scope_index_anchor(SCOPE_ID),
+        active_scope_anchor(&harness.table, SCOPE_ID),
         Some(scoped_anchor)
     );
     harness.begin_pass(SlotPassMode::Recompose);
     harness.session(|session| {
         let group = session
-            .begin_recompose_at_scope(SCOPE_ID)
+            .begin_recompose_at_scope(&labeled_scope(SCOPE_ID))
             .expect("moved scoped group must resolve through the active scope index");
         assert_eq!(session.table.active_group_anchor(group), scoped_anchor);
         session.skip_group();
@@ -623,14 +625,14 @@ fn assigning_same_scope_to_different_active_group_is_rejected() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         let first = begin_unkeyed(session, FIRST_KEY, None);
-        session.set_group_scope(first.group, SCOPE_ID);
+        session.set_group_scope(first.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
 
         let second = begin_unkeyed(session, SECOND_KEY, None);
         assert!(
-            !session.set_group_scope(second.group, SCOPE_ID),
+            !session.set_group_scope(second.group, labeled_scope(SCOPE_ID)),
             "one scope id must not be assigned to two active groups"
         );
         let result = session.finish_group_body();
@@ -640,70 +642,9 @@ fn assigning_same_scope_to_different_active_group_is_rejected() {
     harness.finish_pass();
 
     assert_eq!(
-        harness.table.scope_index_anchor(SCOPE_ID),
+        active_scope_anchor(&harness.table, SCOPE_ID),
         Some(harness.table.groups[0].anchor)
     );
-    assert_eq!(harness.table.validate(), Ok(()));
-}
-
-#[test]
-fn restoring_scope_that_conflicts_with_active_group_gets_fresh_scope_owner() {
-    const PARENT_KEY: Key = 628;
-    const DETACHED_CHILD_KEY: Key = 629;
-    const ACTIVE_CHILD_KEY: Key = 630;
-    const CONFLICT_SCOPE: ScopeId = 631;
-
-    let (mut harness, detached, _) = detached_single_child_with_options(
-        PARENT_KEY,
-        DETACHED_CHILD_KEY,
-        Some(CONFLICT_SCOPE),
-        false,
-        false,
-    );
-    let parent_anchor = harness.table.groups[0].anchor;
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let active_conflict_anchor = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
-        assert_eq!(parent.anchor, parent_anchor);
-
-        let active = begin_unkeyed(session, ACTIVE_CHILD_KEY, None);
-        session.set_group_scope(active.group, CONFLICT_SCOPE);
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-        active.anchor
-    });
-    harness.finish_pass();
-    assert_eq!(
-        harness.table.scope_index_anchor(CONFLICT_SCOPE),
-        Some(active_conflict_anchor)
-    );
-
-    let before = active_group_anchors(&harness.table);
-    let restore_key = detached.root_key();
-    let insert_index = harness.table.direct_child_range(parent_anchor).end();
-    let restored_anchor = restore_detached_child(
-        &mut harness.table,
-        parent_anchor,
-        insert_index,
-        restore_key,
-        detached,
-    );
-
-    let after = active_group_anchors(&harness.table);
-    assert_eq!(after[..before.len()], before);
-    assert!(after.contains(&restored_anchor));
-    assert_eq!(
-        harness.table.scope_index_anchor(CONFLICT_SCOPE),
-        Some(active_conflict_anchor)
-    );
-    let restored_index = harness.table.current_group_index(restored_anchor);
-    assert_eq!(harness.table.groups[restored_index].scope_id, None);
     assert_eq!(harness.table.validate(), Ok(()));
 }
 
@@ -797,11 +738,11 @@ fn stale_group_handle_does_not_alias_recreated_group() {
         assert_ne!(started.group.generation(), stale_group.generation());
 
         assert!(
-            !session.set_group_scope(stale_group, SCOPE_ID),
+            !session.set_group_scope(stale_group, labeled_scope(SCOPE_ID)),
             "stale group handles must not alias a newly created group"
         );
 
-        session.set_group_scope(started.group, SCOPE_ID);
+        session.set_group_scope(started.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -812,7 +753,7 @@ fn stale_group_handle_does_not_alias_recreated_group() {
     harness.begin_pass(SlotPassMode::Recompose);
     harness.session(|session| {
         let group = session
-            .begin_recompose_at_scope(SCOPE_ID)
+            .begin_recompose_at_scope(&labeled_scope(SCOPE_ID))
             .expect("the recreated group must resolve through the scope index");
         assert_eq!(group, recreated_group);
         assert_ne!(group.generation(), stale_group.generation());
@@ -857,11 +798,11 @@ fn moved_group_invalidates_previous_active_group_id() {
         assert_ne!(moved_second.group, stale_second_group);
 
         assert!(
-            !session.set_group_scope(stale_second_group, SCOPE_ID),
+            !session.set_group_scope(stale_second_group, labeled_scope(SCOPE_ID)),
             "moved active group ids must not alias the group shifted into the previous index"
         );
 
-        session.set_group_scope(moved_second.group, SCOPE_ID);
+        session.set_group_scope(moved_second.group, labeled_scope(SCOPE_ID));
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -878,7 +819,7 @@ fn moved_group_invalidates_previous_active_group_id() {
     harness.begin_pass(SlotPassMode::Recompose);
     let resolved = harness.session(|session| {
         let group = session
-            .begin_recompose_at_scope(SCOPE_ID)
+            .begin_recompose_at_scope(&labeled_scope(SCOPE_ID))
             .expect("stable scope lookup must resolve through the moved anchor");
         assert_ne!(group, stale_second_group);
         session.skip_group();

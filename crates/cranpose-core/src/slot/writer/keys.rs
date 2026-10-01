@@ -37,13 +37,15 @@ impl SlotWriteSessionState {
 
     pub(in crate::slot) fn consume_group_key(&mut self, key: GroupKey) {
         let keys = self.current_keys();
-        let ordinal = key
-            .explicit_key
-            .map_or_else(|| keys.next_ordinal(key.static_key), |_| 0);
-        debug_assert_eq!(
-            ordinal, key.ordinal,
-            "reserved group ordinal must match the active writer state"
-        );
+        if key.explicit_key.is_none() {
+            assert_eq!(
+                keys.next_ordinal(key.static_key),
+                key.ordinal,
+                "reserved group ordinal must match the active writer state"
+            );
+            return;
+        }
+        debug_assert_eq!(key.ordinal, 0, "a keyed group has no ordinal");
         assert!(
             keys.insert_seen(key),
             "duplicate sibling group key: {key:?}",

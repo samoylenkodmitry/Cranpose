@@ -5,7 +5,7 @@ use super::{
     },
     SlotWriteSessionState,
 };
-use crate::{AnchorId, NodeId, ScopeId};
+use crate::{AnchorId, NodeId, RecomposeScope};
 
 enum ActiveChildResolution {
     ReuseExpected { anchor: AnchorId },
@@ -53,7 +53,7 @@ impl SlotWriteSession<'_> {
         kind: GroupStartKind,
     ) -> Option<GroupStart<ActiveGroupId>> {
         let group_index = self.table.open_group_frame(self.state, anchor)?;
-        let scope_id = self.table.group_scope_id_at_index(group_index);
+        let scope = self.table.group_scope_at_index(group_index);
         let Some(group) = self.table.active_group_id_at_index(group_index) else {
             log::error!(
                 "slot writer could not create active group handle for group index {group_index}"
@@ -63,7 +63,7 @@ impl SlotWriteSession<'_> {
         Some(GroupStart {
             group,
             anchor,
-            scope_id,
+            scope,
             kind,
         })
     }
@@ -81,10 +81,9 @@ impl SlotWriteSession<'_> {
             log::error!(
                 "slot writer discarded stale group frame before beginning a child for anchor {group_anchor:?}"
             );
-            let Some(frame) = self.state.group_stack.pop() else {
+            if self.state.pop_group_frame().is_none() {
                 return;
-            };
-            self.state.recycle_group_frame(frame);
+            }
         }
     }
 
@@ -146,9 +145,7 @@ impl SlotWriteSession<'_> {
             return started;
         }
 
-        while let Some(frame) = self.state.group_stack.pop() {
-            self.state.recycle_group_frame(frame);
-        }
+        while self.state.pop_group_frame().is_some() {}
         let root_insert_index = self.table.group_count();
         self.state.advance_parent_after_child(root_insert_index);
         let root_anchor = self
@@ -164,7 +161,7 @@ impl SlotWriteSession<'_> {
         GroupStart {
             group: ActiveGroupId::new(0, 0),
             anchor: AnchorId::INVALID,
-            scope_id: None,
+            scope: None,
             kind: GroupStartKind::Inserted,
         }
     }
@@ -245,8 +242,8 @@ impl SlotWriteSession<'_> {
         }
     }
 
-    pub(crate) fn active_scope_root_node_ids(&mut self, scope_id: ScopeId) -> RootNodeIds {
-        let Some(group) = self.table.active_group_for_scope(scope_id) else {
+    pub(crate) fn active_scope_root_node_ids(&mut self, scope: &RecomposeScope) -> RootNodeIds {
+        let Some(group) = self.table.active_group_for_scope(scope) else {
             return RootNodeIds::new();
         };
         let Some(anchor) = self.table.try_active_group_anchor(group) else {
@@ -255,12 +252,15 @@ impl SlotWriteSession<'_> {
         self.table.collect_subtree_root_node_ids(anchor)
     }
 
-    pub(crate) fn begin_recompose_at_scope(&mut self, scope_id: ScopeId) -> Option<ActiveGroupId> {
+    pub(crate) fn begin_recompose_at_scope(
+        &mut self,
+        scope: &RecomposeScope,
+    ) -> Option<ActiveGroupId> {
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
         self.state
             .debug_assert_no_pending_payload_location_refreshes("begin_recompose_at_scope");
-        let group = self.table.active_group_for_scope(scope_id)?;
+        let group = self.table.active_group_for_scope(scope)?;
         let anchor = self.table.try_active_group_anchor(group)?;
         self.table.open_group_frame(self.state, anchor)?;
         Some(group)
@@ -300,18 +300,15 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn end_group(&mut self) {
-        let Some(frame) = self.state.group_stack.pop() else {
+        let Some(group_anchor) = self.state.pop_group_frame() else {
             log::error!("slot writer end_group called with an empty group stack");
             return;
         };
-        let group_anchor = frame.group_anchor;
         let Some(group_index) = self.table.active_group_index(group_anchor) else {
             log::error!("slot writer end_group ignored stale group frame anchor {group_anchor:?}");
-            self.state.recycle_group_frame(frame);
             return;
         };
         let subtree_end = self.repaired_group_subtree_end(group_index, "group end cursor advance");
-        self.state.recycle_group_frame(frame);
         self.state.advance_parent_after_child(subtree_end);
     }
 
@@ -337,8 +334,8 @@ impl SlotWriteSession<'_> {
         frame.skip_to_existing_group_end(group_index, subtree_len);
     }
 
-    pub(crate) fn set_group_scope(&mut self, group: ActiveGroupId, scope_id: ScopeId) -> bool {
-        self.table.assign_active_group_scope(group, scope_id)
+    pub(crate) fn set_group_scope(&mut self, group: ActiveGroupId, scope: RecomposeScope) -> bool {
+        self.table.assign_active_group_scope(group, scope)
     }
 
     pub(crate) fn end_recompose(&mut self) {

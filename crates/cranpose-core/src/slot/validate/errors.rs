@@ -86,10 +86,6 @@ pub(crate) enum SlotInvariantError {
         expected: usize,
         actual: usize,
     },
-    ScopeIndexCountMismatch {
-        expected: usize,
-        actual: usize,
-    },
     DuplicatePayloadAnchor {
         tree: SlotTreeContext,
         payload_anchor: PayloadAnchor,
@@ -142,10 +138,10 @@ pub(crate) enum SlotInvariantError {
         parent_anchor: AnchorId,
         key: GroupKey,
     },
-    ScopeIndexMismatch {
+    ScopeAnchorMismatch {
         scope_id: ScopeId,
-        expected: AnchorId,
-        actual: Option<AnchorId>,
+        group_anchor: AnchorId,
+        scope_anchor: AnchorId,
     },
     RetainedRootKeyMismatch {
         parent_scope: Option<ScopeId>,

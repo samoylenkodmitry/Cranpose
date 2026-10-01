@@ -38,7 +38,7 @@ fn group_generation_counter_wraps_without_aborting() {
 fn group_scope_lookup_for_missing_index_returns_none() {
     let table = SlotTable::new();
 
-    assert_eq!(table.group_scope_id_at_index(usize::MAX), None);
+    assert!(table.group_scope_at_index(usize::MAX).is_none());
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn slot_write_session_exposes_semantic_operations() {
     harness.begin_pass(SlotPassMode::Recompose);
     harness.session(|session| {
         let recomposed_group = session
-            .begin_recompose_at_scope(SCOPE_ID)
+            .begin_recompose_at_scope(&labeled_scope(SCOPE_ID))
             .expect("session should resolve the indexed scope");
         assert_eq!(recomposed_group, composed_group);
         assert_eq!(node_ids_in_current_subtree(session), vec![55]);
@@ -263,7 +263,7 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         let root = begin_unkeyed(session, ROOT_KEY, None);
-        session.set_group_scope(root.group, ROOT_SCOPE);
+        session.set_group_scope(root.group, labeled_scope(ROOT_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -272,7 +272,7 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
         session.record_node_with_parent(11, 1, None, crate::slot::BRANCH_PATH_ROOT);
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
-        session.set_group_scope(child.group, CHILD_SCOPE);
+        session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -295,8 +295,6 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
     assert_eq!(snapshot.active_payload_count, 2);
     assert_eq!(snapshot.active_node_count, 1);
     assert_eq!(snapshot.active_scope_count, 2);
-    assert_eq!(snapshot.scope_index_count, 2);
-    assert_eq!(snapshot.runtime_scope_registry_count, None);
     assert_eq!(snapshot.retained_subtree_count, 0);
 
     let root = snapshot
@@ -304,7 +302,7 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
         .iter()
         .find(|group| group.static_key == ROOT_KEY)
         .expect("root group snapshot");
-    assert_eq!(root.scope_id, Some(ROOT_SCOPE));
+    assert_eq!(root.scope_id, Some(labeled_scope(ROOT_SCOPE).id()));
     assert_eq!(root.subtree_len, 2);
     assert_eq!(root.payload_len, 1);
     assert_eq!(root.node_len, 1);
@@ -315,7 +313,7 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
         .find(|group| group.static_key == CHILD_KEY)
         .expect("child group snapshot");
     assert_eq!(child.parent_anchor, root.anchor);
-    assert_eq!(child.scope_id, Some(CHILD_SCOPE));
+    assert_eq!(child.scope_id, Some(labeled_scope(CHILD_SCOPE).id()));
     assert_eq!(child.subtree_len, 1);
     assert_eq!(child.payload_len, 1);
 }
@@ -383,7 +381,6 @@ fn debug_stats_report_explicit_v2_table_local_counts() {
     assert_eq!(stats.detached_anchor_count, 0);
     assert_eq!(stats.invalidated_anchor_count, 0);
     assert_eq!(stats.free_anchor_count, 0);
-    assert_eq!(stats.scope_index_count, 0);
     assert!(stats.group_capacity >= stats.group_count);
     assert!(stats.payload_capacity >= stats.payload_count);
     assert!(stats.payload_anchor_capacity >= stats.active_payload_anchor_count);
@@ -391,7 +388,6 @@ fn debug_stats_report_explicit_v2_table_local_counts() {
     assert!(stats.node_capacity >= stats.node_count);
     assert!(stats.anchor_capacity >= stats.active_anchor_count);
     assert!(stats.anchor_heap_bytes > 0);
-    assert!(stats.scope_index_capacity >= stats.scope_index_count);
 }
 
 #[test]

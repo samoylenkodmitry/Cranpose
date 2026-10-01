@@ -601,8 +601,6 @@ fn assert_model_matches_slot_table(
     assert_eq!(snapshot.active_payload_count, active_order.len());
     assert_eq!(snapshot.active_node_count, active_order.len());
     assert_eq!(snapshot.active_scope_count, active_order.len());
-    assert_eq!(snapshot.scope_index_count, active_order.len());
-    assert_eq!(snapshot.runtime_scope_registry_count, None);
 
     let root = snapshot
         .active_groups
@@ -632,7 +630,7 @@ fn assert_model_matches_slot_table(
         assert_eq!(group.static_key, child_static_key);
         assert_eq!(group.explicit_key, Some(*key));
         assert_eq!(group.ordinal, 0);
-        assert_eq!(group.scope_id, Some(expected.scope_id));
+        assert_eq!(group.scope_id, Some(labeled_scope(expected.scope_id).id()));
         assert_eq!(group.depth, 1);
         assert_eq!(group.subtree_len, 1);
         assert_eq!(group.payload_len, 1);
@@ -652,9 +650,9 @@ fn assert_model_matches_slot_table(
             "active group anchor must resolve to the current table index for key {key}"
         );
         assert_eq!(
-            harness.table.scope_index_anchor(expected.scope_id),
+            active_scope_anchor(&harness.table, expected.scope_id),
             Some(group.anchor),
-            "active scope index must resolve the current group anchor for key {key}"
+            "active scope must resolve the current group anchor for key {key}"
         );
 
         let payload = harness
@@ -747,9 +745,9 @@ fn assert_model_matches_slot_table(
             "retained group anchor must stay detached for key {key}"
         );
         assert_eq!(
-            harness.table.scope_index_anchor(expected.scope_id),
+            active_scope_anchor(&harness.table, expected.scope_id),
             None,
-            "retained scope must not resolve through the active scope index for key {key}"
+            "retained scope must not resolve to an active group for key {key}"
         );
         assert_eq!(
             subtree.root_parent_anchor(),
@@ -910,7 +908,7 @@ fn apply_model_operation(
                     } else {
                         scope_id
                     };
-                    session.set_group_scope(started.group, scope_id);
+                    session.set_group_scope(started.group, labeled_scope(scope_id));
 
                     let replacing_payload =
                         replace_payload_types.contains(&key) && previous_payload.is_some();
@@ -1070,8 +1068,8 @@ fn apply_model_operation(
             harness.begin_pass(SlotPassMode::Recompose);
             let group_index = harness.session(|session| {
                 let group = session
-                    .begin_recompose_at_scope(scope_id)
-                    .expect("active scopes must resolve through the scope index");
+                    .begin_recompose_at_scope(&labeled_scope(scope_id))
+                    .expect("active scopes must resolve to their groups");
                 session.skip_group();
                 let result = session.finish_group_body();
                 assert!(result.detached_children.is_empty());

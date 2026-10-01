@@ -677,7 +677,15 @@ enum RecomposeCallback {
     Observed {
         observer: SnapshotStateObserver,
         body: Box<dyn FnMut(&Composer) + 'static>,
+        stateless_body: Option<TypeId>,
     },
+}
+
+fn link_scope(link: &RefCell<Option<Weak<RecomposeScopeInner>>>, target: Option<&RecomposeScope>) {
+    let mut link = link.borrow_mut();
+    if link.as_ref().map(Weak::as_ptr) != target.map(|scope| Rc::as_ptr(&scope.inner)) {
+        *link = target.map(RecomposeScope::downgrade);
+    }
 }
 
 pub(crate) struct RecomposeScopeInner {
@@ -693,6 +701,7 @@ pub(crate) struct RecomposeScopeInner {
     derivation: Cell<bool>,
     retention_mode: Cell<RetentionMode>,
     parent_hint: Cell<Option<NodeId>>,
+    group_anchor: Cell<AnchorId>,
     recompose: RefCell<Option<RecomposeCallback>>,
     parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     lifetime_owner_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
@@ -724,6 +733,7 @@ impl RecomposeScopeInner {
             derivation: Cell::new(false),
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
             parent_hint: Cell::new(None),
+            group_anchor: Cell::new(AnchorId::INVALID),
             recompose: RefCell::new(None),
             parent_scope: RefCell::new(None),
             lifetime_owner_scope: RefCell::new(None),
@@ -818,6 +828,10 @@ impl RecomposeScope {
 
     pub(crate) fn downgrade(&self) -> Weak<RecomposeScopeInner> {
         Rc::downgrade(&self.inner)
+    }
+
+    pub(crate) fn upgrade(weak: &Weak<RecomposeScopeInner>) -> Option<Self> {
+        weak.upgrade().map(|inner| Self { inner })
     }
 
     pub fn id(&self) -> ScopeId {
@@ -943,12 +957,28 @@ impl RecomposeScope {
         &self,
         observer: SnapshotStateObserver,
         body: Box<dyn FnMut(&Composer) + 'static>,
+        stateless_body: Option<TypeId>,
     ) {
         #[cfg(feature = "inspection")]
         self.inner
             .source_trace
             .replace(source_trace::current_source_trace());
-        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Observed { observer, body });
+        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Observed {
+            observer,
+            body,
+            stateless_body,
+        });
+    }
+
+    fn reruns_stateless(&self, observer: &SnapshotStateObserver, body: TypeId) -> bool {
+        matches!(
+            &*self.inner.recompose.borrow(),
+            Some(RecomposeCallback::Observed {
+                observer: current,
+                stateless_body: Some(current_body),
+                ..
+            }) if *current_body == body && current.ptr_eq(observer)
+        )
     }
 
     fn run_recompose(&self, composer: &Composer) -> bool {
@@ -961,11 +991,19 @@ impl RecomposeScope {
                     callback(composer);
                     RecomposeCallback::Static(callback)
                 }
-                RecomposeCallback::Observed { observer, mut body } => {
+                RecomposeCallback::Observed {
+                    observer,
+                    mut body,
+                    stateless_body,
+                } => {
                     observer.observe_reads(self.clone(), RecomposeScope::invalidate, || {
                         body(composer);
                     });
-                    RecomposeCallback::Observed { observer, body }
+                    RecomposeCallback::Observed {
+                        observer,
+                        body,
+                        stateless_body,
+                    }
                 }
             };
             let mut slot = self.inner.recompose.borrow_mut();
@@ -982,8 +1020,15 @@ impl RecomposeScope {
         self.inner.recompose.borrow().is_some()
     }
 
-    fn snapshot_locals(&self, stack: LocalStackSnapshot) {
-        *self.inner.local_stack.borrow_mut() = stack;
+    fn snapshot_locals(&self, stack: &LocalStackSnapshot) {
+        let mut locals = self.inner.local_stack.borrow_mut();
+        let unchanged = match (&*locals, stack) {
+            (Some(current), Some(stack)) => Rc::ptr_eq(current, stack),
+            (current, stack) => current.is_none() && stack.is_none(),
+        };
+        if !unchanged {
+            locals.clone_from(stack);
+        }
     }
 
     fn local_stack(&self) -> LocalStackSnapshot {
@@ -994,8 +1039,8 @@ impl RecomposeScope {
         self.inner.parent_hint.set(parent);
     }
 
-    fn set_parent_scope(&self, parent: Option<RecomposeScope>) {
-        *self.inner.parent_scope.borrow_mut() = parent.map(|scope| scope.downgrade());
+    fn set_parent_scope(&self, parent: Option<&RecomposeScope>) {
+        link_scope(&self.inner.parent_scope, parent);
     }
 
     fn parent_scope(&self) -> Option<RecomposeScope> {
@@ -1003,12 +1048,11 @@ impl RecomposeScope {
             .parent_scope
             .borrow()
             .as_ref()
-            .and_then(Weak::upgrade)
-            .map(|inner| RecomposeScope { inner })
+            .and_then(RecomposeScope::upgrade)
     }
 
-    fn set_lifetime_owner_scope(&self, owner: Option<RecomposeScope>) {
-        *self.inner.lifetime_owner_scope.borrow_mut() = owner.map(|scope| scope.downgrade());
+    fn set_lifetime_owner_scope(&self, owner: Option<&RecomposeScope>) {
+        link_scope(&self.inner.lifetime_owner_scope, owner);
     }
 
     #[cfg(test)]
@@ -1017,8 +1061,7 @@ impl RecomposeScope {
             .lifetime_owner_scope
             .borrow()
             .as_ref()
-            .and_then(Weak::upgrade)
-            .map(|inner| RecomposeScope { inner })
+            .and_then(RecomposeScope::upgrade)
     }
 
     fn callback_promotion_target(&self) -> Option<RecomposeScope> {
@@ -1036,10 +1079,24 @@ impl RecomposeScope {
         self.inner.parent_hint.get()
     }
 
-    fn set_slots_host(&self, host: &Rc<SlotsHost>) {
-        self.inner.slots_storage_key.set(host.storage_key());
-        *self.inner.slots_runtime_state.borrow_mut() =
-            host.runtime_state().map(|state| Rc::downgrade(&state));
+    pub(crate) fn group_anchor(&self) -> AnchorId {
+        self.inner.group_anchor.get()
+    }
+
+    pub(crate) fn set_group_anchor(&self, anchor: AnchorId) {
+        self.inner.group_anchor.set(anchor);
+    }
+
+    fn set_slots_host(&self, host: &SlotsHost) {
+        let storage_key = host.storage_key();
+        let mut runtime_state = self.inner.slots_runtime_state.borrow_mut();
+        if self.inner.slots_storage_key.get() == storage_key
+            && runtime_state.as_ref().map(std::rc::Weak::as_ptr) == host.runtime_state_ptr()
+        {
+            return;
+        }
+        self.inner.slots_storage_key.set(storage_key);
+        *runtime_state = host.runtime_state().map(|state| Rc::downgrade(&state));
     }
 
     pub(crate) fn slots_storage_key(&self) -> Option<usize> {
@@ -4401,7 +4458,7 @@ impl Drop for SlotsHost {
                     &mut inner.lifecycle,
                 );
             } else {
-                state.clear_host_storage_key(storage_key);
+                state.clear_host_storage_key(storage_key, &mut inner.table);
             }
         }
         inner.lifecycle.dispose_slot_table(&mut inner.table);
@@ -4464,8 +4521,13 @@ impl SlotsHost {
         for host in nested {
             any |= host.forget_effects();
         }
-        if any && let Some(runtime_state) = runtime_state {
-            runtime_state.force_recompose_host_scopes(self.storage_key());
+        if any {
+            self.borrow()
+                .scopes()
+                .for_each(RecomposeScope::force_recompose);
+            if let Some(runtime_state) = runtime_state {
+                runtime_state.force_recompose_retained_scopes(self.storage_key());
+            }
         }
         any
     }
@@ -4520,7 +4582,7 @@ impl SlotsHost {
             inner.lifecycle = lifecycle;
             return false;
         }
-        previous_state.clear_host(self);
+        previous_state.clear_host(self, &mut inner.table);
         lifecycle.flush_pending_drops();
         inner.runtime_state = Some(Rc::clone(state));
         inner.lifecycle = lifecycle;
@@ -4529,6 +4591,10 @@ impl SlotsHost {
 
     pub(crate) fn runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
         self.inner.borrow().runtime_state.clone()
+    }
+
+    fn runtime_state_ptr(&self) -> Option<*const crate::composer::ComposerRuntimeState> {
+        self.inner.borrow().runtime_state.as_ref().map(Rc::as_ptr)
     }
 
     pub(crate) fn borrow(&self) -> Ref<'_, SlotTable> {
@@ -4564,7 +4630,7 @@ impl SlotsHost {
         if let Some(state) = inner.runtime_state.clone() {
             let host_key = self.storage_key();
             state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)?;
-            state.clear_host(self);
+            state.clear_host(self, &mut inner.table);
             lifecycle.flush_pending_drops();
         }
         let taken = std::mem::take(&mut inner.table);
@@ -4589,7 +4655,7 @@ impl SlotsHost {
         if let Some(state) = runtime_state {
             let host_key = self.storage_key();
             state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)?;
-            state.clear_host(self);
+            state.clear_host(self, &mut inner.table);
         }
         lifecycle.dispose_slot_table(&mut inner.table);
         inner.table = SlotTable::default();

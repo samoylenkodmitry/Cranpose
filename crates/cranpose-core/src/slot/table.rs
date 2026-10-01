@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, MovableIndex, NodeRecord, PayloadAnchorRegistry,
-    ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState, debug::SlotTableDiagnostics,
+    SlotLifecycleCoordinator, SlotWriteSessionState, debug::SlotTableDiagnostics,
     growth::GrowthSlack, payload_store::PayloadStore,
 };
 
@@ -38,7 +38,6 @@ pub struct SlotTable {
     pub(super) nodes: Vec<NodeRecord>,
     pub(super) anchors: AnchorRegistry,
     pub(super) payload_anchors: PayloadAnchorRegistry,
-    pub(super) scope_index: ScopeIndex,
     pub(super) movables: MovableIndex,
     pub(super) diagnostics: SlotTableDiagnostics,
     next_group_generation: u32,
@@ -53,7 +52,6 @@ impl SlotTable {
             nodes: Vec::new(),
             anchors: AnchorRegistry::new(),
             payload_anchors: PayloadAnchorRegistry::new(),
-            scope_index: ScopeIndex::new(),
             movables: MovableIndex::default(),
             diagnostics: SlotTableDiagnostics::default(),
             next_group_generation: 1,
@@ -97,7 +95,6 @@ impl SlotTable {
         self.nodes.shrink_to_fit();
         self.anchors.shrink_to_fit();
         self.payload_anchors.shrink_to_fit();
-        self.scope_index.shrink_to_fit();
         self.movables.shrink_to_fit();
     }
 
@@ -111,7 +108,6 @@ impl SlotTable {
         self.nodes.trim_growth_slack();
         self.anchors.trim_growth_slack();
         self.payload_anchors.trim_growth_slack();
-        self.scope_index.trim_growth_slack();
     }
 
     pub(crate) fn take_effect_drops(&mut self) -> Vec<DeferredDrop> {
@@ -133,7 +129,6 @@ impl SlotTable {
         self.nodes.clear();
         self.anchors.clear();
         self.payload_anchors.clear();
-        self.scope_index.clear();
         self.movables.clear();
         drops
     }
