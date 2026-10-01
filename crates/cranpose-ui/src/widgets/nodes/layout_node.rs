@@ -272,7 +272,7 @@ impl Hash for IntrinsicKind {
 #[derive(Default)]
 struct NodeCacheState {
     epoch: u64,
-    measurements: Vec<MeasurementCacheEntry>,
+    measurement: Option<MeasurementCacheEntry>,
     intrinsics: Vec<(IntrinsicKind, f32)>,
 }
 
@@ -298,7 +298,7 @@ impl Clone for LayoutNodeCacheHandles {
 impl LayoutNodeCacheHandles {
     pub(crate) fn clear(&self) {
         let mut state = self.state.borrow_mut();
-        state.measurements.clear();
+        state.measurement = None;
         state.intrinsics.clear();
         state.epoch = 0;
     }
@@ -306,7 +306,7 @@ impl LayoutNodeCacheHandles {
     pub(crate) fn activate(&self, epoch: u64) {
         let mut state = self.state.borrow_mut();
         if state.epoch != epoch {
-            state.measurements.clear();
+            state.measurement = None;
             state.intrinsics.clear();
             state.epoch = epoch;
         }
@@ -319,26 +319,17 @@ impl LayoutNodeCacheHandles {
     pub(crate) fn get_measurement(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
         let state = self.state.borrow();
         state
-            .measurements
-            .iter()
-            .find(|entry| entry.constraints == constraints)
+            .measurement
+            .as_ref()
+            .filter(|entry| entry.constraints == constraints)
             .map(|entry| Rc::clone(&entry.measured))
     }
 
     pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {
-        let mut state = self.state.borrow_mut();
-        if let Some(entry) = state
-            .measurements
-            .iter_mut()
-            .find(|entry| entry.constraints == constraints)
-        {
-            entry.measured = measured;
-        } else {
-            state.measurements.push(MeasurementCacheEntry {
-                constraints,
-                measured,
-            });
-        }
+        self.state.borrow_mut().measurement = Some(MeasurementCacheEntry {
+            constraints,
+            measured,
+        });
     }
 
     pub(crate) fn get_intrinsic(&self, kind: &IntrinsicKind) -> Option<f32> {
