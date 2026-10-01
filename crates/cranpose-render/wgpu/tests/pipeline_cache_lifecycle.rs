@@ -26,11 +26,13 @@ impl CacheFiles {
             .duration_since(UNIX_EPOCH)
             .expect("system clock follows the Unix epoch")
             .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "cranpose-cache-lifecycle-{}-{stamp}",
-            std::process::id()
-        ));
-        fs::create_dir(&root).expect("create cache lifecycle directory");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../target/test-output")
+            .join(format!(
+                "cranpose-cache-lifecycle-{}-{stamp}",
+                std::process::id()
+            ));
+        fs::create_dir_all(&root).expect("create cache lifecycle directory");
         let files = Self {
             root,
             previous_file: debug_toggle_os(CACHE_FILE),
