@@ -221,6 +221,17 @@ impl AnchorRegistry {
         }
     }
 
+    pub(super) fn move_active(&mut self, anchor: AnchorId, group_index: usize) {
+        if let Some(slot) = self.storage.slot_mut(anchor.id as usize)
+            && slot.generation == anchor.generation
+            && let AnchorState::Active(index) = &mut slot.state
+        {
+            *index = checked_usize_to_u32(group_index, "group index");
+            return;
+        }
+        self.set_active(anchor, group_index);
+    }
+
     pub(super) fn mark_detached(&mut self, anchor: AnchorId) {
         if anchor.is_valid() {
             let previous = self.set_state(anchor, AnchorState::Detached);
