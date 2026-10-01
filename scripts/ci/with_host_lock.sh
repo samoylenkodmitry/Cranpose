@@ -73,11 +73,9 @@ if [[ "$#" -eq 0 ]]; then
   exit 64
 fi
 
-# macOS has no flock(1), and the machine this protects is the Linux one. A
-# host that cannot lock runs the command rather than pretending it waited.
 if ! host_capacity_lock_available; then
-  echo "with_host_lock: no flock on this host; running without the $mode lock"
-  exec "$@"
+  echo "with_host_lock: cannot lock this host; refusing to run the $mode command" >&2
+  exit 1
 fi
 if [[ "${CRANPOSE_HOST_LOCK_HELD:-}" == "exclusive" || ( "${CRANPOSE_HOST_LOCK_HELD:-}" == "shared" && "$mode" == "shared" ) ]]; then
   echo "with_host_lock: already inside the $CRANPOSE_HOST_LOCK_HELD lock; running the nested $mode command under it"

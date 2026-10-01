@@ -226,10 +226,20 @@ fi
 # `--list-classes` reads source files and exits. It neither builds nor
 # measures, so it takes no lock: queueing behind a robot suite to print a
 # partition would make the gate that checks it wait out the job it describes.
-if [ "$LIST_CLASSES" = "0" ] && host_capacity_lock_available; then
-    host_capacity_turnstile_pass
+if [ "$LIST_CLASSES" = "0" ]; then
+    if ! host_capacity_lock_available; then
+        echo "Cannot lock host capacity; refusing to run the robot suite." >&2
+        exit 1
+    fi
+    if ! host_capacity_turnstile_pass; then
+        echo "Cannot acquire host capacity turnstile; refusing to build the robot suite." >&2
+        exit 1
+    fi
     exec 8>"$HOST_CAPACITY_LOCK_FILE"
-    flock -s 8 || true
+    if ! host_capacity_flock -s 8; then
+        echo "Cannot acquire shared host capacity; refusing to build the robot suite." >&2
+        exit 1
+    fi
 fi
 
 # The strict frame-rate contracts inside the robot runners measure presented
@@ -644,10 +654,14 @@ take_exclusive_host_lock() {
     # phantom regression this lock exists to prevent, just reported as a
     # failed timing assertion instead of an honest lock timeout.
     if ! host_capacity_lock_available; then
-        return 0
+        echo "Cannot lock host capacity; refusing to measure the robot suite." >&2
+        return 1
     fi
     exec 8>&-
-    host_capacity_turnstile_hold
+    if ! host_capacity_turnstile_hold; then
+        echo "Cannot acquire host capacity turnstile; refusing to measure the robot suite." >&2
+        return 1
+    fi
     exec 9>"$HOST_CAPACITY_LOCK_FILE"
     host_capacity_flock_wait 9 -x "${CRANPOSE_HOST_LOCK_MAX_WAIT_SECS:-2700}" \
         "the exclusive host lock" 1 | tee -a "$LOG_FILE"
