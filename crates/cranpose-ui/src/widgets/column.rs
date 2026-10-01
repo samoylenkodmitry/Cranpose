@@ -71,5 +71,5 @@ where
         spec.horizontal_alignment,
         crate::density::density().density(),
     );
-    compose_layout(modifier, policy, content)
+    compose_layout(modifier, policy, crate::density::density(), content)
 }
