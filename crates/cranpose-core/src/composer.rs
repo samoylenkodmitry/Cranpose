@@ -832,23 +832,24 @@ impl Composer {
             .unwrap_or_else(|| Rc::clone(&self.core.slots))
     }
 
+    fn with_active_slots_host<R>(&self, f: impl FnOnce(&SlotsHost) -> R) -> R {
+        let hosts = self.core.slot_hosts.borrow();
+        f(hosts.last().unwrap_or(&self.core.slots))
+    }
+
     pub(crate) fn with_slots<R>(&self, f: impl FnOnce(&SlotTable) -> R) -> R {
-        let host = self.active_slots_host();
-        let slots = host.borrow();
-        f(&slots)
+        self.with_active_slots_host(|host| f(&host.borrow()))
     }
 
     pub(crate) fn with_slots_mut<R>(&self, f: impl FnOnce(&mut SlotTable) -> R) -> R {
-        let host = self.active_slots_host();
-        let mut slots = host.borrow_mut();
-        f(&mut slots)
+        self.with_active_slots_host(|host| f(&mut host.borrow_mut()))
     }
 
     pub(crate) fn with_slot_session_mut<R>(
         &self,
         f: impl FnOnce(&mut crate::slot::SlotWriteSession<'_>) -> R,
     ) -> R {
-        self.active_slots_host().with_write_session(f)
+        self.with_active_slots_host(|host| host.with_write_session(f))
     }
 
     pub(crate) fn try_with_slot_host_pass<R>(
