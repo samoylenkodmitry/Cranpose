@@ -1,5 +1,6 @@
 pub mod core;
 pub mod policies;
+mod reveal;
 mod semantics_labels;
 mod semantics_update;
 
@@ -28,12 +29,13 @@ use web_time::Instant;
 
 #[cfg(test)]
 use self::core::{HorizontalAlignment, VerticalAlignment};
-pub use self::semantics_update::{
-    build_semantics_tree_from_applier, update_semantics_tree_from_applier,
-};
 use self::{
     core::{Measurable, Placeable},
     semantics_update::semantics_placement,
+};
+pub use self::{
+    reveal::can_skip_scroll_reveal_from_applier,
+    semantics_update::{build_semantics_tree_from_applier, update_semantics_tree_from_applier},
 };
 use crate::{
     modifier::{
@@ -1052,24 +1054,67 @@ fn record_unplaced_parents(applier: &mut MemoryApplier, root: NodeId, pass: u64)
     }
 }
 
-/// Reads a layout or subcompose node's layout state and the children it
-/// places, borrowed in place. `None` when the node is neither.
 fn read_layout_node<R>(
     applier: &mut MemoryApplier,
     node_id: NodeId,
     mut read: impl FnMut(LayoutState, &[NodeId]) -> R,
 ) -> Result<Option<R>, NodeError> {
-    match applier
-        .with_node::<LayoutNode, _>(node_id, |node| read(node.layout_state(), &node.children))
-    {
+    read_live_layout_node(applier, node_id, |node| {
+        node.with_children(|children| read(node.state(), children))
+    })
+}
+
+enum LiveLayoutNode<'a> {
+    Layout(&'a LayoutNode),
+    Subcompose(&'a SubcomposeLayoutNode),
+}
+
+impl LiveLayoutNode<'_> {
+    fn state(&self) -> LayoutState {
+        match self {
+            Self::Layout(node) => node.layout_state(),
+            Self::Subcompose(node) => node.layout_state(),
+        }
+    }
+
+    fn parent(&self) -> Option<NodeId> {
+        match self {
+            Self::Layout(node) => node.parent(),
+            Self::Subcompose(node) => node.parent(),
+        }
+    }
+
+    fn is_window_root(&self) -> bool {
+        matches!(self, Self::Layout(node) if node.is_window_root())
+    }
+
+    fn with_children<R>(&self, read: impl FnOnce(&[NodeId]) -> R) -> R {
+        match self {
+            Self::Layout(node) => read(&node.children),
+            Self::Subcompose(node) => node.with_active_children(read),
+        }
+    }
+
+    fn semantics(&self) -> Option<SemanticsConfiguration> {
+        match self {
+            Self::Layout(node) => node.semantics_configuration(),
+            Self::Subcompose(node) => node.semantics_configuration(),
+        }
+    }
+}
+
+fn read_live_layout_node<R>(
+    applier: &mut MemoryApplier,
+    node_id: NodeId,
+    mut read: impl FnMut(LiveLayoutNode<'_>) -> R,
+) -> Result<Option<R>, NodeError> {
+    match applier.with_node::<LayoutNode, _>(node_id, |node| read(LiveLayoutNode::Layout(node))) {
         Ok(value) => return Ok(Some(value)),
         Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => {}
         Err(err) => return Err(err),
     }
-
     match applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-        let state = node.layout_state();
-        node.with_active_children(|children| read(state, children))
+        read(LiveLayoutNode::Subcompose(node))
     }) {
         Ok(value) => Ok(Some(value)),
         Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => Ok(None),

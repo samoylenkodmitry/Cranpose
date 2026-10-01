@@ -3,7 +3,7 @@ use std::rc::Rc;
 use cranpose_core::{NodeId, run_in_mutable_snapshot};
 use cranpose_foundation::{ScrollAxisRange, SemanticsScrollBy};
 use cranpose_render_common::Renderer;
-use cranpose_ui::{LayoutBox, SemanticsNode};
+use cranpose_ui::{LayoutBox, SemanticsNode, layout::can_skip_scroll_reveal_from_applier};
 use cranpose_ui_graphics::Rect;
 
 use crate::AppShell;
@@ -34,6 +34,20 @@ where
     fn reveal_node_in_context(&mut self, focused: NodeId) -> bool {
         let mut revealed = false;
         for index in 0..self.surfaces.len() {
+            let surface = &self.surfaces[index];
+            if surface.layout_tree.is_none() && surface.semantics_tree.is_none() {
+                self.app.flush_semantics_invalidations();
+                if let Some(root) = surface.root_node(&self.app)
+                    && can_skip_scroll_reveal_from_applier(
+                        &mut self.app.composition.applier_mut(),
+                        root,
+                        focused,
+                    )
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+            }
             let ancestors = self.surfaces[index]
                 .semantics_tree_for_input(&mut self.app)
                 .and_then(|tree| scroll_ancestors(tree.root(), focused))
