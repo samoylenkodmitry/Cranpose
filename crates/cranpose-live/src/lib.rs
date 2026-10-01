@@ -5,6 +5,7 @@ extern crate self as cranpose_live;
 
 mod api;
 mod error;
+pub mod host;
 mod limits;
 mod program;
 mod protocol;

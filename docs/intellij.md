@@ -13,7 +13,9 @@ can be installed with **Settings → Plugins → Install Plugin from Disk**.
 
 The [live runtime experiment](live-runtime.md) runs supported UI source edits
 and structured agent patches without rebuilding. Its desktop demo uses file
-watching and JSON commands; Studio integration is not wired yet.
+watching and JSON commands, including the embedding host transport. The matching
+`cranpose-idea` live-runtime branch discovers live documents and lets their saves
+bypass native compilation; released plugin versions do not include this yet.
 
 ## Register component previews
 

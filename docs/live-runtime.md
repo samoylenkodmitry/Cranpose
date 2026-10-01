@@ -140,9 +140,40 @@ read the catalogue and snapshot, then submit a revision-checked patch. Natural
 language interpretation belongs to the agent; the running application supplies
 the actual callable contract and executes the resulting document.
 
-The desktop demo implements file watching and stdin transport. Cranpose Studio's
-existing message transport has not been wired to this runtime yet, and the demo
-does not expose an MCP server or embed an AI model.
+The desktop demo implements file watching, stdin commands, and the embedding host
+transport through `host::HostedSession` and `host::LiveHost`. It runs both standalone
+and embedded. The Studio integration needs the matching `cranpose-idea` live-runtime
+branch; released plugin versions do not discover these documents yet.
+
+Studio supplies `CRANPOSE_DEV_SOURCE_MAP` to map its private build checkout back to
+the user's files. `host::original_source_path` applies that mapping before the demo
+starts its watcher. Saving the dedicated `screen.rs` document therefore reaches the
+running interpreter directly. The runner recognizes its `cranposeLive` registration
+and excludes that document from native recompilation. Native Rust source files keep
+the normal build/reload behavior. This path currently updates on save; unsaved
+structural edits are not delivered by Studio.
+
+An application using `HostedSession` must install a watcher for its dedicated UI
+document and apply saves to the same `Session`. Do not register a file that also
+contains native Rust implementations: it is owned by the interpreter until restart.
+The demo is a complete example of that setup. No composable annotation changes.
+
+The authenticated embedding transport uses three channels:
+
+| Channel | Direction | Contents |
+| --- | --- | --- |
+| `cranpose.live.v1.ready` | app → host | Protocol, document ID, source file/function, revision, limits |
+| `cranpose.live.v1.request` | host → app | `{ "id": 1, "document": "…", "request": { "method": "catalogue" } }` |
+| `cranpose.live.v1.response` | app → host | ID, document, current revision, response or error |
+
+Hosts assign increasing request IDs per document. A replay of the latest request
+returns the cached response without repeating an action. Older IDs are rejected.
+Source/patch commands still require their document's `base_revision`; invalid or
+stale edits preserve the last good UI and model state. Studio checkpoints retain
+request sequencing when its UI reconnects to the same application.
+
+The demo does not expose an MCP server or embed an AI model. Agents can use the
+same runtime command protocol through a host integration or the stdin transport.
 
 ## Validation and measurement
 

@@ -10,7 +10,11 @@ use anyhow::{Context, Result};
 use coroflow::{MutableStateFlow, StateFlow};
 use cranpose::{AppLauncher, LaunchedEffectAsync};
 use cranpose_coroflow::StateFlowCollect;
-use cranpose_live::{LiveView, Registry, Request, Session, composable, live_api};
+use cranpose_live::{
+    Registry, Request, Session, composable,
+    host::{HostedSession, LiveHost, original_source_path},
+    live_api,
+};
 use cranpose_ui::{Column, ColumnSpec, Modifier, Text, TextStyle};
 use notify::{RecursiveMode, Watcher};
 use tokio::sync::mpsc;
@@ -115,14 +119,12 @@ fn read_stdin(sender: mpsc::Sender<Input>) {
 }
 
 fn main() -> Result<()> {
-    let path = std::env::args_os()
-        .nth(1)
-        .map_or_else(
-            || PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/screen.rs")),
-            PathBuf::from,
-        )
-        .canonicalize()
-        .context("open live source file")?;
+    let path = original_source_path(std::env::args_os().nth(1).map_or_else(
+        || PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/screen.rs")),
+        PathBuf::from,
+    ))?
+    .canonicalize()
+    .context("open live source file")?;
     let mut registry = Registry::discover()?;
     registry.bind(
         "counter",
@@ -133,6 +135,7 @@ fn main() -> Result<()> {
     let program =
         cranpose_live::parse_source(&registry, &std::fs::read_to_string(&path)?, "Screen")?;
     let session = Session::new(registry, program)?;
+    let hosted = HostedSession::new(session.clone(), path.clone(), "Screen".into());
     let (sender, receiver) = mpsc::channel(32);
     let _watcher = watch(&path, sender.clone())?;
     std::thread::spawn(move || read_stdin(sender));
@@ -163,10 +166,10 @@ fn main() -> Result<()> {
             }));
         }
         let status_text = status.as_state_flow().collectAsState().get();
-        let view = session.clone();
+        let view = hosted.clone();
         Column(Modifier::empty().padding(24.0), ColumnSpec::default(), move || {
             Text(status_text.clone(), Modifier::empty(), TextStyle::default());
-            LiveView(view.clone());
+            LiveHost(view.clone());
         });
     })?;
     Ok(())

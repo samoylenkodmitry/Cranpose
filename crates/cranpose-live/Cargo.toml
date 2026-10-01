@@ -16,6 +16,7 @@ coroflow.workspace = true
 cranpose-core.workspace = true
 cranpose-coroflow.workspace = true
 cranpose-macros.workspace = true
+cranpose-services = { version = "0.1.176", path = "../cranpose-services" }
 cranpose-ui.workspace = true
 inventory = "0.3.24"
 serde = { version = "1.0.229", features = ["derive", "rc"] }

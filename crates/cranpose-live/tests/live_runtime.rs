@@ -171,6 +171,173 @@ fn plain_composable_exports_signatures_and_native_only_diagnostics() {
 }
 
 #[test]
+fn embedded_commands_route_correlate_and_preserve_model_state() {
+    use cranpose_live::host::HostedSession;
+
+    let (model, registry) = setup();
+    let session = session(registry, INITIAL);
+    let hosted = HostedSession::new(session, "/project/screen.rs".into(), "Screen".into());
+    let ready: serde_json::Value =
+        serde_json::from_str(&hosted.announcement().expect("announce")).expect("discovery JSON");
+    let document = ready["document"].as_str().expect("address");
+    let request = |id, request| json!({"id":id,"document":document,"request":request}).to_string();
+    let call = |id, command| -> serde_json::Value {
+        let reply = hosted
+            .handle_json(&request(id, command))
+            .expect("handle")
+            .expect("addressed reply");
+        serde_json::from_str(&reply).expect("reply JSON")
+    };
+    assert_eq!(ready["file"], "/project/screen.rs");
+    assert_eq!(
+        call(1, json!({"method":"catalogue"}))["response"]["kind"],
+        "catalogue"
+    );
+    let dispatch = request(
+        2,
+        json!({"method":"dispatch","node":"increment","event":"on_click"}),
+    );
+    let first = hosted.handle_json(&dispatch).expect("dispatch");
+    assert_eq!(model.value.value(), 1);
+    assert_eq!(hosted.handle_json(&dispatch).expect("host replay"), first);
+    assert_eq!(
+        model.value.value(),
+        1,
+        "a replay must not invoke the action twice"
+    );
+    assert!(
+        hosted
+            .handle_json(&request(
+                1,
+                json!({"method":"dispatch","node":"increment","event":"on_click"})
+            ))
+            .is_err()
+    );
+    let changed = INITIAL
+        .replace("Column", "Row")
+        .replace("Add", "Add five")
+        .replace("counter.add(1)", "counter.add(5)");
+    let applied = call(
+        3,
+        json!({"method":"source","base_revision":0,"source":changed,"function":"Screen"}),
+    );
+    assert_eq!(applied["id"], 3);
+    assert_eq!(applied["revision"], 1);
+    assert_eq!(model.value.value(), 1);
+    let stale = call(
+        4,
+        json!({"method":"source","base_revision":0,"source":INITIAL,"function":"Screen"}),
+    );
+    assert!(stale["error"].as_str().is_some());
+    assert_eq!(stale["revision"], 1);
+    let snapshot = call(5, json!({"method":"snapshot"}));
+    assert_eq!(
+        snapshot["response"]["program"]["root"]["component"],
+        "cranpose_live::widgets::Row"
+    );
+    assert!(hosted.handle_json(&json!({"id":6,"document":"another document","request":{"method":"dispatch","node":"increment","event":"on_click"}}).to_string()).expect("other document").is_none());
+    assert_eq!(model.value.value(), 1);
+    call(
+        6,
+        json!({"method":"dispatch","node":"increment","event":"on_click"}),
+    );
+    assert_eq!(model.value.value(), 6);
+    assert!(
+        call(7, json!({"method":"unknown"}))["error"]
+            .as_str()
+            .is_some()
+    );
+}
+
+#[test]
+fn embedded_host_messages_edit_a_rendered_document_without_restarting_it() {
+    use std::sync::{Arc, Mutex};
+
+    use cranpose_live::host::{
+        HostedSession, LiveHost, READY_CHANNEL, REQUEST_CHANNEL, RESPONSE_CHANNEL,
+    };
+    use cranpose_services::{
+        HostMessage, clear_host_messages, clear_host_outbox, install_host_outbox,
+        publish_host_message,
+    };
+
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            clear_host_outbox();
+            clear_host_messages();
+        }
+    }
+    let _cleanup = Cleanup;
+    clear_host_messages();
+    let received = Arc::new(Mutex::new(Vec::<HostMessage>::new()));
+    let outbox = Arc::clone(&received);
+    install_host_outbox(move |message| outbox.lock().expect("outbox").push(message));
+    let (model, registry) = setup();
+    let session = session(registry, INITIAL);
+    let hosted = HostedSession::new(
+        session.clone(),
+        "/project/screen.rs".into(),
+        "Screen".into(),
+    );
+    let ready: serde_json::Value =
+        serde_json::from_str(&hosted.announcement().expect("announce")).expect("JSON");
+    let mut composition = run_test_composition(|| {});
+    {
+        let mut wait_for = |channel: &str, id: Option<u64>| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                composition
+                    .render(location_key("host-transport", 1, 1), || {
+                        LiveHost(hosted.clone());
+                    })
+                    .expect("render hosted UI");
+                composition.with_app_context(|| composition.runtime_handle().drain_ui());
+                composition.process_invalid_scopes().expect("recompose");
+                composition.flush_pending_node_updates().expect("apply");
+                let found = received.lock().expect("received").iter().any(|message| {
+                    message.channel == channel
+                        && id.is_none_or(|id| {
+                            serde_json::from_str::<serde_json::Value>(&message.payload)
+                                .is_ok_and(|value| value["id"] == id)
+                        })
+                });
+                if found {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "missing host response on {channel}"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        wait_for(READY_CHANNEL, None);
+        let command = |id, request| {
+            HostMessage::new(
+                REQUEST_CHANNEL,
+                json!({"id":id,"document":ready["document"],"request":request}).to_string(),
+            )
+        };
+        publish_host_message(command(
+            1,
+            json!({"method":"dispatch","node":"increment","event":"on_click"}),
+        ));
+        wait_for(RESPONSE_CHANNEL, Some(1));
+        assert_eq!(model.value.value(), 1);
+        publish_host_message(command(
+            2,
+            json!({"method":"source","base_revision":0,
+            "source":INITIAL.replace("Column", "Row").replace("Add", "Live in Studio"),"function":"Screen"}),
+        ));
+        wait_for(RESPONSE_CHANNEL, Some(2));
+        assert_eq!(session.revision(), 1);
+        assert_eq!(model.value.value(), 1);
+        assert_eq!(visible_text(&mut composition), ["1", "Live in Studio"]);
+    }
+}
+
+#[test]
 fn source_and_agent_edits_update_real_widgets_and_keep_viewmodel_state() {
     let (model, registry) = setup();
     let session = session(registry, INITIAL);

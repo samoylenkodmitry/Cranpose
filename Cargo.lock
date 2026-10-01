@@ -1151,6 +1151,7 @@ dependencies = [
  "cranpose-core",
  "cranpose-coroflow",
  "cranpose-macros",
+ "cranpose-services",
  "cranpose-ui",
  "inventory",
  "serde",

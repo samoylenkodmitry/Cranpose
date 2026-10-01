@@ -11,7 +11,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.104"
 coroflow.workspace = true
-cranpose = { workspace = true, features = ["desktop", "embedded-default-font", "renderer-wgpu"] }
+cranpose = { workspace = true, features = ["desktop", "embed", "embedded-default-font", "renderer-wgpu"] }
 cranpose-core.workspace = true
 cranpose-coroflow.workspace = true
 cranpose-live = { version = "0.1.176", path = "../../crates/cranpose-live" }

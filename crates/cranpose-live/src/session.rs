@@ -75,6 +75,10 @@ impl Session {
         self.0.revision.value() as u64
     }
 
+    pub(crate) fn observe_revision(&self) -> u64 {
+        self.0.revision.as_state_flow().collectAsState().get() as u64
+    }
+
     /// The catalogue available to both source translation and agent edits.
     pub fn registry(&self) -> &Registry {
         &self.0.registry
@@ -189,7 +193,7 @@ impl Session {
 /// Renders the current live program with Cranpose's normal composition runtime.
 #[crate::composable]
 pub fn LiveView(session: Session) {
-    let _ = session.0.revision.as_state_flow().collectAsState().get();
+    let _ = session.observe_revision();
     let root = Rc::clone(&session.0.document.borrow().root);
     cranpose_ui::Box(
         cranpose_ui::Modifier::empty(),
