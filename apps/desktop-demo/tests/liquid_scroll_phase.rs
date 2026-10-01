@@ -54,8 +54,10 @@ fn rows(frame: &[u8], first_row: u32, row_count: u32) -> &[u8] {
 
 fn save_drift_frames(previous: &[u8], current: &[u8]) {
     let directory = std::env::var_os("CARGO_TARGET_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("target"))
+        .map_or_else(
+            || std::path::PathBuf::from("target"),
+            std::path::PathBuf::from,
+        )
         .join("liquid-scroll-phase");
     std::fs::create_dir_all(&directory).expect("create scroll evidence directory");
     for (name, pixels) in [("previous.png", previous), ("current.png", current)] {

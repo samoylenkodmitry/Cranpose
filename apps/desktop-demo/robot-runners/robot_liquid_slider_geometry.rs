@@ -85,7 +85,7 @@ fn white_bounds(shot: &RobotScreenshot) -> [f32; 4] {
     let mut top = shot.height;
     let mut right = 0;
     let mut bottom = 0;
-    for (index, pixel) in shot.pixels.chunks_exact(4).enumerate() {
+    for (index, pixel) in shot.pixels.as_chunks::<4>().0.iter().enumerate() {
         if pixel[..3].iter().all(|channel| *channel > 240) {
             let x = index as u32 % shot.width;
             let y = index as u32 / shot.width;
@@ -100,7 +100,7 @@ fn white_bounds(shot: &RobotScreenshot) -> [f32; 4] {
     let mut moment = 0.0;
     let row_start = (shot.height / 2 * shot.width * 4) as usize;
     let row_end = row_start + shot.width as usize * 4;
-    for (x, pixel) in shot.pixels[row_start..row_end].chunks_exact(4).enumerate() {
+    for (x, pixel) in shot.pixels[row_start..row_end].as_chunks::<4>().0.iter().enumerate() {
         let background = if pixel[2] > pixel[0] { 0.0 } else { 25.0 };
         let weight = ((f32::from(pixel[0]) - background) / (255.0 - background)).max(0.0);
         coverage += weight;

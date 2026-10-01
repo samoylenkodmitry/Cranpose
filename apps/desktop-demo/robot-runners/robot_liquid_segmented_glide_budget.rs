@@ -88,7 +88,7 @@ pub(crate) fn main() -> ExitCode {
                 let frames = robot.capture_interaction_keyframes(1.0, &timeline)
                     .expect("capture exact-clock glide");
                 let shot = frames.last().expect("glide shot");
-                robot_shot::save(&shot, &shot_dir, &format!("{}-{name}.png", index + 1));
+                robot_shot::save(shot, &shot_dir, &format!("{}-{name}.png", index + 1));
                 let stats = robot.fps_stats().expect("glide fps stats");
                 let changing_frames = frames.windows(2).filter(|pair| pair[0].pixels != pair[1].pixels).count() as u64;
                 println!(
@@ -100,9 +100,8 @@ pub(crate) fn main() -> ExitCode {
                         &robot,
                         &FAILED,
                         &format!(
-                            "{name} drew {} changing frames, fewer than the \
-                             {GLIDE_FRAMES_DRAWN} its recompositions are counted over",
-                            changing_frames
+                            "{name} drew {changing_frames} changing frames, fewer than the \
+                             {GLIDE_FRAMES_DRAWN} its recompositions are counted over"
                         ),
                     );
                 }
