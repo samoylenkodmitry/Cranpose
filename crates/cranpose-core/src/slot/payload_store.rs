@@ -2,7 +2,7 @@ use std::{mem, ops::Range};
 
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
-use super::{PayloadRecord, checked_usize_to_u32, segments::SegmentItems};
+use super::{PayloadRecord, checked_usize_to_u32, growth::GrowthSlack, segments::SegmentItems};
 
 const ORDER_ENTRY_BYTES: usize = mem::size_of::<u32>();
 
@@ -192,6 +192,13 @@ impl PayloadStore {
             expected,
             actual,
         }
+    }
+}
+
+impl GrowthSlack for PayloadStore {
+    fn trim_growth_slack(&mut self) {
+        self.order.trim_growth_slack();
+        self.slots.trim_growth_slack();
     }
 }
 

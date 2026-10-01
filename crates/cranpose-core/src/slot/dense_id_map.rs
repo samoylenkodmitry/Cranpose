@@ -1,3 +1,5 @@
+use super::growth::GrowthSlack;
+
 pub(super) struct DenseIdMap<T> {
     entries: Vec<Option<T>>,
     len: usize,
@@ -79,5 +81,11 @@ impl<T> DenseIdMap<T> {
             .rposition(std::option::Option::is_some)
             .map_or(0, |index| index + 1);
         self.entries.truncate(retained);
+    }
+}
+
+impl<T> GrowthSlack for DenseIdMap<T> {
+    fn trim_growth_slack(&mut self) {
+        self.entries.trim_growth_slack();
     }
 }

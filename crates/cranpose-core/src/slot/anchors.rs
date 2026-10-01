@@ -5,6 +5,7 @@ use super::SlotInvariantError;
 use super::{
     DetachedSubtree, GroupRecord, SlotTable, checked_usize_to_u32,
     generational_registry::{GenerationalRegistryStorage, RegistryState},
+    growth::GrowthSlack,
 };
 #[cfg(any(test, debug_assertions))]
 use crate::collections::map::HashSet;
@@ -314,6 +315,12 @@ impl AnchorRegistry {
             expected,
             actual,
         })
+    }
+}
+
+impl GrowthSlack for AnchorRegistry {
+    fn trim_growth_slack(&mut self) {
+        self.storage.trim_growth_slack();
     }
 }
 

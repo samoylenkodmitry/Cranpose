@@ -3,7 +3,7 @@ use std::rc::Rc;
 use super::{
     AnchorRegistry, DeferredDrop, GroupRecord, MovableIndex, NodeRecord, PayloadAnchorRegistry,
     ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState, debug::SlotTableDiagnostics,
-    payload_store::PayloadStore,
+    growth::GrowthSlack, payload_store::PayloadStore,
 };
 
 mod metadata;
@@ -99,6 +99,19 @@ impl SlotTable {
         self.payload_anchors.shrink_to_fit();
         self.scope_index.shrink_to_fit();
         self.movables.shrink_to_fit();
+    }
+
+    pub(crate) fn storage_capacity(&self) -> usize {
+        self.groups.capacity() + self.payloads.capacity() + self.nodes.capacity()
+    }
+
+    pub(crate) fn trim_growth_slack(&mut self) {
+        self.groups.trim_growth_slack();
+        self.payloads.trim_growth_slack();
+        self.nodes.trim_growth_slack();
+        self.anchors.trim_growth_slack();
+        self.payload_anchors.trim_growth_slack();
+        self.scope_index.trim_growth_slack();
     }
 
     pub(crate) fn take_effect_drops(&mut self) -> Vec<DeferredDrop> {

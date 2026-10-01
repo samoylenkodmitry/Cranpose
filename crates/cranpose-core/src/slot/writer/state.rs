@@ -63,6 +63,12 @@ impl SlotWriteSessionState {
         self.request_payload_storage_compaction = false;
     }
 
+    pub(crate) fn removed_nothing(&self) -> bool {
+        self.removed_payload_count == 0
+            && self.removed_node_count == 0
+            && self.removed_group_count == 0
+    }
+
     pub(in crate::slot) fn note_removed_payloads(&mut self, count: usize) {
         self.removed_payload_count += count;
         self.update_compaction_hint();

@@ -4325,6 +4325,7 @@ pub(crate) struct SlotPassOutcome {
     pub(crate) compacted: bool,
     pub(crate) compact_anchor_registry_storage: bool,
     pub(crate) compact_payload_storage: bool,
+    pub(crate) trim_growth_slack: bool,
 }
 
 #[derive(Default)]
@@ -4335,6 +4336,7 @@ pub(crate) struct FinishedSlotPass {
 
 struct ActivePassState {
     state: slot::SlotWriteSessionState,
+    storage_capacity: usize,
 }
 
 struct SlotsHostInner {
@@ -4612,7 +4614,11 @@ impl SlotsHost {
         }
         let mut state = slot::SlotWriteSessionState::default();
         state.reset_for_pass(mode);
-        inner.active_pass = Some(ActivePassState { state });
+        let storage_capacity = inner.table.storage_capacity();
+        inner.active_pass = Some(ActivePassState {
+            state,
+            storage_capacity,
+        });
     }
 
     pub(crate) fn has_active_pass(&self) -> bool {
@@ -4707,6 +4713,8 @@ impl SlotsHost {
                     .state
                     .request_anchor_storage_compaction,
                 compact_payload_storage: active_pass.state.request_payload_storage_compaction,
+                trim_growth_slack: active_pass.state.removed_nothing()
+                    && table.storage_capacity() > active_pass.storage_capacity,
             },
             detached_root_children,
         })
@@ -4728,6 +4736,8 @@ impl SlotsHost {
         if outcome.compacted {
             table.compact_storage();
             lifecycle.compact_storage();
+        } else if outcome.trim_growth_slack {
+            table.trim_growth_slack();
         }
         if let Some(state) = runtime_state.clone() {
             state.compact_table_identity_storage_for_host(
