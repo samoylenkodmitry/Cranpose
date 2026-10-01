@@ -111,6 +111,9 @@ jobs:
     name: iOS build (self-hosted)
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     env:
       CARGO_INCREMENTAL: "0"
     steps:
@@ -168,6 +171,9 @@ jobs:
     # resource and the robot suite cannot run anywhere else.
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     env:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"

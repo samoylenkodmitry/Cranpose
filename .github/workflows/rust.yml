@@ -17,8 +17,8 @@ name: Rust
 # so they run on the Linux pool. Both macOS runners are one M3, and every
 # pull request asked it for six jobs against Linux's one; on 2026-09-24 a
 # macOS job waited 26 minutes at p90 for a runner while a Linux slot sat
-# idle. Linux jobs hold the host lock's shared side for every step, so they
-# never run beside a measurement that has emptied that machine.
+# idle. Shell steps on both platforms hold the host lock's shared side, so
+# they never run beside a measurement that has emptied that machine.
 #
 # Every job starts by asking tree_memo.sh whether this exact source tree
 # already passed it on this host -- most often the pull request's own run,
@@ -137,6 +137,9 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -177,6 +180,9 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 20
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
