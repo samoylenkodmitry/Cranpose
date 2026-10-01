@@ -1,9 +1,7 @@
-use std::any::TypeId;
-
 use super::*;
 use crate::{
     AnchorId,
-    slot::{GroupKey, PayloadAnchor, PayloadKind, segments::SegmentItems},
+    slot::{GroupKey, PayloadAnchor, PayloadKind, PayloadType, segments::SegmentItems},
 };
 
 fn one_payload_table() -> (SlotTable, AnchorId, PayloadAnchor) {
@@ -27,14 +25,11 @@ fn one_payload_table() -> (SlotTable, AnchorId, PayloadAnchor) {
     table.payloads.insert_item(
         table.payloads.len(),
         PayloadRecord {
-            owner,
             anchor: payload_anchor,
-            type_id: TypeId::of::<i32>(),
-            type_name: std::any::type_name::<i32>,
+            payload_type: PayloadType::of::<i32>(),
             source: crate::slot::BRANCH_PATH_ROOT,
             kind: PayloadKind::Internal,
             value: Box::new(0_i32),
-            fresh: None,
         },
     );
     table.anchors.set_active(owner, 0);
@@ -56,10 +51,7 @@ fn reverse_payload_anchor_registry_validation_reports_actual_record() {
             payload_anchor: stale_payload_anchor,
             expected_owner: owner,
             expected_payload_index: 0,
-            actual: Some(PayloadAnchorRecord {
-                owner,
-                payload_anchor: actual_payload_anchor,
-            }),
+            actual: Some(actual_payload_anchor),
         })
     );
 }

@@ -1,5 +1,6 @@
 use std::{
     any::{Any, TypeId},
+    marker::PhantomData,
     mem,
 };
 
@@ -194,14 +195,51 @@ pub(crate) enum NodeSlotUpdate {
 }
 
 pub(super) struct PayloadRecord {
-    pub(super) owner: AnchorId,
     pub(super) anchor: PayloadAnchor,
-    pub(super) type_id: TypeId,
-    pub(super) type_name: fn() -> &'static str,
+    pub(super) payload_type: &'static PayloadType,
     pub(super) source: crate::Key,
     pub(super) kind: PayloadKind,
     pub(super) value: Box<dyn Any>,
+}
+
+pub(super) struct PayloadType {
+    pub(super) type_id: TypeId,
+    pub(super) type_name: fn() -> &'static str,
     pub(super) fresh: Option<fn() -> Box<dyn Any>>,
+}
+
+struct PlainPayloadType<T>(PhantomData<T>);
+
+impl<T: 'static> PlainPayloadType<T> {
+    const TYPE: PayloadType = PayloadType {
+        type_id: TypeId::of::<T>(),
+        type_name: std::any::type_name::<T>,
+        fresh: None,
+    };
+}
+
+struct EffectPayloadType<T>(PhantomData<T>);
+
+impl<T: Default + 'static> EffectPayloadType<T> {
+    const TYPE: PayloadType = PayloadType {
+        type_id: TypeId::of::<crate::Owned<T>>(),
+        type_name: std::any::type_name::<crate::Owned<T>>,
+        fresh: Some(fresh_effect_value::<T>),
+    };
+}
+
+fn fresh_effect_value<T: Default + 'static>() -> Box<dyn Any> {
+    Box::new(crate::Owned::new(T::default()))
+}
+
+impl PayloadType {
+    pub(super) fn of<T: 'static>() -> &'static Self {
+        &PlainPayloadType::<T>::TYPE
+    }
+
+    pub(super) fn effect<T: Default + 'static>() -> &'static Self {
+        &EffectPayloadType::<T>::TYPE
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -5,6 +5,7 @@ mod dense_id_map;
 mod detach;
 mod generational_registry;
 mod groups;
+mod growth;
 mod introspection;
 mod lifecycle;
 mod movable;
@@ -59,7 +60,7 @@ pub(crate) use types::{
     FinishGroupResult, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, NodeLifecycle,
     NodeSlotUpdate, PayloadAnchor, PayloadKind, RootNodeIds, SlotPassMode, ValueSlotId,
 };
-use types::{NodeRecord, PayloadRecord};
+use types::{NodeRecord, PayloadRecord, PayloadType};
 #[cfg(any(test, debug_assertions))]
 pub(crate) use validate::SlotInvariantError;
 #[cfg(test)]

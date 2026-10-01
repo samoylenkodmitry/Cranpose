@@ -2,7 +2,7 @@ use std::mem;
 
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
-use super::{ActiveGroupId, AnchorRegistry, GroupRecord, SlotTable};
+use super::{ActiveGroupId, AnchorRegistry, GroupRecord, SlotTable, growth::GrowthSlack};
 use crate::{AnchorId, ScopeId, collections::map::HashMap};
 
 #[derive(Default)]
@@ -154,6 +154,12 @@ impl ScopeIndex {
     #[cfg(test)]
     pub(super) fn insert_for_test(&mut self, scope_id: ScopeId, anchor: AnchorId) {
         self.by_scope.insert(scope_id, anchor);
+    }
+}
+
+impl GrowthSlack for ScopeIndex {
+    fn trim_growth_slack(&mut self) {
+        self.by_scope.trim_growth_slack();
     }
 }
 

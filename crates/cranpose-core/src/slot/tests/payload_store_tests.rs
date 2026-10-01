@@ -1,21 +1,13 @@
-use std::any::TypeId;
-
 use super::*;
-use crate::{
-    AnchorId,
-    slot::{PayloadAnchor, PayloadKind},
-};
+use crate::slot::{PayloadAnchor, PayloadKind, PayloadType};
 
 fn payload(id: usize) -> PayloadRecord {
     PayloadRecord {
-        owner: AnchorId::new(1),
         anchor: PayloadAnchor::new(id, 1),
-        type_id: TypeId::of::<usize>(),
-        type_name: std::any::type_name::<usize>,
+        payload_type: PayloadType::of::<usize>(),
         source: crate::slot::BRANCH_PATH_ROOT,
         kind: PayloadKind::Remember,
         value: Box::new(id),
-        fresh: None,
     }
 }
 

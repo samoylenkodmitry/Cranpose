@@ -138,9 +138,7 @@ impl SlotWriteSession<'_> {
             made = true;
             Box::new(Owned::new(T::default()))
         };
-        let mut init = PayloadInit::new_startable::<Owned<T>>(source, &mut make, || {
-            Box::new(Owned::new(T::default())) as Box<dyn std::any::Any>
-        });
+        let mut init = PayloadInit::new_effect::<T>(source, &mut make);
         let slot = self.value_slot_with_kind_dyn(PayloadKind::Effect, &mut init);
         self.table.read_value::<Owned<T>>(slot).clone()
     }

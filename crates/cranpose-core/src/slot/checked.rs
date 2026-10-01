@@ -30,13 +30,19 @@ impl CheckedU32Delta {
 
 #[inline]
 pub(crate) fn checked_usize_to_u32(value: usize, field: &'static str) -> u32 {
-    u32::try_from(value).unwrap_or_else(|_| panic!("{field} exceeds u32 storage limit: {value}"))
+    u32::try_from(value).unwrap_or_else(|_| panic_usize_out_of_range(field, "u32 storage", value))
 }
 
 #[inline]
 pub(in crate::slot) fn checked_usize_to_i64(value: usize, field: &'static str) -> i64 {
     i64::try_from(value)
-        .unwrap_or_else(|_| panic!("{field} exceeds i64 mutation delta limit: {value}"))
+        .unwrap_or_else(|_| panic_usize_out_of_range(field, "i64 mutation delta", value))
+}
+
+#[cold]
+#[inline(never)]
+fn panic_usize_out_of_range(field: &'static str, limit: &'static str, value: usize) -> ! {
+    panic!("{field} exceeds {limit} limit: {value}");
 }
 
 #[inline]
