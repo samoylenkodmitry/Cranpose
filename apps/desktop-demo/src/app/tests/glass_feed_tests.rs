@@ -16,6 +16,12 @@ fn every_feed_glass_material_is_sharp_but_optically_shaped() {
             .blur_radius,
         Some(0.0)
     );
-    assert_eq!(feed_search_spec().glass.blur_radius, Some(0.0));
+    assert_eq!(
+        feed_search_spec()
+            .glass
+            .expect("feed search overrides its glass")
+            .blur_radius,
+        Some(0.0)
+    );
     assert_eq!(feed_search_spec().foreground, Some(Color::WHITE));
 }

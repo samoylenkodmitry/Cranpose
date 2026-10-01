@@ -735,7 +735,7 @@ impl GraphicsLayerNode {
 
     #[cfg(test)]
     pub fn layer(&self) -> GraphicsLayer {
-        if let Some(resolve) = self.layer_resolver() {
+        if let Some(resolve) = self.layer_resolver(0) {
             resolve()
         } else {
             self.layer.clone()
@@ -746,13 +746,17 @@ impl GraphicsLayerNode {
         self.layer.clone()
     }
 
-    pub fn layer_resolver(&self) -> Option<Rc<dyn Fn() -> GraphicsLayer>> {
+    pub(crate) fn layer_resolver(
+        &self,
+        modifier_index: usize,
+    ) -> Option<Rc<dyn Fn() -> GraphicsLayer>> {
         self.layer_resolver.as_ref().map(|resolve| {
             let resolve = resolve.clone();
             let node_id = Rc::clone(&self.node_id);
             Rc::new(move || {
                 if let Some(node_id) = node_id.get() {
-                    let scope = crate::render_state::DrawObservationScope::new(node_id, usize::MAX);
+                    let scope =
+                        crate::render_state::DrawObservationScope::new(node_id, modifier_index, 0);
                     crate::render_state::observe_draw_reads(scope, || resolve())
                 } else {
                     resolve()
@@ -1948,14 +1952,18 @@ impl DrawCommandNode {
         &self.commands
     }
 
-    pub(crate) fn observed_commands(&self) -> Vec<DrawCommand> {
+    pub(crate) fn observed_commands(
+        &self,
+        modifier_index: usize,
+    ) -> impl Iterator<Item = DrawCommand> + '_ {
         let node_id = self.node_id.get();
         self.commands
             .iter()
             .cloned()
             .enumerate()
-            .map(|(index, command)| observe_draw_command(command, node_id, index))
-            .collect()
+            .map(move |(index, command)| {
+                observe_draw_command(command, node_id, modifier_index, index)
+            })
     }
 }
 
@@ -1988,12 +1996,14 @@ impl DrawModifierNode for DrawCommandNode {}
 fn observe_draw_command(
     command: DrawCommand,
     node_id: Option<NodeId>,
+    modifier_index: usize,
     command_index: usize,
 ) -> DrawCommand {
     let Some(node_id) = node_id else {
         return command;
     };
-    let observation = crate::render_state::DrawObservationScope::new(node_id, command_index);
+    let observation =
+        crate::render_state::DrawObservationScope::new(node_id, modifier_index, command_index);
     match command {
         DrawCommand::Behind(draw) => DrawCommand::Behind(Rc::new(move |scope| {
             crate::render_state::observe_draw_reads(observation, || draw(scope));

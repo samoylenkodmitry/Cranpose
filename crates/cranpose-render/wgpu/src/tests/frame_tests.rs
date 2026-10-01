@@ -383,8 +383,7 @@ fn a_pinned_gate_admits_every_uncached_frame_and_counts_the_hold() {
         "every two-frame hold is pinned on its first frame and replayed on its second"
     );
     assert_eq!(
-        gate.run(),
-        2,
+        gate.run, 2,
         "the replay counted as a second frame of the hold"
     );
     let mut gate = AdmissionGate::pinned(gate_key(0));
@@ -394,13 +393,12 @@ fn a_pinned_gate_admits_every_uncached_frame_and_counts_the_hold() {
         "an unread pin costs nothing to repeat, so a key changing every frame is pinned \
          every frame"
     );
-    assert_eq!(gate.run(), 1);
+    assert_eq!(gate.run, 1);
     for _ in 0..4 {
         gate.observe(gate_key(99));
     }
     assert_eq!(
-        gate.run(),
-        4,
+        gate.run, 4,
         "a held key's run is what the admission budget ranks by"
     );
 }

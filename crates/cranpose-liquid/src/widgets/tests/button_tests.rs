@@ -26,22 +26,24 @@ fn icon_backplate_colors_only_the_compact_foreground_core() {
     let material = GlassButtonSpec::glass()
         .resolve_material(&colors, colors.label)
         .expect("glass button material");
-    assert_eq!(material.tint, None);
-    assert_eq!(material.resolve(&colors).tint, colors.glass_tint);
+    assert_eq!(material.resolve(&colors).tint, Color::WHITE.with_alpha(0.2));
 }
 
 #[test]
-fn neutral_button_tint_comes_from_the_theme_not_foreground_polarity() {
+fn neutral_button_surface_has_no_foreground_color_wash() {
     let accent = Color::from_rgb_u8(0, 122, 255);
-    for colors in [
-        crate::theme::LiquidColors::light(accent),
-        crate::theme::LiquidColors::dark(accent),
+    for (colors, tint_alpha) in [
+        (crate::theme::LiquidColors::light(accent), 0.2),
+        (crate::theme::LiquidColors::dark(accent), 0.0),
     ] {
         let material = GlassButtonSpec::glass()
-            .resolve_material(&colors, colors.label)
+            .resolve_material(&colors, accent)
             .expect("glass button material");
-        assert_eq!(material.tint, None);
-        assert_eq!(material.resolve(&colors).tint, colors.glass_tint);
+        assert_eq!(
+            material.resolve(&colors).tint,
+            Color::WHITE.with_alpha(tint_alpha)
+        );
+        assert_eq!(material.foreground, Some(colors.label));
     }
 }
 

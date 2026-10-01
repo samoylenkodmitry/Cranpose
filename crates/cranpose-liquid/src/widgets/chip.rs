@@ -1,6 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
-
-use cranpose_animation::{animateColorAsState, animateFloatAsState};
+use cranpose_animation::animateFloatAsState;
 use cranpose_macros::composable;
 use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{
@@ -27,45 +25,14 @@ pub fn LiquidChip(
     on_click: impl Fn() + 'static,
     label: impl Into<String>,
 ) {
-    ChipPane(modifier, selected, Some(selected), on_click, label.into());
-}
-
-/// An action pill with the look of [`LiquidChip`] and no selected state:
-/// Save, Cancel, Retry. `prominent` gives it the raised look of a selected
-/// chip, and a screen reader hears a plain button either way.
-#[composable]
-pub fn LiquidActionChip(
-    modifier: Modifier,
-    prominent: bool,
-    on_click: impl Fn() + 'static,
-    label: impl Into<String>,
-) {
-    ChipPane(modifier, prominent, None, on_click, label.into());
-}
-
-#[composable]
-fn ChipPane(
-    modifier: Modifier,
-    selected: bool,
-    selection: Option<bool>,
-    on_click: impl Fn() + 'static,
-    label: String,
-) {
+    let label = label.into();
     let colors = liquid_colors();
     let typography = liquid_typography();
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, _pressed, content_alpha) =
         liquid_press_scale(Modifier::empty(), interaction, 1.18);
 
-    let label_color = animateColorAsState(
-        if selected {
-            colors.accent
-        } else {
-            colors.secondary_label
-        },
-        LiquidMotion::smooth(),
-        "chip-label",
-    );
+    let label_color = colors.accent;
 
     let activity = animateFloatAsState(
         if selected { 1.0 } else { 0.0 },
@@ -82,15 +49,14 @@ fn ChipPane(
         },
     );
 
-    let on_click = Rc::new(RefCell::new(on_click));
     let base = base
         .press_interaction_source(interaction)
-        .stable_semantics(chip_semantics(selection))
+        .stable_semantics(move |config| config.selected = Some(selected))
         .clickable(move |_point| {
             default_haptics().perform(HapticFeedback::Selection);
-            (on_click.borrow_mut())();
+            on_click();
         })
-        .padding_symmetric(14.0, 7.0);
+        .padding_symmetric(13.0, 6.0);
 
     let chip = modifier.then(base);
     Box(pressed_modifier, BoxSpec::default(), move || {
@@ -103,15 +69,15 @@ fn ChipPane(
                 let label = label.clone();
                 let style = TextStyle {
                     span_style: SpanStyle {
-                        color: Some(label_color.get()),
+                        color: Some(label_color),
                         font_weight: Some(if selected {
                             FontWeight::SEMI_BOLD
                         } else {
-                            FontWeight::MEDIUM
+                            FontWeight::NORMAL
                         }),
-                        ..typography.subheadline.span_style.clone()
+                        ..typography.footnote.span_style.clone()
                     },
-                    ..typography.subheadline.clone()
+                    ..typography.footnote.clone()
                 };
                 let content_layer =
                     Modifier::empty().graphics_layer(move || cranpose_ui_graphics::GraphicsLayer {
@@ -124,8 +90,23 @@ fn ChipPane(
     });
 }
 
-fn chip_semantics(selection: Option<bool>) -> impl Fn(&mut cranpose_ui::SemanticsConfiguration) {
-    move |config| {
-        config.selected = selection;
+/// A small glass action button with no selected state: Save, Cancel, Retry.
+/// `prominent` fills the surface with the accent color.
+#[composable]
+pub fn LiquidActionChip(
+    modifier: Modifier,
+    prominent: bool,
+    on_click: impl Fn() + 'static,
+    label: impl Into<String>,
+) {
+    let spec = if prominent {
+        super::button::GlassButtonSpec::prominent()
+    } else {
+        super::button::GlassButtonSpec::glass()
     }
+    .with_size(super::button::GlassButtonSize::Small);
+    let label = label.into();
+    super::button::GlassButton(modifier, spec.clone(), on_click, move || {
+        super::button::GlassButtonLabel(label.clone(), spec.clone());
+    });
 }

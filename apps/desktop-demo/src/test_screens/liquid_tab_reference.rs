@@ -195,125 +195,114 @@ pub(crate) fn LiquidTabReference(checkerboard: bool, dark: bool) {
             let selected = rememberMutableStateOf(initial_destination);
             let colors = liquid_colors();
             let insets = local_safe_area_insets().current();
-            BoxWithConstraints(
-                Modifier::empty().fill_max_size().draw_behind(move |scope| {
-                    scope.draw_rect(Brush::solid(if dark { Color::BLACK } else { Color::WHITE }));
-                    if checkerboard {
-                        let palette = ReferenceContent::colors();
-                        let cell = 8.0;
-                        for row in 0..(scope.size().height / cell).ceil() as usize {
-                            for column in 0..(scope.size().width / cell).ceil() as usize {
-                                let rect = Rect {
-                                    x: column as f32 * cell,
-                                    y: row as f32 * cell,
-                                    width: cell,
-                                    height: cell,
-                                };
-                                scope.draw_rect_at(
-                                    rect,
-                                    Brush::solid(palette[(column + row) % palette.len()]),
-                                );
-                                if (row + column) % 2 == 0 {
-                                    scope.draw_rect_at(
-                                        rect,
-                                        Brush::solid(Color::WHITE.with_alpha(0.55)),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }),
-                move |scope| {
-                    let symbols = cranpose::remember(|| {
-                        [
-                            include_bytes!(
-                                "../../../liquid-reference/reference-content/discover.png"
-                            )
+            BoxWithConstraints(reference_background(checkerboard, dark), move |scope| {
+                let symbols = cranpose::remember(|| {
+                    [
+                        include_bytes!("../../../liquid-reference/reference-content/discover.png")
                             .as_slice(),
-                            include_bytes!(
-                                "../../../liquid-reference/reference-content/browse.png"
-                            )
+                        include_bytes!("../../../liquid-reference/reference-content/browse.png")
                             .as_slice(),
-                            include_bytes!("../../../liquid-reference/reference-content/saved.png")
-                                .as_slice(),
-                            include_bytes!(
-                                "../../../liquid-reference/reference-content/account.png"
-                            )
+                        include_bytes!("../../../liquid-reference/reference-content/saved.png")
                             .as_slice(),
-                        ]
-                        .map(|bytes| {
-                            let image = image::load_from_memory(bytes)
-                                .expect("native symbol PNG")
-                                .into_rgba8();
-                            let size = cranpose::Size::new(
-                                image.width() as f32 / 3.0,
-                                image.height() as f32 / 3.0,
-                            );
-                            let bitmap = cranpose::ImageBitmap::from_rgba8(
-                                image.width(),
-                                image.height(),
-                                image.into_raw(),
-                            )
-                            .expect("native symbol pixels");
-                            (cranpose::widgets::Painter::from_bitmap(bitmap), size)
-                        })
+                        include_bytes!("../../../liquid-reference/reference-content/account.png")
+                            .as_slice(),
+                    ]
+                    .map(|bytes| {
+                        let image = image::load_from_memory(bytes)
+                            .expect("native symbol PNG")
+                            .into_rgba8();
+                        let size = cranpose::Size::new(
+                            image.width() as f32 / 3.0,
+                            image.height() as f32 / 3.0,
+                        );
+                        let bitmap = cranpose::ImageBitmap::from_rgba8(
+                            image.width(),
+                            image.height(),
+                            image.into_raw(),
+                        )
+                        .expect("native symbol pixels");
+                        (cranpose::widgets::Painter::from_bitmap(bitmap), size)
                     })
-                    .with(Clone::clone);
-                    let width = scope.constraints().max_width;
-                    let height = scope.constraints().max_height;
-                    Box(
-                        Modifier::empty().fill_max_size(),
-                        BoxSpec::default().content_alignment(Alignment::CENTER),
-                        move || {
-                            Text(
-                                content.titles[selected.get()].as_str(),
-                                Modifier::empty(),
-                                TextStyle {
-                                    span_style: SpanStyle {
-                                        color: Some(colors.label),
-                                        font_size: TextUnit::Sp(34.0),
-                                        font_family: Some(FontFamily::SansSerif),
-                                        font_weight: Some(FontWeight::BOLD),
-                                        ..Default::default()
-                                    },
+                })
+                .with(Clone::clone);
+                let width = scope.constraints().max_width;
+                let height = scope.constraints().max_height;
+                Box(
+                    Modifier::empty().fill_max_size(),
+                    BoxSpec::default().content_alignment(Alignment::CENTER),
+                    move || {
+                        Text(
+                            content.titles[selected.get()].as_str(),
+                            Modifier::empty(),
+                            TextStyle {
+                                span_style: SpanStyle {
+                                    color: Some(colors.label),
+                                    font_size: TextUnit::Sp(34.0),
+                                    font_family: Some(FontFamily::SansSerif),
+                                    font_weight: Some(FontWeight::BOLD),
                                     ..Default::default()
                                 },
+                                ..Default::default()
+                            },
+                        );
+                    },
+                );
+                TintControls(tint_amount, insets.top);
+                LiquidTabBar(
+                    Modifier::empty()
+                        .offset(21.0, height - (insets.bottom - 13.0).max(21.0) - 62.0)
+                        .width(width - 42.0),
+                    LiquidTabBarSpec::new((width - 50.0) / TITLES.len() as f32),
+                    selected.get(),
+                    move |index| selected.set(index),
+                    move |tabs| {
+                        let offsets = [
+                            (-1.0 / 3.0, 1.0 / 6.0),
+                            (-1.0 / 3.0, 5.0 / 6.0),
+                            (-1.0 / 3.0, 1.0),
+                            (1.0 / 6.0, 1.0),
+                        ];
+                        for (index, title) in content.titles.iter().enumerate() {
+                            let symbol = content.icons[index];
+                            let (painter, size) = symbols[symbol].clone();
+                            let (x, y) = offsets[symbol];
+                            tabs.push(
+                                LiquidTab::from_painter(painter, size, title)
+                                    .with_icon_offset(x, y),
                             );
-                        },
-                    );
-                    TintControls(tint_amount, insets.top);
-                    LiquidTabBar(
-                        Modifier::empty()
-                            .offset(21.0, height - (insets.bottom - 13.0).max(21.0) - 62.0)
-                            .width(width - 42.0),
-                        LiquidTabBarSpec::new((width - 50.0) / TITLES.len() as f32),
-                        selected.get(),
-                        move |index| selected.set(index),
-                        move |tabs| {
-                            let offsets = [
-                                (-1.0 / 3.0, 1.0 / 6.0),
-                                (-1.0 / 3.0, 5.0 / 6.0),
-                                (-1.0 / 3.0, 1.0),
-                                (1.0 / 6.0, 1.0),
-                            ];
-                            for (index, title) in content.titles.iter().enumerate() {
-                                let symbol = content.icons[index];
-                                let (painter, size) = symbols[symbol].clone();
-                                let (x, y) = offsets[symbol];
-                                tabs.push(
-                                    LiquidTab::from_painter(painter, size, title)
-                                        .with_icon_offset(x, y),
-                                );
-                            }
-                        },
-                    );
-                    if std::env::var("REFERENCE_RECORDING").as_deref() == Ok("1") {
-                        RecordingOverlay();
-                    }
-                },
-            );
+                        }
+                    },
+                );
+                if std::env::var("REFERENCE_RECORDING").as_deref() == Ok("1") {
+                    RecordingOverlay();
+                }
+            });
         },
     );
+}
+
+pub(crate) fn reference_background(checkerboard: bool, dark: bool) -> Modifier {
+    Modifier::empty().fill_max_size().draw_behind(move |scope| {
+        scope.draw_rect(Brush::solid(if dark { Color::BLACK } else { Color::WHITE }));
+        if checkerboard {
+            let palette = ReferenceContent::colors();
+            let cell = 8.0;
+            for row in 0..(scope.size().height / cell).ceil() as usize {
+                for column in 0..(scope.size().width / cell).ceil() as usize {
+                    let rect = Rect {
+                        x: column as f32 * cell,
+                        y: row as f32 * cell,
+                        width: cell,
+                        height: cell,
+                    };
+                    scope.draw_rect_at(rect, Brush::solid(palette[(column + row) % palette.len()]));
+                    if (row + column) % 2 == 0 {
+                        scope.draw_rect_at(rect, Brush::solid(Color::WHITE.with_alpha(0.55)));
+                    }
+                }
+            }
+        }
+    })
 }
 
 async fn record_pointer(scope: PointerInputScope) {

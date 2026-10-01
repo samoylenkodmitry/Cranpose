@@ -6,6 +6,35 @@ use crate::liquid_page_support;
 const LOGICAL: (u32, u32) = (393, 816);
 const DENSITY: f32 = 2.75;
 
+#[test]
+fn scrolling_liquid_cards_adds_no_blur_passes_over_the_existing_page_budget() {
+    let Some(mut page) = LiquidPage::open("Liquid Card Cache Test Device", LOGICAL, DENSITY) else {
+        return;
+    };
+    page.scroll_to(700.0);
+    for _ in 0..10 {
+        page.capture();
+    }
+    for step in 0..8 {
+        page.step_one_pixel();
+        let cached = page.capture();
+        let stats = page.stats();
+        assert!(
+            stats.blur_passes <= 4,
+            "scroll step {step} re-blurred an unchanged card: {stats:?}"
+        );
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+        let uncached = page.capture();
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+        assert!(
+            cached.pixels == uncached.pixels,
+            "scroll step {step} changed pixels when reusing a backdrop"
+        );
+        page.capture();
+    }
+    assert_eq!(page.device_errors(), 0);
+}
+
 fn report(label: &str, stats: &RenderStatsSnapshot) {
     eprintln!(
         "[inventory] {label}: passes={} pass_px={} blur_passes={} blur_px={} stages={} \
@@ -75,4 +104,13 @@ fn liquid_page_pass_inventory() {
         report(&format!("one pixel step {step}"), &page.stats());
     }
     assert_eq!(page.device_errors(), 0);
+    if std::env::var_os("CRANPOSE_GPU_PASS_TIMING").is_some() {
+        for step in 0..360 {
+            page.scroll_to(700.0 + (step % 16) as f32 / DENSITY);
+            page.capture();
+        }
+        let timing = page.shell.renderer().gpu_pass_timings();
+        assert!(timing.frames > 0, "the adapter must expose GPU timestamps");
+        assert_eq!(page.device_errors(), 0);
+    }
 }

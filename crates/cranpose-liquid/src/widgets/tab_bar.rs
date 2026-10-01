@@ -18,7 +18,7 @@ use crate::{
     },
     motion::LiquidMotion,
     theme::{LiquidColors, LiquidTypography, liquid_colors, liquid_typography},
-    widgets::content_scope::ScopeContent,
+    widgets::{content_scope::ScopeContent, glass_surface::surface_material},
 };
 
 /// Visual treatment for a tab icon.
@@ -225,43 +225,6 @@ fn tab_flight_lens_material(foreground: cranpose_ui_graphics::Color, activity: f
             8.0,
             7.0,
             0.0,
-        ))
-}
-
-fn tab_bar_surface_material(foreground: cranpose_ui_graphics::Color) -> Glass {
-    Glass::regular()
-        .face_lighting(false)
-        .key_fill(GlassKeyFill {
-            height_dp: 1.0,
-            curvature: 0.7,
-            angle_radians: std::f32::consts::FRAC_PI_4,
-            saturation: 1.5,
-            luma_gain: 0.1,
-            offset: 0.9,
-            scale_with_surface: false,
-        })
-        .face_response(GlassFaceResponse {
-            gain: 0.97,
-            start_dp: 1.0 / 3.0,
-            end_dp: 2.0 / 3.0,
-            illumination: 0.0,
-        })
-        .tint(Color::TRANSPARENT)
-        .blur_radius(6.0)
-        .surface_refraction(31.0)
-        .refraction_depth_dp(15.5)
-        .transmission_refraction(1.0)
-        .saturation(1.0)
-        .lift(0.0)
-        .contrast(1.0)
-        .highlight(1.0)
-        .adaptive_frost(foreground, 0.0)
-        .adaptive_tone(foreground)
-        .shadow_style(GlassShadow::new(
-            Color::BLACK.with_alpha(0.162),
-            32.0,
-            8.0,
-            1.5,
         ))
 }
 
@@ -888,8 +851,7 @@ fn LiquidTabBarLayout(
                             Box(
                                 Modifier::empty()
                                     .glass_effect(
-                                        tab_bar_surface_material(colors.label)
-                                            .tint_amount(tint_amount),
+                                        surface_material(colors.label).tint_amount(tint_amount),
                                     )
                                     .size(Size::new(
                                         geometry.width + BLOB_MARGIN * 2.0,

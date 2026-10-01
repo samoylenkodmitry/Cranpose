@@ -3,7 +3,9 @@ use super::*;
 #[test]
 fn toggle_geometry_matches_the_reference_proportions() {
     assert_eq!((TRACK_WIDTH, TRACK_HEIGHT), (63.0, 28.0));
-    assert_eq!((THUMB_WIDTH, THUMB_HEIGHT), (37.0, 25.0));
+    assert_eq!((THUMB_WIDTH, THUMB_HEIGHT), (37.0, 24.0));
+    assert_eq!(lens_ride_x(Some(0.0), 0.0), 2.0);
+    assert_eq!(lens_ride_x(Some(1.0), 0.0), 24.0);
     assert_eq!((LENS_WIDTH, LENS_HEIGHT), (54.0, 36.0));
     const { assert!(LENS_WIDTH > THUMB_WIDTH) };
     const { assert!(LENS_HEIGHT > TRACK_HEIGHT) };

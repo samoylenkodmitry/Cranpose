@@ -12,7 +12,7 @@ use cranpose_ui_graphics::{
 
 use crate::{
     capture_hash::capture_hasher,
-    geometry::{canonicalized_scaled_rect, snap_delta_for_anchor},
+    geometry::{anchored_device_rect, canonicalized_scaled_rect, snap_delta_for_anchor},
     render::hash_f32_for_cache,
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw},
 };
@@ -297,6 +297,42 @@ pub(crate) fn page_fill_color(
     let [r, g, b, a] = candidate.record.color;
     let [r, g, b, a] = [stored(r)?, stored(g)?, stored(b)?, stored(a)?].map(f64::from);
     covers.then_some((wgpu::Color { r, g, b, a }, op.z_index))
+}
+
+pub(crate) fn capture_solid_rect(
+    scene: &CompositorScene,
+    op: &DrawOp,
+    capture: Rect,
+    scale: f32,
+) -> Option<([f32; 4], Rect, Option<Rect>)> {
+    let candidate = candidate(scene, op)?;
+    let run = candidate.run;
+    if run.segments.end - run.segments.start != 1
+        || run
+            .tables()
+            .segments
+            .get(run.segments.start as usize)?
+            .count
+            != 1
+        || candidate.brush.is_some()
+        || !is_opaque(&candidate)
+    {
+        return None;
+    }
+    let [x, y, width, height] = candidate.record.rect;
+    let placement = &run.placement;
+    let logical = Rect {
+        x: x + placement.offset.x,
+        y: y + placement.offset.y,
+        width,
+        height,
+    };
+    let painted = anchored_device_rect(logical, placement.snap_anchor, scale).intersect(capture)?;
+    let clip = placement.clip.map(|clip| {
+        let device = anchored_device_rect(clip, placement.snap_anchor, scale);
+        device.intersect(capture).unwrap_or(device)
+    });
+    Some((candidate.record.color, painted, clip))
 }
 
 /// `value` rounded to the nearest half float, ties to even, as a shader's

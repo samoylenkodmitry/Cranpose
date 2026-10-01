@@ -7,7 +7,7 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui::{TextLayoutOptions, TextStyle, text::SpanStyle};
-use cranpose_ui_graphics::{Brush, Color, Rect};
+use cranpose_ui_graphics::{Brush, Color, Rect, RenderEffect};
 
 use crate::support;
 
@@ -18,26 +18,320 @@ fn card_layer(node_id: NodeId, y: f32) -> LayerNode {
         width: 96.0,
         height: 28.0,
     };
-    let primitive = PrimitiveEntry {
-        phase: PrimitivePhase::BeforeChildren,
-        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
-            primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
-                rect: local_bounds,
-                brush: Brush::solid(Color(0.15, 0.35, 0.85, 1.0)),
-                stroke: None,
-            },
-            clip: None,
-        })),
-    };
     let mut layer = support::contract_layer(
         Some(node_id),
         CachePolicy::Auto,
         local_bounds,
         ProjectiveTransform::translation(12.0, y),
-        vec![RenderNode::Primitive(primitive)],
+        vec![painted_rect(local_bounds, Color(0.15, 0.35, 0.85, 1.0))],
     );
     layer.graphics_layer.alpha = 0.85;
     layer
+}
+
+fn painted_rect(rect: Rect, color: Color) -> RenderNode {
+    RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
+            primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                rect,
+                brush: Brush::solid(color),
+                stroke: None,
+            },
+            clip: None,
+        })),
+    })
+}
+
+fn live_backdrop_graph(color: Color, policy: CachePolicy, nested: bool) -> RenderGraph {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 128.0,
+        height: 160.0,
+    };
+    let mut card = card_layer(80_001, 20.0);
+    card.cache_policy = policy;
+    card.graphics_layer.render_effect = Some(RenderEffect::blur(1.0));
+    if nested {
+        let mut glass = support::contract_layer(
+            Some(80_002),
+            CachePolicy::None,
+            card.local_bounds,
+            ProjectiveTransform::identity(),
+            Vec::new(),
+        );
+        glass.graphics_layer.backdrop_effect = Some(RenderEffect::blur(6.0));
+        card.children.push(RenderNode::Layer(Box::new(glass)));
+    } else {
+        card.graphics_layer.backdrop_effect = Some(RenderEffect::blur(6.0));
+    }
+    RenderGraph::new(support::contract_layer(
+        Some(80_000),
+        CachePolicy::None,
+        bounds,
+        ProjectiveTransform::identity(),
+        vec![
+            painted_rect(bounds, color),
+            RenderNode::Layer(Box::new(card)),
+        ],
+    ))
+}
+
+fn verify_live_backdrop_content_cache(nested: bool) {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        return;
+    };
+    let mut fresh = support::headless_renderer_beside_locked().expect("reference renderer");
+    for _ in 0..6 {
+        renderer.scene_mut().graph =
+            Some(live_backdrop_graph(Color::BLACK, CachePolicy::Auto, nested));
+        renderer.capture_frame(128, 160).expect("warm glass");
+    }
+    support::wait_for_background_compiler_idle();
+    for color in [Color::WHITE, Color(0.2, 0.7, 0.4, 1.0), Color::BLACK] {
+        renderer.scene_mut().graph = Some(live_backdrop_graph(color, CachePolicy::Auto, nested));
+        let frame = renderer.capture_frame(128, 160).expect("changed backdrop");
+        let stats = renderer.last_frame_stats().expect("frame stats");
+        if nested {
+            assert!(
+                stats.isolated_layer_renders > 0,
+                "nested glass must read the changing page"
+            );
+        } else {
+            assert_eq!(
+                stats.isolated_layer_renders, 0,
+                "unchanged foreground must be retained"
+            );
+        }
+        fresh.scene_mut().graph = Some(live_backdrop_graph(color, CachePolicy::None, nested));
+        let reference = fresh.capture_frame(128, 160).expect("uncached reference");
+        support::assert_same_bytes("live backdrop", 128, &reference.pixels, &frame.pixels);
+    }
+}
+
+#[test]
+fn a_live_backdrop_reuses_its_unchanged_foreground_without_freezing_the_page() {
+    verify_live_backdrop_content_cache(false);
+}
+
+#[test]
+fn a_nested_backdrop_keeps_its_container_content_live() {
+    verify_live_backdrop_content_cache(true);
+}
+
+fn large_backdrops(radius: f32) -> RenderGraph {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 520.0,
+        height: 700.0,
+    };
+    let mut children = vec![painted_rect(bounds, Color::WHITE)];
+    for (index, blur) in [radius, 6.0].into_iter().enumerate() {
+        let pane = Rect {
+            x: 10.0,
+            y: 10.0 + index as f32 * 350.0,
+            width: 500.0,
+            height: 300.0,
+        };
+        children.push(painted_rect(
+            Rect {
+                width: 250.0,
+                ..pane
+            },
+            Color::BLACK,
+        ));
+        let mut glass = support::contract_layer(
+            Some(90_001 + index),
+            CachePolicy::Auto,
+            pane,
+            ProjectiveTransform::identity(),
+            Vec::new(),
+        );
+        glass.graphics_layer.backdrop_effect = Some(RenderEffect::blur(blur));
+        let mut layer = glass;
+        if index == 0 {
+            layer = support::contract_layer(
+                Some(90_010),
+                CachePolicy::None,
+                pane,
+                ProjectiveTransform::identity(),
+                vec![RenderNode::Layer(Box::new(layer))],
+            );
+            layer.graphics_layer.alpha = 0.9;
+        }
+        children.push(RenderNode::Layer(Box::new(layer)));
+    }
+    RenderGraph::new(support::contract_layer(
+        Some(90_000),
+        CachePolicy::None,
+        bounds,
+        ProjectiveTransform::identity(),
+        children,
+    ))
+}
+
+#[test]
+fn a_changing_large_backdrop_does_not_starve_the_still_backdrop_after_it() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        return;
+    };
+    let mut fresh = support::headless_renderer_beside_locked().expect("reference renderer");
+    for step in 0..8 {
+        let radius = 4.0 + step as f32;
+        renderer.scene_mut().graph = Some(large_backdrops(radius));
+        let frame = renderer.capture_frame(520, 700).expect("glass frame");
+        let stats = renderer.last_frame_stats().expect("frame stats");
+        if step >= 2 {
+            assert_eq!(
+                stats.blur_passes, 1,
+                "only the changing first pane may blur: {stats:?}"
+            );
+        }
+        fresh.scene_mut().graph = Some(large_backdrops(radius));
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+        let reference = fresh.capture_frame(520, 700).expect("uncached frame");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+        support::assert_same_bytes("independent glass", 520, &reference.pixels, &frame.pixels);
+    }
+}
+
+fn scrolling_fill_graph(y: f32, mode: usize, phase: usize) -> RenderGraph {
+    use cranpose_render_common::{
+        graph::{DrawCommandId, DrawRunNode},
+        style_shared::DrawPlacement,
+    };
+    use cranpose_ui_graphics::DrawPrimitive;
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 200.0,
+        height: 240.0,
+    };
+    let color = if phase == 0 {
+        Color::WHITE
+    } else {
+        Color(0.2, 0.7, 0.4, 1.0)
+    };
+    let brush = match mode {
+        1 => Brush::linear_gradient(vec![color, Color::BLACK]),
+        2 => Brush::solid(color.with_alpha(0.6)),
+        _ => Brush::solid(color),
+    };
+    let run = |node_id, primitives| {
+        RenderNode::DrawRun(DrawRunNode::for_command(
+            PrimitivePhase::BeforeChildren,
+            Some(DrawCommandId {
+                node_id,
+                command_index: 0,
+                placement: DrawPlacement::Behind,
+            }),
+            primitives,
+        ))
+    };
+    let mut children = vec![run(
+        91_003,
+        vec![DrawPrimitive::Rect {
+            rect: bounds,
+            brush: Brush::solid(Color(0.1, 0.1, 0.2, 1.0)),
+            stroke: None,
+        }],
+    )];
+    let mut primitives = vec![DrawPrimitive::Rect {
+        rect: Rect {
+            x: 30.25,
+            width: 140.75,
+            ..bounds
+        },
+        brush,
+        stroke: None,
+    }];
+    if mode == 3 {
+        primitives.push(DrawPrimitive::Rect {
+            rect: Rect {
+                x: 50.0,
+                y: 85.0 + phase as f32,
+                width: 40.0,
+                height: 20.0,
+            },
+            brush: Brush::solid(Color::BLACK),
+            stroke: None,
+        });
+    }
+    let mut fill = support::contract_layer(
+        Some(91_002),
+        CachePolicy::None,
+        Rect {
+            x: 35.5,
+            y: if phase == 2 { 80.25 } else { 0.0 },
+            width: 130.25,
+            height: 240.0,
+        },
+        ProjectiveTransform::identity(),
+        vec![run(91_004, primitives)],
+    );
+    fill.clip_to_bounds = true;
+    children.push(RenderNode::Layer(Box::new(fill)));
+    let mut pane = support::contract_layer(
+        Some(91_001),
+        CachePolicy::Auto,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 160.0,
+            height: 70.0,
+        },
+        ProjectiveTransform::translation(10.0, y),
+        Vec::new(),
+    );
+    pane.graphics_layer.backdrop_effect = Some(RenderEffect::blur(6.0));
+    children.push(RenderNode::Layer(Box::new(pane)));
+    RenderGraph::new(support::contract_layer(
+        Some(91_000),
+        CachePolicy::None,
+        bounds,
+        ProjectiveTransform::identity(),
+        children,
+    ))
+}
+#[test]
+fn moving_glass_reuses_only_unchanged_clipped_solid_pixels() {
+    let mut renderer = support::headless_renderer().expect("renderer");
+    let mut fresh = support::headless_renderer_beside_locked().expect("reference renderer");
+    for scale in [1.0, 2.75] {
+        for mode in 0..4 {
+            for step in 0..12 {
+                let y = 60.0 + step as f32 / scale;
+                let phase = step / 4;
+                renderer.scene_mut().graph = Some(scrolling_fill_graph(y, mode, phase));
+                let width = (200.0 * scale) as u32;
+                let height = (240.0 * scale) as u32;
+                let actual = renderer
+                    .capture_frame_with_scale(width, height, scale)
+                    .expect("cached frame");
+                if mode == 0 && phase < 2 && step % 4 >= 2 {
+                    assert_eq!(
+                        renderer.last_frame_stats().expect("stats").blur_passes,
+                        0,
+                        "scale={scale} step={step}"
+                    );
+                }
+                fresh.scene_mut().graph = Some(scrolling_fill_graph(y, mode, phase));
+                cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+                let expected = fresh
+                    .capture_frame_with_scale(width, height, scale)
+                    .expect("uncached frame");
+                cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+                support::assert_same_bytes(
+                    &format!("scale={scale} mode={mode} step={step}"),
+                    width,
+                    &expected.pixels,
+                    &actual.pixels,
+                );
+            }
+        }
+    }
 }
 
 fn scroll_like_graph(offsets: &[f32]) -> RenderGraph {

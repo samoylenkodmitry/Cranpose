@@ -16,9 +16,11 @@ use crate::{
 };
 
 const TRACK_HEIGHT: f32 = 6.0;
-const THUMB_SIZE: f32 = 24.0;
+const THUMB_WIDTH: f32 = 37.0;
+const THUMB_HEIGHT: f32 = 24.0;
 const SLIDER_HEIGHT: f32 = 32.0;
-const LENS_SIZE: f32 = 34.0;
+const LENS_WIDTH: f32 = 58.0;
+const LENS_HEIGHT: f32 = 37.0;
 const LENS_PAD: f32 = 10.0;
 
 fn slider_deformation(pose: crate::dynamics::LiquidPose) -> crate::material::GlassDeformation {
@@ -54,8 +56,8 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
             let on_change = Rc::clone(&on_change);
             let active_pointer = Rc::clone(&active_pointer);
             BoxWithConstraints(Modifier::empty(), move |scope| {
-                let width = scope.constraints().max_width.max(THUMB_SIZE);
-                let usable = (width - THUMB_SIZE).max(1.0);
+                let width = scope.constraints().max_width.max(THUMB_WIDTH);
+                let usable = (width - THUMB_WIDTH).max(1.0);
                 let controlled_x = usable * value;
                 let lens_axis = crate::motion::remember_liquid_drag_axis(controlled_x);
                 lens_axis.settle_to(controlled_x, crate::motion::LiquidMotion::snappy());
@@ -76,7 +78,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                     .await_pointer_event_scope(|await_scope| async move {
                                         loop {
                                             let event = await_scope.await_pointer_event().await;
-                                            let fraction = ((event.position.x - THUMB_SIZE * 0.5)
+                                            let fraction = ((event.position.x - THUMB_WIDTH * 0.5)
                                                 / usable)
                                                 .clamp(0.0, 1.0);
                                             match event.kind {
@@ -132,7 +134,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                     });
 
                 Box(surface, BoxSpec::default(), move || {
-                    let track_fill = colors.fill;
+                    let track_fill = colors.label.with_alpha(25.0 / 255.0);
                     let track = Modifier::empty()
                         .size(Size::new(width, TRACK_HEIGHT))
                         .offset(0.0, (SLIDER_HEIGHT - TRACK_HEIGHT) * 0.5)
@@ -145,7 +147,7 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                     Box(track, BoxSpec::default(), || {});
 
                     let accent = colors.accent;
-                    let filled_width = (thumb_x + THUMB_SIZE * 0.5).max(TRACK_HEIGHT);
+                    let filled_width = (thumb_x + THUMB_WIDTH * 0.5).max(TRACK_HEIGHT);
                     let filled = Modifier::empty()
                         .size(Size::new(filled_width, TRACK_HEIGHT))
                         .offset(0.0, (SLIDER_HEIGHT - TRACK_HEIGHT) * 0.5)
@@ -159,19 +161,21 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
 
                     let lens_for_thumb = lens_progress;
                     let thumb = Modifier::empty()
-                        .size(Size::new(THUMB_SIZE, THUMB_SIZE))
-                        .offset(0.0, (SLIDER_HEIGHT - THUMB_SIZE) * 0.5)
+                        .size(Size::new(THUMB_WIDTH, THUMB_HEIGHT))
+                        .offset(0.0, (SLIDER_HEIGHT - THUMB_HEIGHT) * 0.5)
                         .graphics_layer(move || {
                             let lens = lens_for_thumb.get();
                             GraphicsLayer {
-                                translation_x: thumb_x,
+                                translation_x: thumb_x.round(),
                                 alpha: ((0.30 - lens) / 0.22).clamp(0.0, 1.0),
                                 ..Default::default()
                             }
                         })
                         .drop_shadow(
                             cranpose_ui_graphics::LayerShape::Rounded(
-                                cranpose_ui_graphics::RoundedCornerShape::uniform(THUMB_SIZE * 0.5),
+                                cranpose_ui_graphics::RoundedCornerShape::uniform(
+                                    THUMB_HEIGHT * 0.5,
+                                ),
                             ),
                             |scope| {
                                 scope.radius = 6.0;
@@ -182,37 +186,40 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                         .draw_behind(move |scope| {
                             scope.draw_round_rect(
                                 Brush::solid(Color::WHITE),
-                                CornerRadii::uniform(THUMB_SIZE * 0.5),
+                                CornerRadii::uniform(THUMB_HEIGHT * 0.5),
                             );
                         });
                     Box(thumb, BoxSpec::default(), || {});
 
-                    let node = LENS_SIZE + LENS_PAD * 2.0;
+                    let node_w = LENS_WIDTH + LENS_PAD * 2.0;
+                    let node_h = LENS_HEIGHT + LENS_PAD * 2.0;
                     let lens_for_layer = lens_progress;
                     let physics_axis = Rc::clone(&lens_axis);
                     let lens = Modifier::empty()
-                        .required_size(Size::new(node, node))
-                        .offset(0.0, (SLIDER_HEIGHT - node) * 0.5)
+                        .required_size(Size::new(node_w, node_h))
+                        .offset(0.0, (SLIDER_HEIGHT - node_h) * 0.5)
                         .graphics_layer(move || GraphicsLayer {
-                            translation_x: thumb_x + (THUMB_SIZE - node) * 0.5,
+                            translation_x: thumb_x + (THUMB_WIDTH - node_w) * 0.5,
                             alpha: (lens_for_layer.get() * 2.5).clamp(0.0, 1.0),
                             ..Default::default()
                         })
                         .glass_effect_with(
                             Glass::lens()
-                                .shape(LiquidShape::Circle)
-                                .tint(Color::WHITE.with_alpha(0.05))
-                                .highlight(0.52)
+                                .shape(LiquidShape::Capsule)
+                                .tint(Color::WHITE.with_alpha(0.07))
+                                .face_lighting(false)
+                                .highlight(0.15)
                                 .no_clip(),
                             move || {
                                 let grow = lens_for_layer.get().clamp(0.0, 1.2);
-                                let d = THUMB_SIZE + (LENS_SIZE - THUMB_SIZE) * grow;
+                                let w = THUMB_WIDTH + (LENS_WIDTH - THUMB_WIDTH) * grow;
+                                let h = THUMB_HEIGHT + (LENS_HEIGHT - THUMB_HEIGHT) * grow;
                                 let pose = physics_axis.liquid_pose();
                                 GlassDynamics {
                                     activity: Some(grow.clamp(0.0, 1.0)),
                                     morph: Some(GlassMorph {
-                                        node_size: (node, node),
-                                        primary: (node * 0.5, node * 0.5, d, d, -1.0),
+                                        node_size: (node_w, node_h),
+                                        primary: (node_w * 0.5, node_h * 0.5, w, h, -1.0),
                                         shapes: Vec::new(),
                                         glue: 0.0,
                                         wobble_amplitude: 0.0,

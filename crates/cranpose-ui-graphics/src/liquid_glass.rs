@@ -45,6 +45,11 @@ fn slot(uniforms: &[f32], index: usize) -> f32 {
 /// contract tests share.
 pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
     LiquidGlassSpecialization {
+        flag: "GLASS_FACE_TONE_OFF",
+        slots: &[GLASS_FACE_TONE_UNIFORM + 4],
+        inactive: |u| slot(u, GLASS_FACE_TONE_UNIFORM + 4) <= 0.5,
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_DIRECTIONAL_REFRACTION_OFF",
         slots: &[GLASS_REFRACTION_MODE_UNIFORM],
         inactive: |u| slot(u, GLASS_REFRACTION_MODE_UNIFORM) <= 0.5,
@@ -486,6 +491,10 @@ pub const GLASS_BACKDROP_BLUR_UNIFORM: usize = 172;
 /// Enables foreground insertion between the inner warp and chromatic pass. The inner
 /// warp applies the face's tone before content; the final pass disperses and lights it.
 pub const GLASS_FOREGROUND_CONTENT_UNIFORM: usize = 174;
+/// Resting edge sharpness: zero keeps the eight-dp fade, one uses pixel antialiasing.
+pub const GLASS_RESTING_EDGE_SHARPNESS_UNIFORM: usize = 175;
+/// Five fixed face-transfer slots: black, white, saturation, maximum luminance and presence.
+pub const GLASS_FACE_TONE_UNIFORM: usize = 176;
 
 /// Uniform slot selecting the rim style: 0 is the regular surface rim, 1
 /// the lens rim whose meniscus reflects, transmits with loss and carries

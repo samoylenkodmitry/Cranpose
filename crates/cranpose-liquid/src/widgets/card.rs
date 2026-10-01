@@ -10,7 +10,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{Brush, CornerRadii};
 
 use crate::{
-    material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape},
+    material::{LiquidModifierExt, LiquidShape},
     motion::LiquidMotion,
     theme::{liquid_colors, liquid_typography},
 };
@@ -41,14 +41,9 @@ pub fn Card(modifier: Modifier, content: impl FnMut() + 'static) {
 #[composable]
 pub fn LiquidCard(modifier: Modifier, content: impl FnMut() + 'static) {
     let colors = liquid_colors();
-    let surface_glass = colors.surface_glass;
-    let base = Modifier::empty().glass_effect_with(
-        Glass::regular().shape(LiquidShape::RoundedRect(CARD_RADIUS)),
-        move || GlassDynamics {
-            activity: Some(0.0),
-            resting_tint: Some(surface_glass),
-            ..Default::default()
-        },
+    let base = Modifier::empty().glass_effect(
+        super::glass_surface::card_surface_material(colors.label)
+            .shape(LiquidShape::RoundedRect(CARD_RADIUS)),
     );
     Box(modifier.then(base), BoxSpec::default(), content);
 }
@@ -131,12 +126,11 @@ pub fn LiquidListRow(
 
     let separator = spec.separator;
     let separator_color = colors.separator;
-    let on_click = Rc::new(RefCell::new(on_click));
     let base = Modifier::empty()
         .fill_max_width()
         .press_interaction_source(interaction)
         .clickable(move |_point| {
-            (on_click.borrow_mut())();
+            on_click();
         })
         .draw_behind(move |scope| {
             let size = scope.size();
@@ -145,9 +139,9 @@ pub fn LiquidListRow(
                 scope.draw_rect_at(
                     cranpose_ui_graphics::Rect {
                         x: 16.0,
-                        y: size.height - 0.5,
-                        width: (size.width - 16.0).max(0.0),
-                        height: 0.5,
+                        y: size.height - 1.0,
+                        width: (size.width - 32.0).max(0.0),
+                        height: 1.0,
                     },
                     Brush::solid(separator_color),
                 );

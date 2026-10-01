@@ -201,7 +201,7 @@ fn report(label: &str, stats: &cranpose::FpsStats, wall_ms: f32, pipelines: u64)
         stats.work_max_ms,
         stats.work_p95_ms,
         stats.work_stalled_50ms_frames,
-        stats.interval_count,
+        stats.frame_count,
         stats.recompositions,
         cranpose::pipelines_created_off_frame(),
     );

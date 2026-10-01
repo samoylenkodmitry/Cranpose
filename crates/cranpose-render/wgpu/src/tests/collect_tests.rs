@@ -425,7 +425,7 @@ fn an_animated_raster_scale_is_never_smaller_and_at_most_one_step_larger() {
 }
 
 #[test]
-fn layer_motion_steps_a_scale_only_while_it_changes_over_the_same_content() {
+fn layer_motion_keeps_the_raster_for_unchanged_content_across_small_scale_changes() {
     let mut motion = LayerMotion::default();
     assert_eq!(
         motion.raster_scale(Some(1), 0.9, 7, true),
@@ -433,14 +433,12 @@ fn layer_motion_steps_a_scale_only_while_it_changes_over_the_same_content() {
         "a layer seen for the first time rasterizes at its own scale"
     );
     motion.end_frame();
-    let stepped = motion.raster_scale(Some(1), 0.91, 7, true);
-    assert_eq!(stepped, animated_raster_scale(0.91));
-    assert!(stepped > 0.91);
+    assert_eq!(motion.raster_scale(Some(1), 0.91, 7, true), 0.9);
     motion.end_frame();
     assert_eq!(
         motion.raster_scale(Some(1), 0.91, 7, true),
-        0.91,
-        "a scale that holds for a frame rasterizes exactly again"
+        0.9,
+        "a repeated scale must not reposition the content on a different raster grid"
     );
     motion.end_frame();
     assert_eq!(
@@ -465,7 +463,7 @@ fn layer_motion_steps_a_scale_only_while_it_changes_over_the_same_content() {
 }
 
 #[test]
-fn a_scaling_layer_keeps_its_raster_while_it_covers_the_scale_within_an_octave() {
+fn a_scaling_layer_keeps_its_raster_within_the_resolution_range() {
     let mut motion = LayerMotion::default();
     let mut frame = |scale: f32| {
         let raster = motion.raster_scale(Some(1), scale, 7, true);
@@ -473,7 +471,7 @@ fn a_scaling_layer_keeps_its_raster_while_it_covers_the_scale_within_an_octave()
         raster
     };
     assert_eq!(frame(1.0), 1.0);
-    for scale in [0.95, 0.8, 0.6, 0.51, 0.7, 0.99] {
+    for scale in [0.95, 0.8, 0.6, 0.51, 0.7, 0.99, 1.04, 1.08, 1.08] {
         assert_eq!(frame(scale), 1.0, "{scale} draws from the raster at 1.0");
     }
     let shrunk = frame(0.45);
@@ -483,10 +481,10 @@ fn a_scaling_layer_keeps_its_raster_while_it_covers_the_scale_within_an_octave()
         "past an octave down the raster steps down"
     );
     assert_eq!(frame(0.3), shrunk);
-    let grown = frame(0.5);
+    let grown = frame(0.55);
     assert_eq!(
         grown,
-        animated_raster_scale(0.5),
+        animated_raster_scale(0.55),
         "a scale the raster no longer covers steps up"
     );
     assert!(grown > shrunk);
@@ -775,6 +773,41 @@ fn a_moved_layer_resolves_its_backdrop_beside_its_surface() {
     assert!(child.backdrop.is_some());
     assert!(child.rounded_clip.is_some());
     assert!(child.content.children.is_empty());
+}
+
+#[test]
+fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
+    let mut layer = glass_layer(ProjectiveTransform::translation(10.0, 20.0));
+    layer.graphics_layer.alpha = 1.0;
+    layer.graphics_layer.render_effect = Some(RenderEffect::blur(1.0));
+    let root = LayerNode {
+        local_bounds: rect(0.0, 0.0, 100.0, 100.0),
+        clip_to_bounds: true,
+        children: vec![RenderNode::Layer(Box::new(layer))],
+        ..Default::default()
+    };
+    let collected = collect_root(
+        &root,
+        &mut crate::pipeline::UiTextLayoutResolver,
+        &mut LayerMotion::default(),
+        SceneCapacityHint::default(),
+    );
+    let [backdrop] = collected.scene.backdrop_layers.as_slice() else {
+        panic!("the isolated layer's backdrop must be batched");
+    };
+    let [child] = collected.children.as_slice() else {
+        panic!("one foreground surface");
+    };
+    assert!(child.backdrop.is_none());
+    assert_eq!(
+        backdrop.reach, None,
+        "the attached path reads past the inherited clip"
+    );
+    assert_eq!(backdrop.clip, child.clip);
+    assert!(
+        backdrop.z_index < child.z_index,
+        "glass reads the page before its foreground"
+    );
 }
 
 /// The draw ops a root clipped to 100×100 collects around `child`.

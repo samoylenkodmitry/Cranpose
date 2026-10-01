@@ -19,8 +19,8 @@ use crate::{
 pub(crate) const TRACK_WIDTH: f32 = 63.0;
 pub(crate) const TRACK_HEIGHT: f32 = 28.0;
 const THUMB_WIDTH: f32 = 37.0;
-const THUMB_HEIGHT: f32 = 25.0;
-const THUMB_MARGIN: f32 = 1.5;
+const THUMB_HEIGHT: f32 = 24.0;
+const THUMB_MARGIN: f32 = 2.0;
 const LENS_WIDTH: f32 = 54.0;
 const LENS_HEIGHT: f32 = 36.0;
 const LENS_VERTICAL_OFFSET: f32 = 0.0;
@@ -89,32 +89,6 @@ fn lens_translation_x(thumb_x: f32, node_width: f32) -> f32 {
     thumb_x + (THUMB_WIDTH - node_width) * 0.5
 }
 
-fn track_well_brush(track: cranpose_ui_graphics::Color) -> Brush {
-    let scale = |c: cranpose_ui_graphics::Color, r: f32, g: f32, b: f32| {
-        cranpose_ui_graphics::Color::rgba(
-            (c.r() * r).min(1.0),
-            (c.g() * g).min(1.0),
-            (c.b() * b).min(1.0),
-            c.a(),
-        )
-    };
-    let cool_top = scale(track, 1.05, 1.07, 1.09);
-    let lip = scale(track, 1.08, 1.07, 1.04);
-    let seam = scale(track, 1.02, 1.02, 1.0);
-    Brush::vertical_gradient_stops(
-        vec![
-            (0.0, cool_top),
-            (0.09, track),
-            (0.86, track),
-            (0.945, lip),
-            (1.0, seam),
-        ],
-        0.0,
-        TRACK_HEIGHT,
-        cranpose_ui_graphics::TileMode::Clamp,
-    )
-}
-
 fn lens_press_travel(checked: bool) -> f32 {
     if checked { -1.0 } else { 1.0 }
 }
@@ -150,11 +124,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
         }
     };
     let animated_track = animateColorAsState(base_track, toggle_track_motion(), "toggle-track");
-    let track_color = if drag_progress.get().is_some() {
-        base_track
-    } else {
-        animated_track.get()
-    };
 
     let min_x = THUMB_MARGIN;
     let max_x = TRACK_WIDTH - THUMB_MARGIN - THUMB_WIDTH;
@@ -172,17 +141,13 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
     let thumb_x = animateFloatAsState(target_x, LiquidMotion::snappy(), "toggle-thumb-x");
     let lens_axis = crate::motion::remember_liquid_drag_axis(target_x);
     lens_axis.settle_to(target_x, LiquidMotion::snappy());
-    let lens_x = lens_axis.value();
-
-    let thumb_in_flight = (thumb_x.get() - target_x).abs() > 1.5;
-    let lens_target = if pressed.get() || thumb_in_flight {
-        1.0
-    } else {
-        0.0
-    };
+    let thumb_in_flight =
+        cranpose_core::derivedStateOf(move || (thumb_x.get() - target_x).abs() > 1.5).get();
+    let lens_active = pressed.get() || thumb_in_flight;
+    let lens_target = if lens_active { 1.0 } else { 0.0 };
     let lens_progress = animateFloatAsState(
         lens_target,
-        if pressed.get() || thumb_in_flight {
+        if lens_active {
             spring(0.9, 1400.0)
         } else {
             toggle_lens_release()
@@ -292,8 +257,13 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             }
         })
         .draw_behind(move |scope| {
+            let track_color = if drag_progress.get().is_some() {
+                base_track
+            } else {
+                animated_track.get()
+            };
             scope.draw_round_rect(
-                track_well_brush(track_color),
+                Brush::solid(track_color),
                 CornerRadii::uniform(TRACK_HEIGHT * 0.5),
             );
         });
@@ -339,11 +309,12 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             LENS_HEIGHT * deformation_headroom + crate::dynamics::BULGE_MAX + LENS_PAD * 2.0;
         let lens_for_layer = lens_progress;
         let physics_axis = std::rc::Rc::clone(&lens_axis);
+        let layer_axis = std::rc::Rc::clone(&lens_axis);
         let lens = Modifier::empty()
             .required_size(Size::new(node_w, node_h))
             .offset(0.0, (TRACK_HEIGHT - node_h) * 0.5 + LENS_VERTICAL_OFFSET)
             .graphics_layer(move || GraphicsLayer {
-                translation_x: lens_translation_x(lens_x, node_w),
+                translation_x: lens_translation_x(layer_axis.value(), node_w),
                 ..Default::default()
             })
             .glass_effect_with(toggle_lens_material(), move || {

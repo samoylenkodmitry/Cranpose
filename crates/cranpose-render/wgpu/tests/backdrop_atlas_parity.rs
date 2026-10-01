@@ -1272,7 +1272,7 @@ fn a_stage_spanning_two_atlases_allocates_only_the_atlas_its_misses_land_in() {
 }
 
 #[test]
-fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels() {
+fn independent_glasses_are_pinned_together_without_changing_pixels() {
     let Ok(mut renderer) = support::headless_renderer() else {
         return;
     };
@@ -1287,44 +1287,29 @@ fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels(
     };
     let (first, first_frame) = render(true);
     assert_eq!(first.layer_cache_misses, 9);
-    let mut admitted = 0;
-    let mut frames = 0;
-    let mut admitting = vec![first_frame];
-    let mut stats = first;
-    loop {
-        assert!(
-            stats.backdrop_admissions > 0,
-            "admissions stalled at frame {frames}"
-        );
-        assert!(
-            stats.backdrop_admissions <= 3,
-            "frame {frames} pinned {} glasses past the per-frame budget",
-            stats.backdrop_admissions
-        );
-        admitted += stats.backdrop_admissions;
-        frames += 1;
-        if admitted >= first.layer_cache_misses {
-            break;
-        }
-        assert!(frames < first.layer_cache_misses);
-        let (next, frame) = render(true);
-        admitting.push(frame);
-        stats = next;
-    }
-    assert!(frames >= 3);
+    assert_eq!(
+        first.backdrop_admissions, 9,
+        "pin every existing atlas on the first frame"
+    );
     let (settled, settled_frame) = render(true);
     assert_eq!(settled.layer_cache_misses, 0);
     assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
     let mut fresh = support::LockedRenderer::beside_locked().expect("second headless renderer");
     let reference =
         support::capture_graph(&mut fresh, independent_cached_glasses(false), 1104, 720);
-    for (index, frame) in admitting.iter().enumerate() {
-        assert_eq!(
-            support::max_channel_delta(&frame.pixels, &reference.pixels),
-            0,
-            "admitting frame {index} must be the bytes of the same scene drawn without caching"
-        );
-    }
+    assert_eq!(
+        first.copy_count,
+        fresh
+            .last_frame_stats()
+            .expect("reference stats")
+            .copy_count,
+        "pinning existing atlases must add no texture copies"
+    );
+    assert_eq!(
+        support::max_channel_delta(&first_frame.pixels, &reference.pixels),
+        0,
+        "the admitting frame must be the bytes of the same scene drawn without caching"
+    );
     assert_eq!(
         support::max_channel_delta(&settled_frame.pixels, &reference.pixels),
         0,

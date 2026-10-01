@@ -15,10 +15,13 @@ import plistlib
 import sys
 from pathlib import Path
 
-info = {
+with Path("apps/ios-demo/ios/CranposeDemo/Info.plist").open("rb") as source:
+    info = plistlib.load(source)
+info.update({
     "CFBundleIdentifier": "io.cranpose.liquid-cranpose",
     "CFBundleExecutable": "CranposeLiquidReference",
     "CFBundleName": "CranposeLiquidReference",
+    "CFBundleDisplayName": "Cranpose Liquid Reference",
     "CFBundlePackageType": "APPL",
     "CFBundleVersion": "1",
     "CFBundleShortVersionString": "1.0",
@@ -27,7 +30,7 @@ info = {
     "UILaunchScreen": {},
     "UIDeviceFamily": [1],
     "UISupportedInterfaceOrientations": ["UIInterfaceOrientationPortrait"],
-}
+})
 with (Path(sys.argv[1]) / "Info.plist").open("wb") as output:
     plistlib.dump(info, output)
 PY

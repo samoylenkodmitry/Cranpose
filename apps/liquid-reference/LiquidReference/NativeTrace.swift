@@ -77,6 +77,14 @@ final class NativeTrace: NSObject {
         link.add(to: .main, forMode: .common)
         link.isPaused = true
         displayLink = link
+        if ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak window] in
+                guard let self, let window else { return }
+                self.began = CACurrentMediaTime()
+                do { try self.recordContactFilters(in: window, elapsed: 0) }
+                catch { self.error = String(describing: error) }
+            }
+        }
     }
 
     func receive(_ touch: UITouch, phase: String) {
@@ -434,6 +442,12 @@ final class NativeTrace: NSObject {
     }
 
     private func sampleTabBar(in window: UIWindow) -> [LayerSample] {
+        if ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" {
+            let root = window.layer.presentation() ?? window.layer
+            var layers: [LayerSample] = []
+            sample(root, root: root, path: "Window", into: &layers)
+            return layers
+        }
         guard let bar = findTabBar(in: window) else { return [] }
         let visibleBar = bar.layer.presentation() ?? bar.layer
         var root = visibleBar
@@ -465,7 +479,15 @@ final class NativeTrace: NSObject {
         encoder.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "+Infinity", negativeInfinity: "-Infinity", nan: "NaN")
         let profile = ProcessInfo.processInfo.environment["REFERENCE_MATERIAL_PROFILE"].flatMap(Int.init)
         let tag = profile.map { "tint\($0)-" } ?? ""
-        let name = "native-contact-filters-\(tag)\(Int((contactFilterTime ?? elapsed) * 1000)).json"
+        let environment = ProcessInfo.processInfo.environment
+        let name: String
+        if let component = environment["REFERENCE_COMPONENT"], environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" {
+            let scheme = environment["REFERENCE_SCHEME"] ?? "light"
+            let backdrop = environment["REFERENCE_BACKDROP"] ?? "checkerboard"
+            name = "native-control-\(component)-\(scheme)-\(backdrop)-layers.json"
+        } else {
+            name = "native-contact-filters-\(tag)\(Int((contactFilterTime ?? elapsed) * 1000)).json"
+        }
         try encoder.encode(frame).write(to: URL.documentsDirectory.appending(path: name), options: .atomic)
     }
 

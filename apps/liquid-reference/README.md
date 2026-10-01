@@ -1,4 +1,4 @@
-# Native floating tab bar reference
+# Native Liquid component references
 
 `LiquidReference` is a SwiftUI app using the system `TabView`, with an iOS 26 deployment target. The running OS supplies its material, lighting and touch animations. `CranposeLiquidReference` renders the same four destinations with `LiquidTabBar`. Both have an 8-point rainbow checkerboard extending behind the bar.
 
@@ -31,6 +31,30 @@ Open `target/tab-comparison/index.html` for the browser inspector. `liquid-refer
 The Rust builder accepts `aarch64-apple-ios` for a device binary. Physical installation additionally needs signing and provisioning. Device UI automation requires USB and Settings → Developer → Enable UI Automation. Simulator recordings do not establish physical-display FPS, hardware input latency, or haptic parity.
 
 ## Interaction protocol
+
+### Control captures
+
+`REFERENCE_COMPONENT` selects `slider`, `toggle`, `segmented`, `button`, `prominent-button`, `chip`, `card`, `menu`, `icon-button`, `search`, `nav-bar`, or `list-row`. Both apps center controls in the safe area; the navigation header occupies the top of the screen. `REFERENCE_VALUE` sets the initial slider value, toggle state, or segment index; value `1` selects the grouped menu fixture. The reference binary registers the system font's normal, medium and semibold faces at optical size 17, including the normal face before automatic font loading.
+
+`NativeControlTests` and `CranposeControlTests` share geometry and interaction assertions. They capture 41 states across light/dark appearance, slider endpoints, selection, plain/grouped menus, navigation headers, search fields, list rows, icon buttons, and checkerboard surfaces. Menu tests wait for settled bounds and verify action order, centered placement and 42-point rows. Search tests verify the 44-point field and keyboard entry. Geometry assertions use a half-point tolerance; the image report applies no pixel tolerance.
+
+```sh
+just liquid-reference-test 'platform=iOS Simulator,id=YOUR_SIMULATOR_UDID' target/native-controls.xcresult NativeControlTests never
+just liquid-reference-test 'platform=iOS Simulator,id=YOUR_SIMULATOR_UDID' target/cranpose-controls.xcresult CranposeControlTests never
+xcrun xcresulttool export attachments --path target/native-controls.xcresult --output-path target/native-controls
+xcrun xcresulttool export attachments --path target/cranpose-controls.xcresult --output-path target/cranpose-controls
+just liquid-reference-controls-compare target/native-controls target/cranpose-controls target/control-comparison
+just test-liquid-reference-fixtures
+just test-liquid-motion
+```
+
+The final `never` argument disables Xcode's slow failure diagnostic collection while preserving test results and attachments. Omit it to collect diagnostics on failure. Keep the same simulator and viewport for both captures. `compare_controls.py` rejects different devices, incomplete case sets and duplicate screenshots or attachments marked as failures. Verify XCTest success separately: a capture can precede a later test failure. It preserves the original full screenshots and compares unmodified RGBA pixels in fixed regions: x 0–402 and y 317–587 points for controls, y 100–700 for menus, and y 60–250 for navigation headers. The report counts every unequal pixel and retains absolute differences; successful capture is not a claim of pixel parity. Its `--native-extra` and `--cranpose-extra` options combine disjoint captures without dropping states.
+
+`REFERENCE_BACKDROP=gray-0.5` supplies a flat control probe; values from zero to one cover the neutral response. `REFERENCE_CAPTURE_CONTROL_LAYERS=1` saves the native control's presentation layers and archived filters after settling. Inspect both backdrop filters and separate SDF effect archives: the native highlight includes a separate lighting layer. The fixed `GlassFaceTone` control profiles are empirical fits to these neutral probes. They do not identify Apple's complete optical pipeline.
+
+`test-liquid-motion` verifies tab-content anchoring, touch shader/recomposition budgets, toggle/segment animation work, and slider geometry. It measures work counters and changing frames, not physical-display FPS. The renderer's animated-layer tests require byte-identical pictures when an unchanged transform pauses and require repeated input frames to preserve the same raster.
+
+### Tab interaction capture
 
 The same XCTest implementation runs against both applications. Each recording includes both directions at both 250 and 1,000 points/second: touch down, hold for 800 ms, slide, stop, hold for 1.2 seconds, then release. The test waits another 800 ms after release. Native and Cranpose record the observed positions and input times; the synthesized path is retained separately. Additional tests cover taps, repeated selection, dragging outside, holding an unselected tab, and light/dark surfaces on both backgrounds. Destination and committed accessibility selection are asserted after release.
 

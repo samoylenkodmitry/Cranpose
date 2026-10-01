@@ -16,7 +16,7 @@ use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, Point, Rect
 use cranpose_ui_layout::VerticalAlignment;
 
 use crate::{
-    material::{Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape},
+    material::{GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape},
     theme::{liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
 };
@@ -138,8 +138,8 @@ struct LiquidMenuEntry {
 /// The scope a menu's rows are declared in.
 ///
 /// Each row carries its own action, so a caller never dispatches on a row
-/// index and never keeps a parallel list to look one up in. Rows appear in the
-/// order they are declared.
+/// index and never keeps a parallel list to look one up in. The first action
+/// stays closest to the trigger when the menu opens upward.
 pub struct LiquidMenuScope {
     entries: ScopeContent<LiquidMenuEntry>,
     section_next: Cell<bool>,
@@ -184,6 +184,99 @@ fn collect_entries(content: impl FnOnce(&LiquidMenuScope)) -> Vec<LiquidMenuEntr
         },
         content,
     )
+}
+
+fn menu_bounds(anchor: Rect, viewport: Size, width: f32, height: f32) -> (Rect, bool) {
+    let width = if viewport.width > 0.0 {
+        width.min((viewport.width - 32.0).max(1.0))
+    } else {
+        width
+    };
+    let left = anchor.x + (anchor.width - width) * 0.5;
+    let left = if viewport.width > 0.0 {
+        left.clamp(16.0, (viewport.width - width - 16.0).max(16.0))
+    } else {
+        left
+    };
+    let opens_up = viewport.height > 0.0 && anchor.y + anchor.height * 0.5 > viewport.height * 0.5;
+    let top = if opens_up {
+        anchor.y + anchor.height - height
+    } else {
+        anchor.y
+    };
+    (
+        Rect {
+            x: left,
+            y: top,
+            width,
+            height,
+        },
+        opens_up,
+    )
+}
+
+fn menu_items_changed(
+    last: &RefCell<Option<Rc<Vec<LiquidMenuEntry>>>>,
+    items: &Rc<Vec<LiquidMenuEntry>>,
+) -> bool {
+    let mut previous = last.borrow_mut();
+    let changed = previous.as_ref().is_some_and(|previous| {
+        !previous
+            .iter()
+            .map(|entry| &entry.item)
+            .eq(items.iter().map(|entry| &entry.item))
+    });
+    *previous = Some(Rc::clone(items));
+    changed
+}
+
+fn menu_display_rows(
+    items: &[LiquidMenuEntry],
+    opens_up: bool,
+) -> impl Iterator<Item = (usize, bool)> + '_ {
+    let mut cursor = if opens_up { items.len() } else { 0 };
+    std::iter::from_fn(move || {
+        let (start, end) = if opens_up {
+            if cursor == 0 {
+                return None;
+            }
+            let end = cursor;
+            let start = items[..end]
+                .iter()
+                .rposition(|entry| entry.item.header || entry.item.section_start)
+                .unwrap_or(0);
+            cursor = start;
+            (start, end)
+        } else {
+            if cursor == items.len() {
+                return None;
+            }
+            let start = cursor;
+            let end = items[start + 1..]
+                .iter()
+                .position(|entry| entry.item.header || entry.item.section_start)
+                .map_or(items.len(), |offset| start + 1 + offset);
+            cursor = end;
+            (start, end)
+        };
+        Some((start, end))
+    })
+    .enumerate()
+    .flat_map(move |(group, (start, end))| {
+        let header = items[start].item.header.then_some(start);
+        let body_start = start + usize::from(header.is_some());
+        let first = header.unwrap_or(if opens_up { end - 1 } else { start });
+        header
+            .into_iter()
+            .chain((body_start..end).map(move |index| {
+                if opens_up {
+                    end - 1 - (index - body_start)
+                } else {
+                    index
+                }
+            }))
+            .map(move |index| (index, group > 0 && index == first))
+    })
 }
 
 impl LiquidMenuAbsorbedSource {
@@ -247,10 +340,10 @@ const MENU_VERTICAL_REBOUND_END: f32 = 0.70;
 const MENU_SOURCE_HEIGHT_RATIO: f32 = 0.86;
 const MENU_SOURCE_TARGET_Y_PROGRESS: f32 = 0.0;
 const ANCHOR_OVERLAP: f32 = 0.0;
-const ROW_PADDING_X: f32 = 20.0;
-const ROW_PADDING_Y: f32 = 9.25;
+const ROW_PADDING_X: f32 = 28.0;
+const ROW_PADDING_Y: f32 = 9.0;
 const CHIP_INSET_X: f32 = 10.0;
-const MENU_CONTENT_INSET_Y: f32 = 9.5;
+const MENU_CONTENT_INSET_Y: f32 = 10.0;
 const CHECK_COLUMN: f32 = 24.0;
 const ICON_SIZE: f32 = 24.0;
 const ICON_GAP: f32 = 12.0;
@@ -398,7 +491,7 @@ impl LiquidMenuGesture {
         Rc::clone(&rects[index])
     }
 
-    fn item_at(&self, point: Point, items: &[LiquidMenuItem]) -> Option<usize> {
+    fn item_at(&self, point: Point, items: &[LiquidMenuEntry]) -> Option<usize> {
         self.inner
             .item_rects
             .borrow()
@@ -406,7 +499,8 @@ impl LiquidMenuGesture {
             .enumerate()
             .take(items.len())
             .find_map(|(index, rect)| {
-                (!items[index].header && rect.get().contains(point.x, point.y)).then_some(index)
+                (!items[index].item.header && rect.get().contains(point.x, point.y))
+                    .then_some(index)
             })
     }
 }
@@ -632,7 +726,8 @@ fn menu_morph_geometry(
     if expanded && phase.path >= MENU_SOURCE_SEPARATE_END {
         let descent = smoothstep(0.10, 0.90, phase.path);
         primary.center_y = source.center_y + (target.center_y - source.center_y) * descent;
-        primary.center_y += menu_vertical_rebound(phase.path);
+        primary.center_y +=
+            (target.center_y - source.center_y).signum() * menu_vertical_rebound(phase.path);
     }
     let blob_radius = primary.height * 0.5;
     let squareness = smoothstep(0.55, 0.88, phase.path);
@@ -865,20 +960,7 @@ pub fn LiquidMenuIconButton(
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, _, content_alpha) =
         crate::motion::liquid_press_scale(Modifier::empty(), interaction, 1.12);
-    let trigger_visual = cranpose_animation::animate_float_as_state_with_initial(
-        1.0,
-        if covered { 0.0 } else { 1.0 },
-        cranpose_animation::AnimationType::Tween(if covered {
-            cranpose_animation::AnimationSpec::tween(
-                MENU_TRIGGER_ABSORPTION_MS,
-                cranpose_animation::Easing::EaseOut,
-            )
-        } else {
-            cranpose_animation::AnimationSpec::tween(5, cranpose_animation::Easing::EaseOut)
-                .with_delay(MENU_TRIGGER_RESTORE_DELAY_MS)
-        }),
-        "menu-trigger-absorption",
-    );
+    let trigger_visual = menu_trigger_visibility(covered);
     let gate = remember(|| {
         let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
         Rc::new(RefCell::new(cranpose_animation::Animatable::new(
@@ -1084,9 +1166,10 @@ pub fn LiquidMenu(
     on_dismiss: impl Fn() + 'static,
     content: impl FnOnce(&LiquidMenuScope),
 ) {
-    let entries = Rc::new(collect_entries(content));
-    let items: Vec<LiquidMenuItem> = entries.iter().map(|entry| entry.item.clone()).collect();
-    let menu_width = spec.width;
+    let items = Rc::new(collect_entries(content));
+    let viewport = cranpose_ui::widgets::popup::local_popup_viewport()
+        .current()
+        .get();
     let visible = remember(|| mutableStateOf(false)).with(|s| *s);
     if expanded && !visible.get() {
         visible.set(true);
@@ -1096,6 +1179,7 @@ pub fn LiquidMenu(
     }
     let colors = liquid_colors();
     let typography = liquid_typography();
+    let entries = Rc::clone(&items);
     let on_item: Rc<dyn Fn(usize)> = Rc::new(move |index| {
         if let Some(action) = entries.get(index).and_then(|entry| entry.action.as_ref()) {
             action();
@@ -1116,8 +1200,8 @@ pub fn LiquidMenu(
     let dwell_row = remember(|| Rc::new(Cell::new(Option::<usize>::None))).with(Rc::clone);
     let dwell_fired = remember(|| Rc::new(Cell::new(Option::<usize>::None))).with(Rc::clone);
     {
-        let hover_accordion =
-            gesture_hover.filter(|index| items.get(*index).is_some_and(|item| item.keeps_open));
+        let hover_accordion = gesture_hover
+            .filter(|index| items.get(*index).is_some_and(|entry| entry.item.keeps_open));
         if hover_accordion != dwell_row.get() {
             dwell_row.set(hover_accordion);
             dwell_fired.set(None);
@@ -1148,7 +1232,7 @@ pub fn LiquidMenu(
         if handled_release.get() != sequence {
             handled_release.set(sequence);
             if let Some(index) = gesture.item_at(point, &items) {
-                let keeps_open = items.get(index).is_some_and(|item| item.keeps_open);
+                let keeps_open = items.get(index).is_some_and(|entry| entry.item.keeps_open);
                 let on_item = Rc::clone(&on_item);
                 let on_dismiss = Rc::clone(&on_dismiss);
                 SideEffect(move || commit_menu_row(index, keeps_open, &on_item, &on_dismiss));
@@ -1184,8 +1268,7 @@ pub fn LiquidMenu(
     }
 
     let anchor_zone = anchor.height * ANCHOR_OVERLAP;
-    let node_size =
-        remember(|| Rc::new(Cell::new(cranpose_ui_graphics::Size::ZERO))).with(Rc::clone);
+    let node_size = rememberMutableStateOf(|| cranpose_ui_graphics::Size::ZERO);
     let resize_anim = remember(|| {
         let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
         Rc::new(RefCell::new(cranpose_animation::Animatable::new(
@@ -1194,53 +1277,42 @@ pub fn LiquidMenu(
     })
     .with(Rc::clone);
     let resize_from_h = remember(|| Rc::new(Cell::new(0.0f32))).with(Rc::clone);
-    let items_signature: String = items
-        .iter()
-        .map(|item| {
-            format!(
-                "{}|{}|{}{}{}{}{};",
-                item.label,
-                item.subtitle.as_deref().unwrap_or(""),
-                item.checked as u8,
-                item.destructive as u8,
-                item.section_start as u8,
-                item.header as u8,
-                item.keeps_open as u8,
-            )
-        })
-        .collect();
-    let last_signature = remember(|| Rc::new(RefCell::new(String::new()))).with(Rc::clone);
-    if *last_signature.borrow() != items_signature {
-        let was_open = !last_signature.borrow().is_empty()
-            && expanded
-            && grow.get() > 0.5
-            && node_size.get().height > 1.0;
-        *last_signature.borrow_mut() = items_signature;
-        if was_open {
-            resize_from_h.set(node_size.get().height);
-            let mut anim = resize_anim.borrow_mut();
-            anim.snapTo(0.0);
-            anim.animateTo(1.0, cranpose_animation::spring(0.78, 170.0));
-        }
+    let changed = remember(|| RefCell::new(None::<Rc<Vec<LiquidMenuEntry>>>))
+        .with(|last| menu_items_changed(last, &items));
+    if changed && expanded && grow.get() > 0.5 && node_size.get().height > 1.0 {
+        resize_from_h.set(node_size.get().height);
+        let mut anim = resize_anim.borrow_mut();
+        anim.snapTo(0.0);
+        anim.animateTo(1.0, cranpose_animation::spring(0.78, 170.0));
     }
     let resize_state = resize_anim.borrow().state();
+    let menu_height = (node_size.get().height - MENU_SHADOW_PAD * 2.0).max(0.0);
+    let (bounds, opens_up) = menu_bounds(anchor, viewport, spec.width, menu_height);
+    let menu_width = bounds.width;
+    let menu_left = bounds.x;
+    let pivot_y = u8::from(opens_up) as f32;
+    let content_top_inset = if menu_display_rows(&items, opens_up)
+        .next()
+        .is_some_and(|(index, _)| items[index].item.header)
+    {
+        0.0
+    } else {
+        MENU_CONTENT_INSET_Y
+    };
+    let node_origin = Point::new(menu_left - MENU_SHADOW_PAD, bounds.y - MENU_SHADOW_PAD);
     let scrim_dismiss = Rc::clone(&on_dismiss);
     PopupDismissableWhen(
         expanded,
         anchor,
-        Point::new(
-            anchor.width - menu_width - MENU_SHADOW_PAD,
-            -MENU_SHADOW_PAD,
-        ),
+        Point::new(node_origin.x - anchor.x, node_origin.y - anchor.y),
         move || scrim_dismiss(),
         {
             let on_item = Rc::clone(&on_item);
             let on_dismiss = Rc::clone(&on_dismiss);
-            let node_size = Rc::clone(&node_size);
             move || {
                 let anchor_center = (
-                    menu_width - anchor.width * 0.5 + MENU_SHADOW_PAD,
-                    anchor.height * 0.5 + MENU_SHADOW_PAD,
+                    anchor.x + anchor.width * 0.5 - node_origin.x,
+                    anchor.y + anchor.height * 0.5 - node_origin.y,
                 );
                 let anchor_shape = MenuShape::capsule(
                     anchor_center.0,
@@ -1248,29 +1320,14 @@ pub fn LiquidMenu(
                     anchor.width,
                     anchor.height,
                 );
-                let node_origin = Point::new(
-                    anchor.x + anchor.width - menu_width - MENU_SHADOW_PAD,
-                    anchor.y - MENU_SHADOW_PAD,
-                );
                 let absorbed_shapes: Vec<MenuShape> = absorbed
                     .iter()
                     .filter_map(|source| MenuShape::from_window_rect(source.rect, node_origin))
                     .collect();
-                let morph_size = Rc::clone(&node_size);
-                let glass = Glass::regular()
+                let morph_size = node_size;
+                let glass = super::glass_surface::control_surface_material(colors.label)
                     .shape(LiquidShape::RoundedRect(MENU_RADIUS))
-                    .adaptive_frost(colors.label, 0.18)
-                    .blur_radius(30.0)
-                    .saturation(if colors.is_dark { 1.90 } else { 1.55 })
-                    .lift(if colors.is_dark { 0.10 } else { 0.58 })
-                    .highlight(0.14);
-                let glass = if colors.is_dark {
-                    glass
-                        .contrast(0.37)
-                        .tint(Color::from_rgba_u8(34, 10, 34, 146))
-                } else {
-                    glass
-                };
+                    .blur_radius(30.0);
                 let glass = glass
                     .shadow_style(GlassShadow::new(
                         Color::BLACK.with_alpha(if colors.is_dark { 0.60 } else { 0.11 }),
@@ -1292,7 +1349,7 @@ pub fn LiquidMenu(
                 let card = Modifier::empty()
                     .role(SemanticsWidgetRole::Menu)
                     .pane_title("Menu")
-                    .report_size(Rc::clone(&node_size))
+                    .report_size_state(node_size)
                     .glass_effect_with(glass, move || {
                         let glow_touch = glow_for_glass.get().map(|(x, y)| {
                             (x - glass_node_origin.x, y - glass_node_origin.y, 1.0f32)
@@ -1389,7 +1446,7 @@ pub fn LiquidMenu(
                     })
                     .width(menu_width + MENU_SHADOW_PAD * 2.0);
 
-                let has_checks = items.iter().any(|item| item.checked);
+                let has_checks = items.iter().any(|entry| entry.item.checked);
                 let hovered = remember(|| mutableStateOf(Option::<usize>::None)).with(|s| *s);
                 let hovered_row = hovered.get();
                 let glow_row = gesture_hover.or(hovered_row);
@@ -1440,7 +1497,7 @@ pub fn LiquidMenu(
                                     let content_translation_y = if expanded {
                                         menu_vertical_rebound(
                                             menu_geometry_phase(expanded, appear).path,
-                                        )
+                                        ) * (1.0 - 2.0 * pivot_y)
                                     } else {
                                         0.0
                                     };
@@ -1452,8 +1509,12 @@ pub fn LiquidMenu(
                                             scale_y: content_scale,
                                             transform_origin:
                                                 cranpose_ui_graphics::TransformOrigin {
-                                                    pivot_fraction_x: 1.0,
-                                                    pivot_fraction_y: 0.0,
+                                                    pivot_fraction_x: ((anchor.x
+                                                        + anchor.width * 0.5
+                                                        - menu_left)
+                                                        / menu_width)
+                                                        .clamp(0.0, 1.0),
+                                                    pivot_fraction_y: pivot_y,
                                                 },
                                             translation_y: content_translation_y,
                                             render_effect: (content_blur > 0.35)
@@ -1470,7 +1531,7 @@ pub fn LiquidMenu(
                                             Column(
                                                 Modifier::empty().fill_max_width().padding_each(
                                                     0.0,
-                                                    MENU_CONTENT_INSET_Y,
+                                                    content_top_inset,
                                                     0.0,
                                                     MENU_CONTENT_INSET_Y,
                                                 ),
@@ -1482,10 +1543,11 @@ pub fn LiquidMenu(
                                                     let on_dismiss = Rc::clone(&on_dismiss);
                                                     let gesture = gesture.clone();
                                                     move || {
-                                                        for (index, item) in
-                                                            items.iter().enumerate()
+                                                        for (index, starts_section) in
+                                                            menu_display_rows(&items, opens_up)
                                                         {
-                                                            if item.section_start && index > 0 {
+                                                            let item = &items[index].item;
+                                                            if starts_section {
                                                                 let separator =
                                                                     colors.separator.with_alpha(
                                                                         colors.separator.a() * 0.22,
@@ -1494,13 +1556,9 @@ pub fn LiquidMenu(
                                                         Modifier::empty()
                                                             .fill_max_width()
                                                             .padding_symmetric(ROW_PADDING_X, 0.0)
-                                                            .height(1.0)
+                                                            .height(11.0)
                                                             .draw_behind(move |scope| {
-                                                                scope.draw_rect(
-                                                                    cranpose_ui_graphics::Brush::solid(
-                                                                        separator,
-                                                                    ),
-                                                                );
+                                                                scope.draw_rect_at(Rect { x: 0.0, y: 5.0, width: scope.size().width, height: 1.0 / 3.0 }, Brush::solid(separator));
                                                             }),
                                                         BoxSpec::default(),
                                                         || {},
@@ -1520,8 +1578,8 @@ pub fn LiquidMenu(
                                                                 && items
                                                                     .get(index + 1)
                                                                     .is_some_and(|next| {
-                                                                        !next.keeps_open
-                                                                            && !next.header
+                                                                        !next.item.keeps_open
+                                                                            && !next.item.header
                                                                     });
                                                             menu_item_row(
                                                                 index,
@@ -1570,7 +1628,7 @@ pub fn LiquidDropdownMenu<A>(
     expanded: bool,
     spec: LiquidDropdownMenuSpec,
     on_dismiss: impl Fn() + 'static,
-    mut anchor_content: A,
+    anchor_content: A,
     content: impl Fn(&LiquidMenuScope) + 'static,
 ) where
     A: FnMut() + 'static,
@@ -1582,26 +1640,44 @@ pub fn LiquidDropdownMenu<A>(
         height: 0.0,
     });
     let gesture = rememberLiquidMenuGesture();
-    let on_dismiss = Rc::new(on_dismiss);
-    let content = Rc::new(content);
+    let trigger_visual = menu_trigger_visibility(expanded);
     Box(
-        modifier.report_window_rect_state(anchor),
+        modifier
+            .report_window_rect_state(anchor)
+            .graphics_layer(move || GraphicsLayer {
+                alpha: trigger_visual.get(),
+                ..Default::default()
+            }),
         BoxSpec::default(),
-        move || {
-            anchor_content();
-            let content = Rc::clone(&content);
-            let dismiss = Rc::clone(&on_dismiss);
-            LiquidMenu(
-                expanded,
-                anchor.get(),
-                spec.menu,
-                spec.absorbed.clone(),
-                gesture.clone(),
-                move || dismiss(),
-                move |scope| content(scope),
-            );
-        },
+        anchor_content,
     );
+    LiquidMenu(
+        expanded,
+        anchor.get(),
+        spec.menu,
+        spec.absorbed,
+        gesture,
+        on_dismiss,
+        content,
+    );
+}
+
+#[track_caller]
+fn menu_trigger_visibility(covered: bool) -> cranpose_core::State<f32> {
+    cranpose_animation::animate_float_as_state_with_initial(
+        1.0,
+        if covered { 0.0 } else { 1.0 },
+        cranpose_animation::AnimationType::Tween(if covered {
+            cranpose_animation::AnimationSpec::tween(
+                MENU_TRIGGER_ABSORPTION_MS,
+                cranpose_animation::Easing::EaseOut,
+            )
+        } else {
+            cranpose_animation::AnimationSpec::tween(5, cranpose_animation::Easing::EaseOut)
+                .with_delay(MENU_TRIGGER_RESTORE_DELAY_MS)
+        }),
+        "menu-trigger-absorption",
+    )
 }
 
 fn commit_menu_row(
@@ -1634,7 +1710,7 @@ fn menu_header_row(
     let indent = ROW_PADDING_X + if has_checks { CHECK_COLUMN } else { 0.0 };
     let row = Modifier::empty()
         .fill_max_width()
-        .padding_each(indent, 12.0, ROW_PADDING_X, 2.0);
+        .padding_each(indent, 12.0, ROW_PADDING_X, 11.0);
     Row(row, RowSpec::default(), move || {
         Text(label.clone(), Modifier::empty(), style.clone());
     });
@@ -1685,6 +1761,7 @@ fn menu_item_row(
     let keeps_open = item.keeps_open;
     let row = Modifier::empty()
         .fill_max_width()
+        .height_in(42.0, f32::INFINITY)
         .report_window_rect(rect_sink)
         .semantics_spec(menu_row_semantics(row_label, has_checks, checked))
         .focusable()

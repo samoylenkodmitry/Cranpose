@@ -52,6 +52,8 @@ pub enum GlassButtonStyle {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GlassButtonSpec {
     pub style: GlassButtonStyle,
+    /// Text button sizing; icon buttons use their explicit diameter.
+    pub size: GlassButtonSize,
     /// Overrides the material (advanced).
     pub glass: Option<Glass>,
     /// Overrides the label/icon color (defaults per style).
@@ -59,6 +61,43 @@ pub struct GlassButtonSpec {
     /// Optional inner color disc for icon buttons. The outer material remains
     /// clear glass; the disc colors only the icon's compact foreground core.
     pub icon_backplate: Option<Color>,
+}
+
+/// Native text button sizes, including their label style and content insets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GlassButtonSize {
+    /// Compact action with a 15 point label.
+    Small,
+    /// Standard action with a 17 point label.
+    #[default]
+    Regular,
+    /// Large action with a 17 point label.
+    Large,
+}
+
+impl GlassButtonSize {
+    fn minimum_height(self) -> f32 {
+        match self {
+            Self::Small => 28.0,
+            Self::Regular => 34.0,
+            Self::Large => 50.0,
+        }
+    }
+
+    fn padding(self) -> (f32, f32) {
+        match self {
+            Self::Small => (10.0, 5.0),
+            Self::Regular => (12.0, 7.0),
+            Self::Large => (20.0, 15.0),
+        }
+    }
+
+    fn label_style(self, typography: crate::theme::LiquidTypography) -> TextStyle {
+        match self {
+            Self::Small => typography.subheadline,
+            Self::Regular | Self::Large => typography.body,
+        }
+    }
 }
 
 impl GlassButtonSpec {
@@ -94,6 +133,12 @@ impl GlassButtonSpec {
 
     pub fn with_content_color(mut self, color: Color) -> Self {
         self.content_color = Some(color);
+        self
+    }
+
+    /// Sets the label style and padding used by a text button.
+    pub fn with_size(mut self, size: GlassButtonSize) -> Self {
+        self.size = size;
         self
     }
 
@@ -143,11 +188,18 @@ impl GlassButtonSpec {
             });
         }
         match self.style {
-            GlassButtonStyle::Glass => Some(Glass::regular().adaptive_frost(foreground, 0.65)),
+            GlassButtonStyle::Glass => {
+                Some(super::glass_surface::control_surface_material(colors.label))
+            }
             GlassButtonStyle::Prominent => Some(
-                Glass::regular()
-                    .tint(colors.accent.with_alpha(0.75))
-                    .adaptive_frost(foreground, 0.65),
+                super::glass_surface::control_surface_material(colors.label)
+                    .tint(colors.accent)
+                    .face_response(crate::material::GlassFaceResponse {
+                        gain: 1.0,
+                        start_dp: 0.0,
+                        end_dp: 0.0,
+                        illumination: 0.0,
+                    }),
             ),
             GlassButtonStyle::Plain | GlassButtonStyle::Destructive => None,
         }
@@ -373,14 +425,15 @@ pub fn GlassButton(
             });
     }
 
-    let on_click = Rc::new(RefCell::new(on_click));
+    let (horizontal_padding, vertical_padding) = spec.size.padding();
     let base = with_button_semantics(
         base.press_interaction_source(interaction)
             .clickable(move |_point| {
                 default_haptics().perform(HapticFeedback::ImpactLight);
-                (on_click.borrow_mut())();
+                on_click();
             })
-            .padding_symmetric(16.0, 10.0),
+            .height_in(spec.size.minimum_height(), f32::INFINITY)
+            .padding_symmetric(horizontal_padding, vertical_padding),
     );
 
     let content_layer = Modifier::empty().graphics_layer(move || GraphicsLayer {
@@ -410,15 +463,9 @@ pub fn GlassButton(
 /// Convenience text label styled for the enclosing button.
 #[composable]
 pub fn GlassButtonLabel(text: impl Into<String>, spec: GlassButtonSpec) {
-    let typography = liquid_typography();
+    let mut style = spec.size.label_style(liquid_typography());
     let color = spec.content_color(&liquid_colors());
-    let style = TextStyle {
-        span_style: cranpose_ui::text::SpanStyle {
-            color: Some(color),
-            ..typography.headline.span_style.clone()
-        },
-        ..typography.headline
-    };
+    style.span_style.color = Some(color);
     Text(text.into(), Modifier::empty(), style);
 }
 
@@ -495,12 +542,11 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
         });
     }
 
-    let on_click = Rc::new(RefCell::new(on_click));
     let base = base
         .press_interaction_source(interaction)
         .clickable(move |_point| {
             default_haptics().perform(HapticFeedback::ImpactLight);
-            (on_click.borrow_mut())();
+            on_click();
         })
         .size(Size::new(diameter, diameter));
 

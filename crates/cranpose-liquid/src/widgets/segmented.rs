@@ -18,12 +18,8 @@ use crate::{
     widgets::content_scope::ScopeContent,
 };
 
-const SEGMENT_HEIGHT: f32 = 41.0;
+const SEGMENT_HEIGHT: f32 = 32.0;
 const TRACK_PADDING: f32 = 2.0;
-const MARKER_WIDTH_FACTOR: f32 = 1.16;
-const MARKER_REST_ACTIVITY: f32 = 0.55;
-const MARKER_POKE_TOP: f32 = 1.5;
-const MARKER_POKE_BOTTOM: f32 = 0.5;
 const LENS_OVERFLOW: f32 = 8.0;
 const LENS_ELLIPSE_BLEND: f32 = 0.55;
 const LENS_WIDTH_LIFT_SCALE: f32 = 1.06;
@@ -65,11 +61,11 @@ fn segmented_lens_reading(
 
 fn segmented_lens_base_size(segment_width: f32, progress: f32) -> Size {
     let progress = progress.clamp(0.0, 1.2);
-    let rest_h = SEGMENT_HEIGHT + TRACK_PADDING * 2.0 + MARKER_POKE_TOP + MARKER_POKE_BOTTOM;
+    let rest_h = SEGMENT_HEIGHT - TRACK_PADDING * 2.0;
     let width_lift = 1.0 + (LENS_WIDTH_LIFT_SCALE - 1.0) * progress;
     let height_lift = 1.0 + (LENS_HEIGHT_LIFT_SCALE - 1.0) * progress;
     Size::new(
-        (segment_width * MARKER_WIDTH_FACTOR + 2.0 * progress) * width_lift,
+        (segment_width - TRACK_PADDING * 2.0 + 2.0 * progress) * width_lift,
         (rest_h + LENS_OVERFLOW * progress) * height_lift,
     )
 }
@@ -130,7 +126,7 @@ fn SegmentLabel(label: String, selected: bool) {
     let style = TextStyle {
         span_style: SpanStyle {
             color: Some(colors.label),
-            font_size: cranpose_ui::text::TextUnit::Sp(17.0),
+            font_size: cranpose_ui::text::TextUnit::Sp(13.0),
             font_weight: Some(if selected {
                 FontWeight::MEDIUM
             } else {
@@ -172,37 +168,30 @@ pub fn LiquidSegmentedControl(
 
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
 
-    let track_height = SEGMENT_HEIGHT + TRACK_PADDING * 2.0;
+    let track_height = SEGMENT_HEIGHT;
     let track_fill = if colors.is_dark {
-        colors.fill
+        Color::from_rgb_u8(28, 28, 31)
+    } else {
+        Color::from_rgb_u8(238, 238, 239)
+    };
+    let marker_fill = if colors.is_dark {
+        Color::from_rgb_u8(90, 90, 95)
     } else {
         Color::WHITE
     };
-    let track = if colors.is_dark {
-        Modifier::empty()
-    } else {
-        Modifier::empty().drop_shadow(
-            cranpose_ui_graphics::LayerShape::Rounded(
-                cranpose_ui_graphics::RoundedCornerShape::uniform(track_height * 0.5),
-            ),
-            |scope| {
-                scope.radius = 6.0;
-                scope.offset.y = 4.5;
-                scope.color = Color::BLACK.with_alpha(0.10);
-            },
-        )
-    };
-    let track = track.height(track_height).draw_behind(move |scope| {
-        scope.draw_round_rect(
-            Brush::solid(track_fill),
-            CornerRadii::uniform(track_height * 0.5),
-        );
-    });
+    let track = Modifier::empty()
+        .height(track_height)
+        .draw_behind(move |scope| {
+            scope.draw_round_rect(
+                Brush::solid(track_fill),
+                CornerRadii::uniform(track_height * 0.5),
+            );
+        });
 
     Box(modifier.then(track), BoxSpec::default(), move || {
         let segments = Rc::clone(&segments);
         let on_select = Rc::clone(&on_select);
-        BoxWithConstraints(Modifier::empty().padding(TRACK_PADDING), move |scope| {
+        BoxWithConstraints(Modifier::empty(), move |scope| {
             let segments = Rc::clone(&segments);
             let on_select = Rc::clone(&on_select);
             let total_width = scope.constraints().max_width.max(1.0);
@@ -240,35 +229,6 @@ pub fn LiquidSegmentedControl(
                 "segmented-lens",
             );
 
-            let semantic_selection = Rc::clone(&on_select);
-            Row(
-                Modifier::empty().selectable_group(),
-                RowSpec::default(),
-                move || {
-                    for (index, segment) in segments.iter().enumerate() {
-                        let is_selected = index == visual_index;
-                        let description = segment.description.clone();
-                        let on_select = Rc::clone(&semantic_selection);
-                        let cell = Modifier::empty()
-                            .size(Size::new(segment_width, SEGMENT_HEIGHT))
-                            .stable_semantics(super::selection::selection_semantics(
-                                description,
-                                SemanticsWidgetRole::RadioButton,
-                                index,
-                                selected,
-                                on_select,
-                            ))
-                            .focusable();
-                        let content = Rc::clone(&segment.content);
-                        Box(
-                            cell,
-                            BoxSpec::default().content_alignment(Alignment::CENTER),
-                            move || content(is_selected),
-                        );
-                    }
-                },
-            );
-
             let gesture = Modifier::empty()
                 .size(Size::new(total_width, SEGMENT_HEIGHT))
                 .pointer_input(selected, {
@@ -297,7 +257,6 @@ pub fn LiquidSegmentedControl(
                         )
                     }
                 });
-            Box(gesture, BoxSpec::default(), || {});
 
             let raised_size = segmented_lens_base_size(segment_width, 1.2);
             let deformation_headroom = segmented_strain(crate::dynamics::STRETCH_MAX)
@@ -324,6 +283,7 @@ pub fn LiquidSegmentedControl(
                 })
                 .glass_effect_with(
                     Glass::lens()
+                        .resting_edge_sharpness(1.0)
                         .shape(LiquidShape::Capsule)
                         .tint(Color::rgba(0.0, 0.0, 0.0, 0.08))
                         .shadow_style(GlassShadow::new(
@@ -346,10 +306,8 @@ pub fn LiquidSegmentedControl(
                         let base_size = segmented_lens_base_size(segment_width, grow);
                         let pose = physics_axis.liquid_pose();
                         GlassDynamics {
-                            activity: Some(
-                                MARKER_REST_ACTIVITY
-                                    + (1.0 - MARKER_REST_ACTIVITY) * grow.clamp(0.0, 1.0),
-                            ),
+                            activity: Some(grow.clamp(0.0, 1.0)),
+                            resting_tint: Some(marker_fill),
                             press_depth: Some(
                                 (0.12 + 0.30 * grow.clamp(0.0, 1.0) + 0.58 * pose.energy())
                                     .clamp(0.0, 1.0),
@@ -358,7 +316,7 @@ pub fn LiquidSegmentedControl(
                                 node_size: (node_w, node_h),
                                 primary: (
                                     node_w * 0.5,
-                                    node_h * 0.5 - (MARKER_POKE_TOP - MARKER_POKE_BOTTOM) * 0.5,
+                                    node_h * 0.5,
                                     base_size.width,
                                     base_size.height,
                                     -1.0,
@@ -369,7 +327,7 @@ pub fn LiquidSegmentedControl(
                                 wobble_phase: 0.0,
                                 bulge_amplitude: pose.bulge_amplitude.min(4.0),
                                 bulge_direction: pose.bulge_direction,
-                                ellipse_blend: LENS_ELLIPSE_BLEND,
+                                ellipse_blend: LENS_ELLIPSE_BLEND * grow.clamp(0.0, 1.0),
                                 capsule_smoothing_dp: 0.0,
                                 deformation: Some(
                                     crate::material::GlassDeformation::incompressible(
@@ -384,6 +342,35 @@ pub fn LiquidSegmentedControl(
                     },
                 );
             Box(lens, BoxSpec::default(), || {});
+            let semantic_selection = Rc::clone(&on_select);
+            Row(
+                Modifier::empty().selectable_group(),
+                RowSpec::default(),
+                move || {
+                    for (index, segment) in segments.iter().enumerate() {
+                        let is_selected = index == visual_index;
+                        let description = segment.description.clone();
+                        let on_select = Rc::clone(&semantic_selection);
+                        let cell = Modifier::empty()
+                            .size(Size::new(segment_width, SEGMENT_HEIGHT))
+                            .stable_semantics(super::selection::selection_semantics(
+                                description,
+                                SemanticsWidgetRole::RadioButton,
+                                index,
+                                selected,
+                                on_select,
+                            ))
+                            .focusable();
+                        let content = Rc::clone(&segment.content);
+                        Box(
+                            cell,
+                            BoxSpec::default().content_alignment(Alignment::CENTER),
+                            move || content(is_selected),
+                        );
+                    }
+                },
+            );
+            Box(gesture, BoxSpec::default(), || {});
         });
     });
 }

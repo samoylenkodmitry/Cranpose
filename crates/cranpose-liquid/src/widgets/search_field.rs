@@ -19,10 +19,10 @@ pub struct LiquidSearchFieldSpec {
     pub placeholder: String,
     /// Render on glass (floating) instead of the flat fill (inline in lists).
     pub on_glass: bool,
-    /// Material used by the floating variant.
-    pub glass: Glass,
+    /// Optional material override for the floating variant.
+    pub glass: Option<Glass>,
     /// Foreground override for the icon, input, and placeholder. `None` uses
-    /// the theme's primary/secondary search colors.
+    /// the theme's primary color and a subdued placeholder.
     pub foreground: Option<Color>,
 }
 
@@ -31,7 +31,7 @@ impl Default for LiquidSearchFieldSpec {
         Self {
             placeholder: "Search".to_string(),
             on_glass: true,
-            glass: Glass::regular(),
+            glass: None,
             foreground: None,
         }
     }
@@ -43,17 +43,20 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
     let colors = liquid_colors();
     let typography = liquid_typography();
     let foreground = spec.foreground.unwrap_or(colors.label);
-    let secondary_foreground = spec.foreground.unwrap_or(colors.secondary_label);
+    let placeholder_color = spec.foreground.unwrap_or_else(|| {
+        colors
+            .label
+            .with_alpha(if colors.is_dark { 0.35 } else { 0.40 })
+    });
 
     let base = if spec.on_glass {
-        let glass = spec
-            .foreground
-            .map(|color| {
-                spec.glass
-                    .clone()
-                    .adaptive_frost(color, spec.glass.adaptive_frost)
-            })
-            .unwrap_or_else(|| spec.glass.clone());
+        let mut glass = spec
+            .glass
+            .unwrap_or_else(|| super::glass_surface::control_surface_material(foreground));
+        if let Some(color) = spec.foreground {
+            let frost = glass.adaptive_frost;
+            glass = glass.adaptive_frost(color, frost);
+        }
         Modifier::empty().glass_effect(glass)
     } else {
         let fill = colors.fill;
@@ -77,7 +80,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
     };
     let placeholder_style = TextStyle {
         span_style: SpanStyle {
-            color: Some(secondary_foreground),
+            color: Some(placeholder_color),
             ..body.span_style.clone()
         },
         ..body
@@ -87,7 +90,8 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
         state,
         modifier
             .then(base)
-            .padding_symmetric(14.0, 0.0)
+            .height_in(44.0, f32::INFINITY)
+            .padding_symmetric(11.0, 0.0)
             .role(cranpose_ui::SemanticsWidgetRole::SearchField)
             .content_description(placeholder.clone()),
         BasicTextFieldOptions {
@@ -101,8 +105,8 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                 Modifier::empty().fill_max_width(),
                 RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
                 move || {
-                    crate::icons::Icon(crate::icons::SEARCH, None, 18.0, secondary_foreground);
-                    Box(Modifier::empty().width(8.0), BoxSpec::default(), || {});
+                    crate::icons::Icon(crate::icons::SEARCH, None, 24.0, foreground);
+                    Box(Modifier::empty().width(5.0), BoxSpec::default(), || {});
                     let placeholder = placeholder.clone();
                     let placeholder_style = placeholder_style.clone();
                     let inner = inner.clone();

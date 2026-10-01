@@ -19,10 +19,10 @@ use cranpose_ui_graphics::{
     GLASS_OPTICAL_PROJECTION_UNIFORM, GLASS_OPTICAL_ZOOM_ANCHOR_UNIFORM,
     GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM,
     GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
-    GLASS_REFRACTION_MODE_UNIFORM, GLASS_RESTING_TINT_UNIFORM, GLASS_TOUCH_RADIUS_UNIFORM,
-    GLASS_TRANSMISSION_REFRACTION_UNIFORM, GraphicsLayer, LIQUID_GLASS_WGSL, LayerShape, Rect,
-    RenderEffect, RoundedCornerShape, RuntimeShader, TileMode, liquid_glass_runtime_effect,
-    specialize_liquid_glass,
+    GLASS_REFRACTION_MODE_UNIFORM, GLASS_RESTING_EDGE_SHARPNESS_UNIFORM,
+    GLASS_RESTING_TINT_UNIFORM, GLASS_TOUCH_RADIUS_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM,
+    GraphicsLayer, LIQUID_GLASS_WGSL, LayerShape, Rect, RenderEffect, RoundedCornerShape,
+    RuntimeShader, TileMode, liquid_glass_runtime_effect, specialize_liquid_glass,
 };
 
 use crate::{appearance::GlassTintAmount, theme::LiquidColors};
@@ -123,13 +123,13 @@ impl GlassRefraction {
     fn shader_parameters(self) -> (f32, f32) {
         match self {
             Self::Radial => (0.0, 0.0),
-            Self::Surface { reach_dp } => (1.0, normalized_refraction_reach(reach_dp)),
-            Self::EdgeLens { reach_dp } => (2.0, normalized_refraction_reach(reach_dp)),
+            Self::Surface { reach_dp } => (1.0, finite_nonnegative(reach_dp)),
+            Self::EdgeLens { reach_dp } => (2.0, finite_nonnegative(reach_dp)),
         }
     }
 }
 
-fn normalized_refraction_reach(reach_dp: f32) -> f32 {
+fn finite_nonnegative(reach_dp: f32) -> f32 {
     if reach_dp.is_finite() {
         reach_dp.max(0.0)
     } else {
@@ -489,10 +489,44 @@ impl GlassFaceResponse {
     }
 }
 
+/// A fixed face transfer: saturate and clamp each input channel to zero–one,
+/// then apply `black + (white - black) * x - (1 - max_luminance) * x²`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlassFaceTone {
+    /// Black input's output, from zero to one.
+    pub black: f32,
+    /// White endpoint before quadratic highlight compression; greater than black.
+    pub white: f32,
+    /// Chroma gain before the transfer; finite and nonnegative.
+    pub saturation: f32,
+    /// Highlight compression endpoint, from zero to one. One disables compression.
+    pub max_luminance: f32,
+}
+
+impl GlassFaceTone {
+    fn uniforms(self) -> Option<[f32; 5]> {
+        let values = [
+            self.black,
+            self.white,
+            self.saturation,
+            self.max_luminance,
+            1.0,
+        ];
+        (values.iter().all(|value| value.is_finite())
+            && (0.0..=1.0).contains(&self.black)
+            && self.white > self.black
+            && self.saturation >= 0.0
+            && (0.0..=1.0).contains(&self.max_luminance))
+        .then_some(values)
+    }
+}
+
 /// Builder describing a glass material. Resolved against the theme at the
 /// composition site, then evaluated per frame for density and dynamics.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Glass {
+    /// Optional fixed face transfer, replacing adaptive tone, saturation, contrast and lift.
+    pub face_tone: Option<GlassFaceTone>,
     pub variant: GlassVariant,
     pub shape: LiquidShape,
     /// Tint over the refracted backdrop; defaults to the theme's glass tint.
@@ -575,6 +609,8 @@ pub struct Glass {
     /// Adapts the face transfer curve to the mean captured backdrop brightness.
     /// Foreground polarity selects the preferred light or dark treatment.
     pub adaptive_tone: bool,
+    /// Resting edge sharpness, from a soft eight-dp fade at zero to pixel antialiasing at one.
+    pub resting_edge_sharpness: f32,
 }
 
 impl Glass {
@@ -582,6 +618,7 @@ impl Glass {
     pub fn regular() -> Self {
         Self {
             variant: GlassVariant::Regular,
+            face_tone: None,
             shape: LiquidShape::Capsule,
             tint: None,
             tint_amount: None,
@@ -613,6 +650,7 @@ impl Glass {
             foreground: None,
             adaptive_frost: 0.65,
             adaptive_tone: false,
+            resting_edge_sharpness: 0.0,
         }
     }
 
@@ -628,6 +666,7 @@ impl Glass {
     pub fn lens() -> Self {
         Self {
             variant: GlassVariant::Lens,
+            face_tone: None,
             shape: LiquidShape::Capsule,
             tint: Some(Color::rgba(1.0, 1.0, 1.0, 0.07)),
             tint_amount: None,
@@ -659,12 +698,20 @@ impl Glass {
             foreground: None,
             adaptive_frost: 0.0,
             adaptive_tone: false,
+            resting_edge_sharpness: 0.0,
         }
     }
 
     /// Enables or disables diffuse face illumination without changing the specular rim.
     pub fn face_lighting(mut self, enabled: bool) -> Self {
         self.face_lighting = enabled;
+        self
+    }
+
+    /// Sets the resting edge sharpness from zero (eight-dp fade) to one (pixel antialiasing).
+    /// Out-of-range values are clamped; nonfinite values preserve the soft default.
+    pub fn resting_edge_sharpness(mut self, sharpness: f32) -> Self {
+        self.resting_edge_sharpness = sharpness;
         self
     }
 
@@ -728,7 +775,7 @@ impl Glass {
     /// Negative and nonfinite reach values become zero.
     pub fn surface_refraction(mut self, reach_dp: f32) -> Self {
         self.refraction = GlassRefraction::Surface {
-            reach_dp: normalized_refraction_reach(reach_dp),
+            reach_dp: finite_nonnegative(reach_dp),
         };
         self
     }
@@ -745,7 +792,7 @@ impl Glass {
     /// Its inward return uses the amplitude and depth ratios in [`GlassRefraction::EdgeLens`].
     pub fn edge_refraction(mut self, reach_dp: f32) -> Self {
         self.refraction = GlassRefraction::EdgeLens {
-            reach_dp: normalized_refraction_reach(reach_dp),
+            reach_dp: finite_nonnegative(reach_dp),
         };
         self
     }
@@ -826,8 +873,18 @@ impl Glass {
     /// The foreground chooses the preferred polarity, with dark treatment over black
     /// backgrounds and light treatment over white backgrounds.
     pub fn adaptive_tone(mut self, foreground: Color) -> Self {
+        self.face_tone = None;
         self.foreground = Some(foreground);
         self.adaptive_tone = true;
+        self.adaptive_frost = 0.0;
+        self
+    }
+
+    /// Uses a fixed face transfer without reading a mean-backdrop texture.
+    /// Invalid parameters disable the fixed transfer.
+    pub fn face_tone(mut self, tone: GlassFaceTone) -> Self {
+        self.face_tone = tone.uniforms().map(|_| tone);
+        self.adaptive_tone = false;
         self.adaptive_frost = 0.0;
         self
     }
@@ -939,6 +996,7 @@ impl Glass {
             )
         });
         ResolvedGlass {
+            face_tone: self.face_tone,
             shape: self.shape,
             tint: self.tint.unwrap_or(colors.glass_tint),
             tint_amount: self.tint_amount,
@@ -976,6 +1034,7 @@ impl Glass {
                 + 0.0722 * foreground.b(),
             adaptive_frost: self.adaptive_frost,
             adaptive_tone: self.adaptive_tone,
+            resting_edge_sharpness: finite_nonnegative(self.resting_edge_sharpness).min(1.0),
             rim_style: if self.variant == GlassVariant::Lens {
                 1.0
             } else {
@@ -997,6 +1056,8 @@ impl Default for Glass {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedGlass {
+    face_tone: Option<GlassFaceTone>,
+    resting_edge_sharpness: f32,
     pub shape: LiquidShape,
     pub tint: Color,
     tint_amount: Option<GlassTintAmount>,
@@ -1050,6 +1111,8 @@ impl ResolvedGlass {
         self.tint = colors.surface;
         self.tint_amount = None;
         self.backdrop_blur = None;
+        self.face_tone = None;
+        self.adaptive_tone = false;
         self.blur_radius_dp = 0.0;
         self.saturation = 1.0;
         self.refraction_depth = 0.0;
@@ -1222,6 +1285,10 @@ impl ResolvedGlass {
             self.blur_radii(density, activity, content_mask);
         shader.set_float(GLASS_BLUR_RADIUS_UNIFORM, wcksrd_blur_radius);
         shader.set_float(GLASS_ACTIVITY_UNIFORM, activity);
+        shader.set_float(
+            GLASS_RESTING_EDGE_SHARPNESS_UNIFORM,
+            self.resting_edge_sharpness,
+        );
         let resting_tint = dynamics.resting_tint.unwrap_or(Color::TRANSPARENT);
         shader.set_float4(
             GLASS_RESTING_TINT_UNIFORM,
@@ -1272,7 +1339,9 @@ impl ResolvedGlass {
             };
             morph.wobble_amplitude * 2.0 + morph.bulge_amplitude + shape_reach + glue_pad
         });
-        shader.set_input_padding(
+        shader.set_input_padding(if content_mask {
+            0.0
+        } else {
             (self.input_padding()
                 + if refraction_mode >= 1.5 {
                     refraction_reach * (26.5 / 9.0) + spectrum_reach
@@ -1281,8 +1350,8 @@ impl ResolvedGlass {
                 }
                 + morph_pad
                 + wcksrd_blur_radius / density)
-                * projection.0.max(projection.1).max(1.0),
-        );
+                * projection.0.max(projection.1).max(1.0)
+        });
         if let Some(morph) = dynamics.morph.as_ref() {
             let shadow_reach = if dynamic_shadow {
                 self.shadow_radius + self.shadow_offset_y.abs() + self.shadow_spread.max(0.0)
@@ -1327,6 +1396,11 @@ impl ResolvedGlass {
     }
 
     fn set_backdrop_uniforms(&self, shader: &mut RuntimeShader, density: f32, content_mask: bool) {
+        if let Some(values) = self.face_tone.and_then(GlassFaceTone::uniforms) {
+            for (index, value) in values.into_iter().enumerate() {
+                shader.set_float(cranpose_ui_graphics::GLASS_FACE_TONE_UNIFORM + index, value);
+            }
+        }
         if let Some(amount) = self.tint_amount {
             shader.set_float(
                 cranpose_ui_graphics::GLASS_PANE_BLEND_UNIFORM,

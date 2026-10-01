@@ -42,6 +42,7 @@ mod in_place_layers;
 mod initial_present_contract;
 mod layer_effect_cache;
 mod line_coverage;
+mod liquid_control_tone;
 mod liquid_modifier_order;
 mod nested_composite_order;
 mod nested_rotated_relayout;

@@ -19,27 +19,33 @@ pub(crate) fn main() -> anyhow::Result<()> {
             robot_exit::arm_timeout(90);
             robot_shot::settle(&robot, 700);
             robot.touch_down(172.417, 904.0).expect("hold Browse");
-            let mut anchors = Vec::new();
+            let mut anchors = Vec::with_capacity(43);
             for (index, position) in [158.0, 187.0, 158.0].into_iter().enumerate() {
                 robot.touch_move(position, 904.0).expect("move held lens");
                 robot_shot::settle(&robot, 900);
-                let shot = robot.screenshot().expect("capture anchored content");
-                robot_shot::save_checked(&output.join(format!("anchor-{index}.png")), &shot)
-                    .expect("save pixels");
-                let browse = ink_center(&shot, 172.417, true);
-                let neighbors =
-                    (ink_center(&shot, 77.25, false) + ink_center(&shot, 267.583, false)) * 0.5;
-                anchors.push(browse - neighbors);
+                anchors.push(capture_anchor(&robot, &output, index));
+            }
+            for step in 0..40 {
+                let progress = if step < 20 { step + 1 } else { 39 - step } as f32 / 20.0;
+                let position = 158.0 + 29.0 * progress;
+                robot.touch_move(position, 904.0).expect("sweep held lens");
+                robot.pump_frames(1).expect("draw moving lens");
+                anchors.push(capture_anchor(&robot, &output, step + 3));
             }
             robot.touch_up(158.0, 904.0).expect("release");
-            let drift = anchors.iter().copied().fold(f32::NEG_INFINITY, f32::max)
-                - anchors.iter().copied().fold(f32::INFINITY, f32::min);
-            println!("Browse anchor offsets {anchors:?}; drift {drift} pt");
-            if drift > 0.5 {
-                robot_exit::fail(
-                    &robot,
-                    "the lens translated the icon relative to neighboring tab anchors",
+            for (axis, message) in [
+                "the lens translated the icon relative to neighboring tab anchors",
+                "the moving lens shifted the caption relative to its icon",
+            ].into_iter().enumerate() {
+                let (min, max) = anchors.iter().map(|anchor| anchor[axis]).fold(
+                    (f32::INFINITY, f32::NEG_INFINITY),
+                    |(min, max), value| (min.min(value), max.max(value)),
                 );
+                let drift = max - min;
+                println!("Browse anchor axis {axis}: {min}..{max}; drift {drift} pt");
+                if drift > 0.5 {
+                    robot_exit::fail(&robot, message);
+                }
             }
             robot.exit().expect("exit");
         })
@@ -47,27 +53,39 @@ pub(crate) fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn ink_center(shot: &RobotScreenshot, center: f32, accent: bool) -> f32 {
+fn capture_anchor(robot: &cranpose::Robot, output: &std::path::Path, index: usize) -> [f32; 2] {
+    let shot = robot.screenshot().expect("capture anchored content");
+    robot_shot::save_checked(&output.join(format!("anchor-{index}.png")), &shot)
+        .expect("save pixels");
+    let browse = ink_center(&shot, 172.417, true, false);
+    let caption = ink_center(&shot, 172.417, true, true);
+    let neighbors =
+        (ink_center(&shot, 77.25, false, false).0 + ink_center(&shot, 267.583, false, false).0) * 0.5;
+    [browse.0 - neighbors, caption.1 - browse.1]
+}
+
+fn ink_center(shot: &RobotScreenshot, center: f32, accent: bool, caption: bool) -> (f32, f32) {
     let scale = shot.width as f32 / shot.logical_width;
-    let mut sum = 0.0;
-    let mut count = 0;
-    for y in (884.0 * scale) as u32..(910.0 * scale) as u32 {
-        for x in ((center - 24.0) * scale) as u32..((center + 24.0) * scale) as u32 {
+    let mut sum = (0.0, 0.0);
+    let mut weight = 0.0;
+    let (top, bottom, radius) = if caption { (912.0, 932.0, 40.0) } else { (884.0, 910.0, 24.0) };
+    for y in (top * scale) as u32..(bottom * scale) as u32 {
+        for x in ((center - radius) * scale) as u32..((center + radius) * scale) as u32 {
             let pixel = &shot.pixels[((y * shot.width + x) * 4) as usize..];
-            let matches = if accent {
-                pixel[0] < 10 && (126..=146).contains(&pixel[1]) && pixel[2] > 245
+            let coverage = if accent {
+                pixel[2].saturating_sub(pixel[0])
             } else {
-                pixel[0] < 40 && pixel[1] < 40 && pixel[2] < 40
+                255 - pixel[0].max(pixel[1]).max(pixel[2])
             };
-            if matches {
-                sum += (x as f32 + 0.5) / scale;
-                count += 1;
-            }
+            let coverage = f32::from(coverage.saturating_sub(77)) / 178.0;
+            sum.0 += (x as f32 + 0.5) / scale * coverage;
+            sum.1 += (y as f32 + 0.5) / scale * coverage;
+            weight += coverage;
         }
     }
     assert!(
-        count > 30,
-        "expected visible icon at {center}, found {count} pixels"
+        weight > 30.0,
+        "expected visible content at {center}, found {weight} covered pixels"
     );
-    sum / count as f32
+    (sum.0 / weight, sum.1 / weight)
 }

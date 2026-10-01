@@ -620,7 +620,7 @@ fn collect_modifier_slices_into(
     // own) or, past the last one, the node's content.
     let mut layout_ordinal = 0_usize;
 
-    for node_ref in chain.head_to_tail() {
+    for (modifier_index, node_ref) in chain.head_to_tail().enumerate() {
         let node_caps = node_ref.kind_set();
 
         node_ref.with_node(|node| {
@@ -643,6 +643,7 @@ fn collect_modifier_slices_into(
                 let draw = DrawSite {
                     coordinator: CoordinatorRect::new(geometry, layout_ordinal, padding),
                     displaceable: has_layout,
+                    modifier_index,
                 };
                 collect_draw_node(node, &draw, slices, &mut backgrounds);
             }
@@ -708,6 +709,7 @@ fn collect_modifier_slices_into(
 struct DrawSite {
     coordinator: CoordinatorRect,
     displaceable: bool,
+    modifier_index: usize,
 }
 
 /// The chain's backgrounds as the walk finds them. Each draws at its place in
@@ -828,8 +830,7 @@ fn collect_draw_node(
     if let Some(commands) = any.downcast_ref::<DrawCommandNode>() {
         slices.draw_commands.extend(
             commands
-                .observed_commands()
-                .into_iter()
+                .observed_commands(site.modifier_index)
                 .map(|command| placed_draw_command(command, site)),
         );
     }
@@ -840,7 +841,10 @@ fn collect_draw_node(
 
     if let Some(layer_node) = any.downcast_ref::<GraphicsLayerNode>() {
         slices.mark_layer_draw_boundary();
-        slices.push_graphics_layer(layer_node.layer_snapshot(), layer_node.layer_resolver());
+        slices.push_graphics_layer(
+            layer_node.layer_snapshot(),
+            layer_node.layer_resolver(site.modifier_index),
+        );
         slices.enter_layer(site);
     }
 

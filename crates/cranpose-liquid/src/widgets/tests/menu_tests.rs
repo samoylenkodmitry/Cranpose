@@ -37,7 +37,7 @@ fn dropdown_spec_builders_preserve_menu_configuration() {
 
 #[test]
 fn menu_rows_use_the_reference_leading_grid_and_vertical_rhythm() {
-    assert_eq!(ROW_PADDING_X, 20.0);
+    assert_eq!(ROW_PADDING_X, 28.0);
     assert_eq!(CHECK_COLUMN, 24.0);
     assert_eq!(ICON_SIZE, 24.0);
     assert_eq!(ICON_GAP, 12.0);
@@ -45,11 +45,11 @@ fn menu_rows_use_the_reference_leading_grid_and_vertical_rhythm() {
     let check_center = ROW_PADDING_X + 8.0;
     let icon_center = ROW_PADDING_X + CHECK_COLUMN + ICON_SIZE * 0.5;
     let label_start = ROW_PADDING_X + CHECK_COLUMN + ICON_SIZE + ICON_GAP;
-    assert_eq!((check_center, icon_center, label_start), (28.0, 56.0, 80.0));
+    assert_eq!((check_center, icon_center, label_start), (36.0, 64.0, 88.0));
 
     let row_height = ICON_SIZE + ROW_PADDING_Y * 2.0;
     assert!((42.0..=43.0).contains(&row_height));
-    assert_eq!(MENU_CONTENT_INSET_Y, 9.5);
+    assert_eq!(MENU_CONTENT_INSET_Y, 10.0);
     let two_row_panel_height = row_height * 2.0 + MENU_CONTENT_INSET_Y * 2.0;
     assert!((103.5..=104.5).contains(&two_row_panel_height));
 }
@@ -322,7 +322,10 @@ fn claimed_menu_gesture_streams_one_release_to_an_interactive_row() {
     let _runtime =
         cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
     let gesture = LiquidMenuGesture::new();
-    let items = vec![LiquidMenuItem::header("Show"), LiquidMenuItem::new("Grid")];
+    let items = collect_entries(|scope| {
+        scope.header("Show");
+        scope.item(LiquidMenuItem::new("Grid"), || {});
+    });
     gesture.item_rect(0).set(Rect {
         x: 10.0,
         y: 20.0,

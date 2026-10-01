@@ -44,7 +44,7 @@ fn feed_button_spec() -> GlassButtonSpec {
 
 fn feed_search_spec() -> LiquidSearchFieldSpec {
     LiquidSearchFieldSpec {
-        glass: feed_glass(),
+        glass: Some(feed_glass()),
         foreground: Some(Color::WHITE),
         ..Default::default()
     }

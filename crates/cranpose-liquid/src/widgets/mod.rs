@@ -18,8 +18,8 @@ mod toggle;
 mod vibrancy;
 
 pub use button::{
-    GlassButton, GlassButtonLabel, GlassButtonSpec, GlassButtonStyle, GlassIconButton,
-    GlassIconButtonGroup, GlassIconButtonGroupItem, GlassIconButtonGroupScope,
+    GlassButton, GlassButtonLabel, GlassButtonSize, GlassButtonSpec, GlassButtonStyle,
+    GlassIconButton, GlassIconButtonGroup, GlassIconButtonGroupItem, GlassIconButtonGroupScope,
     GlassIconButtonGroupSpec,
 };
 pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection, Surface};

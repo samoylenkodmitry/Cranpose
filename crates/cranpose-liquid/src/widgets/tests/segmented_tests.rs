@@ -14,8 +14,8 @@ fn pointer_position_is_the_clamped_lens_center() {
 fn raised_lens_lifts_in_depth_without_becoming_a_wide_worm() {
     let resting = segmented_lens_base_size(120.0, 0.0);
     let raised = segmented_lens_base_size(120.0, 1.0);
-    assert_eq!(resting.width, 120.0 * MARKER_WIDTH_FACTOR);
-    assert!(resting.height > SEGMENT_HEIGHT + TRACK_PADDING * 2.0);
+    assert_eq!(resting.width, 116.0);
+    assert_eq!(resting.height, 28.0);
     assert!(raised.width < resting.width * 1.10);
     assert!(raised.height > resting.height * 1.20);
     assert!(segmented_strain(crate::dynamics::STRETCH_MAX) < 1.20);

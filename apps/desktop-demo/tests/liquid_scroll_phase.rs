@@ -52,8 +52,29 @@ fn rows(frame: &[u8], first_row: u32, row_count: u32) -> &[u8] {
     &frame[start..start + row_count as usize * stride]
 }
 
+fn save_drift_frames(previous: &[u8], current: &[u8]) {
+    let directory = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("target"))
+        .join("liquid-scroll-phase");
+    std::fs::create_dir_all(&directory).expect("create scroll evidence directory");
+    for (name, pixels) in [("previous.png", previous), ("current.png", current)] {
+        image::save_buffer(
+            directory.join(name),
+            pixels,
+            physical(LOGICAL.0),
+            physical(LOGICAL.1),
+            image::ColorType::Rgba8,
+        )
+        .expect("save scroll drift evidence");
+    }
+    eprintln!("scroll drift pictures: {}", directory.display());
+}
+
 #[test]
 fn the_liquid_page_at_the_bottom_bar_stays_exact_across_one_physical_pixel_scrolls() {
+    #[cfg(feature = "logging")]
+    let _ = env_logger::try_init();
     let Some(mut page) = LiquidPage::open("Liquid Scroll Phase Test Device", LOGICAL, DENSITY)
     else {
         eprintln!("skipping liquid scroll phase assertions: no headless GPU");
@@ -85,6 +106,9 @@ fn the_liquid_page_at_the_bottom_bar_stays_exact_across_one_physical_pixel_scrol
         if drift.worst_channel_delta > MAX_CHANNEL_DELTA
             || drift.differing_pixels > MAX_DIFFERING_PIXELS
         {
+            if failures.is_empty() {
+                save_drift_frames(&previous, &current);
+            }
             failures.push(format!(
                 "step {step}: differing={} worst_channel_delta={}",
                 drift.differing_pixels, drift.worst_channel_delta

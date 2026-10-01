@@ -60,11 +60,19 @@ pub(crate) struct DeviceRect {
 
 impl DeviceRect {
     fn from_logical(rect: Rect, scale: f32) -> Self {
+        let pixel = |value: f32| {
+            let whole = value.round();
+            if (value - whole).abs() <= value.abs().max(1.0) * f32::EPSILON * 2.0 {
+                whole
+            } else {
+                value
+            }
+        };
         Self {
-            x: rect.x * scale,
-            y: rect.y * scale,
-            width: rect.width * scale,
-            height: rect.height * scale,
+            x: pixel(rect.x * scale),
+            y: pixel(rect.y * scale),
+            width: pixel(rect.width * scale),
+            height: pixel(rect.height * scale),
         }
     }
 
@@ -834,7 +842,7 @@ fn log_stage(stage: usize, items: &[&PendingBackdrop<'_>]) {
             _ => Vec::new(),
         };
         log::warn!(
-            "[stage-diag] stage={stage} z={} capture=({:.0},{:.0},{:.0},{:.0}) visible=({:.0},{:.0},{:.0},{:.0}) batched={} blur={blur} substrates={substrates} folds={folds:?} key={:?}",
+            "[stage-diag] stage={stage} z={} capture=({:.0},{:.0},{:.0},{:.0}) visible=({:.0},{:.0},{:.0},{:.0}) batched={} blur={blur} substrates={substrates} folds={folds:?} key={:?} node={:?} effect_rect={:?}",
             item.z,
             capture.x,
             capture.y,
@@ -846,6 +854,8 @@ fn log_stage(stage: usize, items: &[&PendingBackdrop<'_>]) {
             visible.height,
             item.batched.is_some(),
             item.key,
+            item.node_id,
+            item.layer_pixel_rect(),
         );
     }
 }
@@ -1953,7 +1963,6 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     transients: Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
     empty_scene: CompositorScene,
     depth: usize,
-    admitted_pixels: u64,
     prefix_admitted_pixels: u64,
 }
 
@@ -2113,16 +2122,10 @@ impl AdmissionGate {
         }
     }
 
-    fn run(&self) -> u32 {
-        self.run
-    }
-
     pub(crate) fn end_frame(&mut self) -> bool {
         std::mem::take(&mut self.seen)
     }
 }
-
-const MAX_BACKDROP_ADMISSION_PIXELS: u64 = 120_000;
 
 /// A texture a composite draws and what it holds.
 #[derive(Clone)]
@@ -2408,7 +2411,7 @@ impl SurfacePlan {
         let (surface_rect, grid_dest, device_phase) = match grid_offset {
             Some(offset) => {
                 let whole = child_rect.translated(offset).snap_out();
-                let dest = if child.reads_backdrop() && child.effect.is_none() {
+                let dest = if child.content.contains_backdrop() && child.effect.is_none() {
                     let reach = (backdrop_reach(&child.content) * surface_scale).ceil() + 1.0;
                     rendered_surface(whole, shown, reach)
                 } else {
@@ -2446,7 +2449,7 @@ impl SurfacePlan {
     }
 
     fn cache_key(&self, child: &ChildLayer) -> Option<LayerRasterCacheKey> {
-        (!child.reads_backdrop() && child.cache_policy == CachePolicy::Auto).then(|| {
+        (!child.content.contains_backdrop() && child.cache_policy == CachePolicy::Auto).then(|| {
             LayerRasterCacheKey::source_content(
                 child.node_id,
                 child.content_hash,
@@ -2539,7 +2542,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             transients: Vec::new(),
             empty_scene: CompositorScene::new(),
             depth: 0,
-            admitted_pixels: 0,
             prefix_admitted_pixels: 0,
         }
     }
@@ -3185,7 +3187,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         items: &[&PendingBackdrop<'_>],
         outputs: &mut [ResolvedComposite],
     ) {
-        let mut candidates = Vec::with_capacity(items.len());
         for item in items {
             let (Some(key), Some(node_id)) = (item.key, item.node_id) else {
                 continue;
@@ -3205,15 +3206,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 Entry::Vacant(slot) => slot.insert(AdmissionGate::pinned(key)),
             };
             if gate.admits() {
-                candidates.push((gate.run(), item, key, node_id));
+                self.admit_backdrop(item, key, node_id, outputs);
             }
-        }
-        candidates.sort_by_key(|(run, ..)| std::cmp::Reverse(*run));
-        for (_, item, key, node_id) in candidates {
-            if self.admitted_pixels >= MAX_BACKDROP_ADMISSION_PIXELS {
-                return;
-            }
-            self.admit_backdrop(item, key, node_id, outputs);
         }
     }
 
@@ -3241,8 +3235,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         {
             return;
         }
-        let (width, height) = item.capture_rect.pixel_size();
-        self.admitted_pixels += u64::from(width) * u64::from(height);
         self.renderer.frame_stats.record_backdrop_admission();
         if let Some(gate) = self.renderer.backdrop_gates.get_mut(&node_id) {
             gate.admitted();
@@ -4183,7 +4175,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             SourceDecision::Cached(surface) => return Ok(Some(surface)),
             SourceDecision::Render(retain) => retain,
         };
-        let beneath = if child.reads_backdrop() {
+        let beneath = if child.content.contains_backdrop() {
             self.start_page(pass);
             beneath_for_child(pass, child, z, plan.grid_offset.filter(|_| plan.translated))?
         } else {
@@ -4763,13 +4755,9 @@ fn grid_rounded_mask(child: &ChildLayer, snap: Point, scale: f32) -> Option<Roun
 }
 
 fn rounded_mask(clip: LayerRoundedClip, snap: Point, scale: f32) -> RoundedCompositeMask {
+    let rect = DeviceRect::from_logical(clip.rect.translate(snap.x, snap.y), scale);
     RoundedCompositeMask {
-        rect: [
-            (clip.rect.x + snap.x) * scale,
-            (clip.rect.y + snap.y) * scale,
-            clip.rect.width * scale,
-            clip.rect.height * scale,
-        ],
+        rect: [rect.x, rect.y, rect.width, rect.height],
         radii: clip.radii.map(|radius| radius * scale),
     }
 }

@@ -33,7 +33,6 @@ pub(crate) struct LayerMotion {
 
 #[derive(Clone, Copy)]
 struct Motion {
-    scale_bits: u32,
     content_hash: u64,
     raster: f32,
 }
@@ -49,9 +48,10 @@ impl LayerMotion {
         let Some(node_id) = node_id else {
             return scale;
         };
-        let scaling = self.previous.get(&node_id).filter(|previous| {
-            previous.scale_bits != scale.to_bits() && previous.content_hash == content_hash
-        });
+        let scaling = self
+            .previous
+            .get(&node_id)
+            .filter(|previous| previous.content_hash == content_hash);
         let raster = match scaling {
             Some(previous) if cacheable && scale.is_finite() && scale > 0.0 => {
                 held_raster_scale(previous.raster, scale)
@@ -61,7 +61,6 @@ impl LayerMotion {
         self.current.insert(
             node_id,
             Motion {
-                scale_bits: scale.to_bits(),
                 content_hash,
                 raster,
             },
@@ -75,11 +74,8 @@ impl LayerMotion {
     }
 }
 
-/// The raster scale a layer scaling to `scale` draws at: the raster it drew at
-/// last frame while that still covers `scale` within an octave, so a layer
-/// pulsing inside its octave keeps one raster, else `scale` stepped up.
 fn held_raster_scale(held: f32, scale: f32) -> f32 {
-    if held >= scale && held <= scale * 2.0 {
+    if held * (1.0 / ANIMATED_RASTER_STEPS_PER_OCTAVE).exp2() >= scale && held <= scale * 2.0 {
         held
     } else {
         animated_raster_scale(scale)
@@ -775,9 +771,7 @@ fn isolated_child(
         GraphicsLayer::composite_alpha_8bit(layer.graphics_layer.alpha)
     };
     let content_hash = layer.target_content_hash();
-    let cacheable = layer.cache_policy == CachePolicy::Auto
-        && layer.backdrop().is_none()
-        && !content.contains_backdrop();
+    let cacheable = layer.cache_policy == CachePolicy::Auto && !content.contains_backdrop();
     let surface_scale = motion.raster_scale(
         layer.node_id,
         layer_uniform_scale(&layer.graphics_layer),
@@ -851,6 +845,35 @@ fn with_backdrop_in_own_space(child: ChildLayer) -> ChildLayer {
         ..child
     });
     outer
+}
+
+fn detach_flat_backdrop(child: &mut ChildLayer, scene: &mut CompositorScene) {
+    if child.alpha != 1.0
+        || child.blend_mode != BlendMode::SrcOver
+        || child.content.contains_backdrop()
+    {
+        return;
+    }
+    let Some(offset) = direct_translation(child.transform) else {
+        return;
+    };
+    let Some(effect) = child.backdrop.take() else {
+        return;
+    };
+    scene.push_backdrop_layer(BackdropLayer {
+        node_id: child.node_id,
+        rect: child.local_bounds.translate(offset.x, offset.y),
+        clip: child.clip,
+        reach: None,
+        rounded_clip: child.rounded_clip.map(|clip| LayerRoundedClip {
+            rect: clip.rect.translate(offset.x, offset.y),
+            radii: clip.radii,
+        }),
+        snap_anchor: child.snap_anchor,
+        effect,
+        z_index: 0,
+    });
+    child.z_index = scene.next_z();
 }
 
 fn collect_into(
@@ -1052,7 +1075,7 @@ fn collect_child(
                 child_bounds,
                 shadow_clip,
             );
-            let isolated = with_backdrop_in_own_space(isolated_child(
+            let mut isolated = with_backdrop_in_own_space(isolated_child(
                 child,
                 text_layout,
                 motion,
@@ -1060,6 +1083,7 @@ fn collect_child(
                 &mut out.scene,
             ));
             assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
+            detach_flat_backdrop(&mut isolated, &mut out.scene);
             out.children.push(isolated);
             out.scene.next_z += 1;
         }

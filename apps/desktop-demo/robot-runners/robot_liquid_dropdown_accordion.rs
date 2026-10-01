@@ -1,12 +1,11 @@
-use crate::robot_exit;
+use crate::{robot_exit, robot_shot};
 
 use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::{
     liquid::prelude::*,
     rememberMutableStateOf,
-    text::TextStyle,
-    widgets::{Box as CBox, BoxSpec, Text},
+    widgets::{Box as CBox, BoxSpec},
     AppLauncher, Color, Modifier, Size,
 };
 
@@ -41,8 +40,13 @@ pub(crate) fn main() -> ExitCode {
                 );
             }
 
+            let trigger = robot
+                .find_text_bounds(TRIGGER_LABEL)
+                .expect("query trigger")
+                .expect("trigger bounds");
             tap(&robot, TRIGGER_LABEL, "open the dropdown");
             settle(&robot, SETTLE_MS);
+            verify_hidden_trigger(&robot, trigger);
             if !visible(&robot, ACCORDION_HEADER) {
                 robot_exit::fail_and_await_shutdown(
                     &robot,
@@ -108,20 +112,23 @@ pub(crate) fn main() -> ExitCode {
             robot.exit().expect("exit");
         })
         .try_run(move || {
-            LiquidTheme(LiquidThemeSpec::default(), || {
+            LiquidTheme(LiquidThemeSpec {
+                scheme: SchemeMode::Dark,
+                ..Default::default()
+            }, || {
                 CBox(
                     Modifier::empty()
                         .size(Size {
                             width: WINDOW_WIDTH as f32,
                             height: WINDOW_HEIGHT as f32,
                         })
-                        .background(Color(0.14, 0.15, 0.19, 1.0)),
+                        .background(Color::BLACK),
                     BoxSpec::default(),
                     move || {
                         let expanded = rememberMutableStateOf(|| false);
                         let unfolded = rememberMutableStateOf(|| false);
                         LiquidDropdownMenu(
-                            Modifier::empty().absolute_offset(40.0, 60.0),
+                            Modifier::empty().absolute_offset(218.0, 350.0),
                             expanded.get(),
                             LiquidDropdownMenuSpec::default().menu(LiquidMenuSpec::new(260.0)),
                             move || expanded.set(false),
@@ -131,23 +138,19 @@ pub(crate) fn main() -> ExitCode {
                                     GlassButtonSpec::default(),
                                     move || expanded.set(true),
                                     || {
-                                        Text(
-                                            TRIGGER_LABEL,
-                                            Modifier::empty(),
-                                            TextStyle::default(),
-                                        );
+                                        GlassButtonLabel(TRIGGER_LABEL, GlassButtonSpec::glass());
                                     },
                                 );
                             },
                             move |scope| {
+                                scope.item(LiquidMenuItem::new(PLAIN_ROW), || {});
                                 scope.item(
-                                    LiquidMenuItem::new(ACCORDION_HEADER).keeps_open(),
+                                    LiquidMenuItem::new(ACCORDION_HEADER).keeps_open().section_start(),
                                     move || unfolded.set(!unfolded.get()),
                                 );
                                 if unfolded.get() {
                                     scope.item(LiquidMenuItem::new(UNFOLDED_ROW), || {});
                                 }
-                                scope.item(LiquidMenuItem::new(PLAIN_ROW).section_start(), || {});
                             },
                         );
                     },
@@ -157,6 +160,32 @@ pub(crate) fn main() -> ExitCode {
         .expect("launch dropdown accordion runner");
 
     robot_exit::exit_code(&FAILED)
+}
+
+fn verify_hidden_trigger(robot: &cranpose::Robot, trigger: (f32, f32, f32, f32)) {
+    let shot = robot.screenshot().expect("capture open dropdown");
+    let scale = shot.width as f32 / shot.logical_width;
+    let center = (trigger.0 + trigger.2 * 0.5, trigger.1 + trigger.3 * 0.5);
+    let mut blue_excess = 0;
+    for y in ((center.1 - 6.0) * scale) as u32..((center.1 + 6.0) * scale) as u32 {
+        for x in ((center.0 - 10.0) * scale) as u32..((center.0 + 10.0) * scale) as u32 {
+            let pixel = &shot.pixels[((y * shot.width + x) * 4) as usize..];
+            blue_excess = blue_excess.max(pixel[2].saturating_sub(pixel[0].max(pixel[1])));
+        }
+    }
+    println!("open menu trigger-region blue excess: {blue_excess}/255");
+    if blue_excess > 2 {
+        robot_shot::save(
+            &shot,
+            std::path::Path::new("target"),
+            "liquid-menu-trigger-leak.png",
+        );
+        robot_exit::fail_and_await_shutdown(
+            robot,
+            &FAILED,
+            "the absorbed trigger must not color the settled menu backdrop",
+        );
+    }
 }
 
 fn visible(robot: &cranpose::Robot, text: &str) -> bool {

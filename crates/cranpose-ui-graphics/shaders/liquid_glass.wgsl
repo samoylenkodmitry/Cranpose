@@ -915,7 +915,15 @@ fn adaptive_backdrop_tone_curve() -> vec4<f32> {
     return backdrop_tone_curve(luma, get_float(97u));
 }
 
+override GLASS_FACE_TONE_OFF: bool = false;
+
 fn transmission_tone(color: vec3<f32>, saturation: f32, contrast: f32, lift: f32, curve: vec4<f32>) -> vec3<f32> {
+    if !GLASS_FACE_TONE_OFF && get_float(180u) > 0.5 {
+        let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let source = clamp(vec3<f32>(luma) + (color - vec3<f32>(luma)) * get_float(178u), vec3<f32>(0.0), vec3<f32>(1.0));
+        return vec3<f32>(get_float(176u)) + source * (get_float(177u) - get_float(176u))
+            - source * source * (1.0 - get_float(179u));
+    }
     if adaptive_tone() {
         return apply_backdrop_tone(color, curve);
     }
@@ -1070,7 +1078,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // ~8dp (bar_over_orange_purple) — a crisp resting edge doubles with
     // the pill's rim line into an onion contour. Activity sharpens the
     // edge back to the AA band as the lens rises.
-    let rest_feather = 8.0 * optical_scale;
+    let rest_feather = 8.0 * (1.0 - get_float(175u)) * optical_scale;
     let coverage_ramp = floored_band_width(
         mix(rest_feather, lens_refraction / 32.0, material_activity),
     );
@@ -1718,15 +1726,13 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             achromatic_displacement + base_displacement,
             16.0 * optical_scale,
         );
-        var adaptive_rgb = apply_tone_and_lift(
+        var adaptive_rgb = transmission_tone(
             adaptive_sample.rgb,
             saturation,
             contrast,
             face_lift,
+            adaptive_curve,
         );
-        if adaptive_tone() {
-            adaptive_rgb = apply_backdrop_tone(adaptive_sample.rgb, adaptive_curve);
-        }
         adaptive_rgb = mix(adaptive_rgb, tint_color.rgb, optical_tint_alpha);
         let adaptive_luma = dot(adaptive_rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         let separation = abs(adaptive_luma - foreground_luma);
@@ -1762,7 +1768,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
 
     // Ordered-noise dither hides banding in the blurred gradients behind the
     // glass (±0.5/255 at dither_amount = 1).
-    let dither = (hash12(coord) - 0.5) * (dither_amount / 255.0);
+    let dither = (hash12(floor(coord)) - 0.5) * (dither_amount / 255.0);
     rgb = rgb + vec3<f32>(dither);
     key_fill_output += vec4<f32>(vec3<f32>(dither) * key_fill_output.a, 0.0);
 

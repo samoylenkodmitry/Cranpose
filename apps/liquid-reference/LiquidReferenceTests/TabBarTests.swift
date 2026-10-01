@@ -1,8 +1,23 @@
 import XCTest
 
 @MainActor
-class TabBarTests: XCTestCase {
+class ReferenceUITests: XCTestCase {
     var bundleIdentifier: String { "io.cranpose.liquid-reference" }
+
+    func capture(_ name: String, app: XCUIApplication) {
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = name + "-accessibility"
+        tree.lifetime = .keepAlways
+        add(tree)
+    }
+}
+
+@MainActor
+class TabBarTests: ReferenceUITests {
 
     func launch(scheme: String = "light", backdrop: String = "checkerboard", initial: Int = 0, settlingSeconds: Double = 0.8,
                 contactFilterTime: Double? = nil, materialProfile: Int? = nil,
@@ -20,17 +35,6 @@ class TabBarTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.buttons[firstTitle].waitForExistence(timeout: 10))
         return app
-    }
-
-    func capture(_ name: String, app: XCUIApplication) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = name
-        attachment.lifetime = .keepAlways
-        add(attachment)
-        let tree = XCTAttachment(string: app.debugDescription)
-        tree.name = name + "-accessibility"
-        tree.lifetime = .keepAlways
-        add(tree)
     }
 
     func assertDestination(_ title: String, app: XCUIApplication) {
@@ -164,6 +168,200 @@ class TabBarTests: XCTestCase {
 
 @MainActor
 final class CranposeTabBarTests: TabBarTests {
+    override var bundleIdentifier: String { "io.cranpose.liquid-cranpose" }
+}
+
+@MainActor
+class NativeControlTests: ReferenceUITests {
+    func testLightStates() { captureControls(scheme: "light") }
+    func testDarkStates() { captureControls(scheme: "dark") }
+
+    func testOtherControls() {
+        for scheme in ["light", "dark"] {
+            for component in ["icon-button", "search", "list-row"] {
+                let app = launchControl(component, scheme: scheme)
+                capture("control-\(component)-\(scheme)-0", app: app)
+                print("CONTROL \(component) \(scheme): \(app.debugDescription)")
+                app.terminate()
+            }
+        }
+    }
+
+    func testNavigationHeader() {
+        for scheme in ["light", "dark"] {
+            let app = launchControl("nav-bar", scheme: scheme)
+            XCTAssertEqual(app.staticTexts.matching(identifier: "Library").count, 1)
+            capture("control-nav-bar-\(scheme)-0", app: app)
+            print("CONTROL nav-bar \(scheme): \(app.debugDescription)")
+            app.terminate()
+        }
+    }
+
+    func testSearchGeometryAndEditing() {
+        let app = launchControl("search")
+        let field = app.searchFields["Search"].firstMatch
+        XCTAssertTrue(field.exists)
+        XCTAssertEqual(field.frame.width, 300, accuracy: 0.5)
+        XCTAssertEqual(field.frame.height, 44, accuracy: 0.5)
+        field.tap()
+        print("FOCUSED SEARCH: \(app.debugDescription)")
+        app.typeText("Library")
+        print("EDITED SEARCH: \(app.debugDescription)")
+        XCTAssertTrue(app.descendants(matching: .any).matching(NSPredicate(format: "value == %@", "Library")).firstMatch.exists)
+        app.terminate()
+    }
+
+    private func launchControl(_ component: String, scheme: String = "light", backdrop: String = "solid", value: String = "0") -> XCUIApplication {
+        let app = XCUIApplication(bundleIdentifier: bundleIdentifier)
+        app.launchEnvironment["REFERENCE_COMPONENT"] = component
+        app.launchEnvironment["REFERENCE_VALUE"] = value
+        app.launchEnvironment["REFERENCE_SCHEME"] = scheme
+        app.launchEnvironment["REFERENCE_BACKDROP"] = backdrop
+        app.launch()
+        XCTAssertTrue(app.staticTexts["Reference control"].waitForExistence(timeout: 10))
+        return app
+    }
+
+    func testCheckerboardSurfaces() {
+        for scheme in ["light", "dark"] {
+            for component in ["button", "prominent-button", "card"] {
+                let app = launchControl(component, scheme: scheme, backdrop: "checkerboard")
+                capture("control-\(component)-\(scheme)-checkerboard-0", app: app)
+                app.terminate()
+            }
+        }
+    }
+
+    func testOpenMenu() {
+        checkOpenMenu(scheme: "light")
+    }
+
+    func testDarkOpenMenu() {
+        checkOpenMenu(scheme: "dark")
+    }
+
+    private func checkOpenMenu(scheme: String) {
+        let app = launchControl("menu", scheme: scheme)
+        app.buttons["Options"].tap()
+        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Share"].exists)
+        XCTAssertTrue(app.buttons["Delete"].exists)
+        waitForSettledMenu(app)
+        capture("control-menu-\(scheme)-open", app: app)
+        let copy = app.buttons["Copy"].frame
+        let delete = app.buttons["Delete"].frame
+        XCTAssertGreaterThan(copy.minY, delete.maxY)
+        XCTAssertEqual(copy.midX, app.frame.midX, accuracy: 0.5)
+        XCTAssertEqual(copy.width, 250, accuracy: 0.5)
+        XCTAssertEqual(copy.height, 42, accuracy: 0.5)
+        app.terminate()
+    }
+
+    func testGroupedMenu() {
+        checkGroupedMenu(scheme: "light")
+    }
+
+    func testDarkGroupedMenu() {
+        checkGroupedMenu(scheme: "dark")
+    }
+
+    private func checkGroupedMenu(scheme: String) {
+        let app = launchControl("menu", scheme: scheme, value: "1")
+        app.buttons["Options"].tap()
+        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 5))
+        waitForSettledMenu(app)
+        capture("control-menu-\(scheme)-grouped", app: app)
+        XCTAssertLessThan(app.staticTexts["Danger"].frame.minY, app.buttons["Cancel"].frame.minY)
+        XCTAssertLessThan(app.staticTexts["Document"].frame.minY, app.buttons["Share"].frame.minY)
+        XCTAssertLessThan(app.buttons["Cancel"].frame.minY, app.buttons["Delete"].frame.minY)
+        XCTAssertLessThan(app.buttons["Share"].frame.minY, app.buttons["Copy"].frame.minY)
+        app.terminate()
+    }
+
+    private func waitForSettledMenu(_ app: XCUIApplication) {
+        var previous = CGRect.null
+        let settled = NSPredicate { _, _ in
+            let frame = app.buttons["Copy"].frame
+            let unchanged = frame == previous
+            previous = frame
+            return unchanged && abs(frame.width - 250) <= 0.5 && abs(frame.height - 42) <= 0.5
+        }
+        expectation(for: settled, evaluatedWith: app)
+        waitForExpectations(timeout: 3)
+    }
+
+    func testSelectionInteractions() {
+        let toggle = launchControl("toggle")
+        let enabled = toggle.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Enabled")).firstMatch
+        XCTAssertTrue(enabled.exists)
+        XCTAssertTrue(["0", "off"].contains(enabled.value as? String ?? ""))
+        enabled.tap()
+        XCTAssertTrue(["1", "on"].contains(enabled.value as? String ?? ""))
+        toggle.terminate()
+        let segmented = launchControl("segmented")
+        segmented.buttons["Saved"].tap()
+        XCTAssertTrue(segmented.buttons["Saved"].isSelected)
+        waitForStableControl(segmented)
+        capture("control-segmented-light-2", app: segmented)
+        segmented.terminate()
+    }
+
+    private func waitForStableControl(_ app: XCUIApplication) {
+        var previous: Data?
+        let settled = NSPredicate { _, _ in
+            let pixels = app.screenshot().pngRepresentation
+            let unchanged = pixels == previous
+            previous = pixels
+            return unchanged
+        }
+        expectation(for: settled, evaluatedWith: app)
+        waitForExpectations(timeout: 5)
+    }
+
+    func testSliderDrag() {
+        let app = launchControl("slider", scheme: "dark", value: "0.5")
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: 201, dy: 451))
+        let end = origin.withOffset(CGVector(dx: 280, dy: 451))
+        start.press(forDuration: 1.0, thenDragTo: end,
+                    withVelocity: XCUIGestureVelocity(rawValue: 80),
+                    thenHoldForDuration: 1.0)
+        capture("slider-drag-release", app: app)
+        app.terminate()
+    }
+
+    func testControlGeometry() {
+        for (component, label, width, height) in [
+            ("segmented", "All", 100.0, 32.0),
+            ("button", "Continue", 108.7, 50.3),
+            ("prominent-button", "Continue", 108.7, 50.3),
+            ("chip", "Unread", 70.0, 28.0),
+            ("menu", "Options", 84.0, 34.3)
+        ] {
+            let app = launchControl(component)
+            let button = app.buttons[label].firstMatch
+            XCTAssertTrue(button.exists)
+            capture("geometry-\(component)", app: app)
+            XCTAssertEqual(button.frame.width, width, accuracy: 0.5, component)
+            XCTAssertEqual(button.frame.height, height, accuracy: 0.5, component)
+            app.terminate()
+        }
+    }
+
+    private func captureControls(scheme: String) {
+        for component in ["slider", "toggle", "segmented", "button", "prominent-button", "chip", "card", "menu"] {
+            let values = component == "slider" ? ["0", "0.5", "1"] : component == "toggle" ? ["0", "1"] : ["0"]
+            for value in values {
+                let app = launchControl(component, scheme: scheme, value: value)
+                capture("control-\(component)-\(scheme)-\(value.replacingOccurrences(of: ".", with: "p"))", app: app)
+                app.terminate()
+            }
+        }
+    }
+}
+
+@MainActor
+final class CranposeControlTests: NativeControlTests {
     override var bundleIdentifier: String { "io.cranpose.liquid-cranpose" }
 }
 
