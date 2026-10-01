@@ -81,8 +81,16 @@ final class NativeTrace: NSObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak window] in
                 guard let self, let window else { return }
                 self.began = CACurrentMediaTime()
-                do { try self.recordContactFilters(in: window, elapsed: 0) }
-                catch { self.error = String(describing: error) }
+                do {
+                    try self.recordContactFilters(in: window, elapsed: 0)
+                    if let probe = ProcessInfo.processInfo.environment["REFERENCE_CONTROL_HIGHLIGHT"] {
+                        try self.exposeControlHighlight(probe, in: window)
+                    }
+                }
+                catch {
+                    self.error = String(describing: error)
+                    try? String(describing: error).write(to: URL.documentsDirectory.appending(path: "control-probe-error.txt"), atomically: true, encoding: .utf8)
+                }
             }
         }
     }
@@ -337,6 +345,36 @@ final class NativeTrace: NSObject {
         copy.position = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
         container.addSublayer(copy)
         window.layer.addSublayer(container)
+    }
+
+    private func exposeControlHighlight(_ probe: String, in window: UIWindow) throws {
+        guard ["raw", "filtered", "disabled"].contains(probe) else { throw OpticalLayerError.unknownProbe(probe) }
+        var source = window.layer
+        for index in [0, 0, 0, 1, 0, 1, 2] {
+            guard let children = source.sublayers, children.indices.contains(index) else { throw OpticalLayerError.missingLayer("control highlight") }
+            source = children[index]
+        }
+        guard String(describing: type(of: source)) == "CASDFLayer" else { throw OpticalLayerError.missingLayer("control highlight SDF") }
+        guard let effect = source.value(forKey: "effect"),
+              String(describing: type(of: effect)) == "CASDFKeyFillHighlightEffect" else { throw OpticalLayerError.missingFilter("control highlight effect") }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        if probe == "disabled" {
+            source.opacity = 0
+        } else {
+            source.removeFromSuperlayer()
+            if probe == "raw" { source.filters = [] }
+            let container = CALayer()
+            container.name = "Control highlight probe"
+            container.frame = window.bounds
+            container.backgroundColor = UIColor.black.cgColor
+            container.zPosition = 1000
+            source.position = CGPoint(x: container.bounds.midX + (source.anchorPoint.x - 0.5) * source.bounds.width,
+                                      y: container.bounds.midY + (source.anchorPoint.y - 0.5) * source.bounds.height)
+            container.addSublayer(source)
+            window.layer.addSublayer(container)
+        }
     }
 
     private func exposeFilterKernel(_ pattern: OpticalPattern, in window: UIWindow) throws {

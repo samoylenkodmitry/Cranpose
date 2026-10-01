@@ -52,6 +52,8 @@ The final `never` argument disables Xcode's slow failure diagnostic collection w
 
 `REFERENCE_BACKDROP=gray-0.5` supplies a flat control probe; values from zero to one cover the neutral response. `REFERENCE_CAPTURE_CONTROL_LAYERS=1` saves the native control's presentation layers and archived filters after settling. Inspect both backdrop filters and separate SDF effect archives: the native highlight includes a separate lighting layer. The fixed `GlassFaceTone` control profiles are empirical fits to these neutral probes. They do not identify Apple's complete optical pipeline.
 
+After building the native reference, `python3 scripts/dev/capture_control_highlights.py DEVICE target/liquid-reference/Build/Products/Release-iphonesimulator/LiquidReference.app OUTPUT` captures that separate card/button highlight in both schemes: raw on black, filtered on black, and the original control with only its highlight disabled. The probe validates the expected SDF layer/effect before changing it and saves fresh layer archives plus source, binary and image hashes. This separates the highlight from the backdrop filter; it does not establish a matching Cranpose implementation.
+
 `test-liquid-motion` verifies tab-content anchoring, touch shader/recomposition budgets, toggle/segment animation work, and slider geometry. It measures work counters and changing frames, not physical-display FPS. The renderer's animated-layer tests require byte-identical pictures when an unchanged transform pauses and require repeated input frames to preserve the same raster.
 
 ### Tab interaction capture
