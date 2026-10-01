@@ -796,16 +796,7 @@ fn reader_reveal_stops_when_a_scroll_action_reports_no_geometric_progress() {
             Column(
                 Modifier::empty()
                     .size(Size::new(240.0, 120.0))
-                    .semantics(move |config| {
-                        config.vertical_scroll =
-                            Some(cranpose_ui::ScrollAxisRange::new(0.0, 1000.0, false));
-                        let recorded = Rc::clone(&recorded);
-                        config.scroll_by =
-                            Some(cranpose_foundation::SemanticsScrollBy::new(move |_, _| {
-                                recorded.set(recorded.get() + 1);
-                                true
-                            }));
-                    }),
+                    .semantics(move |config| record_scroll_calls(config, &recorded)),
                 ColumnSpec::default(),
                 || {
                     // Below the 120-pixel viewport: a Column offers each child
@@ -845,6 +836,144 @@ fn retained_lazy_editor_remains_readable_and_can_be_revealed() {
             assert_eq!(fixture.active_effects.get(), 1);
         }
     }
+}
+
+fn record_scroll_calls(config: &mut cranpose_ui::SemanticsConfiguration, calls: &Rc<Cell<usize>>) {
+    config.vertical_scroll = Some(cranpose_ui::ScrollAxisRange::new(0.0, 1000.0, false));
+    let calls = Rc::clone(calls);
+    config.scroll_by = Some(cranpose_foundation::SemanticsScrollBy::new(move |_, _| {
+        calls.set(calls.get() + 1);
+        true
+    }));
+}
+
+fn reveal_fixture<T: 'static>(
+    mut content: impl FnMut() -> T + 'static,
+) -> (AppShell<HitGraphRenderer>, T) {
+    let captured = Rc::new(RefCell::new(None));
+    let recorded = Rc::clone(&captured);
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || *recorded.borrow_mut() = Some(content()),
+    );
+    shell.update();
+    let controls = captured.borrow_mut().take().expect("reveal controls");
+    (shell, controls)
+}
+
+#[test]
+fn reader_reveal_rejects_a_subcomposed_target_until_it_is_placed_again() {
+    let _guard = test_guard();
+    let focus = cranpose_ui::FocusRequester::new();
+    let content_focus = focus.clone();
+    let calls = Rc::new(Cell::new(0usize));
+    let scroll_calls = Rc::clone(&calls);
+    let (mut shell, placed) = reveal_fixture(move || {
+        let placed = rememberMutableStateOf(|| true);
+        let scroll_calls = Rc::clone(&scroll_calls);
+        let content_focus = content_focus.clone();
+        cranpose_ui::SubcomposeLayout(
+            Modifier::empty()
+                .size_points(240.0, 120.0)
+                .semantics(move |config| record_scroll_calls(config, &scroll_calls)),
+            move |scope, _| {
+                let content_focus = content_focus.clone();
+                let children = scope.subcompose(cranpose_core::SlotId::new(0), (), move || {
+                    Text(
+                        "Subcomposed target",
+                        Modifier::empty()
+                            .size_points(100.0, 48.0)
+                            .focus_requester(&content_focus)
+                            .clickable(|_| {}),
+                        TextStyle::default(),
+                    );
+                });
+                let mut placements = Vec::new();
+                for child in children {
+                    let child = scope.measure(child, cranpose_ui::Constraints::tight(100.0, 48.0));
+                    if placed.get() {
+                        placements.push(cranpose_ui::Placement::new(
+                            child.node_id(),
+                            0.0,
+                            240.0,
+                            0,
+                        ));
+                    }
+                }
+                scope.layout(240.0, 120.0, placements)
+            },
+        );
+        placed
+    });
+    shell
+        .app_context()
+        .enter(|| focus.request_focus())
+        .expect("subcomposed focus");
+    shell.update();
+    let target = shell
+        .app_context()
+        .enter(cranpose_ui::active_focus_target)
+        .expect("focused target");
+    assert_eq!(calls.get(), 1);
+    placed.set(false);
+    shell.update();
+    assert!(!shell.accessibility_reveal(target));
+    assert_eq!(calls.get(), 1);
+    placed.set(true);
+    shell.update();
+    assert!(shell.accessibility_reveal(target));
+    assert_eq!(calls.get(), 2);
+}
+
+fn nested_reveal_target(depth: usize, focus: cranpose_ui::FocusRequester) {
+    if depth == 0 {
+        Text(
+            "Nested target",
+            Modifier::empty()
+                .size_points(200.0, 48.0)
+                .focus_requester(&focus)
+                .clickable(|_| {}),
+            TextStyle::default(),
+        );
+    } else {
+        Box(Modifier::empty(), BoxSpec::default(), move || {
+            nested_reveal_target(depth - 1, focus.clone());
+        });
+    }
+}
+
+#[test]
+fn reader_reveal_reaches_a_control_through_deep_and_wide_content() {
+    let _guard = test_guard();
+    let focus = cranpose_ui::FocusRequester::new();
+    let content_focus = focus.clone();
+    let (mut shell, scroll) = reveal_fixture(move || {
+        let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+        let content_focus = content_focus.clone();
+        Column(
+            Modifier::empty()
+                .size_points(240.0, 120.0)
+                .vertical_scroll(scroll, false),
+            ColumnSpec::default(),
+            move || {
+                for _ in 0..40 {
+                    Spacer(Modifier::empty().size_points(200.0, 6.0));
+                }
+                nested_reveal_target(24, content_focus.clone());
+            },
+        );
+        scroll
+    });
+    shell
+        .app_context()
+        .enter(|| focus.request_focus())
+        .expect("nested focus");
+    shell.update();
+    assert_eq!(scroll.value(), scroll.max_value());
+    assert_control_visible(&mut shell, "Nested target", false);
+    let target = reader_control_id(&mut shell, "Nested target");
+    assert!(!shell.accessibility_reveal(target));
 }
 
 #[test]

@@ -102,6 +102,76 @@ fn the_primary_has_content_only_outside_window_roots() {
     );
 }
 
+#[test]
+fn reader_reveal_scrolls_only_the_window_that_owns_the_target() {
+    let _guard = test_guard();
+    let captured = Rc::new(RefCell::new(None));
+    let recorded = Rc::clone(&captured);
+    let target = Rc::new(Cell::new(None));
+    let target_slot = Rc::clone(&target);
+    let coordinates = Rc::new(Cell::new(cranpose_ui_graphics::WindowCoordinates::default()));
+    let coordinate_slot = Rc::clone(&coordinates);
+    let (mut shell, _) = shell_with_a_tearable_pane(true, move |_, window| {
+        let primary =
+            cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
+        let secondary =
+            cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
+        *recorded.borrow_mut() = Some((primary, secondary));
+        let window = Rc::clone(window);
+        let target_slot = Rc::clone(&target_slot);
+        let coordinate_slot = Rc::clone(&coordinate_slot);
+        Column(
+            Modifier::empty()
+                .size_points(200.0, 100.0)
+                .vertical_scroll(primary, false),
+            ColumnSpec::default(),
+            move || {
+                cranpose_ui::Spacer(Modifier::empty().size_points(1.0, 240.0));
+                let target_slot = Rc::clone(&target_slot);
+                let coordinate_slot = Rc::clone(&coordinate_slot);
+                Box(
+                    Modifier::empty().window_root(Rc::clone(&window)),
+                    BoxSpec::default(),
+                    move || {
+                        let target_slot = Rc::clone(&target_slot);
+                        let coordinate_slot = Rc::clone(&coordinate_slot);
+                        Column(
+                            Modifier::empty()
+                                .fill_max_size()
+                                .vertical_scroll(secondary, false),
+                            ColumnSpec::default(),
+                            move || {
+                                cranpose_ui::Spacer(Modifier::empty().size_points(1.0, 240.0));
+                                target_slot.set(Some(Box(
+                                    Modifier::empty()
+                                        .size_points(100.0, 48.0)
+                                        .report_window_coordinates(Rc::clone(&coordinate_slot)),
+                                    BoxSpec::default(),
+                                    || {},
+                                )));
+                            },
+                        );
+                    },
+                );
+            },
+        );
+    });
+    let window_id = window_root_at(&shell, 0);
+    shell.add_window_surface(
+        window_id,
+        HitGraphRenderer::default(),
+        (200, 100),
+        (200.0, 100.0),
+    );
+    let (primary, secondary) = captured.borrow().expect("window scroll states");
+    let target = target.get().expect("target in the window");
+    assert!(shell.accessibility_reveal(target));
+    assert_eq!(primary.value(), 0.0);
+    assert_eq!(secondary.value(), secondary.max_value());
+    assert_eq!(coordinates.get().bounds().y, 52.0);
+    assert!(!shell.accessibility_reveal(target));
+}
+
 type TransferLog = RefCell<Vec<String>>;
 
 fn note(log: &TransferLog, line: impl Into<String>) {
