@@ -110,6 +110,7 @@ pub(super) fn FloatingButtonSurface(
     native_material: bool,
     hit_inset: f32,
     feedback: HapticFeedback,
+    tint_progress: Option<(State<f32>, cranpose_ui_graphics::Color)>,
     on_click: impl Fn() + 'static,
 ) -> (Modifier, Modifier, Modifier, Modifier, State<f32>) {
     let size = remember(|| Rc::new(Cell::new(Size::ZERO))).with(Rc::clone);
@@ -187,12 +188,14 @@ pub(super) fn FloatingButtonSurface(
             let center = (size.width * 0.5, size.height * 0.5);
             if native_material {
                 let start = origin.origin.get();
-                super::glass_surface::floating_dynamics(
+                let mut dynamics = super::glass_surface::floating_dynamics(
                     size,
                     progress.get(),
                     light.get(),
                     (center.0 + start.0 + x.get(), center.1 + start.1 + y.get()),
-                )
+                );
+                dynamics.tint_crossfade = tint_progress.map(|(state, color)| (color, state.get()));
+                dynamics
             } else {
                 GlassDynamics::default().touched_up(
                     light.get(),

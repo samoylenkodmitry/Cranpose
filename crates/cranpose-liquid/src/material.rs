@@ -225,6 +225,10 @@ pub struct GlassDynamics {
     /// Optional per-frame multiplier for the material tint alpha. Values
     /// below one clear a resting wash; values above one densify a raised tint.
     pub tint_alpha_multiplier: Option<f32>,
+    /// Blends a plain translucent tint into this material's tint, including its
+    /// luminance-dependent transmission. The fraction is zero at the supplied
+    /// tint and one at the material tint; refraction and lighting stay active.
+    pub tint_crossfade: Option<(Color, f32)>,
     /// Shape morph: when set, the glass geometry is these node-local rects
     /// instead of the node cover — the shapeshift channel.
     pub morph: Option<GlassMorph>,
@@ -1517,6 +1521,11 @@ impl ResolvedGlass {
             dynamic_tint.b(),
             dynamic_tint_alpha,
         );
+        if let Some((color, progress)) = dynamics.tint_crossfade.filter(|(_, p)| p.is_finite()) {
+            let index = cranpose_ui_graphics::liquid_glass::GLASS_TINT_CROSSFADE_UNIFORM;
+            shader.set_float(index, 1.0 + progress.clamp(0.0, 1.0));
+            shader.set_float4(index + 1, color.r(), color.g(), color.b(), color.a());
+        }
         let saturation = (self.saturation + dynamics.saturation_boost).max(0.0);
         shader.set_float(18, 1.0 + (saturation - 1.0) * activity);
         shader.set_float(20, self.lift * activity);
@@ -1876,6 +1885,7 @@ fn glass_dynamics_match(a: &GlassDynamics, b: &GlassDynamics) -> bool {
             highlight_boost,
             saturation_boost,
             tint_alpha_multiplier,
+            tint_crossfade,
             morph: _,
             touch,
             touch_radius_dp,
@@ -1885,6 +1895,7 @@ fn glass_dynamics_match(a: &GlassDynamics, b: &GlassDynamics) -> bool {
             (
                 *contact_lighting,
                 ring_shadow.map(|(ring, width)| (shadow_bits(ring), width.to_bits())),
+                tint_crossfade.map(|(Color(r, g, b, a), p)| [r, g, b, a, p].map(f32::to_bits)),
             ),
             refraction.map(|refraction| {
                 match refraction {

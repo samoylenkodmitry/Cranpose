@@ -26,6 +26,7 @@ struct LayerSample: Codable {
     var backgroundColorSpace: String? = nil
     var sourceLayerPath: String? = nil
     var opticalParameters: [String: Double]? = nil
+    var colorMatrixArchives: [String]? = nil
 }
 
 struct MotionSample: Codable {
@@ -100,6 +101,7 @@ final class NativeTrace: NSObject {
     @ObservationIgnored private let settlingSeconds = ProcessInfo.processInfo.environment["REFERENCE_SETTLING_SECONDS"].flatMap(Double.init) ?? 0.8
     @ObservationIgnored private let component = ProcessInfo.processInfo.environment["REFERENCE_COMPONENT"]
     @ObservationIgnored private let captureAnimations = ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_ANIMATIONS"] == "1"
+    @ObservationIgnored private let captureColorMatrices = ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_COLOR_MATRICES"] == "1"
 
     func install(on window: UIWindow) {
         guard self.window !== window else { return }
@@ -870,6 +872,15 @@ final class NativeTrace: NSObject {
         return find(root.model(), path: "Window") ?? "external: \(type(of: source)) \(source.bounds)"
     }
 
+    private func colorMatrices(_ layer: CALayer) -> [String]? {
+        guard captureColorMatrices else { return nil }
+        let matrices = (layer.filters ?? []).compactMap { filter -> String? in
+            guard String(describing: filter) == "vibrantColorMatrix" else { return nil }
+            return opticalArchive(filter)
+        }
+        return matrices.isEmpty ? nil : matrices
+    }
+
     private func sample(_ layer: CALayer, root: CALayer, path: String, into samples: inout [LayerSample]) {
         let visible = layer
         let rect = visible.convert(visible.bounds, to: root)
@@ -893,7 +904,8 @@ final class NativeTrace: NSObject {
                                    backgroundColor: recordingFilters ? visible.backgroundColor?.components : nil,
                                     backgroundColorSpace: recordingFilters ? visible.backgroundColor?.colorSpace?.name as String? : nil,
                                     sourceLayerPath: sourceLayerPath(visible, root: root),
-                                    opticalParameters: opticalParameters(visible)))
+                                     opticalParameters: opticalParameters(visible),
+                                     colorMatrixArchives: colorMatrices(visible)))
         for (index, child) in (layer.sublayers ?? []).enumerated() {
             sample(child, root: root, path: path + "/\(index)", into: &samples)
         }

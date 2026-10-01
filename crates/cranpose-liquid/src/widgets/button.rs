@@ -4,7 +4,7 @@ use std::{
 };
 
 use cranpose_animation::{AnimationSpec, AnimationType, Easing};
-use cranpose_core::{mutableStateOf, remember};
+use cranpose_core::{State, mutableStateOf, remember};
 use cranpose_macros::composable;
 use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{
@@ -387,6 +387,7 @@ pub fn GlassButton(
         modifier,
         spec,
         HapticFeedback::ImpactLight,
+        None,
         on_click,
         content,
     );
@@ -397,6 +398,7 @@ pub(crate) fn GlassButtonWithFeedback(
     modifier: Modifier,
     spec: GlassButtonSpec,
     feedback: HapticFeedback,
+    tint_progress: Option<State<f32>>,
     on_click: impl Fn() + 'static,
     content: impl FnMut() + 'static,
 ) {
@@ -406,8 +408,21 @@ pub(crate) fn GlassButtonWithFeedback(
         spec.content_color(&colors),
         spec.size.minimum_height(),
     );
-    let (pressed_modifier, base, gesture, illumination, content_activity) =
-        FloatingButtonSurface(material, spec.glass.is_none(), 0.0, feedback, on_click);
+    let (pressed_modifier, base, gesture, illumination, content_activity) = FloatingButtonSurface(
+        material,
+        spec.glass.is_none(),
+        0.0,
+        feedback,
+        tint_progress.map(|state| {
+            (
+                state,
+                super::glass_surface::floating_material(colors.label, spec.size.minimum_height())
+                    .tint
+                    .unwrap_or(Color::TRANSPARENT),
+            )
+        }),
+        on_click,
+    );
 
     let (horizontal_padding, vertical_padding) = spec.size.padding();
     let base = base
@@ -523,6 +538,7 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
         spec.glass.is_none(),
         diameter * 0.25,
         HapticFeedback::ImpactLight,
+        None,
         on_click,
     );
 

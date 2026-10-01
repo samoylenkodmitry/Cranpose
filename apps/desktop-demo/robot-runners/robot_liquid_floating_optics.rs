@@ -51,7 +51,15 @@ pub(crate) fn main() -> anyhow::Result<()> {
             let frames = robot
                 .capture_interaction_keyframes(3.0, &steps)
                 .expect("capture floating glass states");
-            for (frame, name) in frames.iter().zip(["rest.png", "held.png", "released.png"]) {
+            for (frame, name) in frames.iter().zip([
+                "rest.png",
+                "held.png",
+                "release-50ms.png",
+                "release-100ms.png",
+                "release-250ms.png",
+                "release-500ms.png",
+                "released.png",
+            ]) {
                 robot_shot::save_checked(&output.join(name), frame)
                     .expect("save floating glass state");
             }
@@ -122,12 +130,22 @@ fn assert_optics(
                 "native floating glass retains distinct checker cells beneath the label, rest={rest} held={held}");
     }
     if control == Control::FilterChip {
-        let selected = &frames[if initial == 0.0 { 2 } else { 0 }];
+        let selected = &frames[if initial == 0.0 { 6 } else { 0 }];
         let sample = robot_shot::logical_sampler(selected)(201.0, 462.0);
         assert!(
             sample.2.saturating_sub(sample.0) >= 80,
             "selected native filter chip has an accent-filled glass body: {sample:?}"
         );
+        if initial > 0.0 {
+            let early = robot_shot::logical_sampler(&frames[2])(201.0, 462.0);
+            let settled = robot_shot::logical_sampler(&frames[6])(201.0, 462.0);
+            assert!(early.2.saturating_sub(early.0) >= 80,
+                "native selected chip retains its transmitted blue while deselection begins: {early:?}");
+            assert!(
+                backdrop != ReferenceBackdrop::Monochrome || settled.2.abs_diff(settled.0) < 10,
+                "deselection must settle to clear glass: {settled:?}"
+            );
+        }
     }
     if control == Control::ProminentButton || (control == Control::FilterChip && initial > 0.0) {
         let y = if control == Control::ProminentButton {
@@ -192,7 +210,9 @@ fn capture_steps() -> Vec<RobotTimelineStep> {
         actions: vec![RobotTimelineAction::MouseUp],
         capture: false,
     });
-    wait_and_capture(&mut steps, 120);
+    for frames in [3, 3, 9, 15, 90] {
+        wait_and_capture(&mut steps, frames);
+    }
     steps
 }
 

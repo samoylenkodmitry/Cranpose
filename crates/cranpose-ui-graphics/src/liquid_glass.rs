@@ -229,8 +229,14 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
     },
     LiquidGlassSpecialization {
         flag: "GLASS_TINT_TRANSMISSION_OFF",
-        slots: &[GLASS_TINT_TRANSMISSION_UNIFORM + 1],
-        inactive: |u| slot(u, GLASS_TINT_TRANSMISSION_UNIFORM + 1) <= 0.5,
+        slots: &[
+            GLASS_TINT_TRANSMISSION_UNIFORM + 1,
+            GLASS_TINT_CROSSFADE_UNIFORM,
+        ],
+        inactive: |u| {
+            slot(u, GLASS_TINT_TRANSMISSION_UNIFORM + 1) <= 0.5
+                && slot(u, GLASS_TINT_CROSSFADE_UNIFORM) <= 0.0
+        },
     },
 ];
 
@@ -540,6 +546,10 @@ pub const GLASS_FACE_TONE_UNIFORM: usize = 176;
 pub const GLASS_LAYERED_RETURN_UNIFORM: usize = 181;
 /// Minimum tinted transmission luminance followed by a presence flag.
 pub const GLASS_TINT_TRANSMISSION_UNIFORM: usize = 202;
+
+/// Tint crossfade: zero disables it, otherwise one plus the interpolation fraction.
+/// The next four uniforms hold the plain source tint's RGBA components.
+pub const GLASS_TINT_CROSSFADE_UNIFORM: usize = 215;
 /// Selects white contact illumination in place of the standard touch glow.
 pub const GLASS_CONTACT_LIGHT_UNIFORM: usize = 204;
 /// Ten slots for specular height, angle, spread, curvature, diffuse amount, height, spread,

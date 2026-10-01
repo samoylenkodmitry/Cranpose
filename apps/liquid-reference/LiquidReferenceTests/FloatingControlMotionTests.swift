@@ -3,6 +3,7 @@ import XCTest
 @MainActor
 class FloatingControlTests: ReferenceUITests {
     var backdrop: String { "checkerboard-mono" }
+    var captureColorMatrices: Bool { false }
 
     func captureFloating(_ component: String, selected: Bool = false, dragOutside: Bool = false, probe: String? = nil, pressOffset: CGFloat = 0) throws {
         continueAfterFailure = false
@@ -17,6 +18,9 @@ class FloatingControlTests: ReferenceUITests {
                                  "REFERENCE_CAPTURE_CASE": "\(selected ? "on" : "off")-\(dragOutside ? "drag-out" : "press")",
                                  "REFERENCE_CONTACT_FILTER_TIME": "0.4",
                                   "REFERENCE_SETTLING_SECONDS": "2"]
+        if captureColorMatrices {
+            app.launchEnvironment["REFERENCE_CAPTURE_COLOR_MATRICES"] = "1"
+        }
         if let probe {
             app.launchEnvironment["REFERENCE_CONTROL_OPTICAL_PROBE"] = probe
             app.launchEnvironment["REFERENCE_CAPTURE_CASE"] = "probe-\(probe)"
@@ -57,6 +61,16 @@ class FloatingControlTests: ReferenceUITests {
         XCTAssertTrue(app.staticTexts["Activations: \(expectedActivations)"].waitForExistence(timeout: 3))
         XCTAssertFalse(app.staticTexts["trace-error"].exists)
     }
+}
+
+@MainActor class NativeChipTransitionTests: FloatingControlTests {
+    override var captureColorMatrices: Bool { true }
+    func testSelect() throws { try captureFloating("filter-chip") }
+    func testDeselect() throws { try captureFloating("filter-chip", selected: true) }
+}
+
+@MainActor final class NativeRainbowChipTransitionTests: NativeChipTransitionTests {
+    override var backdrop: String { "checkerboard" }
 }
 
 @MainActor class NativeFloatingMonoTests: FloatingControlTests {

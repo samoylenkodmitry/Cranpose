@@ -1170,7 +1170,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let edge_lens = refraction_mode >= 1.5;
     let edge_reach = max(get_float(131u), 0.0) * optical_scale;
     let specular_height = fixed_or(get_float(205u), 0.0, GLASS_CONTOUR_HIGHLIGHT_OFF) * optical_scale;
-    let in_specular = specular_height > 0.0 && -d < max(specular_height, get_float(210u) * optical_scale);
+    let in_specular = specular_height > 0.0 && -d < max(specular_height + 0.5, get_float(210u) * optical_scale);
     var outward_normal = vec2<f32>(0.0);
     if in_rim || in_specular || contour_alpha > 0.0 || (refraction_mode > 0.5 && -d < lens_refraction * 1.44) {
         let eps = 0.5;
@@ -1830,7 +1830,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
             + vec4<f32>(reflected * light_alpha, light_alpha);
     }
 
-    if specular_height > 0.0 {
+    if in_specular {
         let reflection = specular_reflection(d, outward_normal, specular_height, optical_scale);
         let luma = dot(specular_under, vec3<f32>(0.2126, 0.7152, 0.0722));
         let color = clamp((specular_under - vec3<f32>(luma)) * get_float(212u)
@@ -1873,7 +1873,12 @@ fn material_tint(rgb: vec3<f32>, tint: vec4<f32>, opacity: f32) -> vec3<f32> {
         let luma = clamp(dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
         color *= mix(get_float(202u), 1.0, luma);
     }
-    return mix(rgb, color, opacity);
+    let tinted = mix(rgb, color, opacity);
+    if fixed_or(get_float(215u), 0.0, GLASS_TINT_TRANSMISSION_OFF) > 0.0 {
+        let previous = get_vec4(216u);
+        return mix(mix(rgb, previous.rgb, previous.a), tinted, get_float(215u) - 1.0);
+    }
+    return tinted;
 }
 
 fn specular_reflection(d: f32, normal: vec2<f32>, height: f32, scale: f32) -> f32 {

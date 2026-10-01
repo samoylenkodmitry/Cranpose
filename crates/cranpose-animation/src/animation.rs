@@ -167,6 +167,9 @@ pub enum Easing {
     /// Fast out, linear in (material design).
     /// Jetpack Compose: FastOutLinearEasing
     FastOutLinearEasing,
+    /// A cubic Bezier timing curve with control points `(x1, y1)` and `(x2, y2)`.
+    /// The x coordinates must be finite and in `[0, 1]` for a monotonic time mapping.
+    CubicBezier(f32, f32, f32, f32),
     /// Holds each of `step_count` evenly spaced values for one discrete step.
     Steps(u32),
 }
@@ -182,6 +185,7 @@ impl Easing {
             Easing::FastOutSlowInEasing => cubic_bezier(0.4, 0.0, 0.2, 1.0, fraction),
             Easing::LinearOutSlowInEasing => cubic_bezier(0.0, 0.0, 0.2, 1.0, fraction),
             Easing::FastOutLinearEasing => cubic_bezier(0.4, 0.0, 1.0, 1.0, fraction),
+            Easing::CubicBezier(x1, y1, x2, y2) => cubic_bezier(*x1, *y1, *x2, *y2, fraction),
             Easing::Steps(step_count) => {
                 if fraction <= 0.0 || fraction >= 1.0 {
                     fraction

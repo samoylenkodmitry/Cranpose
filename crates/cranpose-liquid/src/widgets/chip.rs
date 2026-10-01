@@ -1,6 +1,9 @@
+use cranpose_animation::{AnimationSpec, AnimationType, Easing, animateFloatAsState};
 use cranpose_macros::composable;
 use cranpose_services::HapticFeedback;
-use cranpose_ui::Modifier;
+use cranpose_ui::{Box, BoxSpec, Modifier};
+use cranpose_ui_graphics::GraphicsLayer;
+use cranpose_ui_layout::Alignment;
 
 use super::button::{GlassButtonLabel, GlassButtonSize, GlassButtonSpec, GlassButtonWithFeedback};
 
@@ -14,18 +17,55 @@ pub fn LiquidChip(
     label: impl Into<String>,
 ) {
     let label = label.into();
-    let spec = if selected {
-        GlassButtonSpec::prominent()
-    } else {
-        GlassButtonSpec::glass()
-    }
-    .with_size(GlassButtonSize::Small);
+    let appearance = |delay| {
+        AnimationType::Tween(
+            AnimationSpec::tween(470, Easing::CubicBezier(0.25, 0.1, 0.25, 1.0)).with_delay(delay),
+        )
+    };
+    let label_progress = animateFloatAsState(f32::from(selected), appearance(16), "chip-label");
+    let tint_progress = animateFloatAsState(f32::from(selected), appearance(24), "chip-tint");
+    let description = label.clone();
     GlassButtonWithFeedback(
-        modifier.stable_semantics(move |config| config.selected = Some(selected)),
-        spec.clone(),
+        modifier.stable_semantics(move |config| {
+            config.selected = Some(selected);
+            config.content_description = Some(description.clone());
+        }),
+        GlassButtonSpec::prominent().with_size(GlassButtonSize::Small),
         HapticFeedback::Selection,
+        Some(tint_progress),
         on_click,
-        move || GlassButtonLabel(label.clone(), spec.clone()),
+        move || {
+            for prominent in [!selected, selected] {
+                let label = label.clone();
+                let layer = Modifier::empty()
+                    .stable_semantics(|config| config.hidden = true)
+                    .graphics_layer(move || GraphicsLayer {
+                        alpha: if prominent {
+                            label_progress.get()
+                        } else {
+                            (1.0 - label_progress.get())
+                                * if selected {
+                                    1.0
+                                } else {
+                                    1.0 - tint_progress.get()
+                                }
+                        },
+                        ..Default::default()
+                    });
+                Box(
+                    layer,
+                    BoxSpec::default().content_alignment(Alignment::CENTER),
+                    move || {
+                        let spec = if prominent {
+                            GlassButtonSpec::prominent()
+                        } else {
+                            GlassButtonSpec::glass()
+                        };
+                        GlassButtonLabel(label.clone(), spec.with_size(GlassButtonSize::Small));
+                    },
+                );
+            }
+        },
     );
 }
 

@@ -65,6 +65,43 @@ fn another_finger_cannot_release_the_active_floating_button() {
 }
 
 #[test]
+fn chip_selection_is_immediate_and_keeps_one_accessible_label_during_transition() {
+    let selected = Rc::new(Cell::new(false));
+    let observed = Rc::clone(&selected);
+    let mut robot = create_headless_robot_test(400, 300, move || {
+        let observed = Rc::clone(&observed);
+        LiquidTheme(LiquidThemeSpec::default(), move || {
+            let state = cranpose_core::rememberMutableStateOf(|| false);
+            let observed = Rc::clone(&observed);
+            LiquidChip(
+                Modifier::empty().size_points(100.0, 28.0),
+                state.get(),
+                move || {
+                    state.set(!state.get());
+                    observed.set(state.get());
+                },
+                "Unread",
+            );
+        });
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    for expected in [true, false, true] {
+        robot.click_at(50.0, 14.0);
+        assert_eq!(selected.get(), expected);
+        robot.advance_time(50_000_000);
+        let tree = placed_semantics_from_shell(robot.shell_mut()).expect("chip semantics");
+        let actions: Vec<_> = tree
+            .flatten()
+            .into_iter()
+            .filter(|node| node.clickable && !node.hidden)
+            .collect();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].label.as_deref(), Some("Unread"));
+    }
+}
+
+#[test]
 fn floating_button_can_be_reached_and_activated_from_the_keyboard() {
     let (mut robot, clicks) = button();
     robot.shell_mut().set_semantics_enabled(true);
