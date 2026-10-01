@@ -504,8 +504,10 @@ impl SlotTable {
         &mut self,
         state: &mut SlotWriteSessionState,
     ) {
-        let refreshes = state.drain_payload_location_refreshes().collect::<Vec<_>>();
-        for (owner, start) in refreshes {
+        if !state.has_pending_payload_location_refreshes() {
+            return;
+        }
+        for (owner, start) in state.drain_payload_location_refreshes() {
             self.refresh_group_payload_anchor_locations(owner, start);
         }
         #[cfg(any(test, debug_assertions))]

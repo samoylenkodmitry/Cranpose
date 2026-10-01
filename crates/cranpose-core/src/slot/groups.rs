@@ -1,7 +1,7 @@
 #[cfg(any(test, debug_assertions))]
 use super::AnchorState;
 use super::{ActiveGroupId, ChildCursor, DirectChildRange, GroupKey, SlotTable, SubtreeRange};
-use crate::{AnchorId, ScopeId};
+use crate::{AnchorId, RecomposeScope};
 
 pub(super) struct GroupRecord {
     pub(super) key: GroupKey,
@@ -15,7 +15,7 @@ pub(super) struct GroupRecord {
     pub(super) subtree_node_count: u32,
     pub(super) generation: u32,
     pub(super) anchor: AnchorId,
-    pub(super) scope_id: Option<ScopeId>,
+    pub(super) scope: Option<RecomposeScope>,
 }
 
 #[derive(Clone, Copy)]
@@ -94,12 +94,15 @@ impl SlotTable {
     }
 
     #[inline(always)]
-    pub(in crate::slot) fn group_scope_id_at_index(&self, group_index: usize) -> Option<ScopeId> {
+    pub(in crate::slot) fn group_scope_at_index(
+        &self,
+        group_index: usize,
+    ) -> Option<RecomposeScope> {
         let Some(group) = self.groups.get(group_index) else {
             log::error!("slot table ignored scope lookup for missing group index {group_index}");
             return None;
         };
-        group.scope_id
+        group.scope.clone()
     }
 
     #[inline(always)]

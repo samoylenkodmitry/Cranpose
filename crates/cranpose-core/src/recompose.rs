@@ -14,8 +14,7 @@ impl Composer {
         parent_hint: Option<NodeId>,
     ) -> Option<usize> {
         let parent_hint = parent_hint?;
-        let roots =
-            self.with_slot_session_mut(|slots| slots.active_scope_root_node_ids(scope.id()));
+        let roots = self.with_slot_session_mut(|slots| slots.active_scope_root_node_ids(scope));
         let first = roots.first().copied()?;
         let mut applier = self.borrow_applier();
         let mut siblings: SmallVec<[NodeId; 8]> = SmallVec::new();
@@ -64,8 +63,7 @@ impl Composer {
             scope.mark_recomposed();
             return;
         }
-        let started =
-            self.with_slot_session_mut(|slots| slots.begin_recompose_at_scope(scope.id()));
+        let started = self.with_slot_session_mut(|slots| slots.begin_recompose_at_scope(scope));
         log::trace!(
             target: "cranpose::compose::recompose",
             "scope_id={} label={:?} started_at={started:?} sources={:?}",

@@ -237,7 +237,7 @@ fn log_runtime_stats(robot: &cranpose::Robot, phase: &str) {
     match robot.get_runtime_leak_debug_stats() {
         Ok(stats) => {
             eprintln!(
-                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} retained_slot_heap_mb={:.1} groups={}/{} payloads={}/{} payload_anchors_active={}/{} payload_anchor_slots={} payload_anchors_detached={} payload_anchors_invalidated={} payload_anchor_heap_kb={} slot_nodes={}/{} pending_drops={}/{} anchors_active={}/{} anchor_slots={} anchor_sparse={} anchors_detached={} anchors_invalidated={} anchors_free={} anchor_heap_kb={} retained_subtrees={} retained_groups={} retained_payloads={} retained_nodes={} retained_scopes={} retained_anchors={} scope_index={}/{} scopes={}/{} commands={}/{} observer_states={}/{}",
+                "[runtime:{phase}] nodes={}/{} live_heap_mb={:.1} recycled_heap_mb={:.1} slot_heap_mb={:.1} retained_slot_heap_mb={:.1} groups={}/{} payloads={}/{} payload_anchors_active={}/{} payload_anchor_slots={} payload_anchors_detached={} payload_anchors_invalidated={} payload_anchor_heap_kb={} slot_nodes={}/{} pending_drops={}/{} anchors_active={}/{} anchor_slots={} anchor_sparse={} anchors_detached={} anchors_invalidated={} anchors_free={} anchor_heap_kb={} retained_subtrees={} retained_groups={} retained_payloads={} retained_nodes={} retained_scopes={} retained_anchors={} scopes={}/{} commands={}/{} observer_states={}/{}",
                 stats.applier_stats.nodes_len,
                 stats.applier_stats.nodes_cap,
                 stats.live_node_heap_bytes as f64 / (1024.0 * 1024.0),
@@ -272,8 +272,6 @@ fn log_runtime_stats(robot: &cranpose::Robot, phase: &str) {
                 stats.slot_stats.retained_node_count,
                 stats.slot_stats.retained_scope_count,
                 stats.slot_stats.retained_anchor_count,
-                stats.slot_stats.scope_index_count,
-                stats.slot_stats.scope_index_capacity,
                 stats.recompose_scope_stats.len,
                 stats.recompose_scope_stats.capacity,
                 stats.pass_stats.commands_len,

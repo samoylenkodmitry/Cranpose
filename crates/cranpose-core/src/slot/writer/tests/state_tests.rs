@@ -136,7 +136,8 @@ fn validate_allows_scoped_recompose_root_depth() {
     let mut table = SlotTable::new();
     let mut lifecycle = SlotLifecycleCoordinator::default();
     let mut state = SlotWriteSessionState::default();
-    let scope_id = 41;
+    let runtime = crate::runtime::TestRuntime::new();
+    let scope = crate::RecomposeScope::new_for_test(runtime.handle());
 
     state.reset_for_pass(SlotPassMode::Compose);
     {
@@ -146,7 +147,7 @@ fn validate_allows_scoped_recompose_root_depth() {
 
         let child_key = session.preview_group_key(GroupKeySeed::unkeyed(11));
         let child = session.begin_group(child_key, None, None);
-        session.set_group_scope(child.group, scope_id);
+        session.set_group_scope(child.group, scope.clone());
         let _ = session.finish_group_body();
         session.end_group();
 
@@ -158,7 +159,7 @@ fn validate_allows_scoped_recompose_root_depth() {
     {
         let mut session = table.write_session(&mut lifecycle, &mut state);
         let _ = session
-            .begin_recompose_at_scope(scope_id)
+            .begin_recompose_at_scope(&scope)
             .expect("scoped recompose should resolve");
     }
 

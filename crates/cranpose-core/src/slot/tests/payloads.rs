@@ -127,7 +127,7 @@ fn payload_segment_insert_rejects_out_of_range_offset_without_mutating() {
         subtree_node_count: 0,
         generation: 0,
         anchor: owner,
-        scope_id: None,
+        scope: None,
     }];
     let mut payloads = vec![17_i32];
 

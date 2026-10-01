@@ -45,7 +45,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
             subtree_node_count: 1,
             generation: 0,
             anchor: owner,
-            scope_id: None,
+            scope: None,
         }],
         payloads: Vec::new(),
         nodes: vec![NodeRecord {
@@ -85,7 +85,7 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
             subtree_node_count: 1,
             generation: 0,
             anchor: owner,
-            scope_id: None,
+            scope: None,
         }],
         payloads: Vec::new(),
         nodes: vec![NodeRecord {
@@ -119,7 +119,7 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
-        session.set_group_scope(child.group, CHILD_SCOPE);
+        session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let child_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -128,7 +128,7 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
         session.record_node_with_parent(21, 1, None, crate::slot::BRANCH_PATH_ROOT);
 
         let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
-        session.set_group_scope(grandchild.group, GRANDCHILD_SCOPE);
+        session.set_group_scope(grandchild.group, labeled_scope(GRANDCHILD_SCOPE));
         let grandchild_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -228,10 +228,10 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
 
         (
             child.kind,
-            child.scope_id,
+            scope_label(child.scope.as_ref()),
             child_slot,
             grandchild.kind,
-            grandchild.scope_id,
+            scope_label(grandchild.scope.as_ref()),
             grandchild_slot,
         )
     });
@@ -370,7 +370,7 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
             session.end_group();
 
             let child_b = begin_unkeyed(session, CHILD_B_KEY, None);
-            session.set_group_scope(child_b.group, CHILD_B_SCOPE);
+            session.set_group_scope(child_b.group, labeled_scope(CHILD_B_SCOPE));
             let child_b_slot = session.value_slot_with_kind(
                 PayloadKind::Internal,
                 crate::slot::BRANCH_PATH_ROOT,
@@ -428,7 +428,7 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
     assert!(
         harness
             .table
-            .active_group_for_scope(CHILD_B_SCOPE)
+            .active_group_for_scope(&labeled_scope(CHILD_B_SCOPE))
             .is_none(),
         "detached scopes must leave the active scope index"
     );
@@ -453,7 +453,7 @@ fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexe
 
     let restored_group = harness
         .table
-        .active_group_for_scope(CHILD_B_SCOPE)
+        .active_group_for_scope(&labeled_scope(CHILD_B_SCOPE))
         .expect("restored child scope must become active again");
     assert_eq!(
         harness.table.active_group_anchor(restored_group),
@@ -484,7 +484,7 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
         session.end_group();
 
         let child_b = begin_unkeyed(session, CHILD_B_KEY, None);
-        session.set_group_scope(child_b.group, CHILD_B_SCOPE);
+        session.set_group_scope(child_b.group, labeled_scope(CHILD_B_SCOPE));
         let child_b_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -541,7 +541,7 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
         detached.node_ids_iter().collect::<Vec<_>>(),
         vec![CHILD_B_NODE]
     );
-    assert_eq!(detached.scope_ids(), vec![CHILD_B_SCOPE]);
+    assert_eq!(scope_labels(detached.scopes()), vec![CHILD_B_SCOPE]);
     assert_eq!(harness.table.groups[1].key.static_key, CHILD_A_KEY);
     assert_eq!(harness.table.groups[2].key.static_key, CHILD_C_KEY);
 
@@ -599,7 +599,12 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
             assert!(parent_result.detached_children.is_empty());
             session.end_group();
 
-            (child_b.kind, child_b.scope_id, restored_slot, restored_node)
+            (
+                child_b.kind,
+                scope_label(child_b.scope.as_ref()),
+                restored_slot,
+                restored_node,
+            )
         });
     harness.finish_pass();
 
@@ -612,7 +617,7 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
     );
     assert_eq!(*harness.table.read_value::<i32>(child_b_slot), 128);
     assert_eq!(
-        harness.table.scope_index_anchor(CHILD_B_SCOPE),
+        active_scope_anchor(&harness.table, CHILD_B_SCOPE),
         Some(child_b_anchor)
     );
     assert_eq!(harness.table.validate(), Ok(()));
@@ -694,7 +699,12 @@ fn empty_detached_subtree_root_scope_id_is_absent() {
         nodes: Vec::new(),
     };
 
-    assert_eq!(empty_subtree.root_scope_id(), None);
+    assert_eq!(
+        empty_subtree
+            .root_scope()
+            .and_then(|scope| scope_label(Some(scope))),
+        None
+    );
 }
 
 #[test]
@@ -710,7 +720,7 @@ fn removing_conditional_child_returns_detached_subtree() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
-        session.set_group_scope(child.group, CHILD_SCOPE);
+        session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -738,7 +748,12 @@ fn removing_conditional_child_returns_detached_subtree() {
     harness.finish_pass();
 
     assert_eq!(detached.root_key().static_key, CHILD_KEY);
-    assert_eq!(detached.root_scope_id(), Some(CHILD_SCOPE));
+    assert_eq!(
+        detached
+            .root_scope()
+            .and_then(|scope| scope_label(Some(scope))),
+        Some(CHILD_SCOPE)
+    );
     assert_eq!(detached.group_count(), 1);
     assert_eq!(detached.node_count(), 1);
     assert_eq!(detached.node_ids_iter().collect::<Vec<_>>(), vec![41]);
@@ -749,7 +764,7 @@ fn removing_conditional_child_returns_detached_subtree() {
         detached.node_states().collect::<Vec<_>>(),
         vec![(41, super::NodeLifecycle::Active)]
     );
-    assert_eq!(detached.scope_ids(), vec![CHILD_SCOPE]);
+    assert_eq!(scope_labels(detached.scopes()), vec![CHILD_SCOPE]);
     assert_eq!(detached.group_anchors().count(), 1);
     assert_eq!(detached.groups[0].parent_anchor, AnchorId::INVALID);
     assert_eq!(detached.groups[0].depth, 0);

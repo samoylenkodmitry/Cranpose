@@ -1,5 +1,4 @@
 use super::{super::GroupRecord, SlotTable};
-use crate::{AnchorId, ScopeId};
 
 impl SlotTable {
     pub(in crate::slot) fn refresh_group_indexes_from(&mut self, start: usize) {
@@ -23,16 +22,5 @@ impl SlotTable {
     pub(in crate::slot) fn clear_group_indexes(&mut self, groups: &[GroupRecord]) {
         self.anchors.mark_detached_groups(groups);
         self.movables.forget_groups(groups);
-    }
-
-    pub(in crate::slot) fn clear_scope_index_for_groups(&mut self, groups: &[GroupRecord]) {
-        self.scope_index.remove_groups(groups);
-    }
-
-    pub(in crate::slot) fn restore_scope_index_entries(
-        &mut self,
-        entries: impl IntoIterator<Item = (ScopeId, AnchorId)>,
-    ) {
-        self.scope_index.restore_entries(entries);
     }
 }

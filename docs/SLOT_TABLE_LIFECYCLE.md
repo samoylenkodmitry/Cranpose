@@ -7,28 +7,28 @@ each transition; validation code must reject states outside this contract.
 ## Active Groups
 
 An active group is present in `SlotTable.groups`, has an active group anchor in
-`AnchorRegistry`, and may have an active scope entry in `ScopeIndex`.
+`AnchorRegistry`, and may hold its `RecomposeScope`.
 
 Group transitions:
 
 - `Active -> Detached`: `SlotTable::detach_subtree_at_index_internal` removes the
-  group segment from the active table, clears active group and scope indexes, marks
+  group segment from the active table, clears the active group index, marks
   payload anchors detached, and normalizes the detached root parent to
-  `AnchorId::INVALID`.
+  `AnchorId::INVALID`. The detached groups keep their scopes.
 - `Detached -> Restored`: `SlotTable::restore_subtree` verifies that every group
   and payload anchor is detached, inserts the segment back into `SlotTable.groups`,
-  refreshes group indexes, restores scope index entries, updates ancestor spans,
-  and refreshes payload anchor locations.
+  refreshes group indexes, updates ancestor spans, and refreshes payload anchor
+  locations.
 - `Detached -> Disposed`: `Composer::dispose_detached_subtree_in_host`,
   `ComposerRuntimeState::dispose_retained_subtrees_for_host`, and root pass cleanup
-  dispose detached nodes, remove or deactivate scopes, invalidate detached anchors,
-  and queue payload disposal.
+  dispose detached nodes, deactivate the scopes the groups hold, invalidate detached
+  anchors, and queue the groups and payloads for disposal.
 - `Disposed -> Invalidated`: `SlotTable::invalidate_detached_subtree_anchors`
   removes detached group and payload anchors from their registries and makes stale
   handles unresolvable until their IDs are reused with bumped generations.
 
 Active group anchors must never resolve to detached storage. Detached group anchors
-must never remain in the active group index or active scope index.
+must never remain in the active group index.
 
 ## Nodes
 
@@ -77,23 +77,26 @@ free payload-anchor IDs; disposed payload anchors contribute to the free count.
 
 ## Scopes
 
-Scope IDs tie active groups to recomposition scopes in the runtime registry.
+A group record holds its `RecomposeScope`, and the scope records the anchor of its
+group. A group start takes the scope from the record; a recomposition reaches the
+group through the scope's anchor and accepts it only when that group holds the same
+scope.
 
 Scope lifecycle:
 
-- Active scope: the group is active, `ScopeIndex` maps the scope ID to the group
-  anchor, and `ComposerRuntimeState` owns the `RecomposeScope`.
-- Inactive retained scope: the subtree is retained, the scope remains in the runtime
-  registry, but it is deactivated and removed from the active `ScopeIndex`.
-- Restored invalid scope: restoring retained content reuses the scope and restores
-  its active group anchor; the scope is marked invalid so the restored content can
-  recompose under the active table again.
-- Removed/disposed scope: disposal removes the scope from
-  `ComposerRuntimeState::scope_registry`, deactivates it, and clears its group
-  anchor.
-
-The slot table only indexes active scopes. Routing detached retained scopes remains
-the responsibility of the composer runtime state.
+- Active scope: the group is active and holds the scope; the scope's anchor is the
+  group's anchor.
+- Inactive retained scope: the subtree is retained, its groups keep their scopes,
+  and the scopes are deactivated. Their anchors are detached, so they reach no
+  active group.
+- Restored invalid scope: restoring retained content reuses the scopes its groups
+  hold; the root scope is forced to recompose so the restored content composes
+  under the active table again. A subtree adopted from another table gets new
+  anchors, and its scopes follow them.
+- Disposed scope: disposal deactivates the scopes the detached groups hold, and the
+  scopes are dropped with the group records unless something else holds them.
+  Clearing a slot host takes every scope out of its table and deactivates it, so
+  whatever composes the table next starts with fresh scopes.
 
 ## Validation Boundaries
 
@@ -103,5 +106,5 @@ must agree with this document:
 - active indexes contain only active groups and active payload locations;
 - retained subtrees contain only detached group and payload anchors;
 - retained nodes use `RetainedDetached`;
-- retained scopes are absent from the active scope index;
+- retained scopes reach no active group;
 - stale anchors and value slots fail rather than aliasing unrelated records.

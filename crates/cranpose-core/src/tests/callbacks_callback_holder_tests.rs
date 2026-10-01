@@ -64,7 +64,7 @@ fn callback_holder_does_not_invoke_under_inactive_creator_ancestor() {
     let runtime = TestRuntime::new();
     let ancestor = RecomposeScope::new_for_test(runtime.handle());
     let creator = RecomposeScope::new_for_test(runtime.handle());
-    creator.set_parent_scope(Some(ancestor.clone()));
+    creator.set_parent_scope(Some(&ancestor));
     let holder = CallbackHolder::new();
     let invocations = Rc::new(Cell::new(0));
     let invocations_for_callback = Rc::clone(&invocations);

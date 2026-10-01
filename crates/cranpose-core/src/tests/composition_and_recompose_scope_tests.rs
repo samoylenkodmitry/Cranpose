@@ -1722,7 +1722,7 @@ fn restored_retained_scope_processes_forced_recompose() {
 
     assert!(
         recomposed,
-        "restored retained scope must resolve through ScopeIndex for forced recomposition",
+        "restored retained scope must resolve to its group for forced recomposition",
     );
     assert_eq!(
         INVOCATIONS.with(Cell::get),
@@ -1735,34 +1735,26 @@ fn restored_retained_scope_processes_forced_recompose() {
 fn changing_root_key_does_not_leak_root_scopes() {
     let mut composition = test_composition();
 
+    let live_before = debug_live_recompose_scope_count();
     composition.render(11, || {}).expect("initial root render");
     assert_eq!(
-        composition
-            .debug_slot_snapshot()
-            .runtime_scope_registry_count
-            .expect("composition snapshot should include runtime scope registry count"),
-        1,
-        "initial render should register exactly one root scope"
+        debug_live_recompose_scope_count(),
+        live_before + 1,
+        "initial render should create exactly one root scope"
     );
 
     composition.render(22, || {}).expect("second root render");
     assert_eq!(
-        composition
-            .debug_slot_snapshot()
-            .runtime_scope_registry_count
-            .expect("composition snapshot should include runtime scope registry count"),
-        1,
-        "changing the root key must dispose the previous root scope instead of leaking it",
+        debug_live_recompose_scope_count(),
+        live_before + 1,
+        "changing the root key must drop the previous root scope instead of leaking it",
     );
 
     composition.render(33, || {}).expect("third root render");
     assert_eq!(
-        composition
-            .debug_slot_snapshot()
-            .runtime_scope_registry_count
-            .expect("composition snapshot should include runtime scope registry count"),
-        1,
-        "repeated root-key churn must keep the scope registry bounded",
+        debug_live_recompose_scope_count(),
+        live_before + 1,
+        "repeated root-key churn must keep the live scopes bounded",
     );
 }
 
@@ -2017,11 +2009,8 @@ fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
         .expect("initial retained payload");
     first_slot.replace(41);
     let first_node = emitted_node.get().expect("initial retained node");
-    let active_scope_count = composition
-        .debug_slot_snapshot()
-        .runtime_scope_registry_count
-        .expect("composition snapshot should include runtime scope registry count");
-    let active_scope_index_count = composition.debug_slot_table_stats().scope_index_count;
+    let live_scope_count = debug_live_recompose_scope_count();
+    let active_scope_count = composition.debug_slot_snapshot().active_scope_count;
     assert_eq!(branch_invocations.get(), 1);
 
     show_branch.set_value(false);
@@ -2044,10 +2033,9 @@ fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
     assert_eq!(hidden_snapshot.retained_scope_count, 1);
     assert_eq!(hidden_snapshot.retained_payload_count, 2);
     assert_eq!(
-        hidden_snapshot
-            .runtime_scope_registry_count
-            .expect("composition snapshot should include runtime scope registry count"),
-        active_scope_count
+        debug_live_recompose_scope_count(),
+        live_scope_count,
+        "the retained branch must keep its scope alive"
     );
     assert_eq!(hidden_stats.retained_payload_count, 2);
     assert_eq!(hidden_stats.retained_node_count, 1);
@@ -2065,9 +2053,9 @@ fn retained_branch_preserves_node_payload_and_scope_lifecycle_until_restore() {
     assert_eq!(node_unmounts.get(), 0);
     assert_eq!(branch_invocations.get(), 2);
     assert_eq!(
-        composition.debug_slot_table_stats().scope_index_count,
-        active_scope_index_count,
-        "restored retained scope must re-enter the active scope index"
+        composition.debug_slot_snapshot().active_scope_count,
+        active_scope_count,
+        "restored retained scope must return to the active slot table"
     );
     assert_eq!(composition.debug_slot_snapshot().retained_subtree_count, 0);
     assert_composition_valid(&composition);
@@ -2326,6 +2314,7 @@ fn secondary_host_reset_disposes_retained_subtrees_before_clearing_ownership() {
     composer.enter_phase(Phase::Measure);
 
     let secondary_host = Rc::new(SlotsHost::new(SlotTable::default()));
+    let live_scopes_before = debug_live_recompose_scope_count();
     let emitted_node = Rc::new(Cell::new(None::<NodeId>));
     let payload_drops = Rc::new(Cell::new(0));
     let node_unmounts = Rc::new(Cell::new(0));
@@ -2404,9 +2393,9 @@ fn secondary_host_reset_disposes_retained_subtrees_before_clearing_ownership() {
         "secondary host reset must clear the old host storage key"
     );
     assert_eq!(
-        composer.core.shared_state.scope_registry_len(),
-        0,
-        "secondary host reset must remove retained scopes from the runtime registry"
+        debug_live_recompose_scope_count(),
+        live_scopes_before,
+        "secondary host reset must release the scopes it composed"
     );
     assert_eq!(secondary_host.debug_stats().retained_subtree_count, 0);
     assert_eq!(secondary_host.borrow().validate(), Ok(()));
@@ -2633,8 +2622,6 @@ struct SlotMemoryPlateau {
     free_anchor_count: usize,
     anchor_capacity: usize,
     anchor_heap_bytes: usize,
-    scope_index_count: usize,
-    scope_index_capacity: usize,
     retained_subtree_count: usize,
     retained_group_count: usize,
     retained_payload_count: usize,
@@ -2674,8 +2661,6 @@ impl From<SlotTableDebugStats> for SlotMemoryPlateau {
             free_anchor_count: stats.free_anchor_count,
             anchor_capacity: stats.anchor_capacity,
             anchor_heap_bytes: stats.anchor_heap_bytes,
-            scope_index_count: stats.scope_index_count,
-            scope_index_capacity: stats.scope_index_capacity,
             retained_subtree_count: stats.retained_subtree_count,
             retained_group_count: stats.retained_group_count,
             retained_payload_count: stats.retained_payload_count,

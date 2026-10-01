@@ -170,7 +170,7 @@ impl SlotTable {
                 subtree_node_count: 0,
                 generation,
                 anchor,
-                scope_id: None,
+                scope: None,
             },
         );
         self.refresh_group_indexes_from(insert_index);

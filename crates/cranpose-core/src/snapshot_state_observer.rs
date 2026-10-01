@@ -78,6 +78,10 @@ impl SnapshotStateObserver {
             .observe_reads(scope, on_value_changed_for_scope, block)
     }
 
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Notify the observer that a new composition frame is starting.
     pub fn begin_frame(&self) {
         self.inner.begin_frame();
@@ -550,7 +554,13 @@ impl SnapshotStateObserverInner {
     }
 
     fn run_with_read_observer<R>(&self, block: impl FnOnce() -> R) -> R {
-        use crate::snapshot_v2::take_transparent_observer_mutable_snapshot_reusing;
+        use crate::snapshot_v2::{
+            current_snapshot_reads_into, take_transparent_observer_mutable_snapshot_reusing,
+        };
+
+        if current_snapshot_reads_into(&self.read_dispatcher) {
+            return block();
+        }
 
         let mut snapshot = take_transparent_observer_mutable_snapshot_reusing(
             Some(self.read_dispatcher.clone()),
