@@ -47,8 +47,6 @@ pub struct ModifierChainHandle {
     /// `None` until the chain first provides or reads a modifier local, as
     /// most chains never do.
     modifier_locals: Option<ModifierLocalsHandle>,
-    inspector_snapshot: Vec<ModifierChainInspectorNode>,
-    inspector_entry_scratch: Vec<Option<ModifierInspectorRecord>>,
     debug_logging: bool,
 }
 
@@ -61,8 +59,6 @@ impl Default for ModifierChainHandle {
             capabilities: NodeCapabilities::default(),
             aggregate_child_capabilities: NodeCapabilities::default(),
             modifier_locals: None,
-            inspector_snapshot: Vec::new(),
-            inspector_entry_scratch: Vec::new(),
             debug_logging: false,
         }
     }
@@ -100,9 +96,9 @@ impl ModifierChainHandle {
 
         let should_log = self.debug_logging || modifier_debug_enabled();
         if should_log {
-            self.collect_inspector_snapshot(modifier);
-            crate::debug::log_modifier_chain(self.chain(), self.inspector_snapshot());
-            crate::debug::emit_modifier_chain_trace(self.inspector_snapshot());
+            let snapshot = self.inspector_snapshot(modifier);
+            crate::debug::log_modifier_chain(self.chain(), &snapshot);
+            crate::debug::emit_modifier_chain_trace(&snapshot);
         }
         modifier_local_invalidations
     }
@@ -198,13 +194,39 @@ impl ModifierChainHandle {
             .sync(&self.chain, resolver)
     }
 
-    pub fn inspector_snapshot(&self) -> &[ModifierChainInspectorNode] {
-        &self.inspector_snapshot
-    }
-
-    #[cfg(test)]
-    pub fn refresh_inspector_snapshot(&mut self, modifier: &Modifier) {
-        self.collect_inspector_snapshot(modifier);
+    /// The chain's nodes in order, with the inspector record of the element
+    /// in `modifier` each top-level node came from. Built on request for
+    /// debug output, so chains keep no inspector state.
+    pub fn inspector_snapshot(&self, modifier: &Modifier) -> Vec<ModifierChainInspectorNode> {
+        let chain_len = self.chain.len();
+        let mut records: Vec<Option<ModifierInspectorRecord>> = modifier
+            .iter_inspector_metadata()
+            .take(chain_len)
+            .map(|metadata| Some(metadata.to_record()))
+            .collect();
+        let mut snapshot = Vec::with_capacity(chain_len);
+        self.chain.for_each_forward(|node_ref| {
+            node_ref.with_node(|node| {
+                let depth = node_ref.delegate_depth();
+                let entry_index = node_ref.entry_index();
+                let inspector = if depth == 0 {
+                    entry_index
+                        .and_then(|idx| records.get_mut(idx))
+                        .and_then(Option::take)
+                } else {
+                    None
+                };
+                snapshot.push(ModifierChainInspectorNode {
+                    depth,
+                    entry_index,
+                    type_name: type_name_of_val(node),
+                    capabilities: node_ref.kind_set(),
+                    aggregate_child_capabilities: node_ref.aggregate_child_capabilities(),
+                    inspector,
+                });
+            });
+        });
+        snapshot
     }
 
     fn compute_resolved(&self) -> ResolvedModifiers {
@@ -253,52 +275,6 @@ impl ModifierChainHandle {
         resolved.set_layout_properties(layout);
         resolved.set_offset(offset);
         resolved
-    }
-
-    fn collect_inspector_snapshot(&mut self, modifier: &Modifier) {
-        if self.chain.is_empty() {
-            self.inspector_snapshot.clear();
-            return;
-        }
-
-        let chain_len = self.chain.len();
-        self.inspector_entry_scratch.clear();
-        self.inspector_entry_scratch.resize_with(chain_len, || None);
-        for (index, metadata) in modifier.iter_inspector_metadata().enumerate() {
-            if index >= chain_len {
-                break;
-            }
-            self.inspector_entry_scratch[index] = Some(metadata.to_record());
-        }
-
-        self.inspector_snapshot.clear();
-        self.inspector_snapshot.reserve(chain_len);
-
-        let chain = &self.chain;
-        let inspector_entry_scratch = &mut self.inspector_entry_scratch;
-        let inspector_snapshot = &mut self.inspector_snapshot;
-
-        chain.for_each_forward(|node_ref| {
-            node_ref.with_node(|node| {
-                let depth = node_ref.delegate_depth();
-                let entry_index = node_ref.entry_index();
-                let inspector = if depth == 0 {
-                    entry_index
-                        .and_then(|idx| inspector_entry_scratch.get_mut(idx))
-                        .and_then(Option::take)
-                } else {
-                    None
-                };
-                inspector_snapshot.push(ModifierChainInspectorNode {
-                    depth,
-                    entry_index,
-                    type_name: type_name_of_val(node),
-                    capabilities: node_ref.kind_set(),
-                    aggregate_child_capabilities: node_ref.aggregate_child_capabilities(),
-                    inspector,
-                });
-            });
-        });
     }
 
     /// Access a text field modifier node in the chain with a mutable callback.

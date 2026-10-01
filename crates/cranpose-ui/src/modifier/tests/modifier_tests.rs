@@ -1817,9 +1817,8 @@ fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
     );
     let mut handle = ModifierChainHandle::new();
     let _ = handle.update(&modifier);
-    handle.refresh_inspector_snapshot(&modifier);
 
-    let snapshot = handle.inspector_snapshot();
+    let snapshot = handle.inspector_snapshot(&modifier);
     assert!(snapshot.iter().any(|node| node.depth > 0));
     let padding_entry = snapshot
         .iter()

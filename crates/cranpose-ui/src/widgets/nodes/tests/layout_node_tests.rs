@@ -42,7 +42,11 @@ impl MeasurePolicy for TestMeasurePolicy {
 }
 
 fn fresh_node() -> LayoutNode {
-    LayoutNode::new(Modifier::empty(), Rc::new(TestMeasurePolicy))
+    node_with(Modifier::empty())
+}
+
+fn node_with(modifier: Modifier) -> LayoutNode {
+    LayoutNode::new(modifier, Rc::new(TestMeasurePolicy))
 }
 
 #[test]
@@ -200,11 +204,9 @@ fn invalidation(kind: InvalidationKind) -> ModifierInvalidation {
 #[test]
 fn layout_invalidation_requires_layout_capability() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
+    let node = node_with(Modifier::empty().draw_behind(|_| {}));
     node.clear_needs_measure();
     node.clear_needs_layout();
-    node.modifier_capabilities = NodeCapabilities::DRAW;
-    node.modifier_child_capabilities = node.modifier_capabilities;
 
     node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Layout)]);
 
@@ -233,12 +235,10 @@ fn layout_invalidation_marks_flags_when_capability_present() {
     let _app_context = crate::render_state::app_context_test_scope();
     let _guard = crate::render_state::render_state_test_guard();
     crate::reset_render_state_for_tests();
-    let mut node = fresh_node();
+    let node = node_with(Modifier::empty().padding(1.0));
     node.id.set(Some(11));
     node.clear_needs_measure();
     node.clear_needs_layout();
-    node.modifier_capabilities = NodeCapabilities::LAYOUT;
-    node.modifier_child_capabilities = node.modifier_capabilities;
 
     node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Layout)]);
 
@@ -257,14 +257,12 @@ fn layout_invalidation_skips_repass_while_composing() {
     let _guard = crate::render_state::render_state_test_guard();
     crate::reset_render_state_for_tests();
 
-    let node = Rc::new(RefCell::new(fresh_node()));
+    let node = Rc::new(RefCell::new(node_with(Modifier::empty().padding(1.0))));
     {
-        let mut node = node.borrow_mut();
+        let node = node.borrow_mut();
         node.id.set(Some(17));
         node.clear_needs_measure();
         node.clear_needs_layout();
-        node.modifier_capabilities = NodeCapabilities::LAYOUT;
-        node.modifier_child_capabilities = node.modifier_capabilities;
     }
 
     let node_for_composition = Rc::clone(&node);
@@ -284,11 +282,9 @@ fn layout_invalidation_skips_repass_while_composing() {
 #[test]
 fn draw_invalidation_marks_redraw_flag_when_capable() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
+    let node = node_with(Modifier::empty().draw_behind(|_| {}));
     node.clear_needs_measure();
     node.clear_needs_layout();
-    node.modifier_capabilities = NodeCapabilities::DRAW;
-    node.modifier_child_capabilities = node.modifier_capabilities;
 
     node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Draw)]);
 
@@ -299,12 +295,10 @@ fn draw_invalidation_marks_redraw_flag_when_capable() {
 #[test]
 fn draw_invalidation_capability_marks_redraw_for_layout_modifier_update() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
+    let node = node_with(Modifier::empty().padding(1.0));
     node.clear_needs_measure();
     node.clear_needs_layout();
     node.clear_needs_redraw();
-    node.modifier_capabilities = NodeCapabilities::LAYOUT;
-    node.modifier_child_capabilities = node.modifier_capabilities;
 
     node.dispatch_modifier_invalidations(&[ModifierInvalidation::new(
         InvalidationKind::Draw,
@@ -319,12 +313,10 @@ fn draw_invalidation_capability_marks_redraw_for_layout_modifier_update() {
 #[test]
 fn semantics_invalidation_sets_semantics_flag_only() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
+    let node = node_with(Modifier::empty().semantics(|_| {}));
     node.clear_needs_measure();
     node.clear_needs_layout();
     node.clear_needs_semantics();
-    node.modifier_capabilities = NodeCapabilities::SEMANTICS;
-    node.modifier_child_capabilities = node.modifier_capabilities;
 
     node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Semantics)]);
 
@@ -336,10 +328,8 @@ fn semantics_invalidation_sets_semantics_flag_only() {
 #[test]
 fn pointer_invalidation_requires_pointer_capability() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
+    let node = node_with(Modifier::empty().draw_behind(|_| {}));
     node.clear_needs_pointer_pass();
-    node.modifier_capabilities = NodeCapabilities::DRAW;
-    node.modifier_child_capabilities = node.modifier_capabilities;
 
     node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::PointerInput)]);
 
@@ -349,10 +339,8 @@ fn pointer_invalidation_requires_pointer_capability() {
 #[test]
 fn pointer_invalidation_marks_flag_and_requests_queue() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
+    let node = node_with(Modifier::empty().clickable(|_| {}));
     node.clear_needs_pointer_pass();
-    node.modifier_capabilities = NodeCapabilities::POINTER_INPUT;
-    node.modifier_child_capabilities = node.modifier_capabilities;
 
     node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::PointerInput)]);
 
@@ -362,10 +350,8 @@ fn pointer_invalidation_marks_flag_and_requests_queue() {
 #[test]
 fn focus_invalidation_requires_focus_capability() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
+    let node = node_with(Modifier::empty().draw_behind(|_| {}));
     node.clear_needs_focus_sync();
-    node.modifier_capabilities = NodeCapabilities::DRAW;
-    node.modifier_child_capabilities = node.modifier_capabilities;
     crate::take_focus_invalidation();
 
     node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Focus)]);
@@ -377,10 +363,8 @@ fn focus_invalidation_requires_focus_capability() {
 #[test]
 fn focus_invalidation_marks_flag_and_requests_queue() {
     let _app_context = crate::render_state::app_context_test_scope();
-    let mut node = fresh_node();
+    let node = node_with(Modifier::empty().focus_target());
     node.clear_needs_focus_sync();
-    node.modifier_capabilities = NodeCapabilities::FOCUS;
-    node.modifier_child_capabilities = node.modifier_capabilities;
     crate::take_focus_invalidation();
 
     node.dispatch_modifier_invalidations(&[invalidation(InvalidationKind::Focus)]);

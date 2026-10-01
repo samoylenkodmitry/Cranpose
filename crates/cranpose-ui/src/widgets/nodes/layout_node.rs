@@ -361,9 +361,6 @@ pub struct LayoutNode {
     pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
     pub modifier: Modifier,
     modifier_chain: ModifierChainHandle,
-    resolved_modifiers: ResolvedModifiers,
-    modifier_capabilities: NodeCapabilities,
-    modifier_child_capabilities: NodeCapabilities,
     pub measure_policy: Rc<dyn MeasurePolicy>,
     density: crate::density::Density,
     /// The actual children of this node (folded view - includes virtual nodes as-is)
@@ -463,9 +460,6 @@ impl LayoutNode {
             source_trace: cranpose_core::source_trace::current_source_trace(),
             modifier,
             modifier_chain: ModifierChainHandle::new(),
-            resolved_modifiers: ResolvedModifiers::default(),
-            modifier_capabilities: NodeCapabilities::default(),
-            modifier_child_capabilities: NodeCapabilities::default(),
             measure_policy,
             density: crate::density::Density::default(),
             children: Vec::new(),
@@ -508,7 +502,7 @@ impl LayoutNode {
         // provide others.
         if self.modifier == modifier
             && !self
-                .modifier_capabilities
+                .modifier_capabilities()
                 .contains(NodeCapabilities::MODIFIER_LOCALS)
         {
             return;
@@ -523,7 +517,7 @@ impl LayoutNode {
     }
 
     fn sync_modifier_chain(&mut self) {
-        let prev_caps = self.modifier_capabilities;
+        let prev_caps = self.modifier_capabilities();
         let start_parent = self.parent();
         let mut resolver = move |token: &ModifierLocalToken| {
             resolve_modifier_local_from_parent_chain(start_parent, token)
@@ -534,12 +528,9 @@ impl LayoutNode {
         let modifier_local_invalidations = self
             .modifier_chain
             .update_with_resolver(&self.modifier, &mut resolver);
-        self.resolved_modifiers = self.modifier_chain.resolved_modifiers();
-        self.modifier_capabilities = self.modifier_chain.capabilities();
-        self.modifier_child_capabilities = self.modifier_chain.aggregate_child_capabilities();
         if prev_caps.contains(NodeCapabilities::WINDOW_ROOT)
             != self
-                .modifier_capabilities
+                .modifier_capabilities()
                 .contains(NodeCapabilities::WINDOW_ROOT)
         {
             self.note_semantics_layout_change();
@@ -584,7 +575,7 @@ impl LayoutNode {
         invalidations: &[ModifierInvalidation],
         prev_caps: NodeCapabilities,
     ) {
-        let curr_caps = self.modifier_capabilities;
+        let curr_caps = self.modifier_capabilities();
         for invalidation in invalidations {
             self.modifier_slices_dirty.set(true);
             let has_capability =
@@ -840,23 +831,23 @@ impl LayoutNode {
     }
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
-        self.resolved_modifiers
+        self.modifier_chain.resolved_modifiers()
     }
 
     pub fn modifier_capabilities(&self) -> NodeCapabilities {
-        self.modifier_capabilities
+        self.modifier_chain.capabilities()
     }
 
     /// Whether this node's modifier chain makes it the root of a separate
     /// window. Its parent lays out as if it had no size and its parent's
     /// scene skips it; its own scene starts here.
     pub fn is_window_root(&self) -> bool {
-        self.modifier_capabilities
+        self.modifier_capabilities()
             .contains(NodeCapabilities::WINDOW_ROOT)
     }
 
     pub fn modifier_child_capabilities(&self) -> NodeCapabilities {
-        self.modifier_child_capabilities
+        self.modifier_chain.aggregate_child_capabilities()
     }
 
     pub fn set_debug_modifiers(&mut self, enabled: bool) {
@@ -875,26 +866,28 @@ impl LayoutNode {
     }
 
     pub fn has_layout_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities
+        self.modifier_capabilities()
             .contains(NodeCapabilities::LAYOUT)
     }
 
     pub fn has_draw_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities.contains(NodeCapabilities::DRAW)
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::DRAW)
     }
 
     pub fn has_pointer_input_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities
+        self.modifier_capabilities()
             .contains(NodeCapabilities::POINTER_INPUT)
     }
 
     pub fn has_semantics_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities
+        self.modifier_capabilities()
             .contains(NodeCapabilities::SEMANTICS)
     }
 
     pub fn has_focus_modifier_nodes(&self) -> bool {
-        self.modifier_capabilities.contains(NodeCapabilities::FOCUS)
+        self.modifier_capabilities()
+            .contains(NodeCapabilities::FOCUS)
     }
 
     fn refresh_registry_state(&self) {
@@ -981,7 +974,7 @@ impl LayoutNode {
     pub fn semantics_reach(&self) -> cranpose_foundation::SemanticsReach {
         // A chain without semantics reaches nothing, known without touching it.
         if !self
-            .modifier_capabilities
+            .modifier_capabilities()
             .contains(NodeCapabilities::SEMANTICS)
         {
             return cranpose_foundation::SemanticsReach::default();
@@ -1035,9 +1028,6 @@ impl Clone for LayoutNode {
             source_trace: self.source_trace.clone(),
             modifier: self.modifier.clone(),
             modifier_chain: ModifierChainHandle::new(),
-            resolved_modifiers: ResolvedModifiers::default(),
-            modifier_capabilities: self.modifier_capabilities,
-            modifier_child_capabilities: self.modifier_child_capabilities,
             measure_policy: self.measure_policy.clone(),
             density: self.density,
             children: self.children.clone(),
