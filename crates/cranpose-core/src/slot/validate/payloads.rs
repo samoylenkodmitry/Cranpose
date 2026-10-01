@@ -1,6 +1,6 @@
 use super::{
     super::{GroupRecord, PayloadRecord, SlotTable},
-    PayloadAnchorRecord, SlotInvariantError,
+    SlotInvariantError,
     groups::{SlotTreeChecks, SlotTreeView},
 };
 
@@ -40,13 +40,6 @@ pub(super) fn validate_group_payloads(
                 view.payloads.item_count(),
             ));
         };
-        if payload.owner != group.anchor {
-            return Err(view.payload_owner_mismatch(
-                payload.anchor.id(),
-                group.anchor,
-                payload.owner,
-            ));
-        }
         checks.validate_payload(group_index, group, payload_index, payload)?;
     }
 
@@ -105,16 +98,8 @@ pub(super) fn validate_payload_anchor_registry(
         };
         let actual = table
             .group_payload_record_at(group_index, payload_index)
-            .map(|payload| PayloadAnchorRecord {
-                owner: payload.owner,
-                payload_anchor: payload.anchor,
-            });
-        if actual
-            != Some(PayloadAnchorRecord {
-                owner,
-                payload_anchor,
-            })
-        {
+            .map(|payload| payload.anchor);
+        if actual != Some(payload_anchor) {
             return Err(SlotInvariantError::PayloadAnchorRegistryTargetMismatch {
                 payload_anchor,
                 expected_owner: owner,

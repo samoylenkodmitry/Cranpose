@@ -148,16 +148,16 @@ impl SlotTable {
                 ),
             });
         }
-        for (group_index, _) in self.groups.iter().enumerate() {
+        for (group_index, group) in self.groups.iter().enumerate() {
             for (payload_index, payload) in self.group_payload_records_at(group_index).enumerate() {
                 rows.push(SlotDebugEntry {
                     kind: SlotDebugEntryKind::Payload,
                     path: format!("group[{group_index}].payload[{payload_index}]"),
                     line: format!(
                         "Payload(owner={:?}, kind={}, type={})",
-                        payload.owner,
+                        group.anchor,
                         payload.kind.label(),
-                        (payload.type_name)()
+                        (payload.payload_type.type_name)()
                     ),
                 });
             }

@@ -10,7 +10,7 @@ pub(super) fn validate_active_group_anchor(
     group: &GroupRecord,
 ) -> Result<(), SlotInvariantError> {
     match table.anchors.state(group.anchor) {
-        Some(AnchorState::Active(actual)) if actual == group_index => Ok(()),
+        Some(AnchorState::Active(actual)) if actual as usize == group_index => Ok(()),
         actual => Err(SlotInvariantError::AnchorMismatch {
             anchor: group.anchor,
             expected: group_index,

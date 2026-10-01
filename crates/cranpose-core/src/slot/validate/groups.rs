@@ -130,20 +130,6 @@ impl SlotTreeView<'_> {
         }
     }
 
-    pub(super) fn payload_owner_mismatch(
-        &self,
-        payload_anchor: usize,
-        expected: AnchorId,
-        actual: AnchorId,
-    ) -> SlotInvariantError {
-        SlotInvariantError::PayloadOwnerMismatch {
-            tree: self.tree,
-            payload_anchor,
-            expected,
-            actual,
-        }
-    }
-
     pub(super) fn node_start_mismatch(
         &self,
         group_index: usize,

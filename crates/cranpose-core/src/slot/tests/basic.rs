@@ -96,7 +96,7 @@ fn first_composition_records_group_value_and_node() {
         .table
         .group_payload_record_at(0, 0)
         .expect("test payload should resolve");
-    assert_eq!(payload.type_id, TypeId::of::<i32>());
+    assert_eq!(payload.payload_type.type_id, TypeId::of::<i32>());
     assert_eq!(
         harness.table.group_node_record_at(0, 0).lifecycle,
         super::NodeLifecycle::Active
