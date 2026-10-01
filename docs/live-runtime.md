@@ -1,4 +1,17 @@
-# Live UI runtime
+# Experimental live UI documents
+
+Normal UI authoring should use Cranpose Studio's compiler-backed reload path:
+ordinary Rust, ordinary `#[composable]`, and the full native modifier and widget
+APIs. Compatible body edits patch the running application; type/layout changes
+require a rebuild. See [native authoring](https://github.com/samoylenkodmitry/cranpose-idea/blob/codex/live-runtime/docs/native-authoring.md)
+for its tested scope and measurements.
+
+This crate is an optional interpreter experiment with the bounded signatures and
+syntax documented below. It is not a full Rust interpreter and is not the path
+for expanding modifier support. Its catalogue, model access, revision handling and
+MCP transport remain useful experiments. Its MCP edits currently affect interpreted
+documents, not native Rust source files; sharing native source edits between Studio
+and chat agents still needs an adapter to the compiler-backed authoring session.
 
 `cranpose-live` runs an editable UI document inside the normal Cranpose composition
 runtime. After the first native build, supported UI edits change that document
