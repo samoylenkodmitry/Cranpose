@@ -137,7 +137,7 @@ pub fn update_semantics_tree_from_applier(
 }
 
 fn contains_modal(node: &SemanticsNode) -> bool {
-    node.is_modal || node.children.iter().any(contains_modal)
+    node.details().is_modal || node.children.iter().any(contains_modal)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -175,14 +175,26 @@ fn write_report(
             if !same {
                 children.clear();
             }
-            *node = semantics_node_from_parts(node_id, generation, role, config, children, bounds);
+            let held_details = node.details.take();
+            *node = semantics_node_from_parts(
+                node_id,
+                generation,
+                role,
+                config,
+                children,
+                held_details,
+                bounds,
+            );
         }
         None => {
-            node.is_modal = reach.is_modal
+            let is_modal = reach.is_modal
                 && modal_takes_space(Size {
                     width: bounds.width,
                     height: bounds.height,
                 });
+            if node.details().is_modal != is_modal {
+                node.update_details(|details| details.is_modal = is_modal);
+            }
             node.bounds = bounds;
         }
     }
@@ -235,7 +247,7 @@ impl<'a> SemanticsUpdate<'a> {
         let Some(content_origin) = self.visit(node_id, origin, node, generation, same)? else {
             return Ok(false);
         };
-        self.saw_modal |= node.is_modal;
+        self.saw_modal |= node.details().is_modal;
         self.children(&mut node.children, first_child, content_origin)?;
         Ok(true)
     }

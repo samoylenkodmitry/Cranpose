@@ -244,7 +244,8 @@ fn join(
     for child in &node.children {
         children.push(join(child, layout_bounds, touch_bounds)?);
     }
-    if node.collection.is_some() {
+    let details = node.details();
+    if details.collection.is_some() {
         for (child, position) in children.iter_mut().zip(1..) {
             place_row(child, position);
         }
@@ -257,7 +258,7 @@ fn join(
             .accessibility_label()
             .map(std::borrow::Cow::into_owned)
             .or_else(|| node.merges_accessibility_descendants().then(String::new)),
-        state_description: node.state_description.clone(),
+        state_description: details.state_description.clone(),
         clickable: node
             .actions
             .iter()
@@ -266,10 +267,10 @@ fn join(
         toggled: node.toggled,
         selected: node.selected,
         enabled: node.enabled,
-        editable_text: node.editable_text,
+        editable_text: details.editable_text,
         focusable: node.focusable,
         hidden: node.hidden,
-        pane_title: node.pane_title.clone(),
+        pane_title: details.pane_title.clone(),
         traversal_index: node.traversal_index,
         list_position: None,
         layout_bounds: bounds,
