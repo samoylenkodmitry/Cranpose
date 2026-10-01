@@ -37,12 +37,17 @@ where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq + 'static,
 {
-    compose_layout(modifier, measure_policy, content)
+    compose_layout(modifier, measure_policy, crate::density::density(), content)
 }
 
 /// Emits a layout node in the calling composable's group, so a widget that
 /// is one layout composes in one group rather than its own and `Layout`'s.
-pub(crate) fn compose_layout<F, P>(modifier: Modifier, measure_policy: P, mut content: F) -> NodeId
+pub(crate) fn compose_layout<F, P>(
+    modifier: Modifier,
+    measure_policy: P,
+    composed_density: crate::density::Density,
+    mut content: F,
+) -> NodeId
 where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq + 'static,
@@ -72,7 +77,6 @@ where
         )
     });
     let provided = modifier.provided_composition_locals();
-    let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
         node.set_modifier(modifier);
         node.set_measure_policy(policy);
