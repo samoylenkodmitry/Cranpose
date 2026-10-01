@@ -1149,8 +1149,9 @@ fn every_platform_bridge_carries_focus_both_ways() {
             && web_source.contains("\"tabindex\",")
             && web_source.contains("if element.enabled")
             && web_source.contains("&& element.tab_stop")
-            && web_source
-                .contains("&& (element.focusable || element.adjustable || element.clickable)"),
+            && web_source.contains(
+                "&& (element.focusable || element.details().adjustable || element.clickable)"
+            ),
         "the web mirror should take Tab focus, follow the app's focus, and report a focus back"
     );
 }
@@ -1192,7 +1193,7 @@ fn every_platform_bridge_lets_a_reader_move_an_adjustable_control() {
             && android_source.contains(
                 "Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilitySetProgress"
             )
-            && wire_source.contains("i32::from(element.adjustable)"),
+            && wire_source.contains("i32::from(details.adjustable)"),
         "TalkBack reads a RangeInfo and hands a new value back through the wire"
     );
 
@@ -3969,7 +3970,7 @@ fn every_platform_takes_a_reader_to_a_row_by_number() {
             )
             && rust_shell_source
                 .contains("drain_accessibility_jumps(shell, &accessibility_elements);")
-            && wire_source.contains("i32::from(element.scroll_to_index)"),
+            && wire_source.contains("i32::from(details.scroll_to_index)"),
         "TalkBack names a row through Android's own scroll-to-position action"
     );
 
@@ -4005,7 +4006,7 @@ fn every_platform_lets_a_reader_find_an_empty_text_field() {
     assert!(
         projection_source.contains("node.write_accessibility_label(&mut label)")
             && workspace_source("crates/cranpose-ui/src/layout/semantics_labels.rs").contains(
-                "self.write_accessibility_words(out))\n            || self.editable_text"
+                "self.write_accessibility_words(out))\n            || self.details().editable_text"
             ),
         "the projection publishes an editable field even with nothing to read"
     );
@@ -4158,7 +4159,7 @@ fn every_platform_lets_a_reader_move_the_caret_of_a_field() {
     let projection_source = crate_source("src/accessibility.rs");
     assert!(
         projection_source.contains("pub(crate) fn set_text_selection(")
-            && projection_source.contains("text_selection: node"),
+            && projection_source.contains("text_selection: details"),
         "the projection publishes the caret and takes a new selection"
     );
 
@@ -4243,7 +4244,7 @@ fn every_platform_with_a_reader_signal_reports_it_and_voiceover_takes_the_magic_
     );
     let projection_source = crate_source("src/accessibility.rs");
     assert!(
-        projection_source.contains(".chain(element.magic_tap_label.clone())"),
+        projection_source.contains(".chain(details.magic_tap_label.clone())"),
         "the other platforms list the magic tap by its label"
     );
     let web_source = crate_source("src/web_accessibility.rs");
@@ -4320,7 +4321,7 @@ fn no_platform_reads_a_password_out() {
         "the web mirror says the field is a password"
     );
     assert!(
-        crate_source("src/accessibility.rs").contains(".filter(|_| !node.password)"),
+        crate_source("src/accessibility.rs").contains(".filter(|_| !details.password)"),
         "the text never leaves the projection"
     );
 }
@@ -4377,7 +4378,7 @@ fn every_platform_sends_a_control_away() {
         "TalkBack offers the ask and it crosses back"
     );
     assert!(
-        crate_source("src/ios_accessibility.rs").contains("native.set_dismissable(element."),
+        crate_source("src/ios_accessibility.rs").contains("native.set_dismissable(details."),
         "a VoiceOver two-finger scrub reaches the control itself"
     );
     for source in [

@@ -123,10 +123,11 @@ fn encode_record(
     changed: bool,
     density: f32,
 ) {
+    let details = element.details();
     let [left, top, right, bottom] = pixel_bounds(element.bounds, density);
     let (center_x, center_y) = element.bounds.center();
-    let progress = element.progress;
-    let scroll = element.vertical_scroll.or(element.horizontal_scroll);
+    let progress = details.progress;
+    let scroll = details.vertical_scroll.or(details.horizontal_scroll);
     let (selection_start, selection_end) = selection_in_utf16(element);
     let mut record = RecordWriter(out);
     record.number(id);
@@ -140,15 +141,15 @@ fn encode_record(
     record.number(i32::from(element.clickable));
     record.text(&element.label);
     record.text(element.value.as_deref().unwrap_or(""));
-    record.text(element.state_description.as_deref().unwrap_or(""));
-    record.text(element.click_label.as_deref().unwrap_or(""));
+    record.text(details.state_description.as_deref().unwrap_or(""));
+    record.text(details.click_label.as_deref().unwrap_or(""));
     record.number(tristate(element.selected));
     record.number(tristate(checked_state(element)));
     record.number(i32::from(element.enabled));
-    record.actions(&element.custom_actions);
+    record.actions(&details.custom_actions);
     record.number(i32::from(element.focusable));
     record.number(i32::from(element.focused));
-    record.number(i32::from(element.adjustable));
+    record.number(i32::from(details.adjustable));
     record.float(progress.map_or(0.0, |p| p.current));
     record.float(progress.map_or(0.0, |p| p.start));
     record.float(progress.map_or(0.0, |p| p.end));
@@ -161,25 +162,25 @@ fn encode_record(
     ));
     record.number(parent);
     record.number(
-        element
+        details
             .collection
             .map_or(0, |collection| count(collection.rows)),
     );
     record.number(
-        element
+        details
             .collection
             .map_or(0, |collection| count(collection.columns)),
     );
     record.number(i32::from(changed));
     record.number(element.collection_item.map_or(-1, item_row));
     record.number(element.collection_item.map_or(-1, item_column));
-    record.text(element.pane_title.as_deref().unwrap_or(""));
-    record.text(element.error.as_deref().unwrap_or(""));
-    record.number(i32::from(element.password));
-    record.number(tristate(element.expanded));
-    record.text(element.long_click_label.as_deref().unwrap_or(""));
-    record.number(i32::from(element.dismissable));
-    record.number(i32::from(element.scroll_to_index));
+    record.text(details.pane_title.as_deref().unwrap_or(""));
+    record.text(details.error.as_deref().unwrap_or(""));
+    record.number(i32::from(details.password));
+    record.number(tristate(details.expanded));
+    record.text(details.long_click_label.as_deref().unwrap_or(""));
+    record.number(i32::from(details.dismissable));
+    record.number(i32::from(details.scroll_to_index));
     record.number(selection_start);
     record.number(selection_end);
 }
@@ -222,7 +223,7 @@ impl RecordWriter<'_> {
 /// The two ends of a field's selection as Android counts text, in UTF-16
 /// units, the anchor first; -1 and -1 for a control with no caret.
 fn selection_in_utf16(element: &AccessibilityElement) -> (i32, i32) {
-    match (&element.value, element.text_selection) {
+    match (&element.value, element.details().text_selection) {
         (Some(value), Some((anchor, focus))) => (
             utf16_offset(value, anchor) as i32,
             utf16_offset(value, focus) as i32,

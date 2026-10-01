@@ -1,6 +1,7 @@
 pub mod core;
 pub mod policies;
 mod reveal;
+mod semantics_details;
 mod semantics_labels;
 mod semantics_update;
 
@@ -17,11 +18,8 @@ use cranpose_core::{
     Phase, RuntimeHandle, SlotTable, SlotsHost,
 };
 use cranpose_foundation::{
-    CanvasSemanticsNode, CollectionInfo, InvalidationKind, LiveRegionMode, ModifierNodeContext,
-    NodeCapabilities, ProgressBarRangeInfo, ScrollAxisRange, SemanticsConfiguration,
-    SemanticsCustomAction, SemanticsDismiss, SemanticsExpand, SemanticsLongClick,
-    SemanticsMagicTap, SemanticsScrollBy, SemanticsScrollToIndex, SemanticsSetProgress,
-    SemanticsSetSelection, SemanticsSetText, SemanticsWidgetRole, text::TextRange,
+    InvalidationKind, ModifierNodeContext, NodeCapabilities, SemanticsConfiguration,
+    SemanticsCustomAction, SemanticsWidgetRole,
 };
 use cranpose_ui_graphics::{ProjectiveTransform, layer_transform::layer_transform_to_window};
 use cranpose_ui_layout::{AlignmentLines, Constraints, MeasurePolicy, PlaceTarget, Placement};
@@ -35,6 +33,7 @@ use self::{
 };
 pub use self::{
     reveal::can_skip_scroll_reveal_from_applier,
+    semantics_details::SemanticsDetails,
     semantics_update::{build_semantics_tree_from_applier, update_semantics_tree_from_applier},
 };
 use crate::{
@@ -415,86 +414,29 @@ pub struct SemanticsNode {
     pub actions: Vec<SemanticsAction>,
     pub children: Vec<SemanticsNode>,
     pub description: Option<String>,
-    pub state_description: Option<String>,
-    pub on_click_label: Option<String>,
     /// Direct activation callback for keyboard and assistive technology.
     pub on_click: Option<SemanticsCustomAction>,
-    /// What this control does when a screen reader asks for its long press.
-    pub on_long_click: Option<SemanticsLongClick>,
-    /// What the long press does, as a verb phrase a reader reads out.
-    pub on_long_click_label: Option<String>,
-    /// What this control does on VoiceOver's magic tap.
-    pub on_magic_tap: Option<SemanticsMagicTap>,
-    /// What the magic tap does, as a verb phrase a reader reads out.
-    pub on_magic_tap_label: Option<String>,
-    /// The short names a person says to Voice Control to reach this control.
-    pub input_labels: Vec<String>,
-    /// The language of this control's text, as a BCP 47 tag.
-    pub language: Option<String>,
     pub selected: Option<bool>,
     pub toggled: Option<bool>,
     pub enabled: bool,
-    pub custom_actions: Vec<SemanticsCustomAction>,
-    /// Controls this node drew rather than laid out; their bounds are relative
-    /// to this node's own top-left. See [`CanvasSemanticsNode`].
-    pub canvas_children: Vec<CanvasSemanticsNode>,
-    pub editable_text: bool,
-    /// Whether an editable field accepts line breaks, independent of its current text.
-    pub multiline: bool,
     /// Whether a screen reader skips this node and everything under it.
     pub hidden: bool,
-    /// Whether this subtree makes content outside it unavailable to assistive technology.
-    pub is_modal: bool,
     /// Whether a screen reader takes this node and the text under it as one
     /// stop.
     pub merge_descendants: bool,
-    /// Whether the selectable controls under this node form one group.
-    pub selectable_group: bool,
-    /// The title of the screen or pane this node is the root of.
-    pub pane_title: Option<String>,
-    /// Why the control's content is wrong, when it is.
-    pub error: Option<String>,
-    /// Whether this field holds a secret, so its text stays unspoken.
-    pub password: bool,
     /// Where a screen reader visits this node among the ones beside it.
     pub traversal_index: f32,
     /// The text an editable field holds.
     pub text: Option<String>,
-    pub text_selection: Option<TextRange>,
     /// Whether this node registered a focus target, so focus can land on it.
     /// Compose's `SemanticsProperties.Focused` companion.
     pub focusable: bool,
     /// Whether focus sits on this node right now.
     pub focused: bool,
-    /// How urgently a screen reader reads this node when its text changes.
-    /// Compose's `SemanticsProperties.LiveRegion`.
-    pub live_region: Option<LiveRegionMode>,
-    /// The value this control holds inside a range. Compose's
-    /// `ProgressBarRangeInfo`.
-    pub progress: Option<ProgressBarRangeInfo>,
-    /// What this control does when a screen reader moves its value.
-    pub set_progress: Option<SemanticsSetProgress>,
-    /// What this field does when a screen reader hands it text.
-    pub set_text: Option<SemanticsSetText>,
-    /// What this field does when a screen reader moves its caret or picks a
-    /// stretch of its text.
-    pub set_selection: Option<SemanticsSetSelection>,
-    /// What this control does when a screen reader asks it to open.
-    pub expand: Option<SemanticsExpand>,
-    /// What this control does when a screen reader asks it to close.
-    pub collapse: Option<SemanticsExpand>,
-    /// What this control does when a screen reader asks to send it away.
-    pub dismiss: Option<SemanticsDismiss>,
-    /// How far this container scrolled up and down, when it scrolls.
-    pub vertical_scroll: Option<ScrollAxisRange>,
-    /// How far this container scrolled left and right, when it scrolls.
-    pub horizontal_scroll: Option<ScrollAxisRange>,
-    /// What this container does when a screen reader pages it.
-    pub scroll_by: Option<SemanticsScrollBy>,
-    /// What this list does when a screen reader asks for the row at an index.
-    pub scroll_to_index: Option<SemanticsScrollToIndex>,
-    /// How many rows and columns this list holds, when it is a list.
-    pub collection: Option<CollectionInfo>,
+    /// The properties few nodes set, held only when the node sets one: read
+    /// them through [`SemanticsNode::details`] and write them through
+    /// [`SemanticsNode::set_details`].
+    pub details: Option<Box<SemanticsDetails>>,
 }
 
 impl Default for SemanticsNode {
@@ -509,47 +451,17 @@ impl Default for SemanticsNode {
             actions: Vec::new(),
             children: Vec::new(),
             description: None,
-            state_description: None,
-            on_click_label: None,
             on_click: None,
-            on_long_click: None,
-            on_long_click_label: None,
-            on_magic_tap: None,
-            on_magic_tap_label: None,
-            input_labels: Vec::new(),
-            language: None,
             selected: None,
             toggled: None,
             enabled: true,
-            custom_actions: Vec::new(),
-            canvas_children: Vec::new(),
-            editable_text: false,
-            multiline: false,
             hidden: false,
-            is_modal: false,
             merge_descendants: false,
-            selectable_group: false,
-            pane_title: None,
-            error: None,
-            password: false,
             traversal_index: 0.0,
             text: None,
-            text_selection: None,
             focusable: false,
             focused: false,
-            live_region: None,
-            progress: None,
-            set_progress: None,
-            set_text: None,
-            set_selection: None,
-            expand: None,
-            collapse: None,
-            dismiss: None,
-            vertical_scroll: None,
-            horizontal_scroll: None,
-            scroll_by: None,
-            scroll_to_index: None,
-            collection: None,
+            details: None,
         }
     }
 }
@@ -639,7 +551,7 @@ fn top_modal_path(root: &SemanticsNode) -> Option<Vec<usize>> {
             }
             path.pop();
         }
-        node.is_modal
+        node.details().is_modal
     }
     let mut path = Vec::new();
     search(root, &mut path).then_some(path)
@@ -3356,80 +3268,56 @@ fn semantics_node_from_parts(
     mut role: SemanticsRole,
     config: Option<SemanticsConfiguration>,
     children: Vec<SemanticsNode>,
+    held_details: Option<Box<SemanticsDetails>>,
     bounds: GeometryRect,
 ) -> SemanticsNode {
+    let focusable = crate::focus_dispatch::has_focus_target(node_id);
     let mut node = SemanticsNode {
         node_id,
         bounds,
         node_generation,
         children,
+        focusable,
+        focused: focusable && crate::focus_dispatch::active_focus_target() == Some(node_id),
+        details: held_details,
         ..SemanticsNode::default()
     };
-
-    if let Some(config) = config {
-        if config.role == Some(SemanticsWidgetRole::Button) {
-            role = SemanticsRole::Button;
-        }
-        if config.is_activatable() {
-            node.actions.push(SemanticsAction::Click {
-                handler: SemanticsCallback::new(node_id),
+    let details = match config {
+        Some(mut config) => {
+            if config.role == Some(SemanticsWidgetRole::Button) {
+                role = SemanticsRole::Button;
+            }
+            if config.is_activatable() {
+                node.actions.push(SemanticsAction::Click {
+                    handler: SemanticsCallback::new(node_id),
+                });
+            }
+            let on_click_label = config.on_click_label.take().or_else(|| {
+                config
+                    .on_click
+                    .as_ref()
+                    .and_then(|action| (!action.label.is_empty()).then(|| action.label.clone()))
             });
+            node.widget_role = config.role;
+            node.description = config.content_description.take();
+            node.on_click = config.on_click.take();
+            node.selected = config.selected;
+            node.toggled = config.toggled;
+            node.enabled = config.enabled;
+            node.hidden = config.hidden;
+            node.merge_descendants = config.merge_descendants;
+            node.traversal_index = config.traversal_index;
+            node.text = config.text.take();
+            let is_modal = config.is_modal
+                && modal_takes_space(Size {
+                    width: bounds.width,
+                    height: bounds.height,
+                });
+            SemanticsDetails::from_configuration(config, on_click_label, is_modal)
         }
-        node.widget_role = config.role;
-        node.description = config.content_description;
-        node.state_description = config.state_description;
-        node.on_click_label = config.on_click_label.or_else(|| {
-            config
-                .on_click
-                .as_ref()
-                .and_then(|action| (!action.label.is_empty()).then(|| action.label.clone()))
-        });
-        node.on_click = config.on_click;
-        node.on_long_click = config.on_long_click;
-        node.on_long_click_label = config.on_long_click_label;
-        node.on_magic_tap = config.on_magic_tap;
-        node.on_magic_tap_label = config.on_magic_tap_label;
-        node.input_labels = config.input_labels;
-        node.language = config.language;
-        node.selected = config.selected;
-        node.toggled = config.toggled;
-        node.enabled = config.enabled;
-        node.custom_actions = config.custom_actions;
-        node.canvas_children = config.canvas_children;
-        node.editable_text = config.is_editable_text;
-        node.multiline = config.multiline;
-        node.hidden = config.hidden;
-        node.is_modal = config.is_modal
-            && modal_takes_space(Size {
-                width: bounds.width,
-                height: bounds.height,
-            });
-        node.merge_descendants = config.merge_descendants;
-        node.selectable_group = config.selectable_group;
-        node.pane_title = config.pane_title;
-        node.error = config.error;
-        node.password = config.password;
-        node.traversal_index = config.traversal_index;
-        node.text = config.text;
-        node.text_selection = config.text_selection;
-        node.live_region = config.live_region;
-        node.progress = config.progress;
-        node.set_progress = config.set_progress;
-        node.set_text = config.set_text;
-        node.set_selection = config.set_selection;
-        node.expand = config.expand;
-        node.collapse = config.collapse;
-        node.dismiss = config.dismiss;
-        node.vertical_scroll = config.vertical_scroll;
-        node.horizontal_scroll = config.horizontal_scroll;
-        node.scroll_by = config.scroll_by;
-        node.scroll_to_index = config.scroll_to_index;
-        node.collection = config.collection;
-    }
-
-    node.focusable = crate::focus_dispatch::has_focus_target(node_id);
-    node.focused = node.focusable && crate::focus_dispatch::active_focus_target() == Some(node_id);
-
+        None => SemanticsDetails::NONE,
+    };
+    node.set_details(details);
     node.role = role;
     node
 }
@@ -3500,6 +3388,7 @@ fn build_semantics_node_from_live_nodes(
             role,
             config,
             children,
+            None,
             bounds,
         )
     })
@@ -3513,6 +3402,9 @@ fn record_semantics_allocation_stats(node: &SemanticsNode, stats: &mut LayoutAll
     stats.semantics_child_capacity += node.children.capacity();
     stats.semantics_heap_bytes += node.actions.capacity() * size_of::<SemanticsAction>();
     stats.semantics_heap_bytes += node.children.capacity() * size_of::<SemanticsNode>();
+    if node.details.is_some() {
+        stats.semantics_heap_bytes += size_of::<SemanticsDetails>();
+    }
 
     if let Some(description) = &node.description {
         stats.semantics_description_count += 1;
@@ -3623,6 +3515,7 @@ fn build_semantics_node_from_layout_box(layout_box: &LayoutBox, origin: Point) -
             semantics_role_from_layout_box(layout_box),
             layout_box.node_data.semantics().cloned(),
             children,
+            None,
             rect,
         )
     }

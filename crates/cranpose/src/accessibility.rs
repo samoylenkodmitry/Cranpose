@@ -1,11 +1,14 @@
 use std::fmt::Debug;
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::NodeId;
+use cranpose_core::{
+    NodeId,
+    collections::rare::{RareProperties, rare, update_rare},
+};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{
     Announcement, CollectionInfo, LiveRegionMode, ProgressBarRangeInfo, ScrollAxisRange,
-    SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
+    SemanticsAction, SemanticsDetails, SemanticsNode, SemanticsRole, SemanticsWidgetRole,
 };
 
 #[path = "accessibility_identity.rs"]
@@ -242,12 +245,13 @@ pub(crate) fn role_entry<T: Copy>(
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 pub(crate) fn web_role(element: &AccessibilityElement) -> &'static str {
-    if element.progress.is_some()
-        && element.adjustable
+    let details = element.details();
+    if details.progress.is_some()
+        && details.adjustable
         && element.role != AccessibilityRole::ValuePicker
     {
         "slider"
-    } else if element.pane_title.is_some() && element.role == AccessibilityRole::StaticText {
+    } else if details.pane_title.is_some() && element.role == AccessibilityRole::StaticText {
         "region"
     } else {
         element.role.aria_name()
@@ -339,6 +343,23 @@ pub(crate) struct AccessibilityElement {
     pub(crate) node_generation: u32,
     pub(crate) canvas_key: Option<u64>,
     pub(crate) label: String,
+    pub(crate) value: Option<String>,
+    pub(crate) bounds: AccessibilityRect,
+    pub(crate) role: AccessibilityRole,
+    pub(crate) clickable: bool,
+    pub(crate) selected: Option<bool>,
+    pub(crate) toggled: Option<bool>,
+    pub(crate) enabled: bool,
+    pub(crate) focusable: bool,
+    pub(crate) tab_stop: bool,
+    pub(crate) focused: bool,
+    pub(crate) scroll_parent: Option<NodeId>,
+    pub(crate) collection_item: Option<CollectionItem>,
+    pub(crate) details: Option<Box<AccessibilityDetails>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AccessibilityDetails {
     pub(crate) state_description: Option<String>,
     pub(crate) click_label: Option<String>,
     /// What a long press on the control does, named for a reader. Present
@@ -351,17 +372,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) input_labels: Vec<String>,
     /// The language of the control's text, as a BCP 47 tag.
     pub(crate) language: Option<String>,
-    pub(crate) value: Option<String>,
-    pub(crate) bounds: AccessibilityRect,
-    pub(crate) role: AccessibilityRole,
-    pub(crate) clickable: bool,
-    pub(crate) selected: Option<bool>,
-    pub(crate) toggled: Option<bool>,
-    pub(crate) enabled: bool,
     pub(crate) custom_actions: Vec<String>,
-    pub(crate) focusable: bool,
-    pub(crate) tab_stop: bool,
-    pub(crate) focused: bool,
     pub(crate) live_region: Option<LiveRegionMode>,
     pub(crate) progress: Option<ProgressBarRangeInfo>,
     pub(crate) adjustable: bool,
@@ -369,9 +380,7 @@ pub(crate) struct AccessibilityElement {
     pub(crate) horizontal_scroll: Option<ScrollAxisRange>,
     /// Whether a screen reader may ask this list for the row at an index.
     pub(crate) scroll_to_index: bool,
-    pub(crate) scroll_parent: Option<NodeId>,
     pub(crate) collection: Option<CollectionInfo>,
-    pub(crate) collection_item: Option<CollectionItem>,
     pub(crate) pane_title: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) password: bool,
@@ -380,14 +389,59 @@ pub(crate) struct AccessibilityElement {
     pub(crate) is_modal: bool,
     /// Where the caret of an editable field sits, or which stretch of its
     /// text is picked: the anchor and the end that moves, as byte offsets into
-    /// `value`. A field that holds a secret publishes none.
+    /// the element's `value`. A field that holds a secret publishes none.
     pub(crate) text_selection: Option<(usize, usize)>,
     pub(crate) multiline: bool,
+}
+
+impl AccessibilityDetails {
+    const NONE: Self = Self {
+        state_description: None,
+        click_label: None,
+        long_click_label: None,
+        magic_tap_label: None,
+        input_labels: Vec::new(),
+        language: None,
+        custom_actions: Vec::new(),
+        live_region: None,
+        progress: None,
+        adjustable: false,
+        vertical_scroll: None,
+        horizontal_scroll: None,
+        scroll_to_index: false,
+        collection: None,
+        pane_title: None,
+        error: None,
+        password: false,
+        expanded: None,
+        dismissable: false,
+        is_modal: false,
+        text_selection: None,
+        multiline: false,
+    };
+}
+
+impl Default for AccessibilityDetails {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+
+impl RareProperties for AccessibilityDetails {
+    const EMPTY: &'static Self = &Self::NONE;
 }
 
 impl AccessibilityElement {
     fn identity_key(&self) -> (NodeId, u32, Option<u64>) {
         (self.node_id, self.node_generation, self.canvas_key)
+    }
+
+    pub(crate) fn details(&self) -> &AccessibilityDetails {
+        rare(&self.details)
+    }
+
+    pub(crate) fn update_details(&mut self, update: impl FnOnce(&mut AccessibilityDetails)) {
+        update_rare(&mut self.details, update);
     }
 }
 
@@ -398,12 +452,6 @@ impl Default for AccessibilityElement {
             node_generation: 0,
             canvas_key: None,
             label: String::new(),
-            state_description: None,
-            click_label: None,
-            long_click_label: None,
-            magic_tap_label: None,
-            input_labels: Vec::new(),
-            language: None,
             value: None,
             bounds: AccessibilityRect::default(),
             role: AccessibilityRole::StaticText,
@@ -411,27 +459,12 @@ impl Default for AccessibilityElement {
             selected: None,
             toggled: None,
             enabled: true,
-            custom_actions: Vec::new(),
             focusable: false,
             tab_stop: true,
             focused: false,
-            live_region: None,
-            progress: None,
-            adjustable: false,
-            vertical_scroll: None,
-            horizontal_scroll: None,
-            scroll_to_index: false,
             scroll_parent: None,
-            collection: None,
             collection_item: None,
-            pane_title: None,
-            error: None,
-            password: false,
-            expanded: None,
-            dismissable: false,
-            is_modal: false,
-            text_selection: None,
-            multiline: false,
+            details: None,
         }
     }
 }
@@ -591,7 +624,8 @@ fn inspector_nodes(
 }
 
 fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspector::InspectorNode {
-    let value = if element.password {
+    let details = element.details();
+    let value = if details.password {
         "[protected]"
     } else {
         element.value.as_deref().unwrap_or("")
@@ -600,7 +634,7 @@ fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspecto
     if element.clickable {
         actions.push("Activate".to_string());
     }
-    if element.adjustable {
+    if details.adjustable {
         actions.push("Adjust value".to_string());
     }
     if element.focusable {
@@ -612,15 +646,15 @@ fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspecto
     ) {
         actions.push("Edit text".to_string());
     }
-    actions.extend(element.custom_actions.iter().cloned());
-    actions.extend(element.long_click_label.iter().cloned());
-    actions.extend(element.magic_tap_label.iter().cloned());
-    let details = format!(
+    actions.extend(details.custom_actions.iter().cloned());
+    actions.extend(details.long_click_label.iter().cloned());
+    actions.extend(details.magic_tap_label.iter().cloned());
+    let summary = format!(
         "Name: {}\nRole: {:?}\nValue: {}\nState: {}\nEnabled: {}  Focused: {}\nSelected: {:?}  Toggled: {:?}\nBounds: {:.1}, {:.1}  {:.1} x {:.1}\nActions: {}\nLive: {:?}\nRange: {:?}\nError: {}",
         element.label,
         element.role,
         value,
-        element.state_description.as_deref().unwrap_or(""),
+        details.state_description.as_deref().unwrap_or(""),
         element.enabled,
         element.focused,
         element.selected,
@@ -630,9 +664,9 @@ fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspecto
         element.bounds.width,
         element.bounds.height,
         actions.join(", "),
-        element.live_region,
-        element.progress,
-        element.error.as_deref().unwrap_or("")
+        details.live_region,
+        details.progress,
+        details.error.as_deref().unwrap_or("")
     );
     cranpose_app_shell::inspector::InspectorNode {
         node_id: element.node_id,
@@ -644,7 +678,7 @@ fn inspector_node(element: AccessibilityElement) -> cranpose_app_shell::inspecto
             height: element.bounds.height,
         },
         label: format!("{}, {:?}", element.label, element.role),
-        details,
+        details: summary,
         focused: element.focused,
         issue: element.label.is_empty() && (element.clickable || element.focusable),
     }
@@ -660,13 +694,13 @@ fn project_node(
     if node.hidden {
         return;
     }
-    let live_region = node.live_region.or(inherited_live_region);
+    let live_region = node.details().live_region.or(inherited_live_region);
     let first_new = out.written;
     let clickable = node
         .actions
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
-    let actionable = clickable || node.editable_text;
+    let actionable = clickable || node.details().editable_text;
     let merges = node.merges_accessibility_descendants();
     let boundary = node.is_accessibility_boundary();
     let rect = AccessibilityRect::new(
@@ -735,11 +769,12 @@ fn write_node_element(
 /// A node a reader walks into rather than stops on: a list, a scroll view, or
 /// a group of tabs or radio buttons.
 fn is_container(node: &SemanticsNode) -> bool {
-    node.vertical_scroll.is_some()
-        || node.horizontal_scroll.is_some()
-        || node.selectable_group
-        || node.is_modal
-        || node.pane_title.is_some()
+    let details = node.details();
+    details.vertical_scroll.is_some()
+        || details.horizontal_scroll.is_some()
+        || details.selectable_group
+        || details.is_modal
+        || details.pane_title.is_some()
         || node.widget_role == Some(SemanticsWidgetRole::Dialog)
         || node
             .widget_role
@@ -773,7 +808,7 @@ fn project_children(
             out,
         );
     }
-    let selectable_group = node.selectable_group
+    let selectable_group = node.details().selectable_group
         || matches!(
             node.widget_role,
             Some(SemanticsWidgetRole::RadioGroup | SemanticsWidgetRole::TabBar)
@@ -856,7 +891,8 @@ fn number_group(
         .iter_mut()
         .find(|element| element.node_id == group && element.canvas_key.is_none())
     {
-        element.collection = Some(CollectionInfo { rows, columns });
+        element
+            .update_details(|details| details.collection = Some(CollectionInfo { rows, columns }));
         if element.role == AccessibilityRole::StaticText && radio_group {
             element.role = AccessibilityRole::RadioGroup;
         }
@@ -866,19 +902,20 @@ fn number_group(
 /// Whether a control reads as open or as closed: one that says what closing
 /// it does is open now, and one that says what opening it does is closed.
 /// A control that says neither is not a thing a reader opens at all.
-fn expansion(node: &SemanticsNode) -> Option<bool> {
-    node.collapse
+fn expansion(details: &SemanticsDetails) -> Option<bool> {
+    details
+        .collapse
         .is_some()
         .then_some(true)
-        .or_else(|| node.expand.is_some().then_some(false))
+        .or_else(|| details.expand.is_some().then_some(false))
 }
 
 /// What a reader reads out for a control's long press: the verb phrase the
 /// app gave, and for a control that declared the action with no phrase the
 /// plain words for what it is. A control with no long press gets nothing.
-fn long_click_label(node: &SemanticsNode) -> Option<&str> {
-    node.on_long_click.as_ref()?;
-    let named = node
+fn long_click_label(details: &SemanticsDetails) -> Option<&str> {
+    details.on_long_click.as_ref()?;
+    let named = details
         .on_long_click_label
         .as_deref()
         .filter(|label| !label.trim().is_empty());
@@ -888,9 +925,9 @@ fn long_click_label(node: &SemanticsNode) -> Option<&str> {
 /// What a reader lists for a control's magic tap: the verb phrase the app
 /// gave, or the plain words for the gesture. A control with no magic tap
 /// gets nothing.
-fn magic_tap_label(node: &SemanticsNode) -> Option<&str> {
-    node.on_magic_tap.as_ref()?;
-    let named = node
+fn magic_tap_label(details: &SemanticsDetails) -> Option<&str> {
+    details.on_magic_tap.as_ref()?;
+    let named = details
         .on_magic_tap_label
         .as_deref()
         .filter(|label| !label.trim().is_empty());
@@ -934,13 +971,14 @@ fn fill_node_element(
     clickable: bool,
     live_region: Option<LiveRegionMode>,
 ) {
-    let role = if node.is_modal {
+    let details = node.details();
+    let role = if details.is_modal {
         AccessibilityRole::Dialog
     } else if let Some(role) = node.widget_role {
         AccessibilityRole::from_widget_role(role)
-    } else if node.editable_text {
+    } else if details.editable_text {
         AccessibilityRole::TextField
-    } else if node.progress.is_some() {
+    } else if details.progress.is_some() {
         AccessibilityRole::ProgressBar
     } else if clickable || matches!(node.role, SemanticsRole::Button) {
         AccessibilityRole::Button
@@ -952,63 +990,82 @@ fn fill_node_element(
         spare.value,
         node.text
             .as_deref()
-            .or_else(|| node.editable_text.then_some(label.as_str()))
-            .filter(|_| !node.password)
-            .filter(|value| node.editable_text || !value.is_empty()),
+            .or_else(|| details.editable_text.then_some(label.as_str()))
+            .filter(|_| !details.password)
+            .filter(|value| details.editable_text || !value.is_empty()),
     );
+    let mut element_details = spare.details;
+    update_rare(&mut element_details, |held| {
+        fill_node_details(held, node, live_region);
+    });
     *slot = AccessibilityElement {
         node_id: node.node_id,
         node_generation: node.node_generation,
         canvas_key: None,
         value,
         label,
-        state_description: reuse_text(spare.state_description, node.state_description.as_deref()),
-        click_label: reuse_text(spare.click_label, node.on_click_label.as_deref()),
-        long_click_label: reuse_text(spare.long_click_label, long_click_label(node)),
-        magic_tap_label: reuse_text(spare.magic_tap_label, magic_tap_label(node)),
-        input_labels: reuse_texts(
-            spare.input_labels,
-            node.input_labels.iter().map(String::as_str),
-        ),
-        language: reuse_text(spare.language, node.language.as_deref()),
         bounds: rect,
         role,
         clickable: clickable && node.enabled,
         selected: node.selected,
         toggled: node.toggled,
         enabled: node.enabled,
-        custom_actions: reuse_texts(
-            spare.custom_actions,
-            node.custom_actions
-                .iter()
-                .map(|action| action.label.as_str()),
-        ),
         focusable: node.focusable,
         tab_stop: true,
         focused: node.focused,
+        scroll_parent: None,
+        collection_item: None,
+        details: element_details,
+    };
+}
+
+fn fill_node_details(
+    held: &mut AccessibilityDetails,
+    node: &SemanticsNode,
+    live_region: Option<LiveRegionMode>,
+) {
+    let details = node.details();
+    *held = AccessibilityDetails {
+        state_description: reuse_text(
+            held.state_description.take(),
+            details.state_description.as_deref(),
+        ),
+        click_label: reuse_text(held.click_label.take(), details.on_click_label.as_deref()),
+        long_click_label: reuse_text(held.long_click_label.take(), long_click_label(details)),
+        magic_tap_label: reuse_text(held.magic_tap_label.take(), magic_tap_label(details)),
+        input_labels: reuse_texts(
+            std::mem::take(&mut held.input_labels),
+            details.input_labels.iter().map(String::as_str),
+        ),
+        language: reuse_text(held.language.take(), details.language.as_deref()),
+        custom_actions: reuse_texts(
+            std::mem::take(&mut held.custom_actions),
+            details
+                .custom_actions
+                .iter()
+                .map(|action| action.label.as_str()),
+        ),
         live_region: live_region.or_else(|| {
             (node.widget_role == Some(SemanticsWidgetRole::Alert))
                 .then_some(LiveRegionMode::Assertive)
         }),
-        progress: node.progress,
-        adjustable: node.set_progress.is_some(),
-        vertical_scroll: node.vertical_scroll,
-        horizontal_scroll: node.horizontal_scroll,
-        scroll_to_index: node.scroll_to_index.is_some(),
-        scroll_parent: None,
-        collection: node.collection,
-        collection_item: None,
-        pane_title: reuse_text(spare.pane_title, node.pane_title.as_deref()),
-        error: reuse_text(spare.error, node.error.as_deref()),
-        password: node.password,
-        expanded: expansion(node),
-        dismissable: node.dismiss.is_some(),
-        is_modal: node.is_modal,
-        text_selection: node
+        progress: details.progress,
+        adjustable: details.set_progress.is_some(),
+        vertical_scroll: details.vertical_scroll,
+        horizontal_scroll: details.horizontal_scroll,
+        scroll_to_index: details.scroll_to_index.is_some(),
+        collection: details.collection,
+        pane_title: reuse_text(held.pane_title.take(), details.pane_title.as_deref()),
+        error: reuse_text(held.error.take(), details.error.as_deref()),
+        password: details.password,
+        expanded: expansion(details),
+        dismissable: details.dismiss.is_some(),
+        is_modal: details.is_modal,
+        text_selection: details
             .text_selection
-            .filter(|_| node.editable_text && !node.password)
+            .filter(|_| details.editable_text && !details.password)
             .map(|range| (range.start, range.end)),
-        multiline: node.multiline,
+        multiline: details.multiline,
     };
 }
 
@@ -1026,7 +1083,7 @@ pub(crate) fn scroll_by(root: &SemanticsNode, node_id: NodeId, dx: f32, dy: f32)
     let Some(node) = find_semantics_node(root, node_id) else {
         return false;
     };
-    match &node.scroll_by {
+    match &node.details().scroll_by {
         Some(action) => action.invoke(dx, dy),
         None => false,
     }
@@ -1046,7 +1103,7 @@ pub(crate) fn scroll_to_index(root: &SemanticsNode, node_id: NodeId, index: usiz
     let Some(node) = find_semantics_node(root, node_id) else {
         return false;
     };
-    match &node.scroll_to_index {
+    match &node.details().scroll_to_index {
         Some(action) => action.invoke(index),
         None => false,
     }
@@ -1062,10 +1119,11 @@ pub(crate) fn scroll_to_index(root: &SemanticsNode, node_id: NodeId, index: usiz
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 pub(crate) fn row_count(element: &AccessibilityElement) -> usize {
-    if !element.scroll_to_index {
+    if !element.details().scroll_to_index {
         return 0;
     }
     element
+        .details()
         .collection
         .map_or(0, |collection| collection.rows.max(collection.columns))
 }
@@ -1081,7 +1139,7 @@ pub(crate) fn row_count(element: &AccessibilityElement) -> usize {
 ))]
 pub(crate) fn page_delta(element: &AccessibilityElement, forward: bool) -> (f32, f32) {
     let sign = if forward { 1.0 } else { -1.0 };
-    if element.vertical_scroll.is_some() {
+    if element.details().vertical_scroll.is_some() {
         (0.0, sign * element.bounds.height * 0.9)
     } else {
         (sign * element.bounds.width * 0.9, 0.0)
@@ -1154,7 +1212,9 @@ pub(crate) fn scroll_container_for<'a>(
         let candidate = elements
             .iter()
             .find(|candidate| candidate.node_id == id && candidate.canvas_key.is_none())?;
-        if candidate.vertical_scroll.is_some() || candidate.horizontal_scroll.is_some() {
+        if candidate.details().vertical_scroll.is_some()
+            || candidate.details().horizontal_scroll.is_some()
+        {
             return Some(candidate);
         }
         parent = candidate.scroll_parent;
@@ -1168,7 +1228,7 @@ fn project_canvas_children(
     live_region: Option<LiveRegionMode>,
     out: &mut Projection,
 ) {
-    for child in &node.canvas_children {
+    for child in &node.details().canvas_children {
         let rect = AccessibilityRect::new(
             owner.x + child.bounds.x,
             owner.y + child.bounds.y,
@@ -1185,29 +1245,36 @@ fn project_canvas_children(
         };
         let slot = out.next_slot();
         let spare = std::mem::take(slot);
+        let mut details = spare.details;
+        update_rare(&mut details, |held| {
+            *held = AccessibilityDetails {
+                state_description: reuse_text(
+                    held.state_description.take(),
+                    child.state_description.as_deref(),
+                ),
+                click_label: reuse_text(held.click_label.take(), child.on_click_label.as_deref()),
+                custom_actions: reuse_texts(
+                    std::mem::take(&mut held.custom_actions),
+                    child
+                        .custom_actions
+                        .iter()
+                        .map(|action| action.label.as_str()),
+                ),
+                live_region,
+                ..AccessibilityDetails::NONE
+            };
+        });
         *slot = AccessibilityElement {
             node_id: node.node_id,
             canvas_key: Some(child.key),
             label: reuse_string(spare.label, &child.label),
-            state_description: reuse_text(
-                spare.state_description,
-                child.state_description.as_deref(),
-            ),
-            click_label: reuse_text(spare.click_label, child.on_click_label.as_deref()),
             bounds: rect,
             role,
             clickable: child.clickable && node.enabled && child.enabled,
             selected: child.selected,
             toggled: child.toggled,
             enabled: node.enabled && child.enabled,
-            custom_actions: reuse_texts(
-                spare.custom_actions,
-                child
-                    .custom_actions
-                    .iter()
-                    .map(|action| action.label.as_str()),
-            ),
-            live_region,
+            details,
             ..AccessibilityElement::default()
         };
         out.commit();
@@ -1230,13 +1297,18 @@ pub(crate) fn perform_custom_action(
     let Some(node) = find_semantics_node(root, node_id) else {
         return false;
     };
+    let details = node.details();
     let actions = match canvas_key {
-        Some(key) => match node.canvas_children.iter().find(|child| child.key == key) {
+        Some(key) => match details
+            .canvas_children
+            .iter()
+            .find(|child| child.key == key)
+        {
             Some(child) if child.enabled => &child.custom_actions,
             Some(_) => return false,
             None => return false,
         },
-        None => &node.custom_actions,
+        None => &details.custom_actions,
     };
     match actions.get(action_index) {
         Some(action) => {
@@ -1245,7 +1317,7 @@ pub(crate) fn perform_custom_action(
         }
         None if canvas_key.is_none() => {
             let after = action_index - actions.len();
-            match (after, &node.on_long_click, &node.on_magic_tap) {
+            match (after, &details.on_long_click, &details.on_magic_tap) {
                 (0, Some(long_click), _) => long_click.invoke(),
                 (0, None, Some(tap)) | (1, Some(_), Some(tap)) => tap.invoke(),
                 _ => false,
@@ -1263,7 +1335,8 @@ pub(crate) fn perform_custom_action(
 ))]
 pub(crate) fn magic_tap(root: &SemanticsNode, node_id: NodeId) -> bool {
     find_semantics_node(root, node_id).is_some_and(|node| {
-        node.on_magic_tap
+        node.details()
+            .on_magic_tap
             .as_ref()
             .is_some_and(cranpose_foundation::SemanticsMagicTap::invoke)
     })
@@ -1281,15 +1354,16 @@ pub(crate) fn magic_tap(root: &SemanticsNode, node_id: NodeId) -> bool {
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 pub(crate) fn reader_actions(element: &AccessibilityElement) -> Vec<String> {
+    let details = element.details();
     if !element.enabled {
         return Vec::new();
     }
-    element
+    details
         .custom_actions
         .iter()
         .cloned()
-        .chain(element.long_click_label.clone())
-        .chain(element.magic_tap_label.clone())
+        .chain(details.long_click_label.clone())
+        .chain(details.magic_tap_label.clone())
         .collect()
 }
 
@@ -1308,7 +1382,7 @@ pub(crate) fn set_progress(root: &SemanticsNode, node_id: NodeId, value: f32) ->
     let Some(node) = find_semantics_node(root, node_id) else {
         return false;
     };
-    match &node.set_progress {
+    match &node.details().set_progress {
         Some(action) => action.invoke(value),
         None => false,
     }
@@ -1326,7 +1400,7 @@ pub(crate) fn set_text(root: &SemanticsNode, node_id: NodeId, text: &str) -> boo
     let Some(node) = find_semantics_node(root, node_id) else {
         return false;
     };
-    match &node.set_text {
+    match &node.details().set_text {
         Some(action) => action.invoke(text),
         None => false,
     }
@@ -1350,7 +1424,7 @@ pub(crate) fn set_text_selection(
     let Some(node) = find_semantics_node(root, node_id) else {
         return false;
     };
-    match &node.set_selection {
+    match &node.details().set_selection {
         Some(action) => action.invoke(anchor, focus),
         None => false,
     }
@@ -1481,7 +1555,11 @@ pub(crate) fn set_expanded(root: &SemanticsNode, node_id: NodeId, open: bool) ->
     let Some(node) = find_semantics_node(root, node_id) else {
         return false;
     };
-    let action = if open { &node.expand } else { &node.collapse };
+    let action = if open {
+        &node.details().expand
+    } else {
+        &node.details().collapse
+    };
     match action {
         Some(action) => action.invoke(),
         None => false,
@@ -1501,7 +1579,7 @@ pub(crate) fn dismiss(root: &SemanticsNode, node_id: NodeId) -> bool {
     let Some(node) = find_semantics_node(root, node_id) else {
         return false;
     };
-    match &node.dismiss {
+    match &node.details().dismiss {
         Some(action) => action.invoke(),
         None => false,
     }
@@ -1528,7 +1606,7 @@ pub(crate) const DISMISS_LABEL: &str = "Dismiss";
 pub(crate) fn listed_actions(element: &AccessibilityElement) -> Vec<String> {
     reader_actions(element)
         .into_iter()
-        .chain((element.enabled && element.dismissable).then(|| DISMISS_LABEL.to_owned()))
+        .chain((element.enabled && element.details().dismissable).then(|| DISMISS_LABEL.to_owned()))
         .collect()
 }
 
@@ -1562,7 +1640,7 @@ pub(crate) fn long_click(root: &SemanticsNode, node_id: NodeId) -> bool {
     let Some(node) = find_semantics_node(root, node_id) else {
         return false;
     };
-    match &node.on_long_click {
+    match &node.details().on_long_click {
         Some(action) => action.invoke(),
         None => false,
     }
@@ -1576,6 +1654,7 @@ pub(crate) fn long_click(root: &SemanticsNode, node_id: NodeId) -> bool {
 ))]
 pub(crate) fn expansion_word(element: &AccessibilityElement) -> Option<&'static str> {
     element
+        .details()
         .expanded
         .map(|open| if open { "expanded" } else { "collapsed" })
 }
@@ -1662,7 +1741,7 @@ pub(crate) fn live_region_announcements(
     }
     let mut announcements = Vec::new();
     for element in current {
-        let Some(mode) = element.live_region else {
+        let Some(mode) = element.details().live_region else {
             continue;
         };
         let text = spoken_text(element);
@@ -1701,13 +1780,14 @@ pub(crate) fn pane_title_announcements(
         .iter()
         .filter_map(|element| {
             let title = element
+                .details()
                 .pane_title
                 .as_deref()
                 .filter(|title| !title.trim().is_empty())?;
             let was = previous
                 .iter()
                 .find(|other| other.identity_key() == element.identity_key())
-                .and_then(|other| other.pane_title.as_deref());
+                .and_then(|other| other.details().pane_title.as_deref());
             (was != Some(title)).then(|| Announcement {
                 text: title.to_owned(),
                 mode: LiveRegionMode::Polite,
@@ -1730,7 +1810,7 @@ fn spoken_text(element: &AccessibilityElement) -> String {
     {
         parts.push(value.clone());
     }
-    if let Some(state) = &element.state_description {
+    if let Some(state) = &element.details().state_description {
         parts.push(state.clone());
     }
     parts.extend(error_text(element));
@@ -1749,6 +1829,7 @@ fn spoken_text(element: &AccessibilityElement) -> String {
 ))]
 pub(crate) fn error_text(element: &AccessibilityElement) -> Option<String> {
     element
+        .details()
         .error
         .as_deref()
         .filter(|error| !error.trim().is_empty())
@@ -1765,6 +1846,7 @@ pub(crate) fn error_text(element: &AccessibilityElement) -> Option<String> {
 ))]
 pub(crate) fn state_with_error(element: &AccessibilityElement) -> Option<String> {
     let parts: Vec<String> = element
+        .details()
         .state_description
         .clone()
         .into_iter()
@@ -1781,14 +1863,16 @@ pub(crate) fn state_with_error(element: &AccessibilityElement) -> Option<String>
     all(feature = "android", feature = "renderer-wgpu", target_os = "android")
 ))]
 fn speaks_the_same(was: &AccessibilityElement, now: &AccessibilityElement) -> bool {
+    let now_details = now.details();
+    let was_details = was.details();
     let same_sources = was.label == now.label
         && was.value == now.value
-        && was.state_description == now.state_description
-        && was.error == now.error;
+        && was_details.state_description == now_details.state_description
+        && was_details.error == now_details.error;
     (same_sources || spoken_text(was) == spoken_text(now))
         && was.toggled == now.toggled
         && was.selected == now.selected
-        && was.progress == now.progress
+        && was_details.progress == now_details.progress
 }
 
 /// For each element of `current`, whether it was published before and now
@@ -1881,11 +1965,12 @@ const SPOKEN_ROLES: [(AccessibilityRole, &str); 24] = [
 /// the value and the actions it offers, in the order VoiceOver says them.
 #[cfg(any(test, feature = "robot", target_os = "ios"))]
 pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
+    let details = element.details();
     let role_word = SPOKEN_ROLES
         .iter()
         .find(|(role, _)| *role == element.role)
         .map_or("", |(_, word)| *word);
-    let name = match (&element.pane_title, element.label.is_empty()) {
+    let name = match (&details.pane_title, element.label.is_empty()) {
         (Some(title), true) => format!("{title}, pane"),
         _ => spoken_text(element),
     };
@@ -1894,12 +1979,12 @@ pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
     } else {
         ("checked", "not checked")
     };
-    let actions: Vec<&str> = element
+    let actions: Vec<&str> = details
         .custom_actions
         .iter()
         .map(String::as_str)
-        .chain(element.long_click_label.as_deref())
-        .chain(element.magic_tap_label.as_deref())
+        .chain(details.long_click_label.as_deref())
+        .chain(details.magic_tap_label.as_deref())
         .collect();
     let mut parts: Vec<String> = vec![name, role_word.to_string()];
     parts.extend(
@@ -1912,15 +1997,15 @@ pub(crate) fn spoken_line(element: &AccessibilityElement) -> String {
             .filter(|picked| *picked && element.role != AccessibilityRole::RadioButton)
             .map(|_| "selected".to_string()),
     );
-    parts.extend(element.expanded.map(|open| {
+    parts.extend(details.expanded.map(|open| {
         if open {
             "expanded".to_string()
         } else {
             "collapsed".to_string()
         }
     }));
-    if element.state_description.is_none() {
-        parts.extend(element.progress.as_ref().and_then(spoken_percent));
+    if details.state_description.is_none() {
+        parts.extend(details.progress.as_ref().and_then(spoken_percent));
     }
     parts.extend((!element.enabled).then(|| "dimmed".to_string()));
     parts.extend(element.focused.then(|| "focused".to_string()));
@@ -2025,8 +2110,9 @@ pub(crate) fn voiceover_replacement_focus(
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
 pub(crate) fn voiceover_value(element: &AccessibilityElement) -> Option<String> {
+    let details = element.details();
     let mut parts = Vec::new();
-    if element.password {
+    if details.password {
         parts.push("password".to_owned());
     } else if let Some(value) = &element.value
         && (element.role.is_text_field() || value != &element.label)
@@ -2034,7 +2120,7 @@ pub(crate) fn voiceover_value(element: &AccessibilityElement) -> Option<String> 
     {
         parts.push(value.clone());
     }
-    if element
+    if details
         .state_description
         .as_deref()
         .is_none_or(|state| state.trim().is_empty())
@@ -2048,7 +2134,7 @@ pub(crate) fn voiceover_value(element: &AccessibilityElement) -> Option<String> 
             };
             parts.push(word.to_owned());
         }
-        if let Some(progress) = element.progress {
+        if let Some(progress) = details.progress {
             parts.push(progress.current.to_string());
         }
     }
