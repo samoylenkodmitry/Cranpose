@@ -129,6 +129,9 @@ fn liquid_page_pass_inventory() {
         }
         let timing = page.shell.renderer().gpu_pass_timings();
         assert!(timing.frames > 0, "the adapter must expose GPU timestamps");
+        assert_eq!(timing.invalid_frames, 0, "{timing:?}");
+        assert_eq!(timing.dropped_frames, 0, "{timing:?}");
+        assert_eq!(timing.dropped_passes, 0, "{timing:?}");
         assert_eq!(page.device_errors(), 0);
     }
 }

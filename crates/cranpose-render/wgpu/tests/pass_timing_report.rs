@@ -99,18 +99,18 @@ fn a_rendered_scene_attributes_gpu_time_to_its_pass_labels() {
         support::headless_renderer_parts_configured(TimingToggle::set).expect("headless renderer");
     let mut harness = Harness::new(renderer);
 
-    let mut report = harness.frame();
-    for _ in 0..20 {
-        if report.frames > 0 {
-            break;
-        }
-        report = harness.frame();
-    }
+    let report = (0..32)
+        .map(|_| harness.frame())
+        .last()
+        .expect("32 captured frames");
 
     assert!(
-        report.frames > 0,
-        "no timed frame was read back within 21 frames"
+        report.frames >= 28,
+        "query readback must keep up with captured frames: {report:?}"
     );
+    assert_eq!(report.invalid_frames, 0, "{report:?}");
+    assert_eq!(report.dropped_frames, 0, "{report:?}");
+    assert_eq!(report.dropped_passes, 0, "{report:?}");
     assert!(
         !report.entries.is_empty(),
         "a rendered frame must attribute at least one pass"
@@ -118,6 +118,16 @@ fn a_rendered_scene_attributes_gpu_time_to_its_pass_labels() {
     for entry in &report.entries {
         assert!(entry.passes > 0, "reported labels must have executed");
     }
+    let output = report
+        .entries
+        .iter()
+        .find(|entry| entry.label == "Output Conversion Pass")
+        .expect("every captured frame must include its output conversion");
+    assert_eq!(
+        output.passes,
+        u64::from(report.frames),
+        "partial frames must not be counted as complete GPU timings: {report:?}"
+    );
     let total_ms: f64 = report.entries.iter().map(|entry| entry.total_ms).sum();
     assert!(
         total_ms > 0.0,
