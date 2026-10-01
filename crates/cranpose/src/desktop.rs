@@ -3010,6 +3010,7 @@ impl App {
         }
         native.surface_dirty = true;
 
+        let acquire_started_at = Instant::now();
         let output = match current_surface_texture(&native.surface, "native window") {
             SurfaceFrame::Ready(output) => output,
             SurfaceFrame::Reconfigure => {
@@ -3075,7 +3076,11 @@ impl App {
             after_present,
             "native",
         );
-        native.last_frame_start_time = Some(frame_started_at);
+        native.last_frame_start_time = Some(presented_frame_anchor(
+            frame_started_at,
+            native.frame_interval(app.frame_pacing_mode()),
+            after_acquire.duration_since(acquire_started_at),
+        ));
         let needs_frame =
             native_surface(app, native).is_some_and(|surface| surface.frame_schedule().needs_frame);
         if should_chain_no_vsync_redraw(native.frame_interval(app.frame_pacing_mode()), needs_frame)
@@ -3557,6 +3562,19 @@ fn next_frame_anchor(
         frame_started_at
     } else {
         anchor
+    }
+}
+
+fn presented_frame_anchor(
+    anchor: Instant,
+    interval: Option<Duration>,
+    acquire_duration: Duration,
+) -> Instant {
+    match interval {
+        Some(interval) if acquire_duration >= interval / 2 => {
+            anchor + acquire_duration.min(interval)
+        }
+        _ => anchor,
     }
 }
 
@@ -5768,6 +5786,7 @@ impl ApplicationHandler for App {
                 );
                 if present_required {
                     self.primary_surface_dirty = true;
+                    let acquire_started_at = Instant::now();
                     let output = match current_surface_texture(surface, "primary window") {
                         SurfaceFrame::Ready(output) => output,
                         SurfaceFrame::Reconfigure => {
@@ -5845,10 +5864,14 @@ impl ApplicationHandler for App {
                         after_present,
                         "primary",
                     );
-                    self.last_frame_start_time = Some(next_frame_anchor(
-                        self.last_frame_start_time,
-                        frame_started_at,
+                    self.last_frame_start_time = Some(presented_frame_anchor(
+                        next_frame_anchor(
+                            self.last_frame_start_time,
+                            frame_started_at,
+                            frame_interval,
+                        ),
                         frame_interval,
+                        after_acquire.duration_since(acquire_started_at),
                     ));
                     #[cfg(feature = "robot")]
                     {
