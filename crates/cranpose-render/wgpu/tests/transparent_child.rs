@@ -120,7 +120,6 @@ fn zero_opacity_skips_source_over_effects_but_keeps_destructive_blending() {
         };
         layer.graphics_layer.alpha = 0.0;
         layer.graphics_layer.blend_mode = blend_mode;
-        layer.graphics_layer.backdrop_effect = Some(RenderEffect::blur(8.0));
         layer.children.push(RenderNode::Layer(Box::new(
             shared_test_support::layer_node(
                 BAR,
@@ -155,7 +154,7 @@ fn zero_opacity_skips_source_over_effects_but_keeps_destructive_blending() {
 }
 
 #[test]
-fn backdrop_and_foreground_share_group_opacity() {
+fn a_descendant_backdrop_shares_its_parents_group_opacity() {
     let mut renderer = support::headless_renderer().expect("GPU required for opacity probe");
     let plain = capture(&mut renderer, support::striped_page(WIDTH, HEIGHT));
     let mut frames = Vec::new();
@@ -167,11 +166,20 @@ fn backdrop_and_foreground_share_group_opacity() {
                 ProjectiveTransform::identity(),
                 GraphicsLayer {
                     alpha,
-                    backdrop_effect: Some(painting_shader()),
                     render_effect: Some(identity_shader(true)),
                     ..Default::default()
                 },
-                vec![],
+                vec![RenderNode::Layer(Box::new(
+                    shared_test_support::layer_node(
+                        BAR,
+                        ProjectiveTransform::identity(),
+                        GraphicsLayer {
+                            backdrop_effect: Some(painting_shader()),
+                            ..Default::default()
+                        },
+                        vec![],
+                    ),
+                ))],
             ),
         )));
         frames.push(capture(&mut renderer, page));

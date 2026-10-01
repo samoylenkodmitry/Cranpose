@@ -597,6 +597,7 @@ test-liquid-reference-fixtures:
     cargo test --profile ci -p desktop-app --bin cranpose-liquid-reference --features ios
 
 test-liquid-motion:
+    cargo test --profile ci -p cranpose-app-shell --lib liquid_lens_frame_tests
     ./run_robot_test.sh --sequential --example robot_liquid_tab_content_anchor --example robot_liquid_navbar_touch_budget --example robot_liquid_segmented_glide_budget --example robot_liquid_slider_geometry --example robot_liquid_dropdown_accordion
 
 test-liquid-reference-tools:

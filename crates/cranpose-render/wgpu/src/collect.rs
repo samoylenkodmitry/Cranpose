@@ -738,6 +738,7 @@ fn isolated_child(
     context: WalkContext,
     parent_scene: &mut CompositorScene,
 ) -> ChildLayer {
+    let local_layer = local_content_layer_for(&layer.graphics_layer);
     let content_context = WalkContext {
         offset: Point::default(),
         visual_clip: None,
@@ -758,7 +759,12 @@ fn isolated_child(
             context.offset.y,
         ));
     let parent_bounds = quad_bounds(transform.map_rect(layer.local_bounds));
-    let snap_anchor = isolated_snap_anchor(layer, context, parent_bounds);
+    let rigid = context.translated || layer_has_pixel_sensitive_subtree(layer);
+    let snap_anchor = context.snap_anchor.or_else(|| {
+        rigid
+            .then(|| rigid_snap_anchor(parent_bounds, &local_layer))
+            .flatten()
+    });
     let alpha = if layer.graphics_layer.compositing_strategy == CompositingStrategy::ModulateAlpha {
         1.0
     } else {
@@ -793,24 +799,8 @@ fn isolated_child(
     }
 }
 
-fn isolated_snap_anchor(
-    layer: &LayerNode,
-    context: WalkContext,
-    bounds: Rect,
-) -> Option<SnapAnchor> {
-    context.snap_anchor.or_else(|| {
-        (context.translated || layer_has_pixel_sensitive_subtree(layer))
-            .then(|| rigid_snap_anchor(bounds, &local_content_layer_for(&layer.graphics_layer)))
-            .flatten()
-    })
-}
-
 fn with_backdrop_in_own_space(child: ChildLayer) -> ChildLayer {
-    if child.backdrop.is_none()
-        || (uniform_scale_translation(child.transform).is_some()
-            && child.alpha == 1.0
-            && child.blend_mode == BlendMode::SrcOver)
-    {
+    if child.backdrop.is_none() || uniform_scale_translation(child.transform).is_some() {
         return child;
     }
     let mut content = LayerScene {
@@ -1078,19 +1068,6 @@ fn collect_child(
                 child_bounds,
                 shadow_clip,
             );
-            if child.graphics_layer.compositing_strategy != CompositingStrategy::ModulateAlpha
-                && child.graphics_layer.blend_mode == BlendMode::SrcOver
-                && GraphicsLayer::composite_alpha_8bit(child.graphics_layer.alpha) == 0.0
-            {
-                if shadows_before < out.scene.shadow_draws.len() {
-                    assign_shadow_anchor(
-                        &mut out.scene,
-                        shadows_before,
-                        isolated_snap_anchor(child, context, child_bounds),
-                    );
-                }
-                return;
-            }
             let mut isolated = with_backdrop_in_own_space(isolated_child(
                 child,
                 text_layout,

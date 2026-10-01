@@ -146,8 +146,8 @@ impl ShapeResponse {
             animation: AnimationType::Spring(cranpose_animation::SpringSpec {
                 damping_ratio: damping,
                 stiffness,
-                position_threshold: 0.000001,
-                velocity_threshold: 0.00001,
+                position_threshold: 0.0001,
+                velocity_threshold: 0.001,
                 ..Default::default()
             }),
         }
@@ -156,7 +156,7 @@ impl ShapeResponse {
     fn advance(&self, speed: f32, dt: f32, now: u64) {
         let relaxed =
             speed + (self.relaxed_speed.get() - speed) * (-self.relaxation_rate * dt).exp();
-        let relaxed = if speed == 0.0 && relaxed < 0.0001 {
+        let relaxed = if speed == 0.0 && relaxed < 0.01 {
             0.0
         } else {
             relaxed

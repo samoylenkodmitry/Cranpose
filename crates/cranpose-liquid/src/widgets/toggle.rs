@@ -233,7 +233,6 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
             .offset(0.0, (TRACK_HEIGHT - node_h) * 0.5 + LENS_VERTICAL_OFFSET)
             .graphics_layer(move || GraphicsLayer {
                 translation_x: lens_translation_x(layer_axis.value(), node_w),
-                alpha: material_progress.get().clamp(0.0, 1.0),
                 ..Default::default()
             })
             .glass_effect_with(toggle_lens_material(), move || {
