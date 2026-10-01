@@ -144,7 +144,7 @@ fn a_released_slider_streams_native_inertia_then_stops_requesting_frames() {
     for accept in [true, false] {
         let mut host =
             CountedShell::settled(location_key(file!(), line!(), column!()), move || {
-                SliderReleaseHost(accept)
+                SliderReleaseHost(accept);
             });
         let value = SLIDER_VALUE.get().expect("controlled slider");
         let mut clock = host.shell.app.last_frame_time_nanos + FRAME_NANOS;
