@@ -660,7 +660,6 @@ impl Hash for LocalKey {
 }
 
 thread_local! {
-    static DROPPED_RECOMPOSE_SCOPES: Cell<u64> = const { Cell::new(0) };
     #[cfg(debug_assertions)]
     static DEBUG_SCOPE_LABELS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
     #[cfg(debug_assertions)]
@@ -703,6 +702,7 @@ pub(crate) struct RecomposeScopeInner {
     retention_mode: Cell<RetentionMode>,
     parent_hint: Cell<Option<NodeId>>,
     group_anchor: Cell<AnchorId>,
+    observers: snapshot_state_observer::ScopeObservers,
     recompose: RefCell<Option<RecomposeCallback>>,
     parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     lifetime_owner_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
@@ -735,6 +735,7 @@ impl RecomposeScopeInner {
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
             parent_hint: Cell::new(None),
             group_anchor: Cell::new(AnchorId::INVALID),
+            observers: snapshot_state_observer::ScopeObservers::default(),
             recompose: RefCell::new(None),
             parent_scope: RefCell::new(None),
             lifetime_owner_scope: RefCell::new(None),
@@ -762,7 +763,7 @@ fn push_unique_state_id(ids: &mut StateIds, state_id: StateId) {
 
 impl Drop for RecomposeScopeInner {
     fn drop(&mut self) {
-        let _ = DROPPED_RECOMPOSE_SCOPES.try_with(|count| count.set(count.get().wrapping_add(1)));
+        self.observers.release();
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
         let subscriptions = std::mem::take(self.state_subscriptions.get_mut());
