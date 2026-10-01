@@ -199,15 +199,7 @@ impl SlotWriteSession<'_> {
             };
         }
 
-        let search_start = self
-            .table
-            .repair_group_subtree_range_at_index(cursor.index(), "later sibling search start").map_or_else(|| {
-                let fallback = cursor.index().saturating_add(1).min(self.table.group_count());
-                log::error!(
-                    "slot writer could not repair expected child subtree at cursor {cursor:?} before keyed sibling search; using fallback search start {fallback}"
-                );
-                fallback
-            }, |range| range.as_group_range().end());
+        let search_start = self.group_subtree_end(cursor.index(), "later sibling search start");
         self.state
             .find_later_sibling(self.table, cursor.parent(), key, search_start)
             .map_or(ActiveChildResolution::InsertNew, |root| {
@@ -308,7 +300,7 @@ impl SlotWriteSession<'_> {
             log::error!("slot writer end_group ignored stale group frame anchor {group_anchor:?}");
             return;
         };
-        let subtree_end = self.repaired_group_subtree_end(group_index, "group end cursor advance");
+        let subtree_end = self.group_subtree_end(group_index, "group end cursor advance");
         self.state.advance_parent_after_child(subtree_end);
     }
 
@@ -326,12 +318,12 @@ impl SlotWriteSession<'_> {
             log::error!("slot writer skip_group ignored stale group frame anchor {group_anchor:?}");
             return;
         };
-        let subtree_len = self.repaired_group_subtree_len(group_index, "group skip cursor advance");
+        let subtree_end = self.group_subtree_end(group_index, "group skip cursor advance");
         let Some(frame) = self.state.group_stack.last_mut() else {
             log::error!("slot writer skip_group lost its active group frame before cursor advance");
             return;
         };
-        frame.skip_to_existing_group_end(group_index, subtree_len);
+        frame.skip_to_existing_group_end(subtree_end);
     }
 
     pub(crate) fn set_group_scope(&mut self, group: ActiveGroupId, scope: RecomposeScope) -> bool {
@@ -342,24 +334,16 @@ impl SlotWriteSession<'_> {
         self.end_group();
     }
 
-    fn repaired_group_subtree_len(&mut self, group_index: usize, operation: &'static str) -> usize {
-        self.table
-            .repair_group_subtree_range_at_index(group_index, operation).map_or_else(|| {
-                log::error!(
-                    "slot writer could not repair subtree length for group index {group_index} during {operation}; advancing by the root group only"
-                );
-                1
-            }, super::super::ranges::SubtreeRange::len)
-    }
-
-    fn repaired_group_subtree_end(&mut self, group_index: usize, operation: &'static str) -> usize {
-        self.table
-            .repair_group_subtree_range_at_index(group_index, operation).map_or_else(|| {
+    fn group_subtree_end(&self, group_index: usize, operation: &'static str) -> usize {
+        self.table.group_subtree_range_at_index(group_index).map_or_else(
+            || {
                 let fallback_end = group_index.saturating_add(1).min(self.table.group_count());
                 log::error!(
-                    "slot writer could not repair subtree end for group index {group_index} during {operation}; using fallback end {fallback_end}"
+                    "slot writer found the stored span of group index {group_index} outside the active groups during {operation}; using fallback end {fallback_end}"
                 );
                 fallback_end
-            }, |range| range.as_group_range().end())
+            },
+            |range| range.as_group_range().end(),
+        )
     }
 }

@@ -301,55 +301,6 @@ fn detach_repairs_corrupt_child_payload_and_node_lengths() {
 }
 
 #[test]
-fn detach_repairs_corrupt_child_subtree_len_from_structure() {
-    const PARENT_KEY: Key = 136;
-    const CHILD_KEY: Key = 236;
-    const GRANDCHILD_KEY: Key = 336;
-
-    let mut harness = SlotHarness::new();
-
-    harness.begin_pass(SlotPassMode::Compose);
-    harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
-
-        begin_unkeyed(session, CHILD_KEY, None);
-        begin_unkeyed(session, GRANDCHILD_KEY, None);
-        let grandchild_result = session.finish_group_body();
-        assert!(grandchild_result.detached_children.is_empty());
-        session.end_group();
-        let child_result = session.finish_group_body();
-        assert!(child_result.detached_children.is_empty());
-        session.end_group();
-
-        let parent_result = session.finish_group_body();
-        assert!(parent_result.detached_children.is_empty());
-        session.end_group();
-    });
-    harness.finish_pass();
-
-    harness.table.groups[1].subtree_len = 0;
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let detached = harness.session(|session| {
-        begin_unkeyed(session, PARENT_KEY, None);
-        let parent_result = session.finish_group_body();
-        session.end_group();
-        assert_eq!(parent_result.detached_children.len(), 1);
-        parent_result.detached_children.into_iter().next().unwrap()
-    });
-    harness.finish_pass();
-
-    assert_eq!(detached.groups.len(), 2);
-    assert_eq!(detached.groups[0].key.static_key, CHILD_KEY);
-    assert_eq!(detached.groups[0].subtree_len, 2);
-    assert_eq!(detached.groups[1].key.static_key, GRANDCHILD_KEY);
-    assert_eq!(harness.table.groups.len(), 1);
-    assert_eq!(harness.table.groups[0].subtree_len, 1);
-    assert_eq!(detached.validate_detached(), Ok(()));
-    assert_eq!(harness.table.validate(), Ok(()));
-}
-
-#[test]
 fn restore_subtree_between_existing_siblings_reactivates_scope_and_anchor_indexes() {
     const PARENT_KEY: Key = 320;
     const CHILD_A_KEY: Key = 321;

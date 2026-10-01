@@ -338,7 +338,10 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
     let after = harness.table.debug_stats().mutation;
 
     let child_index = harness.table.current_group_index(child_anchor);
-    let child_range = harness.table.group_subtree_range_at_index(child_index);
+    let child_range = harness
+        .table
+        .group_subtree_range_at_index(child_index)
+        .expect("restored child span should fit the active groups");
     assert_eq!(child_range.root_index(), child_index);
     assert_eq!(child_range.len(), RESTORED_GROUP_COUNT);
     assert_eq!(

@@ -108,52 +108,6 @@ fn node_tail_cleanup_repairs_corrupt_group_node_len() {
 }
 
 #[test]
-fn node_insertion_repairs_corrupt_subtree_node_count_before_delta() {
-    const GROUP_KEY: Key = 364_003;
-
-    let mut table = SlotTable::new();
-    let owner = table.insert_new_group(
-        ChildCursor::new(AnchorId::INVALID, 0),
-        GroupKey::new(GROUP_KEY, None, 0),
-    );
-    table.groups[0].subtree_node_count = u32::MAX;
-
-    let update = table.record_node_at_cursor(owner, 0, 42, None, 1, crate::slot::BRANCH_PATH_ROOT);
-
-    assert_eq!(
-        update,
-        NodeSlotUpdate::Inserted {
-            id: 42,
-            generation: 1,
-        }
-    );
-    assert_eq!(table.groups[0].subtree_node_count, 1);
-    assert_eq!(table.total_node_count(), 1);
-    assert_eq!(table.validate(), Ok(()));
-}
-
-#[test]
-fn node_tail_removal_repairs_corrupt_subtree_node_count_before_delta() {
-    const GROUP_KEY: Key = 364_004;
-
-    let mut table = SlotTable::new();
-    let owner = table.insert_new_group(
-        ChildCursor::new(AnchorId::INVALID, 0),
-        GroupKey::new(GROUP_KEY, None, 0),
-    );
-    let update = table.record_node_at_cursor(owner, 0, 42, None, 1, crate::slot::BRANCH_PATH_ROOT);
-    assert!(matches!(update, NodeSlotUpdate::Inserted { .. }));
-    table.groups[0].subtree_node_count = 0;
-
-    let removed = table.remove_group_node_tail_at_cursor(owner, 0);
-
-    assert_eq!(removed.len(), 1);
-    assert_eq!(table.groups[0].subtree_node_count, 0);
-    assert_eq!(table.total_node_count(), 0);
-    assert_eq!(table.validate(), Ok(()));
-}
-
-#[test]
 fn node_tail_range_with_corrupt_segment_start_is_empty() {
     const GROUP_KEY: Key = 364_005;
 
@@ -227,47 +181,6 @@ fn collecting_root_nodes_with_stale_group_anchor_returns_empty() {
             .table
             .collect_subtree_root_node_ids(group_anchor)
             .is_empty()
-    );
-}
-
-#[test]
-fn collecting_root_nodes_repairs_corrupt_subtree_span_and_node_count() {
-    const PARENT_KEY: Key = 364_005;
-    const CHILD_KEY: Key = 364_006;
-
-    let mut harness = SlotHarness::new();
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let parent_anchor = harness.session(|session| {
-        let parent = begin_unkeyed(session, PARENT_KEY, None);
-        session.record_node_with_parent(10, 1, None, crate::slot::BRANCH_PATH_ROOT);
-
-        begin_unkeyed(session, CHILD_KEY, None);
-        session.record_node_with_parent(11, 1, Some(10), crate::slot::BRANCH_PATH_ROOT);
-        let child_result = session.finish_group_body();
-        assert!(child_result.detached_children.is_empty());
-        session.end_group();
-
-        let parent_result = session.finish_group_body();
-        assert!(parent_result.detached_children.is_empty());
-        session.end_group();
-        parent.anchor
-    });
-    harness.finish_pass();
-
-    harness.table.groups[0].subtree_len = 3;
-    harness.table.groups[0].subtree_node_count = 10;
-
-    let root_nodes = harness.table.collect_subtree_root_node_ids(parent_anchor);
-
-    assert_eq!(root_nodes.as_slice(), [10]);
-    assert_eq!(
-        harness.table.groups[0].subtree_len, 2,
-        "root-node collection should repair subtree span before iterating"
-    );
-    assert_eq!(
-        harness.table.groups[0].subtree_node_count, 2,
-        "root-node collection should repair its reserve/count metadata"
     );
 }
 

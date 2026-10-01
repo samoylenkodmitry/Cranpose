@@ -28,9 +28,7 @@ pub(crate) use anchors::AnchorRegistry;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use anchors::AnchorState;
 pub(crate) use checked::checked_usize_to_u32;
-pub(in crate::slot) use checked::{
-    CheckedU32Delta, checked_u32_delta, checked_usize_to_i64, try_checked_u32_delta,
-};
+pub(in crate::slot) use checked::{CheckedU32Delta, checked_u32_delta, checked_usize_to_i64};
 pub(crate) use debug::SlotLifecycleDebugStats;
 pub use debug::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,

@@ -225,7 +225,7 @@ impl SlotTable {
             },
         );
         if matches!(update, NodeSlotUpdate::Inserted { .. }) {
-            self.adjust_ancestor_node_counts(owner, 1);
+            self.adjust_ancestor_group_spans(owner, 0, 1);
         }
 
         update
@@ -311,7 +311,7 @@ impl SlotTable {
         let removed = self.remove_group_node_range(node_range);
         if !removed.is_empty() {
             let removed_len = checked_usize_to_i64(removed.len(), "removed node count");
-            self.adjust_ancestor_node_counts(owner, -removed_len);
+            self.adjust_ancestor_group_spans(owner, 0, -removed_len);
         }
         removed
     }

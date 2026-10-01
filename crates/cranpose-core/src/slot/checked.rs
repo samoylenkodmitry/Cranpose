@@ -71,11 +71,7 @@ pub(in crate::slot) fn checked_u32_delta(
 }
 
 #[inline]
-pub(in crate::slot) fn try_checked_u32_delta(
-    value: u32,
-    delta: CheckedU32Delta,
-    min: u32,
-) -> Option<u32> {
+fn try_checked_u32_delta(value: u32, delta: CheckedU32Delta, min: u32) -> Option<u32> {
     let updated = match delta {
         CheckedU32Delta::Add(delta) => value.checked_add(delta)?,
         CheckedU32Delta::Sub(delta) => value.checked_sub(delta)?,

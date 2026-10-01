@@ -153,12 +153,7 @@ impl GroupFrame {
         self.node_cursor += 1;
     }
 
-    pub(in crate::slot) fn skip_to_existing_group_end(
-        &mut self,
-        group_index: usize,
-        subtree_len: usize,
-    ) {
-        let end = group_index + subtree_len;
+    pub(in crate::slot) fn skip_to_existing_group_end(&mut self, end: usize) {
         self.next_child_index = end;
         self.payload_cursor = self.old_payload_len;
         self.node_cursor = self.old_node_len;

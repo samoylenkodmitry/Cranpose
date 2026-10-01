@@ -122,109 +122,14 @@ impl SlotTable {
         group_index + self.group_subtree_len_at_index(group_index)
     }
 
-    #[cfg(test)]
     #[inline(always)]
-    pub(in crate::slot) fn group_subtree_range_at_index(&self, group_index: usize) -> SubtreeRange {
-        SubtreeRange::from_root_len(group_index, self.group_subtree_len_at_index(group_index))
-    }
-
-    pub(in crate::slot) fn structural_subtree_len_at_index(
+    pub(in crate::slot) fn group_subtree_range_at_index(
         &self,
         root_index: usize,
-    ) -> Option<usize> {
-        let root_depth = self.groups.get(root_index)?.depth;
-        let mut end = root_index.checked_add(1)?;
-        while let Some(group) = self.groups.get(end) {
-            if group.depth <= root_depth {
-                break;
-            }
-            end = end.checked_add(1)?;
-        }
-        Some(end - root_index)
-    }
-
-    pub(in crate::slot) fn repair_group_subtree_range_at_index(
-        &mut self,
-        root_index: usize,
-        operation: &'static str,
     ) -> Option<SubtreeRange> {
-        let structural_len = self.structural_subtree_len_at_index(root_index)?;
-        let group = self.groups.get_mut(root_index)?;
-        let declared_len = group.subtree_len as usize;
-        if declared_len != structural_len {
-            let Ok(repaired_len) = u32::try_from(structural_len) else {
-                log::error!(
-                    "slot table ignored subtree length repair for group index {root_index} during {operation}: structural length {structural_len} does not fit in u32"
-                );
-                return None;
-            };
-            log::error!(
-                "slot table repaired subtree length for group index {root_index} during {operation}: declared {declared_len}, structural {structural_len}"
-            );
-            group.subtree_len = repaired_len;
-        }
-        Some(SubtreeRange::from_root_len(root_index, structural_len))
-    }
-
-    pub(in crate::slot) fn repair_group_subtree_node_count_from_storage(
-        &mut self,
-        root_index: usize,
-        operation: &'static str,
-    ) -> Option<usize> {
-        let subtree_range = self.repair_group_subtree_range_at_index(root_index, operation)?;
-        let mut structural_node_count = 0usize;
-        for group_index in subtree_range.as_range() {
-            let group_node_count = self.repair_group_node_len_to_storage(group_index, operation);
-            let Some(updated_node_count) = structural_node_count.checked_add(group_node_count)
-            else {
-                log::error!(
-                    "slot table ignored subtree node-count repair for group index {root_index} during {operation}: structural node count overflowed usize"
-                );
-                return None;
-            };
-            structural_node_count = updated_node_count;
-        }
-
-        let Some(group) = self.groups.get_mut(root_index) else {
-            log::error!(
-                "slot table ignored subtree node-count repair for missing group index {root_index} during {operation}"
-            );
-            return None;
-        };
-        let declared_node_count = group.subtree_node_count as usize;
-        if declared_node_count == structural_node_count {
-            return Some(structural_node_count);
-        }
-        let Ok(repaired_node_count) = u32::try_from(structural_node_count) else {
-            log::error!(
-                "slot table ignored subtree node-count repair for group index {root_index} during {operation}: structural node count {structural_node_count} does not fit in u32"
-            );
-            return None;
-        };
-        log::error!(
-            "slot table repaired subtree node count for group index {root_index} during {operation}: declared {declared_node_count}, structural {structural_node_count}"
-        );
-        group.subtree_node_count = repaired_node_count;
-        Some(structural_node_count)
-    }
-
-    pub(in crate::slot) fn repair_child_cursor_parent_subtree(
-        &mut self,
-        cursor: ChildCursor,
-        operation: &'static str,
-    ) -> bool {
-        let parent_anchor = cursor.parent();
-        if !parent_anchor.is_valid() {
-            return true;
-        }
-        let Some(parent_index) = self.active_group_index(parent_anchor) else {
-            log::error!(
-                "slot table rejected child cursor parent repair for stale parent anchor {parent_anchor:?} during {operation}"
-            );
-            return false;
-        };
-        self.repair_group_subtree_range_at_index(parent_index, operation)
-            .is_some()
+        let len = self.groups.get(root_index)?.subtree_len as usize;
+        let end = root_index.checked_add(len)?;
+        (len > 0 && end <= self.groups.len()).then(|| SubtreeRange::from_root_len(root_index, len))
     }
 
     #[cfg(test)]
@@ -310,16 +215,11 @@ impl SlotTable {
             let end = match declared_end {
                 Some(end) if start <= end && end <= self.group_count() => end,
                 _ => {
-                    let structural_end = self
-                        .structural_subtree_len_at_index(parent_index)
-                        .and_then(|len| parent_index.checked_add(len))
-                        .unwrap_or(start)
-                        .min(self.group_count());
-                    let end = structural_end.max(start);
                     log::error!(
-                        "slot table used structural child range for parent {parent_anchor:?}: declared end {declared_end:?}, structural end {end}"
+                        "slot table clamped the child range of parent {parent_anchor:?}: declared end {declared_end:?} lies outside {} active groups",
+                        self.group_count()
                     );
-                    end
+                    self.group_count()
                 }
             };
             DirectChildRange::new(start, end)
