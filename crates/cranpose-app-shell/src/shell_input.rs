@@ -2017,14 +2017,18 @@ fn activation_target(
         return None;
     }
     if let Some(key) = canvas_key {
-        let child = node.canvas_children.iter().find(|child| child.key == key)?;
+        let child = node
+            .details()
+            .canvas_children
+            .iter()
+            .find(|child| child.key == key)?;
         return (child.enabled && child.clickable)
             .then_some(ActivationTarget::Pointer(node_id, Some(child.bounds)));
     }
     if let Some(action) = &node.on_click {
         return Some(ActivationTarget::Direct(action.clone()));
     }
-    if node.editable_text && node.focusable {
+    if node.details().editable_text && node.focusable {
         return Some(ActivationTarget::Edit(node_id));
     }
     node.actions.first().map(|action| match action {

@@ -2860,7 +2860,7 @@ fn find_semantics_described<'a>(
 fn find_editable_semantics(
     node: &cranpose_ui::SemanticsNode,
 ) -> Option<&cranpose_ui::SemanticsNode> {
-    if node.editable_text {
+    if node.details().editable_text {
         return Some(node);
     }
     node.children.iter().find_map(find_editable_semantics)

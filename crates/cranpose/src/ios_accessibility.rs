@@ -353,7 +353,7 @@ impl IosAccessibilityBridge {
         self.requests.screen_action.set(
             next.iter()
                 .zip(next_ids)
-                .find(|(element, _)| element.magic_tap_label.is_some())
+                .find(|(element, _)| element.details().magic_tap_label.is_some())
                 .map(|(_, id)| *id),
         );
 
@@ -536,7 +536,7 @@ impl IosAccessibilityBridge {
         for (element_id, up) in pending {
             let Some((node_id, progress)) = self
                 .element_for(element_id)
-                .map(|element| (element.node_id, element.progress))
+                .map(|element| (element.node_id, element.details().progress))
             else {
                 continue;
             };
@@ -722,8 +722,11 @@ impl IosAccessibilityBridge {
             );
             crate::ios_keyboard::describe_for_reader(
                 &element.label,
-                element.click_label.as_deref(),
-                element.value.as_deref().filter(|_| !element.password),
+                element.details().click_label.as_deref(),
+                element
+                    .value
+                    .as_deref()
+                    .filter(|_| !element.details().password),
                 frame,
                 &self.host_view,
                 &format!("cranpose-node-{id}"),
@@ -802,18 +805,19 @@ fn update_native_element(
     jumpable: bool,
     mtm: MainThreadMarker,
 ) {
+    let details = element.details();
     native.set_actionable(element.clickable || element.role.is_text_field());
-    native.set_dismissable(element.dismissable);
-    native.set_magic_tap(element.magic_tap_label.is_some());
+    native.set_dismissable(details.dismissable);
+    native.set_magic_tap(details.magic_tap_label.is_some());
     native.setAccessibilityLanguage(
-        element
+        details
             .language
             .as_deref()
             .map(NSString::from_str)
             .as_deref(),
         mtm,
     );
-    let input_labels: Vec<Retained<NSString>> = element
+    let input_labels: Vec<Retained<NSString>> = details
         .input_labels
         .iter()
         .map(|label| NSString::from_str(label))
@@ -830,7 +834,7 @@ fn update_native_element(
     let value = accessibility::voiceover_value(element);
     native.setAccessibilityValue(value.as_deref().map(NSString::from_str).as_deref());
     native.setAccessibilityHint(
-        element
+        details
             .click_label
             .as_deref()
             .map(NSString::from_str)
@@ -850,12 +854,12 @@ fn update_native_element(
         if !element.enabled {
             traits |= UIAccessibilityTraitNotEnabled;
         }
-        if element.adjustable {
+        if details.adjustable {
             traits |= UIAccessibilityTraitAdjustable;
         }
     }
     native.setAccessibilityTraits(traits);
-    native.setAccessibilityViewIsModal(element.is_modal, mtm);
+    native.setAccessibilityViewIsModal(details.is_modal, mtm);
     offer_custom_actions(native, element, jumpable, mtm);
 }
 
@@ -1002,7 +1006,9 @@ fn rotor_action(
 /// view rather than through a plain element.
 fn reader_field(elements: &[AccessibilityElement]) -> Option<(usize, &AccessibilityElement)> {
     elements.iter().enumerate().find(|(_, element)| {
-        element.role.is_text_field() && element.focused && element.text_selection.is_some()
+        element.role.is_text_field()
+            && element.focused
+            && element.details().text_selection.is_some()
     })
 }
 

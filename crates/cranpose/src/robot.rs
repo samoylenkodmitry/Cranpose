@@ -1423,6 +1423,7 @@ pub(crate) fn semantic_element_from_semantics_node<F>(
 where
     F: FnMut(cranpose_core::NodeId) -> SemanticRect,
 {
+    let details = sem_node.details();
     let role = match &sem_node.role {
         SemanticsRole::Button => "Button",
         SemanticsRole::Text { .. } => "Text",
@@ -1443,7 +1444,7 @@ where
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
     let bounds = bounds_for(sem_node.node_id);
-    let mut children: Vec<SemanticElement> = sem_node
+    let mut children: Vec<SemanticElement> = details
         .canvas_children
         .iter()
         .map(|child| semantic_element_from_canvas_node(child, bounds))
@@ -1458,13 +1459,11 @@ where
     SemanticElement {
         role,
         text,
-        state_description: sem_node.state_description.clone(),
+        state_description: details.state_description.clone(),
         bounds,
         clickable,
-        editable_text: sem_node.editable_text,
-        text_selection: sem_node
-            .text_selection
-            .map(|range| (range.start, range.end)),
+        editable_text: details.editable_text,
+        text_selection: details.text_selection.map(|range| (range.start, range.end)),
         children,
     }
 }
@@ -1590,6 +1589,7 @@ fn find_canvas_child(
     require_clickable: bool,
 ) -> Option<SemanticQueryResult> {
     sem_node
+        .details()
         .canvas_children
         .iter()
         .find(|child| {

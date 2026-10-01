@@ -6,30 +6,32 @@ impl SemanticsNode {
     /// Whether this node combines its static descendants into one reader stop.
     /// Independently operable descendants remain separate stops.
     pub fn merges_accessibility_descendants(&self) -> bool {
+        let details = self.details();
         self.merge_descendants
             || !self.actions.is_empty()
-            || self.editable_text
-            || self.password
+            || details.editable_text
+            || details.password
             || self.focusable
-            || !self.custom_actions.is_empty()
-            || self.set_progress.is_some()
-            || self.set_text.is_some()
-            || self.set_selection.is_some()
-            || self.on_long_click.is_some()
-            || self.on_magic_tap.is_some()
-            || self.expand.is_some()
-            || self.collapse.is_some()
-            || self.dismiss.is_some()
+            || !details.custom_actions.is_empty()
+            || details.set_progress.is_some()
+            || details.set_text.is_some()
+            || details.set_selection.is_some()
+            || details.on_long_click.is_some()
+            || details.on_magic_tap.is_some()
+            || details.expand.is_some()
+            || details.collapse.is_some()
+            || details.dismiss.is_some()
     }
 
     /// Whether an ancestor must leave this node and its content as a separate
     /// reader stop or container instead of including it in its own label.
     pub fn is_accessibility_boundary(&self) -> bool {
+        let details = self.details();
         self.merges_accessibility_descendants()
-            || self.vertical_scroll.is_some()
-            || self.horizontal_scroll.is_some()
-            || self.selectable_group
-            || self.pane_title.is_some()
+            || details.vertical_scroll.is_some()
+            || details.horizontal_scroll.is_some()
+            || details.selectable_group
+            || details.pane_title.is_some()
             || matches!(
                 self.widget_role,
                 Some(
@@ -82,7 +84,7 @@ impl SemanticsNode {
         if self.merges_accessibility_descendants() && self.write_accessibility_words(&mut words) {
             return Some(Cow::Owned(words));
         }
-        self.editable_text.then_some(Cow::Borrowed(""))
+        self.details().editable_text.then_some(Cow::Borrowed(""))
     }
 
     /// Appends the name [`SemanticsNode::accessibility_label`] gives to
@@ -97,11 +99,11 @@ impl SemanticsNode {
             return true;
         }
         (self.merges_accessibility_descendants() && self.write_accessibility_words(out))
-            || self.editable_text
+            || self.details().editable_text
     }
 
     fn own_accessibility_label(&self) -> Option<&str> {
-        if self.password {
+        if self.details().password {
             return Some(
                 self.description
                     .as_deref()

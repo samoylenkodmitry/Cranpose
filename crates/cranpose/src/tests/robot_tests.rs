@@ -181,28 +181,30 @@ fn queries_find_a_drawn_control_ahead_of_the_canvas_that_drew_it() {
         Some("Settings screen"),
         Vec::new(),
     );
-    canvas.canvas_children = vec![
-        CanvasSemanticsNode::text(
-            1,
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 200.0,
-                height: 30.0,
-            },
-            "CROWN",
-        ),
-        CanvasSemanticsNode::control(
-            2,
-            Rect {
-                x: 0.0,
-                y: 40.0,
-                width: 200.0,
-                height: 52.0,
-            },
-            "Haptics",
-        ),
-    ];
+    canvas.update_details(|details| {
+        details.canvas_children = vec![
+            CanvasSemanticsNode::text(
+                1,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 200.0,
+                    height: 30.0,
+                },
+                "CROWN",
+            ),
+            CanvasSemanticsNode::control(
+                2,
+                Rect {
+                    x: 0.0,
+                    y: 40.0,
+                    width: 200.0,
+                    height: 52.0,
+                },
+                "Haptics",
+            ),
+        ];
+    });
     let bounds_by_node = HashMap::from_iter([(
         2usize,
         SemanticRect {
@@ -250,30 +252,32 @@ fn robot_snapshots_report_the_controls_a_canvas_published() {
     use cranpose_ui::{CanvasSemanticsNode, SemanticsWidgetRole};
 
     let mut canvas = sample_semantics_node(2, SemanticsRole::Layout, false, None, Vec::new());
-    canvas.canvas_children = vec![
-        CanvasSemanticsNode::control(
-            1,
-            cranpose_ui::Rect {
-                x: 4.0,
-                y: 8.0,
-                width: 100.0,
-                height: 52.0,
-            },
-            "Haptics",
-        )
-        .with_role(SemanticsWidgetRole::Switch)
-        .with_state_description("On"),
-        CanvasSemanticsNode::text(
-            2,
-            cranpose_ui::Rect {
-                x: 4.0,
-                y: 70.0,
-                width: 100.0,
-                height: 20.0,
-            },
-            "CROWN",
-        ),
-    ];
+    canvas.update_details(|details| {
+        details.canvas_children = vec![
+            CanvasSemanticsNode::control(
+                1,
+                cranpose_ui::Rect {
+                    x: 4.0,
+                    y: 8.0,
+                    width: 100.0,
+                    height: 52.0,
+                },
+                "Haptics",
+            )
+            .with_role(SemanticsWidgetRole::Switch)
+            .with_state_description("On"),
+            CanvasSemanticsNode::text(
+                2,
+                cranpose_ui::Rect {
+                    x: 4.0,
+                    y: 70.0,
+                    width: 100.0,
+                    height: 20.0,
+                },
+                "CROWN",
+            ),
+        ];
+    });
 
     let mut bounds_for = |node_id: NodeId| {
         assert_eq!(node_id, 2);

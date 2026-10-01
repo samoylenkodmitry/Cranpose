@@ -1,4 +1,5 @@
 use super::*;
+use crate::accessibility::AccessibilityDetails;
 
 /// The fields in one record, as `CranposeActivity.parseAccessibilityElements`
 /// reads them.
@@ -255,11 +256,8 @@ fn a_removed_control_leaves_the_order() {
 #[test]
 fn a_row_whose_list_was_replaced_is_resent() {
     let list = |generation| AccessibilityElement {
-        node_id: 6,
         node_generation: generation,
-        bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
-        vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
-        ..AccessibilityElement::default()
+        ..list_scrolled_to(6, 0.0)
     };
     let row = AccessibilityElement {
         scroll_parent: Some(6),
@@ -314,17 +312,20 @@ fn records_carry_every_field_java_reads() {
             node_id: 4,
             label: "Tab\tand%".into(),
             value: Some("line\nnext\r".into()),
-            state_description: Some("On".into()),
-            click_label: Some("Toggle".into()),
+            details: Some(Box::new(AccessibilityDetails {
+                state_description: Some("On".into()),
+                click_label: Some("Toggle".into()),
+                custom_actions: vec!["Pause".into(), "Re\u{1f}sume".into()],
+                pane_title: Some("Pane".into()),
+                error: Some("Bad%".into()),
+                long_click_label: Some("Hold".into()),
+                expanded: Some(false),
+                ..Default::default()
+            })),
             bounds: AccessibilityRect::new(1.25, 2.5, 30.0, 40.75),
             role: AccessibilityRole::Switch,
             clickable: true,
             toggled: Some(true),
-            custom_actions: vec!["Pause".into(), "Re\u{1f}sume".into()],
-            pane_title: Some("Pane".into()),
-            error: Some("Bad%".into()),
-            long_click_label: Some("Hold".into()),
-            expanded: Some(false),
             ..AccessibilityElement::default()
         },
         element_with(5, Some(1)),
@@ -398,13 +399,16 @@ fn every_encoded_record_carries_the_fields_java_parses() {
         AccessibilityElement {
             node_id: 4,
             label: "Haptics".into(),
-            state_description: Some("On".into()),
-            click_label: Some("Toggle".into()),
+            details: Some(Box::new(AccessibilityDetails {
+                state_description: Some("On".into()),
+                click_label: Some("Toggle".into()),
+                custom_actions: vec!["Pause".into(), "Resume".into()],
+                ..Default::default()
+            })),
             bounds: AccessibilityRect::new(1.0, 2.0, 30.0, 40.0),
             role: AccessibilityRole::Switch,
             clickable: true,
             toggled: Some(true),
-            custom_actions: vec!["Pause".into(), "Resume".into()],
             ..AccessibilityElement::default()
         },
         element_with(5, Some(1)),
@@ -442,7 +446,10 @@ fn the_record_carries_a_field_selection_in_utf16_units_and_nothing_for_the_rest(
             node_id: 4,
             label: "Note".into(),
             value: Some("añb😀c".into()),
-            text_selection: Some((8, 3)),
+            details: Some(Box::new(AccessibilityDetails {
+                text_selection: Some((8, 3)),
+                ..Default::default()
+            })),
             bounds: AccessibilityRect::new(1.0, 2.0, 30.0, 40.0),
             role: AccessibilityRole::TextField,
             ..AccessibilityElement::default()
@@ -465,7 +472,10 @@ fn the_record_names_what_a_long_press_does() {
         AccessibilityElement {
             node_id: 4,
             label: "Milk".into(),
-            long_click_label: Some("Remove receipt".into()),
+            details: Some(Box::new(AccessibilityDetails {
+                long_click_label: Some("Remove receipt".into()),
+                ..Default::default()
+            })),
             bounds: AccessibilityRect::new(0.0, 0.0, 30.0, 40.0),
             role: AccessibilityRole::Button,
             clickable: true,
@@ -517,6 +527,18 @@ fn the_record_carries_whether_focus_can_land_on_a_control_and_whether_it_has() {
     assert_eq!(other[18], "0", "but focus does not sit on it");
 }
 
+fn list_scrolled_to(node_id: cranpose_core::NodeId, offset: f32) -> AccessibilityElement {
+    AccessibilityElement {
+        node_id,
+        bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
+        details: Some(Box::new(AccessibilityDetails {
+            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(offset, 900.0, false)),
+            ..Default::default()
+        })),
+        ..AccessibilityElement::default()
+    }
+}
+
 fn save_button(node_id: cranpose_core::NodeId) -> AccessibilityElement {
     AccessibilityElement {
         node_id,
@@ -531,12 +553,7 @@ fn save_button(node_id: cranpose_core::NodeId) -> AccessibilityElement {
 #[test]
 fn the_record_names_the_list_above_a_row() {
     let elements = vec![
-        AccessibilityElement {
-            node_id: 6,
-            bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
-            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
-            ..AccessibilityElement::default()
-        },
+        list_scrolled_to(6, 0.0),
         AccessibilityElement {
             node_id: 9,
             label: "Milk".into(),
@@ -564,18 +581,8 @@ fn the_record_names_the_list_above_a_row() {
 #[test]
 fn the_record_says_which_way_a_list_can_still_page() {
     let elements = vec![
-        AccessibilityElement {
-            node_id: 6,
-            bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
-            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
-            ..AccessibilityElement::default()
-        },
-        AccessibilityElement {
-            node_id: 7,
-            bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
-            vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(900.0, 900.0, false)),
-            ..AccessibilityElement::default()
-        },
+        list_scrolled_to(6, 0.0),
+        list_scrolled_to(7, 900.0),
         save_button(8),
     ];
 
@@ -600,8 +607,11 @@ fn the_record_carries_the_range_of_an_adjustable_control() {
             node_id: 4,
             label: "Volume".into(),
             bounds: AccessibilityRect::new(0.0, 0.0, 200.0, 40.0),
-            progress: Some(cranpose_ui::ProgressBarRangeInfo::new(0.25, 0.0, 1.0, 0)),
-            adjustable: true,
+            details: Some(Box::new(AccessibilityDetails {
+                progress: Some(cranpose_ui::ProgressBarRangeInfo::new(0.25, 0.0, 1.0, 0)),
+                adjustable: true,
+                ..Default::default()
+            })),
             ..AccessibilityElement::default()
         },
         save_button(5),
@@ -621,15 +631,12 @@ fn the_record_carries_the_range_of_an_adjustable_control() {
 
 #[test]
 fn the_record_says_how_many_rows_a_list_holds() {
-    let mut list = AccessibilityElement {
-        node_id: 6,
-        bounds: AccessibilityRect::new(0.0, 0.0, 400.0, 600.0),
-        vertical_scroll: Some(cranpose_ui::ScrollAxisRange::new(0.0, 900.0, false)),
-        ..AccessibilityElement::default()
-    };
-    list.collection = Some(cranpose_ui::CollectionInfo {
-        rows: 12,
-        columns: 1,
+    let mut list = list_scrolled_to(6, 0.0);
+    list.update_details(|details| {
+        details.collection = Some(cranpose_ui::CollectionInfo {
+            rows: 12,
+            columns: 1,
+        });
     });
 
     let payload = encode_elements(&[list, save_button(8)], 1.0);
@@ -696,7 +703,7 @@ fn the_record_carries_the_title_of_a_pane() {
         bounds: AccessibilityRect::new(0.0, 0.0, 300.0, 600.0),
         ..AccessibilityElement::default()
     };
-    screen.pane_title = Some("Library".into());
+    screen.update_details(|details| details.pane_title = Some("Library".into()));
 
     let payload = encode_elements(&[screen, save_button(8)], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
@@ -712,7 +719,7 @@ fn the_record_carries_the_title_of_a_pane() {
 #[test]
 fn the_record_says_why_a_field_is_wrong() {
     let mut field = save_button(8);
-    field.error = Some("needs a number".into());
+    field.update_details(|details| details.error = Some("needs a number".into()));
 
     let payload = encode_elements(&[field, save_button(9)], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
@@ -728,7 +735,7 @@ fn the_record_says_why_a_field_is_wrong() {
 #[test]
 fn the_record_marks_a_field_that_holds_a_secret() {
     let mut field = save_button(8);
-    field.password = true;
+    field.update_details(|details| details.password = true);
 
     let payload = encode_elements(&[field, save_button(9)], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
@@ -740,9 +747,9 @@ fn the_record_marks_a_field_that_holds_a_secret() {
 #[test]
 fn the_record_says_whether_a_control_is_open() {
     let mut open = save_button(8);
-    open.expanded = Some(true);
+    open.update_details(|details| details.expanded = Some(true));
     let mut closed = save_button(9);
-    closed.expanded = Some(false);
+    closed.update_details(|details| details.expanded = Some(false));
 
     let payload = encode_elements(&[open, closed, save_button(10)], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
@@ -759,7 +766,7 @@ fn the_record_says_whether_a_control_is_open() {
 #[test]
 fn the_record_says_whether_a_control_has_a_way_out() {
     let mut row = save_button(8);
-    row.dismissable = true;
+    row.update_details(|details| details.dismissable = true);
 
     let payload = encode_elements(&[row, save_button(9)], 1.0);
     let records: Vec<_> = payload.split('\n').collect();
@@ -775,7 +782,7 @@ fn the_record_says_whether_a_control_has_a_way_out() {
 #[test]
 fn the_record_says_whether_a_list_takes_a_row_number() {
     let mut list = save_button(8);
-    list.scroll_to_index = true;
+    list.update_details(|details| details.scroll_to_index = true);
 
     let payload = encode_elements(&[list, save_button(9)], 1.0);
     let records: Vec<_> = payload.split('\n').collect();

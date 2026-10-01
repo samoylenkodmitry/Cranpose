@@ -106,7 +106,7 @@ fn scroll_ancestors(node: &SemanticsNode, target: NodeId) -> Option<Vec<NodeId>>
         .children
         .iter()
         .find_map(|node| scroll_ancestors(node, target))?;
-    if node.scroll_by.is_some() {
+    if node.details().scroll_by.is_some() {
         path.push(node.node_id);
     }
     Some(path)
@@ -135,20 +135,21 @@ fn scroll_request(
     target: Rect,
     viewport: Rect,
 ) -> Option<(SemanticsScrollBy, f32, f32)> {
-    let action = node.scroll_by.clone()?;
+    let details = node.details();
+    let action = details.scroll_by.clone()?;
     let dx = axis_delta(
         target.x,
         target.width,
         viewport.x,
         viewport.width,
-        node.horizontal_scroll,
+        details.horizontal_scroll,
     );
     let dy = axis_delta(
         target.y,
         target.height,
         viewport.y,
         viewport.height,
-        node.vertical_scroll,
+        details.vertical_scroll,
     );
     (dx != 0.0 || dy != 0.0).then_some((action, dx, dy))
 }

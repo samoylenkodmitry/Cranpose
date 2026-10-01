@@ -296,9 +296,9 @@ fn outline(node: &SemanticsNode) -> Vec<String> {
             node.node_id,
             node.node_generation,
             node.description,
-            node.state_description,
+            node.details().state_description,
             node.bounds,
-            node.is_modal,
+            node.details().is_modal,
             node.focusable,
         ));
         for child in &node.children {
@@ -557,7 +557,7 @@ fn a_recorder_reading_live_state_merges_on_every_update() -> Result<(), NodeErro
         .tree
         .as_ref()
         .and_then(|tree| tree.root().children.first())
-        .and_then(|row| row.state_description.clone());
+        .and_then(|row| row.details().state_description.clone());
     assert_eq!(state.as_deref(), Some("at 3"));
     Ok(())
 }
@@ -685,7 +685,7 @@ fn a_live_recorder_below_a_clean_subtree_merges_on_every_update() -> Result<(), 
         .and_then(|tree| tree.root().children.first())
         .and_then(|card| card.children.first())
         .and_then(|inner| inner.children.first())
-        .and_then(|live| live.state_description.clone());
+        .and_then(|live| live.details().state_description.clone());
     assert_eq!(state.as_deref(), Some("at 2"));
     Ok(())
 }

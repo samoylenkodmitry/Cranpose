@@ -20,7 +20,10 @@ use crate::{
 fn semantics_keep_only_the_last_visible_modal_and_its_descendants() {
     let modal = |id, hidden| SemanticsNode {
         node_id: id,
-        is_modal: true,
+        details: Some(Box::new(SemanticsDetails {
+            is_modal: true,
+            ..SemanticsDetails::NONE
+        })),
         hidden,
         children: vec![SemanticsNode {
             node_id: id + 1,
@@ -2366,6 +2369,7 @@ fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
             .semantics_tree()
             .expect("expected semantics tree")
             .root()
+            .details()
             .state_description
             .as_deref(),
         Some("Off")
@@ -2387,6 +2391,7 @@ fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
             .semantics_tree()
             .expect("expected semantics tree")
             .root()
+            .details()
             .state_description
             .as_deref(),
         Some("On")
@@ -2453,19 +2458,19 @@ fn semantics_tree_carries_the_controls_a_canvas_published() -> Result<(), NodeEr
         .root();
 
     assert_eq!(root.widget_role, Some(SemanticsWidgetRole::RadioButton));
-    assert_eq!(root.state_description.as_deref(), Some("Playing"));
-    assert_eq!(root.on_click_label.as_deref(), Some("Launch"));
+    assert_eq!(root.details().state_description.as_deref(), Some("Playing"));
+    assert_eq!(root.details().on_click_label.as_deref(), Some("Launch"));
     assert_eq!(root.selected, Some(true));
     assert!(root.enabled);
     assert_eq!(root.actions.len(), 1);
 
-    assert_eq!(root.custom_actions.len(), 1);
-    assert_eq!(root.custom_actions[0].label, "Pause");
-    root.custom_actions[0].invoke();
+    assert_eq!(root.details().custom_actions.len(), 1);
+    assert_eq!(root.details().custom_actions[0].label, "Pause");
+    root.details().custom_actions[0].invoke();
     assert!(paused.get(), "the published handler should be the live one");
 
-    assert_eq!(root.canvas_children.len(), 1);
-    let switch = &root.canvas_children[0];
+    assert_eq!(root.details().canvas_children.len(), 1);
+    let switch = &root.details().canvas_children[0];
     assert_eq!(switch.key, 9);
     assert_eq!(switch.label, "Haptics");
     assert_eq!(switch.role, Some(SemanticsWidgetRole::Switch));
@@ -2506,8 +2511,12 @@ fn semantics_tree_carries_the_long_press_a_modifier_declared() -> Result<(), Nod
         .expect("expected semantics tree")
         .root();
 
-    assert_eq!(root.on_long_click_label.as_deref(), Some("Remove receipt"));
+    assert_eq!(
+        root.details().on_long_click_label.as_deref(),
+        Some("Remove receipt")
+    );
     let action = root
+        .details()
         .on_long_click
         .as_ref()
         .expect("the long press should reach the node");
