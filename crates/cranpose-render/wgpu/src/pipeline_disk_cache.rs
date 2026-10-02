@@ -103,16 +103,22 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     }
 }
 
-/// Names what fills a file: the framework's WGSL sources, and this crate's
-/// version, which changes with each release of the shader rewrites, pipeline
-/// layouts and translator between those sources and the driver, and with
-/// every pipeline key's layout.
+/// The layout of a cache file: its key, the first screen's pipeline keys
+/// behind their count, then the driver's blob. A file in another layout
+/// carries another key, so it loads cold instead of being misread.
+const FILE_LAYOUT: u32 = 2;
+
+/// Names what fills a file: its layout, the framework's WGSL sources, and
+/// this crate's version, which changes with each release of the shader
+/// rewrites, pipeline layouts and translator between those sources and the
+/// driver, and with every pipeline key's layout.
 ///
 /// The driver keeps every pipeline of the blob it loads in the cache it saves,
 /// so a blob kept across shader changes only grows, and the driver holds all
 /// of it resident. A file under another key loads cold and is replaced.
 fn blob_key() -> [u8; 8] {
     let mut hasher = FxHasher::default();
+    hasher.write_u32(FILE_LAYOUT);
     hasher.write_u64(cranpose_ui_graphics::framework_shaders::SOURCES_KEY);
     hasher.write(env!("CARGO_PKG_VERSION").as_bytes());
     hasher.finish().to_le_bytes()
