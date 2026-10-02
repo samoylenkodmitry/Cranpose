@@ -2082,6 +2082,7 @@ fn check_versions_at(root: &Path) -> Result<(), String> {
         &workspace_version,
         &mut failures,
     )?;
+    check_member_manifest_versions(root, &mut failures);
     check_isolated_demo_manifest_versions(root, &workspace_version, &mut failures)?;
     check_published_lock(
         &root.join("apps/isolated-demo/Cargo.lock"),
@@ -2152,6 +2153,42 @@ fn check_root_lock_versions(
         }
     }
     Ok(())
+}
+
+/// A workspace member takes every cranpose crate from the workspace
+/// dependency table. A version of its own does not move when a release bumps
+/// the workspace: v0.9.0 left `cranpose`'s `cranpose-macros = "0.1.164"`
+/// behind, which no 0.9 crate satisfies, so the release commit broke main.
+fn check_member_manifest_versions(root: &Path, failures: &mut Vec<String>) {
+    for member in test_layout::workspace_members(root).unwrap_or_default() {
+        let Ok(manifest) = load_toml(&root.join(&member).join("Cargo.toml")) else {
+            continue;
+        };
+        for table in all_dependency_tables(&manifest) {
+            for (name, spec) in sorted_release_dependencies(table) {
+                if let Some(version) = dependency_version(spec) {
+                    failures.push(format!(
+                        "{member}/Cargo.toml pins {name} at {version}; take it from the workspace with `{name}.workspace = true`"
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Every dependency table of `manifest`: normal, dev and build, top-level and
+/// under each `[target.'cfg(..)']`.
+fn all_dependency_tables(manifest: &toml::Value) -> Vec<&toml::Table> {
+    const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
+    let targets = manifest
+        .get("target")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(|targets| targets.values());
+    std::iter::once(manifest)
+        .chain(targets)
+        .flat_map(|scope| KINDS.iter().filter_map(|kind| scope.get(*kind)?.as_table()))
+        .collect()
 }
 
 /// `apps/isolated-demo`'s manifest must also pin `workspace_version` for
