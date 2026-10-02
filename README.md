@@ -1,9 +1,5 @@
 # Cranpose
 
-**0.9 — toward 1.0.** Read the [application guide](docs/guide.md) and
-[release readiness ledger](docs/release_readiness.md) for the supported
-surface, current evidence and remaining stabilization work. The desktop demo
-opens on its bundled Documentation tab; all existing examples remain available.
 
 [Cranpose Studio on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/34594-cranpose) ·
 [IntelliJ IDEA and RustRover guide](docs/intellij.md): live editing, component
