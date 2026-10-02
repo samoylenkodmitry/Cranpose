@@ -196,11 +196,14 @@ impl PresentState {
             } => {
                 self.surface_epoch = surface_epoch;
                 self.cancel_waiting(CancelReason::SurfaceEpoch);
+                log::info!("[startup] configure start");
                 surface.configure(&self.device, &config);
+                log::info!("[startup] configured");
                 self.surface = Some(surface);
                 self.config = Some(config);
                 self.offscreen_target = None;
                 self.present_placeholder_frame();
+                log::info!("[startup] placeholder presented");
                 let _ = ack.send(());
                 true
             }
@@ -294,10 +297,18 @@ impl PresentState {
     }
 
     fn render_to_surface(&mut self, packet: FramePacket, width: u32, height: u32) {
+        static PROBE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let probe = PROBE.fetch_add(1, Ordering::Relaxed);
+        if probe < 6 {
+            log::info!("[startup] present {probe} packet");
+        }
         let Some(frame) = self.acquire_with_one_retry() else {
             self.cancel_packet(packet, CancelReason::SurfaceUnavailable);
             return;
         };
+        if probe < 6 {
+            log::info!("[startup] present {probe} acquired");
+        }
         let after_acquire_ns = self.now();
         if let Some(delay) = ENCODE_DELAY_MS.parse::<u64>() {
             std::thread::sleep(std::time::Duration::from_millis(delay));
@@ -317,7 +328,13 @@ impl PresentState {
             &mut returns,
         );
         let after_render_ns = self.now();
+        if probe < 6 {
+            log::info!("[startup] present {probe} encoded+submitted");
+        }
         self.present(frame);
+        if probe < 6 {
+            log::info!("[startup] present {probe} presented");
+        }
         returns.timings = PresentTimings {
             after_acquire_ns,
             after_render_ns,

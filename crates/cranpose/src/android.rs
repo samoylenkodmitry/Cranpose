@@ -1274,6 +1274,7 @@ where
         width,
         height,
     )?;
+    log::info!("[startup] gpu resources created");
 
     if app_shell.is_none() {
         let fonts = settings.resolve_font_set();
@@ -1290,6 +1291,7 @@ where
             );
         }
 
+        log::info!("[startup] renderer init done");
         let content_clone = content.clone();
         let density = density.max(f32::EPSILON);
         let platform_env = android_platform_env();
@@ -1344,6 +1346,7 @@ where
                     renderer.present_reconfigure(setup.resources.config.clone());
                 }
             }
+            log::info!("[startup] surface handed to present thread");
             setup.resources.surface_dirty = true;
             shell.mark_dirty();
         }
@@ -2673,10 +2676,19 @@ pub fn run(
                 frame_timings.lead_ns =
                     frame_pacer.current_lead_ns(vsync_period_ns()) - frame_pacer.current_hold_ns();
                 frame_started_at = Some(web_time::Instant::now());
+                static PROBE_FRAMES: std::sync::atomic::AtomicU32 =
+                    std::sync::atomic::AtomicU32::new(0);
+                let probe_frame = PROBE_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if probe_frame < 6 {
+                    log::info!("[startup] frame {probe_frame} start");
+                }
                 let update_result = android_host_window::with_android_host_window_registry(
                     &host_window_registry,
                     || shell.update_without_frame(),
                 );
+                if probe_frame < 6 {
+                    log::info!("[startup] frame {probe_frame} updated");
+                }
                 frame_rate_boost.note_frame(update_result, Instant::now());
                 #[cfg(feature = "webview")]
                 crate::android_webview::sync(
@@ -2704,6 +2716,9 @@ pub fn run(
                         let (width, height) = shell.buffer_size();
                         match shell.renderer().publish_frame(width, height) {
                             PublishOutcome::Published => {
+                                if probe_frame < 6 {
+                                    log::info!("[startup] frame {probe_frame} published");
+                                }
                                 frame_timings.handed_off_ns =
                                     crate::android_frame_telemetry::monotonic_nanos();
                                 pending_present_timings.push((

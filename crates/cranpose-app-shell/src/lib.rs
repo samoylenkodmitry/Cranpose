@@ -613,9 +613,11 @@ where
                     ShellClipboard { inner: clipboard },
                 ));
             }
+            log::info!("[startup] shell compose start");
             if let Err(err) = composition.render_stable(root_key, &mut *build) {
                 log::error!("initial render failed: {err}");
             }
+            log::info!("[startup] shell composed");
         });
         renderer.scene_mut().clear();
         let app = ShellApp {
@@ -653,6 +655,7 @@ where
             )],
         };
         shell.process_frame();
+        log::info!("[startup] shell first process_frame done");
         shell
     }
 
