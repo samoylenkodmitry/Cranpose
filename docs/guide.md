@@ -2,7 +2,7 @@
 
 This is the guide bundled into the demo's Documentation tab. Its chapters work
 offline; links open the full reference in your browser. The examples and source
-references were checked against the 0.9 preparation tree on 2026-10-02.
+references were checked against the 0.9.0 release tree on 2026-10-02.
 
 ## Welcome
 
@@ -22,6 +22,9 @@ quality or complete Compose parity.
 
 Documentation is the first desktop tab. Every existing demonstration is still
 available in the tab strip, or through the Tabs picker on a narrow window.
+The section wheel and reading pane scroll independently. Select a chapter in
+the wheel or use Previous and Next section below the article. In a compact
+window, open Sections to choose a chapter and return to the reader.
 Use Counter App for state, CompositionLocal for scoped values, Async Runtime for
 effects, Layout and Lazy List for measurement and scrolling, Text Input and
 Text for editing and typography, and Liquid UI for the glass component library.
@@ -59,9 +62,9 @@ or add Cranpose to an existing Rust application:
 cranpose = { version = "0.9", features = ["desktop", "renderer-wgpu"] }
 ```
 
-The 0.9 dependency becomes available when the v0.9.0 publishing workflow finishes.
-Before that release, use the currently published version shown on
-[crates.io](https://crates.io/crates/cranpose).
+Version [0.9.0 is published on crates.io](https://crates.io/crates/cranpose/0.9.0).
+The [release evidence](release_readiness.md#090-release-evidence) records the
+desktop, web and Android applications built against the published crates.
 
 ### A complete counter
 

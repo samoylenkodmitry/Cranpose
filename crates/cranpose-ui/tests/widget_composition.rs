@@ -143,9 +143,10 @@ fn linked_text_composes_a_string_that_carries_a_link() {
         .append("open me")
         .pop()
         .to_annotated_string();
+    let annotated = Rc::new(annotated);
     composed(move || {
         cranpose_ui::widgets::linked_text::LinkedText(
-            annotated.clone(),
+            Rc::clone(&annotated),
             Modifier::empty(),
             TextStyle::default(),
             |_url| {},
