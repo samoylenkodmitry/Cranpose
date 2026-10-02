@@ -19,9 +19,9 @@
 //! cannot keep up with the display never fills it, so pacing it gains
 //! nothing and only takes away the overlap between frames; such a loop runs
 //! unpaced, starting frames as soon as the renderer takes them. A loop that
-//! can keep up does fill it, and the display reports three or more frames
-//! behind the shown one. Then it is paced with two frames queued, and later
-//! one. One gets frames to the screen soonest, but leaves nothing to show
+//! can keep up does fill it, and the display reports as many frames behind
+//! the shown one as the swapchain lets the loop queue: at least two. Then it
+//! is paced with two frames queued, and later one. One gets frames to the screen soonest, but leaves nothing to show
 //! when a frame runs late, which the display reports as a vsync no new frame
 //! reached. Missed vsyncs move the loop up a level: a few of them from one
 //! frame queued, which Compose's own renderer holds through far more, and
@@ -425,7 +425,7 @@ impl FramePacer {
                 hold_over
                     && Level::Buffered
                         .depth()
-                        .is_some_and(|depth| self.queue_deeper_than(depth, FULL_HISTORY))
+                        .is_some_and(|depth| self.queue_at_least(depth, FULL_HISTORY))
             }
             Level::Buffered => stage.until_ns.is_some() && hold_over,
             Level::Shallow => false,
@@ -442,10 +442,16 @@ impl FramePacer {
     /// Whether the last `frames` frames all had more than `depth` queued
     /// behind them.
     fn queue_deeper_than(&self, depth: u32, frames: usize) -> bool {
+        self.queue_at_least(depth.saturating_add(1), frames)
+    }
+
+    /// Whether the last `frames` frames all had at least `depth` queued
+    /// behind them.
+    fn queue_at_least(&self, depth: u32, frames: usize) -> bool {
         self.depths.len() >= frames
             && self.depths[self.depths.len() - frames..]
                 .iter()
-                .all(|queued| *queued > depth)
+                .all(|queued| *queued >= depth)
     }
 
     /// Whether a frame may start now. `now_ns` is on the clock the display

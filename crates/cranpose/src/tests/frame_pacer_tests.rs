@@ -80,7 +80,7 @@ fn frames_start_unpaced_until_the_display_reports_one() {
 #[test]
 fn a_loop_that_leaves_the_queue_shallow_stays_unpaced() {
     let mut pacer = FramePacer::default();
-    let now = shown_run(&mut pacer, 0, 60, 2);
+    let now = shown_run(&mut pacer, 0, 60, 1);
     assert_eq!(
         level(&mut pacer, now + 60 * FIRST_HOLD_NS),
         Some(Level::Unpaced)
@@ -91,12 +91,12 @@ fn a_loop_that_leaves_the_queue_shallow_stays_unpaced() {
 fn a_loop_that_fills_the_queue_is_paced_at_two_frames_queued() {
     let mut pacer = FramePacer::default();
     let now = shown_run(&mut pacer, 0, FULL_HISTORY as i64 - 1, 3);
-    let now = shown_run(&mut pacer, now, 1, 2);
+    let now = shown_run(&mut pacer, now, 1, 1);
     let now = shown_run(&mut pacer, now, FULL_HISTORY as i64 - 1, 3);
     assert_eq!(
         level(&mut pacer, now),
         Some(Level::Unpaced),
-        "a queue that fell to two now and then is not full"
+        "a queue that fell to one now and then is not full"
     );
     let now = shown_run(&mut pacer, now, 1, 3);
     assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
@@ -106,6 +106,13 @@ fn a_loop_that_fills_the_queue_is_paced_at_two_frames_queued() {
     );
     assert!(begin_at(&mut pacer, now + VSYNC));
     assert!(!pacer.begin_frame(now + VSYNC * 3 / 2, now + VSYNC, VSYNC));
+}
+
+#[test]
+fn a_swapchain_that_queues_two_frames_at_most_is_full_at_two() {
+    let mut pacer = FramePacer::default();
+    let now = shown_run(&mut pacer, 0, FULL_HISTORY as i64, 2);
+    assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
 }
 
 #[test]
