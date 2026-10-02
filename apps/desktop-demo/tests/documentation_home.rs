@@ -355,6 +355,9 @@ fn resized_guide_draws_beyond_its_original_window_edges() {
     for (width, height) in [(800, 600), (1440, 1100), (900, 700), (1700, 1200)] {
         shell.set_buffer_size(width, height);
         shell.set_viewport(width as f32, height as f32);
+        shell.update();
+        shell.set_cursor(120.0, 350.0);
+        shell.pointer_scrolled(0.0, -600.0);
         for _ in 0..8 {
             shell.update();
             shell
@@ -378,7 +381,13 @@ fn resized_guide_draws_beyond_its_original_window_edges() {
                 color[0] > 180 && color[1] > 180 && color[2] > 180
             })
         });
-        if !expanded || !link_has_ink {
+        let wheel_has_ink = (240..400).any(|y| {
+            (40..190).any(|x| {
+                let color = pixel(x, y);
+                color[0] > 180 && color[1] > 180 && color[2] > 180
+            })
+        });
+        if !expanded || !link_has_ink || !wheel_has_ink {
             let directory = std::env::var_os("CARGO_TARGET_DIR")
                 .map_or_else(
                     || std::path::PathBuf::from("target"),
@@ -402,6 +411,10 @@ fn resized_guide_draws_beyond_its_original_window_edges() {
         assert!(
             link_has_ink,
             "GitHub must be painted at the new bottom-left at {width}×{height}"
+        );
+        assert!(
+            wheel_has_ink,
+            "rotated chapter labels must stay visible after resizing to {width}×{height}"
         );
     }
 }
