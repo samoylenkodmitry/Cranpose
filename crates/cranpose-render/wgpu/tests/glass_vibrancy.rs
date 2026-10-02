@@ -1021,13 +1021,21 @@ fn replay_tab_drag(trace: &str, mut inspect: impl FnMut(usize, f64, Rect, Rect, 
                     nanos - frame_time,
                 ));
                 frame_time = nanos;
-                let graph = shell.renderer().scene_mut().graph.as_ref().unwrap().clone();
-                let lens =
-                    rendered_lens_bounds(&graph.root, ProjectiveTransform::identity()).unwrap();
-                let pane = rendered_glass_bounds(&graph.root, ProjectiveTransform::identity(), 1.0)
-                    .unwrap();
-                let capture = shell.renderer().capture_frame(1206, 360).unwrap();
+                let (lens, pane) = {
+                    let renderer = shell.renderer();
+                    let graph = renderer.scene_mut().graph.as_ref().expect("rendered scene");
+                    (
+                        rendered_lens_bounds(&graph.root, ProjectiveTransform::identity())
+                            .expect("lens bounds"),
+                        rendered_glass_bounds(&graph.root, ProjectiveTransform::identity(), 1.0)
+                            .expect("pane bounds"),
+                    )
+                };
                 if let Ok(root) = std::env::var("CRANPOSE_OPTICAL_DEBUG") {
+                    let capture = shell
+                        .renderer()
+                        .capture_frame(1206, 360)
+                        .expect("diagnostic frame");
                     save_optical_capture(&root, &format!("drag-{route_index}-{nanos}"), &capture);
                 }
                 inspect(route_index, time, lens, pane, &parts);
@@ -1062,50 +1070,81 @@ fn composed_drag_follows_the_native_input_and_frame_clock() {
 #[test]
 #[ignore = "unmet native parity target; run just audit-liquid-native-parity"]
 fn composed_shape_matches_every_native_contact_drag_and_release_frame() {
+    audit_tab_geometry(
+        include_str!("../../../cranpose-liquid/tests/fixtures/native_tab_drag_geometry.csv"),
+        [229, 183, 183, 229],
+    );
+}
+
+#[test]
+#[ignore = "unmet native parity target; run just audit-liquid-native-parity"]
+fn composed_reversal_shape_tracks_verified_ios27_frames() {
+    audit_tab_geometry(
+        include_str!("../../../cranpose-liquid/tests/fixtures/native_tab_reversal_geometry.csv"),
+        [313, 0, 0, 0],
+    );
+}
+
+fn audit_tab_geometry(trace: &str, expected_counts: [usize; 4]) {
+    use std::io::Write as _;
+
     let mut counts = [0; 4];
     let mut squared_error = [0.0f32; 4];
     let mut maximum = [0.0f32; 4];
     let mut phases = [[0; 3]; 4];
-    let mut samples = String::from("route,time,native_width,native_height,width,height,phase\n");
-    replay_tab_drag(
-        include_str!("../../../cranpose-liquid/tests/fixtures/native_tab_drag_geometry.csv"),
-        |route, time, lens, pane, parts| {
-            let expected = (
-                parts[3].parse::<f32>().unwrap(),
-                parts[4].parse::<f32>().unwrap(),
-            );
-            let actual = (
-                lens.width / (pane.width / 360.0),
-                lens.height / (pane.height / 62.0),
-            );
-            let phase = match parts[5] {
-                "contact" => 0,
-                "drag" => 1,
-                "release" => 2,
-                other => panic!("unexpected native phase: {other}"),
-            };
-            phases[route][phase] += 1;
-            samples.push_str(&format!(
-                "{route},{time},{},{},{},{},{}\n",
+    let mut samples = std::env::var("CRANPOSE_MOTION_TRACE_DIR")
+        .or_else(|_| std::env::var("CRANPOSE_OPTICAL_DEBUG"))
+        .ok()
+        .map(|root| {
+            let file = std::fs::File::create(std::path::Path::new(&root).join("drag-geometry.csv"))
+                .expect("create native geometry comparison");
+            let mut writer = std::io::BufWriter::new(file);
+            writeln!(
+                writer,
+                "route,time,native_width,native_height,width,height,phase"
+            )
+            .expect("write native geometry header");
+            writer
+        });
+    replay_tab_drag(trace, |route, time, lens, pane, parts| {
+        let expected = (
+            parts[3].parse::<f32>().expect("native width"),
+            parts[4].parse::<f32>().expect("native height"),
+        );
+        let actual = (
+            lens.width / (pane.width / 360.0),
+            lens.height / (pane.height / 62.0),
+        );
+        let phase = match parts[5] {
+            "contact" => 0,
+            "drag" => 1,
+            "release" => 2,
+            other => panic!("unexpected native phase: {other}"),
+        };
+        phases[route][phase] += 1;
+        if let Some(writer) = &mut samples {
+            writeln!(
+                writer,
+                "{route},{time},{},{},{},{},{}",
                 expected.0, expected.1, actual.0, actual.1, parts[5]
-            ));
-            for error in [actual.0 - expected.0, actual.1 - expected.1] {
-                squared_error[route] += error.powi(2);
-                maximum[route] = maximum[route].max(error.abs());
-            }
-            counts[route] += 1;
-        },
-    );
-    if let Ok(root) = std::env::var("CRANPOSE_OPTICAL_DEBUG") {
-        std::fs::write(
-            std::path::Path::new(&root).join("drag-geometry.csv"),
-            samples,
-        )
-        .unwrap();
+            )
+            .expect("write native geometry frame");
+        }
+        for error in [actual.0 - expected.0, actual.1 - expected.1] {
+            squared_error[route] += error.powi(2);
+            maximum[route] = maximum[route].max(error.abs());
+        }
+        counts[route] += 1;
+    });
+    if let Some(mut writer) = samples {
+        writer.flush().expect("flush native geometry comparison");
     }
-    assert_eq!(counts, [229, 183, 183, 229]);
-    assert!(phases.iter().flatten().all(|count| *count >= 35));
+    assert_eq!(counts, expected_counts);
     for route in 0..4 {
+        if counts[route] == 0 {
+            continue;
+        }
+        assert!(phases[route].iter().all(|count| *count >= 35));
         let rms = (squared_error[route] / (counts[route] * 2) as f32).sqrt();
         assert!(
             rms <= 1.0 && maximum[route] <= 3.0,
@@ -1620,10 +1659,10 @@ fn native_touch_light_uses_a_gaussian_disk() {
     let source = include_str!("../../../cranpose-liquid/src/widgets/tab_lighting.wgsl")
         .replace("fn effect_fs(", "fn lighting_fs(");
     let mut shader = RuntimeShader::new(&format!(
-        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{source}\n@fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+        "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{source}\n@fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
             let p = input.position.xy - vec2<f32>(160.0);
             return vec4<f32>(vec3<f32>(blurred_disk(length(p), 46.5)), 1.0);
-        }}"
+        }}", cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL
     ));
     shader.set_float(0, 1.0);
     let bounds = Rect {

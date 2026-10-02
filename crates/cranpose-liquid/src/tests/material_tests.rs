@@ -21,6 +21,7 @@ fn backdrop_blur_validates_radius_and_opacity() {
     let shader = terminal_shader(glass.backdrop_effect(3.0, GlassDynamics::default()));
     assert_eq!(shader.uniforms()[172..174], [6.0, 0.75]);
     let mask = terminal_shader(glass.runtime_effect(3.0, &GlassDynamics::default(), true));
+    assert_eq!(mask.input_padding(), 0.0);
     assert_eq!(
         mask.uniforms().get(172..174).unwrap_or(&[0.0, 0.0]),
         [0.0, 0.0]
@@ -30,7 +31,7 @@ fn backdrop_blur_validates_radius_and_opacity() {
 #[test]
 fn pane_tint_preserves_the_sharp_source_at_every_percentage() {
     for percent in [0.0, 25.0, 50.0, 100.0] {
-        let amount = GlassTintAmount::from_percent(percent).unwrap();
+        let amount = GlassTintAmount::from_percent(percent).expect("valid percentage");
         let glass = Glass::regular()
             .adaptive_frost(Color::BLACK, 0.0)
             .tint_amount(amount);
@@ -56,6 +57,39 @@ fn pane_tint_preserves_the_sharp_source_at_every_percentage() {
 
 fn light_colors() -> LiquidColors {
     LiquidColors::light(Color::from_rgb_u8(0, 122, 255))
+}
+
+#[test]
+fn fixed_face_tone_validates_parameters_and_avoids_mean_substrate_work() {
+    let tone = GlassFaceTone {
+        black: 0.125,
+        white: 1.125,
+        saturation: 1.3,
+        max_luminance: 0.6,
+    };
+    let glass = Glass::regular().adaptive_tone(Color::WHITE).face_tone(tone);
+    let effect = glass.backdrop_effect(&light_colors(), 3.0, GlassDynamics::default());
+    let shader = terminal_shader(effect);
+    assert!(shader.substrates().is_empty());
+    assert_eq!(&shader.uniforms()[176..181], &[0.125, 1.125, 1.3, 0.6, 1.0]);
+    for invalid in [
+        GlassFaceTone {
+            black: f32::NAN,
+            ..tone
+        },
+        GlassFaceTone { white: 0.0, ..tone },
+        GlassFaceTone {
+            saturation: -1.0,
+            ..tone
+        },
+        GlassFaceTone {
+            max_luminance: 1.1,
+            ..tone
+        },
+    ] {
+        assert_eq!(Glass::regular().face_tone(invalid).face_tone, None);
+    }
+    assert_eq!(glass.adaptive_tone(Color::BLACK).face_tone, None);
 }
 
 fn terminal_shader(effect: RenderEffect) -> RuntimeShader {
@@ -1265,6 +1299,146 @@ fn resting_surface_tint_survives_zero_optical_activity() {
         &[tint.r(), tint.g(), tint.b(), tint.a()]
     );
     assert_eq!(shader.uniforms()[GLASS_ACTIVITY_UNIFORM], 0.0);
+}
+
+#[test]
+fn layered_refraction_keeps_source_maps_independent_of_resting_fill() {
+    use cranpose_ui_graphics::{GLASS_LAYERED_RETURN_UNIFORM, GLASS_SHADOW_COLOR_UNIFORM};
+
+    let glass = Glass::lens().no_clip().refraction_depth_dp(36.0);
+    for activity in [0.0, 0.25, 1.0] {
+        let effect = glass.backdrop_effect(
+            &light_colors(),
+            3.0,
+            GlassDynamics {
+                activity: Some(activity),
+                refraction: Some(GlassRefraction::LayeredSurface {
+                    reach_dp: 40.0,
+                    return_reach_dp: 7.0,
+                    return_depth_dp: 5.0,
+                }),
+                shadow: Some(GlassShadow::new(
+                    Color::rgba(0.2, 0.4, 0.6, 0.1),
+                    2.0,
+                    0.5,
+                    0.0,
+                )),
+                ..Default::default()
+            },
+        );
+        let shader = terminal_shader(effect);
+        assert_eq!(shader.uniforms()[GLASS_REFRACTION_MODE_UNIFORM], 3.0);
+        assert_eq!(shader.uniforms()[GLASS_EDGE_REFRACTION_REACH_UNIFORM], 40.0);
+        assert_eq!(
+            shader.uniforms()[GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM],
+            36.0
+        );
+        assert_eq!(
+            &shader.uniforms()[GLASS_LAYERED_RETURN_UNIFORM..GLASS_LAYERED_RETURN_UNIFORM + 2],
+            &[7.0, 5.0]
+        );
+        assert_eq!(
+            &shader.uniforms()[GLASS_SHADOW_COLOR_UNIFORM..GLASS_SHADOW_COLOR_UNIFORM + 3],
+            &[0.2, 0.4, 0.6]
+        );
+        assert_eq!(shader.uniforms()[102], 0.1);
+    }
+}
+
+#[test]
+fn invalid_contour_reflections_and_invisible_ring_shadows_do_not_expand_the_surface() {
+    let mut glass = Glass::lens().no_clip();
+    let colors = light_colors();
+    let baseline = glass.backdrop_effect(&colors, 3.0, GlassDynamics::default());
+    let contour = GlassContourHighlight {
+        height_dp: 1.0,
+        offset_dp: -2.0 / 3.0,
+        amount: 0.5,
+        color_bias: -0.3,
+        angle_radians: 0.0,
+        spread_radians: std::f32::consts::FRAC_PI_2,
+    };
+    for invalid in [
+        GlassContourHighlight {
+            height_dp: 0.0,
+            ..contour
+        },
+        GlassContourHighlight {
+            offset_dp: f32::NAN,
+            ..contour
+        },
+        GlassContourHighlight {
+            amount: f32::INFINITY,
+            ..contour
+        },
+        GlassContourHighlight {
+            color_bias: f32::NAN,
+            ..contour
+        },
+        GlassContourHighlight {
+            angle_radians: f32::INFINITY,
+            ..contour
+        },
+        GlassContourHighlight {
+            spread_radians: 0.0,
+            ..contour
+        },
+    ] {
+        glass.contour_highlight = Some(invalid);
+        assert_eq!(
+            glass.backdrop_effect(&colors, 3.0, GlassDynamics::default()),
+            baseline
+        );
+    }
+    glass.contour_highlight = Some(contour);
+    let reflected = terminal_shader(glass.backdrop_effect(&colors, 3.0, GlassDynamics::default()));
+    assert!(reflected.output_padding() >= 2.0 / 3.0);
+    glass.contour_highlight = None;
+    for (alpha, width) in [(0.0, 4.0), (0.1, 0.0), (0.1, f32::NAN)] {
+        let effect = glass.backdrop_effect(
+            &colors,
+            3.0,
+            GlassDynamics {
+                ring_shadow: Some((
+                    GlassShadow::new(Color::BLACK.with_alpha(alpha), 3.0, 8.0, 0.0),
+                    width,
+                )),
+                ..Default::default()
+            },
+        );
+        assert_eq!(effect, baseline);
+    }
+}
+
+#[test]
+fn resting_edge_sharpness_is_bounded_and_packed() {
+    use cranpose_ui_graphics::GLASS_RESTING_EDGE_SHARPNESS_UNIFORM;
+    for (requested, expected) in [
+        (0.0, 0.0),
+        (0.5, 0.5),
+        (1.0, 1.0),
+        (-1.0, 0.0),
+        (2.0, 1.0),
+        (f32::NAN, 0.0),
+        (f32::INFINITY, 0.0),
+    ] {
+        let shader = terminal_shader(
+            Glass::lens()
+                .resting_edge_sharpness(requested)
+                .backdrop_effect(
+                    &light_colors(),
+                    2.0,
+                    GlassDynamics {
+                        activity: Some(0.0),
+                        ..Default::default()
+                    },
+                ),
+        );
+        assert_eq!(
+            shader.uniforms()[GLASS_RESTING_EDGE_SHARPNESS_UNIFORM],
+            expected
+        );
+    }
 }
 
 #[test]

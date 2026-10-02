@@ -881,6 +881,7 @@ pub(crate) fn hash_shadow_device_rect<H: Hasher>(
 
 fn hash_placement<H: Hasher>(
     placement: &crate::scene::Placement,
+    clip: Option<Rect>,
     origin_x: f32,
     origin_y: f32,
     root_scale: f32,
@@ -897,7 +898,7 @@ fn hash_placement<H: Hasher>(
         }
         None => 0u8.hash(state),
     }
-    match placement.clip {
+    match clip {
         Some(clip) => {
             1u8.hash(state);
             hash_shadow_device_rect(clip, origin_x, origin_y, root_scale, state);
@@ -925,11 +926,29 @@ pub(crate) fn hash_run_item<H: Hasher>(
     root_scale: f32,
     state: &mut H,
 ) {
+    hash_run_item_with_clip(
+        run,
+        run.placement.clip,
+        origin_x,
+        origin_y,
+        root_scale,
+        state,
+    );
+}
+
+pub(crate) fn hash_run_item_with_clip<H: Hasher>(
+    run: &RunDraw,
+    clip: Option<Rect>,
+    origin_x: f32,
+    origin_y: f32,
+    root_scale: f32,
+    state: &mut H,
+) {
     run.tables().fingerprint().hash(state);
     run.segments.start.hash(state);
     run.segments.end.hash(state);
     hash_shadow_device_rect(run.bounds, origin_x, origin_y, root_scale, state);
-    hash_placement(&run.placement, origin_x, origin_y, root_scale, state);
+    hash_placement(&run.placement, clip, origin_x, origin_y, root_scale, state);
 }
 
 /// What a shadow's casters draw, independent of where the shadow sits to

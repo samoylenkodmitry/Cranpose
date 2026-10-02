@@ -346,6 +346,7 @@ pub(crate) struct FireShaderParams {
 
 pub(crate) fn fire_shader_effect(p: &FireShaderParams) -> RenderEffect {
     let mut shader = RuntimeShader::from_shared_source(fire_halo_wgsl());
+    shader.set_position_independent(true);
     shader.set_float2(0, p.resolution_w, p.resolution_h);
     shader.set_float(2, p.time);
     shader.set_float(3, p.band_width);
@@ -380,6 +381,7 @@ struct HaloBorderParams {
 
 fn halo_border_effect(p: &HaloBorderParams) -> RenderEffect {
     let mut shader = RuntimeShader::from_shared_source(halo_border_wgsl());
+    shader.set_position_independent(true);
     shader.set_float2(0, p.width, p.height);
     shader.set_float(2, p.corner_radius);
     shader.set_float(3, p.stroke_width);

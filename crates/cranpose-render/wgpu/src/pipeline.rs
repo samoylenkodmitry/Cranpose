@@ -352,6 +352,7 @@ fn build_gpu_text_effect(
     let stroke_padding = stroke_effect_padding_for_draw_mode(&material.draw_mode);
     let effect_rect = expand_text_effect_rect(text_rect, stroke_padding);
     let mut shader = RuntimeShader::new(GPU_TEXT_BRUSH_EFFECT_SHADER);
+    shader.set_position_independent(true);
     shader.set_input_padding(stroke_padding);
     let logical_width = text_rect.width.max(f32::EPSILON);
     let logical_height = text_rect.height.max(f32::EPSILON);

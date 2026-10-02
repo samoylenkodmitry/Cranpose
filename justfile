@@ -572,8 +572,8 @@ robot-accessibility-ios app device output:
 liquid-reference-build destination="generic/platform=iOS Simulator":
     xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination '{{destination}}' -derivedDataPath target/liquid-reference build
 
-liquid-reference-test destination results suite="TabBarTests":
-    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination '{{destination}}' -derivedDataPath target/liquid-reference -resultBundlePath '{{results}}' -parallel-testing-enabled NO -only-testing:LiquidReferenceTests/{{suite}} test
+liquid-reference-test destination results suite="TabBarTests" diagnostics="on-failure":
+    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination '{{destination}}' -derivedDataPath target/liquid-reference -resultBundlePath '{{results}}' -parallel-testing-enabled NO -collect-test-diagnostics '{{diagnostics}}' -only-testing:LiquidReferenceTests/{{suite}} test
 
 liquid-reference-optical-capture device output:
     python3 apps/liquid-reference/capture-optical-probes.py '{{device}}' '{{output}}'
@@ -589,6 +589,16 @@ liquid-reference-keyframes results output traces suite="TabBarTests":
 
 liquid-reference-compare native cranpose output:
     python3 apps/liquid-reference/compare.py '{{native}}' '{{cranpose}}' '{{output}}'
+
+liquid-reference-controls-compare native cranpose output:
+    python3 apps/liquid-reference/compare_controls.py '{{native}}' '{{cranpose}}' '{{output}}'
+
+test-liquid-reference-fixtures:
+    cargo test --profile ci -p desktop-app --bin cranpose-liquid-reference --features ios
+
+test-liquid-motion:
+    cargo test --profile ci -p cranpose-app-shell --lib liquid_lens_frame_tests
+    ./run_robot_test.sh --sequential --example robot_liquid_tab_content_anchor --example robot_liquid_navbar_touch_budget --example robot_liquid_segmented_glide_budget --example robot_liquid_slider_geometry --example robot_liquid_dropdown_accordion
 
 test-liquid-reference-tools:
     python3 -m unittest discover -s apps/liquid-reference -p 'test_*.py'
@@ -607,7 +617,7 @@ test-liquid-vibrancy filter="":
     cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 -E 'test(/^glass_vibrancy::/)' '{{filter}}'
 
 audit-liquid-native-parity:
-    cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 --run-ignored only -E 'test(/^glass_vibrancy::/)'
+    cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 --run-ignored only --no-fail-fast -E 'test(/^glass_vibrancy::/)'
 
 test-liquid-surface filter="":
     cargo nextest run --cargo-profile ci -p cranpose-render-wgpu --test-threads 1 -E 'test(/^glass_surface_refraction::/)' '{{filter}}'

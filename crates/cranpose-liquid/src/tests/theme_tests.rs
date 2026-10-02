@@ -16,6 +16,16 @@ fn palettes_differ_and_share_accent() {
 }
 
 #[test]
+fn primary_labels_and_toggle_tracks_match_native_colors() {
+    let light = LiquidColors::light(Color::BLUE);
+    let dark = LiquidColors::dark(Color::BLUE);
+    assert_eq!(light.label, Color::BLACK);
+    assert_eq!(dark.label, Color::WHITE);
+    assert_eq!(light.toggle_off, Color::from_rgba_u8(60, 60, 67, 76));
+    assert_eq!(dark.toggle_off, Color::from_rgba_u8(235, 235, 245, 76));
+}
+
+#[test]
 fn type_ramp_is_descending() {
     let t = LiquidTypography::default();
     let sizes = [

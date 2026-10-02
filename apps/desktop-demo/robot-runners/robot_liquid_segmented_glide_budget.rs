@@ -2,7 +2,7 @@ use crate::{robot_exit, robot_liquid_stage, robot_shot};
 
 use std::{path::PathBuf, process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
-use cranpose::{liquid::prelude::*, rememberMutableStateOf, AppLauncher, Modifier, Size};
+use cranpose::{liquid::prelude::*, rememberMutableStateOf, RobotTimelineAction, RobotTimelineStep, AppLauncher, Modifier};
 use robot_liquid_stage::LiquidStripedStage;
 
 const WINDOW_WIDTH: u32 = 720;
@@ -11,12 +11,12 @@ const SEGMENT_COUNT: usize = 3;
 const CONTROL_WIDTH: f32 = 600.0;
 const CONTROL_LEFT: f32 = (WINDOW_WIDTH as f32 - CONTROL_WIDTH) * 0.5;
 const CONTROL_TOP: f32 = 70.0;
-const SEGMENT_Y: f32 = CONTROL_TOP + 20.0;
+const SEGMENT_Y: f32 = CONTROL_TOP + 16.0;
 const GLIDE_FRAMES: u32 = 40;
 
 /// Frames the glide must draw for its recompositions to mean anything: a
 /// window that rendered nothing says nothing about what a glide costs.
-const GLIDE_FRAMES_DRAWN: u32 = 20;
+const GLIDE_FRAMES_DRAWN: u64 = 20;
 
 /// Recompositions a glide across the control may cost.
 ///
@@ -33,6 +33,26 @@ const SEGMENTS: [&str; SEGMENT_COUNT] = ["Receiving", "Sending", "Errored"];
 fn segment_x(index: usize) -> f32 {
     let width = CONTROL_WIDTH / SEGMENT_COUNT as f32;
     CONTROL_LEFT + width * (index as f32 + 0.5)
+}
+
+fn check_resting_track(resting: &cranpose::RobotScreenshot) {
+    let scale = resting.width as f32 / resting.logical_width;
+    let track_red = |x: f32| {
+        let x = (x * scale) as usize;
+        let y = (154.0 * scale) as usize;
+        resting.pixels[(y * resting.width as usize + x) * 4]
+    };
+    let transmitted_contrast = track_red(380.0).saturating_sub(track_red(372.0));
+    assert!(transmitted_contrast >= 120,
+        "native inactive switch track transmits the striped backdrop; red contrast={transmitted_contrast}");
+    let x = (segment_x(0) * scale) as usize;
+    let y = ((CONTROL_TOP + 4.0) * scale) as usize;
+    let red = resting.pixels[(y * resting.width as usize + x) * 4];
+    let track_x = (segment_x(2) * scale) as usize;
+    let track = resting.pixels[(y * resting.width as usize + track_x) * 4];
+    let expected = if track < 128 { 90 } else { 255 };
+    assert!(red.abs_diff(expected) <= 3, "native selection edge is opaque two points inside; got {red}, expected {expected}");
+
 }
 
 pub(crate) fn main() -> ExitCode {
@@ -53,39 +73,62 @@ pub(crate) fn main() -> ExitCode {
             robot_shot::settle(&robot, 300);
             let resting = robot.screenshot().expect("resting shot");
             robot_shot::save(&resting, &shot_dir, "0-resting.png");
+            check_resting_track(&resting);
 
-            let mut most = (0, 0);
-            for (index, segment) in [SEGMENT_COUNT - 1, 0].into_iter().enumerate() {
+            let mut most = (0, "");
+            for (index, (name, x, y)) in [
+                ("last-segment", segment_x(SEGMENT_COUNT - 1), SEGMENT_Y),
+                ("first-segment", segment_x(0), SEGMENT_Y),
+                ("toggle-on", 360.0, 154.0),
+                ("toggle-off", 360.0, 154.0),
+            ].into_iter().enumerate() {
                 robot.reset_fps_stats().expect("reset fps stats");
-                robot
-                    .click(segment_x(segment), SEGMENT_Y)
-                    .expect("click a segment");
-                // A headless app renders when it is asked for pixels, so each
-                // frame of the glide ends in a screenshot.
-                let mut shot = robot.screenshot().expect("glide shot");
-                for _ in 0..GLIDE_FRAMES {
-                    robot.pump_frames(1).expect("pump a glide frame");
-                    shot = robot.screenshot().expect("glide shot");
+                let mut timeline = Vec::with_capacity(GLIDE_FRAMES as usize + 1);
+                timeline.push(RobotTimelineStep {
+                    advance_ms: 0.0,
+                    actions: vec![
+                        RobotTimelineAction::MoveTo { x, y },
+                        RobotTimelineAction::MouseDown,
+                        RobotTimelineAction::MouseUp,
+                    ],
+                    capture: true,
+                });
+                timeline.extend((0..GLIDE_FRAMES).map(|_| RobotTimelineStep {
+                    advance_ms: 1000.0 / 60.0,
+                    actions: Vec::new(),
+                    capture: true,
+                }));
+                let frames = robot.capture_interaction_keyframes(1.0, &timeline)
+                    .expect("capture exact-clock glide");
+                if name == "toggle-on" {
+                    let released = &frames[20];
+                    let scale = released.width as f32 / released.logical_width;
+                    let x = (371.0 * scale) as usize;
+                    let y = (154.0 * scale) as usize;
+                    let red = released.pixels[(y * released.width as usize + x) * 4];
+                    assert!(red >= 230,
+                        "native switch restores its white thumb within 333 ms of release; red={red}");
                 }
-                robot_shot::save(&shot, &shot_dir, &format!("{}-glide-to-{segment}.png", index + 1));
+                let shot = frames.last().expect("glide shot");
+                robot_shot::save(shot, &shot_dir, &format!("{}-{name}.png", index + 1));
                 let stats = robot.fps_stats().expect("glide fps stats");
+                let changing_frames = frames.windows(2).filter(|pair| pair[0].pixels != pair[1].pixels).count() as u64;
                 println!(
-                    "[segmented] glide to {segment}: frames={} recompositions={}",
-                    stats.interval_count, stats.recompositions
+                    "[liquid] {name}: changing_frames={} recompositions={}",
+                    changing_frames, stats.recompositions
                 );
-                if stats.interval_count < GLIDE_FRAMES_DRAWN {
+                if changing_frames < GLIDE_FRAMES_DRAWN {
                     robot_exit::fail_and_await_shutdown(
                         &robot,
                         &FAILED,
                         &format!(
-                            "the glide to segment {segment} drew {} frames, fewer than the \
-                             {GLIDE_FRAMES_DRAWN} its recompositions are counted over",
-                            stats.interval_count
+                            "{name} drew {changing_frames} changing frames, fewer than the \
+                             {GLIDE_FRAMES_DRAWN} its recompositions are counted over"
                         ),
                     );
                 }
                 if stats.recompositions > most.0 {
-                    most = (stats.recompositions, segment);
+                    most = (stats.recompositions, name);
                 }
                 robot_shot::settle(&robot, 300);
             }
@@ -95,7 +138,7 @@ pub(crate) fn main() -> ExitCode {
                     &robot,
                     &FAILED,
                     &format!(
-                        "the glide to segment {} recomposed {} times, past the \
+                        "{} recomposed {} times, past the \
                          {RECOMPOSITIONS_ALLOWED_ON_GLIDE} a glide may: something reads the \
                          gliding lens in composition instead of where it is drawn",
                         most.1, most.0
@@ -103,7 +146,7 @@ pub(crate) fn main() -> ExitCode {
                 );
             }
             println!(
-                "PASS: a segmented glide recomposed at most {} times, within the \
+                "PASS: a selection animation recomposed at most {} times, within the \
                  {RECOMPOSITIONS_ALLOWED_ON_GLIDE} it may",
                 most.0
             );
@@ -115,10 +158,7 @@ pub(crate) fn main() -> ExitCode {
                 LiquidSegmentedControl(
                     Modifier::empty()
                         .absolute_offset(CONTROL_LEFT, CONTROL_TOP)
-                        .size(Size {
-                            width: CONTROL_WIDTH,
-                            height: 40.0,
-                        }),
+                        .width(CONTROL_WIDTH),
                     selected.get(),
                     move |index| selected.set(index),
                     |scope| {
@@ -126,6 +166,12 @@ pub(crate) fn main() -> ExitCode {
                             scope.segment(label);
                         }
                     },
+                );
+                let checked = rememberMutableStateOf(|| false);
+                LiquidToggle(
+                    Modifier::empty().absolute_offset(328.5, 140.0),
+                    checked.get(),
+                    move |value| checked.set(value),
                 );
             });
         })

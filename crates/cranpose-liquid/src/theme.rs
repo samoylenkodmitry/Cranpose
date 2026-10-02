@@ -72,10 +72,10 @@ impl LiquidColors {
     pub fn light(accent: Color) -> Self {
         Self {
             is_dark: false,
-            label: Color::from_rgb_u8(17, 17, 20),
+            label: Color::BLACK,
             secondary_label: Color::from_rgba_u8(60, 60, 67, 153),
             tertiary_label: Color::from_rgba_u8(60, 60, 67, 76),
-            separator: Color::from_rgba_u8(60, 60, 67, 56),
+            separator: Color::from_rgba_u8(60, 60, 60, 30),
             fill: Color::from_rgba_u8(120, 120, 128, 40),
             secondary_fill: Color::from_rgba_u8(120, 120, 128, 28),
             surface_glass: Color::from_rgba_u8(255, 255, 255, 191),
@@ -87,7 +87,7 @@ impl LiquidColors {
             destructive: Color::from_rgb_u8(255, 59, 48),
             success: Color::from_rgb_u8(52, 199, 89),
             toggle_on: accent,
-            toggle_off: Color::from_rgb_u8(170, 170, 181),
+            toggle_off: Color::from_rgba_u8(60, 60, 67, 76),
             warning: Color::from_rgb_u8(255, 149, 0),
             glass_tint: Color::from_rgba_u8(255, 255, 255, 18),
             glass_stroke: Color::from_rgba_u8(255, 255, 255, 120),
@@ -97,10 +97,10 @@ impl LiquidColors {
     pub fn dark(accent: Color) -> Self {
         Self {
             is_dark: true,
-            label: Color::from_rgb_u8(242, 242, 247),
+            label: Color::WHITE,
             secondary_label: Color::from_rgba_u8(235, 235, 245, 153),
             tertiary_label: Color::from_rgba_u8(235, 235, 245, 76),
-            separator: Color::from_rgba_u8(84, 84, 88, 130),
+            separator: Color::from_rgba_u8(84, 84, 88, 128),
             fill: Color::from_rgba_u8(120, 120, 128, 70),
             secondary_fill: Color::from_rgba_u8(120, 120, 128, 50),
             surface_glass: Color::from_rgba_u8(28, 28, 30, 184),
@@ -112,7 +112,7 @@ impl LiquidColors {
             destructive: Color::from_rgb_u8(255, 69, 58),
             success: Color::from_rgb_u8(48, 209, 88),
             toggle_on: accent,
-            toggle_off: Color::from_rgb_u8(99, 99, 102),
+            toggle_off: Color::from_rgba_u8(235, 235, 245, 76),
             warning: Color::from_rgb_u8(255, 159, 10),
             glass_tint: Color::from_rgba_u8(20, 20, 24, 40),
             glass_stroke: Color::from_rgba_u8(255, 255, 255, 46),

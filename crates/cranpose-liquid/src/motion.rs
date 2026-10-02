@@ -6,16 +6,13 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_animation::{Animatable, AnimationType, Easing, spring, tween};
+use cranpose_animation::{Animatable, AnimationType, spring};
 use cranpose_core::{RuntimeHandle, State, with_current_composer};
 use cranpose_foundation::VelocityTracker1D;
 use cranpose_macros::composable;
 use cranpose_ui::{Modifier, MutableInteractionSource};
 use cranpose_ui_graphics::GraphicsLayer;
 
-use crate::dynamics::{LiquidDynamics, LiquidPose};
-
-const FLUID_RELAX_MS: u64 = 420;
 const VISUAL_HANDOFF_TOLERANCE_IN_ITEMS: f32 = 0.12;
 
 pub(crate) fn liquid_visual_index(
@@ -95,8 +92,6 @@ pub(crate) struct LiquidDragAxis {
     velocity: RefCell<VelocityTracker1D>,
     runtime: RuntimeHandle,
     last_sample_ms: Cell<Option<i64>>,
-    dynamics: LiquidDynamics,
-    fluid_clock: RefCell<Animatable<f32>>,
 }
 
 impl LiquidDragAxis {
@@ -106,17 +101,9 @@ impl LiquidDragAxis {
             animation: RefCell::new(Animatable::new(initial, runtime.clone())),
             pointer: Cell::new(None),
             velocity: RefCell::new(VelocityTracker1D::new()),
-            dynamics: LiquidDynamics::new(runtime.clone()),
-            fluid_clock: RefCell::new(Animatable::new(1.0, runtime.clone())),
             runtime,
             last_sample_ms: Cell::new(None),
         }
-    }
-
-    fn arm_fluid_frames(&self) {
-        let mut clock = self.fluid_clock.borrow_mut();
-        clock.snapTo(0.0);
-        clock.animateTo(1.0, tween(FLUID_RELAX_MS, Easing::LinearEasing));
     }
 
     fn sample_time_ms(&self, event_time_ms: Option<i64>) -> i64 {
@@ -142,8 +129,6 @@ impl LiquidDragAxis {
         velocity.add_data_point(time_ms, position);
         self.pointer.set(Some(position));
         self.animation.borrow_mut().snapTo(position);
-        self.dynamics.anchor_pointer((position, 0.0));
-        self.arm_fluid_frames();
     }
 
     pub(crate) fn move_to(&self, position: f32, event_time_ms: Option<i64>) {
@@ -163,7 +148,6 @@ impl LiquidDragAxis {
         if self.pointer.get().is_none() {
             return;
         }
-        let previous_time_ms = self.last_sample_ms.get();
         let time_ms = self.sample_time_ms(event_time_ms);
         self.velocity.borrow_mut().add_data_point(time_ms, position);
         self.pointer.set(Some(position));
@@ -177,11 +161,6 @@ impl LiquidDragAxis {
         } else {
             self.animation.borrow_mut().snapTo(position);
         }
-        if let Some(previous_time_ms) = previous_time_ms.filter(|_| self.follow.is_none()) {
-            let dt = (time_ms - previous_time_ms).max(1) as f32 / 1000.0;
-            self.dynamics.advance_pointer((position, 0.0), dt);
-        }
-        self.arm_fluid_frames();
     }
 
     pub(crate) fn release_to(
@@ -216,7 +195,6 @@ impl LiquidDragAxis {
         } else {
             self.velocity.borrow().calculate_velocity_with_max(8_000.0)
         };
-        self.dynamics.release_pointer();
         let mut value = self.animation.borrow_mut();
         if let Some(time) = animation_time_nanos {
             if self.follow.is_some() {
@@ -234,17 +212,10 @@ impl LiquidDragAxis {
             self.animation.borrow_mut().snapTo(position);
             return;
         };
-        let previous_time_ms = self.last_sample_ms.get();
         let time_ms = self.sample_time_ms(event_time_ms);
         self.velocity.borrow_mut().add_data_point(time_ms, position);
-        if let Some(previous_time_ms) = previous_time_ms {
-            let dt = (time_ms - previous_time_ms).max(1) as f32 / 1000.0;
-            self.dynamics.advance_pointer((position, 0.0), dt);
-        }
         self.pointer.set(None);
         self.animation.borrow_mut().snapTo(position);
-        self.dynamics.release_pointer();
-        self.arm_fluid_frames();
     }
 
     pub(crate) fn settle_to(&self, target: f32, animation: AnimationType) {
@@ -266,7 +237,6 @@ impl LiquidDragAxis {
     }
 
     pub(crate) fn value(&self) -> f32 {
-        let _ = self.fluid_clock.borrow().state().value();
         if self.follow.is_some() {
             self.animation.borrow().state().value()
         } else {
@@ -274,10 +244,6 @@ impl LiquidDragAxis {
                 .get()
                 .unwrap_or_else(|| self.animation.borrow().state().value())
         }
-    }
-
-    pub(crate) fn liquid_pose(&self) -> LiquidPose {
-        self.dynamics.update_pointer((self.value(), 0.0))
     }
 
     pub(crate) fn is_dragging(&self) -> bool {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::widgets::tab_motion::tab_lens_activity_motion;
+use crate::widgets::lens_motion::tab_lens_activity_motion;
 
 #[test]
 fn tab_bar_spec_normalizes_the_maximum_cell_width() {
@@ -317,7 +317,7 @@ fn flight_lens_retains_neutral_tint_through_direct_motion() {
 
 #[test]
 fn bar_surface_adapts_tone_to_its_foreground() {
-    let glass = tab_bar_surface_material(cranpose_ui_graphics::Color::BLACK);
+    let glass = surface_material(cranpose_ui_graphics::Color::BLACK);
     assert_eq!(glass.blur_radius, Some(6.0));
     assert_eq!(glass.saturation, Some(1.0));
     assert_eq!(glass.lift, Some(0.0));
@@ -334,7 +334,7 @@ fn bar_surface_adapts_tone_to_its_foreground() {
 
 #[test]
 fn bar_surface_keeps_its_refraction_after_release() {
-    let glass = tab_bar_surface_material(Color::BLACK);
+    let glass = surface_material(Color::BLACK);
     assert_eq!(glass.refraction_depth_dp, Some(15.5));
     assert_eq!(glass.face_response.unwrap().illumination, 0.0);
 }
@@ -342,7 +342,7 @@ fn bar_surface_keeps_its_refraction_after_release() {
 #[test]
 fn bar_surface_tone_tracks_the_local_foreground_polarity() {
     for foreground in [Color::BLACK, Color::WHITE] {
-        let surface = tab_bar_surface_material(foreground);
+        let surface = surface_material(foreground);
         assert!(surface.adaptive_tone);
         assert_eq!(surface.foreground, Some(foreground));
         assert_eq!(surface.lift, Some(0.0));
@@ -352,10 +352,7 @@ fn bar_surface_tone_tracks_the_local_foreground_polarity() {
 #[test]
 fn bar_surface_tone_keeps_the_face_tint_neutral() {
     for foreground in [Color::BLACK, Color::WHITE] {
-        assert_eq!(
-            tab_bar_surface_material(foreground).tint,
-            Some(Color::TRANSPARENT)
-        );
+        assert_eq!(surface_material(foreground).tint, Some(Color::TRANSPARENT));
     }
 }
 

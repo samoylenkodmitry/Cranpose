@@ -6,6 +6,103 @@ use cranpose_testing::{
 use cranpose_ui::Modifier;
 
 #[test]
+fn a_navigation_header_announces_its_title_once_across_collapse() {
+    for offset in [0.0, 26.0, 52.0] {
+        let mut robot = create_headless_robot_test(400, 300, move || {
+            LiquidTheme(LiquidThemeSpec::default(), move || {
+                let scroll = cranpose_ui::rememberScrollState!(offset);
+                LiquidNavBar(
+                    Modifier::empty().fill_max_width(),
+                    LiquidNavBarSpec::new("Library"),
+                    scroll,
+                    || {},
+                    || {},
+                );
+            });
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+        robot.wait_for_idle();
+        let tree =
+            placed_semantics_from_shell(robot.shell_mut()).expect("placed navigation header");
+        assert_eq!(
+            tree.flatten()
+                .into_iter()
+                .filter(|node| !node.hidden && node.label.as_deref() == Some("Library"))
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn search_fields_keep_a_native_height_and_an_accessible_placeholder() {
+    for on_glass in [false, true] {
+        let mut robot = create_headless_robot_test(400, 300, move || {
+            LiquidTheme(LiquidThemeSpec::default(), move || {
+                let state =
+                    cranpose_core::remember(|| cranpose_foundation::text::TextFieldState::new(""))
+                        .with(|state| *state);
+                LiquidSearchField(
+                    Modifier::empty().width(300.0),
+                    state,
+                    LiquidSearchFieldSpec {
+                        on_glass,
+                        ..Default::default()
+                    },
+                );
+            });
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+        robot.wait_for_idle();
+        let tree = placed_semantics_from_shell(robot.shell_mut()).expect("placed search field");
+        let node = tree
+            .flatten()
+            .into_iter()
+            .find(|node| node.label.as_deref() == Some("Search"))
+            .expect("the placeholder announces the search field");
+        assert_eq!(node.layout_bounds.width, 300.0);
+        assert_eq!(node.layout_bounds.height, 44.0);
+    }
+}
+
+#[test]
+fn text_button_sizes_preserve_accessible_activation_and_increase_the_touch_target() {
+    let mut previous_height = 0.0;
+    for size in [
+        GlassButtonSize::Small,
+        GlassButtonSize::Regular,
+        GlassButtonSize::Large,
+    ] {
+        let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+        let recorded = std::rc::Rc::clone(&clicks);
+        let mut robot = create_headless_robot_test(400, 300, move || {
+            let recorded = std::rc::Rc::clone(&recorded);
+            LiquidTheme(LiquidThemeSpec::default(), move || {
+                let spec = GlassButtonSpec::glass().with_size(size);
+                GlassButton(
+                    Modifier::empty(),
+                    spec.clone(),
+                    move || recorded.set(recorded.get() + 1),
+                    move || GlassButtonLabel("Continue", spec.clone()),
+                );
+            });
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+        robot.wait_for_idle();
+        let tree = placed_semantics_from_shell(robot.shell_mut()).expect("placed button");
+        let node = tree
+            .flatten()
+            .into_iter()
+            .find(|node| node.label.as_deref() == Some("Continue") && node.clickable)
+            .expect("announced action");
+        assert!(node.layout_bounds.height > previous_height);
+        previous_height = node.layout_bounds.height;
+        activate(&mut robot, "Continue");
+        assert_eq!(clicks.get(), 1);
+    }
+}
+
+#[test]
 fn reader_activates_a_glass_button_beyond_the_scroll_viewport() {
     let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
     let recorded = std::rc::Rc::clone(&clicks);
@@ -345,6 +442,81 @@ fn an_open_menu_names_itself_to_a_screen_reader() {
             .into_iter()
             .any(|node| !node.hidden && node.pane_title.as_deref() == Some("Menu"))
     );
+}
+
+#[test]
+fn menus_stay_centered_and_put_the_first_action_nearest_the_anchor() {
+    for (anchor_x, anchor_y, grouped, center_x) in [
+        (159.0, 100.0, false, 201.0),
+        (159.0, 434.0, false, 201.0),
+        (159.0, 434.0, true, 201.0),
+        (159.0, 100.0, true, 201.0),
+        (-20.0, 434.0, false, 141.0),
+        (390.0, 434.0, false, 261.0),
+    ] {
+        let mut robot = create_headless_robot_test(402, 874, move || {
+            LiquidTheme(LiquidThemeSpec::default(), move || {
+                LiquidMenu(
+                    true,
+                    cranpose_ui_graphics::Rect {
+                        x: anchor_x,
+                        y: anchor_y,
+                        width: 84.0,
+                        height: 34.0,
+                    },
+                    LiquidMenuSpec::default(),
+                    Vec::new(),
+                    rememberLiquidMenuGesture(),
+                    || {},
+                    |scope| {
+                        let labels: &[&str] = if grouped {
+                            &["Document", "Copy", "Share", "Danger", "Delete", "Cancel"]
+                        } else {
+                            &["Copy", "Share", "Delete"]
+                        };
+                        for label in labels {
+                            if matches!(*label, "Document" | "Danger") {
+                                scope.header(*label);
+                            } else {
+                                scope.item(LiquidMenuItem::new(*label), || {});
+                            }
+                        }
+                    },
+                );
+            });
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+        robot.wait_for_idle();
+        let tree = placed_semantics_from_shell(robot.shell_mut()).expect("placed menu");
+        let bounds = |label| {
+            tree.flatten()
+                .into_iter()
+                .find(|node| node.label.as_deref() == Some(label))
+                .expect("menu action")
+                .layout_bounds
+        };
+        let copy = bounds("Copy");
+        let delete = bounds("Delete");
+        if grouped {
+            assert!(bounds("Document").y < bounds("Share").y);
+            assert!(bounds("Danger").y < bounds("Cancel").y);
+        }
+        assert!(
+            (copy.x + copy.width * 0.5 - center_x).abs() <= 0.5,
+            "menu must stay centered: {copy:?}"
+        );
+        assert!(
+            (copy.height - 42.0).abs() <= 0.5,
+            "native row height: {copy:?}"
+        );
+        if anchor_y > 400.0 {
+            assert!(copy.y > delete.y, "upward menu starts beside the anchor");
+            assert!(copy.y + copy.height <= anchor_y + 34.0);
+        } else {
+            assert!(copy.y < delete.y, "downward menu keeps declaration order");
+            assert!(copy.y >= anchor_y);
+        }
+    }
 }
 
 #[test]

@@ -241,6 +241,7 @@ fn hash_color_filter<H: Hasher>(filter: ColorFilter, state: &mut H) {
 fn hash_runtime_shader<H: Hasher>(shader: &RuntimeShader, state: &mut H) {
     shader.source_hash().hash(state);
     shader.overrides_hash().hash(state);
+    shader.position_independent().hash(state);
     hash_f32_bits(shader.input_padding(), state);
     hash_f32_bits(shader.output_padding(), state);
     for rect in [shader.output_support(), shader.sample_domain()] {

@@ -10,6 +10,7 @@ const SETTLE_FRAME_LIMIT: usize = 240;
 
 thread_local! {
     static LENS_MOVED: RefCell<Option<MutableState<bool>>> = const { RefCell::new(None) };
+    static SLIDER_VALUE: Cell<Option<MutableState<f32>>> = const { Cell::new(None) };
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -121,5 +122,98 @@ fn a_moved_liquid_lens_redraws_itself_until_it_rests_and_then_stops() {
             !host.shell.needs_update(),
             "{control:?}: a lens at rest must not ask for frames"
         );
+    }
+}
+
+#[composable]
+fn SliderReleaseHost(accept: bool) {
+    let value = rememberMutableStateOf(|| 0.5);
+    SLIDER_VALUE.set(Some(value));
+    LiquidTheme(LiquidThemeSpec::default(), move || {
+        LiquidSlider(Modifier::empty().width(300.0), value.get(), move |next| {
+            if accept {
+                value.set(next);
+            }
+        });
+    });
+}
+
+#[test]
+fn a_released_slider_streams_native_inertia_then_stops_requesting_frames() {
+    let _guard = test_guard();
+    for accept in [true, false] {
+        let mut host =
+            CountedShell::settled(location_key(file!(), line!(), column!()), move || {
+                SliderReleaseHost(accept);
+            });
+        let value = SLIDER_VALUE.get().expect("controlled slider");
+        let mut clock = host.shell.app.last_frame_time_nanos + FRAME_NANOS;
+        run_until_idle(&mut host, &mut clock, "slider rest");
+        let rest = drawn_picture(&host.shell);
+        let origin = clock;
+        let scene = host.shell.surfaces[0].renderer.scene_mut();
+        let graph = scene.graph.take().expect("slider scene");
+        collect_graph_hits(
+            &graph.root,
+            cranpose_render_common::graph::ProjectiveTransform::identity(),
+            scene,
+            None,
+        );
+        scene.replace_graph(graph);
+        host.shell.set_cursor_at_event_time(
+            150.0,
+            16.0,
+            PointerEventTime {
+                platform_time_ms: Some(0),
+                animation_time_nanos: origin,
+            },
+        );
+        assert!(host.shell.pointer_pressed_at_event_time(PointerEventTime {
+            platform_time_ms: Some(0),
+            animation_time_nanos: origin,
+        }));
+        for (ms, x) in [(600, 217.0), (610, 221.0), (620, 225.0), (630, 229.0)] {
+            clock = origin + ms * 1_000_000;
+            host.shell.set_cursor_at_event_time(
+                x,
+                16.0,
+                PointerEventTime {
+                    platform_time_ms: Some(ms as i64),
+                    animation_time_nanos: clock,
+                },
+            );
+            host.shell.update_at_frame_time_nanos(clock);
+        }
+        assert!((value.get() - if accept { 0.73 } else { 0.5 }).abs() < 0.0001);
+        clock += 800_000_000;
+        host.shell.update_at_frame_time_nanos(clock);
+        assert!(host.shell.pointer_released_at_event_time(PointerEventTime {
+            platform_time_ms: Some(1430),
+            animation_time_nanos: clock,
+        }));
+        let frames = run_until_idle(&mut host, &mut clock, "slider inertia");
+        assert!(
+            frames > 10,
+            "native release must keep moving after pointer-up"
+        );
+        assert!(
+            (value.get() - if accept { 0.862 } else { 0.5 }).abs() < 0.0001,
+            "released value {}",
+            value.get()
+        );
+        let settled = value.get();
+        for _ in 0..12 {
+            clock += FRAME_NANOS;
+            assert!(!host.shell.update_at_frame_time_nanos(clock).content_redrawn);
+            assert!(!host.shell.needs_update());
+            assert_eq!(value.get(), settled);
+        }
+        if !accept {
+            assert_eq!(
+                drawn_picture(&host.shell),
+                rest,
+                "the declined value must return to its controlled pose"
+            );
+        }
     }
 }

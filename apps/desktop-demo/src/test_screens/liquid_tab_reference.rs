@@ -171,7 +171,7 @@ fn TintControls(amount: cranpose_core::MutableState<GlassTintAmount>, top: f32) 
 }
 
 #[composable]
-pub(crate) fn LiquidTabReference(checkerboard: bool, dark: bool) {
+pub(crate) fn LiquidTabReference(backdrop: ReferenceBackdrop, dark: bool) {
     let scheme = if dark {
         SchemeMode::Dark
     } else {
@@ -195,125 +195,191 @@ pub(crate) fn LiquidTabReference(checkerboard: bool, dark: bool) {
             let selected = rememberMutableStateOf(initial_destination);
             let colors = liquid_colors();
             let insets = local_safe_area_insets().current();
-            BoxWithConstraints(
-                Modifier::empty().fill_max_size().draw_behind(move |scope| {
-                    scope.draw_rect(Brush::solid(if dark { Color::BLACK } else { Color::WHITE }));
-                    if checkerboard {
-                        let palette = ReferenceContent::colors();
-                        let cell = 8.0;
-                        for row in 0..(scope.size().height / cell).ceil() as usize {
-                            for column in 0..(scope.size().width / cell).ceil() as usize {
-                                let rect = Rect {
-                                    x: column as f32 * cell,
-                                    y: row as f32 * cell,
-                                    width: cell,
-                                    height: cell,
-                                };
-                                scope.draw_rect_at(
-                                    rect,
-                                    Brush::solid(palette[(column + row) % palette.len()]),
-                                );
-                                if (row + column) % 2 == 0 {
-                                    scope.draw_rect_at(
-                                        rect,
-                                        Brush::solid(Color::WHITE.with_alpha(0.55)),
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }),
-                move |scope| {
-                    let symbols = cranpose::remember(|| {
-                        [
-                            include_bytes!(
-                                "../../../liquid-reference/reference-content/discover.png"
-                            )
+            BoxWithConstraints(reference_background(backdrop, dark), move |scope| {
+                let symbols = cranpose::remember(|| {
+                    [
+                        include_bytes!("../../../liquid-reference/reference-content/discover.png")
                             .as_slice(),
-                            include_bytes!(
-                                "../../../liquid-reference/reference-content/browse.png"
-                            )
+                        include_bytes!("../../../liquid-reference/reference-content/browse.png")
                             .as_slice(),
-                            include_bytes!("../../../liquid-reference/reference-content/saved.png")
-                                .as_slice(),
-                            include_bytes!(
-                                "../../../liquid-reference/reference-content/account.png"
-                            )
+                        include_bytes!("../../../liquid-reference/reference-content/saved.png")
                             .as_slice(),
-                        ]
-                        .map(|bytes| {
-                            let image = image::load_from_memory(bytes)
-                                .expect("native symbol PNG")
-                                .into_rgba8();
-                            let size = cranpose::Size::new(
-                                image.width() as f32 / 3.0,
-                                image.height() as f32 / 3.0,
-                            );
-                            let bitmap = cranpose::ImageBitmap::from_rgba8(
-                                image.width(),
-                                image.height(),
-                                image.into_raw(),
-                            )
-                            .expect("native symbol pixels");
-                            (cranpose::widgets::Painter::from_bitmap(bitmap), size)
-                        })
+                        include_bytes!("../../../liquid-reference/reference-content/account.png")
+                            .as_slice(),
+                    ]
+                    .map(|bytes| {
+                        let image = image::load_from_memory(bytes)
+                            .expect("native symbol PNG")
+                            .into_rgba8();
+                        let size = cranpose::Size::new(
+                            image.width() as f32 / 3.0,
+                            image.height() as f32 / 3.0,
+                        );
+                        let bitmap = cranpose::ImageBitmap::from_rgba8(
+                            image.width(),
+                            image.height(),
+                            image.into_raw(),
+                        )
+                        .expect("native symbol pixels");
+                        (cranpose::widgets::Painter::from_bitmap(bitmap), size)
                     })
-                    .with(Clone::clone);
-                    let width = scope.constraints().max_width;
-                    let height = scope.constraints().max_height;
-                    Box(
-                        Modifier::empty().fill_max_size(),
-                        BoxSpec::default().content_alignment(Alignment::CENTER),
-                        move || {
-                            Text(
-                                content.titles[selected.get()].as_str(),
-                                Modifier::empty(),
-                                TextStyle {
-                                    span_style: SpanStyle {
-                                        color: Some(colors.label),
-                                        font_size: TextUnit::Sp(34.0),
-                                        font_family: Some(FontFamily::SansSerif),
-                                        font_weight: Some(FontWeight::BOLD),
-                                        ..Default::default()
-                                    },
+                })
+                .with(Clone::clone);
+                let width = scope.constraints().max_width;
+                let height = scope.constraints().max_height;
+                Box(
+                    Modifier::empty().fill_max_size(),
+                    BoxSpec::default().content_alignment(Alignment::CENTER),
+                    move || {
+                        Text(
+                            content.titles[selected.get()].as_str(),
+                            Modifier::empty(),
+                            TextStyle {
+                                span_style: SpanStyle {
+                                    color: Some(colors.label),
+                                    font_size: TextUnit::Sp(34.0),
+                                    font_family: Some(FontFamily::SansSerif),
+                                    font_weight: Some(FontWeight::BOLD),
                                     ..Default::default()
                                 },
+                                ..Default::default()
+                            },
+                        );
+                    },
+                );
+                TintControls(tint_amount, insets.top);
+                LiquidTabBar(
+                    Modifier::empty()
+                        .offset(21.0, height - (insets.bottom - 13.0).max(21.0) - 62.0)
+                        .width(width - 42.0),
+                    LiquidTabBarSpec::new((width - 50.0) / TITLES.len() as f32),
+                    selected.get(),
+                    move |index| selected.set(index),
+                    move |tabs| {
+                        let offsets = [
+                            (-1.0 / 3.0, 1.0 / 6.0),
+                            (-1.0 / 3.0, 5.0 / 6.0),
+                            (-1.0 / 3.0, 1.0),
+                            (1.0 / 6.0, 1.0),
+                        ];
+                        for (index, title) in content.titles.iter().enumerate() {
+                            let symbol = content.icons[index];
+                            let (painter, size) = symbols[symbol].clone();
+                            let (x, y) = offsets[symbol];
+                            tabs.push(
+                                LiquidTab::from_painter(painter, size, title)
+                                    .with_icon_offset(x, y),
                             );
-                        },
-                    );
-                    TintControls(tint_amount, insets.top);
-                    LiquidTabBar(
-                        Modifier::empty()
-                            .offset(21.0, height - (insets.bottom - 13.0).max(21.0) - 62.0)
-                            .width(width - 42.0),
-                        LiquidTabBarSpec::new((width - 50.0) / TITLES.len() as f32),
-                        selected.get(),
-                        move |index| selected.set(index),
-                        move |tabs| {
-                            let offsets = [
-                                (-1.0 / 3.0, 1.0 / 6.0),
-                                (-1.0 / 3.0, 5.0 / 6.0),
-                                (-1.0 / 3.0, 1.0),
-                                (1.0 / 6.0, 1.0),
-                            ];
-                            for (index, title) in content.titles.iter().enumerate() {
-                                let symbol = content.icons[index];
-                                let (painter, size) = symbols[symbol].clone();
-                                let (x, y) = offsets[symbol];
-                                tabs.push(
-                                    LiquidTab::from_painter(painter, size, title)
-                                        .with_icon_offset(x, y),
-                                );
-                            }
-                        },
-                    );
-                    if std::env::var("REFERENCE_RECORDING").as_deref() == Ok("1") {
-                        RecordingOverlay();
-                    }
-                },
-            );
+                        }
+                    },
+                );
+                if std::env::var("REFERENCE_RECORDING").as_deref() == Ok("1") {
+                    RecordingOverlay();
+                }
+            });
         },
     );
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum ReferenceBackdrop {
+    Solid,
+    Rainbow,
+    DarkRainbow,
+    Monochrome,
+    Gray(f32),
+    Rgb(Color),
+}
+
+impl ReferenceBackdrop {
+    pub(crate) fn parse(name: &str) -> anyhow::Result<Self> {
+        match name {
+            "solid" => Ok(Self::Solid),
+            "checkerboard" => Ok(Self::Rainbow),
+            "checkerboard-dark-rainbow" => Ok(Self::DarkRainbow),
+            "checkerboard-mono" => Ok(Self::Monochrome),
+            _ => {
+                if let Some(rgb) = name.strip_prefix("rgb-") {
+                    let values = rgb
+                        .split(',')
+                        .map(str::parse::<f32>)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    anyhow::ensure!(
+                        values.len() == 3
+                            && values
+                                .iter()
+                                .all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+                        "invalid RGB reference background"
+                    );
+                    return Ok(Self::Rgb(Color::rgb(values[0], values[1], values[2])));
+                }
+                let gray = name
+                    .strip_prefix("gray-")
+                    .and_then(|value| value.parse::<f32>().ok());
+                match gray {
+                    Some(value) if value.is_finite() && (0.0..=1.0).contains(&value) => {
+                        Ok(Self::Gray(value))
+                    }
+                    _ => anyhow::bail!("unknown reference backdrop: {name}"),
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn reference_background(backdrop: ReferenceBackdrop, dark: bool) -> Modifier {
+    Modifier::empty().fill_max_size().draw_behind(move |scope| {
+        if let ReferenceBackdrop::Rgb(color) = backdrop {
+            scope.draw_rect(Brush::solid(color));
+            return;
+        }
+        if let ReferenceBackdrop::Gray(value) = backdrop {
+            scope.draw_rect(Brush::solid(Color::rgba(value, value, value, 1.0)));
+            return;
+        }
+        scope.draw_rect(Brush::solid(if dark { Color::BLACK } else { Color::WHITE }));
+        if matches!(
+            backdrop,
+            ReferenceBackdrop::Rainbow
+                | ReferenceBackdrop::DarkRainbow
+                | ReferenceBackdrop::Monochrome
+        ) {
+            let palette = ReferenceContent::colors();
+            let cell = 8.0;
+            for row in 0..(scope.size().height / cell).ceil() as usize {
+                for column in 0..(scope.size().width / cell).ceil() as usize {
+                    let rect = Rect {
+                        x: column as f32 * cell,
+                        y: row as f32 * cell,
+                        width: cell,
+                        height: cell,
+                    };
+                    if matches!(backdrop, ReferenceBackdrop::Monochrome) {
+                        let color = if (row + column) % 2 == 0 {
+                            Color::WHITE
+                        } else {
+                            Color::BLACK
+                        };
+                        scope.draw_rect_at(rect, Brush::solid(color));
+                    } else {
+                        scope.draw_rect_at(
+                            rect,
+                            Brush::solid(palette[(column + row) % palette.len()]),
+                        );
+                        let shade = if backdrop == ReferenceBackdrop::DarkRainbow {
+                            scope.draw_rect_at(rect, Brush::solid(Color::BLACK.with_alpha(0.65)));
+                            Color::BLACK
+                        } else {
+                            Color::WHITE
+                        };
+                        if (row + column) % 2 == 0 {
+                            scope.draw_rect_at(rect, Brush::solid(shade.with_alpha(0.55)));
+                        }
+                    }
+                }
+            }
+        }
+    })
 }
 
 async fn record_pointer(scope: PointerInputScope) {
@@ -350,7 +416,7 @@ async fn record_pointer(scope: PointerInputScope) {
 }
 
 #[composable]
-fn RecordingOverlay() {
+pub(crate) fn RecordingOverlay() {
     let pulse = rememberMutableStateOf(|| 0u64);
     cranpose_core::LaunchedEffectAsync((), move |scope| {
         std::boxed::Box::pin(async move {

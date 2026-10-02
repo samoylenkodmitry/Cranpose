@@ -16,7 +16,7 @@ use cranpose_ui_graphics::{
     BlendMode, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash, RuntimeShader, SubstrateSpec,
     TileMode,
 };
-use smallvec::{SmallVec, smallvec};
+use smallvec::SmallVec;
 
 use crate::{
     ablation::Ablation,
@@ -60,11 +60,19 @@ pub(crate) struct DeviceRect {
 
 impl DeviceRect {
     fn from_logical(rect: Rect, scale: f32) -> Self {
+        let pixel = |value: f32| {
+            let whole = value.round();
+            if (value - whole).abs() <= value.abs().max(1.0) * f32::EPSILON * 2.0 {
+                whole
+            } else {
+                value
+            }
+        };
         Self {
-            x: rect.x * scale,
-            y: rect.y * scale,
-            width: rect.width * scale,
-            height: rect.height * scale,
+            x: pixel(rect.x * scale),
+            y: pixel(rect.y * scale),
+            width: pixel(rect.width * scale),
+            height: pixel(rect.height * scale),
         }
     }
 
@@ -118,44 +126,6 @@ impl DeviceRect {
             width: (right - left).max(1.0),
             height: (bottom - top).max(1.0),
         }
-    }
-
-    /// What is left of the rect outside `hole`: up to four rects that
-    /// partition it exactly, none overlapping the hole.
-    fn subtract(self, hole: Self) -> SmallVec<[Self; 4]> {
-        let Some(hole) = hole.intersect(self) else {
-            return smallvec![self];
-        };
-        let right = self.x + self.width;
-        let bottom = self.y + self.height;
-        let hole_right = hole.x + hole.width;
-        let hole_bottom = hole.y + hole.height;
-        let mut parts = SmallVec::new();
-        let mut push = |x: f32, y: f32, width: f32, height: f32| {
-            if width > 0.0 && height > 0.0 {
-                parts.push(Self {
-                    x,
-                    y,
-                    width,
-                    height,
-                });
-            }
-        };
-        push(self.x, self.y, self.width, hole.y - self.y);
-        push(self.x, hole_bottom, self.width, bottom - hole_bottom);
-        push(self.x, hole.y, hole.x - self.x, hole.height);
-        push(hole_right, hole.y, right - hole_right, hole.height);
-        parts
-    }
-
-    /// The rect minus every hole, as rects that partition what is left.
-    fn subtract_all(self, holes: &[Self]) -> SmallVec<[Self; 4]> {
-        holes.iter().fold(smallvec![self], |parts, hole| {
-            parts
-                .into_iter()
-                .flat_map(|part| part.subtract(*hole))
-                .collect()
-        })
     }
 
     fn pixel_size(self) -> (u32, u32) {
@@ -440,6 +410,20 @@ struct Blocker {
     rect: DeviceRect,
 }
 
+fn blocked_coverage(holes: &mut Vec<Blocker>, z: usize, coverage: DeviceRect) -> bool {
+    let blocked = holes
+        .iter()
+        .filter(|hole| hole.z < z)
+        .find_map(|hole| hole.rect.intersect(coverage).map(|part| part == coverage));
+    let Some(fully_covered) = blocked else {
+        return false;
+    };
+    if !fully_covered {
+        holes.push(Blocker { z, rect: coverage });
+    }
+    true
+}
+
 fn release_op(
     op: DrawOp,
     scene: &CompositorScene,
@@ -448,73 +432,30 @@ fn release_op(
     deferred: &mut Vec<DrawOp>,
     now_ops: &mut Vec<DrawOp>,
 ) {
-    let bounds =
-        op_draw_bounds(scene, &op, scale).map(|bounds| DeviceRect::from_logical(bounds, scale));
-    let blocked = bounds.and_then(|bounds| {
-        holes
-            .iter()
-            .filter(|hole| hole.z < op.z_index)
-            .find_map(|hole| {
-                hole.rect
-                    .intersect(bounds)
-                    .map(|part| (bounds, part == bounds))
-            })
+    let blocked = op_draw_bounds(scene, &op, scale).is_some_and(|bounds| {
+        blocked_coverage(holes, op.z_index, DeviceRect::from_logical(bounds, scale))
     });
-    match blocked {
-        Some((rect, fully_covered)) => {
-            if !fully_covered {
-                holes.push(Blocker {
-                    z: op.z_index,
-                    rect,
-                });
-            }
-            deferred.push(op);
-        }
-        None => now_ops.push(op),
+    if blocked {
+        deferred.push(op);
+    } else {
+        now_ops.push(op);
     }
 }
 
 fn release_composite(
     composite: ResolvedComposite,
-    holes: &[Blocker],
-    covered: &mut Vec<DeviceRect>,
+    holes: &mut Vec<Blocker>,
     now: &mut Vec<ResolvedComposite>,
     pending: &mut Vec<ResolvedComposite>,
 ) {
     let Some(coverage) = composite_coverage(&composite) else {
         return;
     };
-    collect_covered_rects(holes, composite.z_index, coverage, covered);
-    if covered.is_empty() {
+    if blocked_coverage(holes, composite.z_index, coverage) {
+        pending.push(composite);
+    } else {
         now.push(composite);
-        return;
     }
-    now.extend(
-        coverage
-            .subtract_all(covered)
-            .into_iter()
-            .map(|part| with_scissor(&composite, part)),
-    );
-    for (index, hole) in covered.iter().enumerate() {
-        for part in hole.subtract_all(&covered[..index]) {
-            pending.push(with_scissor(&composite, part));
-        }
-    }
-}
-
-fn collect_covered_rects(
-    holes: &[Blocker],
-    z: usize,
-    coverage: DeviceRect,
-    covered: &mut Vec<DeviceRect>,
-) {
-    covered.clear();
-    covered.extend(
-        holes
-            .iter()
-            .filter(|hole| hole.z < z)
-            .filter_map(|hole| hole.rect.intersect(coverage)),
-    );
 }
 
 /// One thing a flush may draw, in the order the pass draws them: at one z
@@ -595,11 +536,6 @@ impl LayerPass<'_> {
         )
     }
 
-    /// Splits what a flush would draw into what draws now and what waits.
-    /// In z order, anything that touches a blocker below it waits: an op is
-    /// deferred whole, a composite is drawn outside the blockers it overlaps
-    /// and its covered parts stay pending; and what waits blocks in turn, so
-    /// nothing above it that overlaps it is drawn before it.
     fn release(
         &mut self,
         mut ops: Vec<DrawOp>,
@@ -628,8 +564,7 @@ impl LayerPass<'_> {
         candidates.sort_by_key(Candidate::order);
         let mut composites: Vec<Option<ResolvedComposite>> =
             composites.into_iter().map(Some).collect();
-        let mut holes = self.blockers.clone();
-        let mut covered = Vec::new();
+        let blocker_count = self.blockers.len();
         let mut now_ops = Vec::with_capacity(op_count);
         let mut now = Vec::with_capacity(composite_count);
         for candidate in candidates {
@@ -638,7 +573,7 @@ impl LayerPass<'_> {
                     op,
                     scene,
                     scale,
-                    &mut holes,
+                    &mut self.blockers,
                     &mut self.deferred,
                     &mut now_ops,
                 ),
@@ -646,10 +581,11 @@ impl LayerPass<'_> {
                     let composite = composites[index]
                         .take()
                         .expect("a flush releases each composite once");
-                    release_composite(composite, &holes, &mut covered, &mut now, &mut self.pending);
+                    release_composite(composite, &mut self.blockers, &mut now, &mut self.pending);
                 }
             }
         }
+        self.blockers.truncate(blocker_count);
         self.deferred.sort_by_key(|op| op.z_index);
         (now_ops, now)
     }
@@ -699,6 +635,28 @@ enum BatchedEffect<'a> {
 }
 
 impl<'a> BatchedEffect<'a> {
+    fn shader(self) -> Option<&'a Arc<RuntimeShader>> {
+        match self {
+            Self::Shader(shader) | Self::BlurThenShader(_, shader) => Some(shader),
+            Self::Blur(_) => None,
+        }
+    }
+
+    fn input_hash(self) -> u64 {
+        let mut hasher = capture_hasher();
+        self.shader().is_some().hash(&mut hasher);
+        self.blur().is_some().hash(&mut hasher);
+        if let Some(blur) = self.blur() {
+            blur.radius_x.to_bits().hash(&mut hasher);
+            blur.radius_y.to_bits().hash(&mut hasher);
+            blur.tile_mode.hash(&mut hasher);
+        }
+        if let Some(shader) = self.shader() {
+            shader.hash_substrates(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     fn blur(self) -> Option<BlurSpec> {
         match self {
             Self::Blur(blur) | Self::BlurThenShader(blur, _) => Some(blur),
@@ -834,7 +792,7 @@ fn log_stage(stage: usize, items: &[&PendingBackdrop<'_>]) {
             _ => Vec::new(),
         };
         log::warn!(
-            "[stage-diag] stage={stage} z={} capture=({:.0},{:.0},{:.0},{:.0}) visible=({:.0},{:.0},{:.0},{:.0}) batched={} blur={blur} substrates={substrates} folds={folds:?} key={:?}",
+            "[stage-diag] stage={stage} z={} capture=({:.0},{:.0},{:.0},{:.0}) visible=({:.0},{:.0},{:.0},{:.0}) batched={} blur={blur} substrates={substrates} folds={folds:?} key={:?} node={:?} effect_rect={:?}",
             item.z,
             capture.x,
             capture.y,
@@ -846,6 +804,8 @@ fn log_stage(stage: usize, items: &[&PendingBackdrop<'_>]) {
             visible.height,
             item.batched.is_some(),
             item.key,
+            item.node_id,
+            item.layer_pixel_rect(),
         );
     }
 }
@@ -1118,21 +1078,20 @@ fn draws_nothing(content: &LayerScene) -> bool {
         && content.scene.effect_layers.is_empty()
 }
 
-/// Whether the child's composite leaves the page as it is: it draws nothing,
-/// its effect keeps that transparent, and source-over of a transparent
-/// source is the identity. Its backdrop, resolved apart, is not in question.
 fn composites_nothing(child: &ChildLayer) -> bool {
-    draws_nothing(&child.content)
-        && child.blend_mode == BlendMode::SrcOver
-        && child
-            .effect
-            .as_ref()
-            .is_none_or(RenderEffect::preserves_transparency)
+    child.blend_mode == BlendMode::SrcOver
+        && (child.alpha == 0.0
+            || (draws_nothing(&child.content)
+                && child
+                    .effect
+                    .as_ref()
+                    .is_none_or(RenderEffect::preserves_transparency)))
 }
 
 fn shader_tail_composites(child: &ChildLayer, shader: &RuntimeShader) -> bool {
     let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
-    shader.substrates().is_empty()
+    shader.position_independent()
+        && shader.substrates().is_empty()
         && child.blend_mode == BlendMode::SrcOver
         && (plain || shader.batched_source())
 }
@@ -1179,14 +1138,9 @@ fn shader_tail_composite(
     }
 }
 
-/// A translated child's runtime shader drawn in the final pass over its
-/// rendered content, so an animated shader over cached content costs no
-/// pass; none when the child is not on the parent grid or the shader cannot
-/// apply the child's clip and alpha.
 fn shader_tail_over_surface(
     child: &ChildLayer,
     surface: &SurfaceRender,
-    translation: Option<Point>,
     snap: Point,
     z: usize,
     scale: f32,
@@ -1195,7 +1149,7 @@ fn shader_tail_over_surface(
     let Some(RenderEffect::Shader { shader }) = &child.effect else {
         return None;
     };
-    let dest = surface.grid_dest.filter(|_| translation.is_some())?;
+    let dest = surface.grid_dest?;
     shader_tail_composites(child, shader).then(|| {
         shader_tail_composite(
             child,
@@ -1268,14 +1222,6 @@ fn composite_coverage(composite: &ResolvedComposite) -> Option<DeviceRect> {
             height: sh,
         }),
         None => Some(dest),
-    }
-}
-
-/// The composite restricted to `scissor`, a part of its coverage.
-fn with_scissor(composite: &ResolvedComposite, scissor: DeviceRect) -> ResolvedComposite {
-    ResolvedComposite {
-        scissor: Some(scissor.tuple()),
-        ..composite.clone()
     }
 }
 
@@ -1386,14 +1332,17 @@ fn replayed_kind(
             source_viewport: *source_viewport,
         },
         ResolvedCompositeKind::Shader {
-            shader,
             source_region,
             source_logical_size,
             substrate_regions,
             alpha,
             ..
         } => ResolvedCompositeKind::Shader {
-            shader: Arc::clone(shader),
+            shader: Arc::clone(
+                item.batched
+                    .and_then(BatchedEffect::shader)
+                    .expect("cached shader inputs"),
+            ),
             layer_pixel_rect: item.layer_pixel_rect(),
             source_region: *source_region,
             source_logical_size: *source_logical_size,
@@ -1953,7 +1902,6 @@ pub(crate) struct FrameExecutor<'r, 'c, C: FrameCommandRecorder> {
     transients: Vec<(FrameTextureDescriptor, Rc<OffscreenTarget>)>,
     empty_scene: CompositorScene,
     depth: usize,
-    admitted_pixels: u64,
     prefix_admitted_pixels: u64,
 }
 
@@ -2113,16 +2061,10 @@ impl AdmissionGate {
         }
     }
 
-    fn run(&self) -> u32 {
-        self.run
-    }
-
     pub(crate) fn end_frame(&mut self) -> bool {
         std::mem::take(&mut self.seen)
     }
 }
-
-const MAX_BACKDROP_ADMISSION_PIXELS: u64 = 120_000;
 
 /// A texture a composite draws and what it holds.
 #[derive(Clone)]
@@ -2408,7 +2350,7 @@ impl SurfacePlan {
         let (surface_rect, grid_dest, device_phase) = match grid_offset {
             Some(offset) => {
                 let whole = child_rect.translated(offset).snap_out();
-                let dest = if child.reads_backdrop() && child.effect.is_none() {
+                let dest = if child.content.contains_backdrop() && child.effect.is_none() {
                     let reach = (backdrop_reach(&child.content) * surface_scale).ceil() + 1.0;
                     rendered_surface(whole, shown, reach)
                 } else {
@@ -2446,7 +2388,7 @@ impl SurfacePlan {
     }
 
     fn cache_key(&self, child: &ChildLayer) -> Option<LayerRasterCacheKey> {
-        (!child.reads_backdrop() && child.cache_policy == CachePolicy::Auto).then(|| {
+        (!child.content.contains_backdrop() && child.cache_policy == CachePolicy::Auto).then(|| {
             LayerRasterCacheKey::source_content(
                 child.node_id,
                 child.content_hash,
@@ -2539,7 +2481,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             transients: Vec::new(),
             empty_scene: CompositorScene::new(),
             depth: 0,
-            admitted_pixels: 0,
             prefix_admitted_pixels: 0,
         }
     }
@@ -3081,11 +3022,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         (kept, indices)
     }
 
-    /// The cache key of a backdrop whose result can be reused: the hash of
-    /// everything its capture reads, relative to the capture, with the
-    /// effect and the capture's size. None when the backdrop is not batched,
-    /// has no node, reads a projected parent page, or reads a texture drawn
-    /// anew every frame.
     fn backdrop_cache_key(
         &self,
         pass: &mut LayerPass<'_>,
@@ -3093,7 +3029,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         layout: u64,
     ) -> Option<LayerRasterCacheKey> {
         let node_id = item.node_id?;
-        item.batched.as_ref()?;
+        let effect = item.batched?;
         if NO_BACKDROP_CACHE.flag() {
             return None;
         }
@@ -3122,27 +3058,38 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let pending = &segment.pending[..segment
                 .pending
                 .partition_point(|composite| composite.z_index < segment.z_end)];
-            if !hash_capture_composites(drawn, window, &mut hasher)
-                || !hash_capture_composites(pending, window, &mut hasher)
-            {
+            if !hash_capture_composites(drawn, pending, window, &mut hasher) {
                 return None;
             }
         }
         let window = capture_window(item.capture_rect);
         let ops = filtered_ops(&pass.layer.scene.draw_ops, item.z, &[]);
         hash_capture_ops(&pass.layer.scene, &ops, window, scale, &mut hasher);
-        if !hash_capture_composites(pass.drawn_below(item.z), window, &mut hasher) {
-            return None;
-        }
-        if !hash_capture_composites(pass.pending_below(item.z), window, &mut hasher) {
+        ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
+        let pending_end = pass
+            .pending
+            .partition_point(|composite| composite.z_index < item.z);
+        if !hash_capture_composites(
+            pass.drawn_below(item.z),
+            &pass.pending[..pending_end],
+            window,
+            &mut hasher,
+        ) {
             return None;
         }
         layout.hash(&mut hasher);
-        let [x, y, width, height] = item.layer_pixel_rect();
+        let [x, y, width, height] = if layout == 0
+            || effect.shader().is_none()
+            || effect.substrates().contains(&SubstrateSpec::Mean)
+        {
+            item.layer_pixel_rect()
+        } else {
+            [0.0, 0.0, item.capture_rect.width, item.capture_rect.height]
+        };
         Some(LayerRasterCacheKey::backdrop_effect(
             Some(node_id),
             hasher.finish(),
-            item.effect.render_hash(),
+            effect.input_hash(),
             Rect {
                 x,
                 y,
@@ -3185,7 +3132,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         items: &[&PendingBackdrop<'_>],
         outputs: &mut [ResolvedComposite],
     ) {
-        let mut candidates = Vec::with_capacity(items.len());
         for item in items {
             let (Some(key), Some(node_id)) = (item.key, item.node_id) else {
                 continue;
@@ -3205,15 +3151,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 Entry::Vacant(slot) => slot.insert(AdmissionGate::pinned(key)),
             };
             if gate.admits() {
-                candidates.push((gate.run(), item, key, node_id));
+                self.admit_backdrop(item, key, node_id, outputs);
             }
-        }
-        candidates.sort_by_key(|(run, ..)| std::cmp::Reverse(*run));
-        for (_, item, key, node_id) in candidates {
-            if self.admitted_pixels >= MAX_BACKDROP_ADMISSION_PIXELS {
-                return;
-            }
-            self.admit_backdrop(item, key, node_id, outputs);
         }
     }
 
@@ -3241,8 +3180,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         {
             return;
         }
-        let (width, height) = item.capture_rect.pixel_size();
-        self.admitted_pixels += u64::from(width) * u64::from(height);
         self.renderer.frame_stats.record_backdrop_admission();
         if let Some(gate) = self.renderer.backdrop_gates.get_mut(&node_id) {
             gate.admitted();
@@ -3332,7 +3269,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .intersect(pass.target_rect())
             .unwrap_or(visible)
             .snap_out();
-        let item = PendingBackdrop {
+        let mut item = PendingBackdrop {
             z,
             node_id: child.node_id,
             key: None,
@@ -3352,14 +3289,26 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let items = [&item];
             let layout = self.plan_stage(&items);
             if layout.placements[0].is_some() {
-                return self
-                    .run_stage(pass, &items, &layout)?
+                item.key = self.backdrop_cache_key(pass, &item, layout.signature(0));
+                if let Some(cached) = self.cached_backdrop(&item) {
+                    return Ok(cached);
+                }
+                let items = [&item];
+                let mut outputs = self.run_stage(pass, &items, &layout)?;
+                self.admit_backdrops(&items, &mut outputs);
+                return outputs
                     .pop()
                     .ok_or_else(|| "a child backdrop substrate produced no composite".into());
             }
         }
+        item.key = self.backdrop_cache_key(pass, &item, 0);
+        if let Some(cached) = self.cached_backdrop(&item) {
+            return Ok(cached);
+        }
         let capture = self.capture(pass, z, capture_rect, "Child Backdrop Capture")?;
-        self.resolve_captured_backdrop(&item, capture, scale)
+        let mut output = self.resolve_captured_backdrop(&item, capture, scale)?;
+        self.admit_backdrops(&[&item], std::slice::from_mut(&mut output));
+        Ok(output)
     }
 
     /// Places every batched member of a stage into the atlas, in item order.
@@ -3989,8 +3938,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(surface) = resolved else {
             return Ok(());
         };
-        if let Some(composite) =
-            shader_tail_over_surface(child, &surface, translation, snap, z, scale, visible)
+        if let Some(composite) = shader_tail_over_surface(child, &surface, snap, z, scale, visible)
         {
             pass.pending.push(composite);
             return Ok(());
@@ -4183,7 +4131,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             SourceDecision::Cached(surface) => return Ok(Some(surface)),
             SourceDecision::Render(retain) => retain,
         };
-        let beneath = if child.reads_backdrop() {
+        let beneath = if child.content.contains_backdrop() {
             self.start_page(pass);
             beneath_for_child(pass, child, z, plan.grid_offset.filter(|_| plan.translated))?
         } else {
@@ -4763,13 +4711,9 @@ fn grid_rounded_mask(child: &ChildLayer, snap: Point, scale: f32) -> Option<Roun
 }
 
 fn rounded_mask(clip: LayerRoundedClip, snap: Point, scale: f32) -> RoundedCompositeMask {
+    let rect = DeviceRect::from_logical(clip.rect.translate(snap.x, snap.y), scale);
     RoundedCompositeMask {
-        rect: [
-            (clip.rect.x + snap.x) * scale,
-            (clip.rect.y + snap.y) * scale,
-            clip.rect.width * scale,
-            clip.rect.height * scale,
-        ],
+        rect: [rect.x, rect.y, rect.width, rect.height],
         radii: clip.radii.map(|radius| radius * scale),
     }
 }

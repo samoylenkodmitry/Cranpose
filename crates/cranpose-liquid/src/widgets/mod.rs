@@ -4,22 +4,28 @@ mod button;
 mod card;
 mod chip;
 mod content_scope;
+mod control_lens;
+mod control_material;
+mod control_motion;
+mod floating_button;
 mod glass_surface;
+mod lens_motion;
 mod menu;
 mod nav_bar;
 mod search_field;
 mod segmented;
 mod selection;
 mod slider;
+mod slider_gesture;
+mod slider_motion;
 mod tab_bar;
 mod tab_lighting;
-mod tab_motion;
 mod toggle;
 mod vibrancy;
 
 pub use button::{
-    GlassButton, GlassButtonLabel, GlassButtonSpec, GlassButtonStyle, GlassIconButton,
-    GlassIconButtonGroup, GlassIconButtonGroupItem, GlassIconButtonGroupScope,
+    GlassButton, GlassButtonLabel, GlassButtonSize, GlassButtonSpec, GlassButtonStyle,
+    GlassIconButton, GlassIconButtonGroup, GlassIconButtonGroupItem, GlassIconButtonGroupScope,
     GlassIconButtonGroupSpec,
 };
 pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection, Surface};

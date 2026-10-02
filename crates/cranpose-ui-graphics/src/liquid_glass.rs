@@ -45,6 +45,11 @@ fn slot(uniforms: &[f32], index: usize) -> f32 {
 /// contract tests share.
 pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
     LiquidGlassSpecialization {
+        flag: "GLASS_FACE_TONE_OFF",
+        slots: &[GLASS_FACE_TONE_UNIFORM + 4],
+        inactive: |u| slot(u, GLASS_FACE_TONE_UNIFORM + 4) <= 0.5,
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_DIRECTIONAL_REFRACTION_OFF",
         slots: &[GLASS_REFRACTION_MODE_UNIFORM],
         inactive: |u| slot(u, GLASS_REFRACTION_MODE_UNIFORM) <= 0.5,
@@ -127,6 +132,24 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         inactive: |u| slot(u, 102) <= 0.0,
     },
     LiquidGlassSpecialization {
+        flag: "GLASS_RING_SHADOW_OFF",
+        slots: &[GLASS_RING_SHADOW_UNIFORM + 7],
+        inactive: |u| slot(u, GLASS_RING_SHADOW_UNIFORM + 7) <= 0.5,
+    },
+    LiquidGlassSpecialization {
+        flag: "GLASS_CONTOUR_HIGHLIGHT_OFF",
+        slots: &[
+            GLASS_CONTOUR_HIGHLIGHT_UNIFORM,
+            GLASS_CONTOUR_HIGHLIGHT_UNIFORM + 2,
+            GLASS_SPECULAR_HIGHLIGHT_UNIFORM,
+        ],
+        inactive: |u| {
+            (slot(u, GLASS_CONTOUR_HIGHLIGHT_UNIFORM) <= 0.0
+                || slot(u, GLASS_CONTOUR_HIGHLIGHT_UNIFORM + 2) <= 0.0)
+                && slot(u, GLASS_SPECULAR_HIGHLIGHT_UNIFORM) <= 0.0
+        },
+    },
+    LiquidGlassSpecialization {
         flag: "GLASS_ZOOM_OFF",
         slots: &[GLASS_OPTICAL_ZOOM_UNIFORM],
         inactive: |u| slot(u, GLASS_OPTICAL_ZOOM_UNIFORM) <= 1.0,
@@ -204,6 +227,17 @@ pub const LIQUID_GLASS_SPECIALIZATIONS: &[LiquidGlassSpecialization] = &[
         slots: &[],
         inactive: |_| true,
     },
+    LiquidGlassSpecialization {
+        flag: "GLASS_TINT_TRANSMISSION_OFF",
+        slots: &[
+            GLASS_TINT_TRANSMISSION_UNIFORM + 1,
+            GLASS_TINT_CROSSFADE_UNIFORM,
+        ],
+        inactive: |u| {
+            slot(u, GLASS_TINT_TRANSMISSION_UNIFORM + 1) <= 0.5
+                && slot(u, GLASS_TINT_CROSSFADE_UNIFORM) <= 0.0
+        },
+    },
 ];
 
 /// The inset shadow's presence, the last of its eight slots.
@@ -242,8 +276,10 @@ static GLASS_MATERIAL_FOLDS: AtomicBool = AtomicBool::new(cfg!(target_os = "andr
 /// `override` and the draw is split into interior and rim. Byte-exact: a
 /// raised flag substitutes the value the uniform already holds, and the
 /// interior guard skips only terms whose weight is zero. With folds off the
-/// shader carries no flags and draws whole, from the one pipeline every
-/// material shares. Either way an adaptive frost declares the blurred
+/// shader skips zero-weight interior work but draws whole. Layered surfaces
+/// also fold inactive material features. Projection, partial activity, rim
+/// strength and shadows stay dynamic. Other materials share one program.
+/// Either way an adaptive frost declares the blurred
 /// substrate its neighbourhood reads whatever the activity: the declaration
 /// also sets the member's capture geometry, so a resting material keeps it
 /// although its shader returns before the read. A content mask (uniform 112)
@@ -251,6 +287,30 @@ static GLASS_MATERIAL_FOLDS: AtomicBool = AtomicBool::new(cfg!(target_os = "andr
 /// leaves a transparent source transparent.
 pub fn specialize_liquid_glass(shader: &mut RuntimeShader) {
     specialize_liquid_glass_with_folds(shader, glass_material_folds_enabled());
+}
+
+fn specialization_flags(uniforms: &[f32], folds: bool) -> u32 {
+    let layered = slot(uniforms, GLASS_REFRACTION_MODE_UNIFORM) > 2.5;
+    if !folds && !layered {
+        return 0;
+    }
+    LIQUID_GLASS_SPECIALIZATIONS
+        .iter()
+        .enumerate()
+        .filter(|(_, specialization)| {
+            folds
+                || !matches!(
+                    specialization.flag,
+                    "GLASS_PROJECTION_OFF"
+                        | "GLASS_PARTIAL_ACTIVITY_OFF"
+                        | "GLASS_RIM_STYLE_OFF"
+                        | "GLASS_SHADOW_OFF"
+                        | "GLASS_RING_SHADOW_OFF"
+                )
+        })
+        .fold(0, |flags, (index, specialization)| {
+            flags | (u32::from((specialization.inactive)(uniforms)) << index)
+        })
 }
 
 /// [`specialize_liquid_glass`] with folding decided by the caller rather
@@ -273,22 +333,16 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
             const { RefCell::new(ShaderSpecializationCache::new()) };
     }
     let uniforms = shader.uniforms();
-    let flags = if folds {
-        LIQUID_GLASS_SPECIALIZATIONS
-            .iter()
-            .enumerate()
-            .fold(0, |flags, (index, specialization)| {
-                flags | (u32::from((specialization.inactive)(uniforms)) << index)
-            })
-    } else {
-        0
-    };
-    let substrate_radius = (slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0).then(|| {
-        (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
+    let flags = specialization_flags(uniforms, folds);
+    let content_mask = slot(uniforms, 112) > 0.5;
+    let substrate_radius = (!content_mask && slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0)
+        .then(|| {
+            (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
+                * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
             .to_bits()
-    });
-    let mean_tone = slot(uniforms, GLASS_ADAPTIVE_TONE_UNIFORM) > 0.5;
-    let pane_radius = (slot(uniforms, GLASS_PANE_BLEND_UNIFORM) > 0.0)
+        });
+    let mean_tone = !content_mask && slot(uniforms, GLASS_ADAPTIVE_TONE_UNIFORM) > 0.5;
+    let pane_radius = (!content_mask && slot(uniforms, GLASS_PANE_BLEND_UNIFORM) > 0.0)
         .then(|| slot(uniforms, GLASS_PANE_BLEND_UNIFORM).to_bits());
     let projection = [
         slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM),
@@ -296,9 +350,10 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
     ];
     let projected = projection.iter().all(|v| *v > 0.0) && projection != [1.0, 1.0];
     let stage = slot(uniforms, GLASS_OPTICAL_STAGE_UNIFORM) as u8;
-    let backdrop_radius = (stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
-        .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
-    shader.set_preserves_transparency(slot(uniforms, 112) > 0.5);
+    let backdrop_radius =
+        (!content_mask && stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
+            .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
+    shader.set_preserves_transparency(content_mask);
     CACHE.with_borrow_mut(|cache| {
         cache.apply(
             shader,
@@ -320,6 +375,7 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
                         shader.clear_override(specialization.flag);
                     }
                 }
+                shader.set_override("GLASS_INTERIOR_GUARD", 1.0);
                 shader.set_draw_split((folds && !projected).then_some(GLASS_RIM_DRAW_OVERRIDE));
                 if folds {
                     shader.set_override(GLASS_OPTICAL_STAGE_OVERRIDE, f64::from(stage));
@@ -327,29 +383,33 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
                     shader.clear_override(GLASS_OPTICAL_STAGE_OVERRIDE);
                 }
                 shader.set_specialization_exact(true);
-                let substrate = radius.map(|radius| SubstrateSpec::Blur {
-                    radius_px: f32::from_bits(radius),
-                });
-                let mut substrates = arrayvec::ArrayVec::<SubstrateSpec, 3>::new();
-                substrates.extend(substrate);
-                if mean_tone {
-                    substrates.push(SubstrateSpec::Mean);
-                }
-                if let Some(radius) = pane_radius {
-                    substrates.push(SubstrateSpec::Blur {
-                        radius_px: f32::from_bits(radius),
-                    });
-                }
-                if matches!(stage, 1 | 2) {
-                    substrates.clear();
-                    if let Some(radius) = backdrop_radius {
-                        substrates.push(SubstrateSpec::Blur { radius_px: f32::from_bits(radius) });
-                    }
-                }
-                shader.set_substrates(&substrates);
+                shader.set_substrates(&glass_substrates(radius, mean_tone, pane_radius, stage, backdrop_radius));
             },
         );
     });
+}
+
+fn glass_substrates(
+    radius: Option<u32>,
+    mean_tone: bool,
+    pane_radius: Option<u32>,
+    stage: u8,
+    backdrop_radius: Option<u32>,
+) -> arrayvec::ArrayVec<SubstrateSpec, 3> {
+    let blur = |radius| SubstrateSpec::Blur {
+        radius_px: f32::from_bits(radius),
+    };
+    let mut substrates = arrayvec::ArrayVec::new();
+    if matches!(stage, 1 | 2) {
+        substrates.extend(backdrop_radius.map(blur));
+    } else {
+        substrates.extend(radius.map(blur));
+        if mean_tone {
+            substrates.push(SubstrateSpec::Mean);
+        }
+        substrates.extend(pane_radius.map(blur));
+    }
+    substrates
 }
 
 /// The `override NAME: i32` of `liquid_glass.wgsl` the renderer sets to
@@ -377,7 +437,7 @@ pub const GLASS_ADAPTIVE_NEIGHBOURHOOD_DP: f32 = 16.0;
 /// outer warp, inner warp, and chromatic lighting in three successive images.
 /// Content masks and other refraction modes use one image.
 pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
-    if slot(shader.uniforms(), GLASS_REFRACTION_MODE_UNIFORM) >= 1.5
+    if (1.5..2.5).contains(&slot(shader.uniforms(), GLASS_REFRACTION_MODE_UNIFORM))
         && slot(shader.uniforms(), 112) <= 0.5
         && slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM) == 0.0
     {
@@ -397,6 +457,7 @@ pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
 }
 
 fn glass_shader_effect(mut shader: RuntimeShader) -> RenderEffect {
+    shader.set_position_independent(true);
     specialize_liquid_glass(&mut shader);
     if matches!(
         slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM),
@@ -486,6 +547,29 @@ pub const GLASS_BACKDROP_BLUR_UNIFORM: usize = 172;
 /// Enables foreground insertion between the inner warp and chromatic pass. The inner
 /// warp applies the face's tone before content; the final pass disperses and lights it.
 pub const GLASS_FOREGROUND_CONTENT_UNIFORM: usize = 174;
+/// Resting edge sharpness: zero keeps the eight-dp fade, one uses pixel antialiasing.
+pub const GLASS_RESTING_EDGE_SHARPNESS_UNIFORM: usize = 175;
+/// Five fixed face-transfer slots: black, white, saturation, maximum luminance and presence.
+pub const GLASS_FACE_TONE_UNIFORM: usize = 176;
+/// Inward amplitude and falloff depth in dp for a fused layered-surface projection.
+pub const GLASS_LAYERED_RETURN_UNIFORM: usize = 181;
+/// Minimum tinted transmission luminance followed by a presence flag.
+pub const GLASS_TINT_TRANSMISSION_UNIFORM: usize = 202;
+
+/// Tint crossfade: zero disables it, otherwise one plus the interpolation fraction.
+/// The next four uniforms hold the plain source tint's RGBA components.
+pub const GLASS_TINT_CROSSFADE_UNIFORM: usize = 215;
+/// Selects white contact illumination in place of the standard touch glow.
+pub const GLASS_CONTACT_LIGHT_UNIFORM: usize = 204;
+/// Ten slots for specular height, angle, spread, curvature, diffuse amount, height, spread,
+/// reflected chroma gain, luminance gain and color bias.
+pub const GLASS_SPECULAR_HIGHLIGHT_UNIFORM: usize = 205;
+/// RGB of the surface shadow; its alpha is stored in the shadow strength slot.
+pub const GLASS_SHADOW_COLOR_UNIFORM: usize = 183;
+/// RGBA, Gaussian radius, vertical offset, stroke width, presence and spread of a ring shadow.
+pub const GLASS_RING_SHADOW_UNIFORM: usize = 187;
+/// Height, offset, amount, color bias, angle and angular spread of contour reflection.
+pub const GLASS_CONTOUR_HIGHLIGHT_UNIFORM: usize = 196;
 
 /// Uniform slot selecting the rim style: 0 is the regular surface rim, 1
 /// the lens rim whose meniscus reflects, transmits with loss and carries

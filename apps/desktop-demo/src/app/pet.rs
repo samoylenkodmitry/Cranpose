@@ -165,6 +165,7 @@ struct PetParams {
 
 fn pet_effect(p: &PetParams) -> RenderEffect {
     let mut shader = RuntimeShader::from_shared_source(pet_wgsl());
+    shader.set_position_independent(true);
     shader.set_float2(0, PET_WIDTH, PET_HEIGHT);
     shader.set_float(2, p.time);
     shader.set_float(3, p.squash);

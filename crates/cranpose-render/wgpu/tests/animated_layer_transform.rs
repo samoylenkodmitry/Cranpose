@@ -135,14 +135,6 @@ fn spread_harness(
     }
 }
 
-fn fresh_harness(scale_spread: f32) -> TileHarness {
-    TileHarness::new(
-        support::headless_renderer_beside_locked().expect("reference renderer"),
-        false,
-        scale_spread,
-    )
-}
-
 fn second_period_stats(harness: &mut TileHarness) -> Vec<RenderStatsSnapshot> {
     for frame in 0..SCALE_PERIOD_FRAMES {
         harness.frame(frame_seconds(frame));
@@ -205,7 +197,7 @@ fn an_animated_opaque_layer_transform_redraws_almost_no_surface_and_bounds_the_c
 }
 
 #[test]
-fn a_layer_that_stops_scaling_draws_what_a_fresh_renderer_draws() {
+fn a_layer_that_pauses_scaling_keeps_the_same_picture() {
     let Some((_lock, mut animated)) = harness(false) else {
         return;
     };
@@ -220,42 +212,27 @@ fn a_layer_that_stops_scaling_draws_what_a_fresh_renderer_draws() {
         support::pipelines_settled(&stats),
         "the still frame drew with stand-in pipelines: {stats:?}"
     );
-    assert!(
-        stats.isolated_layer_renders >= TILES,
-        "the first frame a scale holds redraws every tile at its exact scale: {stats:?}"
+    assert_eq!(
+        stats.isolated_layer_renders, 0,
+        "holding the transform must reuse the content already drawn: {stats:?}"
     );
-    let expected = fresh_harness(SCALE_SPREAD).settled_frame(held);
-    support::assert_same_bytes("still frame", FRAME_WIDTH, &expected.pixels, &still.pixels);
-    assert_ne!(
-        moving.pixels, still.pixels,
-        "the moving frame must differ from the still one, or the still frame proves nothing"
-    );
+    support::assert_same_bytes("paused frame", FRAME_WIDTH, &moving.pixels, &still.pixels);
 }
 
-/// Tiles scaling in step all grow over the measured frames, so each draws at
-/// its scale's step whatever came before; a shrinking tile holds the raster
-/// its motion chose earlier, which two frames of motion cannot reproduce.
 #[test]
-fn a_growing_animated_frame_draws_what_a_fresh_renderer_given_the_same_motion_draws() {
-    let Some((_lock, mut animated)) = spread_harness(false, 0.0) else {
+fn scale_animation_pixels_do_not_depend_on_repeated_input_frames() {
+    let Some((_lock, mut animated)) = harness(false) else {
         return;
     };
-    for frame in 0..WARMUP_FRAMES {
-        animated.frame(frame_seconds(frame));
-    }
+    animated.settled_frame(0.0);
     support::wait_for_background_compiler_idle();
-    for frame in WARMUP_FRAMES..WARMUP_FRAMES + MEASURED_FRAMES {
+    for frame in 1..SCALE_PERIOD_FRAMES {
         let (stats, actual) = animated.frame(frame_seconds(frame));
-        if frame % 4 != 3 {
-            continue;
-        }
         assert!(
             support::pipelines_settled(&stats),
             "frame {frame} drew with stand-in pipelines: {stats:?}"
         );
-        let mut fresh = fresh_harness(0.0);
-        fresh.settled_frame(frame_seconds(frame - 1));
-        let (fresh_stats, expected) = fresh.frame(frame_seconds(frame));
+        let (fresh_stats, expected) = animated.frame(frame_seconds(frame));
         assert!(
             support::pipelines_settled(&fresh_stats),
             "the reference frame {frame} drew with stand-in pipelines: {fresh_stats:?}"

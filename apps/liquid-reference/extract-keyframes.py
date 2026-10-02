@@ -174,12 +174,25 @@ def _frame_index(frame_times, time, duration):
     return bisect.bisect_right(frame_times, time) - 1
 
 
-def _extract(bundle, output, suite, traces):
+def _crop_filter(viewport):
+    width, height = viewport["width"], viewport["height"]
+    crop = viewport.get("crop", [0, height - 120, width, 120])
+    if (not isinstance(crop, list) or len(crop) != 4
+            or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in crop)):
+        raise ValueError("capture crop needs four finite coordinates")
+    x, y, w, h = crop
+    if min(x, y) < 0 or min(w, h) <= 0 or x + w > width or y + h > height:
+        raise ValueError("capture crop must fit the viewport")
+    return f"crop=iw*{w}/{width}:ih*{h}/{height}:iw*{x}/{width}:ih*{y}/{height}"
+
+
+def _extract(bundle, output, suite, traces, test="testInteractionKeyframes()"):
     output.mkdir(parents=True, exist_ok=False)
+    test_id = f"{suite}/{test}"
     _run("xcrun", "xcresulttool", "export", "attachments", "--path", str(bundle),
-         "--output-path", str(output / "attachments"))
+         "--test-id", test_id, "--output-path", str(output / "attachments"))
     activities = json.loads(_run("xcrun", "xcresulttool", "get", "test-results", "activities",
-                                "--path", str(bundle), "--test-id", f"{suite}/testInteractionKeyframes()"))
+                                "--path", str(bundle), "--test-id", test_id))
     (output / "activities.json").write_text(json.dumps(activities, indent=2) + "\n")
     runs = activities["testRuns"]
     if len(runs) != 1:
@@ -245,7 +258,7 @@ def _extract(bundle, output, suite, traces):
     directory = output / "frames"
     directory.mkdir(exist_ok=False)
     _run("ffmpeg", "-v", "error", "-i", str(movie), "-vf",
-         f"crop=iw:ih*120/{viewport['height']}:0:ih-oh,setpts=N/(60*TB)",
+         _crop_filter(viewport) + ",setpts=N/(60*TB)",
          "-fps_mode", "passthrough", "-enc_time_base", "1/60000", "-start_number", "0", str(directory / "%06d.png"))
     files = sorted(directory.glob("*.png"))
     if len(files) != len(frame_times):
@@ -283,6 +296,7 @@ if __name__ == "__main__":
     parser.add_argument("bundle", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--suite", default="TabBarTests")
+    parser.add_argument("--test", default="testInteractionKeyframes()")
     parser.add_argument("--traces", type=Path, required=True)
     args = parser.parse_args()
-    _extract(args.bundle, args.output, args.suite, args.traces)
+    _extract(args.bundle, args.output, args.suite, args.traces, args.test)

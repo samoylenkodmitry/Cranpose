@@ -10,6 +10,16 @@ spec.loader.exec_module(extract)
 
 
 class KeyframeTests(unittest.TestCase):
+    def test_control_crop_preserves_viewport_coordinates(self):
+        viewport = {"width": 402, "height": 874}
+        self.assertEqual(extract._crop_filter(viewport), "crop=iw*402/402:ih*120/874:iw*0/402:ih*754/874")
+        self.assertEqual(extract._crop_filter(dict(viewport, crop=[0, 351, 402, 200])),
+                         "crop=iw*402/402:ih*200/874:iw*0/402:ih*351/874")
+        for crop in [[0, 0, 0, 10], [-1, 0, 402, 200], [0, 351, 402, 600],
+                     [0, 0, float("nan"), 10], [0, 0, 1], "full"]:
+            with self.assertRaises(ValueError):
+                extract._crop_filter(dict(viewport, crop=crop))
+
     def test_both_platforms_use_delivery_time_without_losing_native_event_time(self):
         native = [{"timestamp": 10, "wallMillis": 1000, "receivedWallMillis": 1017}]
         delivered = extract._delivery_samples(native)

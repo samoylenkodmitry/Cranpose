@@ -15,7 +15,8 @@ fn shader() -> RuntimeShader {
     SHADER
         .get_or_init(|| {
             RuntimeShader::new(&format!(
-                "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}",
+                "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}\n{}",
+                cranpose_ui_graphics::LIQUID_GLASS_GEOMETRY_WGSL,
                 include_str!("tab_lighting.wgsl")
             ))
         })

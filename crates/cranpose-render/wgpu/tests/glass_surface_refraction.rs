@@ -81,7 +81,7 @@ fn adaptive_key_fill_matches_native_light_and_dark_color_matrices() {
         .skip(1)
         .map(|line| {
             line.split(',')
-                .map(|value| value.parse::<f32>().unwrap())
+                .map(|value| value.parse::<f32>().expect("native tone sample"))
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();

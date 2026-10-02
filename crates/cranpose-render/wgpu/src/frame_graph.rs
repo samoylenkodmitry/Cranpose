@@ -628,12 +628,12 @@ impl WgpuFrameGraphExecutor {
         };
         let _ = device.poll(wgpu::PollType::Poll);
         timer.harvest_completed();
-        if let Some(resolve) = timer.frame_resolve() {
+        if timer.has_completed_queries() {
             let mut encoder =
                 Self::create_command_encoder(device, Some("Pass Timing Resolve Encoder"));
-            resolve.encode(&mut encoder);
+            timer.resolve_completed_queries(&mut encoder);
             Self::submit(queue, encoder);
-            resolve.arm_readback();
+            timer.map_resolved_queries();
         }
         timer.finish_frame();
     }
@@ -791,7 +791,8 @@ impl WgpuFrameGraphExecutor {
         if fence_profile::enabled() {
             fence_profile::end_frame(device, queue, &mut encoder);
         }
-        let (submission, upload_writes) = Self::submit_with_timing(queue, encoder);
+        let (submission, upload_writes) =
+            Self::submit_frame(queue, encoder, self.pass_timer.as_ref());
         self.upload_allocators.buffers.recall();
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
@@ -887,6 +888,18 @@ impl WgpuFrameGraphExecutor {
             );
         }
         (submission, upload_writes)
+    }
+
+    fn submit_frame(
+        queue: &wgpu::Queue,
+        encoder: wgpu::CommandEncoder,
+        pass_timer: Option<&PassTimer>,
+    ) -> (wgpu::SubmissionIndex, u32) {
+        let submitted = Self::submit_with_timing(queue, encoder);
+        if let Some(timer) = pass_timer {
+            timer.frame_submitted(queue);
+        }
+        submitted
     }
 }
 
@@ -1202,7 +1215,8 @@ impl WgpuFrameEncoder<'_> {
         let mut transient_releases = self.transient_releases;
         self.uploads.buffers.finish();
         let uploads = self.uploads.finish_frame();
-        let (submission, upload_writes) = WgpuFrameGraphExecutor::submit(self.queue, self.encoder);
+        let (submission, upload_writes) =
+            WgpuFrameGraphExecutor::submit_frame(self.queue, self.encoder, self.pass_timer);
         self.uploads.buffers.recall();
         transient_releases.release_pending();
         let retained_texture_bytes = transient_releases.retained_texture_bytes();

@@ -1,0 +1,177 @@
+{
+  "clock": "CADisplayLink timestamp relative to application-delivered pointer-up; no registration or discarded release samples.",
+  "sources": [
+    {
+      "capture": "liquid-motion28-velocity-native",
+      "environment": {
+        "architecture": "arm64",
+        "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+        "deviceName": "Cranpose Liquid Motion iOS27",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "24A434",
+        "osVersion": "27.0",
+        "platform": "iOS Simulator"
+      },
+      "initial": 0.7300000190734863,
+      "final": 0.8615332841873169,
+      "calculated_velocity": 398.58573099921284,
+      "measured_pan_velocity": 398.58573099921284,
+      "source_velocity": 398.58573099921284,
+      "predicted_final": 0.8615333103032266,
+      "spring_fit": {
+        "frequency_initial_velocity_delay": [
+          15.707974729361391,
+          1.3286173929914051,
+          0.017764944111886553
+        ],
+        "value_rms": 1.74045245746231e-08
+      },
+      "input_sha256": {
+        "timeline.json": "2d54c86beef271eb2f1ebdcfb2d7a45993d8930dcd65ab2d3b89d9c53fc68a62",
+        "native-1790835428039-touches.json": "76e12ae4f7459b94ef7d55d37960074f8f91bf906763873dfa6347fe7a650246",
+        "native-1790835428039-layers.json": "829d139be74e3bcd8aaeac36b04a6c08bd4f92250c81d22bf78eb9c93aed4e35"
+      }
+    },
+    {
+      "capture": "liquid-motion28-medium-native",
+      "environment": {
+        "architecture": "arm64",
+        "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+        "deviceName": "Cranpose Liquid Motion iOS27",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "24A434",
+        "osVersion": "27.0",
+        "platform": "iOS Simulator"
+      },
+      "initial": 0.7300000190734863,
+      "final": 0.7814800143241882,
+      "calculated_velocity": 155.9999987930046,
+      "measured_pan_velocity": null,
+      "source_velocity": 155.9999987930046,
+      "predicted_final": 0.7814800186751778,
+      "spring_fit": {
+        "frequency_initial_velocity_delay": [
+          15.283915147914634,
+          0.5540920872994763,
+          0.01536597864795531
+        ],
+        "value_rms": 0.0001902799148961734
+      },
+      "input_sha256": {
+        "timeline.json": "a586757d6e5e841e6bfbbb44be174d22c207db5b5383e2ae6c1cb7ade274aff9",
+        "native-1790835223847-touches.json": "05bd8fd6e9f3c76d64bf626c5f5ed11010b548d3fed29fe15d318e2bc7347a85",
+        "native-1790835223847-layers.json": "0e9848485f4c92d25a49fbb13f23fbcb056317242370b4ea7465a7888aeeb8d1"
+      }
+    },
+    {
+      "capture": "liquid-motion28-gentle-native",
+      "environment": {
+        "architecture": "arm64",
+        "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+        "deviceName": "Cranpose Liquid Motion iOS27",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "24A434",
+        "osVersion": "27.0",
+        "platform": "iOS Simulator"
+      },
+      "initial": 0.7300000190734863,
+      "final": 0.7669600248336792,
+      "calculated_velocity": 112.00000019371555,
+      "measured_pan_velocity": null,
+      "source_velocity": 112.00000019371555,
+      "predicted_final": 0.7669600191374124,
+      "spring_fit": {
+        "frequency_initial_velocity_delay": [
+          15.26137879838921,
+          0.40104729577369796,
+          0.015230955881873412
+        ],
+        "value_rms": 0.00017006224246210265
+      },
+      "input_sha256": {
+        "timeline.json": "8efab670795b97c86399a0c6a089ffbf70ea287f6466b56f100ae0fe843a4d10",
+        "native-1790835335622-touches.json": "fbd769a3788a76889972e8f87443931b92e79fbedb4fa68f3c83729774bd3150",
+        "native-1790835335622-layers.json": "00c18d68807948f0b442543a33ce25d9cec17e04f60f7552340d033aa4d72e58"
+      }
+    },
+    {
+      "capture": "liquid-motion28-slow-velocity-native",
+      "environment": {
+        "architecture": "arm64",
+        "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+        "deviceName": "Cranpose Liquid Motion iOS27",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "24A434",
+        "osVersion": "27.0",
+        "platform": "iOS Simulator"
+      },
+      "initial": 0.7300000190734863,
+      "final": 0.7300000190734863,
+      "calculated_velocity": 75.99997027598533,
+      "measured_pan_velocity": 75.99997027598533,
+      "source_velocity": 75.99997027598533,
+      "predicted_final": 0.7300000190734863,
+      "spring_fit": null,
+      "input_sha256": {
+        "timeline.json": "eee1df1d70a196b0c01570a73ac8470f250573d225c25a1d1941982d1d9ee748",
+        "native-1790835572024-touches.json": "a5efeb4df9131815314a0ad5983b4f34863daa4b6c2d041aa542eeac3d41f9fe",
+        "native-1790835572024-layers.json": "19b2f9ed6b419396b91c60e996e999b8140a3d2dd315b0e27cf825dc0439084d"
+      }
+    },
+    {
+      "capture": "liquid-motion28-threshold-native",
+      "environment": {
+        "architecture": "arm64",
+        "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+        "deviceName": "Cranpose Liquid Motion iOS27",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "24A434",
+        "osVersion": "27.0",
+        "platform": "iOS Simulator"
+      },
+      "initial": 0.7300000190734863,
+      "final": 0.7300000190734863,
+      "calculated_velocity": 80.00000029802277,
+      "measured_pan_velocity": 80.00000029802277,
+      "source_velocity": 80.00000029802277,
+      "predicted_final": 0.7300000190734863,
+      "spring_fit": null,
+      "input_sha256": {
+        "timeline.json": "319a70cf07bac7dd57588f61847f654806ccb52cf6470d7e0f3d0f81bb7d15c8",
+        "native-1790835802176-touches.json": "c8a18dd34af8954a1b7a1cb08e6ccf4b5ed8f86f37be4f10b062fea860783a64",
+        "native-1790835802176-layers.json": "eeb3f679bffdf0d7f91c021b2ffd200fbfc17a3ac0e502e28142a4faadc01973"
+      }
+    },
+    {
+      "capture": "native-slider-holdout24",
+      "environment": {
+        "architecture": "arm64",
+        "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+        "deviceName": "Cranpose Liquid Motion iOS27",
+        "modelName": "iPhone 17 Pro",
+        "osBuildNumber": "24A434",
+        "osVersion": "27.0",
+        "platform": "iOS Simulator"
+      },
+      "initial": 0.5333333611488342,
+      "final": 0.4699733257293701,
+      "calculated_velocity": -191.99999848008193,
+      "measured_pan_velocity": null,
+      "source_velocity": -191.99999848008193,
+      "predicted_final": 0.4699733616504072,
+      "spring_fit": {
+        "frequency_initial_velocity_delay": [
+          15.784812394623048,
+          -0.6360917813204024,
+          0.02037657002810248
+        ],
+        "value_rms": 0.00011250763300906727
+      },
+      "input_sha256": {
+        "timeline.json": "ae5063523689dc6ab9f859f577422a043ae9388ee5b50815506dfab968031c2f",
+        "native-1790822345577-touches.json": "8b71ecbe208affbef2722b16a35fa9e4291d4626cadd443390d1fbd2f26ee66d",
+        "native-1790822345577-layers.json": "21c722f5ea4d6a3f6569bb6274e83a971279c3f871079b4f9677c9d3356c3c47"
+      }
+    }
+  ]
+}

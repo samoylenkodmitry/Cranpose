@@ -1,12 +1,3 @@
-fn blurred_disk(distance: f32, radius: f32) -> f32 {
-    let z = 0.5 * pow(distance / radius, 2.0);
-    let p = 0.3934693403 + z * (0.09020401043 + z * (0.007193838983
-        + z * (0.0002919370927 + z * (0.000007171484581 + z * (0.0000001180411444
-        + z * (1.392193893e-9 + z * (1.234065648e-11 + z * (8.520561128e-14
-        + z * (4.711392277e-16 + z * (2.133168193e-18 + z * 8.053494527e-21))))))))));
-    return exp(-z) * p;
-}
-
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let source = textureSample(input_texture, input_sampler, input.uv);

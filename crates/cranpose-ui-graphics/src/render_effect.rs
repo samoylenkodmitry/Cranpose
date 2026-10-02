@@ -129,6 +129,7 @@ pub struct RuntimeShader {
     input_padding: f32,
     output_padding: f32,
     batched_source: bool,
+    position_independent: bool,
     preserves_transparency: bool,
     domains: Option<Box<ShaderDomains>>,
 }
@@ -399,6 +400,7 @@ impl RuntimeShader {
             input_padding: 0.0,
             output_padding: 0.0,
             batched_source: false,
+            position_independent: false,
             preserves_transparency: false,
             domains: None,
         }
@@ -638,6 +640,20 @@ impl RuntimeShader {
         self.batched_source
     }
 
+    /// Declares that fragment output is independent of `@builtin(position)`.
+    /// The renderer may then apply a layer's effect directly in its parent's
+    /// pass when the source and destination raster grids match. UVs and the
+    /// source metadata keep their meaning; fragment positions belong to the
+    /// render target and can change when a pass is removed.
+    pub fn set_position_independent(&mut self, independent: bool) {
+        self.position_independent = independent;
+    }
+
+    /// Whether the shader's output is independent of fragment positions.
+    pub fn position_independent(&self) -> bool {
+        self.position_independent
+    }
+
     /// Declares that the shader returns zero wherever every texel it reads
     /// is zero. A layer that draws nothing under such a shader composites
     /// nothing, so the renderer leaves the page as it is instead of shading
@@ -797,6 +813,7 @@ impl PartialEq for RuntimeShader {
             && self.input_padding.to_bits() == other.input_padding.to_bits()
             && self.output_padding.to_bits() == other.output_padding.to_bits()
             && self.batched_source == other.batched_source
+            && self.position_independent == other.position_independent
             && self.preserves_transparency == other.preserves_transparency
             && self.substrates() == other.substrates()
             && self.draw_split() == other.draw_split()

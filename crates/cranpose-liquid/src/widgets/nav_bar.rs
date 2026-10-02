@@ -97,7 +97,12 @@ pub fn LiquidNavBar(
                     cranpose_ui_layout::VerticalAlignment::CenterVertically,
                 )),
                 move || {
-                    Text(large_title.clone(), Modifier::empty(), style.clone());
+                    let modifier = if progress < 0.5 {
+                        Modifier::empty()
+                    } else {
+                        Modifier::empty().hide_from_accessibility()
+                    };
+                    Text(large_title.clone(), modifier, style.clone());
                 },
             );
         }
@@ -149,7 +154,12 @@ pub fn LiquidNavBar(
                     Modifier::empty().weight(1.0),
                     BoxSpec::default().content_alignment(Alignment::CENTER),
                     move || {
-                        Text(inline_title.clone(), Modifier::empty(), style.clone());
+                        let modifier = if progress >= 0.5 {
+                            Modifier::empty()
+                        } else {
+                            Modifier::empty().hide_from_accessibility()
+                        };
+                        Text(inline_title.clone(), modifier, style.clone());
                     },
                 );
                 (trailing.borrow_mut())();

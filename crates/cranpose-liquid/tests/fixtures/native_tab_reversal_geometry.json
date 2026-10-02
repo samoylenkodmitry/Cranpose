@@ -1,0 +1,22 @@
+{
+  "environment": {
+    "architecture": "arm64",
+    "deviceId": "3395F38A-327C-4712-A4BB-D8D47D6908BB",
+    "deviceName": "Cranpose Liquid Motion iOS27",
+    "modelName": "iPhone 17 Pro",
+    "osBuildNumber": "24A434",
+    "osVersion": "27.0",
+    "platform": "iOS Simulator"
+  },
+  "sources": [
+    {
+      "touches": "native-1790795035397-touches.json",
+      "layers": "native-1790795035397-layers.json",
+      "frames": 313,
+      "touches_sha256": "22aef5357ca3868687cba60bfde17e4f7800d896334c259f764f623735fd27ce",
+      "layers_sha256": "ba3dd9348c06e18b84b08ea4bff287c72df920b065aaac17f480c821cf9ab604"
+    }
+  ],
+  "clock": "CADisplayLink timestamp and input delivery relative to the first delivered touch. No trajectory registration.",
+  "normalization": "Lens position and dimensions relative to enclosing 360 x 62 point bar. Recorded global input x is offset by the replay fixture's 72.333 point origin."
+}

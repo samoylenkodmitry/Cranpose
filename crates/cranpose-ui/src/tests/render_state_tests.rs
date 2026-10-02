@@ -9,7 +9,7 @@ fn a_draw_closure_can_name_its_own_node_for_the_next_frame() {
     let _ = take_draw_repass_nodes();
     let _ = take_render_invalidation();
 
-    observe_draw_reads(DrawObservationScope::new(33, 0), || {
+    observe_draw_reads(DrawObservationScope::new(33, 0, 0), || {
         request_current_draw_redraw();
     });
     assert_eq!(

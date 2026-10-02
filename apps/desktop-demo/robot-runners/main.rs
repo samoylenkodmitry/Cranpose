@@ -4,6 +4,8 @@ mod external_x11_frame_telemetry;
 mod glass_backdrop_scroll_helpers;
 mod hacker_news_robot_support;
 mod liquid_cheatsheets;
+#[path = "../src/test_screens/liquid_control_reference.rs"]
+mod liquid_control_reference;
 mod liquid_page;
 #[path = "../src/test_screens/liquid_tab_reference.rs"]
 mod liquid_tab_reference;
@@ -117,6 +119,8 @@ runners! {
     robot_liquid_backdrop_feedback,
     robot_liquid_bar_alignment,
     robot_liquid_bottom_bar_form_cheatsheet,
+    robot_liquid_control_refraction,
+    robot_liquid_floating_optics,
     robot_liquid_dropdown_accordion,
     robot_liquid_menu_expand_cheatsheet,
     robot_liquid_menu_open_cheatsheet,
@@ -129,6 +133,7 @@ runners! {
     robot_liquid_scroll_exact_external_contract,
     robot_liquid_segmented_cheatsheet,
     robot_liquid_segmented_glide_budget,
+    robot_liquid_slider_geometry,
     robot_liquid_tab_bar_pill_containment,
     robot_liquid_tab_content_anchor,
     robot_liquid_tab_flight_dark_scheme_ink_recolor,

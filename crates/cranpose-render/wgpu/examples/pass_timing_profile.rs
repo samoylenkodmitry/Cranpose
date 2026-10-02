@@ -232,10 +232,13 @@ fn main() {
     let report = shell.renderer().gpu_pass_timings();
     let stats = shell.renderer().last_frame_stats().expect("frame stats");
     println!(
-        "frames={} wall_fps={:.1} report_frames={}",
+        "frames={} cpu_submission_fps={:.1} report_frames={} invalid_frames={} dropped_frames={} dropped_passes={}",
         measured_frames,
         measured_frames as f64 / elapsed,
         report.frames,
+        report.invalid_frames,
+        report.dropped_frames,
+        report.dropped_passes,
     );
     println!(
         "counters: passes={} blur={} composite={} shadow_hit_px={:.2}MP layer_miss_px={:.2}MP",
@@ -245,7 +248,17 @@ fn main() {
         stats.shadow_shape_cache_hit_pixels as f64 / 1_000_000.0,
         stats.layer_cache_miss_pixels as f64 / 1_000_000.0,
     );
-    let frames = f64::from(report.frames.max(1));
+    if report.frames == 0
+        || report.invalid_frames > 0
+        || report.dropped_frames > 0
+        || report.dropped_passes > 0
+    {
+        eprintln!(
+            "No complete current GPU timing window; inspect the [GPU-PASS] windows and their coverage counters."
+        );
+        return;
+    }
+    let frames = f64::from(report.frames);
     let total_ms: f64 = report.entries.iter().map(|entry| entry.total_ms).sum();
     println!(
         "gpu_span={:.3}ms/frame occupancy={:.3}ms/frame",

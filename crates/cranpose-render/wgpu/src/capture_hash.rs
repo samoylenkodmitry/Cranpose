@@ -6,9 +6,10 @@ use cranpose_ui_graphics::{FxHasher, Point, Rect, RenderHash};
 use crate::{
     draw_pass::{ResolvedComposite, ResolvedCompositeKind, SourceContent},
     effect_renderer::{CompositeSampleMode, RoundedCompositeMask},
+    opaque_prefix::capture_solid_rect,
     render::{
-        hash_f32_for_cache, hash_run_item, hash_shadow_device_offset, hash_shadow_device_rect,
-        shadow_content_hash, shadow_draw_bounds,
+        hash_f32_for_cache, hash_run_item_with_clip, hash_shadow_device_offset,
+        hash_shadow_device_rect, shadow_content_hash, shadow_draw_bounds,
     },
     scene::{CompositorScene, DrawOp, DrawOpKind, ImageDraw, ShadowDraw, SnapAnchor, TextDraw},
 };
@@ -26,6 +27,18 @@ pub(crate) struct CaptureWindow {
 type DeviceTuple = (f32, f32, f32, f32);
 
 impl CaptureWindow {
+    fn clipped_logical(self, clip: Option<Rect>, scale: f32) -> Option<Rect> {
+        clip.map(|clip| {
+            let window = Rect {
+                x: self.x / scale,
+                y: self.y / scale,
+                width: self.width / scale,
+                height: self.height / scale,
+            };
+            clip.intersect(window).unwrap_or(clip)
+        })
+    }
+
     fn origin(self, scale: f32) -> Point {
         Point::new(self.x / scale, self.y / scale)
     }
@@ -65,27 +78,53 @@ pub(crate) fn hash_capture_ops<H: Hasher>(
     state: &mut H,
 ) {
     let origin = window.origin(scale);
+    let capture = Rect {
+        x: window.x,
+        y: window.y,
+        width: window.width,
+        height: window.height,
+    };
     for op in ops {
+        if let Some((color, rect, clip)) = capture_solid_rect(scene, op, capture, scale) {
+            4u8.hash(state);
+            for channel in color {
+                channel.to_bits().hash(state);
+            }
+            hash_device_tuple((rect.x, rect.y, rect.width, rect.height), window, state);
+            hash_optional_tuple(
+                clip.map(|rect| (rect.x, rect.y, rect.width, rect.height)),
+                window,
+                state,
+            );
+            continue;
+        }
         match op.kind {
             DrawOpKind::Run(index) => {
                 let run = &scene.runs[index];
                 if window.touches_logical(run.bounds, OP_MARGIN, scale) {
                     0u8.hash(state);
-                    hash_run_item(run, origin.x, origin.y, scale, state);
+                    hash_run_item_with_clip(
+                        run,
+                        window.clipped_logical(run.placement.clip, scale),
+                        origin.x,
+                        origin.y,
+                        scale,
+                        state,
+                    );
                 }
             }
             DrawOpKind::Image(index) => {
                 let image = &scene.images[index];
                 if window.touches_logical(image.rect, OP_MARGIN, scale) {
                     1u8.hash(state);
-                    hash_image(image, origin, scale, state);
+                    hash_image(image, window, scale, state);
                 }
             }
             DrawOpKind::Text(index) => {
                 let text = &scene.texts[index];
                 if window.touches_logical(text.rect, OP_MARGIN, scale) {
                     2u8.hash(state);
-                    hash_text(text, origin, scale, state);
+                    hash_text(text, window, scale, state);
                 }
             }
             DrawOpKind::Shadow(index) => {
@@ -95,7 +134,7 @@ pub(crate) fn hash_capture_ops<H: Hasher>(
                     .is_some_and(|bounds| window.touches_logical(bounds, margin, scale))
                 {
                     3u8.hash(state);
-                    hash_shadow(shadow, origin, scale, state);
+                    hash_shadow(shadow, window, scale, state);
                 }
             }
         }
@@ -134,7 +173,8 @@ fn hash_optional_render_hash<H: Hasher, T: RenderHash>(value: Option<&T>, state:
     }
 }
 
-fn hash_text<H: Hasher>(text: &TextDraw, origin: Point, scale: f32, state: &mut H) {
+fn hash_text<H: Hasher>(text: &TextDraw, window: CaptureWindow, scale: f32, state: &mut H) {
+    let origin = window.origin(scale);
     hash_shadow_device_rect(text.rect, origin.x, origin.y, scale, state);
     hash_anchor(text.snap_anchor, origin, scale, state);
     text.text.render_hash().hash(state);
@@ -143,10 +183,16 @@ fn hash_text<H: Hasher>(text: &TextDraw, origin: Point, scale: f32, state: &mut 
     hash_f32_for_cache(text.font_size, state);
     hash_f32_for_cache(text.scale, state);
     text.layout_options.hash(state);
-    hash_optional_rect(text.clip, origin, scale, state);
+    hash_optional_rect(
+        window.clipped_logical(text.clip, scale),
+        origin,
+        scale,
+        state,
+    );
 }
 
-fn hash_image<H: Hasher>(image: &ImageDraw, origin: Point, scale: f32, state: &mut H) {
+fn hash_image<H: Hasher>(image: &ImageDraw, window: CaptureWindow, scale: f32, state: &mut H) {
+    let origin = window.origin(scale);
     hash_shadow_device_rect(image.rect, origin.x, origin.y, scale, state);
     hash_shadow_device_rect(image.local_rect, origin.x, origin.y, scale, state);
     for point in image.quad {
@@ -158,13 +204,19 @@ fn hash_image<H: Hasher>(image: &ImageDraw, origin: Point, scale: f32, state: &m
     hash_f32_for_cache(image.alpha, state);
     hash_optional_render_hash(image.color_filter.as_ref(), state);
     image.sampling.hash(state);
-    hash_optional_rect(image.clip, origin, scale, state);
+    hash_optional_rect(
+        window.clipped_logical(image.clip, scale),
+        origin,
+        scale,
+        state,
+    );
     hash_optional_render_hash(image.src_rect.as_ref(), state);
     image.blend_mode.hash(state);
     image.motion_context_animated.hash(state);
 }
 
-fn hash_shadow<H: Hasher>(shadow: &ShadowDraw, origin: Point, scale: f32, state: &mut H) {
+fn hash_shadow<H: Hasher>(shadow: &ShadowDraw, window: CaptureWindow, scale: f32, state: &mut H) {
+    let origin = window.origin(scale);
     shadow_content_hash(shadow, scale).hash(state);
     hash_optional_rect(shadow_draw_bounds(shadow), origin, scale, state);
     if let Some(run) = &shadow.shapes {
@@ -173,10 +225,15 @@ fn hash_shadow<H: Hasher>(shadow: &ShadowDraw, origin: Point, scale: f32, state:
         hash_anchor(run.placement.snap_anchor, origin, scale, state);
     }
     for text in &shadow.texts {
-        hash_text(text, origin, scale, state);
+        hash_text(text, window, scale, state);
     }
     hash_f32_for_cache(shadow.blur_radius, state);
-    hash_optional_rect(shadow.clip, origin, scale, state);
+    hash_optional_rect(
+        window.clipped_logical(shadow.clip, scale),
+        origin,
+        scale,
+        state,
+    );
     hash_optional_rect(shadow.occluder, origin, scale, state);
     match shadow.rounded_clip {
         Some(clip) => {
@@ -244,13 +301,31 @@ const SOURCE_SPACE: CaptureWindow = CaptureWindow {
 /// Hashes every resolved composite that touches `window`: what its texture
 /// holds and where it lands relative to the window. Returns false when one
 /// of them is drawn anew every frame, so nothing reading it can be reused.
-pub(crate) fn hash_capture_composites<H: Hasher>(
-    composites: &[ResolvedComposite],
+pub(crate) fn hash_capture_composites<'a, H: Hasher>(
+    mut drawn: &'a [ResolvedComposite],
+    mut pending: &'a [ResolvedComposite],
     window: CaptureWindow,
     state: &mut H,
 ) -> bool {
-    for composite in composites {
-        if !window.touches_device(composite.dest) {
+    while !drawn.is_empty() || !pending.is_empty() {
+        let stream = if drawn.first().is_some_and(|first| {
+            pending
+                .first()
+                .is_none_or(|next| first.z_index <= next.z_index)
+        }) {
+            &mut drawn
+        } else {
+            &mut pending
+        };
+        let (composite, rest) = stream
+            .split_first()
+            .expect("one composite stream is nonempty");
+        *stream = rest;
+        if !window.touches_device(composite.dest)
+            || composite
+                .scissor
+                .is_some_and(|clip| !window.touches_device(clip))
+        {
             continue;
         }
         let SourceContent::Retained(content) = composite.content else {

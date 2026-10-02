@@ -5,11 +5,16 @@ import subprocess
 from pathlib import Path
 
 
+def _is_trace(name):
+    return name.endswith(("-touches.json", "-layers.json")) or (
+        name.startswith("control-optical-probe-") and name.endswith(".json"))
+
+
 def _device_trace_names(listing):
     names = []
     for item in listing["result"]["files"]:
         name = item["name"]
-        if not name.endswith(("-touches.json", "-layers.json")):
+        if not _is_trace(name):
             continue
         if Path(name).name != name or item["resources"]["isSymbolicLink"] or item["resources"]["isDirectory"]:
             raise ValueError("trace must be a regular file directly in the app's Documents directory")
@@ -35,7 +40,7 @@ def _collect(output, bundle, device, physical=False):
         _collect_device(output, bundle, device)
         return
     source = Path(subprocess.check_output(["xcrun", "simctl", "get_app_container", device, bundle, "data"], text=True).strip()) / "Documents"
-    files = list(source.glob("*-touches.json")) + list(source.glob("*-layers.json"))
+    files = [file for file in source.iterdir() if _is_trace(file.name)]
     if not files:
         raise ValueError("no input traces; record the interaction test first")
     output.mkdir(parents=True, exist_ok=False)

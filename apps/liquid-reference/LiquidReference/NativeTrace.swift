@@ -22,6 +22,11 @@ struct LayerSample: Codable {
     var bounds: [CGFloat]? = nil
     var scale: [CGFloat]? = nil
     var animations: [[String: String]]? = nil
+    var backgroundColor: [CGFloat]? = nil
+    var backgroundColorSpace: String? = nil
+    var sourceLayerPath: String? = nil
+    var opticalParameters: [String: Double]? = nil
+    var colorMatrixArchives: [String]? = nil
 }
 
 struct MotionSample: Codable {
@@ -29,6 +34,32 @@ struct MotionSample: Codable {
     let targetTimestamp: TimeInterval
     let phase: String
     let layers: [LayerSample]
+    var controlValue: Double? = nil
+    var gestures: [PanSample]? = nil
+}
+
+struct PanSample: Codable {
+    let kind: String
+    let state: Int
+    let translation: [Double]
+    let velocity: [Double]
+}
+
+@MainActor
+private func samplePans(in root: UIView) -> [PanSample] {
+    var samples: [PanSample] = []
+    func collect(_ view: UIView) {
+        for recognizer in view.gestureRecognizers ?? [] {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { continue }
+            let translation = pan.translation(in: root)
+            let velocity = pan.velocity(in: root)
+            samples.append(PanSample(kind: String(describing: type(of: pan)), state: pan.state.rawValue,
+                                     translation: [translation.x, translation.y], velocity: [velocity.x, velocity.y]))
+        }
+        for child in view.subviews { collect(child) }
+    }
+    collect(root)
+    return samples
 }
 
 struct TouchSample: Codable {
@@ -48,6 +79,8 @@ final class NativeTrace: NSObject {
     var speed = 0.0
     var frameCount = 0
     var error: String?
+    @ObservationIgnored var controlValue: Double?
+    @ObservationIgnored private let captureGestures = ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_GESTURES"] == "1"
     @ObservationIgnored private weak var window: UIWindow?
     @ObservationIgnored private var displayLink: CADisplayLink?
     @ObservationIgnored private var touches: [TouchSample] = []
@@ -63,8 +96,12 @@ final class NativeTrace: NSObject {
     @ObservationIgnored private var pendingContactFilters: [(Int, [Any])] = []
     @ObservationIgnored private var pendingContactEffects: [(Int, Any)] = []
     @ObservationIgnored private var contactFiltersSaved = false
+    @ObservationIgnored private var releaseFiltersSaved = false
     @ObservationIgnored private let contactFilterTime = ProcessInfo.processInfo.environment["REFERENCE_CONTACT_FILTER_TIME"].flatMap(Double.init)
     @ObservationIgnored private let settlingSeconds = ProcessInfo.processInfo.environment["REFERENCE_SETTLING_SECONDS"].flatMap(Double.init) ?? 0.8
+    @ObservationIgnored private let component = ProcessInfo.processInfo.environment["REFERENCE_COMPONENT"]
+    @ObservationIgnored private let captureAnimations = ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_ANIMATIONS"] == "1"
+    @ObservationIgnored private let captureColorMatrices = ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_COLOR_MATRICES"] == "1"
 
     func install(on window: UIWindow) {
         guard self.window !== window else { return }
@@ -77,6 +114,22 @@ final class NativeTrace: NSObject {
         link.add(to: .main, forMode: .common)
         link.isPaused = true
         displayLink = link
+        if ProcessInfo.processInfo.environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak window] in
+                guard let self, let window else { return }
+                self.began = CACurrentMediaTime()
+                do {
+                    try self.recordContactFilters(in: window, elapsed: 0)
+                    if let probe = ProcessInfo.processInfo.environment["REFERENCE_CONTROL_HIGHLIGHT"] {
+                        try self.exposeControlHighlight(probe, in: window)
+                    }
+                }
+                catch {
+                    self.error = String(describing: error)
+                    try? String(describing: error).write(to: URL.documentsDirectory.appending(path: "control-probe-error.txt"), atomically: true, encoding: .utf8)
+                }
+            }
+        }
     }
 
     func receive(_ touch: UITouch, phase: String) {
@@ -85,7 +138,7 @@ final class NativeTrace: NSObject {
         guard let window else { return }
         let point = touch.location(in: window)
         if phase == "Touch down" {
-            guard point.y > window.bounds.height - 120 else { return }
+            guard component != nil || point.y > window.bounds.height - 120 else { return }
             if ProcessInfo.processInfo.environment["REFERENCE_EXPORT_CONTENT"] == "1", let bar = findTabBar(in: window) {
                 do { try exportContent(bar) } catch { self.error = String(describing: error) }
             }
@@ -100,6 +153,8 @@ final class NativeTrace: NSObject {
             touches = []
             frames = []
             saved = false
+            contactFiltersSaved = false
+            releaseFiltersSaved = false
         }
         guard held else { return }
         if phase == "Sliding", let previous = touches.last {
@@ -127,12 +182,19 @@ final class NativeTrace: NSObject {
                 try recordContactFilters(in: window, elapsed: now - began)
                 contactFiltersSaved = true
             }
+            if captureAnimations, !held, !touches.isEmpty, !releaseFiltersSaved, now - released >= 0.07 {
+                try recordContactFilters(in: window, elapsed: now - began)
+                releaseFiltersSaved = true
+            }
             if held && optics.enabled && now - began > 1.5 && configuredProbe != optics.index {
                 try isolateOpticalLayer(in: window)
                 configuredProbe = optics.index
             }
             try optics.advance(now: now, viewport: window.bounds.size) { sampleTabBar(in: window) }
-        } catch { self.error = String(describing: error) }
+        } catch {
+            self.error = String(describing: error)
+            try? String(describing: error).write(to: URL.documentsDirectory.appending(path: "control-probe-error.txt"), atomically: true, encoding: .utf8)
+        }
         guard !touches.isEmpty, !saved else {
             if !optics.running { link.isPaused = true }
             return
@@ -145,7 +207,8 @@ final class NativeTrace: NSObject {
         if !optics.enabled {
             let layers = sampleTabBar(in: window)
             frames.append(MotionSample(timestamp: link.timestamp, targetTimestamp: link.targetTimestamp,
-                                       phase: phase, layers: layers))
+                                        phase: phase, layers: layers, controlValue: controlValue,
+                                        gestures: captureGestures ? samplePans(in: window) : nil))
             if frames.count.isMultiple(of: 12) { frameCount = frames.count }
         }
         if !held && now - released >= settlingSeconds {
@@ -331,6 +394,37 @@ final class NativeTrace: NSObject {
         window.layer.addSublayer(container)
     }
 
+    private func exposeControlHighlight(_ probe: String, in window: UIWindow) throws {
+        guard ["raw", "filtered", "disabled"].contains(probe) else { throw OpticalLayerError.unknownProbe(probe) }
+        var source = window.layer
+        for index in [0, 0, 0, 1, 0, 1, 2] {
+            guard let children = source.sublayers, children.indices.contains(index) else { throw OpticalLayerError.missingLayer("control highlight") }
+            source = children[index]
+        }
+        guard String(describing: type(of: source)) == "CASDFLayer" else { throw OpticalLayerError.missingLayer("control highlight SDF") }
+        guard let effect = source.value(forKey: "effect"),
+              String(describing: type(of: effect)) == "CASDFKeyFillHighlightEffect" else { throw OpticalLayerError.missingFilter("control highlight effect") }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        if probe == "disabled" {
+            source.opacity = 0
+        } else {
+            source.removeFromSuperlayer()
+            if probe == "raw" { source.filters = [] }
+            let container = CALayer()
+            container.name = "Control highlight probe"
+            container.frame = window.bounds
+            container.backgroundColor = ProcessInfo.processInfo.environment["REFERENCE_CONTROL_HIGHLIGHT_BACKGROUND"] == "blue"
+                ? UIColor(red: 0, green: 0.48, blue: 1, alpha: 1).cgColor : UIColor.black.cgColor
+            container.zPosition = 1000
+            source.position = CGPoint(x: container.bounds.midX + (source.anchorPoint.x - 0.5) * source.bounds.width,
+                                      y: container.bounds.midY + (source.anchorPoint.y - 0.5) * source.bounds.height)
+            container.addSublayer(source)
+            window.layer.addSublayer(container)
+        }
+    }
+
     private func exposeFilterKernel(_ pattern: OpticalPattern, in window: UIWindow) throws {
         let content = pattern.sourceLayer == "contentKernel"
         let index = content ? 1 : pattern.sourceLayer == "backgroundKernel" ? 0 : 2
@@ -434,6 +528,12 @@ final class NativeTrace: NSObject {
     }
 
     private func sampleTabBar(in window: UIWindow) -> [LayerSample] {
+        if component != nil {
+            let root = window.layer.presentation() ?? window.layer
+            var layers: [LayerSample] = []
+            sample(root, root: root, path: "Window", into: &layers)
+            return layers
+        }
         guard let bar = findTabBar(in: window) else { return [] }
         let visibleBar = bar.layer.presentation() ?? bar.layer
         var root = visibleBar
@@ -465,8 +565,144 @@ final class NativeTrace: NSObject {
         encoder.nonConformingFloatEncodingStrategy = .convertToString(positiveInfinity: "+Infinity", negativeInfinity: "-Infinity", nan: "NaN")
         let profile = ProcessInfo.processInfo.environment["REFERENCE_MATERIAL_PROFILE"].flatMap(Int.init)
         let tag = profile.map { "tint\($0)-" } ?? ""
-        let name = "native-contact-filters-\(tag)\(Int((contactFilterTime ?? elapsed) * 1000)).json"
+        let environment = ProcessInfo.processInfo.environment
+        let name: String
+        if let component, environment["REFERENCE_CAPTURE_CONTROL_LAYERS"] == "1" || captureAnimations {
+            let scheme = environment["REFERENCE_SCHEME"] ?? "light"
+            let backdrop = environment["REFERENCE_BACKDROP"] ?? "checkerboard"
+            let captureCase = environment["REFERENCE_CAPTURE_CASE"].map { "-\($0)" } ?? ""
+            let phase = captureAnimations ? (held ? "-contact" : "-release") : ""
+            name = "native-control-\(component)-\(scheme)-\(backdrop)\(captureCase)\(phase)-layers.json"
+        } else {
+            name = "native-contact-filters-\(tag)\(Int((contactFilterTime ?? elapsed) * 1000)).json"
+        }
         try encoder.encode(frame).write(to: URL.documentsDirectory.appending(path: name), options: .atomic)
+        if held, let probe = environment["REFERENCE_CONTROL_OPTICAL_PROBE"] {
+            try disableControlWarp(probe, in: window)
+        }
+    }
+
+    private func disableControlWarp(_ probe: String, in window: UIWindow) throws {
+        if ["floating-global", "floating-local", "floating-local-plain", "floating-rim"].contains(probe) {
+            let index = probe == "floating-global" ? 0 : 1
+            var layer = window.layer
+            let path = probe == "floating-rim" ? [0, 0, 0, 1, 0, 1] : [0, 0, 0, 1, 0, 0, 0, 1, index]
+            for child in path {
+                guard let children = layer.sublayers, children.indices.contains(child) else {
+                    throw OpticalLayerError.missingLayer(probe)
+                }
+                layer = children[child]
+            }
+            if probe == "floating-rim" {
+                guard let highlight = layer.sublayers?.first(where: { child in
+                    guard String(describing: type(of: child)) == "CASDFLayer",
+                          let effect = child.value(forKey: "effect") as? NSObject else { return false }
+                    return String(describing: type(of: effect)) == "CASDFKeyFillHighlightEffect"
+                }) else { throw OpticalLayerError.missingLayer(probe) }
+                layer = highlight
+            }
+            guard (layer.filters ?? []).contains(where: { String(describing: $0) == "vibrantColorMatrix" }) else {
+                throw OpticalLayerError.missingFilter(probe)
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            if probe == "floating-local-plain" {
+                layer.filters = nil
+            } else {
+                layer.isHidden = true
+            }
+            CATransaction.commit()
+            guard layer.isHidden || layer.filters == nil else { throw OpticalLayerError.missingLayer(probe) }
+            try JSONEncoder().encode(["hidden": layer.isHidden, "filterRemoved": layer.filters == nil]).write(
+                to: URL.documentsDirectory.appending(path: "control-optical-probe-\(component ?? "unknown")-\(probe).json"), options: .atomic)
+            let observedLayer = layer
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self else { return }
+                do {
+                    let filtersRemoved = observedLayer.filters == nil
+                    guard probe == "floating-local-plain" ? filtersRemoved : observedLayer.isHidden else {
+                        throw OpticalLayerError.missingLayer("probe mutation was replaced: \(probe)")
+                    }
+                    let name = "control-optical-probe-\(self.component ?? "unknown")-\(probe)-verified"
+                    let metadata = ["hidden": String(observedLayer.isHidden),
+                                    "filterRemoved": String(filtersRemoved),
+                                    "contents": String(describing: observedLayer.contents),
+                                    "layer": String(describing: observedLayer),
+                                    "presentation": String(describing: observedLayer.presentation()),
+                                    "presentationFilters": String(describing: observedLayer.presentation()?.filters),
+                                    "mask": String(describing: observedLayer.mask),
+                                    "sublayers": String(describing: observedLayer.sublayers),
+                                    "compositingFilter": String(describing: observedLayer.compositingFilter),
+                                    "backgroundFilters": String(describing: observedLayer.backgroundFilters)]
+                    try JSONEncoder().encode(metadata).write(to: URL.documentsDirectory.appending(path: name + ".json"), options: .atomic)
+                    if probe == "floating-local-plain" {
+                        let image = UIGraphicsImageRenderer(size: observedLayer.bounds.size).image { context in
+                            observedLayer.render(in: context.cgContext)
+                        }
+                        try image.pngData()?.write(to: URL.documentsDirectory.appending(path: name + ".png"), options: .atomic)
+                    }
+                } catch {
+                    self.error = String(describing: error)
+                }
+            }
+            return
+        }
+        let isolatedInputs = [
+            "refraction-opacity": [("glassBackground", "inputRefractionOpacity")],
+            "fill-blur": [("glassBackground", "inputBlurFillBlurRadius")],
+            "fill-blur-half": [("glassBackground", "inputBlurFillBlurRadius")],
+            "outer-surface": [("glassBackground", "inputOuterRefractionAmount")],
+            "surface": [("glassBackground", "inputInnerRefractionAmount")],
+            "ring-shadow": [("glassBackground", "inputRingShadowOpacity")],
+            "highlight": [("glassBackground", "inputKeyFillHighlightAmount")],
+            "shadow": [("glassBackground", "inputShadowOpacity")],
+            "spectral": [("glassForeground", "inputAberrationAmount")],
+            "highlight-spectral": [("glassBackground", "inputKeyFillHighlightAmount"), ("glassForeground", "inputAberrationAmount")]
+        ]
+        guard ["backdrop", "portal", "content"].contains(probe) || isolatedInputs[probe] != nil else {
+            throw OpticalLayerError.unknownProbe(probe)
+        }
+        var changes: [[String: String]] = []
+        func visit(_ layer: CALayer, path: String) {
+            if var filters = layer.filters {
+                for index in filters.indices {
+                    if let (_, key) = isolatedInputs[probe]?.first(where: { String(describing: filters[index]) == $0.0 }),
+                       let original = filters[index] as? NSCopying,
+                       let filter = original.copy(with: nil) as? NSObject {
+                        let amount = String(describing: filter.value(forKey: key))
+                        let value = probe == "fill-blur-half" ? 4.0 : 0.0
+                        filter.setValue(value, forKey: key)
+                        filters[index] = filter
+                        changes.append(["path": path, "key": key, "from": amount, "to": String(value)])
+                        continue
+                    }
+                    if isolatedInputs[probe] != nil { continue }
+                    guard String(describing: filters[index]) == "displacementMap",
+                          let original = filters[index] as? NSCopying,
+                          let filter = original.copy(with: nil) as? NSObject,
+                          let amount = filter.value(forKey: "inputAmount") as? NSNumber else { continue }
+                    let backdrop = String(describing: type(of: layer)) == "CABackdropLayer"
+                    let portal = !backdrop && abs(amount.doubleValue + 17.5) < 0.1
+                    let selected = probe == "backdrop" ? backdrop : probe == "portal" ? portal : !backdrop && !portal
+                    guard selected else { continue }
+                    filter.setValue(0.0, forKey: "inputAmount")
+                    filters[index] = filter
+                    changes.append(["path": path, "from": amount.stringValue, "to": "0"])
+                }
+                layer.filters = filters
+            }
+            for (index, child) in (layer.sublayers ?? []).enumerated() {
+                visit(child, path: path + "/\(index)")
+            }
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        visit(window.layer, path: "Window")
+        CATransaction.commit()
+        guard !changes.isEmpty else { throw OpticalLayerError.missingFilter("control \(probe) warp") }
+        try JSONEncoder().encode(changes).write(
+            to: URL.documentsDirectory.appending(path: "control-optical-probe-\(component ?? "unknown")-\(probe).json"),
+            options: .atomic)
     }
 
     private func findTabBar(in view: UIView) -> UITabBar? {
@@ -600,6 +836,51 @@ final class NativeTrace: NSObject {
         }
     }
 
+    private func opticalParameters(_ layer: CALayer) -> [String: Double]? {
+        guard captureAnimations else { return nil }
+        var result: [String: Double] = [:]
+        for value in layer.filters ?? [] {
+            guard let filter = value as? NSObject else { continue }
+            let name = String(describing: value)
+            let keys: [String]
+            switch name {
+            case "displacementMap": keys = ["inputAmount"]
+            case "glassBackground": keys = ["inputInnerRefractionAmount", "inputInnerRefractionHeight"]
+            case "glassForeground": keys = ["inputAberrationAmount", "inputAberrationAngle", "inputEdgeStart", "inputEdgeEnd"]
+            default: continue
+            }
+            for key in keys {
+                if let number = filter.value(forKey: key) as? NSNumber {
+                    result[name + "." + key] = number.doubleValue
+                }
+            }
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    private func sourceLayerPath(_ layer: CALayer, root: CALayer) -> String? {
+        guard recordingFilters,
+              layer.responds(to: NSSelectorFromString("sourceLayer")),
+              let source = layer.value(forKey: "sourceLayer") as? CALayer else { return nil }
+        func find(_ candidate: CALayer, path: String) -> String? {
+            if candidate.model() === source.model() { return path }
+            for (index, child) in (candidate.sublayers ?? []).enumerated() {
+                if let found = find(child, path: path + "/\(index)") { return found }
+            }
+            return nil
+        }
+        return find(root.model(), path: "Window") ?? "external: \(type(of: source)) \(source.bounds)"
+    }
+
+    private func colorMatrices(_ layer: CALayer) -> [String]? {
+        guard captureColorMatrices else { return nil }
+        let matrices = (layer.filters ?? []).compactMap { filter -> String? in
+            guard String(describing: filter) == "vibrantColorMatrix" else { return nil }
+            return opticalArchive(filter)
+        }
+        return matrices.isEmpty ? nil : matrices
+    }
+
     private func sample(_ layer: CALayer, root: CALayer, path: String, into samples: inout [LayerSample]) {
         let visible = layer
         let rect = visible.convert(visible.bounds, to: root)
@@ -619,7 +900,12 @@ final class NativeTrace: NSObject {
                                    archive: optics.enabled && String(describing: type(of: visible)).hasPrefix("CASDF") ? opticalArchive(visible) : nil,
                                    bounds: [visible.bounds.minX, visible.bounds.minY, visible.bounds.width, visible.bounds.height],
                                    scale: [visible.transform.m11, visible.transform.m22],
-                                   animations: recordingFilters ? animationValues(visible) : nil))
+                                   animations: recordingFilters ? animationValues(visible) : nil,
+                                   backgroundColor: recordingFilters ? visible.backgroundColor?.components : nil,
+                                    backgroundColorSpace: recordingFilters ? visible.backgroundColor?.colorSpace?.name as String? : nil,
+                                    sourceLayerPath: sourceLayerPath(visible, root: root),
+                                     opticalParameters: opticalParameters(visible),
+                                     colorMatrixArchives: colorMatrices(visible)))
         for (index, child) in (layer.sublayers ?? []).enumerated() {
             sample(child, root: root, path: path + "/\(index)", into: &samples)
         }

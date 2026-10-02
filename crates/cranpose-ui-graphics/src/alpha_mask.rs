@@ -114,6 +114,7 @@ pub fn gradient_cut_mask_effect(
     area_height: f32,
 ) -> RenderEffect {
     let mut shader = RuntimeShader::new(GRADIENT_CUT_MASK_WGSL);
+    shader.set_position_independent(true);
     shader.set_float2(0, area_width.max(1.0), area_height.max(1.0));
     shader.set_float(2, spec.progress.clamp(0.0, 1.0));
     shader.set_float(3, spec.feather.max(0.0));
@@ -148,6 +149,7 @@ pub fn rounded_corner_alpha_mask_effect(
     edge_feather: f32,
 ) -> RenderEffect {
     let mut shader = RuntimeShader::new(ROUNDED_ALPHA_MASK_WGSL);
+    shader.set_position_independent(true);
     shader.set_float2(0, area_width.max(1.0), area_height.max(1.0));
     shader.set_float(2, edge_feather.max(0.0));
     shader.set_float4(
@@ -171,6 +173,7 @@ pub fn gradient_fade_dst_out_effect(
     area_height: f32,
 ) -> RenderEffect {
     let mut shader = RuntimeShader::new(GRADIENT_FADE_DST_OUT_WGSL);
+    shader.set_position_independent(true);
     shader.set_float2(0, area_width.max(1.0), area_height.max(1.0));
     shader.set_float(2, spec.start);
     shader.set_float(3, spec.end);

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use cranpose_animation::{animateFloatAsState, spring};
+use cranpose_animation::spring;
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -12,42 +12,31 @@ use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 
 use crate::{
-    material::{Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape},
+    material::{GlassDynamics, GlassMorph, LiquidModifierExt},
     motion::LiquidMotion,
     theme::{liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
 };
 
-const SEGMENT_HEIGHT: f32 = 41.0;
+const SEGMENT_HEIGHT: f32 = 32.0;
 const TRACK_PADDING: f32 = 2.0;
-const MARKER_WIDTH_FACTOR: f32 = 1.16;
-const MARKER_REST_ACTIVITY: f32 = 0.55;
-const MARKER_POKE_TOP: f32 = 1.5;
-const MARKER_POKE_BOTTOM: f32 = 0.5;
-const LENS_OVERFLOW: f32 = 8.0;
-const LENS_ELLIPSE_BLEND: f32 = 0.55;
-const LENS_WIDTH_LIFT_SCALE: f32 = 1.06;
-const LENS_HEIGHT_LIFT_SCALE: f32 = 1.22;
 const LENS_PAD: f32 = 10.0;
-const SEGMENTED_STRAIN_RESPONSE: f32 = 0.30;
 const TAP_SLOP: f32 = 4.0;
 
 fn segment_lens_left(pointer_x: f32, segment_width: f32, count: usize) -> f32 {
     (pointer_x - segment_width * 0.5).clamp(0.0, segment_width * (count.saturating_sub(1)) as f32)
 }
 
-/// The segment the lens is over, and whether the lens is still gliding home
-/// after a release.
 fn segmented_lens_reading(
     lens_axis: &crate::motion::LiquidDragAxis,
     pressed: bool,
     selected: usize,
     segment_width: f32,
     count: usize,
-) -> (usize, bool) {
+) -> usize {
     let selected_x = segment_width * selected as f32;
     let lens_x = lens_axis.value();
-    let visual_index = crate::motion::liquid_visual_index(
+    crate::motion::liquid_visual_index(
         selected,
         lens_x,
         segment_width,
@@ -58,24 +47,16 @@ fn segmented_lens_reading(
             selected_x,
             segment_width,
         ),
-    );
-    let settling = !lens_axis.is_dragging() && (lens_x - selected_x).abs() > 1.0;
-    (visual_index, settling)
-}
-
-fn segmented_lens_base_size(segment_width: f32, progress: f32) -> Size {
-    let progress = progress.clamp(0.0, 1.2);
-    let rest_h = SEGMENT_HEIGHT + TRACK_PADDING * 2.0 + MARKER_POKE_TOP + MARKER_POKE_BOTTOM;
-    let width_lift = 1.0 + (LENS_WIDTH_LIFT_SCALE - 1.0) * progress;
-    let height_lift = 1.0 + (LENS_HEIGHT_LIFT_SCALE - 1.0) * progress;
-    Size::new(
-        (segment_width * MARKER_WIDTH_FACTOR + 2.0 * progress) * width_lift,
-        (rest_h + LENS_OVERFLOW * progress) * height_lift,
     )
 }
 
-fn segmented_strain(stretch: f32) -> f32 {
-    1.0 + (stretch - 1.0) * SEGMENTED_STRAIN_RESPONSE
+fn segmented_lens_base_size(segment_width: f32, progress: f32) -> Size {
+    let progress = progress.clamp(-0.1, 1.2);
+    let rest_h = SEGMENT_HEIGHT - TRACK_PADDING * 2.0;
+    Size::new(
+        segment_width - TRACK_PADDING * 2.0 + 24.0 * progress,
+        rest_h + 16.0 * progress,
+    )
 }
 
 struct LiquidSegment {
@@ -130,7 +111,7 @@ fn SegmentLabel(label: String, selected: bool) {
     let style = TextStyle {
         span_style: SpanStyle {
             color: Some(colors.label),
-            font_size: cranpose_ui::text::TextUnit::Sp(17.0),
+            font_size: cranpose_ui::text::TextUnit::Sp(13.0),
             font_weight: Some(if selected {
                 FontWeight::MEDIUM
             } else {
@@ -171,48 +152,49 @@ pub fn LiquidSegmentedControl(
     let segments = Rc::new(segments);
 
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
+    let contact = super::control_motion::remember_control_contact(
+        super::control_motion::ControlContactKind::Segment,
+    );
+    let (lens_progress, material_progress) = contact.states();
 
-    let track_height = SEGMENT_HEIGHT + TRACK_PADDING * 2.0;
+    let track_height = SEGMENT_HEIGHT;
     let track_fill = if colors.is_dark {
-        colors.fill
+        Color::from_rgb_u8(28, 28, 31)
+    } else {
+        Color::from_rgb_u8(238, 238, 239)
+    };
+    let marker_fill = if colors.is_dark {
+        Color::from_rgb_u8(90, 90, 95)
     } else {
         Color::WHITE
     };
-    let track = if colors.is_dark {
-        Modifier::empty()
-    } else {
-        Modifier::empty().drop_shadow(
-            cranpose_ui_graphics::LayerShape::Rounded(
-                cranpose_ui_graphics::RoundedCornerShape::uniform(track_height * 0.5),
-            ),
-            |scope| {
-                scope.radius = 6.0;
-                scope.offset.y = 4.5;
-                scope.color = Color::BLACK.with_alpha(0.10);
-            },
-        )
-    };
-    let track = track.height(track_height).draw_behind(move |scope| {
-        scope.draw_round_rect(
-            Brush::solid(track_fill),
-            CornerRadii::uniform(track_height * 0.5),
-        );
-    });
+    let track = Modifier::empty()
+        .height(track_height)
+        .draw_behind(move |scope| {
+            scope.draw_round_rect(
+                Brush::solid(track_fill),
+                CornerRadii::uniform(track_height * 0.5),
+            );
+        });
 
     Box(modifier.then(track), BoxSpec::default(), move || {
         let segments = Rc::clone(&segments);
         let on_select = Rc::clone(&on_select);
-        BoxWithConstraints(Modifier::empty().padding(TRACK_PADDING), move |scope| {
+        let contact = Rc::clone(&contact);
+        BoxWithConstraints(Modifier::empty(), move |scope| {
             let segments = Rc::clone(&segments);
             let on_select = Rc::clone(&on_select);
             let total_width = scope.constraints().max_width.max(1.0);
             let segment_width = total_width / count as f32;
             let selected_x = segment_width * selected as f32;
-            let lens_axis = crate::motion::remember_liquid_drag_axis(selected_x);
+            let lens_axis =
+                crate::motion::remember_liquid_follow_axis(selected_x, spring(1.0, 750.0));
+            let shape =
+                super::lens_motion::remember_lens_shape(super::lens_motion::LensShapeKind::Segment);
             if !pressed.get() {
                 lens_axis.settle_to(selected_x, LiquidMotion::glide());
             }
-            let (visual_index, lens_settling) = {
+            let visual_index = {
                 let lens_axis = Rc::clone(&lens_axis);
                 cranpose_core::derivedStateOf(move || {
                     segmented_lens_reading(
@@ -225,24 +207,125 @@ pub fn LiquidSegmentedControl(
                 })
                 .get()
             };
-            let lens_target = if pressed.get() || lens_settling {
-                1.0
-            } else {
-                0.0
-            };
-            let lens_progress = animateFloatAsState(
-                lens_target,
-                if pressed.get() || lens_settling {
-                    spring(0.9, 1400.0)
-                } else {
-                    spring(1.0, 170.0)
-                },
-                "segmented-lens",
-            );
 
+            let gesture = Modifier::empty()
+                .size(Size::new(total_width, SEGMENT_HEIGHT))
+                .pointer_input(selected, {
+                    let on_select = Rc::clone(&on_select);
+                    let lens_axis = Rc::clone(&lens_axis);
+                    let contact = Rc::clone(&contact);
+                    move |scope: PointerInputScope| {
+                        let on_select = Rc::clone(&on_select);
+                        let lens_axis = Rc::clone(&lens_axis);
+                        let contact = Rc::clone(&contact);
+                        crate::motion::liquid_lens_gesture(
+                            scope,
+                            crate::motion::LiquidLensGesture {
+                                axis: lens_axis,
+                                cell_width: segment_width,
+                                cell_offset: 0.0,
+                                count,
+                                tap_slop: TAP_SLOP,
+                                drag_left: Rc::new(move |x| {
+                                    segment_lens_left(x, segment_width, count)
+                                }),
+                                rest_left: Rc::new(move |index| segment_width * index as f32),
+                                selected,
+                                on_pressed: Rc::new(move |down, time| {
+                                    pressed.set(down);
+                                    contact.pressed(down, time);
+                                }),
+                                on_touch: Rc::new(|_, _| {}),
+                                on_select,
+                            },
+                        )
+                    }
+                });
+
+            let Size {
+                width: node_w,
+                height: node_h,
+            } = super::control_lens::node_size(
+                segmented_lens_base_size(segment_width, 0.0),
+                segmented_lens_base_size(segment_width, 1.0),
+                LENS_PAD,
+            );
+            let lens_for_layer = lens_progress;
+            let layer_axis = Rc::clone(&lens_axis);
+            let physics_axis = Rc::clone(&lens_axis);
+            let content_axis = Rc::clone(&lens_axis);
+            let content_shape = Rc::clone(&shape);
+            let foreground_shape = Rc::clone(&shape);
+            let foreground_axis = Rc::clone(&lens_axis);
+            let lens = Modifier::empty()
+                .required_size(Size::new(node_w, node_h))
+                .offset(
+                    (segment_width - node_w) * 0.5,
+                    (SEGMENT_HEIGHT - node_h) * 0.5,
+                )
+                .graphics_layer(move || GraphicsLayer {
+                    translation_x: layer_axis.value(),
+                    alpha: 1.0,
+                    ..Default::default()
+                })
+                .glass_effect_with(
+                    super::control_material::material(
+                        super::control_motion::ControlContactKind::Segment,
+                    ),
+                    move || {
+                        let grow = lens_for_layer.get().clamp(-0.1, 1.2);
+                        let base_size = segmented_lens_base_size(segment_width, grow);
+                        let projection = shape.projection(physics_axis.value());
+                        let material = material_progress.get().max(0.0);
+                        GlassDynamics {
+                            optical_projection: Some(projection),
+                            resting_tint: Some(marker_fill),
+                            morph: Some(GlassMorph {
+                                node_size: (node_w, node_h),
+                                primary: (
+                                    node_w * 0.5,
+                                    node_h * 0.5,
+                                    base_size.width,
+                                    base_size.height,
+                                    -1.0,
+                                ),
+                                shapes: Vec::new(),
+                                glue: 0.0,
+                                wobble_amplitude: 0.0,
+                                wobble_phase: 0.0,
+                                bulge_amplitude: 0.0,
+                                bulge_direction: 0.0,
+                                ellipse_blend: 0.0,
+                                capsule_smoothing_dp: 0.0,
+                                deformation: None,
+                                zoom_anchor: (0.0, 0.0),
+                            }),
+                            ..super::control_material::dynamics(
+                                super::control_motion::ControlContactKind::Segment,
+                                grow,
+                                material,
+                            )
+                        }
+                    },
+                );
+            Box(lens, BoxSpec::default(), || {});
             let semantic_selection = Rc::clone(&on_select);
             Row(
-                Modifier::empty().selectable_group(),
+                Modifier::empty()
+                    .selectable_group()
+                    .graphics_layer(move || {
+                        let position = content_axis.value();
+                        GraphicsLayer {
+                            render_effect: super::control_material::content_effect(
+                                Size::new(total_width, SEGMENT_HEIGHT),
+                                (position + segment_width * 0.5, SEGMENT_HEIGHT * 0.5),
+                                segmented_lens_base_size(segment_width, lens_progress.get()),
+                                content_shape.projection(position),
+                                material_progress.get().max(0.0),
+                            ),
+                            ..Default::default()
+                        }
+                    }),
                 RowSpec::default(),
                 move || {
                     for (index, segment) in segments.iter().enumerate() {
@@ -268,122 +351,30 @@ pub fn LiquidSegmentedControl(
                     }
                 },
             );
-
-            let gesture = Modifier::empty()
-                .size(Size::new(total_width, SEGMENT_HEIGHT))
-                .pointer_input(selected, {
-                    let on_select = Rc::clone(&on_select);
-                    let lens_axis = Rc::clone(&lens_axis);
-                    move |scope: PointerInputScope| {
-                        let on_select = Rc::clone(&on_select);
-                        let lens_axis = Rc::clone(&lens_axis);
-                        crate::motion::liquid_lens_gesture(
-                            scope,
-                            crate::motion::LiquidLensGesture {
-                                axis: lens_axis,
-                                cell_width: segment_width,
-                                cell_offset: 0.0,
-                                count,
-                                tap_slop: TAP_SLOP,
-                                drag_left: Rc::new(move |x| {
-                                    segment_lens_left(x, segment_width, count)
-                                }),
-                                rest_left: Rc::new(move |index| segment_width * index as f32),
-                                selected,
-                                on_pressed: Rc::new(move |down, _| pressed.set(down)),
-                                on_touch: Rc::new(|_, _| {}),
-                                on_select,
-                            },
-                        )
-                    }
-                });
-            Box(gesture, BoxSpec::default(), || {});
-
-            let raised_size = segmented_lens_base_size(segment_width, 1.2);
-            let deformation_headroom = segmented_strain(crate::dynamics::STRETCH_MAX)
-                .max(1.0 / segmented_strain(crate::dynamics::STRETCH_MIN));
-            let node_w = raised_size.width * deformation_headroom
-                + crate::dynamics::BULGE_MAX
-                + LENS_PAD * 2.0;
-            let node_h = raised_size.height * deformation_headroom
-                + crate::dynamics::BULGE_MAX
-                + LENS_PAD * 2.0;
-            let lens_for_layer = lens_progress;
-            let layer_axis = Rc::clone(&lens_axis);
-            let physics_axis = Rc::clone(&lens_axis);
-            let lens = Modifier::empty()
-                .required_size(Size::new(node_w, node_h))
-                .offset(
-                    (segment_width - node_w) * 0.5,
-                    (SEGMENT_HEIGHT - node_h) * 0.5,
-                )
-                .graphics_layer(move || GraphicsLayer {
-                    translation_x: layer_axis.value(),
-                    alpha: 1.0,
-                    ..Default::default()
-                })
-                .glass_effect_with(
-                    Glass::lens()
-                        .shape(LiquidShape::Capsule)
-                        .tint(Color::rgba(0.0, 0.0, 0.0, 0.08))
-                        .shadow_style(GlassShadow::new(
-                            Color::BLACK.with_alpha(0.14),
-                            12.0,
-                            4.0,
-                            -2.0,
-                        ))
-                        .rim_reflection(0.04)
-                        .blur_radius(0.5)
-                        .refraction_depth(1.0)
-                        .refraction_curve(0.25)
-                        .fold_depth(5.0)
-                        .dispersion(0.85)
-                        .highlight(0.04)
-                        .lift(0.0)
-                        .no_clip(),
-                    move || {
-                        let grow = lens_for_layer.get().clamp(0.0, 1.2);
-                        let base_size = segmented_lens_base_size(segment_width, grow);
-                        let pose = physics_axis.liquid_pose();
-                        GlassDynamics {
-                            activity: Some(
-                                MARKER_REST_ACTIVITY
-                                    + (1.0 - MARKER_REST_ACTIVITY) * grow.clamp(0.0, 1.0),
+            Box(
+                Modifier::empty()
+                    .required_size(Size::new(node_w, node_h))
+                    .offset(
+                        (segment_width - node_w) * 0.5,
+                        (SEGMENT_HEIGHT - node_h) * 0.5,
+                    )
+                    .graphics_layer(move || {
+                        let position = foreground_axis.value();
+                        GraphicsLayer {
+                            translation_x: position,
+                            backdrop_effect: super::control_material::foreground_effect(
+                                Size::new(node_w, node_h),
+                                segmented_lens_base_size(segment_width, lens_progress.get()),
+                                foreground_shape.projection(position),
+                                material_progress.get().max(0.0),
                             ),
-                            press_depth: Some(
-                                (0.12 + 0.30 * grow.clamp(0.0, 1.0) + 0.58 * pose.energy())
-                                    .clamp(0.0, 1.0),
-                            ),
-                            morph: Some(GlassMorph {
-                                node_size: (node_w, node_h),
-                                primary: (
-                                    node_w * 0.5,
-                                    node_h * 0.5 - (MARKER_POKE_TOP - MARKER_POKE_BOTTOM) * 0.5,
-                                    base_size.width,
-                                    base_size.height,
-                                    -1.0,
-                                ),
-                                shapes: Vec::new(),
-                                glue: 0.0,
-                                wobble_amplitude: 0.0,
-                                wobble_phase: 0.0,
-                                bulge_amplitude: pose.bulge_amplitude.min(4.0),
-                                bulge_direction: pose.bulge_direction,
-                                ellipse_blend: LENS_ELLIPSE_BLEND,
-                                capsule_smoothing_dp: 0.0,
-                                deformation: Some(
-                                    crate::material::GlassDeformation::incompressible(
-                                        pose.axis,
-                                        segmented_strain(pose.stretch),
-                                    ),
-                                ),
-                                zoom_anchor: (0.0, 0.0),
-                            }),
                             ..Default::default()
                         }
-                    },
-                );
-            Box(lens, BoxSpec::default(), || {});
+                    }),
+                BoxSpec::default(),
+                || {},
+            );
+            Box(gesture, BoxSpec::default(), || {});
         });
     });
 }

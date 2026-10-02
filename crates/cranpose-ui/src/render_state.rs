@@ -70,13 +70,15 @@ pub(crate) struct AppContextId(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct DrawObservationScope {
     node_id: NodeId,
+    modifier_index: usize,
     command_index: usize,
 }
 
 impl DrawObservationScope {
-    pub(crate) fn new(node_id: NodeId, command_index: usize) -> Self {
+    pub(crate) fn new(node_id: NodeId, modifier_index: usize, command_index: usize) -> Self {
         Self {
             node_id,
+            modifier_index,
             command_index,
         }
     }

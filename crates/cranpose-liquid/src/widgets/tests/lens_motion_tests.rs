@@ -1,10 +1,51 @@
 use super::*;
 
 #[test]
+fn control_reversals_track_native_stretch_compression_and_stopped_rebound() {
+    for (name, kind) in [
+        ("slider", LensShapeKind::Thumb),
+        ("toggle", LensShapeKind::Thumb),
+        ("segmented", LensShapeKind::Segment),
+    ] {
+        let runtime =
+            cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
+        let shape = LensShapeMotion::new(runtime.handle(), kind);
+        let mut squared_error = [0.0; 2];
+        let mut counts = 0;
+        for row in include_str!("../../../tests/fixtures/native_control_shape.csv")
+            .lines()
+            .skip(1)
+        {
+            let fields = row.split(',').collect::<Vec<_>>();
+            if fields[0] != name {
+                continue;
+            }
+            let values = fields[1..]
+                .iter()
+                .map(|value| value.parse::<f64>().expect("native geometry"))
+                .collect::<Vec<_>>();
+            runtime
+                .handle()
+                .drain_frame_callbacks(1_000_000_000 + (values[0].max(0.0) * 1e9) as u64);
+            let actual = shape.projection(values[1] as f32);
+            for (index, value) in [actual.0, actual.1].into_iter().enumerate() {
+                squared_error[index] += (f64::from(value) - values[index + 2]).powi(2);
+            }
+            counts += 1;
+        }
+        assert!(counts > 200);
+        for error in squared_error {
+            let rms = (error / f64::from(counts)).sqrt();
+            assert!(rms < 0.03, "{name} native strain RMS: {rms}");
+        }
+    }
+}
+
+#[test]
 fn reversing_motion_preserves_the_stretch_and_rebound() {
     let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
-    let forward = TabLensShape::new(runtime.handle());
-    let reverse = TabLensShape::new(runtime.handle());
+    let forward = LensShapeMotion::new(runtime.handle(), LensShapeKind::Tab);
+    let reverse = LensShapeMotion::new(runtime.handle(), LensShapeKind::Tab);
     let mut greatest = 0.0f32;
     for frame in 0..240 {
         runtime
@@ -101,7 +142,7 @@ fn contact_without_input_time_uses_the_shared_frame_clock() {
 #[test]
 fn stopped_shape_returns_to_exact_zero() {
     let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
-    let shape = TabLensShape::new(runtime.handle());
+    let shape = LensShapeMotion::new(runtime.handle(), LensShapeKind::Tab);
     shape
         .width
         .strain
@@ -121,7 +162,7 @@ fn stopped_shape_returns_to_exact_zero() {
 #[test]
 fn shape_response_tracks_native_reversal_microframes() {
     let runtime = cranpose_core::Runtime::new(std::sync::Arc::new(cranpose_core::DefaultScheduler));
-    let mut shape = TabLensShape::new(runtime.handle());
+    let mut shape = LensShapeMotion::new(runtime.handle(), LensShapeKind::Tab);
     let mut errors = [[0.0f32; 2]; 8];
     let mut counts = [0; 8];
     let mut extrema = [0.0f32; 2];
@@ -135,7 +176,7 @@ fn shape_response_tracks_native_reversal_microframes() {
         let next = fields[0] as usize;
         if route != next {
             route = next;
-            shape = TabLensShape::new(runtime.handle());
+            shape = LensShapeMotion::new(runtime.handle(), LensShapeKind::Tab);
         }
         runtime
             .handle()

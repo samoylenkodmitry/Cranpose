@@ -8,6 +8,9 @@ use cranpose_core::{RuntimeHandle, State, with_current_composer};
 use cranpose_macros::composable;
 use cranpose_ui_graphics::Size;
 
+const STRAIN_LIMIT: f32 = 0.35;
+pub(super) const MAX_LENS_PROJECTION: f32 = 1.0 + STRAIN_LIMIT;
+
 pub(super) fn tab_lens_activity_motion(raised: bool) -> AnimationType {
     if raised {
         spring(1.0, 600.0)
@@ -108,7 +111,7 @@ pub(super) fn remember_tab_contact_motion() -> Rc<TabContactMotion> {
     })
 }
 
-struct TabShapeParameters {
+struct ShapeParameters {
     damping: f32,
     stiffness: f32,
     relaxation_rate: f32,
@@ -116,7 +119,7 @@ struct TabShapeParameters {
     inertial_response: f32,
 }
 
-struct TabShapeResponse {
+struct ShapeResponse {
     relaxed_speed: Cell<f32>,
     strain: RefCell<Animatable<f32>>,
     relaxation_rate: f32,
@@ -125,9 +128,9 @@ struct TabShapeResponse {
     animation: AnimationType,
 }
 
-impl TabShapeResponse {
-    fn new(runtime: RuntimeHandle, parameters: TabShapeParameters) -> Self {
-        let TabShapeParameters {
+impl ShapeResponse {
+    fn new(runtime: RuntimeHandle, parameters: ShapeParameters) -> Self {
+        let ShapeParameters {
             damping,
             stiffness,
             relaxation_rate,
@@ -143,8 +146,8 @@ impl TabShapeResponse {
             animation: AnimationType::Spring(cranpose_animation::SpringSpec {
                 damping_ratio: damping,
                 stiffness,
-                position_threshold: 0.000001,
-                velocity_threshold: 0.00001,
+                position_threshold: 0.0001,
+                velocity_threshold: 0.001,
                 ..Default::default()
             }),
         }
@@ -153,7 +156,7 @@ impl TabShapeResponse {
     fn advance(&self, speed: f32, dt: f32, now: u64) {
         let relaxed =
             speed + (self.relaxed_speed.get() - speed) * (-self.relaxation_rate * dt).exp();
-        let relaxed = if speed == 0.0 && relaxed < 0.0001 {
+        let relaxed = if speed == 0.0 && relaxed < 0.01 {
             0.0
         } else {
             relaxed
@@ -173,43 +176,74 @@ impl TabShapeResponse {
     }
 }
 
-pub(super) struct TabLensShape {
-    runtime: RuntimeHandle,
-    previous: Cell<Option<(u64, f32)>>,
-    width: TabShapeResponse,
-    height: TabShapeResponse,
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum LensShapeKind {
+    Tab,
+    Thumb,
+    Segment,
 }
 
-impl TabLensShape {
-    fn new(runtime: RuntimeHandle) -> Self {
+pub(super) struct LensShapeMotion {
+    runtime: RuntimeHandle,
+    previous: Cell<Option<(u64, f32)>>,
+    width: ShapeResponse,
+    height: Option<ShapeResponse>,
+    height_factor: f32,
+}
+
+impl LensShapeMotion {
+    fn new(runtime: RuntimeHandle, kind: LensShapeKind) -> Self {
         Self {
-            width: TabShapeResponse::new(
+            width: ShapeResponse::new(
                 runtime.clone(),
-                TabShapeParameters {
-                    damping: 0.430087,
-                    stiffness: 164.807,
-                    relaxation_rate: 6.059487,
-                    viscous_response: 0.00001663016,
-                    inertial_response: 0.00004602218,
+                if kind == LensShapeKind::Tab {
+                    ShapeParameters {
+                        damping: 0.430087,
+                        stiffness: 164.807,
+                        relaxation_rate: 6.059487,
+                        viscous_response: 0.00001663016,
+                        inertial_response: 0.00004602218,
+                    }
+                } else {
+                    ShapeParameters {
+                        damping: 0.24,
+                        stiffness: 140.0,
+                        relaxation_rate: 3.7,
+                        viscous_response: 0.0,
+                        inertial_response: 0.000064,
+                    }
                 },
             ),
-            height: TabShapeResponse::new(
-                runtime.clone(),
-                TabShapeParameters {
-                    damping: 0.38644,
-                    stiffness: 198.37253,
-                    relaxation_rate: 3.179867,
-                    viscous_response: -0.00008953011,
-                    inertial_response: -0.00008536202,
-                },
-            ),
+            height: (kind == LensShapeKind::Tab).then(|| {
+                ShapeResponse::new(
+                    runtime.clone(),
+                    ShapeParameters {
+                        damping: 0.38644,
+                        stiffness: 198.37253,
+                        relaxation_rate: 3.179867,
+                        viscous_response: -0.00008953011,
+                        inertial_response: -0.00008536202,
+                    },
+                )
+            }),
+            height_factor: if kind == LensShapeKind::Segment {
+                -1.2
+            } else {
+                -1.02
+            },
             previous: Cell::new(None),
             runtime,
         }
     }
 
     pub(super) fn sample(&self, position: f32) -> Size {
-        let value = Size::new(self.width.value(), self.height.value());
+        let width = self.width.value();
+        let value = Size::new(
+            width,
+            self.height
+                .as_ref()
+                .map_or(width * self.height_factor, ShapeResponse::value),
+        );
         let Some(now) = self.runtime.last_frame_time_nanos() else {
             return value;
         };
@@ -224,21 +258,31 @@ impl TabLensShape {
         let speed = ((position - previous_position) / dt).abs().min(8000.0);
         self.previous.set(Some((now, position)));
         self.width.advance(speed, dt, now);
-        self.height.advance(speed, dt, now);
+        if let Some(height) = &self.height {
+            height.advance(speed, dt, now);
+        }
         value
+    }
+
+    pub(super) fn projection(&self, position: f32) -> (f32, f32) {
+        let strain = self.sample(position);
+        (
+            1.0 + strain.width.clamp(-STRAIN_LIMIT, STRAIN_LIMIT),
+            1.0 + strain.height.clamp(-STRAIN_LIMIT, STRAIN_LIMIT),
+        )
     }
 }
 
 #[composable]
-pub(super) fn remember_tab_lens_shape() -> Rc<TabLensShape> {
+pub(super) fn remember_lens_shape(kind: LensShapeKind) -> Rc<LensShapeMotion> {
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer
-            .remember(move || Rc::new(TabLensShape::new(runtime)))
+            .remember(move || Rc::new(LensShapeMotion::new(runtime, kind)))
             .with(Rc::clone)
     })
 }
 
 #[cfg(test)]
-#[path = "tests/tab_motion_tests.rs"]
+#[path = "tests/lens_motion_tests.rs"]
 mod tests;

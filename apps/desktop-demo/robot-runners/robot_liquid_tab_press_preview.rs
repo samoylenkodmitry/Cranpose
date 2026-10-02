@@ -1,8 +1,8 @@
-use crate::{liquid_tab_reference, robot_exit, robot_shot};
-
 use std::{path::PathBuf, time::Duration};
 
 use cranpose::{AppLauncher, RobotScreenshot};
+
+use crate::{liquid_tab_reference, robot_exit, robot_shot};
 
 pub(crate) fn main() -> anyhow::Result<()> {
     let directory = PathBuf::from(
@@ -55,7 +55,12 @@ pub(crate) fn main() -> anyhow::Result<()> {
             );
             robot.exit().expect("exit");
         })
-        .try_run(|| liquid_tab_reference::LiquidTabReference(false, false))?;
+        .try_run(|| {
+            liquid_tab_reference::LiquidTabReference(
+                liquid_tab_reference::ReferenceBackdrop::Solid,
+                false,
+            );
+        })?;
     Ok(())
 }
 

@@ -980,6 +980,156 @@ fn stacked_cached_glasses(first_blur: f32, identified: bool) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
+fn animated_substrate_scene(
+    tint: f32,
+    changed_source: bool,
+    stacked: bool,
+    isolated: bool,
+    identified: bool,
+) -> RenderGraph {
+    let mut shader = RuntimeShader::new(&format!(
+        r"{RUNTIME_SHADER_PRELUDE_WGSL}
+@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+    let region = u[58u];
+    let uv = (region.xy + clamp(input.uv, 0.5 / region.zw, vec2<f32>(1.0) - 0.5 / region.zw) * region.zw) / vec2<f32>(textureDimensions(input_texture));
+    let source = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
+    return vec4<f32>(mix(source.rgb, vec3<f32>(0.1, 0.7, 0.9), u[0u].x), 1.0);
+}}
+"
+    ));
+    shader.set_batched_source(true);
+    shader.set_substrates(&[SubstrateSpec::Blur { radius_px: 12.0 }]);
+    shader.set_float(0, tint);
+    let mut children = striped_page();
+    if changed_source {
+        children.push(solid_rect(
+            rect(GLASS_LEFT, GLASS_TOP, 24.0, 30.0),
+            Color::BLACK,
+        ));
+    }
+    for (index, effect) in [
+        Some(RenderEffect::runtime_shader(shader)),
+        stacked.then(|| RenderEffect::blur(2.0)),
+    ]
+    .into_iter()
+    .flatten()
+    .enumerate()
+    {
+        let mut node = glass_layer(0, effect);
+        let RenderNode::Layer(layer) = &mut node else {
+            unreachable!()
+        };
+        layer.node_id = identified.then_some(900 + index);
+        layer.isolation.explicit_offscreen = isolated;
+        if isolated {
+            layer.graphics_layer.compositing_strategy =
+                cranpose_ui_graphics::CompositingStrategy::Offscreen;
+        }
+        children.push(node);
+    }
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+fn glass_content_mask_scene(with_material: bool) -> RenderGraph {
+    let RenderEffect::Shader { mut shader } = glass_shader() else {
+        panic!("glass shader fixture");
+    };
+    let configured = std::sync::Arc::make_mut(&mut shader);
+    configured.set_float(112, 1.0);
+    if with_material {
+        configured.set_float(cranpose_ui_graphics::GLASS_ADAPTIVE_FROST_UNIFORM, 0.5);
+        configured.set_float(cranpose_ui_graphics::GLASS_ADAPTIVE_TONE_UNIFORM, 1.0);
+        configured.set_float2(cranpose_ui_graphics::GLASS_PANE_BLEND_UNIFORM, 32.0, 0.5);
+    }
+    cranpose_ui_graphics::specialize_liquid_glass(configured);
+    let bounds = rect(0.0, 0.0, GLASS_WIDTH, GLASS_HEIGHT);
+    let mut children = striped_page();
+    children.push(RenderNode::Layer(Box::new(
+        shared_test_support::layer_node(
+            bounds,
+            ProjectiveTransform::translation(GLASS_LEFT, GLASS_TOP),
+            GraphicsLayer {
+                render_effect: Some(RenderEffect::Shader { shader }),
+                ..Default::default()
+            },
+            vec![solid_rect(bounds, Color::from_rgb_u8(35, 120, 190))],
+        ),
+    )));
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+#[test]
+fn a_glass_content_mask_does_not_blur_inputs_it_cannot_sample() {
+    let mut renderer = support::headless_renderer().expect("mask renderer");
+    let plain = capture(&mut renderer, glass_content_mask_scene(false));
+    let material = capture(&mut renderer, glass_content_mask_scene(true));
+    let stats = renderer.last_frame_stats().expect("mask frame stats");
+    assert_eq!(
+        support::max_channel_delta(&plain.pixels, &material.pixels),
+        0,
+        "the material's unused blur inputs must not change the content mask"
+    );
+    assert_eq!(
+        stats.blur_passes, 0,
+        "a content mask must not run unused blur passes: {stats:?}"
+    );
+}
+
+#[test]
+fn animated_shader_reuses_unchanged_substrates_and_updates_glass_above_it() {
+    let mut renderer = support::headless_renderer().expect("substrate renderer");
+    for (stacked, isolated) in [(false, false), (true, false), (false, true), (true, true)] {
+        let references = [0.2, 0.6, 1.0].map(|tint| {
+            capture(
+                &mut renderer,
+                animated_substrate_scene(tint, false, stacked, isolated, false),
+            )
+        });
+        let changed_source_reference = capture(
+            &mut renderer,
+            animated_substrate_scene(0.6, true, stacked, isolated, false),
+        );
+        let before = capture(
+            &mut renderer,
+            animated_substrate_scene(0.0, false, stacked, isolated, true),
+        );
+        for (tint, reference) in [0.2, 0.6, 1.0].into_iter().zip(references) {
+            let changed = capture(
+                &mut renderer,
+                animated_substrate_scene(tint, false, stacked, isolated, true),
+            );
+            let stats = renderer
+                .last_frame_stats()
+                .expect("animated substrate stats");
+            assert_eq!(
+                support::max_channel_delta(&changed.pixels, &reference.pixels),
+                0,
+                "live shader and dependent glass must match uncached rendering"
+            );
+            assert_ne!(
+                before.pixels, changed.pixels,
+                "the tint must visibly change"
+            );
+            if !stacked {
+                assert_eq!(
+                    stats.blur_passes, 0,
+                    "a uniform-only change must reuse the unchanged blurred source: {stats:?}"
+                );
+            }
+        }
+        let changed = capture(
+            &mut renderer,
+            animated_substrate_scene(0.6, true, stacked, isolated, true),
+        );
+        assert_eq!(
+            support::max_channel_delta(&changed.pixels, &changed_source_reference.pixels),
+            0,
+            "changed source must invalidate its substrate"
+        );
+    }
+}
+
 #[test]
 fn a_cached_backdrop_tracks_the_effect_of_the_glass_beneath_it() {
     let Ok(mut renderer) = support::headless_renderer() else {
@@ -1272,7 +1422,7 @@ fn a_stage_spanning_two_atlases_allocates_only_the_atlas_its_misses_land_in() {
 }
 
 #[test]
-fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels() {
+fn independent_glasses_are_pinned_together_without_changing_pixels() {
     let Ok(mut renderer) = support::headless_renderer() else {
         return;
     };
@@ -1287,44 +1437,29 @@ fn independent_glasses_are_admitted_over_several_frames_without_changing_pixels(
     };
     let (first, first_frame) = render(true);
     assert_eq!(first.layer_cache_misses, 9);
-    let mut admitted = 0;
-    let mut frames = 0;
-    let mut admitting = vec![first_frame];
-    let mut stats = first;
-    loop {
-        assert!(
-            stats.backdrop_admissions > 0,
-            "admissions stalled at frame {frames}"
-        );
-        assert!(
-            stats.backdrop_admissions <= 3,
-            "frame {frames} pinned {} glasses past the per-frame budget",
-            stats.backdrop_admissions
-        );
-        admitted += stats.backdrop_admissions;
-        frames += 1;
-        if admitted >= first.layer_cache_misses {
-            break;
-        }
-        assert!(frames < first.layer_cache_misses);
-        let (next, frame) = render(true);
-        admitting.push(frame);
-        stats = next;
-    }
-    assert!(frames >= 3);
+    assert_eq!(
+        first.backdrop_admissions, 9,
+        "pin every existing atlas on the first frame"
+    );
     let (settled, settled_frame) = render(true);
     assert_eq!(settled.layer_cache_misses, 0);
     assert_eq!(settled.layer_cache_hits, first.layer_cache_misses);
     let mut fresh = support::LockedRenderer::beside_locked().expect("second headless renderer");
     let reference =
         support::capture_graph(&mut fresh, independent_cached_glasses(false), 1104, 720);
-    for (index, frame) in admitting.iter().enumerate() {
-        assert_eq!(
-            support::max_channel_delta(&frame.pixels, &reference.pixels),
-            0,
-            "admitting frame {index} must be the bytes of the same scene drawn without caching"
-        );
-    }
+    assert_eq!(
+        first.copy_count,
+        fresh
+            .last_frame_stats()
+            .expect("reference stats")
+            .copy_count,
+        "pinning existing atlases must add no texture copies"
+    );
+    assert_eq!(
+        support::max_channel_delta(&first_frame.pixels, &reference.pixels),
+        0,
+        "the admitting frame must be the bytes of the same scene drawn without caching"
+    );
     assert_eq!(
         support::max_channel_delta(&settled_frame.pixels, &reference.pixels),
         0,

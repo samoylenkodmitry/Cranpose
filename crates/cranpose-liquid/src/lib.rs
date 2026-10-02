@@ -27,9 +27,10 @@ pub mod widgets;
 pub use appearance::{GlassTintAmount, InvalidGlassTintAmount};
 pub use dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics};
 pub use material::{
-    Glass, GlassDeformation, GlassDynamics, GlassFaceResponse, GlassKeyFill, GlassMorph,
-    GlassRefraction, GlassShadow, GlassSpectrum, GlassVariant, LiquidModifierExt, LiquidShape,
-    glass_light_direction, set_glass_light_direction,
+    Glass, GlassContourHighlight, GlassDeformation, GlassDynamics, GlassFaceResponse,
+    GlassFaceTone, GlassKeyFill, GlassMorph, GlassRefraction, GlassShadow, GlassSpectrum,
+    GlassSpecularHighlight, GlassVariant, LiquidModifierExt, LiquidShape, glass_light_direction,
+    set_glass_light_direction,
 };
 pub use motion::{LiquidMotion, liquid_press_scale};
 pub use theme::{
@@ -45,9 +46,9 @@ pub mod prelude {
         dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics},
         icons,
         material::{
-            Glass, GlassDeformation, GlassDynamics, GlassFaceResponse, GlassKeyFill, GlassMorph,
-            GlassRefraction, GlassShadow, GlassSpectrum, GlassVariant, LiquidModifierExt,
-            LiquidShape,
+            Glass, GlassContourHighlight, GlassDeformation, GlassDynamics, GlassFaceResponse,
+            GlassFaceTone, GlassKeyFill, GlassMorph, GlassRefraction, GlassShadow, GlassSpectrum,
+            GlassSpecularHighlight, GlassVariant, LiquidModifierExt, LiquidShape,
         },
         motion::{LiquidMotion, liquid_press_scale},
         theme::{
