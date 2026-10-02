@@ -37,10 +37,8 @@ struct VertexOutput {
 struct SolidOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(2) world_pos: vec4<f32>,
     @location(3) @interpolate(flat) rect: vec4<f32>,
     @location(4) @interpolate(flat) radii: vec4<f32>,
-    @location(5) @interpolate(flat) clip_rect: vec4<f32>,
     @location(6) @interpolate(flat) stroke_params: vec4<f32>,
     @location(7) @interpolate(flat) arc_params: vec4<f32>,
 }
@@ -49,10 +47,8 @@ fn solid_output(full: VertexOutput) -> SolidOutput {
     var output: SolidOutput;
     output.clip_position = full.clip_position;
     output.color = full.color;
-    output.world_pos = full.world_pos;
     output.rect = full.rect;
     output.radii = full.radii;
-    output.clip_rect = full.clip_rect;
     output.stroke_params = full.stroke_params;
     output.arc_params = full.arc_params;
     return output;
@@ -62,10 +58,10 @@ fn full_output(solid: SolidOutput) -> VertexOutput {
     var output: VertexOutput;
     output.clip_position = solid.clip_position;
     output.color = solid.color;
-    output.world_pos = solid.world_pos;
+    output.world_pos = vec4<f32>(0.0, 0.0, vec2<f32>(UNDITHERED));
     output.rect = solid.rect;
     output.radii = solid.radii;
-    output.clip_rect = solid.clip_rect;
+    output.clip_rect = vec4<f32>(0.0);
     output.stroke_params = solid.stroke_params;
     output.arc_params = solid.arc_params;
     output.gradient_params = vec4<f32>(0.0);
@@ -100,13 +96,13 @@ fn full_from_clipped_fill(fill: ClippedFillOutput) -> VertexOutput {
     var solid: SolidOutput;
     solid.clip_position = fill.clip_position;
     solid.color = fill.color;
-    solid.world_pos = vec4<f32>(0.0, 0.0, vec2<f32>(UNDITHERED));
     solid.rect = fill.rect;
     solid.radii = fill.radii;
-    solid.clip_rect = fill.clip_rect;
     solid.stroke_params = vec4<f32>(0.0);
     solid.arc_params = vec4<f32>(0.0);
-    return full_output(solid);
+    var full = full_output(solid);
+    full.clip_rect = fill.clip_rect;
+    return full;
 }
 
 // `ClippedFillOutput` without the clip an unclipped fill has none of.
