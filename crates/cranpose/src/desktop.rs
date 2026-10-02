@@ -5461,7 +5461,12 @@ impl ApplicationHandler for App {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
-        cranpose_app_shell::__startup_probe("caps+config");
+        cranpose_app_shell::__startup_probe(&format!(
+            "caps+config {}x{} scale {}",
+            surface_config.width,
+            surface_config.height,
+            window.scale_factor()
+        ));
         surface.configure(&device, &surface_config);
         cranpose_app_shell::__startup_probe("configured");
         present_initial_placeholder_frame(

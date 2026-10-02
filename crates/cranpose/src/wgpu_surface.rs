@@ -45,10 +45,12 @@ pub(crate) fn current_surface_texture(surface: &wgpu::Surface<'_>, context: &str
             SurfaceFrame::Reconfigure
         }
         wgpu::CurrentSurfaceTexture::Timeout => {
+            cranpose_app_shell::__startup_probe("Timeout acquiring");
             log::debug!("{context} surface timeout, skipping frame");
             SurfaceFrame::Skip
         }
         wgpu::CurrentSurfaceTexture::Occluded => {
+            cranpose_app_shell::__startup_probe("Occluded acquiring");
             log::debug!("{context} surface occluded, skipping frame");
             SurfaceFrame::Skip
         }
