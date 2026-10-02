@@ -975,6 +975,47 @@ fn versions_fail_when_workspace_dependency_diverges() {
     );
 }
 
+fn write_member_manifest(root: &Path, dependencies: &str) {
+    let dir = root.join("crates/cranpose");
+    fs::create_dir_all(&dir).expect("create the member's directory");
+    let manifest =
+        format!("[package]\nname = \"cranpose\"\nversion.workspace = true\n\n{dependencies}");
+    fs::write(dir.join("Cargo.toml"), manifest).expect("write the member manifest");
+}
+
+#[test]
+fn versions_fail_when_a_member_pins_its_own_cranpose_version() {
+    let root = unique_temp_dir();
+    write_aligned_versions_fixture(&root);
+    write_member_manifest(
+        &root,
+        "[target.'cfg(unix)'.dev-dependencies]\n\
+         cranpose-macros = { version = \"0.1.164\", path = \"../cranpose-macros\" }\n",
+    );
+
+    let error = check_versions_at(&root).expect_err("a member's own pin must fail");
+
+    assert!(
+        error.contains(
+            "crates/cranpose/Cargo.toml pins cranpose-macros at 0.1.164; take it from the workspace"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn versions_pass_when_members_take_cranpose_from_the_workspace() {
+    let root = unique_temp_dir();
+    write_aligned_versions_fixture(&root);
+    write_member_manifest(
+        &root,
+        "[dependencies]\ncranpose-macros.workspace = true\nlog = \"0.4\"\n\n\
+         [build-dependencies]\ncranpose-core = { workspace = true }\n",
+    );
+
+    check_versions_at(&root).expect("workspace-inherited dependencies must pass");
+}
+
 #[test]
 fn versions_fail_when_lockfile_version_diverges() {
     let root = unique_temp_dir();
