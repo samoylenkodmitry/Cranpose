@@ -2,6 +2,13 @@
 
 Validation on 2026-09-21, starting from main `39b18fe1`.
 
+Evidence review, 2026-10-02: this report retains its original results.
+Later [physical-iPhone VoiceOver runs](accessibility_voiceover_validation.md)
+and [screen identity/text editing runs](accessibility_screen_identity_validation.md)
+cover specific navigation, capture and edit/save/reopen flows on 2026-09-22.
+The simulator-only scope below applies to this September 21 run, not to all
+subsequent project validation.
+
 ## Regressions
 
 The former canvas ID calculation discarded high key bits and resolved collisions

@@ -3,6 +3,12 @@
 A release is one action: create a `vX.Y.Z` tag on green `main` in the GitHub web
 UI. Nothing before it, nothing after it.
 
+For the 0.9 stabilization line, the [release readiness ledger](release_readiness.md)
+records the supported scope and remaining 1.0 acceptance work. Validate the
+documentation home, existing demo navigation and external-consumer builds as
+part of the release. The 0.9 milestone uses `v0.9.0` through this same workflow;
+it does not need a different version-bumping path.
+
 ## What the tag sets off
 
 `.github/workflows/publish.yml` takes it from there:
