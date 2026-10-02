@@ -1,5 +1,10 @@
 # Cranpose
 
+**0.9 — toward 1.0.** Read the [application guide](docs/guide.md) and
+[release readiness ledger](docs/release_readiness.md) for the supported
+surface, current evidence and remaining stabilization work. The desktop demo
+opens on its bundled Documentation tab; all existing examples remain available.
+
 [Cranpose Studio on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/34594-cranpose) ·
 [IntelliJ IDEA and RustRover guide](docs/intellij.md): live editing, component
 previews, layout inspection and local platform builds.
@@ -53,7 +58,7 @@ Or add the framework to an existing project:
 
 ```toml
 [dependencies]
-cranpose = { version = "0.1.95", features = ["desktop", "renderer-wgpu"] }
+cranpose = { version = "0.9", features = ["desktop", "renderer-wgpu"] }
 ```
 
 ## Example
@@ -292,7 +297,7 @@ out-of-the-box behaviour over size:
 
 ```toml
 [dependencies]
-cranpose = { version = "0.1.95", default-features = false, features = [
+cranpose = { version = "0.9", default-features = false, features = [
     "desktop",        # or just "desktop-wayland" / "desktop-x11"
     "renderer-wgpu",
 ] }
@@ -337,7 +342,7 @@ rustdoc, and the architecture budgets: featureless and all-features builds, the
 per-backend winit checks, the duplicate-dependency budgets and the desktop
 binary-size ceiling.
 
-Zero warnings is the standard Contributor conventions live in
+Zero warnings is the standard. Contributor conventions live in
 [`AGENTS.md`](AGENTS.md).
 
 ## License

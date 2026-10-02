@@ -462,6 +462,16 @@ const DEFAULT_URL: &str =
     "https://raw.githubusercontent.com/samoylenkodmitry/s-a--m.github.io/refs/heads/master/_leetcode_source/2023-07-14-leetcode_daily.md";
 
 #[composable]
+pub(super) fn MarkdownDocument(markdown: &'static str, base_url: &'static str) {
+    let blocks = cranpose_core::rememberKeyed((markdown, base_url), |(markdown, base_url)| {
+        Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(
+            markdown, base_url,
+        )))
+    });
+    render_markdown_blocks(blocks);
+}
+
+#[composable]
 pub fn markdown_viewer_tab() {
     let url_state = cranpose_core::remember(|| TextFieldState::new(DEFAULT_URL)).with(|s| *s);
     let fetch_state = cranpose_core::rememberMutableStateOf(|| FetchState::Idle);

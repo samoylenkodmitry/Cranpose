@@ -1,6 +1,14 @@
-# Capability parity — every service API real on every platform
+# Platform capabilities and limits
 
-Status: implementation contract (2026-07-10). Companion audit: the
+Source audit for 0.9: 2026-10-02, baseline `59ac28c6b`. Backend presence is
+distinct from an executed device check. The matrix records supported backends
+and defaults; the [release ledger](release_readiness.md) records validation.
+The network fallback was rechecked in
+[`network_status.rs`](../crates/cranpose-services/src/network_status.rs):
+without a registered backend it reports online and unmetered, not Unsupported.
+Applications must not mistake that default for measured connectivity.
+
+Original implementation contract (2026-07-10): the
 0.1.44→0.1.57 extraction arc added the service registry + iOS backends but
 left Android/desktop/web unfilled, so cranscan ships ~1,500 lines of app-side
 Java/JNI duplicating framework concerns.
@@ -23,7 +31,7 @@ never silently pretend.
 | haptics           | ■   | ■ `performHapticFeedback` JNI | □ | ■ `navigator.vibrate` | desktop honest no-op |
 | share sheet       | ■   | ■ ACTION_SEND + `CranposeShareProvider` | □ (save-dialog instead) | ■ Web Share API | |
 | notifier          | ■   | ■ channels + deep-link Java | ■ zero-dep CLI (notify-send/osascript/PowerShell) | ■ Notification API | |
-| network status    | □   | ■ ConnectivityManager Java | ● explicit assumption | ■ `navigator.onLine` | iOS NWPathMonitor still open |
+| network status    | ● optimistic default | ■ ConnectivityManager Java | ● optimistic default | ■ `navigator.onLine` | iOS NWPathMonitor still open; without a backend the default is online/unmetered |
 | device info       | ■ `NSProcessInfo` + `os_proc_available_memory` | ■ /proc + `getrusage`/`mallopt` | ■ `getrusage`; resident on linux | ● `navigator.deviceMemory` (reflective) | process readings — resident set, memory still available to this process, processor time, and returning free pages — sit beside the device total; every one is optional and a platform that will not say reports nothing rather than zero |
 | clipboard         | ■   | ■ ClipboardManager JNI | ■ arboard | ■ Async Clipboard API (`web_clipboard`) | web reads are a promise, so the bridge takes the *paste* (`request_paste`) instead of answering `read_text` |
 | back requests     | ■   | ■ back key → `push_back_request` behind `set_back_interception` | □ (apps map keys themselves) | □ | predictive back must stay off (`enableOnBackInvokedCallback=false`) |

@@ -1,8 +1,9 @@
 use desktop_app::app::{DemoTab, DEMO_TABS, DESKTOP_INITIAL_TAB};
 
 #[test]
-fn desktop_demo_opens_on_hacker_news() {
-    assert_eq!(DESKTOP_INITIAL_TAB, DemoTab::HackerNews);
+fn desktop_demo_opens_on_documentation() {
+    assert_eq!(DESKTOP_INITIAL_TAB, DemoTab::Documentation);
+    assert_eq!(DEMO_TABS.first(), Some(&DemoTab::Documentation));
 }
 
 #[test]
@@ -13,7 +14,7 @@ fn liquid_ui_is_a_front_row_demo_tab() {
         .expect("Liquid UI must be registered in the desktop demo");
 
     assert!(
-        liquid_index <= 1,
+        liquid_index <= 2,
         "Liquid UI must be visible beside the default tab without scrolling; index={liquid_index}"
     );
 }
