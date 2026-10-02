@@ -1364,6 +1364,10 @@ where
         }
 
         log::info!("[startup] renderer init done");
+        // Insets and launch arguments Java delivered while the window was
+        // made reach the first composition, not a recomposition after it.
+        crate::android_services::apply_pending_platform_signals(density, app_shell);
+        log::info!("[startup] platform signals applied");
         let content_clone = content.clone();
         let density = density.max(f32::EPSILON);
         let platform_env = android_platform_env();
