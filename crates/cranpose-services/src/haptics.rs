@@ -12,10 +12,7 @@
 //! that degrades to the closest [`HapticFeedback`] constant, so a backend that
 //! implements only [`Haptics::perform`] still answers the whole trait.
 
-use std::{
-    cell::RefCell,
-    sync::{Arc, OnceLock},
-};
+use std::sync::{Arc, OnceLock};
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
@@ -353,16 +350,10 @@ pub fn default_haptics() -> HapticsRef {
 }
 
 pub fn local_haptics() -> CompositionLocal<HapticsRef> {
-    thread_local! {
-        static LOCAL_HAPTICS: RefCell<Option<CompositionLocal<HapticsRef>>> = const { RefCell::new(None) };
-    }
-
-    LOCAL_HAPTICS.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_haptics, Arc::ptr_eq))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.haptics,
+        || compositionLocalOfWithPolicy(default_haptics, Arc::ptr_eq),
+    )
 }
 
 #[composable]

@@ -2,7 +2,7 @@
 //! that speaks guidance, slows an automatic step down or drops a gesture-only
 //! path while a screen reader is on.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
@@ -40,17 +40,10 @@ pub fn platform_accessibility_state() -> AccessibilityState {
 /// The state a composable reads: what the platform reported, unless a
 /// [`ProvideAccessibilityState`] above it says otherwise.
 pub fn local_accessibility_state() -> CompositionLocal<AccessibilityState> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<AccessibilityState>>> =
-            const { RefCell::new(None) };
-    }
-
-    LOCAL.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOf(platform_accessibility_state))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.accessibility_state,
+        || compositionLocalOf(platform_accessibility_state),
+    )
 }
 
 /// Gives the content below it a fixed state, for a preview or a test that

@@ -7,10 +7,7 @@
 //! / osascript / PowerShell toast); CI without a notification service simply
 //! drops them.
 
-use std::{
-    cell::RefCell,
-    sync::{Arc, OnceLock},
-};
+use std::sync::{Arc, OnceLock};
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
@@ -264,16 +261,10 @@ mod desktop {
 }
 
 pub fn local_notifier() -> CompositionLocal<NotifierRef> {
-    thread_local! {
-        static LOCAL_NOTIFIER: RefCell<Option<CompositionLocal<NotifierRef>>> = const { RefCell::new(None) };
-    }
-
-    LOCAL_NOTIFIER.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_notifier, Arc::ptr_eq))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.notifier,
+        || compositionLocalOfWithPolicy(default_notifier, Arc::ptr_eq),
+    )
 }
 
 #[composable]

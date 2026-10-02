@@ -8,7 +8,7 @@
 //! behavior on desktop (a file dialog), the web (`<input accept="image/*">`),
 //! and Android (SAF), where a plain file picker already surfaces images.
 
-use std::{cell::RefCell, sync::Arc};
+use std::sync::Arc;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
@@ -102,16 +102,10 @@ pub fn default_image_picker() -> ImagePickerRef {
 }
 
 pub fn local_image_picker() -> CompositionLocal<ImagePickerRef> {
-    thread_local! {
-        static LOCAL_IMAGE_PICKER: RefCell<Option<CompositionLocal<ImagePickerRef>>> = const { RefCell::new(None) };
-    }
-
-    LOCAL_IMAGE_PICKER.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_image_picker, Arc::ptr_eq))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.image_picker,
+        || compositionLocalOfWithPolicy(default_image_picker, Arc::ptr_eq),
+    )
 }
 
 #[composable]

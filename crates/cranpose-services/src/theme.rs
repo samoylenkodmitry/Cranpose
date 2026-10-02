@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
@@ -232,16 +232,10 @@ fn theme_from_windows_registry(value: &str) -> Option<SystemTheme> {
 }
 
 pub fn local_system_theme() -> CompositionLocal<SystemTheme> {
-    thread_local! {
-        static LOCAL_SYSTEM_THEME: RefCell<Option<CompositionLocal<SystemTheme>>> = const { RefCell::new(None) };
-    }
-
-    LOCAL_SYSTEM_THEME.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOf(default_system_theme))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.theme,
+        || compositionLocalOf(default_system_theme),
+    )
 }
 
 #[composable]

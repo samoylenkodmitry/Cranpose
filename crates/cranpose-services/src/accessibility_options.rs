@@ -3,7 +3,7 @@
 //! inverted colors. The framework applies them on its own; an app reads them
 //! for what it draws itself.
 
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
@@ -90,17 +90,10 @@ pub fn platform_accessibility_options() -> AccessibilityOptions {
 /// The options a composable reads: what the platform reported, unless a
 /// [`ProvideAccessibilityOptions`] above it says otherwise.
 pub fn local_accessibility_options() -> CompositionLocal<AccessibilityOptions> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<AccessibilityOptions>>> =
-            const { RefCell::new(None) };
-    }
-
-    LOCAL.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOf(platform_accessibility_options))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.accessibility_options,
+        || compositionLocalOf(platform_accessibility_options),
+    )
 }
 
 /// Gives the content below it fixed options, for a preview or a test that

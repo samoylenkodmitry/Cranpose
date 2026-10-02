@@ -1111,16 +1111,10 @@ pub fn default_http_client() -> HttpClientRef {
 }
 
 pub fn local_http_client() -> CompositionLocal<HttpClientRef> {
-    thread_local! {
-        static LOCAL_HTTP_CLIENT: std::cell::RefCell<Option<CompositionLocal<HttpClientRef>>> = const { std::cell::RefCell::new(None) };
-    }
-
-    LOCAL_HTTP_CLIENT.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_http_client, Arc::ptr_eq))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.http,
+        || compositionLocalOfWithPolicy(default_http_client, Arc::ptr_eq),
+    )
 }
 
 #[cfg(test)]

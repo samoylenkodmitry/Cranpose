@@ -125,16 +125,10 @@ pub fn default_uri_handler() -> UriHandlerRef {
 }
 
 pub fn local_uri_handler() -> CompositionLocal<UriHandlerRef> {
-    thread_local! {
-        static LOCAL_URI_HANDLER: RefCell<Option<CompositionLocal<UriHandlerRef>>> = const { RefCell::new(None) };
-    }
-
-    LOCAL_URI_HANDLER.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_uri_handler, Rc::ptr_eq))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.uri_handler,
+        || compositionLocalOfWithPolicy(default_uri_handler, Rc::ptr_eq),
+    )
 }
 
 #[composable]

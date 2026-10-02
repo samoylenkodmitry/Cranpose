@@ -300,16 +300,10 @@ pub fn launch_args_from_command_line(
 /// Compares by pointer: a snapshot is replaced wholesale, never edited, so
 /// identity is the change signal and no deep comparison is needed per read.
 pub fn local_launch_args() -> CompositionLocal<LaunchArgsRef> {
-    thread_local! {
-        static LOCAL_LAUNCH_ARGS: RefCell<Option<CompositionLocal<LaunchArgsRef>>> = const { RefCell::new(None) };
-    }
-
-    LOCAL_LAUNCH_ARGS.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(launch_args, Rc::ptr_eq))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.launch_args,
+        || compositionLocalOfWithPolicy(launch_args, Rc::ptr_eq),
+    )
 }
 
 /// Provides launch arguments to `content`.

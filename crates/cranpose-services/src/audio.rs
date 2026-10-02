@@ -25,7 +25,6 @@
 mod wav;
 
 use std::{
-    cell::RefCell,
     fmt,
     ops::Index,
     rc::Rc,
@@ -631,16 +630,10 @@ pub fn default_audio() -> AudioPlayerRef {
 
 /// The CompositionLocal descendants read to reach the audio player.
 pub fn local_audio() -> CompositionLocal<AudioPlayerRef> {
-    thread_local! {
-        static LOCAL_AUDIO: RefCell<Option<CompositionLocal<AudioPlayerRef>>> = const { RefCell::new(None) };
-    }
-
-    LOCAL_AUDIO.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_audio, Arc::ptr_eq))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.audio,
+        || compositionLocalOfWithPolicy(default_audio, Arc::ptr_eq),
+    )
 }
 
 /// Provides the installed audio player to `content`.

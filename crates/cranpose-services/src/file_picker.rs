@@ -288,15 +288,10 @@ pub fn default_file_picker() -> FilePickerRef {
 
 /// The [`CompositionLocal`] carrying the active [`FilePicker`].
 pub fn local_file_picker() -> CompositionLocal<FilePickerRef> {
-    thread_local! {
-        static LOCAL_FILE_PICKER: RefCell<Option<CompositionLocal<FilePickerRef>>> = const { RefCell::new(None) };
-    }
-
-    LOCAL_FILE_PICKER.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_file_picker, Rc::ptr_eq))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.file_picker,
+        || compositionLocalOfWithPolicy(default_file_picker, Rc::ptr_eq),
+    )
 }
 
 /// Provides the default [`FilePicker`] to descendant composables.

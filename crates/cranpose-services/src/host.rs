@@ -379,15 +379,10 @@ pub fn advance_lifecycle(target: LifecycleState) {
 /// transition, so a screen can pause its own work without registering an
 /// observer of its own.
 pub fn local_lifecycle_state() -> cranpose_core::CompositionLocal<LifecycleState> {
-    thread_local! {
-        static LOCAL: std::cell::RefCell<Option<cranpose_core::CompositionLocal<LifecycleState>>> =
-            const { std::cell::RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| cranpose_core::compositionLocalOf(current_lifecycle_state))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.lifecycle,
+        || cranpose_core::compositionLocalOf(current_lifecycle_state),
+    )
 }
 
 /// The host's lifecycle state as observable state.
