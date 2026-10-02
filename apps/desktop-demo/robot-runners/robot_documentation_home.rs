@@ -1,5 +1,5 @@
 use cranpose::{AppLauncher, Robot};
-use cranpose_testing::find_button_exact_in_semantics;
+use cranpose_testing::{find_button_exact_in_semantics, find_text_in_semantics};
 use desktop_app::app;
 
 use crate::{output_paths, robot_shot};
@@ -7,7 +7,9 @@ use crate::{output_paths, robot_shot};
 fn click_button(robot: &Robot, label: &str) {
     let (x, y, width, height) =
         find_button_exact_in_semantics(robot, label).expect("documentation button");
-    robot.click(x + width * 0.5, y + height * 0.5).expect("click documentation control");
+    robot
+        .click(x + width * 0.5, y + height * 0.5)
+        .expect("click documentation control");
     robot.wait_for_idle().expect("documentation settles");
 }
 
@@ -16,7 +18,8 @@ fn capture(robot: &Robot, width: u32, stage: &str) {
     robot_shot::save_checked(
         &output_paths::diagnostic_path(&filename),
         &robot.screenshot().expect("documentation screenshot"),
-    ).expect("save documentation screenshot");
+    )
+    .expect("save documentation screenshot");
 }
 
 pub(crate) fn main() {
@@ -30,10 +33,12 @@ pub(crate) fn main() {
     AppLauncher::new()
         .with_title("Cranpose documentation")
         .with_size(width, height)
+        .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(true)
         .with_test_driver(move |robot| {
             robot.wait_for_idle().expect("documentation startup");
-            robot.validate_content("Build native and browser interfaces in Rust.")
+            robot
+                .validate_content("Build native and browser interfaces in Rust.")
                 .expect("offline documentation opens first");
             capture(&robot, width, "home");
             if compact {
@@ -41,37 +46,64 @@ pub(crate) fn main() {
                 capture(&robot, width, "sections");
             }
             click_button(&robot, "Get started");
-            robot.validate_content("Create an application").expect("chapter changed");
+            robot
+                .validate_content("Create an application")
+                .expect("chapter changed");
             capture(&robot, width, "get-started");
-            let section_bounds = (!compact).then(|| {
-                find_button_exact_in_semantics(&robot, "Get started").expect("selected section")
-            });
-            robot.move_to(width as f32 * 0.72, height as f32 * 0.64).expect("hover document");
-            robot.mouse_scroll_sequence_and_wait_for_frames(0.0, -70.0, 3)
-                .expect("scroll guide through presented frames");
+            let tabs_before = (!compact)
+                .then(|| find_button_exact_in_semantics(&robot, "Counter App").expect("tab row"));
+            let (_, title_y, _, _) =
+                find_text_in_semantics(&robot, "Create an application").expect("article heading");
+            robot
+                .move_to(width as f32 * 0.90, height as f32 * 0.70)
+                .expect("hover document");
+            robot
+                .mouse_scroll_sequence_and_wait_for_frames(0.0, -90.0, 3)
+                .expect("scroll the whole guide");
+            robot.wait_for_idle().expect("page settles");
             capture(&robot, width, "scrolling");
-            robot.wait_for_idle().expect("electric edge settles at rest");
-            capture(&robot, width, "settled");
-            if let Some((x, y, _, _)) = section_bounds {
-                let (current_x, current_y, _, _) =
-                    find_button_exact_in_semantics(&robot, "Get started").expect("section stays visible");
-                assert!((x - current_x).abs() < 0.5 && (y - current_y).abs() < 0.5,
-                    "reading scroll must leave the section wheel in place");
+            let (_, scrolled_title_y, _, _) =
+                find_text_in_semantics(&robot, "Create an application")
+                    .expect("scrolled article heading");
+            assert!(title_y - scrolled_title_y > 50.0, "the page must scroll: {title_y} -> {scrolled_title_y}");
+            if let Some((_, tabs_y, _, _)) = tabs_before {
+                let (_, scrolled_tabs_y, _, _) =
+                    find_button_exact_in_semantics(&robot, "Counter App")
+                        .expect("scrolled tab row");
+                assert!(
+                    (tabs_y - scrolled_tabs_y - (title_y - scrolled_title_y)).abs() < 1.0,
+                    "tabs and article share the same page scroll"
+                );
+                assert!(scrolled_tabs_y < 0.0, "tabs scroll out of view");
             }
-            for _ in 0..12 {
-                if robot.validate_content("use cranpose::prelude::*;").is_ok() {
+            for _ in 0..30 {
+                let (_, y, _, _) = find_text_in_semantics(&robot, "use cranpose::prelude::*;")
+                    .expect("code block");
+                if y >= 0.0 && y < height as f32 * 0.65 {
                     break;
                 }
-                robot.mouse_scroll_and_wait_for_frame(0.0, -120.0).expect("scroll to code");
+                robot
+                    .mouse_scroll_and_wait_for_frame(0.0, -90.0)
+                    .expect("scroll to code");
             }
-            robot.validate_content("use cranpose::prelude::*;").expect("code is readable");
-            robot.wait_for_idle().expect("reading code settles");
             capture(&robot, width, "code");
+            robot
+                .mouse_scroll_sequence_and_wait_for_frames(0.0, -240.0, 25)
+                .expect("scroll to the end");
+            robot.wait_for_idle().expect("end of page");
+            capture(&robot, width, "end");
+            click_button(&robot, "Back to top");
+            robot
+                .validate_content("Create an application")
+                .expect("return to article top");
             if !compact {
                 click_button(&robot, "Counter App");
-                robot.validate_content("Increment").expect("existing counter remains available");
+                robot
+                    .validate_content("Increment")
+                    .expect("existing counter remains available");
                 click_button(&robot, "Documentation");
-                robot.validate_content("Build native and browser interfaces in Rust.")
+                robot
+                    .validate_content("Build native and browser interfaces in Rust.")
                     .expect("return to documentation");
             }
             robot.exit().expect("exit documentation robot");

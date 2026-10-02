@@ -469,18 +469,23 @@ pub(super) enum MarkdownAppearance {
 }
 
 #[composable]
-pub(super) fn MarkdownDocument(
-    markdown: &'static str,
-    base_url: &'static str,
-    list_state: cranpose_foundation::lazy::LazyListState,
-    appearance: MarkdownAppearance,
-) {
+pub(super) fn MarkdownDocument(markdown: &'static str, base_url: &'static str) {
     let blocks = cranpose_core::rememberKeyed((markdown, base_url), |(markdown, base_url)| {
         Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(
             markdown, base_url,
         )))
     });
-    render_markdown_blocks_with_state(blocks, list_state, appearance);
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(18.0)),
+        move || {
+            for (index, block) in blocks.iter().enumerate() {
+                cranpose_core::with_key(&index, || {
+                    render_markdown_block(block, MarkdownAppearance::Reader);
+                });
+            }
+        },
+    );
 }
 
 #[composable]
@@ -703,11 +708,7 @@ pub fn MarkdownScrollStressFixtureTabWithState(
             .fill_max_size(),
         ColumnSpec::default(),
         move || {
-            render_markdown_blocks_with_state(
-                blocks.clone(),
-                list_state,
-                MarkdownAppearance::Standard,
-            );
+            render_markdown_blocks_with_state(blocks.clone(), list_state);
         },
     );
 }
@@ -768,13 +769,8 @@ const MARKDOWN_SCROLLBAR_MIN_THUMB_HEIGHT: f32 = 32.0;
 fn MarkdownBlocksList(
     list_state: cranpose_foundation::lazy::LazyListState,
     blocks: Rc<[MarkdownBlock]>,
-    appearance: MarkdownAppearance,
 ) {
-    let gap = match appearance {
-        MarkdownAppearance::Standard => 6.0,
-        MarkdownAppearance::Reader => 14.0,
-    };
-    let mut spec = LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(gap));
+    let mut spec = LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0));
     spec.beyond_bounds_item_count = 0;
     LazyColumn(
         Modifier::empty()
@@ -786,15 +782,19 @@ fn MarkdownBlocksList(
         spec,
         move |scope| {
             use cranpose_foundation::lazy::LazyListScopeExt;
-            scope.items_indexed_rc(blocks, move |_index, block| match block {
-                MarkdownBlock::Text(annotated) => render_text_block(annotated.clone(), appearance),
-                MarkdownBlock::Image { url, alt } => {
-                    MarkdownImage(url.clone(), alt.clone());
-                }
-                MarkdownBlock::Rule => render_rule(),
+            scope.items_indexed_rc(blocks, move |_index, block| {
+                render_markdown_block(block, MarkdownAppearance::Standard);
             });
         },
     );
+}
+
+fn render_markdown_block(block: &MarkdownBlock, appearance: MarkdownAppearance) {
+    match block {
+        MarkdownBlock::Text(annotated) => render_text_block(annotated.clone(), appearance),
+        MarkdownBlock::Image { url, alt } => MarkdownImage(url.clone(), alt.clone()),
+        MarkdownBlock::Rule => render_rule(),
+    }
 }
 
 fn markdown_scrollbar_style() -> LazyScrollbarStyle {
@@ -810,32 +810,21 @@ fn markdown_scrollbar_style() -> LazyScrollbarStyle {
 #[composable]
 fn render_markdown_blocks(blocks: Rc<[MarkdownBlock]>) {
     let list_state = rememberLazyListState();
-    render_markdown_blocks_with_state(blocks, list_state, MarkdownAppearance::Standard);
+    render_markdown_blocks_with_state(blocks, list_state);
 }
 
 #[composable]
 fn render_markdown_blocks_with_state(
     blocks: Rc<[MarkdownBlock]>,
     list_state: cranpose_foundation::lazy::LazyListState,
-    appearance: MarkdownAppearance,
 ) {
-    let style = match appearance {
-        MarkdownAppearance::Standard => markdown_scrollbar_style(),
-        MarkdownAppearance::Reader => LazyScrollbarStyle {
-            rail_width: 12.0,
-            thumb_width: 3.0,
-            min_thumb_height: 36.0,
-            rail_color: Color(0.05, 0.07, 0.11, 0.0),
-            thumb_color: Color(0.40, 0.72, 0.79, 0.65),
-        },
-    };
     LazyListWithScrollbar(
         Modifier::empty().fill_max_size(),
         list_state,
         "MarkdownScrollbarRail",
-        style,
+        markdown_scrollbar_style(),
         move || {
-            MarkdownBlocksList(list_state, blocks.clone(), appearance);
+            MarkdownBlocksList(list_state, blocks.clone());
         },
     );
 }
@@ -852,7 +841,6 @@ fn render_text_block(annotated: Rc<AnnotatedString>, appearance: MarkdownAppeara
     let modifier = if code_panel {
         modifier
             .background(Color(0.065, 0.095, 0.13, 1.0))
-            .rounded_corners(12.0)
             .padding(14.0)
     } else {
         modifier.padding(2.0)

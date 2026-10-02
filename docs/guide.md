@@ -22,9 +22,11 @@ quality or complete Compose parity.
 
 Documentation is the first desktop tab. Every existing demonstration is still
 available in the tab strip, or through the Tabs picker on a narrow window.
-The section wheel and reading pane scroll independently. Select a chapter in
-the wheel or use Previous and Next section below the article. In a compact
-window, open Sections to choose a chapter and return to the reader.
+The entire documentation page scrolls, including the tab strip. A large section
+wheel curves beneath the glass reading surface. Select an exposed chapter on
+the wheel, use Previous section and Next section above the article, or open
+Sections to reach any chapter. Back to top returns to the tab strip. The compact
+layout keeps the same page scroll and provides the full Sections menu.
 Use Counter App for state, CompositionLocal for scoped values, Async Runtime for
 effects, Layout and Lazy List for measurement and scrolling, Text Input and
 Text for editing and typography, and Liquid UI for the glass component library.
