@@ -269,7 +269,7 @@ accesskit = { version = "0.25.1", optional = true }
 serde = { version = "1.0.229", features = ["derive"], optional = true }
 serde_json = { version = "1.0.151", optional = true }
 inventory = { version = "0.3.24", optional = true }
-cranpose-macros = { version = "0.1.164", path = "../cranpose-macros" }
+cranpose-macros = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
