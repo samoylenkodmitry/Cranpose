@@ -5595,6 +5595,17 @@ impl ApplicationHandler for App {
         window_id: WinitWindowId,
         event: WindowEvent,
     ) {
+        {
+            static PROBE_EVENTS: std::sync::atomic::AtomicU32 =
+                std::sync::atomic::AtomicU32::new(0);
+            if PROBE_EVENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 30 {
+                let name = format!("{event:?}");
+                cranpose_app_shell::__startup_probe(&format!(
+                    "event {}",
+                    &name[..name.len().min(90)]
+                ));
+            }
+        }
         self.sync_frame_pacing();
         self.track_pointer_for_cursors(window_id, &event);
         self.observe_presence(window_id, &event);
@@ -5875,6 +5886,7 @@ impl ApplicationHandler for App {
                 record_pacing_event(|diag| &mut diag.redraw_events);
                 self.primary_redraw_pending = false;
                 if defer_window_redraw(event_loop, primary_frames_enabled, frame_cap_deadline) {
+                    cranpose_app_shell::__startup_probe("redraw deferred");
                     return;
                 }
                 log::trace!(target: "cranpose::input", "desktop redraw requested");
@@ -5922,6 +5934,11 @@ impl ApplicationHandler for App {
                     frame_owed,
                     app.needs_redraw(),
                 );
+                if probe < 6 {
+                    cranpose_app_shell::__startup_probe(&format!(
+                        "redraw {probe} present_required={present_required} dirty={primary_surface_dirty_before_update} owed={frame_owed}"
+                    ));
+                }
                 pace_after_empty_redraw(
                     &mut self.last_frame_start_time,
                     &mut self.last_redraw_empty,
@@ -5934,6 +5951,7 @@ impl ApplicationHandler for App {
                     let output = match current_surface_texture(surface, "primary window") {
                         SurfaceFrame::Ready(output) => output,
                         SurfaceFrame::Reconfigure => {
+                            cranpose_app_shell::__startup_probe("primary acquire reconfigure");
                             let size = window.surface_size();
                             let viewport = viewport_for_surface_size(
                                 primary_viewport_override,
@@ -5955,6 +5973,7 @@ impl ApplicationHandler for App {
                             return;
                         }
                         SurfaceFrame::Skip => {
+                            cranpose_app_shell::__startup_probe("primary acquire skipped");
                             // No texture: the window is minimized, occluded or
                             // timed out. The next attempt waits a frame
                             // interval, as after an empty redraw, or the loop
