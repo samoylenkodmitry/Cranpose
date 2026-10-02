@@ -5028,7 +5028,7 @@ fn a_skipped_reader_still_follows_the_state_it_read() {
     let value = MutableState::with_runtime(1_u32, runtime);
     composition
         .render(location_key(file!(), line!(), column!()), move || {
-            read_tracking::Parent(tick, value)
+            read_tracking::Parent(tick, value);
         })
         .expect("initial composition");
     read_tracking::READER_RUNS.with(|runs| runs.set(0));
@@ -5057,7 +5057,7 @@ fn a_non_reactive_read_does_not_subscribe_its_scope() {
     let value = MutableState::with_runtime(1_u32, composition.runtime_handle());
     composition
         .render(location_key(file!(), line!(), column!()), move || {
-            read_tracking::Peeker(value)
+            read_tracking::Peeker(value);
         })
         .expect("initial composition");
     read_tracking::READER_RUNS.with(|runs| runs.set(0));
