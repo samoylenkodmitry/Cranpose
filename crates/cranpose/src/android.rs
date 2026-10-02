@@ -667,7 +667,11 @@ impl AndroidFrameDriver {
         for frame in self.displayed_rx.try_iter() {
             pacer.record_shown(frame.shown_ns, frame.queued_behind, vsync_period_ns());
             pacer.record_present_return_to_display(frame.present_returned_ns, frame.shown_ns);
-            telemetry.note_present_return_to_display(frame.shown_ns - frame.present_returned_ns);
+            telemetry.note_shown(
+                frame.shown_ns - frame.present_returned_ns,
+                frame.queued_behind,
+                frame.present_margin_ns,
+            );
         }
     }
 

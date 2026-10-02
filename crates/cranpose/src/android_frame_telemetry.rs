@@ -367,11 +367,18 @@ struct Sample {
     lead_us: i32,
 }
 
+const QUEUED_BEHIND_BUCKETS: usize = 5;
+
 pub(crate) struct AndroidFrameTelemetry {
     enabled: bool,
     window_frames: usize,
     samples: Vec<Sample>,
     present_return_to_display_us: Vec<i32>,
+    /// Shown frames by how many later frames the display had queued behind
+    /// each, the last bucket counting that many or more.
+    queued_behind: [u32; QUEUED_BEHIND_BUCKETS],
+    present_margin_us: Vec<i32>,
+    unreported_margins: u32,
     last_present_ns: i64,
     idle_iterations: u32,
     window_start_ns: i64,
@@ -396,6 +403,9 @@ impl AndroidFrameTelemetry {
             window_frames,
             samples: Vec::with_capacity(window_frames),
             present_return_to_display_us: Vec::with_capacity(window_frames),
+            queued_behind: [0; QUEUED_BEHIND_BUCKETS],
+            present_margin_us: Vec::with_capacity(window_frames),
+            unreported_margins: 0,
             last_present_ns: 0,
             idle_iterations: 0,
             window_start_ns: 0,
@@ -512,12 +522,49 @@ impl AndroidFrameTelemetry {
                 ms(percentile(latencies, 0.90)),
             );
         }
+        let queued_behind = self
+            .queued_behind
+            .iter()
+            .enumerate()
+            .map(|(depth, frames)| format!("{depth}:{frames}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        log::warn!("[android-frame]   queued_behind {queued_behind}");
+        if !self.present_margin_us.is_empty() || self.unreported_margins > 0 {
+            self.present_margin_us.sort_unstable();
+            let margins = &self.present_margin_us;
+            log::warn!(
+                "[android-frame]   present_margin_ms n={} p10={:.2} p50={:.2} p90={:.2} unreported={}",
+                margins.len(),
+                ms(percentile(margins, 0.10)),
+                ms(percentile(margins, 0.50)),
+                ms(percentile(margins, 0.90)),
+                self.unreported_margins,
+            );
+        }
     }
 
-    pub(crate) fn note_present_return_to_display(&mut self, present_return_to_display_ns: i64) {
+    /// Records a frame the display showed: how long after its present
+    /// returned, how many later frames were queued behind it then, and its
+    /// present margin.
+    pub(crate) fn note_shown(
+        &mut self,
+        present_return_to_display_ns: i64,
+        queued_behind: u32,
+        present_margin_ns: Option<i64>,
+    ) {
         if self.enabled {
+            match present_margin_ns {
+                Some(margin_ns) => self.present_margin_us.push(us(margin_ns)),
+                None => self.unreported_margins += 1,
+            }
             self.present_return_to_display_us
                 .push(us(present_return_to_display_ns));
+            let bucket = usize::try_from(queued_behind)
+                .map_or(QUEUED_BEHIND_BUCKETS - 1, |depth| {
+                    depth.min(QUEUED_BEHIND_BUCKETS - 1)
+                });
+            self.queued_behind[bucket] += 1;
         }
     }
 
@@ -578,6 +625,9 @@ impl AndroidFrameTelemetry {
     fn reset(&mut self) {
         self.samples.clear();
         self.present_return_to_display_us.clear();
+        self.queued_behind = [0; QUEUED_BEHIND_BUCKETS];
+        self.present_margin_us.clear();
+        self.unreported_margins = 0;
         self.idle_iterations = 0;
         self.window_start_ns = 0;
     }
