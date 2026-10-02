@@ -1,8 +1,8 @@
 //! Caches that forget what layout stopped asking for.
 
-use std::{borrow::Borrow, hash::Hash};
+use std::{borrow::Borrow, hash::Hash, num::NonZeroUsize};
 
-use super::bounded_lru::BoundedLruCache;
+use super::{bounded_lru::BoundedLruCache, map::RandomState};
 
 /// Layout passes an entry may go without a lookup before it leaves. Text on
 /// screen is measured again only when its layout changes, so this is how long
@@ -42,11 +42,15 @@ where
 {
     pub fn with_capacity_at_least_one(capacity: usize) -> Self {
         let probation = (capacity / PROBATION_SHARE).max(1);
+        let bound = |cap| NonZeroUsize::new(cap).unwrap_or(NonZeroUsize::MIN);
+        // One hasher for both segments, so a lookup hashes its key once.
+        let hasher = RandomState::default();
         Self {
-            entries: BoundedLruCache::with_capacity_at_least_one(
-                capacity.saturating_sub(probation),
+            entries: BoundedLruCache::with_hasher(
+                bound(capacity.saturating_sub(probation)),
+                hasher.clone(),
             ),
-            probation: BoundedLruCache::with_capacity_at_least_one(probation),
+            probation: BoundedLruCache::with_hasher(bound(probation), hasher),
             pass: 0,
         }
     }
@@ -72,11 +76,12 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let slot = match self.entries.find(key) {
+        let hash = self.entries.hash(key);
+        let slot = match self.entries.find_hashed(hash, key) {
             Some(slot) => slot,
             None => {
-                let (key, used) = self.probation.remove(key)?;
-                self.entries.insert_absent(key, used).0
+                let (key, used) = self.probation.remove_hashed(hash, key)?;
+                self.entries.insert_absent_hashed(hash, key, used).0
             }
         };
         let used = self.entries.touch_mut(slot);
@@ -91,12 +96,15 @@ where
             value,
             pass: self.pass,
         };
-        let segment = if self.entries.contains(&key) {
+        let hash = self.entries.hash(&key);
+        let segment = if self.entries.find_hashed(hash, &key).is_some() {
             &mut self.entries
         } else {
             &mut self.probation
         };
-        segment.push(key, used).map(|(key, used)| (key, used.value))
+        segment
+            .push_hashed(hash, key, used)
+            .map(|(key, used)| (key, used.value))
     }
 
     /// Starts a layout pass: drops the entries no lookup asked for in the

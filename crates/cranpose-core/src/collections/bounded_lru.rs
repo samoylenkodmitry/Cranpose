@@ -57,9 +57,15 @@ where
     K: Eq + Hash,
 {
     pub fn new(cap: NonZeroUsize) -> Self {
+        Self::with_hasher(cap, RandomState::default())
+    }
+
+    /// A cache hashing with `hasher`, so caches built with one hasher share
+    /// a key's hash.
+    pub(super) fn with_hasher(cap: NonZeroUsize, hasher: RandomState) -> Self {
         Self {
             index: HashTable::new(),
-            hasher: RandomState::default(),
+            hasher,
             slots: Vec::new(),
             free: Vec::new(),
             newest: None,
@@ -87,7 +93,7 @@ where
 
     /// Drops every entry and gives back the storage they took.
     pub fn clear(&mut self) {
-        *self = Self::new(self.cap);
+        *self = Self::with_hasher(self.cap, self.hasher.clone());
     }
 
     /// The lookups take any form of the key the stored key borrows as, so a
@@ -130,25 +136,34 @@ where
     }
 
     pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
-        if let Some(slot) = self.find(&key) {
+        self.push_hashed(self.hash(&key), key, value)
+    }
+
+    /// [`Self::push`] of a key whose [`Self::hash`] the caller has.
+    pub(super) fn push_hashed(&mut self, hash: u64, key: K, value: V) -> Option<(K, V)> {
+        if let Some(slot) = self.find_hashed(hash, &key) {
             self.promote(slot);
             let old_value = std::mem::replace(&mut self.slot_mut(slot).value, value);
             return Some((key, old_value));
         }
-        self.insert_absent(key, value).1
+        self.insert_absent_hashed(hash, key, value).1
     }
 
-    /// Stores `key`, which the cache does not hold, as the most recently
-    /// used entry. Returns its slot and the least recently used entry it
-    /// pushed out.
-    pub(super) fn insert_absent(&mut self, key: K, value: V) -> (u32, Option<(K, V)>) {
+    /// Stores `key`, which the cache does not hold, under its `hash` as the
+    /// most recently used entry. Returns its slot and the least recently
+    /// used entry it pushed out.
+    pub(super) fn insert_absent_hashed(
+        &mut self,
+        hash: u64,
+        key: K,
+        value: V,
+    ) -> (u32, Option<(K, V)>) {
         let evicted = if self.index.len() == self.cap.get() {
             self.pop_lru()
         } else {
             None
         };
 
-        let hash = self.hasher.hash_one(&key);
         let slot = self.claim_slot(key, value);
         let (slots, hasher) = (&self.slots, &self.hasher);
         self.index.insert_unique(hash, slot, |&slot| {
@@ -158,8 +173,9 @@ where
         (slot, evicted)
     }
 
-    /// The value in `slot`, from [`Self::find`] or [`Self::insert_absent`]
-    /// with no change between, marked most recently used.
+    /// The value in `slot`, from [`Self::find_hashed`] or
+    /// [`Self::insert_absent_hashed`] with no change between, marked most
+    /// recently used.
     pub(super) fn touch_mut(&mut self, slot: u32) -> &mut V {
         self.promote(slot);
         &mut self.slot_mut(slot).value
@@ -187,16 +203,17 @@ where
     }
 
     pub fn pop(&mut self, key: &K) -> Option<V> {
-        self.remove(key).map(|(_, value)| value)
+        self.remove_hashed(self.hash(key), key)
+            .map(|(_, value)| value)
     }
 
-    /// Takes the entry under `key` out of the cache, key and value.
-    pub(super) fn remove<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    /// Takes the entry under `key`, whose [`Self::hash`] the caller has, out
+    /// of the cache, key and value.
+    pub(super) fn remove_hashed<Q>(&mut self, hash: u64, key: &Q) -> Option<(K, V)>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash = self.hasher.hash_one(key);
         let slots = &self.slots;
         let (slot, _) = self
             .index
@@ -218,17 +235,29 @@ where
         })
     }
 
-    /// The slot holding `key`, for [`Self::touch_mut`].
-    pub(super) fn find<Q>(&self, key: &Q) -> Option<u32>
+    fn find<Q>(&self, key: &Q) -> Option<u32>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.find_hashed(self.hash(key), key)
+    }
+
+    /// The hash this cache files `key` under.
+    pub(super) fn hash<Q: Hash + ?Sized>(&self, key: &Q) -> u64 {
+        self.hasher.hash_one(key)
+    }
+
+    /// The slot holding `key`, whose [`Self::hash`] the caller has, for
+    /// [`Self::touch_mut`].
+    pub(super) fn find_hashed<Q>(&self, hash: u64, key: &Q) -> Option<u32>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let slots = &self.slots;
         self.index
-            .find(self.hasher.hash_one(key), |&slot| {
-                occupied(slots, slot).key.borrow() == key
-            })
+            .find(hash, |&slot| occupied(slots, slot).key.borrow() == key)
             .copied()
     }
 
