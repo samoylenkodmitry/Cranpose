@@ -45,7 +45,7 @@ impl WheelGeometry {
         let radius = width.max(780.0) * 0.9;
         let left = (width * 0.27).clamp(290.0, 380.0) * 0.62;
         let center = Point::new(radius + left, -radius * 0.12);
-        let focus_y = (height * 0.43).clamp(260.0, 360.0);
+        let focus_y = (height * 0.43).clamp(320.0, 360.0);
         Self {
             width,
             radius,

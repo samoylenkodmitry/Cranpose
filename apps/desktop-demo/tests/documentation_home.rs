@@ -5,7 +5,7 @@ use desktop_app::app::{combined_app_with_initial_tab, startup_tab_from_args, Dem
 fn text_bounds(rects: &[(cranpose_ui::Rect, Option<String>)], label: &str) -> cranpose_ui::Rect {
     rects
         .iter()
-        .find(|(_, text)| text.as_ref().is_some_and(|text| text.contains(label)))
+        .find(|(_, text)| text.as_deref() == Some(label))
         .map(|(bounds, _)| *bounds)
         .expect("text in page snapshot")
 }
@@ -125,6 +125,20 @@ fn wide_article_aligns_with_the_wheel_edge() {
         "Build native and browser interfaces in Rust.",
     );
     assert!(text.x - glass.x <= 41.0, "article should align with the wheel, not the center of the remaining window: {text:?}, {glass:?}");
+}
+
+#[test]
+fn wheel_brand_clears_the_tabs_in_a_short_window() {
+    let mut robot = RobotTestRule::new(800, 600, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+    });
+    let rects = robot.get_all_rects();
+    let brand = text_bounds(&rects, "CRANPOSE");
+    let tabs = text_bounds(&rects, "Counter App");
+    assert!(
+        brand.y > tabs.y + tabs.height + 12.0,
+        "brand must clear the initial tabs: {brand:?}, {tabs:?}"
+    );
 }
 
 #[test]

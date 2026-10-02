@@ -42,6 +42,7 @@ fn return_to_top(robot: &Robot, width: u32, height: u32) {
 pub(crate) fn main() {
     let (width, height) = match std::env::var("CRANPOSE_DOCS_VIEWPORT").as_deref() {
         Ok("compact") => (390, 780),
+        Ok("short") => (800, 600),
         Ok("wide") => (1440, 1000),
         Ok("desktop") | Err(std::env::VarError::NotPresent) => (1100, 820),
         other => panic!("invalid documentation viewport: {other:?}"),
