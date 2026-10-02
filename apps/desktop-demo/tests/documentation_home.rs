@@ -338,6 +338,104 @@ fn reader_actions_move_between_chapters_without_the_section_wheel() {
 }
 
 #[test]
+fn resized_guide_draws_beyond_its_original_window_edges() {
+    let Some(renderer) = crate::liquid_page_support::headless_renderer("Guide resize regression")
+    else {
+        eprintln!("skipping guide resize pixels: no headless GPU");
+        return;
+    };
+    let mut shell = cranpose_app_shell::AppShell::new_with_size_and_density(
+        renderer,
+        cranpose_core::location_key(file!(), line!(), column!()),
+        || combined_app_with_initial_tab(Some(DemoTab::Documentation)),
+        (800, 600),
+        (800.0, 600.0),
+        1.0,
+    );
+    for (width, height) in [(800, 600), (1440, 1100), (900, 700), (1700, 1200)] {
+        shell.set_buffer_size(width, height);
+        shell.set_viewport(width as f32, height as f32);
+        for _ in 0..8 {
+            shell.update();
+            shell
+                .renderer()
+                .capture_frame(width, height)
+                .expect("warm resize capture");
+        }
+        let frame = shell
+            .renderer()
+            .capture_frame(width, height)
+            .expect("resized guide pixels");
+        let pixel = |x, y| {
+            let offset = ((y * width + x) * 4) as usize;
+            &frame.pixels[offset..offset + 4]
+        };
+        let corner = pixel(width - 8, height - 8);
+        let expanded = corner[2] > corner[0] && corner[1] > corner[0];
+        let link_has_ink = (height - 35..height - 8).any(|y| {
+            (8..130).any(|x| {
+                let color = pixel(x, y);
+                color[0] > 180 && color[1] > 180 && color[2] > 180
+            })
+        });
+        if !expanded || !link_has_ink {
+            let directory = std::env::var_os("CARGO_TARGET_DIR")
+                .map_or_else(
+                    || std::path::PathBuf::from("target"),
+                    std::path::PathBuf::from,
+                )
+                .join("documentation-resize");
+            std::fs::create_dir_all(&directory).expect("resize evidence directory");
+            image::save_buffer(
+                directory.join(format!("{width}-{height}.png")),
+                &frame.pixels,
+                width,
+                height,
+                image::ColorType::Rgba8,
+            )
+            .expect("resize evidence");
+        }
+        assert!(
+            expanded,
+            "guide must paint its expanded lower-right corner at {width}×{height}: {corner:?}"
+        );
+        assert!(
+            link_has_ink,
+            "GitHub must be painted at the new bottom-left at {width}×{height}"
+        );
+    }
+}
+
+#[test]
+fn growing_the_window_expands_the_guide_and_preserves_the_corner_link() {
+    let mut robot = RobotTestRule::new(800, 600, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    for (width, height) in [(1440, 1100), (900, 700), (1700, 1200)] {
+        robot.set_viewport(width, height);
+        robot.wait_for_idle();
+        let tree = cranpose_testing::placed_semantics_from_shell(robot.shell_mut())
+            .expect("resized documentation");
+        let page = semantic_bounds(&tree, "Cranpose documentation");
+        let glass = semantic_bounds(&tree, "Documentation glass");
+        let github = semantic_bounds(&tree, "View on GitHub");
+        assert_eq!(page.width, width as f32);
+        assert_eq!(page.height, height as f32);
+        assert!((glass.x + glass.width - width as f32).abs() < 1.0);
+        assert!(
+            github.y > height as f32 - 55.0,
+            "corner link must follow a growing window: {github:?}"
+        );
+        assert!(github.x < 20.0);
+        assert!(click_control(&mut robot, "Next section"));
+        assert!(robot.find_by_text("Create an application").exists());
+        assert!(click_control(&mut robot, "Previous section"));
+    }
+}
+
+#[test]
 fn selected_chapter_survives_resizing_between_reader_layouts() {
     let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::Documentation));

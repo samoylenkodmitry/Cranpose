@@ -75,34 +75,21 @@ impl WheelGeometry {
     }
 
     pub fn entry_modifier(self, position: f32, height: f32) -> Modifier {
-        self.item_modifier(
-            position,
-            height,
-            270.0,
-            64.0,
-            -position * self.section_angle(),
-        )
+        self.item_modifier(position, height, 270.0, 64.0)
     }
 
     pub fn brand_modifier(self, position: f32) -> Modifier {
-        self.item_modifier(position, 112.0, 246.0, 24.0, 0.0)
+        self.item_modifier(position, 112.0, 246.0, 24.0)
     }
 
-    fn item_modifier(
-        self,
-        position: f32,
-        height: f32,
-        width: f32,
-        radial_offset: f32,
-        rotation: f32,
-    ) -> Modifier {
+    fn item_modifier(self, position: f32, height: f32, width: f32, radial_offset: f32) -> Modifier {
         let angle = self.focus_angle + position * self.section_angle();
         let center = self.point(angle, self.radius + radial_offset);
         Modifier::empty()
             .size_points(width, height)
             .offset(center.x - width * 0.5, center.y - height * 0.5)
             .graphics_layer_value(GraphicsLayer {
-                rotation_z: rotation.to_degrees(),
+                rotation_z: -angle.to_degrees(),
                 ..Default::default()
             })
     }

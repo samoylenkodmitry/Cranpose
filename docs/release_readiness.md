@@ -61,10 +61,12 @@ latency.
 
 On 2026-10-02, using the pinned toolchain on macm3:
 
-- `cargo nextest run --cargo-profile ci -p desktop-app -p cranpose-ui --no-fail-fast`:
-  1,794 passed, four configured skips. This includes 16 documentation regressions,
+- `cargo nextest run --cargo-profile ci -p desktop-app -p cranpose-ui -p cranpose-app-shell --no-fail-fast`:
+  2,091 passed, four configured skips. This includes 18 documentation regressions,
   offline startup, animated chapter selection and interruption, wheel fling,
-  compact navigation, all-tab rendering and accessibility.
+  compact navigation, all-tab rendering and accessibility. A GPU pixel regression
+  verifies repeated window growth and shrinkage without stale clipping and keeps
+  the repository link visible at the resized window's corner.
 - GPU robot runs passed at 390×780, 800×600, 1100×820 and 1440×1000, covering
   continuous reading, tabs scrolling out of view, wheel/article synchronization,
   chapter actions, compact back navigation and fling interruption. Captures

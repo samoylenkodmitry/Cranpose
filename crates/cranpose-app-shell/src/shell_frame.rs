@@ -459,8 +459,7 @@ where
     fn reset_layout_snapshots(&mut self) {
         self.forget_frame_snapshots();
         for surface in &mut self.surfaces {
-            surface.scoped_layout_scene_nodes.clear();
-            surface.scene_dirty = true;
+            surface.invalidate_scene_root(surface.root_node(&self.app));
         }
         let _ = cranpose_ui::take_geometry_scene_nodes();
         self.app.layout_requested = false;
@@ -477,8 +476,7 @@ where
         self.app.content_moved |= !moved.is_empty();
         if global {
             for surface in &mut self.surfaces {
-                surface.scoped_layout_scene_nodes.clear();
-                surface.scene_dirty = true;
+                surface.invalidate_scene_root(surface.root_node(&self.app));
             }
             return;
         }

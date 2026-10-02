@@ -161,13 +161,18 @@ impl<R: Renderer> RootSurface<R> {
         }
         self.root = root;
         self.forget_snapshots();
-        self.scoped_layout_scene_nodes.clear();
+        self.invalidate_scene_root(root);
         self.retained_visual_nodes.clear();
         self.hit_path_tracker.clear();
         self.hovered_nodes.clear();
         self.buttons_pressed = PointerButtons::NONE;
-        self.scene_dirty = true;
         self.is_dirty = true;
+    }
+
+    pub(crate) fn invalidate_scene_root(&mut self, root: Option<NodeId>) {
+        self.scoped_layout_scene_nodes.clear();
+        self.scoped_layout_scene_nodes.extend(root);
+        self.scene_dirty = true;
     }
 
     /// Drops the layout snapshot and marks the semantics tree for an update,
@@ -503,7 +508,8 @@ where
                 self.shell_app().request_layout_pass();
             }
         }
-        self.surface_mut().scene_dirty = true;
+        let root = self.root();
+        self.surface_mut().invalidate_scene_root(root);
         self.mark_dirty();
     }
 
