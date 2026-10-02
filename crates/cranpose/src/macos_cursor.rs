@@ -90,7 +90,7 @@ pub(crate) fn as_drawn(
     )))
 }
 
-fn ns_window(window: &dyn Window) -> Option<Retained<NSWindow>> {
+pub(crate) fn ns_window(window: &dyn Window) -> Option<Retained<NSWindow>> {
     let RawWindowHandle::AppKit(handle) = window.window_handle().ok()?.as_raw() else {
         return None;
     };

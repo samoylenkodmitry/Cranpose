@@ -5401,6 +5401,13 @@ impl ApplicationHandler for App {
         };
 
         cranpose_app_shell::__startup_probe("window created");
+        #[cfg(target_os = "macos")]
+        if std::env::var_os("NO_ANIM").is_some()
+            && let Some(ns_window) = crate::macos_cursor::ns_window(window.as_ref())
+        {
+            ns_window.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
+            cranpose_app_shell::__startup_probe("animation off");
+        }
         let (instance, surface, adapter) =
             match crate::wgpu_surface::create_wgpu_surface_and_adapter(&window) {
                 Ok(triple) => triple,
