@@ -1,9 +1,10 @@
-use crate::robot_launch;
-
 use std::time::Duration;
 
 use cranpose::Robot;
+use cranpose_testing::find_button_exact_in_semantics;
 use desktop_app::app;
+
+use crate::robot_launch;
 
 fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Duration) -> bool {
     for _ in 0..attempts {
@@ -58,13 +59,11 @@ pub(crate) fn main() {
 
             for (tab_name, expected_content) in tabs {
                 println!("Switching to '{tab_name}' tab...");
-                match robot.click_by_text(tab_name) {
-                    Ok(()) => {}
-                    Err(e) => {
-                        println!("  Error clicking tab: {e}");
-                        continue;
-                    }
-                }
+                let (x, y, width, height) = find_button_exact_in_semantics(&robot, tab_name)
+                    .unwrap_or_else(|| panic!("tab {tab_name:?} could not be brought into view"));
+                robot
+                    .click(x + width / 2.0, y + height / 2.0)
+                    .unwrap_or_else(|err| panic!("failed to click tab {tab_name:?}: {err}"));
 
                 if wait_for_content(&robot, expected_content, 10, Duration::from_millis(200)) {
                     println!("  ✓ Validated: found '{expected_content}'");

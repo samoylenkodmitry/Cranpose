@@ -1,11 +1,11 @@
-use crate::robot_launch;
-
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::time::Duration;
 
-use cranpose_testing::find_text_by_prefix_in_semantics;
+use cranpose_testing::{find_button_exact_in_semantics, find_text_by_prefix_in_semantics};
 use desktop_app::app;
+
+use crate::robot_launch;
 
 const WINDOW_WIDTH: u32 = 1024;
 const WINDOW_HEIGHT: u32 = 768;
@@ -47,34 +47,12 @@ fn settle(robot: &cranpose::Robot, delay_ms: u64) {
     std::thread::sleep(Duration::from_millis(delay_ms));
 }
 
-fn click_tab(robot: &cranpose::Robot, label: &str) -> bool {
-    if robot.click_by_text(label).is_ok() {
-        settle(robot, 100);
-        return true;
-    }
-
-    let _ = robot.move_to(512.0, 30.0);
-    std::thread::sleep(Duration::from_millis(30));
-
-    for _ in 0..20 {
-        let _ = robot.mouse_scroll(-200.0, 0.0);
-        std::thread::sleep(Duration::from_millis(30));
-        if robot.click_by_text(label).is_ok() {
-            settle(robot, 100);
-            return true;
-        }
-    }
-
-    for _ in 0..40 {
-        let _ = robot.mouse_scroll(200.0, 0.0);
-        std::thread::sleep(Duration::from_millis(30));
-        if robot.click_by_text(label).is_ok() {
-            settle(robot, 100);
-            return true;
-        }
-    }
-
-    false
+fn click_tab(robot: &cranpose::Robot, label: &str) -> Result<(), String> {
+    let (x, y, width, height) = find_button_exact_in_semantics(robot, label)
+        .ok_or_else(|| format!("tab {label:?} could not be brought into view"))?;
+    robot.click(x + width / 2.0, y + height / 2.0)?;
+    settle(robot, 100);
+    Ok(())
 }
 
 fn scroll_tab_bar_home(robot: &cranpose::Robot) {
@@ -315,11 +293,8 @@ fn log_smaps_top(phase: &str) {
     let mut rss_by_mapping: HashMap<String, (u64, usize)> = HashMap::new();
 
     for line in smaps.lines() {
-        let is_header = line
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_hexdigit)
-            && line.contains('-');
+        let is_header =
+            line.as_bytes().first().is_some_and(u8::is_ascii_hexdigit) && line.contains('-');
         if is_header {
             current_mapping = smaps_mapping_name(line);
             continue;
@@ -387,19 +362,16 @@ pub(crate) fn main() {
             }
 
             scroll_tab_bar_home(&robot);
-            assert!(click_tab(&robot, "Counter App"), "Counter App not found");
+            click_tab(&robot, "Counter App").expect("navigate to Counter App");
             assert_active_tab_content(&robot, "Increment", "Counter App");
             let counter_tab_center = button_center(&robot, "Counter App");
 
-            assert!(
-                click_tab(&robot, "Recursive Layout"),
-                "Recursive Layout not found"
-            );
+            click_tab(&robot, "Recursive Layout").expect("navigate to Recursive Layout");
             assert_active_tab_content(&robot, "Increase depth", "Recursive Layout");
             assert_current_depth(&robot, 3, "warmup");
             assert_recursive_layout_visible(&robot, 3, "warmup");
 
-            assert!(click_tab(&robot, "Counter App"), "Counter App not found");
+            click_tab(&robot, "Counter App").expect("navigate to Counter App");
             assert_active_tab_content(&robot, "Increment", "Counter App");
             settle(&robot, 500);
 
@@ -419,10 +391,7 @@ pub(crate) fn main() {
             let mut all_passed = true;
 
             for cycle in 1..=MEASURE_CYCLES {
-                assert!(
-                    click_tab(&robot, "Recursive Layout"),
-                    "Recursive Layout not found"
-                );
+                click_tab(&robot, "Recursive Layout").expect("navigate to Recursive Layout");
                 assert_active_tab_content(&robot, "Increase depth", "Recursive Layout");
                 assert_current_depth(&robot, 3, "before spike");
                 assert_recursive_layout_visible(&robot, 3, "before spike");
