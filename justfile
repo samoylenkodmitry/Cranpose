@@ -292,6 +292,7 @@ test-features: test-watchos
     cargo test --profile ci -p cranpose-ui --features svg
     cargo test --profile ci -p cranpose-render-common --features text-hyphenation-embedded
     cargo test --profile ci -p cranpose
+    cargo clippy -p cranpose --no-default-features --features webview -- -D warnings
     cargo test --profile ci -p cranpose --no-default-features --features embed
     cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
 
@@ -558,6 +559,36 @@ android-release:
 # Build the starter template for Android, the way the publish canary does.
 android-isolated:
     apps/isolated-demo/android/gradlew -p apps/isolated-demo/android :app:assembleRelease
+
+# Build the native mobile embedding demos and their generated language bindings.
+native-demo-bindings:
+    bash scripts/native_demo.sh bindings
+
+android-native-demo:
+    bash scripts/native_demo.sh android
+
+ios-native-demo target="aarch64-apple-ios-sim":
+    bash scripts/native_demo.sh ios {{quote(target)}}
+
+test-native-demo:
+    cargo test --locked -p cranpose-native --test integration
+    cargo test --locked -p cranpose --features renderer-wgpu,renderer-pixels --test integration
+    cargo test --locked -p cranpose-native-demo --test integration
+    cargo test --locked -p cranpose --no-default-features --features embed --lib
+
+test-native-demo-ios device:
+    xcrun simctl install {{quote(device)}} "${CARGO_TARGET_DIR:-target}/aarch64-apple-ios-sim/debug/CranposeNativeDemo.app"
+    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination 'platform=iOS Simulator,id={{device}}' -derivedDataPath target/native-demo-ui-tests -parallel-testing-enabled NO -only-testing:LiquidReferenceTests/NativeEmbeddingTests test
+
+test-native-demo-android device:
+    bash scripts/native_demo.sh android-test {{quote(device)}}
+
+test-webview-ios device:
+    xcrun simctl install {{quote(device)}} "${CARGO_TARGET_DIR:-target}/aarch64-apple-ios-sim/debug/CranposeDemo.app"
+    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination 'platform=iOS Simulator,id={{device}}' -derivedDataPath target/webview-ui-tests -parallel-testing-enabled NO -only-testing:LiquidReferenceTests/WebViewTabTests test
+
+test-webview-android device:
+    cd apps/android-demo/android && ANDROID_SERIAL={{quote(device)}} ./gradlew --no-daemon :app:connectedReleaseAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.compose_rs.demo.CranposeWebViewTabTest
 
 # Build the iOS simulator app bundle.
 ios-sim:

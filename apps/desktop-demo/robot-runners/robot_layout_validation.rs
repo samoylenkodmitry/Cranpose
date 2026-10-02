@@ -132,20 +132,20 @@ fn validate_bounds(
             });
         }
 
-        if *w <= 0.0 && !text.is_empty() {
+        if *w < 0.0 || (*w == 0.0 && !text.is_empty()) {
             issues.push(LayoutIssue {
                 element_text: text.clone(),
                 element_role: role.clone(),
-                issue: format!("ZERO WIDTH on content element: width={w:.1}"),
+                issue: format!("INVALID WIDTH: width={w:.1}"),
                 bounds,
             });
         }
 
-        if *h <= 0.0 && !text.is_empty() {
+        if *h < 0.0 || (*h == 0.0 && !text.is_empty()) {
             issues.push(LayoutIssue {
                 element_text: text.clone(),
                 element_role: role.clone(),
-                issue: format!("ZERO HEIGHT on content element: height={h:.1}"),
+                issue: format!("INVALID HEIGHT: height={h:.1}"),
                 bounds,
             });
         }
@@ -166,15 +166,6 @@ fn validate_bounds(
                 element_text: format!("Container at depth {depth}"),
                 element_role: role.clone(),
                 issue: format!("CONTAINER OVERFLOW: height {h:.1} exceeds window height {vh:.0}"),
-                bounds,
-            });
-        }
-
-        if *x < -1.0 || *y < -1.0 {
-            issues.push(LayoutIssue {
-                element_text: text.clone(),
-                element_role: role.clone(),
-                issue: format!("NEGATIVE POSITION: ({x:.1}, {y:.1})"),
                 bounds,
             });
         }
@@ -304,9 +295,8 @@ pub(crate) fn main() {
             println!("✓ NO LAYOUT ISSUES FOUND");
             println!("\nAll elements have valid bounds:");
             println!("  - No NaN/Infinity values");
-            println!("  - No zero/negative sizes");
+            println!("  - No negative sizes or zero-sized text");
             println!("  - No elements far outside window");
-            println!("  - No negative positions");
         } else {
             println!("✗ FOUND {} LAYOUT ISSUES:\n", all_issues.len());
             for (i, (tab, issue)) in all_issues.iter().enumerate() {

@@ -6,7 +6,7 @@ use cranpose_ui::{Point, Size, WindowRootDescriptor};
 
 use crate::{
     embed::{EmbedError, SurfaceSize},
-    embed_frame::{FrameTarget, changed_rect},
+    embed_frame::{FRAME_FORMAT, FrameTarget, changed_rect},
     embed_overlay::HostOverlayRoot,
     embed_protocol::{
         FrameUpdate, SurfaceId, WINDOW_ALWAYS_ON_TOP, WINDOW_DECORATED, WINDOW_RESIZABLE,
@@ -178,7 +178,7 @@ impl SurfaceSlot {
             id,
             root,
             kind,
-            target: FrameTarget::new(device, size.width, size.height),
+            target: FrameTarget::new(device, size.width, size.height, FRAME_FORMAT),
             size,
             drawn: Vec::new(),
             shown: Vec::new(),
@@ -217,7 +217,7 @@ impl SurfaceSlot {
             return false;
         }
         if (size.width, size.height) != self.target.size() {
-            self.target = FrameTarget::new(device, size.width, size.height);
+            self.target = FrameTarget::new(device, size.width, size.height, FRAME_FORMAT);
             self.shown.clear();
         }
         self.size = size;
@@ -240,7 +240,9 @@ impl SurfaceSlot {
             .renderer()
             .render(self.target.texture(), self.target.view(), width, height)
             .map_err(|error| EmbedError::Render(format!("{error:?}")))?;
-        self.target.read_into(device, queue, &mut self.drawn)?;
+        self.target
+            .read_into(device, queue, &mut self.drawn)
+            .map_err(|error| EmbedError::Readback(error.to_string()))?;
         self.dirty = false;
         let Some(rect) = changed_rect(&self.shown, &self.drawn, width, height) else {
             return Ok(None);

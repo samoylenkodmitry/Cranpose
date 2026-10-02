@@ -1,0 +1,2 @@
+[defaults.bindings.kotlin]
+cdylib_name = "cranpose_native_demo"

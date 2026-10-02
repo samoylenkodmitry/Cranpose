@@ -163,6 +163,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
         val root = androidRoot()
         contributeManifest(variant, root, "base")
         variant.sources.java?.addStaticSourceDirectory(File(root, "java").absolutePath)
+        variant.sources.java?.addStaticSourceDirectory(File(root, "java-webview").absolutePath)
         variant.proguardFiles.add(
             project.layout.projectDirectory.file(File(root, "proguard-rules.pro").absolutePath)
         )

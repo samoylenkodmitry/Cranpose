@@ -540,23 +540,33 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         }
     }
 
-    #[cfg(any(
-        test,
-        feature = "embed",
-        all(
-            feature = "desktop-shell",
-            feature = "renderer-wgpu",
-            not(target_os = "android")
-        ),
-        all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
-        all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
-        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
-    ))]
+    #[cfg(any(test, feature = "renderer-wgpu"))]
     fn into_settings(self) -> AppSettings {
         AppSettings {
             default_face: Fonts::default_face,
             ..self.settings
         }
+    }
+
+    /// Creates content inside a native host without starting an application.
+    ///
+    /// The host drives input, resizing and frames through the returned component.
+    /// Uses the launcher's fonts; the native application supplies platform services.
+    #[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+    pub fn create_embedded_view(
+        self,
+        width: u32,
+        height: u32,
+        density: f32,
+        content: impl FnMut() + 'static,
+    ) -> Result<crate::embedded_view::EmbeddedView, crate::embedded_view::EmbeddedViewError> {
+        crate::embedded_view::EmbeddedView::new(
+            &self.into_settings(),
+            width,
+            height,
+            density,
+            content,
+        )
     }
 
     /// Set the window title.

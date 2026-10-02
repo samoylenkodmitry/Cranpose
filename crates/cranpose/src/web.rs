@@ -797,10 +797,24 @@ pub async fn run(
     let canvas_for_cursor = canvas.clone();
     let reshape_for_loop = reshape.clone();
 
+    #[cfg(feature = "webview")]
+    let mut webviews = crate::web_webview::BrowserViews::default();
+    #[cfg(feature = "webview")]
+    let webview_canvas = canvas.clone();
+
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         frame_pending.set(false);
         canvas_watch.follow();
+        #[cfg(feature = "webview")]
+        webviews.dispatch(&platform_env.native_views);
         let update_result = app.borrow_mut().update();
+        #[cfg(feature = "webview")]
+        webviews.sync(
+            &platform_env.native_views,
+            &mut app.borrow_mut(),
+            &webview_canvas,
+            &request_frame_for_loop,
+        );
         // A size the app asked for in this update is applied in the same
         // frame, while the gesture that led to it still counts as one: a
         // floating window only resizes itself in answer to one.

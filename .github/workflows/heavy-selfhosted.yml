@@ -160,6 +160,10 @@ jobs:
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
         run: just ios-sim
 
+      - name: Build UIKit embedding demo and framework
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        run: just ios-native-demo
+
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
         run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
@@ -260,6 +264,10 @@ jobs:
         # main took the only compile of it off pull requests -- a plugin with
         # two companion objects reached main before anything said so.
         run: just android-plugin-check
+
+      - name: Build Android embedding demo and framework
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        run: just android-native-demo
 
       - name: sccache stats
         if: always() && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'

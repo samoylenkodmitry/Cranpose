@@ -1,0 +1,35 @@
+[package]
+name = "cranpose-native-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+autotests = false
+
+[lib]
+name = "cranpose_native_demo"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+bindings = ["uniffi/cli"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cranpose = { workspace = true, features = ["renderer-wgpu", "embedded-default-font"] }
+cranpose-core.workspace = true
+cranpose-native.workspace = true
+uniffi = { version = "0.32.2", default-features = false }
+
+[[bin]]
+name = "native-demo-bindgen"
+path = "src/bin/bindgen.rs"
+required-features = ["bindings"]
+
+[dev-dependencies]
+pollster = "0.4"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"

@@ -5,6 +5,8 @@ use cranpose_ui::{EdgeInsets, composable, local_ime_insets, local_safe_area_inse
 
 #[derive(Default)]
 pub(crate) struct PlatformEnvironment {
+    #[cfg(feature = "webview")]
+    pub(crate) native_views: crate::native_view::NativeViewHost,
     safe_area: Cell<EdgeInsets>,
     ime_insets: Cell<EdgeInsets>,
 }
@@ -46,6 +48,9 @@ impl PlatformEnvironment {
             ],
             || {
                 RootBackHandler();
+                #[cfg(feature = "webview")]
+                self.native_views.provide(content);
+                #[cfg(not(feature = "webview"))]
                 content();
             },
         );

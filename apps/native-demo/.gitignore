@@ -1,0 +1,5 @@
+generated/
+android/.gradle/
+android/local.properties
+android/app/build/
+ios/*.app/

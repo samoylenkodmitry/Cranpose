@@ -425,6 +425,38 @@ struct DuplicateDebt {
 
 const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     DuplicateDebt {
+        family: "bitflags",
+        reason: "Wry 0.57 requires webkit2gtk 2 and javascriptcore-rs 1, which use bitflags 1 while the workspace uses 2",
+    },
+    DuplicateDebt {
+        family: "heck",
+        reason: "Wry's GTK 3 stack uses glib-macros 0.18 with heck 0.4 while the workspace uses 0.5",
+    },
+    DuplicateDebt {
+        family: "proc-macro-crate",
+        reason: "Wry's GTK 3 stack requires gtk3-macros 0.18 and glib-macros 0.18, which use proc-macro-crate 1 and 2 while the workspace uses 3",
+    },
+    DuplicateDebt {
+        family: "serde_spanned",
+        reason: "Wry's GTK 3 system-deps 6 requires toml 0.8 and serde_spanned 0.6 while the workspace uses toml 1 and serde_spanned 1",
+    },
+    DuplicateDebt {
+        family: "toml",
+        reason: "Wry's GTK 3 sys crates require system-deps 6 with toml 0.8 while the workspace uses toml 1",
+    },
+    DuplicateDebt {
+        family: "toml_datetime",
+        reason: "Follows the GTK 3 toml 0.8 and proc-macro-crate 1/2 split",
+    },
+    DuplicateDebt {
+        family: "toml_edit",
+        reason: "GTK 3's proc-macro-crate 1/2 and toml 0.8 require toml_edit 0.19/0.20 while proc-macro-crate 3 uses 0.25",
+    },
+    DuplicateDebt {
+        family: "winnow",
+        reason: "Follows the GTK 3 toml_edit 0.19/0.20 split via winnow 0.5",
+    },
+    DuplicateDebt {
         family: "base64",
         reason: "reqwest 0.13.5 moved to ^0.23 while hyper-util 0.1.20 (latest) is still on ^0.22",
     },
@@ -470,10 +502,16 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
 ];
 
-const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[DuplicateDebt {
-    family: "env_filter",
-    reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
-}];
+const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[
+    DuplicateDebt {
+        family: "env_filter",
+        reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
+    },
+    DuplicateDebt {
+        family: "rustc-hash",
+        reason: "UniFFI 0.32.2 binding generation uses Askama 0.16 with rustc-hash ^2; naga, naga-types and wgpu-core 30.0.1 require ^1.1. The split is confined to the bindings tool feature",
+    },
+];
 
 const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] =
     &["pixels", "wgpu", "wgpu-core", "wgpu-hal", "naga"];
