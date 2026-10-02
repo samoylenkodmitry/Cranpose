@@ -19,14 +19,19 @@ else
     cache_root="$HOME/ci-cache/cranpose"
 fi
 
+# sccache is content-addressed, so every runner on a host can share it. A
+# target directory is not: two jobs building into one would package each
+# other's artifacts, so each runner gets its own.
+target_dir="$cache_root/targets/$RUNNER_NAME"
+
 test -d "$sdk_root"
-mkdir -p "$cache_root/sccache" "$cache_root/target"
+mkdir -p "$cache_root/sccache" "$target_dir"
 {
     echo "ANDROID_HOME=$sdk_root"
     echo "ANDROID_SDK_ROOT=$sdk_root"
     echo "ANDROID_NDK_HOME=$sdk_root/ndk/30.0.16248370"
     echo "SCCACHE_DIR=$cache_root/sccache"
-    echo "CARGO_TARGET_DIR=$cache_root/target"
+    echo "CARGO_TARGET_DIR=$target_dir"
 } >> "$GITHUB_ENV"
 {
     echo "$(eval echo "~$(id -un)")/.cargo/bin"
