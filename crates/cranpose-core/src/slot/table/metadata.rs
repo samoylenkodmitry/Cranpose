@@ -14,8 +14,8 @@ impl SlotTable {
         let span = end - start;
         self.diagnostics.record_group_index_refresh(span);
 
-        for index in start..end {
-            self.anchors.set_active(self.groups[index].anchor, index);
+        for (index, group) in (start..end).zip(&self.groups[start..end]) {
+            self.anchors.move_active(group.anchor, index);
         }
     }
 

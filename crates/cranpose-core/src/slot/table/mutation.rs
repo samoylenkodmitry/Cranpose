@@ -1,7 +1,7 @@
 use super::{
     super::{
         ActiveSubtreeRoot, CheckedU32Delta, ChildCursor, GroupKey, GroupRecord, checked_u32_delta,
-        checked_usize_to_u32, try_checked_u32_delta,
+        checked_usize_to_u32,
     },
     SlotTable,
 };
@@ -68,50 +68,11 @@ impl SlotTable {
         }
     }
 
-    pub(in crate::slot) fn adjust_ancestor_node_counts(&mut self, owner: AnchorId, delta: i64) {
-        let delta = CheckedU32Delta::from_i64(delta, "active group subtree node count");
-        let mut current = Some(owner);
-        while let Some(anchor) = current {
-            let Some(group_index) = self.active_group_index(anchor) else {
-                log::error!(
-                    "slot table stopped ancestor node-count adjustment at stale parent anchor {anchor:?}"
-                );
-                return;
-            };
-            let declared_node_count = self.groups[group_index].subtree_node_count;
-            if let Some(updated_node_count) = try_checked_u32_delta(declared_node_count, delta, 0) {
-                self.groups[group_index].subtree_node_count = updated_node_count;
-            } else if self
-                .repair_group_subtree_node_count_from_storage(
-                    group_index,
-                    "ancestor node-count adjustment",
-                )
-                .is_none()
-            {
-                log::error!(
-                    "slot table stopped ancestor node-count adjustment at unrecoverable group index {group_index} for anchor {anchor:?}"
-                );
-                return;
-            }
-
-            let parent_anchor = self.groups[group_index].parent_anchor;
-            current = parent_anchor.is_valid().then_some(parent_anchor);
-        }
-    }
-
     pub(in crate::slot) fn insert_new_group(
         &mut self,
         cursor: ChildCursor,
         key: GroupKey,
     ) -> AnchorId {
-        if !self.repair_child_cursor_parent_subtree(cursor, "group insertion") {
-            log::error!(
-                "slot table rejected group insertion for unrecoverable child cursor parent={:?} index={}",
-                cursor.parent(),
-                cursor.index()
-            );
-            return AnchorId::INVALID;
-        }
         if !self.child_cursor_boundary_is_valid(cursor) {
             log::error!(
                 "slot table rejected group insertion for invalid child cursor parent={:?} index={}",
@@ -184,14 +145,6 @@ impl SlotTable {
         root: ActiveSubtreeRoot,
         cursor: ChildCursor,
     ) {
-        if !self.repair_child_cursor_parent_subtree(cursor, "keyed sibling move cursor") {
-            log::error!(
-                "slot table ignored keyed sibling move for unrecoverable child cursor parent={:?} index={}",
-                cursor.parent(),
-                cursor.index()
-            );
-            return;
-        }
         if !self.child_cursor_boundary_is_valid(cursor) {
             log::error!(
                 "slot table ignored keyed sibling move for invalid child cursor parent={:?} index={}",
@@ -205,9 +158,7 @@ impl SlotTable {
             log::error!("slot table ignored keyed sibling move for stale root anchor {anchor:?}");
             return;
         };
-        let Some(moving_groups) =
-            self.repair_group_subtree_range_at_index(from_index, "keyed sibling move")
-        else {
+        let Some(moving_groups) = self.group_subtree_range_at_index(from_index) else {
             log::error!(
                 "slot table ignored keyed sibling move for corrupt root subtree at group index {from_index}"
             );

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use super::{
-    CheckedU32Delta, GroupRecord, checked_u32_delta, checked_usize_to_i64, checked_usize_to_u32,
+    CheckedU32Delta, GroupRecord, checked_u32_delta, checked_usize_to_i64,
     ranges::{GroupItemRange, ItemRangeKind, NodeRangeKind, PayloadRangeKind, TypedItemRange},
 };
 
@@ -57,11 +57,6 @@ pub(in crate::slot) trait GroupSegment {
 }
 
 pub(in crate::slot) struct PayloadSegment;
-
-pub(in crate::slot) struct SegmentLengthRepair {
-    pub(in crate::slot) len: usize,
-    pub(in crate::slot) repaired: bool,
-}
 
 impl GroupSegment for PayloadSegment {
     const NAME: &'static str = "payload";
@@ -133,131 +128,22 @@ pub(in crate::slot) fn group_segment_range_checked<S: GroupSegment>(
     (end <= item_count).then_some(TypedItemRange::new(start, end))
 }
 
-fn group_segment_storage_available_len<S: GroupSegment>(
+pub(in crate::slot) fn group_segment_len_checked<S: GroupSegment>(
     groups: &[GroupRecord],
     item_count: usize,
     group_index: usize,
+    operation: &'static str,
 ) -> usize {
-    let Some(group) = groups.get(group_index) else {
-        return 0;
-    };
-    let start = S::start(group) as usize;
-    if start >= item_count {
-        return 0;
-    }
-    let next_start = groups
-        .get(group_index + 1)
-        .map_or(item_count, |group| S::start(group) as usize);
-    next_start.min(item_count).saturating_sub(start)
-}
-
-fn expected_group_segment_start<S: GroupSegment>(
-    groups: &[GroupRecord],
-    item_count: usize,
-    group_index: usize,
-) -> Option<usize> {
-    if group_index == 0 {
-        return Some(0);
-    }
-    let previous = groups.get(group_index.checked_sub(1)?)?;
-    let previous_start = S::start(previous) as usize;
-    let previous_len = S::len(previous) as usize;
-    let expected = previous_start.checked_add(previous_len).unwrap_or_else(|| {
-        log::error!(
-            "slot table clamped overflowing expected {} segment start before group index {group_index}",
-            S::NAME
-        );
-        item_count
-    });
-    Some(expected.min(item_count))
-}
-
-fn repair_group_segment_start_to_storage<S: GroupSegment>(
-    groups: &mut [GroupRecord],
-    item_count: usize,
-    group_index: usize,
-    operation: &'static str,
-) -> (usize, bool) {
-    let expected =
-        expected_group_segment_start::<S>(groups, item_count, group_index).unwrap_or(item_count);
-    let Some(group) = groups.get_mut(group_index) else {
-        log::error!(
-            "slot table ignored {} segment start repair for missing group index {group_index} during {operation}",
-            S::NAME
-        );
-        return (expected, false);
-    };
-    let declared = S::start(group) as usize;
-    if declared == expected {
-        return (declared, false);
-    }
-    log::error!(
-        "slot table repaired {} segment start for group index {group_index} during {operation}: declared {declared}, expected {expected}",
-        S::NAME
-    );
-    *S::start_mut(group) = checked_usize_to_u32(expected, "group segment start repair");
-    (expected, true)
-}
-
-fn removed_subtree_segment_end<S: GroupSegment>(
-    groups: &[GroupRecord],
-    item_count: usize,
-    removed_group_index: usize,
-) -> usize {
-    groups
-        .get(removed_group_index)
-        .map_or(item_count, |group| S::start(group) as usize)
-        .min(item_count)
-}
-
-pub(in crate::slot) fn repair_group_segment_len_to_storage<S: GroupSegment>(
-    groups: &mut [GroupRecord],
-    item_count: usize,
-    group_index: usize,
-    operation: &'static str,
-) -> SegmentLengthRepair {
-    if let Some(range) = group_segment_range_checked::<S>(groups, item_count, group_index) {
-        return SegmentLengthRepair {
-            len: range.len(),
-            repaired: false,
-        };
-    }
-
-    let available = group_segment_storage_available_len::<S>(groups, item_count, group_index);
-    let Some(group) = groups.get_mut(group_index) else {
-        log::error!(
-            "slot table ignored {} segment repair for missing group index {group_index} during {operation}",
-            S::NAME
-        );
-        return SegmentLengthRepair {
-            len: 0,
-            repaired: false,
-        };
-    };
-    let declared = S::len(group) as usize;
-    log::error!(
-        "slot table repaired {} segment length for group index {group_index} during {operation}: declared {declared}, available {available}",
-        S::NAME
-    );
-    *S::len_mut(group) = checked_usize_to_u32(available, "group segment length repair");
-    SegmentLengthRepair {
-        len: available,
-        repaired: true,
-    }
-}
-
-pub(in crate::slot) fn repair_group_segment_start_and_len_to_storage<S: GroupSegment>(
-    groups: &mut [GroupRecord],
-    item_count: usize,
-    group_index: usize,
-    operation: &'static str,
-) -> SegmentLengthRepair {
-    let (_, start_repaired) =
-        repair_group_segment_start_to_storage::<S>(groups, item_count, group_index, operation);
-    let mut repair =
-        repair_group_segment_len_to_storage::<S>(groups, item_count, group_index, operation);
-    repair.repaired |= start_repaired;
-    repair
+    group_segment_range_checked::<S>(groups, item_count, group_index).map_or_else(
+        || {
+            log::error!(
+                "slot table found the {} segment of group index {group_index} outside its storage during {operation}",
+                S::NAME
+            );
+            0
+        },
+        TypedItemRange::len,
+    )
 }
 
 pub(in crate::slot) fn group_segment_subrange_at<S: GroupSegment>(
@@ -305,13 +191,14 @@ fn empty_group_segment_range<S: GroupSegment>(
     GroupItemRange::new(group_index, TypedItemRange::new(start, start), 0, 0)
 }
 
-fn segment_insert_index_for_group_mut<S: GroupSegment>(
-    groups: &mut [GroupRecord],
+fn segment_insert_index<S: GroupSegment>(
+    groups: &[GroupRecord],
     item_count: usize,
     group_index: usize,
-    operation: &'static str,
 ) -> usize {
-    repair_group_segment_start_to_storage::<S>(groups, item_count, group_index, operation).0
+    groups
+        .get(group_index)
+        .map_or(item_count, |group| S::start(group) as usize)
 }
 
 pub(in crate::slot) fn shift_group_segment_starts_from<S: GroupSegment>(
@@ -382,22 +269,11 @@ pub(in crate::slot) fn insert_group_segment_item<S: GroupSegment, I: SegmentItem
         );
         return;
     }
-    let insert_index = segment_insert_index_for_group_mut::<S>(
-        groups,
-        items.item_count(),
-        group_index,
-        "segment item insertion",
-    );
-    let repaired_len = repair_group_segment_len_to_storage::<S>(
-        groups,
-        items.item_count(),
-        group_index,
-        "segment item insertion",
-    )
-    .len;
-    if item_offset > repaired_len {
+    let insert_index = group_segment_start::<S>(groups, group_index);
+    let segment_len = group_segment_len::<S>(groups, group_index);
+    if item_offset > segment_len {
         log::error!(
-            "slot table ignored {} segment item insertion for group index {group_index}: item offset {item_offset} exceeds segment length {repaired_len}",
+            "slot table ignored {} segment item insertion for group index {group_index}: item offset {item_offset} exceeds segment length {segment_len}",
             S::NAME
         );
         return;
@@ -445,17 +321,6 @@ pub(in crate::slot) fn extract_subtree_segment<S: GroupSegment, I: SegmentItems>
     removed_group_index: usize,
     removed_groups: &mut [GroupRecord],
 ) -> Vec<I::Item> {
-    let segment_end =
-        removed_subtree_segment_end::<S>(groups, items.item_count(), removed_group_index);
-    for group_index in 0..removed_groups.len() {
-        repair_group_segment_len_to_storage::<S>(
-            removed_groups,
-            segment_end,
-            group_index,
-            "subtree segment extraction",
-        );
-    }
-
     let Some((item_start, item_len)) = subtree_segment_span::<S>(removed_groups) else {
         return Vec::new();
     };
@@ -479,12 +344,8 @@ pub(in crate::slot) fn restore_subtree_segment<S: GroupSegment, I: SegmentItems>
     restoring_groups: &mut [GroupRecord],
     restoring_items: Vec<I::Item>,
 ) {
-    let item_insert_index = segment_insert_index_for_group_mut::<S>(
-        groups,
-        items.item_count(),
-        insert_group_index,
-        "subtree segment restore",
-    );
+    let item_insert_index =
+        segment_insert_index::<S>(groups, items.item_count(), insert_group_index);
     let restoring_len =
         checked_usize_to_i64(restoring_items.item_count(), "restoring segment length");
     shift_group_segment_starts_from::<S>(groups, insert_group_index, restoring_len);
@@ -530,27 +391,14 @@ pub(in crate::slot) fn move_subtree_segment_to_earlier_group<S: GroupSegment, I:
         return 0;
     }
 
-    for group_index in insert_group_index..moving_group_end {
-        repair_group_segment_start_and_len_to_storage::<S>(
-            groups,
-            items.item_count(),
-            group_index,
-            "subtree segment move",
-        );
-    }
-
     let Some((item_start, item_len)) =
         subtree_segment_span::<S>(&groups[moving_group_index..moving_group_end])
     else {
         return 0;
     };
 
-    let item_insert_index = segment_insert_index_for_group_mut::<S>(
-        groups,
-        items.item_count(),
-        insert_group_index,
-        "subtree segment move",
-    );
+    let item_insert_index =
+        segment_insert_index::<S>(groups, items.item_count(), insert_group_index);
     if item_insert_index > item_start {
         log::error!(
             "slot table ignored {} segment move because target item index {item_insert_index} is after moving item start {item_start}",

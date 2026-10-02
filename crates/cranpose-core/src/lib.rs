@@ -562,7 +562,7 @@ fn note_location_key(_key: Key, _file: &str, _line: u32, _column: u32) {}
 
 #[doc(hidden)]
 pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
-    with_current_composer_opt(|composer| composer.__branch_group_deferred(key))
+    composer_context::with_current_core(|core| core.open_branch_fold(key))
 }
 
 #[doc(hidden)]
@@ -660,7 +660,6 @@ impl Hash for LocalKey {
 }
 
 thread_local! {
-    static DROPPED_RECOMPOSE_SCOPES: Cell<u64> = const { Cell::new(0) };
     #[cfg(debug_assertions)]
     static DEBUG_SCOPE_LABELS: RefCell<HashMap<usize, &'static str>> = RefCell::new(HashMap::default());
     #[cfg(debug_assertions)]
@@ -682,10 +681,23 @@ enum RecomposeCallback {
     },
 }
 
+thread_local! {
+    static SCOPE_ACTIVITY_EPOCH: Cell<u64> = const { Cell::new(1) };
+}
+
+fn scope_activity_epoch() -> u64 {
+    SCOPE_ACTIVITY_EPOCH.with(Cell::get)
+}
+
+fn note_scope_activity_change() {
+    let _ = SCOPE_ACTIVITY_EPOCH.try_with(|epoch| epoch.set(epoch.get() + 1));
+}
+
 fn link_scope(link: &RefCell<Option<Weak<RecomposeScopeInner>>>, target: Option<&RecomposeScope>) {
     let mut link = link.borrow_mut();
     if link.as_ref().map(Weak::as_ptr) != target.map(|scope| Rc::as_ptr(&scope.inner)) {
         *link = target.map(RecomposeScope::downgrade);
+        note_scope_activity_change();
     }
 }
 
@@ -694,6 +706,7 @@ pub(crate) struct RecomposeScopeInner {
     invalid: Cell<bool>,
     enqueued: Cell<bool>,
     active: Cell<bool>,
+    active_epoch: Cell<u64>,
     deactivations: Cell<u64>,
     composed_once: Cell<bool>,
     pending_recompose: Cell<bool>,
@@ -703,6 +716,7 @@ pub(crate) struct RecomposeScopeInner {
     retention_mode: Cell<RetentionMode>,
     parent_hint: Cell<Option<NodeId>>,
     group_anchor: Cell<AnchorId>,
+    observers: snapshot_state_observer::ScopeObservers,
     recompose: RefCell<Option<RecomposeCallback>>,
     parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     lifetime_owner_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
@@ -718,7 +732,49 @@ pub(crate) struct RecomposeScopeInner {
 
 type StateIds = SmallVec<[StateId; 2]>;
 
+enum ScopeOwner {
+    Root,
+    Live(Rc<RecomposeScopeInner>),
+    Dropped,
+}
+
 impl RecomposeScopeInner {
+    fn owner(&self) -> ScopeOwner {
+        let parent = self.parent_scope.borrow();
+        let lifetime_owner;
+        let owner = match parent.as_ref() {
+            Some(parent) => parent,
+            None => {
+                lifetime_owner = self.lifetime_owner_scope.borrow();
+                match lifetime_owner.as_ref() {
+                    Some(owner) => owner,
+                    None => return ScopeOwner::Root,
+                }
+            }
+        };
+        owner
+            .upgrade()
+            .map_or(ScopeOwner::Dropped, ScopeOwner::Live)
+    }
+
+    fn is_effectively_active(&self, epoch: u64) -> bool {
+        if self.active_epoch.get() == epoch {
+            return true;
+        }
+        if !self.active.get() {
+            return false;
+        }
+        let active = match self.owner() {
+            ScopeOwner::Root => true,
+            ScopeOwner::Dropped => false,
+            ScopeOwner::Live(owner) => owner.is_effectively_active(epoch),
+        };
+        if active {
+            self.active_epoch.set(epoch);
+        }
+        active
+    }
+
     fn new(runtime: RuntimeHandle) -> Self {
         runtime.increment_live_recompose_scope_count();
         Self {
@@ -726,6 +782,7 @@ impl RecomposeScopeInner {
             invalid: Cell::new(false),
             enqueued: Cell::new(false),
             active: Cell::new(true),
+            active_epoch: Cell::new(0),
             deactivations: Cell::new(0),
             composed_once: Cell::new(false),
             pending_recompose: Cell::new(false),
@@ -735,6 +792,7 @@ impl RecomposeScopeInner {
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
             parent_hint: Cell::new(None),
             group_anchor: Cell::new(AnchorId::INVALID),
+            observers: snapshot_state_observer::ScopeObservers::default(),
             recompose: RefCell::new(None),
             parent_scope: RefCell::new(None),
             lifetime_owner_scope: RefCell::new(None),
@@ -762,7 +820,8 @@ fn push_unique_state_id(ids: &mut StateIds, state_id: StateId) {
 
 impl Drop for RecomposeScopeInner {
     fn drop(&mut self) {
-        let _ = DROPPED_RECOMPOSE_SCOPES.try_with(|count| count.set(count.get().wrapping_add(1)));
+        note_scope_activity_change();
+        self.observers.release();
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
         let subscriptions = std::mem::take(self.state_subscriptions.get_mut());
@@ -854,40 +913,17 @@ impl RecomposeScope {
     /// once to restart them — no flag on the slot's own scopes carries that
     /// trace, because deactivation walks stop at slot-host boundaries.
     pub fn owner_chain_deactivation_epoch(&self) -> u64 {
-        let mut total = 0u64;
-        let mut current = Some(self.clone());
-        while let Some(scope) = current {
-            total = total.wrapping_add(scope.inner.deactivations.get());
-            let structural_parent = scope.inner.parent_scope.borrow().clone();
-            let lifetime_owner = scope.inner.lifetime_owner_scope.borrow().clone();
-            let next = structural_parent.or(lifetime_owner);
-            current = next
-                .and_then(|parent| parent.upgrade())
-                .map(|inner| RecomposeScope { inner });
+        let mut total = self.inner.deactivations.get();
+        let mut owner = self.inner.owner();
+        while let ScopeOwner::Live(scope) = owner {
+            total = total.wrapping_add(scope.deactivations.get());
+            owner = scope.owner();
         }
         total
     }
 
     pub(crate) fn is_effectively_active(&self) -> bool {
-        let mut current = Some(self.clone());
-        while let Some(scope) = current {
-            if !scope.is_active() {
-                return false;
-            }
-            let structural_parent = scope.inner.parent_scope.borrow().clone();
-            let lifetime_owner = scope.inner.lifetime_owner_scope.borrow().clone();
-            let next = structural_parent.or(lifetime_owner);
-            current = match next {
-                Some(parent) => {
-                    let Some(inner) = parent.upgrade() else {
-                        return false;
-                    };
-                    Some(RecomposeScope { inner })
-                }
-                None => None,
-            };
-        }
-        true
+        self.inner.is_effectively_active(scope_activity_epoch())
     }
 
     fn record_state_subscription(&self, state_id: StateId) {
@@ -1117,6 +1153,7 @@ impl RecomposeScope {
         if !self.inner.active.replace(false) {
             return;
         }
+        note_scope_activity_change();
         self.inner
             .deactivations
             .set(self.inner.deactivations.get() + 1);

@@ -110,11 +110,9 @@ impl SlotTable {
         refresh_indexes: bool,
     ) -> DetachedSubtree {
         let root_parent_anchor = self.groups[root_index].parent_anchor;
-        let Some(removed_group_range) =
-            self.repair_group_subtree_range_at_index(root_index, "subtree detach")
-        else {
+        let Some(removed_group_range) = self.group_subtree_range_at_index(root_index) else {
             log::error!(
-                "slot table rejected detached subtree extraction for missing group index {root_index}"
+                "slot table rejected detached subtree extraction at group index {root_index}: its stored span lies outside the active groups"
             );
             return DetachedSubtree {
                 groups: Vec::new(),
@@ -175,14 +173,6 @@ impl SlotTable {
         &mut self,
         cursor: ChildCursor,
     ) -> Vec<DetachedSubtree> {
-        if !self.repair_child_cursor_parent_subtree(cursor, "subtree detach cursor") {
-            log::error!(
-                "slot table rejected subtree detach for unrecoverable child cursor parent={:?} index={}",
-                cursor.parent(),
-                cursor.index()
-            );
-            return Vec::new();
-        }
         let mut detached = Vec::new();
         let dirty_start = self
             .direct_child_anchor_at_cursor(cursor)
@@ -223,14 +213,6 @@ impl SlotTable {
         mut subtree: DetachedSubtree,
         parent_node: Option<NodeId>,
     ) -> Result<AnchorId, DetachedSubtree> {
-        if !self.repair_child_cursor_parent_subtree(cursor, "detached subtree restore cursor") {
-            log::error!(
-                "slot table rejected detached subtree restore for unrecoverable child cursor parent={:?} index={}",
-                cursor.parent(),
-                cursor.index()
-            );
-            return Err(subtree);
-        }
         if !self.subtree_restore_ready(cursor, key, &subtree) {
             return Err(subtree);
         }

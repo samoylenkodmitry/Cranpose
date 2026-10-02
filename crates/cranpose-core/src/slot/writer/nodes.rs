@@ -1,30 +1,18 @@
-use super::super::{
-    NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession, root_node_ids,
-};
+use super::super::{NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession};
 use crate::{AnchorId, NodeId};
 
 impl SlotTable {
-    /// The node records of a group's subtree, repaired to storage: each
-    /// group's node segment starts where the one before it ends, so the
-    /// subtree's records are one run from its root group's segment on.
-    fn subtree_node_records(&mut self, group_anchor: AnchorId) -> &[NodeRecord] {
+    fn subtree_node_records(&self, group_anchor: AnchorId) -> &[NodeRecord] {
         let Some(group_index) = self.active_group_index(group_anchor) else {
             log::error!(
                 "slot table ignored root-node collection for stale group anchor {group_anchor:?}"
             );
             return &[];
         };
-        let Some(node_count) =
-            self.repair_group_subtree_node_count_from_storage(group_index, "root-node collection")
-        else {
-            log::error!(
-                "slot table ignored root-node collection for malformed subtree at group index {group_index}"
-            );
-            return &[];
-        };
-        let start = self.group_node_start_at(group_index);
+        let group = &self.groups[group_index];
+        let start = group.node_start as usize;
         let records = start
-            .checked_add(node_count)
+            .checked_add(group.subtree_node_count as usize)
             .and_then(|end| self.nodes.get(start..end));
         records.unwrap_or_else(|| {
             log::error!(
@@ -35,10 +23,46 @@ impl SlotTable {
     }
 
     pub(in crate::slot) fn collect_subtree_root_node_ids(
-        &mut self,
+        &self,
         group_anchor: AnchorId,
     ) -> RootNodeIds {
-        root_node_ids(self.subtree_node_records(group_anchor)).collect()
+        let records = self.subtree_node_records(group_anchor);
+        let parent = records.first().map(|record| record.parent_id);
+        let roots: RootNodeIds = records
+            .iter()
+            .filter(|record| Some(record.parent_id) == parent)
+            .map(|record| record.id)
+            .collect();
+        #[cfg(any(test, debug_assertions))]
+        if crate::slot_validation_diagnostics_enabled() {
+            let expected: RootNodeIds = super::super::types::root_node_ids(records).collect();
+            assert_eq!(
+                roots, expected,
+                "the roots of a group subtree must be the records sharing its first record's parent"
+            );
+        }
+        roots
+    }
+
+    pub(in crate::slot) fn first_subtree_root_node_id(
+        &self,
+        group_anchor: AnchorId,
+    ) -> Option<NodeId> {
+        let first = self
+            .subtree_node_records(group_anchor)
+            .first()
+            .map(|record| record.id);
+        #[cfg(any(test, debug_assertions))]
+        if crate::slot_validation_diagnostics_enabled() {
+            assert_eq!(
+                first,
+                self.collect_subtree_root_node_ids(group_anchor)
+                    .first()
+                    .copied(),
+                "the first record of a group subtree must be one of its roots"
+            );
+        }
+        first
     }
 }
 

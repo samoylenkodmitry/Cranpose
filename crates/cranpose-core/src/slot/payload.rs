@@ -3,10 +3,9 @@ use super::{
     PayloadRecord, PayloadType, SlotTable, SlotWriteSessionState, ValueSlotId,
     segments::{
         PayloadSegment, SegmentItems, extract_subtree_segment, group_segment_len,
-        group_segment_range_checked, group_segment_start, group_segment_subrange_at,
-        insert_group_segment_item, move_subtree_segment_to_earlier_group,
-        remove_group_segment_range, repair_group_segment_start_and_len_to_storage,
-        restore_subtree_segment,
+        group_segment_len_checked, group_segment_range_checked, group_segment_start,
+        group_segment_subrange_at, insert_group_segment_item,
+        move_subtree_segment_to_earlier_group, remove_group_segment_range, restore_subtree_segment,
     },
 };
 use crate::{AnchorId, retention::RetentionManager};
@@ -91,21 +90,13 @@ impl SlotTable {
         )
     }
 
-    fn repair_group_payload_len_to_storage(
-        &mut self,
-        group_index: usize,
-        operation: &'static str,
-    ) -> usize {
-        let repair = repair_group_segment_start_and_len_to_storage::<PayloadSegment>(
-            &mut self.groups,
+    fn group_payload_len_checked_at(&self, group_index: usize, operation: &'static str) -> usize {
+        group_segment_len_checked::<PayloadSegment>(
+            &self.groups,
             self.payloads.len(),
             group_index,
             operation,
-        );
-        if repair.repaired {
-            self.record_segment_range_update_from(group_index);
-        }
-        repair.len
+        )
     }
 
     pub(in crate::slot) fn group_payload_subrange_at(
@@ -372,11 +363,10 @@ impl SlotTable {
         kind: PayloadKind,
         init: &mut PayloadInit<'_>,
     ) -> (ValueSlotId, Option<PayloadLocationRefresh>) {
-        let payload_len =
-            self.repair_group_payload_len_to_storage(group_index, "value payload cursor");
+        let payload_len = self.group_payload_len_checked_at(group_index, "value payload cursor");
         let payload_index = if payload_index > payload_len {
             log::error!(
-                "slot table clamped payload cursor {payload_index} to repaired payload length {payload_len} for owner {owner:?}"
+                "slot table clamped payload cursor {payload_index} to payload length {payload_len} for owner {owner:?}"
             );
             payload_len
         } else {
@@ -590,8 +580,7 @@ impl SlotTable {
             log::error!("slot table ignored payload-tail removal for stale owner anchor {owner:?}");
             return Vec::new();
         };
-        let payload_len =
-            self.repair_group_payload_len_to_storage(owner_index, "payload tail cleanup");
+        let payload_len = self.group_payload_len_checked_at(owner_index, "payload tail cleanup");
         if payload_cursor >= payload_len {
             return Vec::new();
         }

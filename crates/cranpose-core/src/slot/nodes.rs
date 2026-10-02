@@ -4,10 +4,10 @@ use super::{
     GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
     checked_usize_to_i64,
     segments::{
-        NodeSegment, extract_subtree_segment, group_segment_len, group_segment_range_checked,
-        group_segment_start, group_segment_subrange_at, insert_group_segment_item,
-        move_subtree_segment_to_earlier_group, remove_group_segment_range,
-        repair_group_segment_start_and_len_to_storage, restore_subtree_segment,
+        NodeSegment, extract_subtree_segment, group_segment_len, group_segment_len_checked,
+        group_segment_range_checked, group_segment_start, group_segment_subrange_at,
+        insert_group_segment_item, move_subtree_segment_to_earlier_group,
+        remove_group_segment_range, restore_subtree_segment,
     },
 };
 use crate::{AnchorId, NodeId};
@@ -25,21 +25,13 @@ impl SlotTable {
         group_segment_range_checked::<NodeSegment>(&self.groups, self.nodes.len(), group_index)
     }
 
-    pub(in crate::slot) fn repair_group_node_len_to_storage(
-        &mut self,
-        group_index: usize,
-        operation: &'static str,
-    ) -> usize {
-        let repair = repair_group_segment_start_and_len_to_storage::<NodeSegment>(
-            &mut self.groups,
+    fn group_node_len_checked_at(&self, group_index: usize, operation: &'static str) -> usize {
+        group_segment_len_checked::<NodeSegment>(
+            &self.groups,
             self.nodes.len(),
             group_index,
             operation,
-        );
-        if repair.repaired {
-            self.record_segment_range_update_from(group_index);
-        }
-        repair.len
+        )
     }
 
     pub(in crate::slot) fn group_node_tail_range_at(
@@ -161,10 +153,10 @@ impl SlotTable {
         node_index: usize,
         record: NodeRecord,
     ) -> NodeSlotUpdate {
-        let node_len = self.repair_group_node_len_to_storage(group_index, "node cursor");
+        let node_len = self.group_node_len_checked_at(group_index, "node cursor");
         let node_index = if node_index > node_len {
             log::error!(
-                "slot table clamped node cursor {node_index} to repaired node length {node_len} for owner {:?}",
+                "slot table clamped node cursor {node_index} to node length {node_len} for owner {:?}",
                 record.owner
             );
             node_len
@@ -225,7 +217,7 @@ impl SlotTable {
             },
         );
         if matches!(update, NodeSlotUpdate::Inserted { .. }) {
-            self.adjust_ancestor_node_counts(owner, 1);
+            self.adjust_ancestor_group_spans(owner, 0, 1);
         }
 
         update
@@ -306,12 +298,11 @@ impl SlotTable {
             log::error!("slot table ignored node-tail removal for stale owner anchor {owner:?}");
             return Vec::new();
         };
-        self.repair_group_node_len_to_storage(group_index, "node tail cleanup");
         let node_range = self.group_node_tail_range_at(group_index, node_cursor);
         let removed = self.remove_group_node_range(node_range);
         if !removed.is_empty() {
             let removed_len = checked_usize_to_i64(removed.len(), "removed node count");
-            self.adjust_ancestor_node_counts(owner, -removed_len);
+            self.adjust_ancestor_group_spans(owner, 0, -removed_len);
         }
         removed
     }

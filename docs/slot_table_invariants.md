@@ -41,6 +41,7 @@ This document is the short operational checklist for the slot table implementati
 - Disposed nodes are not retained by slot storage.
 - Node ids are unique within each active or detached slot tree.
 - Skipped-group root node metadata is exact and comes from stored node records, not applier tree scans.
+- Within a group subtree, a node record follows the record of its parent node, so the subtree's first record is a root, and every root shares that record's parent; root-node collection reads the roots that way, and debug and test validation compares it with the full parent check.
 
 ## Anchors
 
@@ -76,4 +77,5 @@ This document is the short operational checklist for the slot table implementati
 - `SlotTable::validate()` covers active preorder, parent/depth structure, subtree spans, payload/node ranges, ownership, active anchors, scope anchors, and duplicate sibling keys.
 - Retained-state validation must cover detached anchors, retained scopes, retained node lifecycle, retained root parentage, and retained-key/root-key agreement.
 - Debug and test builds should validate after composition operations that mutate slot structure.
+- Runtime paths read the stored `subtree_len`, `subtree_node_count` and payload and node segment ranges as written; nothing re-derives them from depths or neighbouring segments, so validation is what catches drift.
 - A validation failure should identify the violated invariant locally instead of allowing a later recomposition panic.
