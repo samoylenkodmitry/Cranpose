@@ -763,6 +763,7 @@ async fn run_workspace_frames(
     let mut direction = 1.0f32;
     let mut window_start = clock.next_frame().await;
     let mut window_frames = 0u32;
+    let mut frames = 0u32;
     while scope.is_active() {
         let now = clock.next_frame().await;
         if !scope.is_active() {
@@ -775,6 +776,10 @@ async fn run_workspace_frames(
             hover.advance();
         }
         window_frames += 1;
+        frames += 1;
+        if frames == 240 {
+            cranpose::release_free_memory();
+        }
         // The frame-stats bar samples twice a second, as the
         // showcase's does.
         if now.saturating_sub(window_start) >= 500_000_000 {
