@@ -12,6 +12,7 @@ pub mod audio;
 pub mod background;
 pub mod bundled_assets;
 pub mod camera;
+mod composition_locals;
 pub mod content;
 pub mod device_info;
 pub mod file_picker;

@@ -109,16 +109,10 @@ pub fn default_share_sheet() -> ShareSheetRef {
 }
 
 pub fn local_share_sheet() -> CompositionLocal<ShareSheetRef> {
-    thread_local! {
-        static LOCAL_SHARE_SHEET: RefCell<Option<CompositionLocal<ShareSheetRef>>> = const { RefCell::new(None) };
-    }
-
-    LOCAL_SHARE_SHEET.with(|cell| {
-        let mut local = cell.borrow_mut();
-        local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_share_sheet, Rc::ptr_eq))
-            .clone()
-    })
+    crate::composition_locals::cached_local(
+        |locals| &locals.share_sheet,
+        || compositionLocalOfWithPolicy(default_share_sheet, Rc::ptr_eq),
+    )
 }
 
 #[composable]
