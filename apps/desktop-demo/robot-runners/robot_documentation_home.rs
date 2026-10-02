@@ -1,5 +1,5 @@
 use cranpose::{AppLauncher, Robot};
-use cranpose_testing::{find_button_exact_in_semantics, find_text_in_semantics};
+use cranpose_testing::{find_button_exact_in_semantics, find_text_in_semantics, find_text_in_semantics_exact};
 use desktop_app::app;
 
 use crate::{output_paths, robot_shot};
@@ -51,7 +51,7 @@ pub(crate) fn main() {
                 .expect("chapter changed");
             capture(&robot, width, "get-started");
             let tabs_before = (!compact)
-                .then(|| find_button_exact_in_semantics(&robot, "Counter App").expect("tab row"));
+                .then(|| find_text_in_semantics_exact(&robot, "Counter App").expect("tab row"));
             let (_, title_y, _, _) =
                 find_text_in_semantics(&robot, "Create an application").expect("article heading");
             robot
@@ -68,7 +68,7 @@ pub(crate) fn main() {
             assert!(title_y - scrolled_title_y > 50.0, "the page must scroll: {title_y} -> {scrolled_title_y}");
             if let Some((_, tabs_y, _, _)) = tabs_before {
                 let (_, scrolled_tabs_y, _, _) =
-                    find_button_exact_in_semantics(&robot, "Counter App")
+                    find_text_in_semantics_exact(&robot, "Counter App")
                         .expect("scrolled tab row");
                 assert!(
                     (tabs_y - scrolled_tabs_y - (title_y - scrolled_title_y)).abs() < 1.0,
@@ -88,7 +88,7 @@ pub(crate) fn main() {
             }
             capture(&robot, width, "code");
             robot
-                .mouse_scroll_sequence_and_wait_for_frames(0.0, -240.0, 25)
+                .mouse_scroll_sequence_and_wait_for_frames(0.0, -12000.0, 25)
                 .expect("scroll to the end");
             robot.wait_for_idle().expect("end of page");
             capture(&robot, width, "end");
