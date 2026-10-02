@@ -43,8 +43,8 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 panic = "abort"
-strip = true
-debug = 0
+strip = false
+debug = "line-tables-only"
 
 # Crates that run off the frame path: the shader translator at pipeline
 # creation and the error reporting only a failure reaches.
