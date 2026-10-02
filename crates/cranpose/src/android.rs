@@ -1272,6 +1272,95 @@ fn drop_android_surface(
     }
 }
 
+/// The app composed and laid out for a `buffer_size` window at `density`.
+/// A renderer without a GPU yet builds its first scene all the same; the
+/// GPU joins it when the window comes.
+fn new_android_app_shell<F>(
+    renderer: WgpuRenderer,
+    content: &Rc<RefCell<F>>,
+    settings: &AppSettings,
+    frame_driver: &AndroidFrameDriver,
+    (width, height): (u32, u32),
+    density: f32,
+) -> AppShell<WgpuRenderer>
+where
+    F: FnMut() + 'static,
+{
+    let content = Rc::clone(content);
+    let density = density.max(f32::EPSILON);
+    let platform_env = android_platform_env();
+    let mut shell = AppShell::new_with_size_and_density(
+        renderer,
+        default_root_key(),
+        move || {
+            platform_env.compose_root(|| content.borrow_mut()());
+        },
+        (width, height),
+        (width as f32 / density, height as f32 / density),
+        density,
+    );
+    shell.set_semantics_enabled(true);
+    crate::accessibility::install_inspector(&mut shell, settings.developer_inspector);
+    shell.set_frame_waker(frame_driver.frame_waker());
+    shell
+}
+
+/// Composes and lays out the first frame while Android is still making the
+/// window, at the size the window had when the app last ran, unless the app
+/// has a shell already. When the window comes at another size, setting its
+/// viewport lays the frame out again, as a launch with no size kept does in
+/// the first place. An app drawing into an overlay window instead of its
+/// activity's waits for it.
+fn compose_ahead_of_window<F>(
+    app_shell: &mut Option<AppShell<WgpuRenderer>>,
+    app: &android_activity::AndroidApp,
+    window_size: Option<crate::android_window_size::WindowSize>,
+    overlay: bool,
+    content: &Rc<RefCell<F>>,
+    settings: &AppSettings,
+    frame_driver: &AndroidFrameDriver,
+) where
+    F: FnMut() + 'static,
+{
+    let Some(size) = window_size
+        .filter(|size| app_shell.is_none() && !overlay && size.density == get_display_density(app))
+    else {
+        return;
+    };
+    let shell = new_android_app_shell(
+        WgpuRenderer::with_font_set(settings.resolve_font_set()),
+        content,
+        settings,
+        frame_driver,
+        (size.width, size.height),
+        size.density,
+    );
+    log::info!(
+        "App shell composed ahead of the window at {}x{} px",
+        size.width,
+        size.height
+    );
+    *app_shell = Some(shell);
+}
+
+/// Keeps the window's size for the next launch when it is not the one kept.
+fn remember_window_size(
+    kept: &mut Option<crate::android_window_size::WindowSize>,
+    width: u32,
+    height: u32,
+    density: f32,
+) {
+    let size = crate::android_window_size::WindowSize {
+        width,
+        height,
+        density,
+    };
+    if *kept != Some(size) {
+        crate::android_window_size::remember(size);
+        *kept = Some(size);
+    }
+}
+
 /// Gives the present thread the window's new surface, or the new size of
 /// the one it has. Frames published afterwards queue behind it.
 fn hand_surface_to_present_thread(renderer: &mut WgpuRenderer, setup: &mut AndroidGpuSetup) {
@@ -1335,28 +1424,14 @@ where
             );
         }
 
-        let content_clone = content.clone();
-        let density = density.max(f32::EPSILON);
-        let platform_env = android_platform_env();
-        let mut shell = AppShell::new_with_size_and_density(
+        *app_shell = Some(new_android_app_shell(
             renderer,
-            default_root_key(),
-            move || {
-                platform_env.compose_root(|| content_clone.borrow_mut()());
-            },
+            content,
+            settings,
+            frame_driver,
             (width, height),
-            (width as f32 / density, height as f32 / density),
             density,
-        );
-        shell.set_semantics_enabled(true);
-        crate::accessibility::install_inspector(&mut shell, settings.developer_inspector);
-
-        *app_shell = Some(shell);
-
-        if let Some(shell) = app_shell {
-            shell.set_frame_waker(frame_driver.frame_waker());
-        }
-
+        ));
         log::info!("App shell created");
     } else if setup.renderer_needs_init {
         if let Some(shell) = app_shell {
@@ -1995,7 +2070,6 @@ pub fn run(
 
     let content = std::rc::Rc::new(std::cell::RefCell::new(content));
 
-    let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
     #[cfg(feature = "webview")]
     let mut webviews = crate::webview_host::WebViews::default();
     let mut accessibility_elements = crate::accessibility::AccessibilitySnapshot::default();
@@ -2043,6 +2117,9 @@ pub fn run(
     let mut pending_host_window_confirmation = None::<PendingHostWindowSizeRequest>;
     let mut overlay_window_options = settings.android_overlay_window;
     let mut overlay_window_requested = false;
+
+    let mut kept_window_size = crate::android_window_size::last();
+    let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
 
     let mut gpu_resources: Option<GpuResources> = None;
 
@@ -2266,6 +2343,12 @@ pub fn run(
                                         }
 
                                         gpu_resources = Some(resources);
+                                        remember_window_size(
+                                            &mut kept_window_size,
+                                            width,
+                                            height,
+                                            density,
+                                        );
                                         log::info!("Rendering initialized successfully");
                                     }
                                     Err(error) => {
@@ -2367,6 +2450,17 @@ pub fn run(
                         if !reopened {
                             ime_session.ensure_hidden();
                         }
+                        // Android makes the window once the activity resumed,
+                        // which it learned before this ran.
+                        compose_ahead_of_window(
+                            &mut app_shell,
+                            &app,
+                            kept_window_size,
+                            overlay_window_options.is_some(),
+                            &content,
+                            &settings,
+                            &android_frame_driver,
+                        );
                     }
                     MainEvent::Start => {
                         log::info!("App started");
