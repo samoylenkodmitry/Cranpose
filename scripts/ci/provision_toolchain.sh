@@ -20,6 +20,8 @@ real_home="$(eval echo "~$(id -un)")"
 export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 if [[ -n "${GITHUB_PATH:-}" ]]; then
     echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
+    echo /opt/homebrew/bin >> "$GITHUB_PATH"
+    echo /usr/local/bin >> "$GITHUB_PATH"
 fi
 
 if ! command -v cargo >/dev/null; then

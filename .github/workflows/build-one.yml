@@ -23,6 +23,7 @@ on:
           - wasm
           - android
           - ios
+          - watchos
           - robot-example
           - windows-accessibility
       example:
@@ -45,7 +46,7 @@ jobs:
     name: ${{ inputs.target }} on ${{ inputs.runner }}
     runs-on: >-
       ${{ inputs.runner == 'macOS'
-          && fromJSON('["self-hosted", "macOS", "ARM64"]')
+          && fromJSON('["self-hosted", "macOS", "ARM64", "recent-repo"]')
           || fromJSON('["self-hosted", "Linux", "cranpose-heavy"]') }}
     timeout-minutes: 60
     steps:
@@ -89,6 +90,10 @@ jobs:
         run: |
           rustup target add aarch64-apple-ios-sim
           just ios-sim
+
+      - name: watchOS
+        if: inputs.target == 'watchos'
+        run: just watchos
 
       - name: Robot example
         if: inputs.target == 'robot-example'

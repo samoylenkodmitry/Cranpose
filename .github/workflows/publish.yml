@@ -27,7 +27,7 @@ permissions:
 jobs:
   sync_versions:
     name: Sync versions with tag
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
     permissions:
       contents: write
     outputs:
@@ -114,7 +114,7 @@ jobs:
 
   publish:
     name: Publish to crates.io
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
     needs: sync_versions
     if: needs.sync_versions.outputs.should_publish == 'true'
     env:
@@ -190,7 +190,7 @@ jobs:
 
   bump_isolated_demo:
     name: Point isolated demo at the release
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
     needs: publish
     permissions:
       contents: write

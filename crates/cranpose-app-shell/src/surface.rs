@@ -472,6 +472,13 @@ where
         &mut self.surface_mut().renderer
     }
 
+    /// Runs a presentation operation with this surface's app context active.
+    /// Software text rasterization uses the context's font measurement services.
+    pub fn with_renderer<T>(&mut self, block: impl FnOnce(&mut R) -> T) -> T {
+        let (app, surface) = self.parts();
+        app.app_context.enter(|| block(&mut surface.renderer))
+    }
+
     /// The scene this surface last built.
     pub fn scene(&self) -> &R::Scene {
         self.surface().renderer.scene()

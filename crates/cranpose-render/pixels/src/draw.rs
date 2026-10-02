@@ -103,8 +103,19 @@ pub fn draw_scene_with_text_resources(
     scene: &Scene,
     text_resources: &SoftwareTextResources,
 ) {
+    draw_scene_scaled(frame, width, height, scene, text_resources, 1.0);
+}
+
+pub(crate) fn draw_scene_scaled(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    scene: &Scene,
+    text_resources: &SoftwareTextResources,
+    scale: f32,
+) {
     if let Some(graph) = scene.graph.as_ref() {
-        let raster_scene = pipeline::build_raster_scene(graph, scene.diagnostics());
+        let raster_scene = pipeline::build_raster_scene(graph, scene.diagnostics(), scale);
         draw_raster_scene(
             frame,
             width,

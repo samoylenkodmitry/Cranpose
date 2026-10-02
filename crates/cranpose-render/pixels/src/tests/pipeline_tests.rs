@@ -15,7 +15,7 @@ fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
 
 fn build_raster_scene_for_test(graph: &RenderGraph) -> RasterScene {
     let diagnostics = RenderDiagnostics::new();
-    with_test_app_context(|| build_raster_scene(graph, &diagnostics))
+    with_test_app_context(|| build_raster_scene(graph, &diagnostics, 1.0))
 }
 
 fn push_text_style_draws_for_test(

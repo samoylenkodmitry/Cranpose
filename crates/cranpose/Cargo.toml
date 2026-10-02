@@ -151,6 +151,7 @@ camera-desktop = [
 # use their platform stack, and there the backend compiles away.
 media = ["dep:cranpose-media"]
 renderer-pixels = ["cranpose-render-pixels"]
+watchos = ["renderer-pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster", "dep:ash"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
 # ~0.7 MiB). On by default; drop via `default-features = false` if the app

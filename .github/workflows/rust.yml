@@ -135,7 +135,7 @@ jobs:
   tests:
     name: tests (mac)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 20
     defaults:
       run:
@@ -178,7 +178,7 @@ jobs:
   clippy:
     name: clippy + docs (mac)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 20
     defaults:
       run:

@@ -116,6 +116,8 @@ mod android_writable_folder;
 mod app_launcher;
 #[cfg(feature = "preview")]
 pub mod preview;
+#[cfg(feature = "watchos")]
+pub mod watchos;
 #[cfg(feature = "preview")]
 pub use cranpose_macros::preview;
 #[cfg(feature = "embed")]

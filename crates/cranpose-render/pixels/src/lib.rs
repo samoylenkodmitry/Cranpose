@@ -45,6 +45,24 @@ impl PixelsRenderer {
             &self.text_resources,
         );
     }
+
+    /// Rasterizes logical scene coordinates at `scale` device pixels per point.
+    /// Hit regions stay in logical coordinates. Invalid scales use 1.0.
+    pub fn draw_scaled(&self, frame: &mut [u8], width: u32, height: u32, scale: f32) {
+        let scale = if scale.is_finite() && scale > 0.0 {
+            scale
+        } else {
+            1.0
+        };
+        draw::draw_scene_scaled(
+            frame,
+            width,
+            height,
+            &self.scene,
+            &self.text_resources,
+            scale,
+        );
+    }
 }
 
 impl Renderer for PixelsRenderer {
