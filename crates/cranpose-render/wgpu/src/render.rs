@@ -1302,8 +1302,11 @@ pub(crate) enum RunStage {
     Paint,
 }
 
-/// The depth buffer of a pass that lays opaque interiors down first.
-pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// The depth buffer of a pass that lays opaque interiors down first. Depth
+/// only orders records, one unorm code apart, so 16 bits order 65,534 of
+/// them a pass at half the memory of a float buffer: 4.6 MB of a 2.3 MP
+/// target on a device that backs it in full, as Mali does.
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth16Unorm;
 
 /// How a pipeline meets its pass's depth buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

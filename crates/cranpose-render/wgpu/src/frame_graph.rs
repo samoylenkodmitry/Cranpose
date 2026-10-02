@@ -573,7 +573,8 @@ pub(crate) fn texture_format_bytes_per_pixel(format: wgpu::TextureFormat) -> u64
         | wgpu::TextureFormat::Rg8Unorm
         | wgpu::TextureFormat::Rg8Snorm
         | wgpu::TextureFormat::Rg8Uint
-        | wgpu::TextureFormat::Rg8Sint => 2,
+        | wgpu::TextureFormat::Rg8Sint
+        | wgpu::TextureFormat::Depth16Unorm => 2,
         wgpu::TextureFormat::R32Uint
         | wgpu::TextureFormat::R32Sint
         | wgpu::TextureFormat::R32Float

@@ -206,9 +206,9 @@ composites the resolved textures.
 - **Opaque interiors first**: a pass without composites that draws an
   occluder (a solid opaque fill whose interior spans `OCCLUDER_MIN_AREA`,
   1024 logical px², marked per segment at record time) gets a transient
-  `Depth32Float` buffer; only draws holding one lay interiors down, so a
+  `Depth16Unorm` buffer; only draws holding one lay interiors down, so a
   field of circles or arcs pays nothing. Each shape record's depth is its place in the
-  pass's order, 2^-20 apart, from a per-batch base in the viewport
+  pass's order, one unorm code (1/65535) apart, from a per-batch base in the viewport
   uniform plus its instance index. Before the paint, the solid source-over
   fills' interiors (inside their clip, alpha exactly 1) go down front to
   back with depth writes (`vs_record_interior`), neighbouring draws that

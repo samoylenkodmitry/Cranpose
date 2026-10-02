@@ -44,7 +44,7 @@ var<uniform> uniforms: Uniforms;
 // The batch's depth in a pass that lays opaque interiors down first: its
 // place in the pass's order from `uniforms.reserved.x`, on the step the
 // shape stage's records use (`record_depth`), so later interiors hide it.
-const DEPTH_STEP: f32 = 1.0 / 1048576.0;
+const DEPTH_STEP: f32 = 1.0 / 65535.0;
 
 fn batch_depth() -> f32 {
     return max(1.0 - (uniforms.reserved.x + 1.0) * DEPTH_STEP, 0.0);

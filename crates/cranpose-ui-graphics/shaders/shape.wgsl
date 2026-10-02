@@ -718,14 +718,14 @@ fn pinned(position: vec2<f32>, placement: Placement) -> VertexOutput {
     return output;
 }
 
-// Depth steps one record apart: 2^-20, a whole number of ulps below 1, so
-// every record's depth is exact and interpolation cannot reorder two.
-const DEPTH_STEP: f32 = 1.0 / 1048576.0;
+// Depth steps one record apart: one code of the 16-bit unorm depth buffer,
+// so every record's depth is exact and interpolation cannot reorder two.
+const DEPTH_STEP: f32 = 1.0 / 65535.0;
 
 // The depth of the record at `instance`: its place in the pass's draw
 // order, counted from the batch's first record in `uniforms.reserved.x`,
 // nearer for later records and a step nearer than the cleared far plane.
-// Records past the 2^20 the range holds sit on the near plane: they pass
+// Records past the 65,534 the range holds sit on the near plane: they pass
 // every test, so they paint in order, and never occlude.
 fn record_depth(instance: u32) -> f32 {
     return max(1.0 - (uniforms.reserved.x + f32(instance) + 1.0) * DEPTH_STEP, 0.0);
