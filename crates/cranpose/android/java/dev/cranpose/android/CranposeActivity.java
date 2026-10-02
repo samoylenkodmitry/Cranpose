@@ -518,6 +518,8 @@ public class CranposeActivity extends NativeActivity {
             final List<CranposeAccessibilityElement> updated = parseAccessibilityElements(records);
             View host = getWindow().getDecorView();
             if (cranposeAccessibilityProvider == null) {
+                host.postDelayed(CranposeActivity::collectStartupGarbage,
+                        ACCESSIBILITY_STARTUP_GC_DELAY_MS);
                 cranposeAccessibilityProvider = new CranposeAccessibilityProvider(host);
                 host.setFocusable(true);
                 host.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
@@ -532,6 +534,20 @@ public class CranposeActivity extends NativeActivity {
                 nativeOnAccessibilityTreeLost();
             }
         });
+    }
+
+    /**
+     * How long after the accessibility bridge first publishes its tree the
+     * Java heap is collected once. Mirroring the tree is this host's one
+     * stream of Java allocation, and the heap it grows to by then stays
+     * resident in a foreground process: on the Mate 20 X, workspace quotes
+     * held 22 MB of Java heap PSS at 30 s with 1.5 MB live, and one
+     * collection brought it to 2 MB for the rest of the run.
+     */
+    private static final long ACCESSIBILITY_STARTUP_GC_DELAY_MS = 3000;
+
+    private static void collectStartupGarbage() {
+        new Thread(Runtime.getRuntime()::gc, "cranpose-heap-gc").start();
     }
 
     /**
