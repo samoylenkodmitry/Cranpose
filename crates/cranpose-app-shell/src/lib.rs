@@ -969,7 +969,11 @@ where
     }
 
     /// Sets the primary surface's viewport and lays out and renders at once.
+    /// The size the surface already has changes nothing.
     pub fn set_viewport(&mut self, width: f32, height: f32) {
+        if self.surfaces[0].viewport == (width, height) {
+            return;
+        }
         self.primary().set_viewport(width, height);
         self.process_frame();
     }

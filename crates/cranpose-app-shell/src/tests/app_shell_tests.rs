@@ -11460,3 +11460,30 @@ impl Gate {
         })
     }
 }
+
+#[test]
+fn the_viewport_the_shell_already_has_rebuilds_nothing() {
+    let _guard = test_guard();
+    let rebuilds = Rc::new(Cell::new(0));
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new_with_size(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        || {
+            Text("Viewport", Modifier::empty(), TextStyle::default());
+        },
+        (320, 240),
+        (320.0, 240.0),
+    );
+    shell.update();
+    let settled = rebuilds.get();
+    assert!(settled >= 1, "instrument dead: the scene was never built");
+
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+    assert_eq!(rebuilds.get(), settled);
+
+    shell.set_viewport(320.0, 480.0);
+    shell.update();
+    assert!(rebuilds.get() > settled, "a new size rebuilds the scene");
+}
