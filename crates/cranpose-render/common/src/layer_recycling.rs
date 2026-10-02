@@ -51,6 +51,26 @@ pub(crate) fn recycle_children(layer: &mut LayerNode) {
     POOL.with(|pool| pool.borrow_mut().recycle_children(layer));
 }
 
+/// Takes `layer`'s own primitives out of its child list, keeping its child
+/// layers in their order, and moves their text boxes into the pool.
+pub(crate) fn recycle_primitives(layer: &mut LayerNode) {
+    POOL.with(|pool| {
+        let texts = &mut pool.borrow_mut().texts;
+        for child in layer
+            .children
+            .extract_if(.., |child| !matches!(child, RenderNode::Layer(_)))
+        {
+            if let RenderNode::Primitive(PrimitiveEntry {
+                node: PrimitiveNode::Text(text),
+                ..
+            }) = child
+            {
+                texts.push(text);
+            }
+        }
+    });
+}
+
 /// Moves `layer`'s box, and every layer box beneath it, into the pool.
 pub(crate) fn recycle(layer: Box<LayerNode>) {
     POOL.with(|pool| pool.borrow_mut().recycle_layer(layer));
