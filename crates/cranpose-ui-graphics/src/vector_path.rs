@@ -227,7 +227,8 @@ struct Edge {
 struct EdgeScanner<'a> {
     edges: &'a [Edge],
     next: usize,
-    active: Vec<&'a Edge>,
+    /// The edges the current line crosses, each with where it crosses.
+    active: Vec<(f32, &'a Edge)>,
     crossings: Vec<(f32, i32)>,
 }
 
@@ -249,20 +250,22 @@ impl<'a> EdgeScanner<'a> {
             .get(self.next)
             .filter(|edge| edge.top.y <= sample_y)
         {
-            self.active.push(edge);
+            self.active.push((0.0, edge));
             self.next += 1;
         }
-        self.active.retain(|edge| sample_y < edge.bottom.y);
-        let x_at = |edge: &Edge| {
+        self.active.retain(|(_, edge)| sample_y < edge.bottom.y);
+        for (x, edge) in &mut self.active {
             let t = (sample_y - edge.top.y) / (edge.bottom.y - edge.top.y);
-            edge.top.x + t * (edge.bottom.x - edge.top.x)
-        };
-        // The active edges stay in crossing order: it barely changes from
-        // one sample line to the next, so the sort meets presorted runs.
-        self.active.sort_by(|a, b| x_at(a).total_cmp(&x_at(b)));
+            *x = edge.top.x + t * (edge.bottom.x - edge.top.x);
+        }
+        // Each crossing is computed once, then sorted: the order barely
+        // changes from one sample line to the next, which the sort finds in
+        // one pass. Crossings at the same x bound an empty span either way.
+        self.active
+            .sort_unstable_by(|(a, _), (b, _)| a.total_cmp(b));
         self.crossings.clear();
         self.crossings
-            .extend(self.active.iter().map(|edge| (x_at(edge), edge.winding)));
+            .extend(self.active.iter().map(|(x, edge)| (*x, edge.winding)));
         &self.crossings
     }
 }
