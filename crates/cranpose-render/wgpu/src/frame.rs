@@ -1150,6 +1150,7 @@ fn shader_tail_over_surface(
         return None;
     };
     let dest = surface.grid_dest?;
+    let visible = dest.intersect(visible)?;
     shader_tail_composites(child, shader).then(|| {
         shader_tail_composite(
             child,
