@@ -123,8 +123,8 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                     let thumb_shape = Rc::clone(&shape);
                     let thumb_axis = Rc::clone(&lens_axis);
                     let thumb = Modifier::empty()
-                        .size(Size::new(THUMB_WIDTH, THUMB_HEIGHT))
-                        .offset(0.0, (SLIDER_HEIGHT - THUMB_HEIGHT) * 0.5)
+                        .required_size(Size::new(node_w, node_h))
+                        .offset((THUMB_WIDTH - node_w) * 0.5, (SLIDER_HEIGHT - node_h) * 0.5)
                         .graphics_layer(move || {
                             let lens = lens_for_thumb.get();
                             let grow = lens_progress.get().clamp(-0.1, 1.2);
@@ -140,20 +140,11 @@ pub fn LiquidSlider(modifier: Modifier, value: f32, on_change: impl Fn(f32) + 's
                                 alpha: (1.0 - lens).clamp(0.0, 1.0),
                                 ..Default::default()
                             }
-                        })
-                        .drop_shadow(
-                            cranpose_ui_graphics::LayerShape::Rounded(
-                                cranpose_ui_graphics::RoundedCornerShape::uniform(
-                                    THUMB_HEIGHT * 0.5,
-                                ),
-                            ),
-                            |scope| {
-                                scope.radius = 6.0;
-                                scope.offset.y = 2.0;
-                                scope.color = Color::BLACK.with_alpha(0.16);
-                            },
-                        );
-                    super::control_lens::WhiteControlThumb(thumb, THUMB_HEIGHT);
+                        });
+                    super::control_lens::WhiteControlThumb(
+                        thumb,
+                        Size::new(THUMB_WIDTH, THUMB_HEIGHT),
+                    );
 
                     let lens_for_layer = lens_progress;
                     let physics_axis = Rc::clone(&lens_axis);

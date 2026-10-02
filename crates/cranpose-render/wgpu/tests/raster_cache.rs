@@ -861,6 +861,117 @@ fn clipped_text_graph(y: f32) -> RenderGraph {
     support::page_graph(320, 140, vec![RenderNode::Layer(Box::new(layer))])
 }
 
+fn nested_shadow_graph(padded: bool, scale: f32, shader: bool) -> RenderGraph {
+    let caster = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 44.0,
+        height: 28.0,
+    };
+    let shadow = RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
+            primitive: cranpose_ui_graphics::DrawPrimitive::Shadow(
+                cranpose_ui_graphics::ShadowPrimitive::Drop {
+                    shape: Box::new(cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: caster,
+                        brush: Brush::solid(Color::BLACK.with_alpha(0.4)),
+                        stroke: None,
+                    }),
+                    cutout: None,
+                    blur_radius: 6.0,
+                    blend_mode: cranpose_ui_graphics::BlendMode::SrcOver,
+                },
+            ),
+            clip: None,
+        })),
+    });
+    let inner = support::contract_layer(
+        Some(90_002),
+        CachePolicy::None,
+        caster,
+        ProjectiveTransform::identity(),
+        vec![shadow],
+    );
+    let bounds = if padded {
+        Rect {
+            x: -32.0,
+            y: -32.0,
+            width: 108.0,
+            height: 92.0,
+        }
+    } else {
+        caster
+    };
+    let mut outer = support::contract_layer(
+        Some(90_001),
+        CachePolicy::None,
+        bounds,
+        ProjectiveTransform::uniform_scale(scale)
+            .then(ProjectiveTransform::translation(54.0, 50.0)),
+        vec![RenderNode::Layer(Box::new(inner))],
+    );
+    outer.graphics_layer.scale_x = scale;
+    outer.graphics_layer.scale_y = scale;
+    if shader {
+        let mut effect = cranpose_ui_graphics::RuntimeShader::new(&format!(
+            "{}\n@fragment fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{ return textureSample(input_texture, input_sampler, input.uv); }}",
+            cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
+        ));
+        effect.set_position_independent(true);
+        outer.graphics_layer.render_effect = Some(RenderEffect::runtime_shader(effect));
+        outer.isolation.effect = true;
+    }
+    support::page_graph(
+        180,
+        140,
+        vec![
+            painted_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 180.0,
+                    height: 140.0,
+                },
+                Color::WHITE,
+            ),
+            RenderNode::Layer(Box::new(outer)),
+        ],
+    )
+}
+
+#[test]
+fn transformed_and_shaded_layers_preserve_descendant_shadow_extents() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    for density in [1.0, 2.0] {
+        for scale in [1.0, 1.25] {
+            for shader in [false, true] {
+                let width = (180.0 * density) as u32;
+                let height = (140.0 * density) as u32;
+                renderer.scene_mut().graph = Some(nested_shadow_graph(true, scale, shader));
+                let reference = renderer
+                    .capture_frame_with_scale(width, height, density)
+                    .expect("padded reference");
+                let reference_stats = renderer.last_frame_stats().expect("reference stats");
+                renderer.scene_mut().graph = Some(nested_shadow_graph(false, scale, shader));
+                let actual = renderer
+                    .capture_frame_with_scale(width, height, density)
+                    .expect("interaction shadow");
+                support::assert_bytes_within(
+                    &format!("descendant shadow density={density} scale={scale} shader={shader}"),
+                    width,
+                    &reference.pixels,
+                    &actual.pixels,
+                    1,
+                );
+                let stats = renderer.last_frame_stats().expect("shadow stats");
+                assert!(stats.pass_count <= reference_stats.pass_count);
+                assert!(stats.pass_pixels <= reference_stats.pass_pixels);
+            }
+        }
+    }
+}
+
 #[test]
 fn retained_short_text_matches_fresh_clipped_pixels_after_translation() {
     let mut renderer = support::headless_renderer().expect("headless renderer");

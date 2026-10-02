@@ -15,7 +15,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 
-use super::floating_button::FloatingButtonSurface;
+use super::floating_button::{FloatingButtonSurface, floating_button_content};
 use crate::{
     material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape},
     motion::LiquidMotion,
@@ -442,26 +442,12 @@ pub(crate) fn GlassButtonWithFeedback(
         ..Default::default()
     });
     let content = Rc::new(RefCell::new(content));
-    let button = pressed_modifier.then(base);
-    Box(
+    floating_button_content(
         modifier.then(gesture),
-        BoxSpec::default().propagate_min_constraints(true),
-        move || {
-            let content = Rc::clone(&content);
-            let content_layer = content_layer.clone();
-            Box(
-                button.clone(),
-                BoxSpec::default().content_alignment(Alignment::CENTER),
-                move || {
-                    let content = Rc::clone(&content);
-                    Box(
-                        content_layer.clone(),
-                        BoxSpec::default().content_alignment(Alignment::CENTER),
-                        move || (content.borrow_mut())(),
-                    );
-                },
-            );
-        },
+        pressed_modifier,
+        base,
+        content_layer,
+        move || (content.borrow_mut())(),
     );
 }
 
@@ -549,26 +535,12 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
             * foreground_alpha.clamp(0.0, 1.0),
         ..Default::default()
     });
-    let button = pressed_modifier.then(base);
-    Box(
+    floating_button_content(
         modifier.then(gesture),
-        BoxSpec::default().propagate_min_constraints(true),
-        move || {
-            let foreground_spec = spec.clone();
-            let content_layer = content_layer.clone();
-            Box(
-                button.clone(),
-                BoxSpec::default().content_alignment(Alignment::CENTER),
-                move || {
-                    let foreground_spec = foreground_spec.clone();
-                    Box(
-                        content_layer.clone(),
-                        BoxSpec::default().content_alignment(Alignment::CENTER),
-                        move || GlassIconForeground(foreground_spec.clone(), diameter, icon_path),
-                    );
-                },
-            );
-        },
+        pressed_modifier,
+        base,
+        content_layer,
+        move || GlassIconForeground(spec.clone(), diameter, icon_path),
     );
 }
 

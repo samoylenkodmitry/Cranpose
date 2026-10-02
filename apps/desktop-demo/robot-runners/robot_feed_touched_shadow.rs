@@ -1,26 +1,20 @@
-use crate::{liquid_page, robot_exit, robot_shot};
-
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
 use cranpose::{AppLauncher, RobotScreenshot, SemanticElement};
 use cranpose_testing::{find_in_semantics, find_text_exact};
 use desktop_app::app;
 
+use crate::{liquid_page, robot_exit, robot_shot};
+
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 700;
 const SHOT_SCALE: f32 = 2.0;
-/// The card whose star this runner holds: its neighbours' stars sit under the
-/// feed's chrome.
 const CARD: &str = "Receipt #0004 — 12 items";
 const STAR: &str = "★";
-/// How far left of the star's box the walk toward it starts, in dp: plain
-/// card there, well past the shadow's reach.
 const FAR: f32 = 32.0;
-/// Rows the walk samples, in dp from the star's vertical centre.
+const SAMPLE_STEP: f32 = 1.0 / SHOT_SCALE;
 const ROWS: [f32; 3] = [-10.0, 0.0, 10.0];
-/// The most a shadow that fades may darken from one dp to the next.
 const STEP_TOLERANCE: f32 = 3.0;
-/// A brightening this large is the glass rim: the walk has reached the control.
 const RIM_STEP: f32 = 20.0;
 
 type Bounds = (f32, f32, f32, f32);
@@ -112,7 +106,6 @@ pub(crate) fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The clickable element holding a star whose box spans `y`.
 fn star_beside(element: &SemanticElement, y: f32) -> Option<Bounds> {
     let bounds = element.bounds;
     if element.clickable
@@ -127,27 +120,23 @@ fn star_beside(element: &SemanticElement, y: f32) -> Option<Bounds> {
         .find_map(|child| star_beside(child, y))
 }
 
-/// The page's luma along each of [`ROWS`], walking from `FAR` dp left of the
-/// star's box toward its edge one dp at a time.
 fn walks(shot: &RobotScreenshot, star: Bounds) -> Vec<Vec<f32>> {
     let sample = robot_shot::logical_sampler(shot);
-    let luma = |x: f32, y: f32| {
+    let brightness = |x: f32, y: f32| {
         let (r, g, b) = sample(x, y);
-        0.299 * f32::from(r) + 0.587 * f32::from(g) + 0.114 * f32::from(b)
+        f32::from(r.max(g).max(b))
     };
     let centre = star.1 + star.3 * 0.5;
     ROWS.iter()
         .map(|row| {
             let y = centre + row;
-            (0..FAR as usize)
-                .map(|step| luma(star.0 - FAR + step as f32, y))
+            (0..(FAR / SAMPLE_STEP) as usize)
+                .map(|step| brightness(star.0 - FAR + step as f32 * SAMPLE_STEP, y))
                 .collect()
         })
         .collect()
 }
 
-/// Where a walk toward the star darkens by more than a fading shadow can in
-/// one dp before it reaches the glass rim: the edge of a cut shadow.
 fn first_cut(walks: &[Vec<f32>]) -> Option<String> {
     walks.iter().zip(ROWS).find_map(|(walk, row)| {
         walk.windows(2)
@@ -160,12 +149,12 @@ fn first_cut(walks: &[Vec<f32>]) -> Option<String> {
                 (-inward > STEP_TOLERANCE).then(|| {
                     Some(format!(
                         "{:.1} dp below the centre row, the card goes from {:.1} to {:.1} between \
-                     {:.0} and {:.0} dp left of the star's box",
+                     {:.1} and {:.1} dp left of the star's box",
                         row,
                         pair[0],
                         pair[1],
-                        FAR - step as f32,
-                        FAR - step as f32 - 1.0
+                        FAR - step as f32 * SAMPLE_STEP,
+                        FAR - (step + 1) as f32 * SAMPLE_STEP
                     ))
                 })
             })

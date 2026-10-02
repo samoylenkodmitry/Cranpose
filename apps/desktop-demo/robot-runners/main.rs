@@ -123,6 +123,7 @@ runners! {
     robot_liquid_control_refraction,
     robot_liquid_floating_optics,
     robot_liquid_dropdown_accordion,
+    robot_liquid_interaction_shadow,
     robot_liquid_menu_expand_cheatsheet,
     robot_liquid_menu_open_cheatsheet,
     robot_liquid_nav_bar_backdrop,
