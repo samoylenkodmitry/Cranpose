@@ -34,16 +34,17 @@ pub(crate) fn main() {
     .with_test_driver(|robot| {
         std::thread::sleep(Duration::from_millis(300));
         robot.pump_frames(4).expect("settle");
+        // A card serving a stale surface repeats its pixel exactly; a
+        // periodic animation sampled near a turn, or at nearly its period,
+        // moves only a few levels between samples, so the visible swing is
+        // judged over the whole run.
         let mut previous = shader_pixel(&robot);
+        let (mut low, mut high) = (previous, previous);
         for sample in 0..SAMPLES {
             std::thread::sleep(Duration::from_millis(120));
             robot.pump_frames(FRAMES_BETWEEN_SAMPLES).expect("advance animation");
             let current = shader_pixel(&robot);
-            let moved = previous
-                .iter()
-                .zip(current.iter())
-                .take(3)
-                .any(|(a, b)| (*a as i32 - *b as i32).abs() >= MIN_CHANNEL_DELTA);
+            let moved = previous[..3] != current[..3];
             println!("sample {sample}: {previous:?} -> {current:?} moved={moved}");
             if !moved {
                 robot_exit::fail(
@@ -53,7 +54,23 @@ pub(crate) fn main() {
                     ),
                 );
             }
+            for channel in 0..3 {
+                low[channel] = low[channel].min(current[channel]);
+                high[channel] = high[channel].max(current[channel]);
+            }
             previous = current;
+        }
+        let swing = (0..3)
+            .map(|channel| i32::from(high[channel]) - i32::from(low[channel]))
+            .max()
+            .unwrap_or(0);
+        if swing < MIN_CHANNEL_DELTA {
+            robot_exit::fail(
+                &robot,
+                &format!(
+                    "the runtime shader swung only {swing} levels over {SAMPLES} samples, below {MIN_CHANNEL_DELTA}: its animation barely reaches the cached card"
+                ),
+            );
         }
         println!("✓ PASS: frame-clock uniforms keep repainting through the cached card");
         let _ = robot.exit();
