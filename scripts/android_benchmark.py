@@ -1,15 +1,17 @@
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import re
 import signal
 import statistics
 import subprocess
 import time
+import threading
 import uuid
 
-from android_benchmark_artifacts import snapshot_source, source_inventory, verify_apk, verify_build
+from android_benchmark_artifacts import snapshot_source, source_inventory, verify_apk, verify_build, verify_helper
 from android_benchmark_device import AndroidDevice, surface_frames, verify_route_window
 from android_benchmark_support import checked_command, device_lock, digest, error_details, interrupted, run_reported, write_report
 from android_benchmark_video import AndroidRecording, ScrcpyRecording
@@ -254,10 +256,8 @@ def sequence(args, report):
                          'inventory': source_inventory(tooling)}
     route = json.loads(args.route.read_text())
     validate_route(route)
-    helper = json.loads(args.dex.with_name('route.json').read_text())
-    if (helper['dex_sha256'] != digest(args.dex)
-            or helper['source_sha256'] != digest(Path(__file__).parent / 'android/CranposeBenchmarkRoute.java')):
-        raise ValueError('Route helper does not match the versioned source and build proof')
+    helper = verify_helper(args.dex, tooling / 'android/CranposeBenchmarkRoute.java',
+                           args.dex.with_name('route.json'), 'dex_sha256')
     inputs = [path.resolve() for path in [args.a, args.b]]
     proofs = [json.loads(path.read_text()) for path in inputs]
     for path, proof in zip(inputs, proofs):
@@ -269,15 +269,19 @@ def sequence(args, report):
     validate_pair(proofs, args.variant_source, allow_lock_drift)
     report['variant_source'] = args.variant_source
     report['allow_lock_drift'] = allow_lock_drift
+    properties = [json.loads(getattr(args, name + '_properties', '{}')) for name in ['a', 'b']]
+    if any(not isinstance(value, dict) or any(not name.startswith('debug.cranpose.')
+           or not isinstance(setting, str) for name, setting in value.items()) for value in properties):
+        raise ValueError('Variant properties must map Cranpose diagnostic property names to strings')
+    diagnostic = any(properties)
+    report['variant_properties'] = dict(zip(['A', 'B'], properties))
+    report['diagnostic'] = diagnostic
     if allow_lock_drift:
         report['lock_sha256'] = [proof['build']['lock_sha256'] for proof in proofs]
     report.update(serial=args.serial, route_sha256=digest(args.route), helper=helper, legs=[])
     if args.ocr:
-        proof = json.loads(args.ocr.with_suffix('.json').read_text())
-        if (proof['executable_sha256'] != digest(args.ocr)
-                or proof['source_sha256'] != digest(tooling / 'android/recognize_text.swift')):
-            raise ValueError('OCR helper does not match its source build')
-        report['ocr'] = proof
+        report['ocr'] = verify_helper(args.ocr, tooling / 'android/recognize_text.swift',
+                                      args.ocr.with_suffix('.json'), 'executable_sha256')
     device = AndroidDevice(args.serial, args.adb, args.ocr, args.output / 'endpoints')
     remote_apks = {proof['apk_sha256']: (path.parent / proof['apk'],
                                          '/data/local/tmp/cranpose-benchmark-' + uuid.uuid4().hex + '.apk')
@@ -286,15 +290,15 @@ def sequence(args, report):
         def measure():
             for sha256, (apk, remote) in remote_apks.items():
                 stage_apk(device, route['package'], apk, remote, sha256, args.transfer_timeout_seconds)
-            try:
-                device.configure_properties({})
-            finally:
-                report['saved_properties'] = device.saved_properties
             for index, slot in enumerate('AB' if args.record else 'ABABBABA', 1):
                 source = 0 if slot == 'A' else 1
+                try:
+                    device.configure_properties(properties[source])
+                finally:
+                    report['saved_properties'] = device.saved_properties
                 destination = args.output / f'{index}-{slot}'
                 destination.mkdir()
-                leg = {'slot': slot, 'index': index}
+                leg = {'slot': slot, 'index': index, 'properties': properties[source], 'diagnostic': diagnostic}
                 report['legs'].append(leg)
                 recorder = None
                 if args.record:
@@ -302,13 +306,28 @@ def sequence(args, report):
                     options = {'duration_seconds': args.video_seconds} if args.record_backend == 'scrcpy' else {}
                     options['visual_regions'] = route.get('visual_regions')
                     recorder = recording_type(device, destination, route['size'], leg, args.video_bit_rate, **options)
-                run_reported(destination / 'report.json', leg,
-                             lambda: run_leg(device, route, inputs[source].parent / proofs[source]['apk'],
-                                             proofs[source], args.dex, destination, leg,
-                                             remote_apks[proofs[source]['apk_sha256']][1], recorder),
+                def run():
+                    previous = signal.signal(signal.SIGALRM, interrupted)
+                    signal.alarm(175)
+                    try:
+                        run_leg(device, route, inputs[source].parent / proofs[source]['apk'],
+                                proofs[source], args.dex, destination, leg,
+                                remote_apks[proofs[source]['apk_sha256']][1], recorder)
+                    finally:
+                        signal.alarm(0)
+                        signal.signal(signal.SIGALRM, previous)
+                        if diagnostic:
+                            leg['acceptance_eligible'] = False
+                def capture_logs():
+                    if 'pid' in leg:
+                        leg['diagnostic_log'] = 'logcat.txt'
+                        (destination / 'logcat.txt').write_text(device.shell(
+                            'logcat', '-d', '--pid=' + leg['pid'], '-T', leg['launch_time']))
+                run_reported(destination / 'report.json', leg, run,
                              [lambda: stop_route(device, destination, leg),
                               lambda: device.shell('dumpsys', 'SurfaceFlinger', '--timestats', '-disable'),
                               lambda: recorder.finish() if recorder else None,
+                              capture_logs,
                               lambda: device.shell('am', 'force-stop', route['package'])])
                 write_report(args.output / 'report.json', report)
                 print(json.dumps({key: leg[key] for key in ['slot', 'index', 'fps', 'elapsed_s']}), flush=True)
@@ -316,7 +335,7 @@ def sequence(args, report):
                                   for slot in ['A', 'B']}
             if source_inventory(tooling) != report['tooling']['inventory']:
                 raise ValueError('Measurement tooling changed during the sequence')
-            report['acceptance_eligible'] = not args.record
+            report['acceptance_eligible'] = not args.record and not diagnostic
         run_reported(args.output / 'report.json', report, measure,
                      [device.restore_properties, *[lambda path=path: device.shell('rm', '-f', path)
                                                     for _, path in remote_apks.values()]])
@@ -356,6 +375,7 @@ def main():
     measure.add_argument('--serial', required=True)
     measure.add_argument('--adb', default='adb')
     measure.add_argument('--transfer-timeout-seconds', type=int, default=120)
+    measure.add_argument('--timeout-seconds', type=int, default=720)
     measure.add_argument('--route', type=Path, required=True)
     measure.add_argument('--dex', type=Path, required=True)
     measure.add_argument('--ocr', type=Path)
@@ -365,6 +385,8 @@ def main():
     measure.add_argument('--video-bit-rate', type=int, default=2_000_000)
     measure.add_argument('--a', type=Path, required=True)
     measure.add_argument('--b', type=Path, required=True)
+    measure.add_argument('--a-properties', default='{}')
+    measure.add_argument('--b-properties', default='{}')
     measure.add_argument('--variant-source', choices=['framework', 'app'], default='framework')
     measure.add_argument('--allow-lock-drift', action='store_true')
     measure.add_argument('--output', type=Path, required=True)
@@ -375,9 +397,17 @@ def main():
     elif args.command == 'build-ocr':
         build_ocr(args)
     else:
+        if args.timeout_seconds <= 0:
+            parser.error('The measurement timeout must be positive')
         args.output.mkdir(parents=True, exist_ok=False)
         report = {}
-        run_reported(args.output / 'report.json', report, lambda: sequence(args, report))
+        timer = threading.Timer(args.timeout_seconds, os.kill, (os.getpid(), signal.SIGTERM))
+        timer.start()
+        try:
+            run_reported(args.output / 'report.json', report, lambda: sequence(args, report))
+        finally:
+            timer.cancel()
+            timer.join()
 
 
 if __name__ == '__main__':

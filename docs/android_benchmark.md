@@ -2,12 +2,16 @@
 
 - Requires Python 3.11+, Pillow, adb, cargo-ndk and the app’s Android NDK; video capture also requires ffmpeg and screenrecord or scrcpy.
 - Build immutable source archives and native provenance with `python3 scripts/android_benchmark_build.py --help`; keep reports outside the disposable build cache.
+- Interrupted native compilation retains its source inventories, toolchain and command in `build.json`. Resume that exact build with `python3 scripts/android_benchmark_resume.py --report OUTPUT/build.json --timeout 150`; changed sources or build settings are rejected.
 - Set `RUSTUP_TOOLCHAIN` to the framework's pinned toolchain for both builds. Compilation runs inside the frozen application, whose toolchain file can otherwise select a different compiler; pair validation rejects that mismatch before device measurement.
 - Package one verified native ABI into an isolated signed APK with `python3 scripts/android_benchmark_package.py --help`; both revisions must share their application payload and build settings.
 - Compile the device input helper with `./perf_android.sh build-route --android-jar SDK/android.jar --d8 BUILD_TOOLS/d8 --output OUTPUT`.
 - Configure display size, density, input timing and distinct visible endpoints in a route JSON; examples live in [scripts/android/routes](../scripts/android/routes).
 - Use `./perf_android.sh build-ocr --output OUTPUT` on macOS for image endpoint checks; restrict heading regions to exclude persistent navigation labels.
 - Run `./perf_android.sh measure --serial SERIAL --route ROUTE --dex HELPER/classes.dex --a A/apk.json --b B/apk.json --output OUTPUT` for one locked ABAB BABA sequence.
+- For same-APK attribution, pass the same proof for A and B and add a diagnostic variant such as `--b-properties '{"debug.cranpose.ablate":"glass"}'`. Every variant and the complete comparison remain ineligible for performance acceptance when either property map is nonempty. This switch bypasses batched glass composites; it does not remove every Liquid effect.
+- Each run has a 175-second deadline. The complete sequence defaults to 720 seconds, adjustable with `--timeout-seconds`; failures and cleanup remain recorded.
+- Use `python3 scripts/android_benchmark_probe.py --help` for a single diagnostic route or video. A successful probe alone never authorizes a performance claim.
 - Add `--record --record-backend scrcpy` for comparison videos; recording runs and their nested windows are ineligible for FPS acceptance.
 - Matching installed APK hashes reuse the on-device payload and skip redundant installation; differing payloads are transferred and verified before use.
 - Each leg verifies the installed APK, first-gesture motion, both endpoints, foreground PID, input timing and device temperature; captures sit outside the measurement window.

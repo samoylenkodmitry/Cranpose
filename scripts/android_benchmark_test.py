@@ -12,6 +12,7 @@ import unittest
 import zipfile
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
+from itertools import product
 
 import android_benchmark as benchmark
 import android_benchmark_artifacts as artifacts
@@ -20,6 +21,7 @@ from android_benchmark_device import AndroidDevice, surface_frames, verify_route
 from android_benchmark_build import build, native_artifact
 from android_benchmark import run_leg, sequence, validate_pair, validate_route
 from android_benchmark_video import AndroidRecording, ScrcpyRecording, inspect_recording
+from android_benchmark_resume import resume
 
 
 class BenchmarkContracts(unittest.TestCase):
@@ -49,6 +51,22 @@ class BenchmarkContracts(unittest.TestCase):
         (extracted / 'unexpected.rs').write_text('stale input')
         with self.assertRaisesRegex(ValueError, 'fresh directory'):
             artifacts.extract_source(archives[0], extracted)
+
+    def test_helper_requires_both_the_recorded_source_and_binary(self):
+        source = self.root / 'source.java'
+        source.write_bytes(b'source')
+        artifact = self.root / 'classes.dex'
+        artifact.write_bytes(b'bytecode')
+        manifest = self.root / 'helper.json'
+        proof = {'source_sha256': support.digest(source), 'dex_sha256': support.digest(artifact)}
+        manifest.write_text(json.dumps(proof))
+        self.assertEqual(artifacts.verify_helper(artifact, source, manifest, 'dex_sha256'), proof)
+        for path in [source, artifact]:
+            original = path.read_bytes()
+            path.write_bytes(b'different')
+            with self.assertRaisesRegex(ValueError, 'Helper differs'):
+                artifacts.verify_helper(artifact, source, manifest, 'dex_sha256')
+            path.write_bytes(original)
 
     def test_archive_rejects_symlinks_and_self_inclusion(self):
         source = self.source()
@@ -249,6 +267,22 @@ class BenchmarkContracts(unittest.TestCase):
         self.assertEqual(captures[0]['motion_pixels_sha256'], captures[1]['motion_pixels_sha256'])
         self.assertNotEqual(captures[1]['motion_pixels_sha256'], captures[2]['motion_pixels_sha256'])
 
+    def test_property_variants_restore_the_original_device_state(self):
+        device = AndroidDevice('fixture')
+        values = {'debug.cranpose.ablate': 'none'}
+
+        def shell(_command, name, value):
+            values[name] = value
+            return ''
+
+        with patch.object(device, 'properties', side_effect=lambda: values.copy()), patch.object(device, 'shell', side_effect=shell):
+            device.configure_properties({})
+            device.configure_properties({'debug.cranpose.ablate': 'glass'})
+            self.assertEqual(values['debug.cranpose.ablate'], 'glass')
+            device.configure_properties({})
+            device.restore_properties()
+        self.assertEqual(values, {'debug.cranpose.ablate': 'none'})
+
     def test_surface_counts_reject_missing_or_restarted_application_layers(self):
         valid = 'layerName = SurfaceView - com.example.app/Main\ntotalFrames = 300\n'
         self.assertEqual(surface_frames(valid, 'com.example.app')['frames'], 300)
@@ -306,6 +340,12 @@ class BenchmarkContracts(unittest.TestCase):
 
         def checked(command, **options):
             if command[:2] == ['cargo', 'ndk']:
+                checkpoint = json.loads((output / 'build.json').read_text())
+                self.assertEqual(checkpoint['phase'], 'compile')
+                self.assertEqual(checkpoint['command'], command)
+                self.assertEqual(checkpoint['sources'], report['sources'])
+                self.assertEqual(checkpoint['settings'], report['settings'])
+                self.assertEqual(checkpoint['native'], 'libbenchmark_app.so')
                 raise RuntimeError('native build reached with archived sources')
             try:
                 return support.checked_command(command, **options)
@@ -318,6 +358,38 @@ class BenchmarkContracts(unittest.TestCase):
                 build(args, report)
         self.assertTrue(Path(report['resolved']['benchmark-fixture']).is_relative_to(Path(report['cache']) / 'framework'))
         self.assertIn('unavailable-host', config.read_text())
+
+    def test_resume_preserves_named_artifacts_and_rejects_changed_sources(self):
+        cache = self.root / 'cache'
+        app = cache / 'app'
+        app.mkdir(parents=True)
+        (app / 'Cargo.lock').write_text('locked inputs')
+        library = cache / 'native' / 'test-abi' / 'libcustom_name.so'
+        library.parent.mkdir(parents=True)
+        library.write_bytes(b'compiled library')
+        settings = {'package': 'package-with-another-name', 'platform': 26}
+        report = {'cache': str(cache), 'command': ['fixture-build'], 'settings': settings,
+                  'sources': {'app': {'inventory': artifacts.source_inventory(app)}},
+                  'toolchain': 'fixture-rustc', 'cargo': 'fixture-cargo', 'abi': 'test-abi',
+                  'native': library.name}
+        args = SimpleNamespace(report=self.root / 'build.json', timeout=30)
+
+        def command(parts, **options):
+            if parts == ['fixture-build']:
+                options['output'].write_text('build complete')
+                return b''
+            return {'rustc': b'fixture-rustc', 'cargo': b'fixture-cargo'}[parts[0]]
+
+        with patch('android_benchmark_resume.build_settings', return_value=settings), patch('android_benchmark_resume.checked_command', side_effect=command) as commands:
+            resume(args, report)
+            self.assertEqual((self.root / library.name).read_bytes(), library.read_bytes())
+            self.assertEqual(report['native_sha256'], support.digest(library))
+            self.assertEqual(report['phase'], 'complete')
+            commands.reset_mock()
+            (app / 'Cargo.lock').write_text('different inputs')
+            with self.assertRaisesRegex(ValueError, 'source differs'):
+                resume(args, report)
+            commands.assert_not_called()
 
     def test_endpoint_reads_the_dump_file_and_rejects_offscreen_or_other_apps(self):
         device = AndroidDevice('fixture')
@@ -521,12 +593,13 @@ class BenchmarkContracts(unittest.TestCase):
                                          'apk_sha256': support.digest(apk), 'native_member': 'library',
                                          'build_directory': str(self.root), 'build': build, 'payload': {}}))
             proofs.append(proof)
-        for fail in [False, True]:
-            with self.subTest(fail=fail):
-                output = self.root / str(fail)
+        for fail, diagnostic in product([False, True], repeat=2):
+            with self.subTest(fail=fail, diagnostic=diagnostic):
+                output = self.root / f'{fail}-{diagnostic}'
                 output.mkdir()
                 args = SimpleNamespace(serial='fixture-' + str(self.root), adb='adb', route=route,
-                                       dex=dex, ocr=None, record=False, video_bit_rate=2_000_000, a=proofs[0], b=proofs[1], output=output, transfer_timeout_seconds=600, variant_source='framework')
+                                       dex=dex, ocr=None, record=False, video_bit_rate=2_000_000, a=proofs[0], b=proofs[1], output=output, transfer_timeout_seconds=600, variant_source='framework',
+                                       a_properties='{}', b_properties='{"debug.cranpose.ablate":"glass"}' if diagnostic else '{}')
                 device = Mock(spec=AndroidDevice)
                 device.saved_properties = {}
                 device.installed_apk.return_value = None
@@ -570,7 +643,11 @@ class BenchmarkContracts(unittest.TestCase):
                 self.assertEqual(set(removed), set(uploaded))
                 device.restore_properties.assert_called_once()
                 self.assertEqual(report['status'], 'failed' if fail else 'complete')
-                self.assertEqual(report['acceptance_eligible'], not fail)
+                self.assertEqual(report['acceptance_eligible'], not fail and not diagnostic)
+                if diagnostic:
+                    self.assertEqual([call.args[0] for call in device.configure_properties.call_args_list],
+                                     [{'debug.cranpose.ablate': 'glass'} if slot == 'B' else {} for slot in slots])
+                    self.assertTrue(all(not item['acceptance_eligible'] for item in report['legs']))
                 if not fail:
                     self.assertEqual(report['mean_fps'], {'A': 10, 'B': 20})
 
@@ -641,6 +718,18 @@ class BenchmarkContracts(unittest.TestCase):
         with patch.object(device, 'shell', return_value=''), patch('android_benchmark_device.time.monotonic', side_effect=[0, 0, 2]), patch('android_benchmark_device.time.sleep'):
             with self.assertRaisesRegex(ValueError, 'PID'):
                 device.wait_for_pid('com.scene', timeout=1)
+
+    def test_missing_package_exit_does_not_hide_device_errors(self):
+        device = AndroidDevice('fixture')
+        for code, output in [(1, b''), (1, b'error: device offline'), (2, b'')]:
+            with self.subTest(code=code, output=output):
+                error = subprocess.CalledProcessError(code, ['pm', 'path', 'com.scene'], output=output)
+                with patch.object(device, 'shell', side_effect=error):
+                    if code == 1 and not output:
+                        self.assertIsNone(device.installed_apk('com.scene'))
+                    else:
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            device.installed_apk('com.scene')
 
     def test_first_gesture_requires_visible_content_motion(self):
         route = json.loads((Path(__file__).parent / 'android/routes/huawei-showcase.json').read_text())

@@ -137,3 +137,10 @@ def verify_build(proof, directory):
         with tarfile.open(archive) as contents:
             if json.load(contents.extractfile(INVENTORY)) != source['inventory']:
                 raise ValueError('Source inventory differs from its build report')
+
+
+def verify_helper(artifact, source, manifest, digest_key):
+    proof = json.loads(manifest.read_text())
+    if proof[digest_key] != digest(artifact) or proof['source_sha256'] != digest(source):
+        raise ValueError('Helper differs from its source build: ' + str(artifact))
+    return proof

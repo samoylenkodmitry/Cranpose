@@ -41,8 +41,12 @@ class AndroidDevice:
         if any(not name.startswith('debug.cranpose.') for name in overrides):
             raise ValueError('Only Cranpose diagnostic properties can be changed')
         current = self.properties()
+        for name, original in self.saved_properties.items():
+            if current.get(name, '') not in {original, self.desired_properties[name]}:
+                raise ValueError('Diagnostic property changed outside the sequence: ' + name)
         self.desired_properties = dict.fromkeys(current, '') | overrides
-        self.saved_properties = {name: current.get(name, '') for name in self.desired_properties}
+        for name in self.desired_properties:
+            self.saved_properties.setdefault(name, current.get(name, ''))
         for name, value in self.desired_properties.items():
             if current.get(name, '') != value:
                 self.shell('setprop', name, value)
@@ -140,7 +144,12 @@ class AndroidDevice:
                 'background_cpu': self.shell('dumpsys', 'cpuinfo')}
 
     def installed_apk(self, package):
-        paths = self.shell('pm', 'path', package).splitlines()
+        try:
+            paths = self.shell('pm', 'path', package).splitlines()
+        except subprocess.CalledProcessError as error:
+            if error.returncode == 1 and error.output == b'':
+                return None
+            raise
         if not paths:
             return None
         if len(paths) != 1 or not paths[0].startswith('package:'):
