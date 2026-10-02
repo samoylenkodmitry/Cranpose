@@ -3938,8 +3938,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(surface) = resolved else {
             return Ok(());
         };
-        if let Some(composite) = shader_tail_over_surface(child, &surface, snap, z, scale, visible)
-        {
+        if let Some(composite) = shader_tail_over_surface(child, &surface, snap, z, scale, shown) {
             pass.pending.push(composite);
             return Ok(());
         }
@@ -4811,14 +4810,14 @@ fn pending_draw_ops<'a>(
 /// clipped to its bounds when it clips, expanded for its effect's reach.
 fn child_surface_rect(child: &ChildLayer, scale: f32) -> Option<Rect> {
     let surface_scale = scale * child.surface_scale;
-    let mut bounds = union_rect(
-        Some(child.local_bounds),
-        scene_bounds(&child.content, surface_scale),
-    );
-    if child.rounded_clip.is_some() || child.content.scene.draw_ops.is_empty() {
-        bounds = Some(child.local_bounds);
-    }
-    let bounds = bounds?;
+    let bounds = if child.rounded_clip.is_some() {
+        Some(child.local_bounds)
+    } else {
+        union_rect(
+            Some(child.local_bounds),
+            scene_bounds(&child.content, surface_scale),
+        )
+    }?;
     let padding = child.effect.as_ref().map_or(0.0, |effect| {
         effect.input_padding() + effect.output_padding()
     });

@@ -9,13 +9,54 @@ use cranpose_core::{RuntimeHandle, State, remember, with_current_composer};
 use cranpose_foundation::{SemanticsCustomAction, SemanticsWidgetRole};
 use cranpose_macros::composable;
 use cranpose_services::{HapticFeedback, default_haptics};
-use cranpose_ui::{Modifier, PointerEvent, PointerEventKind, PointerInputScope};
+use cranpose_ui::{
+    Modifier, PointerEvent, PointerEventKind, PointerInputScope,
+    widgets::{Box, BoxSpec},
+};
 use cranpose_ui_graphics::{
     GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, RenderEffect, RuntimeShader, ShaderTarget,
     ShaderWarmUp, Size,
 };
+use cranpose_ui_layout::Alignment;
 
 use crate::material::{Glass, GlassDynamics, LiquidModifierExt};
+
+pub(super) fn floating_button_content(
+    modifier: Modifier,
+    transform: Modifier,
+    surface: Modifier,
+    foreground: Modifier,
+    content: impl FnMut() + Clone + 'static,
+) {
+    Box(
+        modifier,
+        BoxSpec::default().propagate_min_constraints(true),
+        move || {
+            let surface = surface.clone();
+            let foreground = foreground.clone();
+            let content = content.clone();
+            Box(
+                transform.clone(),
+                BoxSpec::default().propagate_min_constraints(true),
+                move || {
+                    let foreground = foreground.clone();
+                    let content = content.clone();
+                    Box(
+                        surface.clone(),
+                        BoxSpec::default().content_alignment(Alignment::CENTER),
+                        move || {
+                            Box(
+                                foreground.clone(),
+                                BoxSpec::default().content_alignment(Alignment::CENTER),
+                                content.clone(),
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
 
 fn lighting_shader() -> RuntimeShader {
     static SHADER: OnceLock<RuntimeShader> = OnceLock::new();
