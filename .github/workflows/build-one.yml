@@ -23,6 +23,7 @@ on:
           - wasm
           - android
           - ios
+          - watchos
           - robot-example
           - windows-accessibility
       example:
@@ -89,6 +90,10 @@ jobs:
         run: |
           rustup target add aarch64-apple-ios-sim
           just ios-sim
+
+      - name: watchOS
+        if: inputs.target == 'watchos'
+        run: just watchos
 
       - name: Robot example
         if: inputs.target == 'robot-example'

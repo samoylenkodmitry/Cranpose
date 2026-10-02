@@ -23,7 +23,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
-    RenderEffect, RoundedCornerShape,
+    RenderEffect, RoundedCornerShape, TransformOrigin,
 };
 
 use crate::{
@@ -631,13 +631,14 @@ pub(crate) fn render_from_applier(applier: &mut MemoryApplier, root: NodeId, sce
 pub(crate) fn build_raster_scene(
     graph: &RenderGraph,
     diagnostics: &RenderDiagnostics,
+    scale: f32,
 ) -> RasterScene {
     let mut scene = RasterScene::new();
     populate_draws_from_graph(
         &graph.root,
         &mut scene,
         RasterTraversalContext {
-            parent_transform: ProjectiveTransform::identity(),
+            parent_transform: ProjectiveTransform::uniform_scale(scale),
             parent_content_style: GraphicsLayer::default(),
             parent_visual_clip: None,
             inherited_translated_snap_anchor: None,
@@ -720,11 +721,13 @@ fn raster_layer_mapping(
         color_filter: content_style.color_filter,
         scale_x,
         scale_y,
+        transform_origin: TransformOrigin::new(0.0, 0.0),
         ..GraphicsLayer::default()
     };
     let shadow_layer = GraphicsLayer {
         scale_x,
         scale_y,
+        transform_origin: TransformOrigin::new(0.0, 0.0),
         shadow_elevation: layer.graphics_layer.shadow_elevation,
         ambient_shadow_color: layer.graphics_layer.ambient_shadow_color,
         spot_shadow_color: layer.graphics_layer.spot_shadow_color,

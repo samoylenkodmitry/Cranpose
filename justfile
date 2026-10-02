@@ -76,6 +76,17 @@ clippy-ios:
 # The feature set `clippy-optional-backends` and `clippy-release` both lint.
 optional_backend_features := "desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling,embed"
 
+# Portable checks for the experimental watchOS runtime and packager.
+test-watchos:
+    cargo test -p cranpose-render-pixels
+    cargo test -p cranpose --no-default-features --features watchos,embedded-default-font --test integration -- --test-threads=1
+    cargo clippy -p cranpose --no-default-features --features watchos,embedded-default-font --all-targets -- -D warnings
+    python3 -m unittest discover -s crates/cranpose/watchos/tests -v
+
+# Native simulator and arm64 device builds, with a simulator launch on macOS.
+watchos:
+    python3 crates/cranpose/watchos/check.py
+
 # Lint the desktop-only backends that ship off by default: the macOS camera
 # capture path, the cpal audio output device, the in-process media backend
 # and the StoreKit purchase bridge.
@@ -275,7 +286,7 @@ test-ide:
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview preview::tests::
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview desktop_launcher_uses_embed_endpoint_before_event_loop
 
-test-features:
+test-features: test-watchos
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
     cargo test --profile ci -p cranpose-ui --features svg
@@ -830,7 +841,7 @@ ci: fmt-check typos versions twin-matrix-check test clippy clippy-release clippy
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-ios clippy-android web android robot
+ci-full: ci clippy-ios clippy-android web android watchos robot
 
 liquid-reference-traces output bundle="io.cranpose.liquid-reference" device="booted":
     python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}'

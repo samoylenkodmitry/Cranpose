@@ -164,6 +164,29 @@ jobs:
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}
         run: scripts/ci/tree_memo.sh record "${{ github.workflow }}/${{ github.job }}"
 
+  watchos-build:
+    name: watchOS device and simulator
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Provision toolchain
+        run: scripts/ci/provision_toolchain.sh
+      - name: Build both targets and launch the simulator
+        run: just watchos
+      - name: Keep bundles and simulator evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: watchos
+          path: |
+            target/watchos/*.zip
+            target/watchos/evidence/
+          if-no-files-found: error
+
   android-release:
     name: Android release build (self-hosted)
     # macOS, not the shared `cranpose-heavy` label: the Android toolchain is

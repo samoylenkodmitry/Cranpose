@@ -21,6 +21,7 @@ If you are developing a custom widget library or a low-level extension, you migh
 -   `web`: Bindings for WASM/WebGL2.
 -   `renderer-wgpu` (default): Hardware-accelerated rendering using `wgpu`.
 -   `renderer-pixels`: Software rendering fallback using `pixels`.
+-   `watchos`: Experimental software-rendered Apple Watch host. See the [watchOS prototype guide](watchos/README.md) for simulator packaging and current limits.
 
 ## Android Gradle Plugin
 
