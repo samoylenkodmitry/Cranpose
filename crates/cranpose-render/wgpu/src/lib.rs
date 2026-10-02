@@ -760,11 +760,14 @@ impl WgpuRenderer {
         drained
     }
 
-    /// Threaded mode: install a (re)created surface on the present thread
-    /// and wait for the acknowledgement. The caller must have bumped the
+    /// Threaded mode: install a (re)created surface on the present thread.
+    /// Nothing waits for the present thread to set it up: frames published
+    /// afterwards queue behind it, so the caller composes its next frame
+    /// while the surface is configured. The caller must have bumped the
     /// surface epoch first (`note_surface_reconfigured`
     /// [Self::note_surface_reconfigured]) when the message invalidates
-    /// in-flight packets; the message carries the current epoch.
+    /// in-flight packets; the message carries the current epoch. Returns
+    /// false when the present thread is gone.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn present_replace_surface(
         &mut self,
@@ -776,15 +779,15 @@ impl WgpuRenderer {
             log::error!("present_replace_surface called without a threaded present runtime");
             return false;
         };
-        handle.send_control_and_wait(
-            move |ack| PresentControl::ReplaceSurface {
-                surface,
-                config,
-                surface_epoch,
-                ack,
-            },
-            "replace surface",
-        )
+        let sent = handle.send_control(PresentControl::ReplaceSurface {
+            surface,
+            config,
+            surface_epoch,
+        });
+        if !sent {
+            log::error!("[present-runtime] replace surface: runtime is gone");
+        }
+        sent
     }
 
     /// Threaded mode: reconfigure the present thread's surface (resize)
