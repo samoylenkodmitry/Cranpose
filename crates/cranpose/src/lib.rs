@@ -421,8 +421,8 @@ pub mod prelude {
         AndroidHostWindowState, rememberAndroidHostWindowState,
     };
     pub use crate::{
-        AndroidOverlayWindowOptions, AppFonts, AppLauncher, AppSettings, WindowConfig,
-        WindowModifierExt, WindowResizeDirection, WindowState, rememberWindowState,
+        AndroidOverlayWindowOptions, AppFonts, AppLauncher, AppSettings, WebView, WebViewEvent,
+        WindowConfig, WindowModifierExt, WindowResizeDirection, WindowState, rememberWindowState,
         rememberWindowStateAt,
     };
 }
@@ -729,3 +729,46 @@ pub use robot::{
 pub(crate) fn test_scratch_dir(tag: &str) -> std::path::PathBuf {
     cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), tag)
 }
+mod webview;
+pub use webview::{WebView, WebViewEvent};
+
+#[cfg(all(
+    feature = "webview",
+    feature = "renderer-wgpu",
+    feature = "android",
+    target_os = "android"
+))]
+mod android_webview;
+#[cfg(all(
+    feature = "webview",
+    feature = "renderer-wgpu",
+    feature = "web",
+    target_arch = "wasm32"
+))]
+mod web_webview;
+#[cfg(all(
+    feature = "webview",
+    feature = "renderer-wgpu",
+    any(
+        all(feature = "android", target_os = "android"),
+        all(feature = "ios", target_os = "ios"),
+        all(feature = "web", target_arch = "wasm32"),
+        all(
+            feature = "desktop-shell",
+            any(target_os = "macos", target_os = "windows", target_os = "linux")
+        )
+    )
+))]
+mod webview_host;
+#[cfg(all(
+    feature = "webview",
+    feature = "renderer-wgpu",
+    any(
+        all(feature = "ios", target_os = "ios"),
+        all(
+            feature = "desktop-shell",
+            any(target_os = "macos", target_os = "windows", target_os = "linux")
+        )
+    )
+))]
+mod wry_webview;

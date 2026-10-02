@@ -57,7 +57,7 @@ robot-app = ["logging", "cranpose-ui/test-helpers"]
 logging = ["dep:env_logger"]
 
 [dependencies]
-cranpose = { path = "../../crates/cranpose", default-features = false }
+cranpose = { path = "../../crates/cranpose", default-features = false, features = ["webview"] }
 cranpose-animation = { path = "../../crates/cranpose-animation" }
 cranpose-core = { path = "../../crates/cranpose-core" }
 cranpose-ui = { path = "../../crates/cranpose-ui" }

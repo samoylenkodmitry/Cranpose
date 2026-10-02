@@ -53,6 +53,7 @@ pub mod tool_windows;
 mod url_resolve;
 pub mod wear;
 mod web_fetch;
+mod webview;
 mod winamp;
 mod window_snap;
 mod xkcd;
@@ -124,6 +125,7 @@ pub enum DemoTab {
     Animations,
     InteractiveAnim,
     WebFetch,
+    WebView,
     TextInput,
     Layout,
     ModifierShowcase,
@@ -158,7 +160,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 29] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 30] = [
     DemoTabInfo {
         tab: DemoTab::Documentation,
         label: "Documentation",
@@ -211,6 +213,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 29] = [
         slug: "web-fetch",
         source_path: "apps/desktop-demo/src/app/web_fetch.rs",
         startup_aliases: &["webfetch"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::WebView,
+        label: "WebView",
+        slug: "webview",
+        source_path: "apps/desktop-demo/src/app/webview.rs",
+        startup_aliases: &["webview", "browser"],
     },
     DemoTabInfo {
         tab: DemoTab::TextInput,
@@ -408,7 +417,7 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DESKTOP_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 29] = [
+pub const DEMO_TABS: [DemoTab; 30] = [
     DemoTab::Documentation,
     DemoTab::Counter,
     DemoTab::Liquid,
@@ -416,6 +425,7 @@ pub const DEMO_TABS: [DemoTab; 29] = [
     DemoTab::Async,
     DemoTab::Animations,
     DemoTab::WebFetch,
+    DemoTab::WebView,
     DemoTab::TextInput,
     DemoTab::Layout,
     DemoTab::ModifierShowcase,
@@ -833,7 +843,14 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
         crate::test_screens::accessibility_robot::AccessibilityRobotScreen();
         return;
     }
-    let initial_tab = startup.initial_tab.unwrap_or(DemoTab::Counter);
+    let initial_tab = startup
+        .initial_tab
+        .or_else(|| {
+            cranpose::launch_args()
+                .string("tab")
+                .and_then(DemoTab::from_startup_name)
+        })
+        .unwrap_or(DemoTab::Counter);
     let active_tab = cranpose_core::rememberMutableStateOf(move || initial_tab);
     let winamp_tab_state = remember_winamp_tab_state();
     TEST_ACTIVE_TAB_STATE.with(|cell| {
@@ -936,6 +953,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
     !matches!(
         tab,
         DemoTab::HackerNews
+            | DemoTab::WebView
             | DemoTab::Documentation
             | DemoTab::LazyList
             | DemoTab::Winamp
@@ -956,6 +974,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::Animations => AnimationsTab(),
         DemoTab::InteractiveAnim => InteractiveAnimTab(),
         DemoTab::WebFetch => web_fetch_example(),
+        DemoTab::WebView => webview::WebViewTab(),
         DemoTab::TextInput => text_input_example(),
         DemoTab::Layout => recursive_layout_example(),
         DemoTab::ModifierShowcase => modifier_showcase_tab(),
@@ -1007,6 +1026,7 @@ fn render_showcase_tab(
         | DemoTab::Animations
         | DemoTab::InteractiveAnim
         | DemoTab::WebFetch
+        | DemoTab::WebView
         | DemoTab::TextInput
         | DemoTab::Layout
         | DemoTab::ModifierShowcase

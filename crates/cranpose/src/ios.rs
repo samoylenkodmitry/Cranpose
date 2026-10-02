@@ -48,6 +48,10 @@ struct GpuResources {
 }
 
 struct IosApp<F: FnMut() + 'static> {
+    #[cfg(feature = "webview")]
+    webviews: crate::webview_host::WebViews<wry::WebView>,
+    #[cfg(feature = "webview")]
+    webview_wake: Rc<dyn Fn()>,
     settings: AppSettings,
     content: Option<Rc<RefCell<F>>>,
     window: Option<Arc<dyn Window>>,
@@ -73,6 +77,10 @@ impl<F: FnMut() + 'static> IosApp<F> {
         launch_error: Rc<RefCell<Option<LaunchError>>>,
     ) -> Self {
         Self {
+            #[cfg(feature = "webview")]
+            webviews: Default::default(),
+            #[cfg(feature = "webview")]
+            webview_wake: crate::wry_webview::wake_callback(&event_proxy),
             settings,
             content: Some(Rc::new(RefCell::new(content))),
             window: None,
@@ -162,6 +170,8 @@ impl<F: FnMut() + 'static> IosApp<F> {
     }
 
     fn render(&mut self) {
+        #[cfg(feature = "webview")]
+        self.webviews.dispatch(&self.platform_env.native_views);
         let mut ime_changed = false;
         if crate::ios_keyboard::keyboard_poll_active() {
             if let Some(bottom) = crate::ios_keyboard::poll_keyboard_bottom_inset()
@@ -218,12 +228,24 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
         let dirty_before = gpu.surface_dirty;
         let update_result = shell.update();
+        #[cfg(feature = "webview")]
+        crate::wry_webview::sync(
+            &mut self.webviews,
+            &self.platform_env.native_views,
+            Some(shell),
+            self.window.as_ref(),
+            &self.webview_wake,
+        );
         if self.accessibility.is_none() {
             self.accessibility =
                 crate::ios_accessibility::IosAccessibilityBridge::new(self.event_proxy.clone());
         }
         if let Some(accessibility) = self.accessibility.as_mut() {
-            accessibility.sync(shell);
+            accessibility.sync(
+                shell,
+                #[cfg(feature = "webview")]
+                &self.webviews,
+            );
         }
         if crate::ios_background::app_is_off_screen() {
             gpu.surface_dirty = true;
@@ -396,7 +418,11 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         let mut accessibility =
             crate::ios_accessibility::IosAccessibilityBridge::new(self.event_proxy.clone());
         if let Some(accessibility) = accessibility.as_mut() {
-            accessibility.sync(&mut shell);
+            accessibility.sync(
+                &mut shell,
+                #[cfg(feature = "webview")]
+                &self.webviews,
+            );
         }
 
         let waker_proxy = self.event_proxy.clone();

@@ -19,6 +19,12 @@ The reusable implementation lives in the framework:
 - `platforms/android`: the Android library containing `CranposeView`, factory lifecycle and optional `WebViewFactory`.
 - `platforms/ios/Sources/Cranpose`: the equivalent UIKit module.
 - `crates/cranpose`: lower-level `EmbeddedView` and renderer-independent `NativeViewHost`.
+- `cranpose::WebView`: the shared website composable, also re-exported by `cranpose-native`.
+
+The [desktop demo's WebView tab](../desktop-demo/src/app/webview.rs) uses this same
+composable in regular Cranpose applications on desktop, Android, iOS and web.
+Its built-in hosts require the `cranpose/webview` feature; native component hosts
+continue to register `WebViewFactory` in their containing application.
 
 The demo keeps its content and application events. It does not implement a render loop, pixel
 conversion, input routing, slot reconciliation or platform WebView management.

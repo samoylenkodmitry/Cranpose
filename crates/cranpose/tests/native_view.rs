@@ -9,6 +9,62 @@ use cranpose_core::{MutableState, rememberMutableStateOf};
 use cranpose_render_pixels::PixelsRenderer;
 
 #[test]
+fn shared_webview_preserves_identity_and_delivers_page_events() {
+    use std::cell::RefCell;
+
+    use cranpose::{WebView, WebViewEvent};
+
+    let host = NativeViewHost::default();
+    let content_host = host.clone();
+    let url = Rc::new(Cell::new(None::<MutableState<&'static str>>));
+    let content_url = Rc::clone(&url);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let content_events = Rc::clone(&events);
+    let mut shell = AppShell::new_with_size(
+        PixelsRenderer::new(),
+        default_root_key(),
+        move || {
+            let page = rememberMutableStateOf(|| "https://example.com");
+            content_url.set(Some(page));
+            let events = Rc::clone(&content_events);
+            content_host.provide(|| {
+                WebView(
+                    page.value(),
+                    Modifier::empty().size_points(200.0, 120.0),
+                    move |event| {
+                        events.borrow_mut().push(event);
+                    },
+                );
+            });
+        },
+        (320, 240),
+        (320.0, 240.0),
+    );
+    let initial = host.layout(shell.layout_tree());
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].value, "https://example.com");
+    assert!(host.dispatch(initial[0].id, "loaded:https://example.com"));
+    assert_eq!(
+        *events.borrow(),
+        [WebViewEvent::Loaded("https://example.com".into())]
+    );
+    url.get()
+        .expect("composed URL state")
+        .set("https://example.org");
+    shell.update();
+    let updated = host.layout(shell.layout_tree());
+    assert_eq!(updated[0].id, initial[0].id);
+    assert_eq!(updated[0].value, "https://example.org");
+    assert!(host.dispatch(updated[0].id, "error:offline"));
+    assert_eq!(
+        events.borrow().last(),
+        Some(&WebViewEvent::Failed("offline".into()))
+    );
+    drop(shell);
+    assert!(!host.dispatch(updated[0].id, "loaded:stale"));
+}
+
+#[test]
 fn native_slots_follow_layout_updates_events_and_disposal() {
     let host = NativeViewHost::default();
     let content_host = host.clone();

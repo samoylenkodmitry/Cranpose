@@ -33,8 +33,11 @@ impl NativeContext {
     }
 
     pub(crate) fn provide(&self, content: impl FnOnce()) {
-        CONTEXT
-            .with(|local| CompositionLocalProvider([local.provides(Some(self.clone()))], content));
+        CONTEXT.with(|local| {
+            CompositionLocalProvider([local.provides(Some(self.clone()))], || {
+                self.views.provide(content);
+            });
+        });
     }
 
     pub(crate) fn take_events(&self) -> Vec<NativeEvent> {
@@ -94,29 +97,4 @@ pub fn NativeView(kind: &str, value: &str, modifier: Modifier, on_event: impl Fn
         modifier,
         on_event,
     );
-}
-
-/// An event emitted by the optional platform WebView factory.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WebViewEvent {
-    /// A page finished loading.
-    Loaded(String),
-    /// A main-frame request failed.
-    Failed(String),
-}
-
-/// Embeds a website using the registered `web` factory.
-///
-/// The supplied URL is loaded only when it changes. Navigation and scroll state
-/// survive unrelated recompositions. Install `WebViewFactory` in the native host.
-/// Both adapters accept HTTPS URLs and report loading failures through this callback.
-#[cranpose::prelude::composable]
-pub fn WebView(url: &str, modifier: Modifier, on_event: impl Fn(WebViewEvent) + 'static) {
-    NativeView("web", url, modifier, move |event| {
-        if let Some(url) = event.strip_prefix("loaded:") {
-            on_event(WebViewEvent::Loaded(url.to_owned()));
-        } else if let Some(message) = event.strip_prefix("error:") {
-            on_event(WebViewEvent::Failed(message.to_owned()));
-        }
-    });
 }

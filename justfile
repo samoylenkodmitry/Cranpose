@@ -292,6 +292,7 @@ test-features: test-watchos
     cargo test --profile ci -p cranpose-ui --features svg
     cargo test --profile ci -p cranpose-render-common --features text-hyphenation-embedded
     cargo test --profile ci -p cranpose
+    cargo clippy -p cranpose --no-default-features --features webview -- -D warnings
     cargo test --profile ci -p cranpose --no-default-features --features embed
     cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
 
@@ -581,6 +582,13 @@ test-native-demo-ios device:
 
 test-native-demo-android device:
     bash scripts/native_demo.sh android-test {{quote(device)}}
+
+test-webview-ios device:
+    xcrun simctl install {{quote(device)}} "${CARGO_TARGET_DIR:-target}/aarch64-apple-ios-sim/debug/CranposeDemo.app"
+    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination 'platform=iOS Simulator,id={{device}}' -derivedDataPath target/webview-ui-tests -parallel-testing-enabled NO -only-testing:LiquidReferenceTests/WebViewTabTests test
+
+test-webview-android device:
+    cd apps/android-demo/android && ANDROID_SERIAL={{quote(device)}} ./gradlew --no-daemon :app:connectedReleaseAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.compose_rs.demo.CranposeWebViewTabTest
 
 # Build the iOS simulator app bundle.
 ios-sim:

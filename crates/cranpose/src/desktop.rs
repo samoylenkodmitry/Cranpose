@@ -624,6 +624,10 @@ fn native_surface<'a>(
 }
 
 struct App {
+    #[cfg(feature = "webview")]
+    webviews: crate::webview_host::WebViews<wry::WebView>,
+    #[cfg(feature = "webview")]
+    webview_wake: Rc<dyn Fn()>,
     settings: AppSettings,
     platform_env: Rc<crate::platform_env::PlatformEnvironment>,
     content: Option<Box<dyn FnMut()>>,
@@ -697,6 +701,10 @@ impl App {
         let content = move || env_for_content.compose_root(&mut content);
 
         Self {
+            #[cfg(feature = "webview")]
+            webviews: Default::default(),
+            #[cfg(feature = "webview")]
+            webview_wake: crate::wry_webview::wake_callback(&event_proxy),
             settings,
             platform_env,
             content: Some(Box::new(content)),
@@ -6032,6 +6040,8 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        #[cfg(feature = "webview")]
+        self.webviews.dispatch(&self.platform_env.native_views);
         self.publish_settled_presence();
         if cranpose_services::take_exit_request() {
             self.exiting = true;
@@ -6058,7 +6068,9 @@ impl ApplicationHandler for App {
         self.sync_pointer_icons(event_loop);
 
         let last_frame_start_time = self.last_frame_start_time;
+        #[cfg(feature = "robot")]
         let registry = Rc::clone(&self.native_window_registry);
+        #[cfg(feature = "robot")]
         let primary_visible = self.primary_visible();
         let primary_frames_enabled = self.primary_frames_enabled();
         let frames_enabled = self.frames_enabled();
@@ -6817,6 +6829,20 @@ impl ApplicationHandler for App {
             self.sync_native_windows(event_loop);
         }
 
+        #[cfg(feature = "webview")]
+        crate::wry_webview::sync(
+            &mut self.webviews,
+            &self.platform_env.native_views,
+            self.app.as_mut(),
+            self.window.as_ref(),
+            &self.webview_wake,
+        );
+
+        #[cfg(all(feature = "webview", target_os = "linux"))]
+        let webview_deadline = crate::wry_webview::pump(&self.webviews);
+        #[cfg(not(all(feature = "webview", target_os = "linux")))]
+        let webview_deadline = None;
+
         let Some(app) = self.app.as_mut() else { return };
         let mut native_drag_deadline: Option<Instant> = None;
         let native_position_poll_deadline = self
@@ -6912,6 +6938,7 @@ impl ApplicationHandler for App {
                 .min(),
                 has_active_animations,
                 next_event_time: [
+                    webview_deadline,
                     primary_next_event_time,
                     native_next_event_time,
                     self.accessibility.as_ref().and_then(

@@ -3,6 +3,15 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_core::{NodeId, remember};
 use cranpose_ui::{LayoutBox, LayoutTree, Modifier, Rect, Spacer, composable};
 
+thread_local! {
+    static HOST: cranpose_core::CompositionLocal<NativeViewHost> =
+        cranpose_core::compositionLocalOf(NativeViewHost::default);
+}
+
+pub(crate) fn current_host() -> NativeViewHost {
+    HOST.with(cranpose_core::CompositionLocal::current)
+}
+
 type EventHandler = Rc<dyn Fn(&str)>;
 
 struct Slot {
@@ -66,6 +75,13 @@ pub struct NativeViewLayout {
 }
 
 impl NativeViewHost {
+    /// Supplies the native view host used by [`crate::WebView`] in this composition.
+    pub fn provide(&self, content: impl FnOnce()) {
+        HOST.with(|local| {
+            cranpose_core::CompositionLocalProvider([local.provides(self.clone())], content);
+        });
+    }
+
     /// Returns whether no native children are mounted, so hosts can skip layout snapshots.
     pub fn is_empty(&self) -> bool {
         self.registry.borrow().slots.is_empty()

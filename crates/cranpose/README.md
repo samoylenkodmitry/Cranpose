@@ -16,12 +16,51 @@ If you are developing a custom widget library or a low-level extension, you migh
 
 ## Feature Flags
 
--   `desktop` (default): Application shell for Linux, macOS, and Windows.
+-   `desktop`: Application shell for Linux, macOS, and Windows.
 -   `android`: Bindings for Android Activity.
 -   `web`: Bindings for WASM/WebGL2.
--   `renderer-wgpu` (default): Hardware-accelerated rendering using `wgpu`.
+-   `renderer-wgpu`: Hardware-accelerated rendering using `wgpu`.
 -   `renderer-pixels`: Software rendering fallback using `pixels`.
 -   `watchos`: Experimental software-rendered Apple Watch host. See the [watchOS prototype guide](watchos/README.md) for simulator packaging and current limits.
+-   `webview`: Embedded system browsers in the desktop, Android, iOS and web application hosts.
+
+## Embedded websites
+
+Enable `webview` alongside the application's platform and renderer features, then
+use the same composable on macOS, Windows, Linux, Android, iOS and web:
+
+```rust,ignore
+use cranpose::prelude::*;
+
+WebView(
+    "https://example.com",
+    Modifier::empty().fill_max_width().height(360.0),
+    |event| println!("{event:?}"),
+);
+```
+
+The platform host creates, positions and disposes the browser. A changed URL
+navigates; ordinary recomposition retains its document and navigation state.
+The shared desktop demo's **WebView** tab exercises this with a Cranpose counter
+and remove/show controls. Start desktop with `cargo run -p desktop-app -- webview`,
+iOS with `--tab=webview`, Android with the string intent extra `tab=webview`,
+or web with `?tab=webview`.
+
+Android applications declare `Use::network()` in their capability declaration
+and `network` in their Gradle services. Windows requires the WebView2 Runtime.
+Linux requires WebKitGTK 4.1 and X11/XWayland; for example Debian/Ubuntu's
+`libwebkit2gtk-4.1-dev` package supplies the build dependencies. Browsers use an
+iframe, so the site must allow framing; cross-origin HTTP failures and the final
+navigation URL are not available through iframe events. The experimental watchOS
+host has no embedded browser.
+
+Native browsers render above Cranpose, own their input and accessibility, and
+support axis-aligned bounds. Ancestor transforms, rounded clips and interleaved
+Cranpose overlays are not supported. Remove the view while displaying an
+overlapping Cranpose popup. Android's NativeActivity host uses attached child
+windows clipped to its content bounds; ordinary Kotlin/UIKit component hosts use
+native child views. See [the native embedding demo](../../apps/native-demo/README.md)
+for embedding Cranpose in native applications.
 
 ## Android Gradle Plugin
 

@@ -5,6 +5,7 @@ extensions.configure<com.android.build.api.dsl.LibraryExtension> {
     compileSdk = 37
     defaultConfig { minSdk = 24 }
     sourceSets["main"].kotlin.srcDir(rootProject.file(providers.gradleProperty("cranposeBindingsDir").get()))
+    sourceSets["main"].java.srcDir("../../crates/cranpose/android/java-webview")
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

@@ -270,6 +270,8 @@ impl NativeAccessibilityElement {
 }
 
 pub(crate) struct IosAccessibilityBridge {
+    #[cfg(feature = "webview")]
+    hosted_revision: u64,
     host_view: Retained<UIView>,
     native_elements: HashMap<i32, Retained<NativeAccessibilityElement>>,
     snapshot: accessibility::AccessibilitySnapshot,
@@ -293,6 +295,8 @@ impl IosAccessibilityBridge {
         host_object.setIsAccessibilityElement(false, mtm);
 
         Some(Self {
+            #[cfg(feature = "webview")]
+            hosted_revision: 0,
             host_view,
             native_elements: HashMap::new(),
             snapshot: accessibility::AccessibilitySnapshot::default(),
@@ -305,8 +309,11 @@ impl IosAccessibilityBridge {
         })
     }
 
-    pub(crate) fn sync<R>(&mut self, shell: &mut AppShell<R>)
-    where
+    pub(crate) fn sync<R>(
+        &mut self,
+        shell: &mut AppShell<R>,
+        #[cfg(feature = "webview")] hosted: &crate::webview_host::WebViews<wry::WebView>,
+    ) where
         R: Renderer,
         R::Error: Debug,
     {
@@ -323,9 +330,18 @@ impl IosAccessibilityBridge {
         }
         let next = accessibility::snapshot(shell, &mut self.snapshot);
         self.speak(&next);
+        #[cfg(feature = "webview")]
+        let hosted_changed = {
+            let changed = self.hosted_revision != hosted.revision();
+            self.hosted_revision = hosted.revision();
+            changed
+        };
+        #[cfg(not(feature = "webview"))]
+        let hosted_changed = false;
         let input_changed = (crate::ios_keyboard::reader_input_active()
             && reader_field(&next).is_some())
-            != self.reader_view.is_some();
+            != self.reader_view.is_some()
+            || hosted_changed;
         let Some(next) = self.snapshot.changed(next, input_changed) else {
             return;
         };
@@ -383,7 +399,15 @@ impl IosAccessibilityBridge {
                 .zip(next_ids)
                 .find(|(element, _)| Some(element.node_id) == opened)
                 .map(|(_, id)| *id);
-            self.publish_container(next, next_ids, opened_dialog, reader_view_changed, mtm);
+            self.publish_container(
+                next,
+                next_ids,
+                opened_dialog,
+                reader_view_changed,
+                mtm,
+                #[cfg(feature = "webview")]
+                hosted,
+            );
         }
         self.snapshot = next_snapshot;
         if !self.follow_app_focus() {
@@ -746,20 +770,24 @@ impl IosAccessibilityBridge {
         opened_dialog: Option<i32>,
         reader_view_changed: bool,
         mtm: MainThreadMarker,
+        #[cfg(feature = "webview")] hosted: &crate::webview_host::WebViews<wry::WebView>,
     ) {
-        let ordered: Vec<Retained<AnyObject>> = next_ids
-            .iter()
-            .filter_map(|element_id| {
-                if let Some((reader_id, view)) = &self.reader_view
-                    && reader_id == element_id
-                {
-                    return Some(view.clone());
-                }
-                self.native_elements
-                    .get(element_id)
-                    .map(|element| element.retain().into())
-            })
-            .collect();
+        let ordered = next_ids.iter().filter_map(|element_id| {
+            if let Some((reader_id, view)) = &self.reader_view
+                && reader_id == element_id
+            {
+                return Some(view.clone());
+            }
+            self.native_elements
+                .get(element_id)
+                .map(|element| element.retain().into())
+        });
+        #[cfg(feature = "webview")]
+        let ordered = ordered.chain(hosted.views().map(|view| {
+            use wry::WebViewExtIOS;
+            view.webview().into()
+        }));
+        let ordered: Vec<Retained<AnyObject>> = ordered.collect();
         let array = NSArray::from_retained_slice(&ordered);
         let host_object: &NSObject = self.host_view.as_ref();
         // SAFETY: Every array member is a retained UIAccessibilityElement and

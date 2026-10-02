@@ -1955,6 +1955,8 @@ pub fn run(
     let content = std::rc::Rc::new(std::cell::RefCell::new(content));
 
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
+    #[cfg(feature = "webview")]
+    let mut webviews = crate::webview_host::WebViews::default();
     let mut accessibility_elements = crate::accessibility::AccessibilitySnapshot::default();
     let mut accessibility_wire = crate::android_accessibility_wire::AccessibilityWire::default();
     let mut accessibility_revision = None;
@@ -2646,6 +2648,8 @@ pub fn run(
         }
 
         let mut frame_started_at: Option<web_time::Instant> = None;
+        #[cfg(feature = "webview")]
+        webviews.dispatch(&android_platform_env().native_views);
         frame_waits_for_vsync = false;
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
             frame_timings.work_start_ns = crate::android_frame_telemetry::monotonic_nanos();
@@ -2670,6 +2674,13 @@ pub fn run(
                     || shell.update_without_frame(),
                 );
                 frame_rate_boost.note_frame(update_result, Instant::now());
+                #[cfg(feature = "webview")]
+                crate::android_webview::sync(
+                    &mut webviews,
+                    &android_platform_env().native_views,
+                    shell,
+                    &app,
+                );
                 frame_timings.after_update_ns = frame_telemetry.now();
                 dispatch_registered_android_surface_size_request(
                     &app,

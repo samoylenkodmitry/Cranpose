@@ -2477,6 +2477,7 @@ public class CranposeActivity extends NativeActivity {
 
     @Override
     protected void onPause() {
+        cranposeWebViews.setVisible(false);
         cranposePaused = true;
         if (cranposeBackgroundActive) {
             askForCranposeBackgroundService();
@@ -2490,6 +2491,7 @@ public class CranposeActivity extends NativeActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        cranposeWebViews.setVisible(true);
         reportAccessibilityOptions();
         cranposePaused = false;
         cranposeEverResumed = true;
@@ -2547,6 +2549,7 @@ public class CranposeActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
+        cranposeWebViews.close();
         cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);
         CranposeBackgroundService.stop(this);
         if (cranposeAccessibilityStateListener != null) {
@@ -3101,4 +3104,11 @@ public class CranposeActivity extends NativeActivity {
             launch(intent, token, FLAG_SAVE);
         });
     }
+    private final CranposeWebViews cranposeWebViews = new CranposeWebViews(this);
+
+    public void cranposeUpdateWebView(long id, String url, boolean placed, float x, float y, float width, float height) {
+        cranposeWebViews.update(id, url, placed, x, y, width, height);
+    }
+
+    public void cranposeRemoveWebView(long id) { cranposeWebViews.remove(id); }
 }
