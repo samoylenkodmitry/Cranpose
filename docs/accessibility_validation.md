@@ -6,12 +6,16 @@ perform native actions, and verify the resulting application state. They exit
 nonzero on failures and retain a `report.json` plus diagnostic artifacts in a new
 output directory. Do not reuse an output directory.
 
-AccessKit comes from crates.io, with no accessibility workspace patches or forks.
-The published AT-SPI translation layer, 0.20.0, can report disabled buttons as
-enabled on Linux. The [upstream fix](https://github.com/AccessKit/accesskit/commit/6ee0558b6315b3ef1594db24ce45a030ecac7cb5)
-will be adopted when released. Cranpose still publishes the disabled property and
-rejects disabled actions. This native state-bit limitation is accepted for this
-release and recorded separately from successful checks.
+Evidence reviewed on 2026-10-02 against `59ac28c6b`. AccessKit comes from
+crates.io, with no accessibility workspace patches or forks. The lockfile now
+contains `accesskit_atspi_common 0.21.0`; the earlier 0.20.0 disabled-state
+limitation is superseded by the strict Linux disabled-state checks recorded in
+[identity validation](accessibility_identity_validation.md).
+
+Later [physical-iPhone VoiceOver runs](accessibility_voiceover_validation.md)
+and [text-editing flows](accessibility_screen_identity_validation.md) extend
+the September 21 simulator evidence. These are dated, named interactions;
+they do not establish every reader/browser combination.
 
 Applications can provide a localized state description alongside a button's name:
 
@@ -24,8 +28,8 @@ Modifier::empty().semantics(move |config| {
 
 Use the application's translated text in place of `"Disabled"`. Desktop readers
 receive this as the accessible description; their settings determine when it is
-spoken. The robot verifies the description reaches Linux AT-SPI. This text does
-not repair the upstream native state bit.
+spoken. The robot verifies the description reaches Linux AT-SPI. This text
+is an additional accessible description, not a substitute for native state.
 
 ## Coverage
 

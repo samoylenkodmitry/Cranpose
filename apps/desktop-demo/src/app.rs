@@ -25,6 +25,7 @@ mod animations;
 pub mod chrome_tabs;
 mod controls_ui;
 mod demo_trace;
+mod documentation;
 pub mod flame_window;
 mod floating_input;
 mod floating_windows;
@@ -116,6 +117,7 @@ thread_local! {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum DemoTab {
+    Documentation,
     Counter,
     CompositionLocal,
     Async,
@@ -146,7 +148,7 @@ pub enum DemoTab {
     Wear,
 }
 
-pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::HackerNews;
+pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::Documentation;
 
 pub struct DemoTabInfo {
     pub tab: DemoTab,
@@ -156,7 +158,14 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 28] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 29] = [
+    DemoTabInfo {
+        tab: DemoTab::Documentation,
+        label: "Documentation",
+        slug: "documentation",
+        source_path: "apps/desktop-demo/src/app/documentation.rs",
+        startup_aliases: &["documentation", "docs", "guide"],
+    },
     DemoTabInfo {
         tab: DemoTab::Counter,
         label: "Counter App",
@@ -399,7 +408,8 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DESKTOP_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 28] = [
+pub const DEMO_TABS: [DemoTab; 29] = [
+    DemoTab::Documentation,
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -926,6 +936,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
     !matches!(
         tab,
         DemoTab::HackerNews
+            | DemoTab::Documentation
             | DemoTab::LazyList
             | DemoTab::Winamp
             | DemoTab::MarkdownViewer
@@ -938,6 +949,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
 #[composable]
 fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_state: WinampTabState) {
     match active {
+        DemoTab::Documentation => documentation::DocumentationTab(),
         DemoTab::Counter => counter_app(),
         DemoTab::CompositionLocal => composition_local_example(),
         DemoTab::Async => async_runtime_example(),
@@ -988,7 +1000,8 @@ fn render_showcase_tab(
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
         DemoTab::GlassTiles => GlassTilesTab(),
-        DemoTab::Counter
+        DemoTab::Documentation
+        | DemoTab::Counter
         | DemoTab::CompositionLocal
         | DemoTab::Async
         | DemoTab::Animations

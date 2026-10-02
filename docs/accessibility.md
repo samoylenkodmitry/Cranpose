@@ -881,7 +881,7 @@ The issues:
 | `UnnamedImage` | a picture a reader stops on with no words | a description, or `None` so it is skipped |
 
 **The demo screens.** `apps/desktop-demo/tests/accessibility_audit.rs` puts
-all 27 tabs of the desktop demo under `audit_accessibility`. The tabs that
+every registered desktop demo tab under `audit_accessibility`. The tabs that
 were caught the first time are named there beside the reason each is left
 as it is, and the list only shrinks: a new issue on any tab fails the test,
 and so does a listed issue that went away without the list saying so.

@@ -12,6 +12,7 @@ mod composition_local_dup_test;
 mod counter_tab_roundtrip_regression;
 mod demo_fonts_parse;
 mod demo_tab_navigation_test;
+mod documentation_home;
 mod font_variations;
 mod liquid_page_support;
 mod liquid_pass_inventory;

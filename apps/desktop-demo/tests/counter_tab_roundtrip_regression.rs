@@ -315,13 +315,24 @@ fn robot_click(shell: &mut AppShell<HitGraphRenderer>, x: f32, y: f32) {
 }
 
 fn click_button_by_text(shell: &mut AppShell<HitGraphRenderer>, text: &str) {
-    let matches = button_bounds(shell, text);
-    assert!(
-        !matches.is_empty(),
-        "expected semantics button {text:?}; found none"
-    );
-    let (_, x, y, w, h) = matches[0];
-    robot_click(shell, x + w * 0.5, y + h * 0.5);
+    for _ in 0..8 {
+        let matches = button_bounds(shell, text);
+        let &(_, x, y, w, h) = matches.first().expect("expected semantics button");
+        let (width, _) = shell.viewport_size();
+        if x >= 0.0 && x + w <= width {
+            robot_click(shell, x + w * 0.5, y + h * 0.5);
+            return;
+        }
+        shell.set_cursor(width * 0.5, y + h * 0.5);
+        let delta = if x < 0.0 {
+            -x + 16.0
+        } else {
+            width - x - w - 16.0
+        };
+        assert!(shell.pointer_scrolled(delta, 0.0), "reveal {text:?}");
+        pump_shell_until_stable(shell);
+    }
+    panic!("button {text:?} did not scroll into view");
 }
 
 fn first_index_from_texts(texts: &[String]) -> Option<usize> {

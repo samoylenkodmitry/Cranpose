@@ -59,6 +59,7 @@ runners! {
     robot_counter_conditional_text_top,
     robot_demo,
     robot_developer_inspector,
+    robot_documentation_home,
     robot_double_click,
     robot_drag_selection,
     robot_draw_only_transition_work,
