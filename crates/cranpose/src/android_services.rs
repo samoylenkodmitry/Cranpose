@@ -345,7 +345,9 @@ pub(crate) fn apply_pending_platform_signals(
             right: INSETS_RIGHT_PX.load(Ordering::Acquire) as f32 / density,
             bottom: INSETS_BOTTOM_PX.load(Ordering::Acquire) as f32 / density,
         };
-        if crate::android::android_platform_env().set_safe_area(insets)
+        let changed = crate::android::android_platform_env().set_safe_area(insets);
+        log::info!("[startup] insets applied {insets:?} changed={changed} shell={}", shell.is_some());
+        if changed
             && let Some(shell) = shell
         {
             shell.request_root_render();

@@ -118,6 +118,7 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
     ("debug.cranpose.no_warm", "CRANPOSE_NO_WARM"),
     ("debug.cranpose.scope_ms", "CRANPOSE_RECOMPOSE_SCOPE_TELEMETRY_MS"),
     ("debug.cranpose.scope_labels", "CRANPOSE_DEBUG_SCOPE_LABELS"),
+    ("debug.cranpose.early_signals", "CRANPOSE_EARLY_SIGNALS"),
 ];
 
 pub(crate) fn seed_env_from_system_properties() {
