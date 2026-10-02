@@ -109,7 +109,7 @@ jobs:
 
   ios-build:
     name: iOS build (self-hosted)
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 20
     defaults:
       run:
@@ -192,7 +192,7 @@ jobs:
     # macOS, not the shared `cranpose-heavy` label: the Android toolchain is
     # provisioned on both, but the two Linux slots are the fleet's scarce
     # resource and the robot suite cannot run anywhere else.
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 20
     defaults:
       run:
@@ -320,7 +320,7 @@ jobs:
   android-apk:
     name: Android release APK (macOS)
     if: github.event_name != 'pull_request'
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

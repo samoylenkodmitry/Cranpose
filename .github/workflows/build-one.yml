@@ -46,7 +46,7 @@ jobs:
     name: ${{ inputs.target }} on ${{ inputs.runner }}
     runs-on: >-
       ${{ inputs.runner == 'macOS'
-          && fromJSON('["self-hosted", "macOS", "ARM64"]')
+          && fromJSON('["self-hosted", "macOS", "ARM64", "recent-repo"]')
           || fromJSON('["self-hosted", "Linux", "cranpose-heavy"]') }}
     timeout-minutes: 60
     steps:
