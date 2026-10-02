@@ -34,11 +34,11 @@ pub(crate) struct PresentRuntimeInit {
 }
 
 pub(crate) enum PresentControl {
+    /// Nothing waits for it: packets sent after it run on the new surface.
     ReplaceSurface {
         surface: wgpu::Surface<'static>,
         config: wgpu::SurfaceConfiguration,
         surface_epoch: u64,
-        ack: SyncSender<()>,
     },
     Reconfigure {
         config: wgpu::SurfaceConfiguration,
@@ -192,7 +192,6 @@ impl PresentState {
                 surface,
                 config,
                 surface_epoch,
-                ack,
             } => {
                 self.surface_epoch = surface_epoch;
                 self.cancel_waiting(CancelReason::SurfaceEpoch);
@@ -201,7 +200,6 @@ impl PresentState {
                 self.config = Some(config);
                 self.offscreen_target = None;
                 self.present_placeholder_frame();
-                let _ = ack.send(());
                 true
             }
             PresentControl::Reconfigure {
@@ -648,6 +646,12 @@ impl PresentHandle {
                 false
             }
         }
+    }
+
+    /// Sends `control` behind the packets already sent, waiting for
+    /// nothing. False when the runtime is gone.
+    pub(crate) fn send_control(&self, control: PresentControl) -> bool {
+        self.msg_tx.send(PresentMsg::Control(control)).is_ok()
     }
 
     pub(crate) fn send_control_unacked(
