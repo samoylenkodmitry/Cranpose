@@ -671,11 +671,10 @@ thread_local! {
 
 enum RecomposeCallback {
     Static(fn(&Composer)),
-    /// A composable's body, rerun with `observer` watching its reads for
-    /// the scope. The scope passes itself when it runs, so the callback
-    /// needs neither a second box nor a reference back to its scope.
-    Observed {
-        observer: SnapshotStateObserver,
+    /// A composable's body. The scope passes itself when it runs, so the
+    /// callback needs neither a second box nor a reference back to its
+    /// scope; a capture-free body records its type to be kept as is.
+    Boxed {
         body: Box<dyn FnMut(&Composer) + 'static>,
         stateless_body: Option<TypeId>,
     },
@@ -716,7 +715,6 @@ pub(crate) struct RecomposeScopeInner {
     retention_mode: Cell<RetentionMode>,
     parent_hint: Cell<Option<NodeId>>,
     group_anchor: Cell<AnchorId>,
-    observers: snapshot_state_observer::ScopeObservers,
     recompose: RefCell<Option<RecomposeCallback>>,
     parent_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
     lifetime_owner_scope: RefCell<Option<Weak<RecomposeScopeInner>>>,
@@ -792,7 +790,6 @@ impl RecomposeScopeInner {
             retention_mode: Cell::new(RetentionMode::DisposeWhenInactive),
             parent_hint: Cell::new(None),
             group_anchor: Cell::new(AnchorId::INVALID),
-            observers: snapshot_state_observer::ScopeObservers::default(),
             recompose: RefCell::new(None),
             parent_scope: RefCell::new(None),
             lifetime_owner_scope: RefCell::new(None),
@@ -821,7 +818,6 @@ fn push_unique_state_id(ids: &mut StateIds, state_id: StateId) {
 impl Drop for RecomposeScopeInner {
     fn drop(&mut self) {
         note_scope_activity_change();
-        self.observers.release();
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
         let subscriptions = std::mem::take(self.state_subscriptions.get_mut());
@@ -990,9 +986,8 @@ impl RecomposeScope {
         *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Static(callback));
     }
 
-    fn set_observed_recompose(
+    fn set_boxed_recompose(
         &self,
-        observer: SnapshotStateObserver,
         body: Box<dyn FnMut(&Composer) + 'static>,
         stateless_body: Option<TypeId>,
     ) {
@@ -1000,21 +995,19 @@ impl RecomposeScope {
         self.inner
             .source_trace
             .replace(source_trace::current_source_trace());
-        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Observed {
-            observer,
+        *self.inner.recompose.borrow_mut() = Some(RecomposeCallback::Boxed {
             body,
             stateless_body,
         });
     }
 
-    fn reruns_stateless(&self, observer: &SnapshotStateObserver, body: TypeId) -> bool {
+    fn reruns_stateless(&self, body: TypeId) -> bool {
         matches!(
             &*self.inner.recompose.borrow(),
-            Some(RecomposeCallback::Observed {
-                observer: current,
+            Some(RecomposeCallback::Boxed {
                 stateless_body: Some(current_body),
                 ..
-            }) if *current_body == body && current.ptr_eq(observer)
+            }) if *current_body == body
         )
     }
 
@@ -1028,16 +1021,12 @@ impl RecomposeScope {
                     callback(composer);
                     RecomposeCallback::Static(callback)
                 }
-                RecomposeCallback::Observed {
-                    observer,
+                RecomposeCallback::Boxed {
                     mut body,
                     stateless_body,
                 } => {
-                    observer.observe_reads(self.clone(), RecomposeScope::invalidate, || {
-                        body(composer);
-                    });
-                    RecomposeCallback::Observed {
-                        observer,
+                    body(composer);
+                    RecomposeCallback::Boxed {
                         body,
                         stateless_body,
                     }

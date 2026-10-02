@@ -9,7 +9,6 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
-    RecomposeScope, RecomposeScopeInner, ScopeId,
     collections::map::{HashMap, HashSet},
     hash::default as default_hash,
     snapshot_v2::{
@@ -45,7 +44,6 @@ pub struct SnapshotStateObserver {
 pub struct SnapshotStateObserverDebugStats {
     pub scopes_len: usize,
     pub scopes_cap: usize,
-    pub recompose_scopes_len: usize,
     pub stateless_scope_count: usize,
     pub observed_state_count: usize,
     pub observed_state_capacity: usize,
@@ -54,9 +52,9 @@ pub struct SnapshotStateObserverDebugStats {
 impl SnapshotStateObserver {
     /// Create a new observer that schedules callbacks using `on_changed_executor`.
     pub fn new(on_changed_executor: impl Fn(Box<dyn FnOnce() + 'static>) + 'static) -> Self {
-        let inner = Rc::new(SnapshotStateObserverInner::new(on_changed_executor));
-        inner.set_self(Rc::downgrade(&inner));
-        Self { inner }
+        Self {
+            inner: Rc::new(SnapshotStateObserverInner::new(on_changed_executor)),
+        }
     }
 
     /// Observe state object reads performed while executing `block`.
@@ -75,20 +73,6 @@ impl SnapshotStateObserver {
     {
         self.inner
             .observe_reads(scope, on_value_changed_for_scope, block)
-    }
-
-    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
-    }
-
-    /// Notify the observer that a new composition frame is starting.
-    pub fn begin_frame(&self) {
-        self.inner.begin_frame();
-    }
-
-    /// Drop bookkeeping for scopes that were released during the current frame.
-    pub fn prune_dead_scopes(&self) {
-        self.inner.prune_dead_scopes();
     }
 
     /// Temporarily pause read observation while executing `block`.
@@ -145,9 +129,6 @@ struct SnapshotStateObserverInner {
     read_dispatcher: ReadObserver,
     read_snapshot: RefCell<Option<Arc<TransparentObserverMutableSnapshot>>>,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
-    weak_self: RefCell<Weak<SnapshotStateObserverInner>>,
-    frame_version: Cell<u64>,
-    dead_entries: RefCell<Vec<Rc<RefCell<ScopeEntry>>>>,
     next_entry_id: Cell<usize>,
     /// One `Rc` per type of callback that captures nothing: see
     /// [`SnapshotStateObserverInner::capture_free_callback`].
@@ -205,22 +186,9 @@ impl SnapshotStateObserverInner {
             read_dispatcher,
             read_snapshot: RefCell::new(None),
             apply_handle: RefCell::new(None),
-            weak_self: RefCell::new(Weak::new()),
-            frame_version: Cell::new(0),
-            dead_entries: RefCell::new(Vec::new()),
             next_entry_id: Cell::new(0),
             capture_free_callbacks: RefCell::new(SmallVec::new()),
         }
-    }
-
-    fn set_self(&self, weak: Weak<SnapshotStateObserverInner>) {
-        self.weak_self.replace(weak);
-    }
-
-    fn begin_frame(&self) {
-        let next = self.frame_version.get().wrapping_add(1);
-        self.frame_version.set(next);
-        self.prune_dead_scopes();
     }
 
     fn observe_reads<T, R>(
@@ -232,9 +200,6 @@ impl SnapshotStateObserverInner {
     where
         T: Any + Clone + Eq + Hash + 'static,
     {
-        let frame_version = self.frame_version.get();
-        let has_frame_version = frame_version != 0;
-
         let existing_entry = self.find_scope_entry(&scope);
         let on_changed = std::cell::LazyCell::new(|| {
             let callback = move |scope_any: &dyn Any| {
@@ -252,16 +217,9 @@ impl SnapshotStateObserverInner {
         });
 
         if let Some(entry) = existing_entry.as_ref() {
-            let already_observed = {
-                let mut entry_mut = entry.borrow_mut();
-                entry_mut.update_scope(&scope);
-                has_frame_version && entry_mut.last_seen_version == frame_version
-            };
+            entry.borrow_mut().update_scope(&scope);
             let callback = on_changed.clone();
             entry.borrow_mut().on_changed = callback;
-            if already_observed {
-                return block();
-            }
         }
 
         let observed = self.active_read_targets.borrow_mut().push();
@@ -291,15 +249,7 @@ impl SnapshotStateObserverInner {
         drop(on_changed);
         let entry = existing_entry
             .unwrap_or_else(|| self.insert_scope_entry(scope.clone(), Rc::clone(&callback)));
-        {
-            let mut entry_mut = entry.borrow_mut();
-            entry_mut.update(&scope, callback);
-            entry_mut.last_seen_version = if has_frame_version {
-                frame_version
-            } else {
-                u64::MAX
-            };
-        }
+        entry.borrow_mut().update(&scope, callback);
         self.replace_observed_ids(&entry, &mut observed.borrow_mut());
 
         result
@@ -317,57 +267,24 @@ impl SnapshotStateObserverInner {
     where
         T: Any + Eq + Hash + 'static,
     {
-        if let Some(rc_scope) = (scope as &dyn Any).downcast_ref::<RecomposeScope>() {
-            if let Some(entry) = rc_scope.inner.observers.unlink(self) {
-                self.unregister_entry(&entry);
-            }
-            return;
-        }
-
-        let removed = self.remove_owned_scope_entry(scope);
+        let removed = self.remove_scope_entry(scope);
         if let Some(entry) = removed {
             self.unregister_entry(&entry);
         }
     }
 
     fn clear_if(&self, predicate: impl Fn(&dyn Any) -> bool) {
-        let removed_recompose: Vec<_> = self
-            .indexed_scopes
-            .borrow()
-            .values()
-            .filter(|entry| {
-                let entry = entry.borrow();
-                entry.holds_recompose_scope() && entry.matches_predicate(&predicate)
-            })
-            .cloned()
-            .collect();
-        for entry in &removed_recompose {
-            self.unlink_entry(entry);
-        }
-        let removed_owned =
-            { self.partition_owned_scopes(|entry| entry.matches_predicate(&predicate)) };
-
-        for entry in removed_recompose.into_iter().chain(removed_owned) {
+        let removed = self.partition_scopes(|entry| predicate(entry.scope.as_ref()));
+        for entry in removed {
             self.unregister_entry(&entry);
         }
     }
 
     fn clear_all(&self) {
         let entries = std::mem::take(&mut *self.indexed_scopes.borrow_mut());
-        for entry in entries.values() {
-            self.unlink_entry(entry);
-        }
         let owned = std::mem::take(&mut *self.owned_scopes.borrow_mut());
         self.observed_to_scopes.borrow_mut().clear();
-        let dead = std::mem::take(&mut *self.dead_entries.borrow_mut());
-        drop((entries, owned, dead));
-    }
-
-    fn unlink_entry(&self, entry: &Rc<RefCell<ScopeEntry>>) {
-        let scope = entry.borrow().live_recompose_scope();
-        if let Some(scope) = scope {
-            scope.inner.observers.unlink(self);
-        }
+        drop((entries, owned));
     }
 
     fn start(&self, weak_self: Weak<SnapshotStateObserverInner>) {
@@ -389,20 +306,9 @@ impl SnapshotStateObserverInner {
         }
     }
 
-    fn find_scope_entry<T>(&self, scope: &T) -> Option<Rc<RefCell<ScopeEntry>>>
-    where
-        T: Any + Eq + Hash + 'static,
-    {
-        if let Some(scope) = (scope as &dyn Any).downcast_ref::<RecomposeScope>() {
-            return scope.inner.observers.find(self);
-        }
-
-        self.find_owned_scope_entry(scope)
-    }
-
     /// The `Rc` of a callback that captures nothing. Every closure of such a
-    /// type does the same thing, as `RecomposeScope::invalidate` does for
-    /// every group, so one `Rc` serves all its scopes instead of one each.
+    /// type does the same thing, so one `Rc` serves all its scopes instead
+    /// of one each.
     fn capture_free_callback<F: Fn(&dyn Any) + 'static>(
         &self,
         callback: F,
@@ -424,42 +330,20 @@ impl SnapshotStateObserverInner {
     ) -> Rc<RefCell<ScopeEntry>> {
         let entry_id = self.next_entry_id.get();
         self.next_entry_id.set(entry_id.wrapping_add(1));
-        let recompose_scope = (&scope as &dyn Any)
-            .downcast_ref::<RecomposeScope>()
-            .cloned();
-        let owned_scope_key = recompose_scope
-            .is_none()
-            .then(|| owned_scope_index_key(&scope));
+        let scope_key = owned_scope_index_key(&scope);
         let entry = Rc::new(RefCell::new(ScopeEntry::new(entry_id, scope, on_changed)));
         self.indexed_scopes
             .borrow_mut()
             .insert(entry_id, Rc::clone(&entry));
-        if let Some(recompose_scope) = recompose_scope {
-            recompose_scope
-                .inner
-                .observers
-                .link(self.weak_self.borrow().clone(), Rc::clone(&entry));
-        } else if let Some(scope_key) = owned_scope_key {
-            self.owned_scopes
-                .borrow_mut()
-                .entry(scope_key)
-                .or_default()
-                .push(Rc::clone(&entry));
-        }
+        self.owned_scopes
+            .borrow_mut()
+            .entry(scope_key)
+            .or_default()
+            .push(Rc::clone(&entry));
         entry
     }
 
-    fn prune_dead_scopes(&self) {
-        while let Some(entry) = self.pop_dead_entry() {
-            self.unregister_entry(&entry);
-        }
-    }
-
-    fn pop_dead_entry(&self) -> Option<Rc<RefCell<ScopeEntry>>> {
-        self.dead_entries.borrow_mut().pop()
-    }
-
-    fn find_owned_scope_entry<T>(&self, scope: &T) -> Option<Rc<RefCell<ScopeEntry>>>
+    fn find_scope_entry<T>(&self, scope: &T) -> Option<Rc<RefCell<ScopeEntry>>>
     where
         T: Any + Eq + Hash + 'static,
     {
@@ -472,7 +356,7 @@ impl SnapshotStateObserverInner {
         })
     }
 
-    fn remove_owned_scope_entry<T>(&self, scope: &T) -> Option<Rc<RefCell<ScopeEntry>>>
+    fn remove_scope_entry<T>(&self, scope: &T) -> Option<Rc<RefCell<ScopeEntry>>>
     where
         T: Any + Eq + Hash + 'static,
     {
@@ -495,7 +379,7 @@ impl SnapshotStateObserverInner {
         removed
     }
 
-    fn partition_owned_scopes(
+    fn partition_scopes(
         &self,
         should_remove: impl Fn(&ScopeEntry) -> bool,
     ) -> Vec<Rc<RefCell<ScopeEntry>>> {
@@ -529,20 +413,17 @@ impl SnapshotStateObserverInner {
         let mut observed_state_count = 0;
         let mut observed_state_capacity = 0;
         let mut stateless_scope_count = 0;
-        let mut recompose_scopes_len = 0;
 
         for entry in indexed_scopes.values() {
             let entry = entry.borrow();
             observed_state_count += entry.observed.len();
             observed_state_capacity += entry.observed.capacity();
             stateless_scope_count += usize::from(entry.observed.is_empty());
-            recompose_scopes_len += usize::from(entry.holds_recompose_scope());
         }
 
         SnapshotStateObserverDebugStats {
             scopes_len: indexed_scopes.len(),
             scopes_cap,
-            recompose_scopes_len,
             stateless_scope_count,
             observed_state_count,
             observed_state_capacity,
@@ -813,20 +694,11 @@ impl ObservedIds {
 
 const MAX_OBSERVED_STATES: usize = 8;
 
-enum ScopeStorage {
-    Owned(Box<dyn Any>),
-    RecomposeScope {
-        id: ScopeId,
-        weak: Weak<RecomposeScopeInner>,
-    },
-}
-
 struct ScopeEntry {
     id: usize,
-    scope: ScopeStorage,
+    scope: Box<dyn Any>,
     on_changed: Rc<dyn ScopeChangedCallback>,
     observed: ObservedIds,
-    last_seen_version: u64,
 }
 
 impl ScopeEntry {
@@ -836,10 +708,9 @@ impl ScopeEntry {
     {
         Self {
             id,
-            scope: ScopeStorage::from_value(scope),
+            scope: Box::new(scope),
             on_changed,
             observed: ObservedIds::new(),
-            last_seen_version: u64::MAX,
         }
     }
 
@@ -869,169 +740,23 @@ impl ScopeEntry {
     where
         T: Any + Clone + 'static,
     {
-        match &mut self.scope {
-            ScopeStorage::Owned(stored) => {
-                if let Some(stored) = stored.downcast_mut::<T>() {
-                    stored.clone_from(new_scope);
-                    return;
-                }
-            }
-            ScopeStorage::RecomposeScope { weak, .. } => {
-                if (new_scope as &dyn Any)
-                    .downcast_ref::<RecomposeScope>()
-                    .is_some_and(|scope| Weak::as_ptr(weak) == Rc::as_ptr(&scope.inner))
-                {
-                    return;
-                }
-            }
+        match self.scope.downcast_mut::<T>() {
+            Some(stored) => stored.clone_from(new_scope),
+            None => self.scope = Box::new(new_scope.clone()),
         }
-        self.scope = ScopeStorage::from_value(new_scope.clone());
     }
 
     fn matches_scope<T>(&self, scope: &T) -> bool
     where
         T: Any + Eq + 'static,
     {
-        if let Some(scope) = (scope as &dyn Any).downcast_ref::<RecomposeScope>() {
-            return matches!(
-                &self.scope,
-                ScopeStorage::RecomposeScope { id, .. } if *id == scope.id()
-            );
-        }
-
-        match &self.scope {
-            ScopeStorage::Owned(stored) => stored
-                .downcast_ref::<T>()
-                .is_some_and(|stored| stored == scope),
-            ScopeStorage::RecomposeScope { .. } => false,
-        }
-    }
-
-    fn matches_predicate(&self, predicate: &impl Fn(&dyn Any) -> bool) -> bool {
-        match &self.scope {
-            ScopeStorage::Owned(scope) => predicate(scope.as_ref()),
-            ScopeStorage::RecomposeScope { weak, .. } => weak
-                .upgrade()
-                .is_none_or(|inner| predicate(&RecomposeScope { inner })),
-        }
-    }
-
-    fn holds_recompose_scope(&self) -> bool {
-        matches!(self.scope, ScopeStorage::RecomposeScope { .. })
-    }
-
-    fn live_recompose_scope(&self) -> Option<RecomposeScope> {
-        match &self.scope {
-            ScopeStorage::Owned(_) => None,
-            ScopeStorage::RecomposeScope { weak, .. } => {
-                weak.upgrade().map(|inner| RecomposeScope { inner })
-            }
-        }
+        self.scope
+            .downcast_ref::<T>()
+            .is_some_and(|stored| stored == scope)
     }
 
     fn notify(&self) {
-        match &self.scope {
-            ScopeStorage::Owned(scope) => (self.on_changed)(scope.as_ref()),
-            ScopeStorage::RecomposeScope { weak, .. } => {
-                if let Some(inner) = weak.upgrade() {
-                    (self.on_changed)(&RecomposeScope { inner });
-                }
-            }
-        }
-    }
-}
-
-impl ScopeStorage {
-    fn from_value<T>(value: T) -> Self
-    where
-        T: Any + 'static,
-    {
-        let any = &value as &dyn Any;
-        if let Some(scope) = any.downcast_ref::<RecomposeScope>() {
-            Self::RecomposeScope {
-                id: scope.id(),
-                weak: scope.downgrade(),
-            }
-        } else {
-            Self::Owned(Box::new(value))
-        }
-    }
-}
-
-#[derive(Default)]
-pub(crate) struct ScopeObservers {
-    head: Cell<Option<Box<ObserverLink>>>,
-}
-
-struct ObserverLink {
-    observer: Weak<SnapshotStateObserverInner>,
-    entry: Rc<RefCell<ScopeEntry>>,
-    next: Option<Box<ObserverLink>>,
-}
-
-impl ScopeObservers {
-    fn find(&self, observer: &SnapshotStateObserverInner) -> Option<Rc<RefCell<ScopeEntry>>> {
-        let head = self.head.take();
-        let mut link = head.as_deref();
-        let mut found = None;
-        while let Some(current) = link {
-            if std::ptr::eq(current.observer.as_ptr(), observer) {
-                found = Some(Rc::clone(&current.entry));
-                break;
-            }
-            link = current.next.as_deref();
-        }
-        self.head.set(head);
-        found
-    }
-
-    fn link(&self, observer: Weak<SnapshotStateObserverInner>, entry: Rc<RefCell<ScopeEntry>>) {
-        let next = self.head.take();
-        self.head.set(Some(Box::new(ObserverLink {
-            observer,
-            entry,
-            next,
-        })));
-    }
-
-    fn unlink(&self, observer: &SnapshotStateObserverInner) -> Option<Rc<RefCell<ScopeEntry>>> {
-        let mut rest = self.head.take();
-        let mut kept = None;
-        let mut removed = None;
-        while let Some(mut link) = rest {
-            rest = link.next.take();
-            if removed.is_none() && std::ptr::eq(link.observer.as_ptr(), observer) {
-                removed = Some(link.entry);
-            } else {
-                link.next = kept;
-                kept = Some(link);
-            }
-        }
-        self.head.set(kept);
-        removed
-    }
-
-    pub(crate) fn release(&mut self) {
-        let mut rest = self.head.get_mut().take();
-        while let Some(link) = rest {
-            let ObserverLink {
-                observer,
-                entry,
-                next,
-            } = *link;
-            rest = next;
-            if let Some(observer) = observer.upgrade() {
-                observer.dead_entries.borrow_mut().push(entry);
-            }
-        }
-    }
-}
-
-impl Drop for SnapshotStateObserverInner {
-    fn drop(&mut self) {
-        for entry in self.indexed_scopes.borrow().values() {
-            self.unlink_entry(entry);
-        }
+        (self.on_changed)(self.scope.as_ref());
     }
 }
 

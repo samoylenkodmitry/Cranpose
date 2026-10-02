@@ -639,7 +639,10 @@ impl Drop for ObserverHandle {
     fn drop(&mut self) {
         match self.kind {
             ObserverKind::Apply => {
-                APPLY_OBSERVERS.with(|cell| {
+                // A handle dropped while the thread tears its locals down,
+                // as a coroutine's state can be, finds the registry gone
+                // and has nothing left to remove.
+                let _ = APPLY_OBSERVERS.try_with(|cell| {
                     cell.borrow_mut().remove(&self.id);
                 });
             }

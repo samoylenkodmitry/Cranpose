@@ -5,7 +5,7 @@ use std::{
 
 use cranpose_core::{
     self, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier, NodeId, Phase,
-    SlotTable, SlotsHost, SnapshotStateObserver, location_key,
+    SlotTable, SlotsHost, location_key,
 };
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
@@ -58,12 +58,10 @@ fn prepare_measure_composer(
         applier,
         MemoryApplier::new(),
     )));
-    let observer = SnapshotStateObserver::new(|callback| callback());
     let composer = Composer::new(
         Rc::clone(&slots_host),
         applier_host.clone(),
         handle.clone(),
-        observer,
         root,
     );
     (composer, slots_host, applier_host)

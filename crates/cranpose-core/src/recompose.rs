@@ -107,7 +107,7 @@ impl Composer {
                 let mut locals = self.local_stack();
                 *locals = scope.local_stack();
             }
-            let callback_ran = self.observe_scope(scope, || scope.run_recompose(self));
+            let callback_ran = scope.run_recompose(self);
             log::trace!(
                 target: "cranpose::compose::recompose",
                 "scope_id={} label={:?} callback_ran={}",

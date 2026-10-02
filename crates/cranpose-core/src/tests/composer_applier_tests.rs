@@ -152,7 +152,6 @@ fn composer_new_with_shared_state_quarantines_mismatched_bound_host() {
 
     let (handle, _runtime) = runtime_handle();
     let applier = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
-    let observer = SnapshotStateObserver::new(|callback| callback());
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         Composer::new_with_shared_state(
@@ -160,7 +159,6 @@ fn composer_new_with_shared_state_quarantines_mismatched_bound_host() {
             Rc::clone(&slots_host),
             applier,
             handle,
-            observer,
             None,
         )
     }));
@@ -206,15 +204,8 @@ fn mismatched_slot_pass_fixture() -> MismatchedSlotPassFixture {
     let (handle, _runtime) = runtime_handle();
     let local_host = Rc::new(SlotsHost::new(SlotTable::new()));
     let applier: Rc<dyn ApplierHost> = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    let composer = Composer::new_with_shared_state(
-        Rc::clone(&other_state),
-        local_host,
-        applier,
-        handle,
-        observer,
-        None,
-    );
+    let composer =
+        Composer::new_with_shared_state(Rc::clone(&other_state), local_host, applier, handle, None);
 
     MismatchedSlotPassFixture {
         composer,

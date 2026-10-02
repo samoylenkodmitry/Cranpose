@@ -14,7 +14,7 @@ use crate::{
     MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions, RecomposeScope,
     RecomposeScopeInner, RecycledNode, RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId,
     SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
-    SnapshotStateObserver, StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
+    StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
     collections::map::{HashMap, HashSet},
     composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
@@ -596,7 +596,6 @@ pub(crate) struct ComposerCore {
     slot_hosts: RefCell<Vec<Rc<SlotsHost>>>,
     pub(crate) applier: Rc<dyn ApplierHost>,
     pub(crate) runtime: RuntimeHandle,
-    pub(crate) observer: SnapshotStateObserver,
     pub(crate) parent_stack: RefCell<Vec<ParentFrame>>,
     pub(crate) subcompose_stack: RefCell<Vec<SubcomposeFrame>>,
     pub(crate) root: Cell<Option<NodeId>>,
@@ -676,7 +675,6 @@ impl ComposerCore {
         slots: Rc<SlotsHost>,
         applier: Rc<dyn ApplierHost>,
         runtime: RuntimeHandle,
-        observer: SnapshotStateObserver,
         root: Option<NodeId>,
         initial_parent_frame: InitialParentFrame,
     ) -> Self {
@@ -699,7 +697,6 @@ impl ComposerCore {
             slot_hosts: RefCell::new(Vec::new()),
             applier,
             runtime,
-            observer,
             parent_stack: RefCell::new(parent_stack),
             subcompose_stack: RefCell::new(Vec::new()),
             root: Cell::new(root),
@@ -750,7 +747,6 @@ impl Composer {
         slots: Rc<SlotsHost>,
         applier: Rc<dyn ApplierHost>,
         runtime: RuntimeHandle,
-        observer: SnapshotStateObserver,
         root: Option<NodeId>,
     ) -> Self {
         Self::new_with_shared_state_with_parent_frame(
@@ -758,7 +754,6 @@ impl Composer {
             slots,
             applier,
             runtime,
-            observer,
             root,
             InitialParentFrame::SyntheticRoot,
         )
@@ -769,7 +764,6 @@ impl Composer {
         slots: Rc<SlotsHost>,
         applier: Rc<dyn ApplierHost>,
         runtime: RuntimeHandle,
-        observer: SnapshotStateObserver,
         root: Option<NodeId>,
         initial_parent_frame: InitialParentFrame,
     ) -> Self {
@@ -780,7 +774,6 @@ impl Composer {
             slots,
             applier,
             runtime,
-            observer,
             root,
             initial_parent_frame,
         ));
@@ -791,7 +784,6 @@ impl Composer {
         slots: Rc<SlotsHost>,
         applier: Rc<dyn ApplierHost>,
         runtime: RuntimeHandle,
-        observer: SnapshotStateObserver,
         root: Option<NodeId>,
     ) -> Self {
         Self::new_with_shared_state_with_parent_frame(
@@ -801,7 +793,6 @@ impl Composer {
             slots,
             applier,
             runtime,
-            observer,
             root,
             InitialParentFrame::RealParent,
         )
@@ -815,22 +806,12 @@ impl Composer {
         Rc::clone(&self.core)
     }
 
-    fn observer(&self) -> SnapshotStateObserver {
-        self.core.observer.clone()
-    }
-
     pub(crate) fn request_root_render(&self) {
         self.core.root_render_requested.set(true);
     }
 
     pub(crate) fn take_root_render_request(&self) -> bool {
         self.core.root_render_requested.replace(false)
-    }
-
-    pub(crate) fn observe_scope<R>(&self, scope: &RecomposeScope, block: impl FnOnce() -> R) -> R {
-        self.core
-            .observer
-            .observe_reads(scope.clone(), super::RecomposeScope::invalidate, block)
     }
 
     pub fn active_slots_host(&self) -> Rc<SlotsHost> {
@@ -1431,7 +1412,7 @@ impl Composer {
             scope: scope_ref,
         };
         if placeholder_for.is_none() {
-            self.observe_scope(&guard.scope, || f(self));
+            f(self);
         }
         guard.scope.mark_composed_once();
         drop(guard);
@@ -1897,7 +1878,6 @@ impl Composer {
             Rc::clone(slots),
             Rc::clone(&self.core.applier),
             runtime_handle.clone(),
-            self.observer(),
             root,
             InitialParentFrame::RealParent,
         ));
@@ -2075,7 +2055,7 @@ impl Composer {
             .scope_stack
             .borrow()
             .last()
-            .is_some_and(|scope| scope.reruns_stateless(&self.core.observer, body))
+            .is_some_and(|scope| scope.reruns_stateless(body))
     }
 
     #[inline(never)]
@@ -2085,7 +2065,7 @@ impl Composer {
         stateless: Option<std::any::TypeId>,
     ) {
         if let Some(scope) = self.current_recompose_scope() {
-            scope.set_observed_recompose(self.observer(), callback, stateless);
+            scope.set_boxed_recompose(callback, stateless);
         }
     }
 
