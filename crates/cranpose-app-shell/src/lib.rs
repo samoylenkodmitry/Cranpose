@@ -592,6 +592,7 @@ where
         let app_content = Rc::new(std::cell::RefCell::new(content));
         let mut build: Box<dyn FnMut()> = Box::new(move || {
             let app_content = Rc::clone(&app_content);
+            log::info!("[startup] root composes with {:?}", cranpose_ui::Density::from_host());
             cranpose_ui::density::ProvideDensity(cranpose_ui::Density::from_host(), move || {
                 cranpose_ui::widgets::PopupHost(move || {
                     (app_content.borrow_mut())();
@@ -1106,7 +1107,9 @@ where
         self.surfaces[0].is_dirty = true;
     }
 
+    #[track_caller]
     pub fn request_root_render(&mut self) {
+        log::info!("[startup] request_root_render from {}", std::panic::Location::caller());
         self.app.composition.request_root_render();
         self.app.request_forced_layout_pass();
         let app_context = Rc::clone(&self.app.app_context);
