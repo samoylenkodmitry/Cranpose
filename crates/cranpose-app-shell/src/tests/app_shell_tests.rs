@@ -11487,3 +11487,22 @@ fn the_viewport_the_shell_already_has_rebuilds_nothing() {
     shell.update();
     assert!(rebuilds.get() > settled, "a new size rebuilds the scene");
 }
+
+#[test]
+fn a_platform_answering_the_font_scale_the_shell_shows_recomposes_nothing() {
+    let _guard = test_guard();
+    let compositions = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&compositions);
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, move || {
+        counted.set(counted.get() + 1);
+        Text("Scaled", Modifier::empty(), TextStyle::default());
+    });
+    shell.update();
+    let settled = compositions.get();
+
+    let plain_table: Vec<(f32, f32)> = (1..=40).map(|sp| (sp as f32, sp as f32)).collect();
+    shell.set_font_scale_curve(cranpose_ui::FontScaleCurve::from_samples(1.0, &plain_table));
+    shell.update();
+    assert_eq!(compositions.get(), settled);
+}

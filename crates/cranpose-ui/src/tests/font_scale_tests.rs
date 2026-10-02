@@ -36,6 +36,21 @@ fn the_identity_curve_leaves_a_size_alone() {
 }
 
 #[test]
+fn a_table_of_the_plain_setting_is_the_plain_setting() {
+    let flat: Vec<(f32, f32)> = (1..=40).map(|sp| (sp as f32, sp as f32)).collect();
+    assert_eq!(
+        FontScaleCurve::from_samples(1.0, &flat),
+        FontScaleCurve::linear(1.0)
+    );
+    let scaled: Vec<(f32, f32)> = (1..=40).map(|sp| (sp as f32, sp as f32 * 1.3)).collect();
+    assert_eq!(
+        FontScaleCurve::from_samples(1.3, &scaled),
+        FontScaleCurve::linear(1.3)
+    );
+    assert!(!platform_124().is_linear());
+}
+
+#[test]
 fn the_platform_curve_is_reproduced_at_every_size_the_platform_was_asked() {
     let curve = platform_124();
     for (sp, expected_px) in [
