@@ -274,7 +274,7 @@ fn Sidebar(
                 move || {
                     if !compact {
                         Box(Modifier::empty().padding(12.0), BoxSpec::default(), || {
-                            Brand(false)
+                            Brand(false);
                         });
                     }
                     Text(
@@ -471,7 +471,7 @@ pub(super) fn DocumentationTab() {
                     .rounded_corners(22.0)
                     .clip_to_bounds()
                     .semantics(|config| {
-                        config.content_description = Some("Cranpose documentation".to_string())
+                        config.content_description = Some("Cranpose documentation".to_string());
                     }),
                 move |bounds| {
                     let compact = bounds.max_width().0 < COMPACT_BREAKPOINT;
