@@ -3,10 +3,9 @@ use std::rc::Rc;
 use cranpose_render_common::{
     brush_sampling::normalize_gradient_t,
     graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
+        RenderNode,
     },
-    raster_cache::LayerRasterCacheHashes,
 };
 use cranpose_ui::Brush;
 use cranpose_ui_graphics::{Color, TileMode};
@@ -311,32 +310,12 @@ fn multiline_text_renders_second_line_pixels() {
 fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
     let mut scene = Scene::new();
     scene.graph = Some(RenderGraph::new(LayerNode {
-        node_id: None,
-        wraps: None,
-        node_bounds: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
             width: 16.0,
             height: 16.0,
         },
-        transform_to_parent: ProjectiveTransform::identity(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: cranpose_ui_graphics::Point::default(),
-        content_offset: cranpose_ui_graphics::Point::default(),
-        origin_in_parent: cranpose_ui_graphics::Point::default(),
-        graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        draws_within_bounds: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
         children: vec![RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
@@ -353,6 +332,7 @@ fn draw_scene_renders_graph_backed_scene_without_flat_primitives() {
                 clip: None,
             })),
         })],
+        ..Default::default()
     }));
 
     let width = 20;

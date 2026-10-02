@@ -526,7 +526,7 @@ fn try_translate_scrolled_layer(
 
 struct TranslatedContainer {
     node_id: NodeId,
-    graphics_layer: GraphicsLayer,
+    graphics_layer: Option<GraphicsLayer>,
 }
 
 fn translated_container(
@@ -570,12 +570,12 @@ fn translated_container(
         return Err("container clip changed");
     }
     let graphics_layer = graphics_layer_with_shaped_clip(
-        modifier_slices.graphics_layer().unwrap_or_default(),
+        modifier_slices.graphics_layer(),
         clip_to_bounds,
         modifier_slices.corner_shape(),
         container.local_bounds,
     );
-    if graphics_layer != container.graphics_layer {
+    if graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT) != &*container.graphics_layer {
         return Err("container graphics layer changed");
     }
     Ok(TranslatedContainer {
@@ -903,6 +903,7 @@ fn translate_layer_from_data(
         node_id,
         graphics_layer,
     } = container_plan;
+    let graphics_layer = graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT);
     let mut scratch = TRANSLATE_SCRATCH.take();
     let children_unchanged = match translated_children(
         applier,
@@ -920,7 +921,7 @@ fn translate_layer_from_data(
 
     let geometry = TranslateGeometry::new(
         &layout_state,
-        &graphics_layer,
+        graphics_layer,
         container.local_bounds,
         parent_abs,
     );
@@ -946,7 +947,7 @@ fn translate_layer_from_data(
         container,
         &modifier_slices,
         &layout_state,
-        &graphics_layer,
+        graphics_layer,
         parent_content_offset,
         geometry,
     );
@@ -1087,7 +1088,7 @@ struct LayerHead {
     translated_content_context: bool,
     translated_content_offset: Point,
     origin_in_parent: Point,
-    graphics_layer: GraphicsLayer,
+    graphics_layer: Option<GraphicsLayer>,
     clip_to_bounds: bool,
     shadow_clip: Option<Rect>,
     hit_test: Option<HitTestNode>,
@@ -1108,12 +1109,13 @@ fn node_layer_head(
     node_id: NodeId,
     slices: &Rc<ModifierNodeSlices>,
     frame: NodeFrame,
-    graphics_layer: GraphicsLayer,
+    graphics_layer: Option<GraphicsLayer>,
     context: LowerContext,
 ) -> LayerHead {
     let clip_to_bounds = slices.clip_to_bounds();
     let translated_content_context = slices.translated_content_context();
-    let isolation = isolation_reasons(&graphics_layer);
+    let properties = graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT);
+    let isolation = isolation_reasons(properties);
     LayerHead {
         node_id: Some(node_id),
         wraps: None,
@@ -1122,7 +1124,7 @@ fn node_layer_head(
         transform_to_parent: placed_transform(
             frame.local_bounds,
             frame.placement,
-            &graphics_layer,
+            properties,
             context.parent_content_offset,
         ),
         content_offset: frame.content_offset,
@@ -1135,7 +1137,7 @@ fn node_layer_head(
             Point::default()
         },
         origin_in_parent: frame.placement,
-        cache_policy: layer_cache_policy(&graphics_layer, isolation),
+        cache_policy: layer_cache_policy(properties, isolation),
         isolation,
         graphics_layer,
         clip_to_bounds,
@@ -1180,7 +1182,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
     *translated_content_context = head.translated_content_context;
     *translated_content_offset = head.translated_content_offset;
     *origin_in_parent = head.origin_in_parent;
-    *graphics_layer = head.graphics_layer;
+    graphics_layer.replace(head.graphics_layer);
     *clip_to_bounds = head.clip_to_bounds;
     *shadow_clip = head.shadow_clip;
     *hit_test = head.hit_test;
@@ -1313,7 +1315,7 @@ fn write_snapshot_layer(
             content_offset,
             translated_content_offset: content_offset,
         },
-        graphics_layer.unwrap_or_default(),
+        graphics_layer,
         context,
     );
     let outer = outer_draws(
@@ -1498,13 +1500,18 @@ fn write_node_layer(
         );
     }
     let graphics_layer = graphics_layer_with_shaped_clip(
-        slices.graphics_layer().unwrap_or_default(),
+        slices.graphics_layer(),
         slices.clip_to_bounds(),
         slices.corner_shape(),
         local_bounds,
     );
     let geometry = context.parent_abs.map(|parent_abs| {
-        TranslateGeometry::new(&layout_state, &graphics_layer, local_bounds, parent_abs)
+        TranslateGeometry::new(
+            &layout_state,
+            graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT),
+            local_bounds,
+            parent_abs,
+        )
     });
     if let Some(geometry) = geometry {
         slices.publish_window_geometry(geometry.top_left, geometry.window_transform, size);
@@ -1777,7 +1784,7 @@ fn write_wrapper(
         layer_transform_to_parent(layer.local_bounds, Point::default(), &layer.graphics_layer);
     layer.origin_in_parent = Point::default();
     let node_rect = layer.node_rect();
-    let graphics_layer = GraphicsLayer::default();
+    let graphics_layer = None;
     let head = LayerHead {
         node_id: None,
         wraps: layer.node_id,
@@ -1786,7 +1793,7 @@ fn write_wrapper(
         transform_to_parent: placed_transform(
             node_rect,
             placement,
-            &graphics_layer,
+            &GraphicsLayer::DEFAULT,
             parent_content_offset,
         ),
         content_offset: Point::default(),
@@ -1928,8 +1935,9 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         children.push(layout_box_to_snapshot(child, Some(node)));
     }
     let base_graphics_layer = node.node_data.modifier_slices.graphics_layer();
+    let has_graphics_layer = base_graphics_layer.is_some();
     let graphics_layer = graphics_layer_with_shaped_clip(
-        base_graphics_layer.clone().unwrap_or_default(),
+        base_graphics_layer,
         node.node_data.modifier_slices.clip_to_bounds(),
         node.node_data.modifier_slices.corner_shape(),
         Rect {
@@ -1939,8 +1947,10 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
             height: node.rect.height,
         },
     );
-    let has_graphics_layer =
-        base_graphics_layer.is_some() || graphics_layer.render_effect.is_some();
+    let has_graphics_layer = has_graphics_layer
+        || graphics_layer
+            .as_ref()
+            .is_some_and(|layer| layer.render_effect.is_some());
 
     BuildNodeSnapshot {
         node_id: node.node_id,
@@ -1951,7 +1961,7 @@ fn layout_box_to_snapshot(node: &LayoutBox, parent: Option<&LayoutBox>) -> Build
         },
         content_offset: node.content_offset,
         slices: Rc::clone(&node.node_data.modifier_slices),
-        graphics_layer: has_graphics_layer.then_some(graphics_layer),
+        graphics_layer: graphics_layer.filter(|_| has_graphics_layer),
         children,
     }
 }
@@ -1961,11 +1971,11 @@ fn modifier_slices_have_origin_sinks(slices: &ModifierNodeSlices) -> bool {
 }
 
 fn graphics_layer_with_shaped_clip(
-    mut graphics_layer: GraphicsLayer,
+    mut graphics_layer: Option<GraphicsLayer>,
     clip_to_bounds: bool,
     corner_shape: Option<RoundedCornerShape>,
     local_bounds: Rect,
-) -> GraphicsLayer {
+) -> Option<GraphicsLayer> {
     if !clip_to_bounds {
         return graphics_layer;
     }
@@ -1982,17 +1992,18 @@ fn graphics_layer_with_shaped_clip(
         return graphics_layer;
     }
 
-    if let Some(existing) = graphics_layer.render_effect.take() {
+    let properties = graphics_layer.get_or_insert_default();
+    if let Some(existing) = properties.render_effect.take() {
         let rounded_clip = rounded_corner_alpha_mask_effect(
             local_bounds.width,
             local_bounds.height,
             radii,
             ROUNDED_CLIP_EDGE_FEATHER,
         );
-        graphics_layer.render_effect = Some(existing.then(rounded_clip));
+        properties.render_effect = Some(existing.then(rounded_clip));
     } else {
-        graphics_layer.shape = LayerShape::Rounded(corner_shape);
-        graphics_layer.clip = true;
+        properties.shape = LayerShape::Rounded(corner_shape);
+        properties.clip = true;
     }
     graphics_layer
 }

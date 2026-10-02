@@ -416,6 +416,31 @@ pub struct GraphicsLayer {
 }
 
 impl GraphicsLayer {
+    /// Default properties for an untransformed, opaque layer without effects.
+    pub const DEFAULT: Self = Self {
+        alpha: 1.0,
+        scale: 1.0,
+        scale_x: 1.0,
+        scale_y: 1.0,
+        rotation_x: 0.0,
+        rotation_y: 0.0,
+        rotation_z: 0.0,
+        camera_distance: 8.0,
+        transform_origin: TransformOrigin::CENTER,
+        translation_x: 0.0,
+        translation_y: 0.0,
+        shadow_elevation: 0.0,
+        ambient_shadow_color: Color::BLACK,
+        spot_shadow_color: Color::BLACK,
+        shape: LayerShape::Rectangle,
+        clip: false,
+        compositing_strategy: CompositingStrategy::Auto,
+        blend_mode: BlendMode::SrcOver,
+        color_filter: None,
+        render_effect: None,
+        backdrop_effect: None,
+    };
+
     /// The alpha an isolated layer is composited at: an **eight-bit** one,
     /// truncated.
     ///
@@ -446,29 +471,7 @@ impl GraphicsLayer {
 
 impl Default for GraphicsLayer {
     fn default() -> Self {
-        Self {
-            alpha: 1.0,
-            scale: 1.0,
-            scale_x: 1.0,
-            scale_y: 1.0,
-            rotation_x: 0.0,
-            rotation_y: 0.0,
-            rotation_z: 0.0,
-            camera_distance: 8.0,
-            transform_origin: TransformOrigin::CENTER,
-            translation_x: 0.0,
-            translation_y: 0.0,
-            shadow_elevation: 0.0,
-            ambient_shadow_color: Color::BLACK,
-            spot_shadow_color: Color::BLACK,
-            shape: LayerShape::Rectangle,
-            clip: false,
-            compositing_strategy: CompositingStrategy::Auto,
-            blend_mode: BlendMode::SrcOver,
-            color_filter: None,
-            render_effect: None,
-            backdrop_effect: None,
-        }
+        Self::DEFAULT
     }
 }
 

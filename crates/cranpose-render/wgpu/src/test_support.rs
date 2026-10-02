@@ -1,8 +1,5 @@
-use cranpose_render_common::{
-    graph::{CachePolicy, IsolationReasons, LayerNode, ProjectiveTransform, RenderNode},
-    raster_cache::LayerRasterCacheHashes,
-};
-use cranpose_ui_graphics::{GraphicsLayer, Point, Rect};
+use cranpose_render_common::graph::{LayerNode, ProjectiveTransform, RenderNode};
+use cranpose_ui_graphics::{GraphicsLayer, Rect};
 
 pub fn layer_node(
     local_bounds: Rect,
@@ -11,27 +8,10 @@ pub fn layer_node(
     children: Vec<RenderNode>,
 ) -> LayerNode {
     LayerNode {
-        node_id: None,
-        wraps: None,
         local_bounds,
-        node_bounds: None,
         transform_to_parent,
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        origin_in_parent: Point::default(),
-        content_offset: Point::default(),
-        graphics_layer,
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        draws_within_bounds: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
+        graphics_layer: graphics_layer.into(),
         children,
+        ..Default::default()
     }
 }

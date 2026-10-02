@@ -1,9 +1,6 @@
-use cranpose_render_common::{
-    graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
-    },
-    raster_cache::LayerRasterCacheHashes,
+use cranpose_render_common::graph::{
+    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+    ProjectiveTransform, RenderGraph, RenderNode,
 };
 use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{CornerRadii, ImageBitmap, ImageSampling};
@@ -46,8 +43,6 @@ fn push_text_style_draws_for_test(
 fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> RenderGraph {
     let text_leaf = LayerNode {
         node_id: Some(77),
-        wraps: None,
-        node_bounds: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
@@ -57,20 +52,6 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
         transform_to_parent: ProjectiveTransform::translation(14.25, 16.5),
         motion_context_animated: animated,
         translated_content_context,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        origin_in_parent: cranpose_ui_graphics::Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        draws_within_bounds: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
         children: vec![
             RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
@@ -134,36 +115,18 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
                 })),
             }),
         ],
+        ..Default::default()
     };
 
     RenderGraph::new(LayerNode {
-        node_id: None,
-        wraps: None,
-        node_bounds: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
             width: 96.0,
             height: 64.0,
         },
-        transform_to_parent: ProjectiveTransform::identity(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        origin_in_parent: cranpose_ui_graphics::Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        draws_within_bounds: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
         children: vec![RenderNode::Layer(Box::new(text_leaf))],
+        ..Default::default()
     })
 }
 
@@ -269,36 +232,13 @@ fn shadow_geometry_has_visible_expansion_and_offsets() {
 #[test]
 fn build_raster_scene_uses_graph_transform_to_parent() {
     let graph = RenderGraph::new(LayerNode {
-        node_id: None,
-        wraps: None,
-        node_bounds: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
             width: 64.0,
             height: 48.0,
         },
-        transform_to_parent: ProjectiveTransform::identity(),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        origin_in_parent: cranpose_ui_graphics::Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        draws_within_bounds: false,
-        isolation: IsolationReasons::default(),
-        cache_policy: CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
         children: vec![RenderNode::Layer(Box::new(LayerNode {
-            node_id: None,
-            wraps: None,
-            node_bounds: None,
             local_bounds: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -306,22 +246,6 @@ fn build_raster_scene_uses_graph_transform_to_parent() {
                 height: 18.0,
             },
             transform_to_parent: ProjectiveTransform::translation(17.0, 11.0),
-            motion_context_animated: false,
-            translated_content_context: false,
-            translated_content_offset: Point::default(),
-            content_offset: Point::default(),
-            origin_in_parent: cranpose_ui_graphics::Point::default(),
-            graphics_layer: GraphicsLayer::default(),
-            clip_to_bounds: false,
-            shadow_clip: None,
-            hit_test: None,
-            has_hit_targets: false,
-            has_origin_sinks: false,
-            draws_within_bounds: false,
-            isolation: IsolationReasons::default(),
-            cache_policy: CachePolicy::None,
-            cache_hashes: LayerRasterCacheHashes::default(),
-            cache_hashes_valid: false,
             children: vec![RenderNode::Primitive(PrimitiveEntry {
                 phase: PrimitivePhase::BeforeChildren,
                 node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
@@ -338,7 +262,9 @@ fn build_raster_scene_uses_graph_transform_to_parent() {
                     clip: None,
                 })),
             })],
+            ..Default::default()
         }))],
+        ..Default::default()
     });
 
     let scene = build_raster_scene_for_test(&graph);
