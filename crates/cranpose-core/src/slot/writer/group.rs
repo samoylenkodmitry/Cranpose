@@ -303,6 +303,22 @@ impl SlotWriteSession<'_> {
         self.state.advance_parent_after_child(subtree_end);
     }
 
+    /// How many groups follow the pass's root cursor.
+    pub(crate) fn groups_after_root_cursor(&self) -> usize {
+        self.table
+            .group_count()
+            .saturating_sub(self.state.root.next_child_index)
+    }
+
+    /// Puts the root cursor back before the `groups_after` groups that
+    /// followed it, after a scope nested in an already composed root group
+    /// recomposed: recomposing it moved the cursor into that root group and
+    /// may have grown or shrunk the table before the cursor, while the pass
+    /// must not detach the root groups after that scope as if left out.
+    pub(crate) fn resume_root_cursor_before(&mut self, groups_after: usize) {
+        self.state.root.next_child_index = self.table.group_count().saturating_sub(groups_after);
+    }
+
     pub(crate) fn skip_group(&mut self) {
         let Some(group_anchor) = self
             .state

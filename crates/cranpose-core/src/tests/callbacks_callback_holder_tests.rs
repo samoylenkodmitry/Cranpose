@@ -44,7 +44,7 @@ fn callback_holder_does_not_invoke_after_creator_scope_deactivation() {
     let invocations = Rc::new(Cell::new(0));
     let invocations_for_callback = Rc::clone(&invocations);
     holder.update(move || invocations_for_callback.set(invocations_for_callback.get() + 1));
-    holder.creator_scope.replace(Some(scope.clone()));
+    holder.shared.creator_scope.replace(Some(scope.clone()));
     let forwarder = holder.clone_rc();
 
     forwarder();
@@ -69,7 +69,7 @@ fn callback_holder_does_not_invoke_under_inactive_creator_ancestor() {
     let invocations = Rc::new(Cell::new(0));
     let invocations_for_callback = Rc::clone(&invocations);
     holder.update(move || invocations_for_callback.set(invocations_for_callback.get() + 1));
-    holder.creator_scope.replace(Some(creator));
+    holder.shared.creator_scope.replace(Some(creator));
     let forwarder = holder.clone_rc();
 
     forwarder();

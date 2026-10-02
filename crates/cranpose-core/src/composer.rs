@@ -9,12 +9,13 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
-    AnchorId, Applier, ApplierHost, COMMAND_FLUSH_THRESHOLD, ChildList, Command, CommandQueue,
-    CompositionLocal, DirtyBubble, Key, LocalKey, LocalStackSnapshot, LocalStateEntry,
-    MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions, RecomposeScope,
-    RecomposeScopeInner, RecycledNode, RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId,
-    SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
-    SnapshotStateObserver, StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
+    AnchorId, Applier, ApplierHost, COMMAND_FLUSH_THRESHOLD, CallbackHolder, ChildList, Command,
+    CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey, LocalStackSnapshot,
+    LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions,
+    RecomposeScope, RecomposeScopeInner, RecycledNode, RetentionMode, RetentionPolicy,
+    RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList,
+    SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal, StaticLocalEntry,
+    SubcomposeState,
     collections::map::{HashMap, HashSet},
     composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
@@ -602,6 +603,12 @@ pub(crate) struct ComposerCore {
     pub(crate) root: Cell<Option<NodeId>>,
     pub(crate) commands: RefCell<CommandQueue>,
     pub(crate) scope_stack: RefCell<Vec<RecomposeScope>>,
+    /// The positions in `scope_stack` of the scopes a callback forwarder
+    /// pushed for its creator, as opposed to the scopes of open groups.
+    pub(crate) callback_scope_marks: RefCell<SmallVec<[usize; 8]>>,
+    /// Scopes that ran the callbacks of calls that skipped, to run the new
+    /// callbacks before the pass over their slot table ends.
+    skipped_content: RefCell<Vec<RecomposeScope>>,
     subcomposition_owner_scope: RefCell<Option<RecomposeScope>>,
     pub(crate) local_stack: RefCell<LocalStackSnapshot>,
     pub(crate) side_effects: RefCell<Vec<Box<dyn FnOnce()>>>,
@@ -705,6 +712,8 @@ impl ComposerCore {
             root: Cell::new(root),
             commands: RefCell::new(CommandQueue::default()),
             scope_stack: RefCell::new(Vec::new()),
+            callback_scope_marks: RefCell::new(SmallVec::new()),
+            skipped_content: RefCell::new(Vec::new()),
             subcomposition_owner_scope: RefCell::new(None),
             local_stack: RefCell::new(None),
             side_effects: RefCell::new(Vec::new()),
@@ -870,6 +879,7 @@ impl Composer {
     ) -> Result<(R, SlotPassOutcome), NodeError> {
         let mut guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
+        self.recompose_skipped_content(&guard.host);
         let outcome = self.finish_slot_host_pass(&guard.host)?;
         guard.close();
         Ok((result, outcome))
@@ -883,6 +893,7 @@ impl Composer {
     ) -> (R, SlotPassOutcome) {
         let mut guard = self.begin_slot_host_pass(&slots, mode);
         let result = f(self);
+        self.recompose_skipped_content(&guard.host);
         let outcome = match self.finish_slot_host_pass(&guard.host) {
             Ok(outcome) => outcome,
             Err(err) => {
@@ -923,6 +934,43 @@ impl Composer {
             host: slots,
             active: true,
         }
+    }
+
+    /// Calls that skipped left their new callbacks to the scopes that ran
+    /// the old ones; this pass recomposes those in `host` before it ends, so
+    /// what it composed, a subcomposition measured right after included, is
+    /// current. Scopes of other slot tables recompose with the runtime's
+    /// invalid scopes.
+    fn recompose_skipped_content(&self, host: &Rc<SlotsHost>) {
+        let storage_key = Some(host.storage_key());
+        loop {
+            let scopes: Vec<RecomposeScope> = self
+                .core
+                .skipped_content
+                .borrow_mut()
+                .extract_if(.., |scope| scope.slots_storage_key() == storage_key)
+                .collect();
+            if scopes.is_empty() {
+                break;
+            }
+            for scope in &scopes {
+                let groups_after =
+                    host.with_write_session(|slots| slots.groups_after_root_cursor());
+                let parents = std::mem::take(&mut *self.parent_stack());
+                self.recompose_group(scope);
+                *self.parent_stack() = parents;
+                host.with_write_session(|slots| slots.resume_root_cursor_before(groups_after));
+            }
+        }
+        if self.core.slot_hosts.borrow().len() <= 1 {
+            self.core.skipped_content.borrow_mut().clear();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn __rerun_callback_invokers(&self, slot: ValueSlotHandle<'_, CallbackHolder>) {
+        let mut rerun = self.core.skipped_content.borrow_mut();
+        self.with_slot_value(slot, |holder| holder.rerun_invokers(&mut rerun));
     }
 
     fn finish_slot_host_pass(&self, slots: &Rc<SlotsHost>) -> Result<SlotPassOutcome, NodeError> {
@@ -1302,6 +1350,10 @@ impl Composer {
             host,
             group,
         } = entry;
+        // Content entered while inactive is being reused: like Compose, it
+        // composes again rather than skipping, which also reactivates the
+        // scopes beneath it.
+        let reused = !scope_ref.is_active() && scope_ref.has_composed_once();
         scope_ref.reactivate();
         {
             let mut stack = self.scope_stack();
@@ -1322,6 +1374,8 @@ impl Composer {
             scope_ref.force_recompose();
         } else if options.force_reuse {
             scope_ref.force_reuse();
+        } else if reused {
+            scope_ref.force_recompose();
         }
         let restored = matches!(start_kind, GroupStartKind::Restored);
         if restored {
@@ -1800,6 +1854,24 @@ impl Composer {
 
     pub fn current_recompose_scope(&self) -> Option<RecomposeScope> {
         self.core.scope_stack.borrow().last().cloned()
+    }
+
+    /// The innermost open group's scope that can recompose on its own: where
+    /// a callback invoked now runs. Scopes that callback forwarders pushed
+    /// for their creators are passed over.
+    pub(crate) fn content_invocation_scope(&self) -> Option<RecomposeScope> {
+        let stack = self.core.scope_stack.borrow();
+        let marks = self.core.callback_scope_marks.borrow();
+        let mut marks = marks.iter().rev().copied().peekable();
+        for (index, scope) in stack.iter().enumerate().rev() {
+            if marks.next_if_eq(&index).is_some() {
+                continue;
+            }
+            if scope.has_recompose_callback() {
+                return Some(scope.clone());
+            }
+        }
+        None
     }
 
     pub(crate) fn current_state_invalidation_scope(&self) -> Option<RecomposeScope> {

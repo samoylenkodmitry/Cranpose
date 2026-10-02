@@ -241,6 +241,25 @@ fn is_fn_param(ty: &Type, generics: &syn::Generics) -> bool {
     is_fn_like_type(ty) || is_generic_fn_like(ty, generics)
 }
 
+/// A call that skips leaves its callbacks' new closures to the scopes that
+/// ran the old ones.
+fn rerun_callback_invokers(
+    composer_ident: &Ident,
+    param_state_slots: &[Ident],
+    param_is_callback: &[bool],
+) -> Vec<TokenStream2> {
+    param_state_slots
+        .iter()
+        .zip(param_is_callback)
+        .filter(|(_, is_callback)| **is_callback)
+        .map(|(slot_ident, _)| {
+            quote! {
+                #composer_ident.__rerun_callback_invokers(#slot_ident);
+            }
+        })
+        .collect()
+}
+
 fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
     if let Type::ImplTrait(impl_trait) = ty {
         impl_trait.bounds.iter().any(|bound| {
@@ -651,21 +670,18 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .map(|(((info, slot_ident), erased), is_callback)| {
                 if *is_callback {
                     let ident = &info.ident;
-                    let update = if *erased {
-                        quote! { holder.update_boxed(#ident); }
+                    let refresh = if *erased {
+                        quote! { holder.refresh_boxed(#ident, &#current_scope_ident) }
                     } else {
-                        quote! { holder.update(#ident); }
+                        quote! { holder.refresh(#ident, &#current_scope_ident) }
                     };
                     quote! {
                         let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::CallbackHolder::new());
-                        #composer_ident.with_slot_value::<#core_path::CallbackHolder, _>(
+                        __changed |= #composer_ident.with_slot_value::<#core_path::CallbackHolder, _>(
                             #slot_ident,
-                            |holder| {
-                                #update
-                            },
+                            |holder| #refresh,
                         );
-                        __changed = true;
                     }
                 } else if info.is_impl_trait {
                     quote! { __changed = true; }
@@ -686,6 +702,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             })
             .collect();
+
+        let rerun_callback_invokers =
+            rerun_callback_invokers(&composer_ident, &param_state_slots, &param_is_callback);
 
         let callback_rebinds: Vec<TokenStream2> = param_info
             .iter()
@@ -790,6 +809,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(#param_setup)*
                 #recompose_setter
                 if !__changed && #current_scope_ident.has_composed_once() {
+                    #(#rerun_callback_invokers)*
                     #composer_ident.skip_current_group();
                     return;
                 }
@@ -812,6 +832,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         |slot| slot.get().is_some(),
                     );
                 if !__changed && #has_previous_ident {
+                    #(#rerun_callback_invokers)*
                     #composer_ident.skip_current_group();
                     let #result_ident = #composer_ident
                         .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(

@@ -1,6 +1,11 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
 
-use crate::{Composer, ComposerCore, RecomposeScope, composer_context};
+use smallvec::SmallVec;
+
+use crate::{Composer, ComposerCore, RecomposeScope, RecomposeScopeInner, composer_context};
 
 pub struct ParamState<T> {
     pub(crate) value: Option<T>,
@@ -98,7 +103,6 @@ impl<T> ParamSlot<T> {
     }
 }
 
-type CallbackCell = Rc<RefCell<Option<Box<dyn FnMut()>>>>;
 type CallbackScopeCell = Rc<RefCell<Option<RecomposeScope>>>;
 
 struct CallbackScopeGuard {
@@ -107,7 +111,13 @@ struct CallbackScopeGuard {
 
 impl CallbackScopeGuard {
     fn push(composer: &Composer, scope: RecomposeScope) -> Self {
-        composer.core.scope_stack.borrow_mut().push(scope);
+        let mut stack = composer.core.scope_stack.borrow_mut();
+        composer
+            .core
+            .callback_scope_marks
+            .borrow_mut()
+            .push(stack.len());
+        stack.push(scope);
         Self {
             core: composer.clone_core(),
         }
@@ -117,12 +127,12 @@ impl CallbackScopeGuard {
 impl Drop for CallbackScopeGuard {
     fn drop(&mut self) {
         self.core.scope_stack.borrow_mut().pop();
+        self.core.callback_scope_marks.borrow_mut().pop();
     }
 }
 
-fn with_callback_scope<R>(scope: &CallbackScopeCell, f: impl FnOnce() -> R) -> R {
-    let captured_scope = scope.borrow().clone();
-    if let Some(saved_scope) = captured_scope
+fn with_callback_scope<R>(scope: Option<RecomposeScope>, f: impl FnOnce() -> R) -> R {
+    if let Some(saved_scope) = scope
         && let Some(composer) = composer_context::current_composer()
     {
         let _scope_guard = CallbackScopeGuard::push(&composer, saved_scope);
@@ -132,7 +142,7 @@ fn with_callback_scope<R>(scope: &CallbackScopeCell, f: impl FnOnce() -> R) -> R
     f()
 }
 
-fn callback_owner_is_active(scope: &CallbackScopeCell) -> bool {
+fn callback_owner_is_active(scope: &RefCell<Option<RecomposeScope>>) -> bool {
     scope
         .borrow()
         .as_ref()
@@ -143,10 +153,55 @@ fn callback_owner_scope(composer: &Composer) -> Option<RecomposeScope> {
     composer.core.scope_stack.borrow().last().cloned()
 }
 
-#[derive(Clone)]
+/// What a [`CallbackHolder`] shares with its forwarders.
+#[derive(Default)]
+struct CallbackShared {
+    callback: RefCell<Option<Box<dyn FnMut()>>>,
+    creator_scope: RefCell<Option<RecomposeScope>>,
+    /// The scopes whose composition ran the callback. When the composable
+    /// that received the callback skips, they run its newest closure again
+    /// where the old one ran.
+    invokers: RefCell<SmallVec<[Weak<RecomposeScopeInner>; 1]>>,
+}
+
+impl CallbackShared {
+    fn invoke(&self) {
+        if !callback_owner_is_active(&self.creator_scope) {
+            return;
+        }
+        let creator_scope = self.creator_scope.borrow().clone();
+        if let Some(composer) = composer_context::current_composer() {
+            if let Some(invoker) = composer.content_invocation_scope() {
+                self.record_invoker(&invoker);
+            }
+            if let Some(creator_scope) = creator_scope {
+                let _scope_guard = CallbackScopeGuard::push(&composer, creator_scope);
+                self.call();
+                return;
+            }
+        }
+        self.call();
+    }
+
+    fn call(&self) {
+        if let Some(callback) = self.callback.borrow_mut().as_mut() {
+            callback();
+        }
+    }
+
+    fn record_invoker(&self, invoker: &RecomposeScope) {
+        let mut invokers = self.invokers.borrow_mut();
+        if invokers.iter().any(|known| invoker.is(known)) {
+            return;
+        }
+        invokers.retain(|known| known.strong_count() > 0);
+        invokers.push(invoker.downgrade());
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct CallbackHolder {
-    rc: CallbackCell,
-    creator_scope: CallbackScopeCell,
+    shared: Rc<CallbackShared>,
 }
 
 impl CallbackHolder {
@@ -167,34 +222,52 @@ impl CallbackHolder {
     /// callbacks type-erased at the public-fn boundary, so helper bodies are
     /// compiled once instead of once per caller closure type.
     pub fn update_boxed(&self, f: Box<dyn FnMut() + 'static>) {
-        *self.rc.borrow_mut() = Some(f);
-        *self.creator_scope.borrow_mut() =
+        *self.shared.callback.borrow_mut() = Some(f);
+        *self.shared.creator_scope.borrow_mut() =
             composer_context::try_with_composer(callback_owner_scope).flatten();
+    }
+
+    /// Stores the callback a composable call received and says whether the
+    /// call's own `scope` ran the previous one while composing. Such a call
+    /// runs its body again; any other call may skip, and
+    /// [`Self::rerun_invokers`] then shows the new callback.
+    pub fn refresh<F>(&self, f: F, scope: &RecomposeScope) -> bool
+    where
+        F: FnMut() + 'static,
+    {
+        self.refresh_boxed(Box::new(f), scope)
+    }
+
+    /// Boxed form of [`Self::refresh`].
+    pub fn refresh_boxed(&self, f: Box<dyn FnMut() + 'static>, scope: &RecomposeScope) -> bool {
+        self.update_boxed(f);
+        self.shared
+            .invokers
+            .borrow()
+            .iter()
+            .any(|invoker| scope.is(invoker))
+    }
+
+    /// Invalidates the scopes that ran the previous callback while composing,
+    /// for a composable call that skipped its body, and adds them to
+    /// `rerun`: each runs the newest callback where the previous one ran.
+    pub(crate) fn rerun_invokers(&self, rerun: &mut Vec<RecomposeScope>) {
+        self.shared.invokers.borrow_mut().retain(|invoker| {
+            match RecomposeScope::upgrade(invoker) {
+                Some(scope) => {
+                    scope.invalidate();
+                    rerun.push(scope);
+                    true
+                }
+                None => false,
+            }
+        });
     }
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
     pub fn clone_rc(&self) -> impl Fn() + 'static + use<> {
-        let rc = self.rc.clone();
-        let creator_scope = self.creator_scope.clone();
-        move || {
-            if !callback_owner_is_active(&creator_scope) {
-                return;
-            }
-            with_callback_scope(&creator_scope, || {
-                if let Some(callback) = rc.borrow_mut().as_mut() {
-                    callback();
-                }
-            });
-        }
-    }
-}
-
-impl Default for CallbackHolder {
-    fn default() -> Self {
-        Self {
-            rc: Rc::new(RefCell::new(None)),
-            creator_scope: Rc::new(RefCell::new(None)),
-        }
+        let shared = Rc::clone(&self.shared);
+        move || shared.invoke()
     }
 }
 
@@ -231,7 +304,7 @@ impl<A: 'static> CallbackHolder1<A> {
             if !callback_owner_is_active(&creator_scope) {
                 return;
             }
-            with_callback_scope(&creator_scope, || {
+            with_callback_scope(creator_scope.borrow().clone(), || {
                 if let Some(callback) = rc.borrow_mut().as_mut() {
                     callback(arg);
                 }

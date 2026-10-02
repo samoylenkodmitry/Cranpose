@@ -46,10 +46,40 @@ pub(crate) fn compose_layout<F, P>(
     modifier: Modifier,
     measure_policy: P,
     composed_density: crate::density::Density,
-    mut content: F,
+    content: F,
 ) -> NodeId
 where
     F: FnMut() + 'static,
+    P: MeasurePolicy + Clone + PartialEq + 'static,
+{
+    let (id, provided) = emit_layout_node(modifier, measure_policy, composed_density);
+    cranpose_core::push_parent(id);
+    compose_under_locals(provided, move || LayoutContent(content));
+    cranpose_core::pop_parent();
+    id
+}
+
+/// [`compose_layout`] for a node that never has children.
+pub(crate) fn compose_leaf_layout<P>(
+    modifier: Modifier,
+    measure_policy: P,
+    composed_density: crate::density::Density,
+) -> NodeId
+where
+    P: MeasurePolicy + Clone + PartialEq + 'static,
+{
+    let (id, _) = emit_layout_node(modifier, measure_policy, composed_density);
+    cranpose_core::push_parent(id);
+    cranpose_core::pop_parent();
+    id
+}
+
+fn emit_layout_node<P>(
+    modifier: Modifier,
+    measure_policy: P,
+    composed_density: crate::density::Density,
+) -> (NodeId, Vec<cranpose_core::ProvidedValue>)
+where
     P: MeasurePolicy + Clone + PartialEq + 'static,
 {
     let policy_holder = cranpose_core::remember({
@@ -84,13 +114,18 @@ where
     }) {
         debug_assert!(false, "failed to update Layout node: {err}");
     }
-    cranpose_core::push_parent(id);
-    compose_under_locals(provided, &mut content);
-    cranpose_core::pop_parent();
-    id
+    (id, provided)
 }
 
-fn compose_under_locals(provided: Vec<cranpose_core::ProvidedValue>, content: &mut dyn FnMut()) {
+/// Composes a layout's children in a group of their own, as Compose runs a
+/// composable lambda in its own restart group: when the call that passed the
+/// content skips, this group alone runs the newest content again.
+#[composable]
+fn LayoutContent(content: impl FnMut() + 'static) {
+    content();
+}
+
+fn compose_under_locals(provided: Vec<cranpose_core::ProvidedValue>, content: impl FnOnce()) {
     if provided.is_empty() {
         content();
         return;

@@ -85,14 +85,19 @@ fn a_widget_that_is_one_layout_composes_as_few_groups_as_a_bare_layout() {
         groups_composed_by(|| {
             Box(Modifier::empty(), BoxSpec::default(), || {});
         }),
-        groups_composed_by(|| {
-            Spacer(Modifier::empty().size_points(0.0, 0.0));
-        }),
     ];
     assert_eq!(
-        widgets, [layout; 4],
+        widgets, [layout; 3],
         "a widget composing through `Layout` pays for a second group, its read \
          observation and its snapshot on every recomposition"
+    );
+    let spacer = groups_composed_by(|| {
+        Spacer(Modifier::empty().size_points(0.0, 0.0));
+    });
+    assert_eq!(
+        spacer + 1,
+        layout,
+        "a layout without children composes no group for content"
     );
 }
 

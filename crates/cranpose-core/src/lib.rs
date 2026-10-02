@@ -894,6 +894,11 @@ impl RecomposeScope {
         weak.upgrade().map(|inner| Self { inner })
     }
 
+    /// Whether `weak` points at this scope.
+    pub(crate) fn is(&self, weak: &Weak<RecomposeScopeInner>) -> bool {
+        std::ptr::eq(weak.as_ptr(), Rc::as_ptr(&self.inner))
+    }
+
     pub fn id(&self) -> ScopeId {
         self.inner.id()
     }

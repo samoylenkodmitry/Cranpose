@@ -410,6 +410,14 @@ mod swipe_to_dismiss_render_tests;
 mod lazy_list_recompose_tests;
 
 #[cfg(test)]
+#[path = "tests/content_skip_tests.rs"]
+mod content_skip_tests;
+
+#[cfg(test)]
+#[path = "tests/test_support.rs"]
+mod test_support;
+
+#[cfg(test)]
 #[path = "tests/lazy_row_tests.rs"]
 mod lazy_row_tests;
 

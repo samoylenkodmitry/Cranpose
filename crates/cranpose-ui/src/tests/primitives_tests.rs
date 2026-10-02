@@ -15,9 +15,9 @@ use crate::{
     LayoutEngine, composable,
     layout::LayoutBox,
     modifier::{Modifier, Size},
-    renderer::{HeadlessRenderer, RenderOp},
     run_test_composition,
     subcompose_layout::{Constraints, SubcomposeLayoutNode},
+    test_support::rendered_texts,
     text::TextStyle,
     widgets::{
         BoxWithConstraints, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Spacer,
@@ -230,28 +230,6 @@ fn capture_subcompose_child_constraints(
     captured.borrow().clone()
 }
 
-fn render_texts(
-    composition: &mut Composition<MemoryApplier>,
-    root: NodeId,
-    size: Size,
-) -> Vec<String> {
-    let handle = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(handle);
-    let layout = applier.compute_layout(root, size).expect("layout");
-    applier.clear_runtime_handle();
-    let renderer = HeadlessRenderer::new();
-    let scene = renderer.render(&layout);
-    scene
-        .operations()
-        .iter()
-        .filter_map(|op| match op {
-            RenderOp::Text { value, .. } => Some(value.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
 fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size: Size) {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
@@ -284,7 +262,7 @@ fn assert_box_with_constraints_branch_toggle<F>(
         width: 200.0,
         height: 200.0,
     };
-    let texts = render_texts(&mut composition, root, size);
+    let texts = rendered_texts(&mut composition, root, size);
     assert!(texts.iter().any(|text| text == "Header"));
     assert!(texts.iter().any(|text| text == initial_text));
 
@@ -292,7 +270,7 @@ fn assert_box_with_constraints_branch_toggle<F>(
     composition
         .process_invalid_scopes()
         .expect("switch to alternate branch");
-    let texts = render_texts(&mut composition, root, size);
+    let texts = rendered_texts(&mut composition, root, size);
     assert!(texts.iter().any(|text| text == toggled_text));
     assert!(!texts.iter().any(|text| text == initial_text));
 
@@ -300,7 +278,7 @@ fn assert_box_with_constraints_branch_toggle<F>(
     composition
         .process_invalid_scopes()
         .expect("restore original branch");
-    let texts = render_texts(&mut composition, root, size);
+    let texts = rendered_texts(&mut composition, root, size);
     assert!(
         texts.iter().any(|text| text == initial_text),
         "{restore_message}, got {texts:?}",
@@ -857,7 +835,7 @@ fn box_with_constraints_reinstalls_slot_root_callback_after_recompose() {
         height: 120.0,
     };
 
-    let texts = render_texts(&mut composition, root, size);
+    let texts = rendered_texts(&mut composition, root, size);
     assert!(texts.iter().any(|text| text == "Value 0"));
 
     value.set_value(1);
@@ -865,9 +843,9 @@ fn box_with_constraints_reinstalls_slot_root_callback_after_recompose() {
         .process_invalid_scopes()
         .expect("first box-with-constraints recomposition")
     {
-        let _ = render_texts(&mut composition, root, size);
+        let _ = rendered_texts(&mut composition, root, size);
     }
-    let texts = render_texts(&mut composition, root, size);
+    let texts = rendered_texts(&mut composition, root, size);
     assert!(
         texts.iter().any(|text| text == "Value 1"),
         "first box-with-constraints recomposition should refresh content, got {texts:?}",
@@ -878,9 +856,9 @@ fn box_with_constraints_reinstalls_slot_root_callback_after_recompose() {
         .process_invalid_scopes()
         .expect("second box-with-constraints recomposition")
     {
-        let _ = render_texts(&mut composition, root, size);
+        let _ = rendered_texts(&mut composition, root, size);
     }
-    let texts = render_texts(&mut composition, root, size);
+    let texts = rendered_texts(&mut composition, root, size);
     assert!(
         texts.iter().any(|text| text == "Value 2"),
         "second box-with-constraints recomposition should still refresh content, got {texts:?}",

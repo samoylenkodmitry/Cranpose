@@ -4,7 +4,7 @@ use cranpose_core::NodeId;
 
 use crate::{
     composable, layout::policies::EmptyMeasurePolicy, modifier::Modifier,
-    widgets::layout::compose_layout,
+    widgets::layout::compose_leaf_layout,
 };
 
 /// A component that represents an empty space.
@@ -29,10 +29,5 @@ use crate::{
 /// ```
 #[composable]
 pub fn Spacer(modifier: Modifier) -> NodeId {
-    compose_layout(
-        modifier,
-        EmptyMeasurePolicy,
-        crate::density::density(),
-        || {},
-    )
+    compose_leaf_layout(modifier, EmptyMeasurePolicy, crate::density::density())
 }

@@ -16,7 +16,7 @@ use crate::{
     modifier::Modifier,
     text::{TextLayoutOptions, TextOptions, TextOverflow, TextStyle},
     text_modifier_node::TextModifierElement,
-    widgets::layout::compose_layout,
+    widgets::layout::compose_leaf_layout,
 };
 
 #[derive(Clone)]
@@ -154,7 +154,7 @@ fn compose_basic_text_group(
     let final_modifier = Modifier::from_parts(&[text_element]);
     let combined_modifier = modifier.then(final_modifier);
 
-    compose_layout(combined_modifier, EmptyMeasurePolicy, density, || {})
+    compose_leaf_layout(combined_modifier, EmptyMeasurePolicy, density)
 }
 
 #[composable]
