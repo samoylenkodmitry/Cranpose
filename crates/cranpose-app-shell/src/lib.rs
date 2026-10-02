@@ -613,11 +613,11 @@ where
                     ShellClipboard { inner: clipboard },
                 ));
             }
-            log::info!("[startup] shell compose start");
+            __startup_probe("shell compose start");
             if let Err(err) = composition.render_stable(root_key, &mut *build) {
                 log::error!("initial render failed: {err}");
             }
-            log::info!("[startup] shell composed");
+            __startup_probe("shell composed");
         });
         renderer.scene_mut().clear();
         let app = ShellApp {
@@ -655,7 +655,7 @@ where
             )],
         };
         shell.process_frame();
-        log::info!("[startup] shell first process_frame done");
+        __startup_probe("shell first process_frame done");
         shell
     }
 
@@ -972,7 +972,12 @@ where
     }
 
     /// Sets the primary surface's viewport and lays out and renders at once.
+    /// Sizes the primary surface's content, in logical pixels, and lays it
+    /// out at the new size. The size it already has changes nothing.
     pub fn set_viewport(&mut self, width: f32, height: f32) {
+        if self.surfaces[0].viewport == (width, height) {
+            return;
+        }
         self.primary().set_viewport(width, height);
         self.process_frame();
     }
@@ -1445,3 +1450,22 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/surface_tests.rs"]
 mod surface_tests;
+
+#[doc(hidden)]
+pub fn __startup_probe(label: &str) {
+    let Some(t0) = std::env::var("STARTUP_T0_NS")
+        .ok()
+        .and_then(|v| v.parse::<u128>().ok())
+    else {
+        log::info!("[startup] {label}");
+        return;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    eprintln!(
+        "[startup] {:7.1} ms {label}",
+        (now.saturating_sub(t0)) as f64 / 1e6
+    );
+}

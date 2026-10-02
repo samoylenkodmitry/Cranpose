@@ -5377,6 +5377,7 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
+        cranpose_app_shell::__startup_probe("can_create_surfaces");
 
         let initial_width = self.settings.initial_width;
         let initial_height = self.settings.initial_height;
@@ -5399,6 +5400,7 @@ impl ApplicationHandler for App {
             }
         };
 
+        cranpose_app_shell::__startup_probe("window created");
         let (instance, surface, adapter) =
             match crate::wgpu_surface::create_wgpu_surface_and_adapter(&window) {
                 Ok(triple) => triple,
@@ -5407,6 +5409,7 @@ impl ApplicationHandler for App {
                     return;
                 }
             };
+        cranpose_app_shell::__startup_probe("instance+surface+adapter");
         let adapter_info = adapter.get_info();
         self.vsync_interval = monitor_refresh_interval(&window);
 
@@ -5426,6 +5429,7 @@ impl ApplicationHandler for App {
                 }
             };
 
+        cranpose_app_shell::__startup_probe("device");
         let size = window.surface_size();
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = match select_surface_format(&surface_caps) {
@@ -5457,7 +5461,9 @@ impl ApplicationHandler for App {
         let device = Arc::new(device);
         let queue = Arc::new(queue);
 
+        cranpose_app_shell::__startup_probe("caps+config");
         surface.configure(&device, &surface_config);
+        cranpose_app_shell::__startup_probe("configured");
         present_initial_placeholder_frame(
             &surface,
             &device,
@@ -5465,8 +5471,10 @@ impl ApplicationHandler for App {
             surface_format,
             "primary window initial present",
         );
+        cranpose_app_shell::__startup_probe("placeholder presented");
 
         let text_system = WgpuTextSystem::from_font_set(self.settings.resolve_font_set());
+        cranpose_app_shell::__startup_probe("text system");
         let initial_scale = window.scale_factor();
         let renderer = wgpu_renderer_for_surface(
             text_system.clone(),
@@ -5478,6 +5486,7 @@ impl ApplicationHandler for App {
             initial_scale,
         );
 
+        cranpose_app_shell::__startup_probe("renderer");
         let viewport = primary_viewport_for_surface_size(
             &self.settings,
             size.width,
@@ -5500,6 +5509,7 @@ impl ApplicationHandler for App {
                 initial_scale as f32,
             )
         });
+        cranpose_app_shell::__startup_probe("app shell created");
         app.set_semantics_enabled(true);
         crate::accessibility::install_inspector(&mut app, self.settings.developer_inspector);
 
@@ -5516,7 +5526,9 @@ impl ApplicationHandler for App {
             self.primary_wrap_size,
         )
         .or(self.primary_wrap_size);
+        cranpose_app_shell::__startup_probe("a11y+wrap");
         show_primary_when_it_has_content(&self.primary_shown, &mut app, window.as_ref(), headless);
+        cranpose_app_shell::__startup_probe("shown");
 
         let mut dev_options = self.settings.dev_options.clone();
         dev_options.frame_pacing_mode = self.frame_pacing_mode();
@@ -5866,6 +5878,12 @@ impl ApplicationHandler for App {
                     return;
                 }
                 log::trace!(target: "cranpose::input", "desktop redraw requested");
+                static PROBE_FRAMES: std::sync::atomic::AtomicU32 =
+                    std::sync::atomic::AtomicU32::new(0);
+                let probe = PROBE_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if probe < 6 {
+                    cranpose_app_shell::__startup_probe(&format!("redraw {probe} start"));
+                }
                 let frame_started_at = Instant::now();
                 #[cfg(feature = "robot")]
                 let robot_surface_dirty_before_update = self.robot_visible_surface_dirty;
@@ -5893,6 +5911,9 @@ impl ApplicationHandler for App {
                     controller.record_idle_update_result(update_result);
                 }
                 let after_update = Instant::now();
+                if probe < 6 {
+                    cranpose_app_shell::__startup_probe(&format!("redraw {probe} updated"));
+                }
                 sync_native_windows_after_event = true;
 
                 let frame_owed = app.take_frame_owed();
@@ -5971,10 +5992,16 @@ impl ApplicationHandler for App {
                         return;
                     }
                     let after_render = Instant::now();
+                    if probe < 6 {
+                        cranpose_app_shell::__startup_probe(&format!("redraw {probe} rendered"));
+                    }
 
                     window.pre_present_notify();
                     app.renderer().present(output);
                     let after_present = Instant::now();
+                    if probe < 6 {
+                        cranpose_app_shell::__startup_probe(&format!("redraw {probe} presented"));
+                    }
                     record_pacing_event(|diag| &mut diag.presents);
                     self.primary_surface_dirty = false;
                     self.primary_initial_present_pending = false;
@@ -7012,9 +7039,11 @@ pub fn try_run(
     mut settings: AppSettings,
     content: impl FnMut() + 'static,
 ) -> Result<(), LaunchError> {
+    cranpose_app_shell::__startup_probe("try_run");
     crate::application_id::register(settings.application_id.as_deref());
 
     let event_loop = build_event_loop().map_err(LaunchError::EventLoopCreate)?;
+    cranpose_app_shell::__startup_probe("event loop built");
     let event_proxy = event_loop.create_proxy();
     let launch_error = Rc::new(RefCell::new(None));
 

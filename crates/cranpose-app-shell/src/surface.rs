@@ -495,8 +495,12 @@ where
     /// A window surface's viewport is what its renderer draws into; the
     /// window root lays out to the size its descriptor reports, which the
     /// platform keeps equal to this. The next update lays out and renders;
-    /// [`AppShell::set_viewport`] additionally runs that frame at once.
+    /// [`AppShell::set_viewport`] additionally runs that frame at once. The
+    /// size the surface already has changes nothing.
     pub fn set_viewport(&mut self, width: f32, height: f32) {
+        if self.surface().viewport == (width, height) {
+            return;
+        }
         self.surface_mut().viewport = (width, height);
         match self.id() {
             RootId::Primary => self.shell_app().request_forced_layout_pass(),
