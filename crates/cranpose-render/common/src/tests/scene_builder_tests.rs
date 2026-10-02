@@ -1693,6 +1693,30 @@ fn assert_shadowed_scroll_reuses_children(wrapped_root: bool) {
     assert_dirty_hash_road_matches_full_walk(&graph);
 }
 
+/// The nodes whose content changed since they were last drawn, as the shell
+/// adds them to a frame's dirty set: a node reused for another item reports
+/// its own change, not only its parent's.
+fn take_redraw_nodes(applier: &mut MemoryApplier, node: NodeId, out: &mut Vec<NodeId>) {
+    let mut children = smallvec::SmallVec::<[NodeId; 8]>::new();
+    let Ok(entry) = cranpose_core::Applier::get_mut(applier, node) else {
+        return;
+    };
+    entry.collect_children_into(&mut children);
+    let redraw = applier
+        .with_node::<cranpose_ui::LayoutNode, _>(node, |layout| {
+            let redraw = layout.needs_redraw();
+            layout.clear_needs_redraw();
+            redraw
+        })
+        .unwrap_or(false);
+    if redraw {
+        out.push(node);
+    }
+    for child in children {
+        take_redraw_nodes(applier, child, out);
+    }
+}
+
 #[test]
 fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
     let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
@@ -1755,6 +1779,7 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
         .compute_layout(root, viewport)
         .expect("scrolled lazy layout");
     dirty_nodes.extend(applier.take_structural_change_parents_attached_to(root));
+    take_redraw_nodes(&mut applier, root, &mut dirty_nodes);
     dirty_nodes.sort_unstable();
     dirty_nodes.dedup();
     assert!(
@@ -1764,6 +1789,8 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
 
     reset_lowered_layer_count();
     let report = update_graph_from_applier_report(&applier, &mut graph, &dirty_nodes, 1.0);
+    let lowered = lowered_layer_count();
+    let fresh = build_graph_from_applier(&applier, root, 1.0).expect("fresh comparison graph");
     applier.clear_runtime_handle();
 
     assert!(
@@ -1771,15 +1798,15 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
         "the boundary frame must apply in place, got {:?}",
         report.update
     );
-    let lowered = lowered_layer_count();
-    assert!(
-        lowered > 0,
-        "rows crossed the window boundary; the entering subtrees must lower"
-    );
     assert!(
         lowered <= 8,
         "only the entering rows may lower on a boundary frame; \
          {lowered} layers were rebuilt (dirty={dirty_nodes:?})"
+    );
+    assert_eq!(
+        collect_text_tops(&graph.root),
+        collect_text_tops(&fresh.root),
+        "rows crossed the window boundary: the patched scene must show what a fresh build shows"
     );
     let updated_row_top = find_text_top(&graph.root, "row 4").expect("updated row text");
     assert!(
@@ -1901,6 +1928,7 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
             .compute_layout(root, viewport)
             .expect("scrolled lazy layout");
         dirty_nodes.extend(applier.take_structural_change_parents_attached_to(root));
+        take_redraw_nodes(&mut applier, root, &mut dirty_nodes);
         dirty_nodes.sort_unstable();
         dirty_nodes.dedup();
         reset_lowered_layer_count();

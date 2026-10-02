@@ -542,13 +542,6 @@ fn translated_container(
     let Some(node_id) = container.node_id else {
         return Err("no node id");
     };
-    if container
-        .children
-        .iter()
-        .any(|child| !matches!(child, RenderNode::Layer(_)))
-    {
-        return Err("container has own primitive children");
-    }
     if !layout_state.is_placed()
         || Rect::from_size(layout_state.size()) != container.node_rect()
         || modifier_slices.layer_bounds(layout_state.size()) != container.local_bounds
@@ -557,13 +550,11 @@ fn translated_container(
     }
     let outer_count = modifier_slices.outer_draw_command_count();
     if (outer_count > 0 && !wrapped)
-        || !modifier_slices.draw_commands()[outer_count..].is_empty()
         || (inherited_motion_context_animated || modifier_slices.motion_context_animated())
             != container.motion_context_animated
-        || modifier_slices.annotated_text().is_some()
         || modifier_slices.translated_content_context() != container.translated_content_context
     {
-        return Err("container draw/text/translated-context changed");
+        return Err("container outer draws or translated context changed");
     }
     let clip_to_bounds = modifier_slices.clip_to_bounds();
     if clip_to_bounds != container.clip_to_bounds {
@@ -797,6 +788,34 @@ fn build_entering_children(
     }
 }
 
+/// Records `container`'s own draws and text around the child layers its list
+/// holds, in the order [`write_node_content`] writes a layer.
+fn write_own_content_around_children(
+    container: &mut LayerNode,
+    node_id: NodeId,
+    modifier_slices: &ModifierNodeSlices,
+    size: Size,
+) {
+    if modifier_slices.draw_commands()[modifier_slices.outer_draw_command_count()..].is_empty()
+        && modifier_slices.annotated_text().is_none()
+    {
+        return;
+    }
+    let mut layers = std::mem::replace(
+        &mut container.children,
+        crate::layer_recycling::child_list(0),
+    );
+    write_node_content(
+        &mut container.children,
+        node_id,
+        modifier_slices,
+        size,
+        layers.len(),
+        |list| list.append(&mut layers),
+    );
+    crate::layer_recycling::recycle_list(layers);
+}
+
 fn apply_translated_container_state(
     container: &mut LayerNode,
     modifier_slices: &ModifierNodeSlices,
@@ -904,6 +923,10 @@ fn translate_layer_from_data(
         graphics_layer,
     } = container_plan;
     let graphics_layer = graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT);
+    // The container's own draws and text are recorded again around the
+    // children it keeps: an unchanged draw reuses its recording, while
+    // building the container anew lowered every child layer beneath it too.
+    crate::layer_recycling::recycle_primitives(container);
     let mut scratch = TRANSLATE_SCRATCH.take();
     let children_unchanged = match translated_children(
         applier,
@@ -961,6 +984,7 @@ fn translate_layer_from_data(
         geometry,
     );
     TRANSLATE_SCRATCH.set(scratch);
+    write_own_content_around_children(container, node_id, &modifier_slices, layout_state.size());
     container.hit_test = hit_test_from_slices(&modifier_slices);
 
     container.has_origin_sinks = modifier_slices_have_origin_sinks(&modifier_slices)
