@@ -661,6 +661,16 @@ impl Drop for SubcomposeStackGuard {
 }
 
 impl ComposerCore {
+    pub(crate) fn open_branch_fold(&self, key: Key) -> BranchGroupGuard {
+        let hosts = self.slot_hosts.borrow();
+        let host = hosts.last().unwrap_or(&self.slots);
+        BranchGroupGuard {
+            fold: host
+                .try_push_branch_fold(key)
+                .map(|token| (Rc::clone(host), token)),
+        }
+    }
+
     pub(crate) fn new(
         shared_state: Rc<ComposerRuntimeState>,
         slots: Rc<SlotsHost>,
@@ -1477,11 +1487,7 @@ impl Composer {
 
     #[doc(hidden)]
     pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard {
-        let host = self.active_slots_host();
-        let token = host.try_push_branch_fold(key);
-        BranchGroupGuard {
-            fold: token.map(|token| (host, token)),
-        }
+        self.core.open_branch_fold(key)
     }
 
     fn dispose_detached_nodes(&self, nodes: impl IntoIterator<Item = NodeId>) {

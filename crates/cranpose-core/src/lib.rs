@@ -562,7 +562,7 @@ fn note_location_key(_key: Key, _file: &str, _line: u32, _column: u32) {}
 
 #[doc(hidden)]
 pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
-    with_current_composer_opt(|composer| composer.__branch_group_deferred(key))
+    composer_context::with_current_core(|core| core.open_branch_fold(key))
 }
 
 #[doc(hidden)]
