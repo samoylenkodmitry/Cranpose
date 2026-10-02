@@ -1435,6 +1435,30 @@ impl ShapePipelineKey {
     }
 }
 
+/// PROBE: the general keys a first frame builds.
+pub(crate) fn startup_warm_keys() -> Vec<ShapePipelineKey> {
+    let mut keys = Vec::new();
+    for tier in [RunTier::Arena, RunTier::Store] {
+        let tested = ShapePipelineKey {
+            blend_mode: BlendMode::SrcOver,
+            tier,
+            variant: ShapeVariant::GENERAL,
+            turns: ShapeTurns::None,
+            depth: ShapeDepth::Tested,
+        };
+        keys.push(tested);
+        keys.extend(tested.interior());
+        keys.push(ShapePipelineKey {
+            variant: ShapeVariant {
+                clip: SegmentClip::Rounded,
+                ..ShapeVariant::GENERAL
+            },
+            ..tested
+        });
+    }
+    keys
+}
+
 pub(crate) fn create_shape_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,

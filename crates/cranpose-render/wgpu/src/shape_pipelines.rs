@@ -55,6 +55,16 @@ impl ShapePipelines {
                 })
                 .flatten()
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut compiler = compiler;
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::env::var("CRANPOSE_NO_WARM").map_or(true, |v| v != "1")
+            && let Some(compiler) = compiler.as_mut()
+        {
+            for key in crate::render::startup_warm_keys() {
+                compiler.warm(key);
+            }
+        }
         Self {
             factory,
             ready: HashMap::default(),
@@ -167,6 +177,19 @@ mod background {
             let finished = self.finished.clone();
             let stopped = Arc::clone(&self.stopped);
             self.compiler.enqueue(CompileLane::Demanded, move || {
+                if stopped.load(Ordering::Acquire) {
+                    return;
+                }
+                finished.send((key, create(key))).ok();
+            });
+        }
+
+        pub(super) fn warm(&mut self, key: ShapePipelineKey) {
+            self.pending.push(key);
+            let create = Arc::clone(&self.create);
+            let finished = self.finished.clone();
+            let stopped = Arc::clone(&self.stopped);
+            self.compiler.enqueue(CompileLane::WarmUp, move || {
                 if stopped.load(Ordering::Acquire) {
                     return;
                 }
