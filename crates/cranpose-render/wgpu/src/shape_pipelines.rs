@@ -1,9 +1,13 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 use cranpose_core::collections::map::HashMap;
+use smallvec::SmallVec;
 
 use crate::{
-    pipeline_compiler::PipelineCompiler,
+    pipeline_compiler::{CompileLane, CompilerSend, CompilerSync, PipelineCompiler},
     render::{ShapePipelineKey, create_shape_pipeline},
     run_store::RunBufferMode,
     shared_shader::SharedShader,
@@ -18,8 +22,17 @@ pub(crate) struct ShapePipelineFactory {
     pub(crate) mode: RunBufferMode,
 }
 
-impl ShapePipelineFactory {
-    fn create(&self, key: ShapePipelineKey) -> wgpu::RenderPipeline {
+/// Builds the value a key names, on whichever thread asks.
+pub(crate) trait KeyedBuild: CompilerSend + CompilerSync + 'static {
+    type Output: CompilerSend + CompilerSync + 'static;
+
+    fn build(&self, key: ShapePipelineKey) -> Self::Output;
+}
+
+impl KeyedBuild for ShapePipelineFactory {
+    type Output = wgpu::RenderPipeline;
+
+    fn build(&self, key: ShapePipelineKey) -> wgpu::RenderPipeline {
         create_shape_pipeline(
             &self.device,
             self.cache.as_ref(),
@@ -32,166 +45,201 @@ impl ShapePipelineFactory {
 }
 
 pub(crate) struct ShapePipelines {
-    factory: ShapePipelineFactory,
-    ready: HashMap<ShapePipelineKey, wgpu::RenderPipeline>,
+    slots: Slots<ShapePipelineFactory>,
+    /// Whether a draw takes the general pipeline while its specialized one
+    /// builds on the background compiler.
+    asynchronous: bool,
     #[cfg(not(target_arch = "wasm32"))]
-    compiler: Option<background::Compiler<wgpu::RenderPipeline>>,
+    created: web_time::Instant,
 }
 
 impl ShapePipelines {
+    /// Pipelines from `factory`. Those `first_screen` names, the ones the
+    /// last launch drew its first screen with, start building on the
+    /// compiler's warm-up lane at once, so the first frame finds them ready.
     pub(crate) fn new(
         factory: ShapePipelineFactory,
-        _backend: wgpu::Backend,
-        _compiler: &PipelineCompiler,
+        backend: wgpu::Backend,
+        compiler: &PipelineCompiler,
+        first_screen: impl IntoIterator<Item = ShapePipelineKey>,
     ) -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        let compiler = {
-            static ASYNC_SHAPE_PIPELINES: crate::debug_toggles::DebugToggle =
-                crate::debug_toggles::DebugToggle::new("CRANPOSE_ASYNC_SHAPE_PIPELINES");
-            (_backend == wgpu::Backend::Vulkan && !ASYNC_SHAPE_PIPELINES.equals("0"))
-                .then(|| {
-                    let factory = factory.clone();
-                    background::Compiler::new(_compiler, move |key| factory.create(key))
-                })
-                .flatten()
-        };
+        static ASYNC_SHAPE_PIPELINES: crate::debug_toggles::DebugToggle =
+            crate::debug_toggles::DebugToggle::new("CRANPOSE_ASYNC_SHAPE_PIPELINES");
+        let asynchronous = compiler.is_active()
+            && backend == wgpu::Backend::Vulkan
+            && !ASYNC_SHAPE_PIPELINES.equals("0");
+        let mut slots = Slots::new(compiler, factory);
+        for key in first_screen {
+            slots.warm(key);
+        }
         Self {
-            factory,
-            ready: HashMap::default(),
+            slots,
+            asynchronous,
             #[cfg(not(target_arch = "wasm32"))]
-            compiler,
+            created: web_time::Instant::now(),
         }
-    }
-
-    fn asynchronous(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.compiler.is_some()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
-    }
-
-    fn ensure_general(&mut self, key: ShapePipelineKey) {
-        self.ready
-            .entry(key.general())
-            .or_insert_with(|| self.factory.create(key.general()));
     }
 
     pub(crate) fn begin_frame(&mut self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(compiler) = self.compiler.as_mut() {
-            compiler.collect(|key, pipeline| {
-                self.ready.insert(key, pipeline);
-            });
-        }
+        self.slots.settle_demanded();
     }
 
     pub(crate) fn ensure(&mut self, key: ShapePipelineKey) {
-        if self.ready.contains_key(&key) {
+        let need = self.slots.need(key);
+        #[cfg(not(target_arch = "wasm32"))]
+        if need.first && self.created.elapsed() <= crate::pipeline_disk_cache::FIRST_SCREEN_SPAN {
+            crate::pipeline_disk_cache::note_first_screen_pipeline(key.to_bits());
+        }
+        if need.ready {
             return;
         }
-        if self.asynchronous() && !key.is_general() {
-            self.ensure_general(key);
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(compiler) = self.compiler.as_mut() {
-                compiler.request(key);
-            }
+        if self.asynchronous && !key.is_general() {
+            self.slots.build(key.general());
+            self.slots.request(key);
         } else {
-            self.ready.insert(key, self.factory.create(key));
+            self.slots.build(key);
         }
     }
 
     pub(crate) fn get(&self, key: ShapePipelineKey) -> Option<(&wgpu::RenderPipeline, bool)> {
-        self.ready
-            .get(&key)
+        self.slots
+            .get(key)
             .map(|pipeline| (pipeline, false))
             .or_else(|| {
-                self.ready
-                    .get(&key.general())
+                self.slots
+                    .get(key.general())
                     .map(|pipeline| (pipeline, true))
             })
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-mod background {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver, Sender},
-    };
+/// What a draw's first look at a key found.
+pub(crate) struct Need {
+    /// Its value is built.
+    pub(crate) ready: bool,
+    /// No draw needed the key before.
+    #[cfg_attr(target_arch = "wasm32", expect(dead_code))]
+    pub(crate) first: bool,
+}
 
-    use smallvec::SmallVec;
+struct Entry<T> {
+    value: Arc<OnceLock<T>>,
+    needed: bool,
+    queued: bool,
+}
 
-    use crate::{
-        pipeline_compiler::{CompileLane, PipelineCompiler},
-        render::ShapePipelineKey,
-    };
+/// Values by key, each built once by whichever thread asks first: a job on
+/// the background compiler, or the frame that needs it. A frame asking for
+/// a value a job is building waits for that build rather than starting a
+/// second.
+pub(crate) struct Slots<B: KeyedBuild> {
+    entries: HashMap<ShapePipelineKey, Entry<B::Output>>,
+    builder: Arc<B>,
+    compiler: PipelineCompiler,
+    /// Keys a frame queued, not yet built: at most two at a time, so a burst
+    /// of new keys queues behind nothing a frame waits for.
+    demanded: SmallVec<[ShapePipelineKey; 2]>,
+    stopped: Arc<AtomicBool>,
+}
 
-    pub(super) struct Compiler<T> {
-        compiler: PipelineCompiler,
-        create: Arc<dyn Fn(ShapePipelineKey) -> T + Send + Sync>,
-        finished: Sender<(ShapePipelineKey, T)>,
-        completed: Receiver<(ShapePipelineKey, T)>,
-        pending: SmallVec<[ShapePipelineKey; 2]>,
-        stopped: Arc<AtomicBool>,
-    }
-
-    impl<T: Send + 'static> Compiler<T> {
-        pub(super) fn new(
-            compiler: &PipelineCompiler,
-            create: impl Fn(ShapePipelineKey) -> T + Send + Sync + 'static,
-        ) -> Option<Self> {
-            compiler.is_active().then(|| {
-                let (finished, completed) = mpsc::channel();
-                Self {
-                    compiler: compiler.clone(),
-                    create: Arc::new(create),
-                    finished,
-                    completed,
-                    pending: SmallVec::new(),
-                    stopped: Arc::new(AtomicBool::new(false)),
-                }
-            })
-        }
-
-        pub(super) fn request(&mut self, key: ShapePipelineKey) {
-            if self.pending.len() == self.pending.inline_size() || self.pending.contains(&key) {
-                return;
-            }
-            self.pending.push(key);
-            let create = Arc::clone(&self.create);
-            let finished = self.finished.clone();
-            let stopped = Arc::clone(&self.stopped);
-            self.compiler.enqueue(CompileLane::Demanded, move || {
-                if stopped.load(Ordering::Acquire) {
-                    return;
-                }
-                finished.send((key, create(key))).ok();
-            });
-        }
-
-        pub(super) fn collect(&mut self, mut publish: impl FnMut(ShapePipelineKey, T)) {
-            while let Ok((key, pipeline)) = self.completed.try_recv() {
-                self.pending.retain(|pending| *pending != key);
-                publish(key, pipeline);
-            }
+impl<B: KeyedBuild> Slots<B> {
+    pub(crate) fn new(compiler: &PipelineCompiler, builder: B) -> Self {
+        Self {
+            entries: HashMap::default(),
+            builder: Arc::new(builder),
+            compiler: compiler.clone(),
+            demanded: SmallVec::new(),
+            stopped: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    impl<T> Drop for Compiler<T> {
-        fn drop(&mut self) {
-            self.stopped.store(true, Ordering::Release);
+    fn entry(&mut self, key: ShapePipelineKey) -> &mut Entry<B::Output> {
+        self.entries.entry(key).or_insert_with(|| Entry {
+            value: Arc::new(OnceLock::new()),
+            needed: false,
+            queued: false,
+        })
+    }
+
+    /// Records that a draw needs `key`.
+    pub(crate) fn need(&mut self, key: ShapePipelineKey) -> Need {
+        let entry = self.entry(key);
+        let first = !entry.needed;
+        entry.needed = true;
+        Need {
+            ready: entry.value.get().is_some(),
+            first,
         }
+    }
+
+    /// Queues `key`'s build on the warm-up lane, ahead of any draw.
+    pub(crate) fn warm(&mut self, key: ShapePipelineKey) {
+        if self.compiler.is_active() {
+            self.queue(key, CompileLane::WarmUp);
+        }
+    }
+
+    /// Queues `key`'s build for a draw standing in with another value until
+    /// it is ready.
+    pub(crate) fn request(&mut self, key: ShapePipelineKey) {
+        if self.demanded.len() == self.demanded.inline_size()
+            || self.entries.get(&key).is_some_and(|entry| entry.queued)
+        {
+            return;
+        }
+        self.demanded.push(key);
+        self.queue(key, CompileLane::Demanded);
+    }
+
+    fn queue(&mut self, key: ShapePipelineKey, lane: CompileLane) {
+        let builder = Arc::clone(&self.builder);
+        let stopped = Arc::clone(&self.stopped);
+        let entry = self.entry(key);
+        entry.queued = true;
+        let value = Arc::clone(&entry.value);
+        self.compiler.enqueue(lane, move || {
+            if !stopped.load(Ordering::Acquire) {
+                value.get_or_init(|| builder.build(key));
+            }
+        });
+    }
+
+    /// Builds `key`'s value here unless a job already built it, or waits
+    /// for the job building it.
+    pub(crate) fn build(&mut self, key: ShapePipelineKey) {
+        let builder = Arc::clone(&self.builder);
+        self.entry(key).value.get_or_init(|| builder.build(key));
+    }
+
+    pub(crate) fn get(&self, key: ShapePipelineKey) -> Option<&B::Output> {
+        self.entries.get(&key)?.value.get()
+    }
+
+    /// Forgets the demanded keys whose values are built.
+    pub(crate) fn settle_demanded(&mut self) {
+        let entries = &self.entries;
+        self.demanded.retain(|key| {
+            entries
+                .get(key)
+                .is_none_or(|entry| entry.value.get().is_none())
+        });
     }
 
     #[cfg(test)]
-    #[path = "tests/shape_pipelines_background_tests.rs"]
-    mod tests;
+    fn demanded(&self) -> &[ShapePipelineKey] {
+        &self.demanded
+    }
 }
+
+impl<B: KeyedBuild> Drop for Slots<B> {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "tests/shape_pipelines_slots_tests.rs"]
+mod slots_tests;
 
 #[cfg(test)]
 #[path = "tests/shape_pipelines_tests.rs"]
