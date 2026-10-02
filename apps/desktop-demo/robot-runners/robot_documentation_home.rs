@@ -5,8 +5,13 @@ use desktop_app::app;
 use crate::{output_paths, robot_shot};
 
 fn click_button(robot: &Robot, label: &str) {
-    let (x, y, width, height) =
-        find_button_exact_in_semantics(robot, label).expect("documentation button");
+    let Some((x, y, width, height)) = find_button_exact_in_semantics(robot, label) else {
+        robot_shot::save_checked(
+            &output_paths::diagnostic_path("documentation-missing-control.png"),
+            &robot.screenshot().expect("missing control screenshot"),
+        ).expect("save missing control screenshot");
+        panic!("documentation button {label:?}");
+    };
     robot
         .click(x + width * 0.5, y + height * 0.5)
         .expect("click documentation control");
@@ -20,6 +25,18 @@ fn capture(robot: &Robot, width: u32, stage: &str) {
         &robot.screenshot().expect("documentation screenshot"),
     )
     .expect("save documentation screenshot");
+}
+
+fn return_to_top(robot: &Robot, width: u32, height: u32) {
+    let (_, y, _, _) = find_button_exact_in_semantics(robot, "Back to top")
+        .expect("reader footer");
+    if y < 80.0 {
+        robot.move_to(width as f32 * 0.9, height as f32 * 0.6).expect("hover reader");
+        robot.mouse_scroll_and_wait_for_frame(0.0, 120.0 - y).expect("reveal footer below the back bar");
+        robot.wait_for_idle().expect("footer settles");
+    }
+    click_button(robot, "Back to top");
+    robot.validate_content("Build native and browser interfaces in Rust.").expect("top of guide is visible");
 }
 
 pub(crate) fn main() {
@@ -88,7 +105,8 @@ pub(crate) fn main() {
                 click_button(&robot, "Get started");
                 robot.validate_content("Create an application").expect("reopen the reader");
             }
-            click_button(&robot, "Back to top");
+            return_to_top(&robot, width, height);
+            capture(&robot, width, "back-to-top");
             if !compact {
                 click_button(&robot, "Counter App");
                 robot.validate_content("Increment").expect("existing demo remains available");

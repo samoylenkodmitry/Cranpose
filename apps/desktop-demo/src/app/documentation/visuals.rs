@@ -35,6 +35,7 @@ pub(super) fn caption_style(color: Color) -> TextStyle {
 pub(super) struct WheelGeometry {
     pub width: f32,
     pub radius: f32,
+    height: f32,
     center: Point,
     focus_angle: f32,
 }
@@ -48,13 +49,14 @@ impl WheelGeometry {
         Self {
             width,
             radius,
+            height: height.max(center.y + radius + 80.0),
             center,
             focus_angle: ((focus_y - center.y) / (radius + 120.0)).asin(),
         }
     }
 
     pub fn height(self) -> f32 {
-        self.center.y + self.radius + 80.0
+        self.height
     }
 
     pub fn reader_left(self) -> f32 {
