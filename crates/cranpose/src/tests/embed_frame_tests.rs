@@ -1,4 +1,5 @@
 use super::*;
+use crate::frame_readback::{copy_unpadded_rows, padded_row_bytes};
 
 fn frame(width: u32, height: u32, fill: u8) -> Vec<u8> {
     vec![fill; (width * height * 4) as usize]

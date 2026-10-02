@@ -9,6 +9,13 @@ mod android_file_picker;
     all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
 mod chunked_read;
+/// An in-process Cranpose component driven by its native host.
+#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+pub mod embedded_view;
+#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+mod frame_readback;
+/// Native views mounted in a Cranpose layout by an application-owned host.
+pub mod native_view;
 mod scoped_weak_stack;
 #[cfg(all(feature = "android", target_os = "android"))]
 pub use android_file_picker::open_content_uri;

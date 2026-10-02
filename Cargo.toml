@@ -31,6 +31,7 @@ members = [
     "crates/cranpose-coroflow",
     "crates/cranpose-navigation",
     "apps/coroflow-demo",
+    "apps/native-demo",
     "apps/coroflow-demo/android",
     "apps/coroflow-demo/web",
 ]

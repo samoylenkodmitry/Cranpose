@@ -559,6 +559,28 @@ android-release:
 android-isolated:
     apps/isolated-demo/android/gradlew -p apps/isolated-demo/android :app:assembleRelease
 
+# Build the native mobile embedding demos and their generated language bindings.
+native-demo-bindings:
+    bash scripts/native_demo.sh bindings
+
+android-native-demo:
+    bash scripts/native_demo.sh android
+
+ios-native-demo target="aarch64-apple-ios-sim":
+    bash scripts/native_demo.sh ios {{quote(target)}}
+
+test-native-demo:
+    cargo test --locked -p cranpose --features renderer-wgpu,renderer-pixels --test integration
+    cargo test --locked -p cranpose-native-demo --test integration
+    cargo test --locked -p cranpose --no-default-features --features embed --lib
+
+test-native-demo-ios device:
+    xcrun simctl install {{quote(device)}} "${CARGO_TARGET_DIR:-target}/aarch64-apple-ios-sim/debug/CranposeNativeDemo.app"
+    xcodebuild -project apps/liquid-reference/LiquidReference.xcodeproj -scheme LiquidReference -configuration Release -destination 'platform=iOS Simulator,id={{device}}' -derivedDataPath target/native-demo-ui-tests -parallel-testing-enabled NO -only-testing:LiquidReferenceTests/NativeEmbeddingTests test
+
+test-native-demo-android device:
+    bash scripts/native_demo.sh android-test {{quote(device)}}
+
 # Build the iOS simulator app bundle.
 ios-sim:
     apps/ios-demo/ios/build-app.sh aarch64-apple-ios-sim

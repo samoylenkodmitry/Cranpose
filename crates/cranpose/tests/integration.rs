@@ -4,3 +4,8 @@ mod platform_scheduling_static;
 mod prelude_surface;
 #[cfg(feature = "watchos")]
 mod watchos;
+
+#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+mod embedded_view;
+#[cfg(feature = "renderer-pixels")]
+mod native_view;

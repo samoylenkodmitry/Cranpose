@@ -63,6 +63,10 @@ cranpose = { version = "0.9", features = ["desktop", "renderer-wgpu"] }
 
 ## Example
 
+For an existing Kotlin or UIKit app, see the [native embedding demos](apps/native-demo/README.md).
+They show a Cranpose component inside native UI and a native WebView inside Cranpose,
+with state and events flowing in both directions.
+
 State, layout, and input, in the shape the framework actually has: composables
 take a `Modifier`, a spec, and their content; state comes from `rememberMutableStateOf` and is
 read with `.value()`.

@@ -171,7 +171,7 @@ impl HeadlessGpu {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("Embed Device"),
             required_features: cranpose_render_wgpu::optional_device_features(&adapter),
-            required_limits: wgpu::Limits::default(),
+            required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::default(),
             trace: wgpu::Trace::Off,
