@@ -72,14 +72,36 @@ On 2026-10-02, using the pinned toolchain on macm3:
 
 These results do not refresh physical-device or cross-framework measurements.
 
-## Release procedure
+## 0.9.0 release evidence
 
-Follow [the release runbook](release.md). The intended milestone tag is
-`v0.9.0`, created on green main after these changes land. Do not pre-bump the
-workspace or the isolated crates.io consumer. The workflow owns both updates
-in the correct order.
+The [0.9.0 crates](https://crates.io/crates/cranpose/0.9.0) were published on
+2026-10-02. The immutable `v0.9.0` tag points to
+`922045d40ae6a5d9dba979cad78cbfc26c11512f`.
 
-Before tagging, record the candidate SHA and check URLs. After tagging, verify
-publication, desktop artifacts, web deployment and the isolated consumer
-against the released version. This ledger is a living acceptance document;
-dated device reports retain their original dates and scope.
+- The production source at `79bdf82a9` passed all nine checks in
+  [Rust](https://github.com/samoylenkodmitry/Cranpose/actions/runs/36972310086)
+  and [heavy CI](https://github.com/samoylenkodmitry/Cranpose/actions/runs/36972310046).
+  The tag adds automated version metadata and
+  [workspace inheritance for the macro dependency](https://github.com/samoylenkodmitry/Cranpose/pull/1085).
+  Locked Cargo resolution, tag verification and precommit gates passed for
+  that dependency repair.
+- [Publication and isolated consumer checks](https://github.com/samoylenkodmitry/Cranpose/actions/runs/36973849809)
+  passed. The desktop, web and Android consumer builds resolved the published
+  0.9.0 crates outside the workspace.
+- After the workflow aligned the workspace and isolated consumer at 0.9.0,
+  main at `35cad0b97` passed all nine checks in fresh
+  [Rust](https://github.com/samoylenkodmitry/Cranpose/actions/runs/36976459199)
+  and [heavy CI](https://github.com/samoylenkodmitry/Cranpose/actions/runs/36976459286)
+  runs, including the macOS workspace tests, Linux robots, Android and iOS builds.
+- [Web deployment](https://github.com/samoylenkodmitry/Cranpose/actions/runs/36975505681)
+  passed from the final tag; the
+  [hosted demo](https://samoylenkodmitry.github.io/Cranpose/) returned HTTP 200.
+- The [release page](https://github.com/samoylenkodmitry/Cranpose/releases/tag/v0.9.0)
+  carries the platform downloads and release notes. Its
+  [artifact build record](https://github.com/samoylenkodmitry/Cranpose/actions/runs/36977364842)
+  is separate from crate publication.
+
+For subsequent candidates, follow [the release runbook](release.md). Keep the
+tag, check URLs, publication, artifacts and consumer evidence together. Dated
+device reports retain their original dates and scope; a successful release
+does not refresh those measurements.
