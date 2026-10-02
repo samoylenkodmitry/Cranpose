@@ -842,3 +842,75 @@ fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
          {effective}, leaving a {blank_gap}px blank gap"
     );
 }
+
+/// A badge whose parameters every row shares, so a reused row skips it.
+#[composable]
+fn SharedTickBadge(tick: cranpose_core::MutableState<u32>) {
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        Text(
+            format!("tick {}", tick.value()),
+            Modifier::empty(),
+            TextStyle::default(),
+        );
+    });
+}
+
+#[test]
+fn a_skipped_badge_in_a_reused_row_follows_its_state() {
+    let captured_tick = Rc::new(RefCell::new(None));
+    let tick_slot = Rc::clone(&captured_tick);
+    let (mut composition, captured_state) = compose_with_list_state(move |list_state| {
+        let tick =
+            cranpose_core::remember(|| cranpose_core::mutableStateOf(0_u32)).with(|tick| *tick);
+        *tick_slot.borrow_mut() = Some(tick);
+        LazyColumn(
+            Modifier::empty(),
+            list_state,
+            LazyColumnSpec::default(),
+            move |scope| {
+                scope.items(LazyItems::new(200), move |index| {
+                    Text(
+                        format!("Item {index}"),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                    SharedTickBadge(tick);
+                });
+            },
+        );
+    });
+    let root = composition.root().expect("lazy column root");
+    let list_state = (*captured_state.borrow()).expect("state captured");
+    let viewport_size = ViewportSize {
+        width: 320.0,
+        height: 260.0,
+    };
+    let renderer = HeadlessRenderer::new();
+    for _ in 0..6 {
+        list_state.dispatch_scroll_delta(-240.0);
+        let _ = measure_tree(&mut composition, root, viewport_size);
+    }
+
+    let tick = (*captured_tick.borrow()).expect("tick captured");
+    tick.set(1);
+    composition
+        .process_invalid_scopes()
+        .expect("recompose after the tick");
+    let layout = measure_tree(&mut composition, root, viewport_size);
+    let ticks: Vec<String> = renderer
+        .render(&layout)
+        .operations()
+        .iter()
+        .filter_map(|operation| match operation {
+            crate::renderer::RenderOp::Text { value, .. } if value.starts_with("tick ") => {
+                Some(value.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(!ticks.is_empty(), "rows show their badges");
+    assert!(
+        ticks.iter().all(|text| text == "tick 1"),
+        "every shown badge follows the tick: {ticks:?}"
+    );
+}

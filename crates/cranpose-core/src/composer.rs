@@ -1302,6 +1302,11 @@ impl Composer {
             host,
             group,
         } = entry;
+        // A group entered while its scope is inactive is reused content, as
+        // when a lazy list gives a recycled row to another item: like Compose,
+        // it composes again rather than skipping, which reactivates the
+        // scopes beneath it.
+        let reused = !scope_ref.is_active() && scope_ref.has_composed_once();
         scope_ref.reactivate();
         {
             let mut stack = self.scope_stack();
@@ -1322,6 +1327,8 @@ impl Composer {
             scope_ref.force_recompose();
         } else if options.force_reuse {
             scope_ref.force_reuse();
+        } else if reused {
+            scope_ref.force_recompose();
         }
         let restored = matches!(start_kind, GroupStartKind::Restored);
         if restored {
