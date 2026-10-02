@@ -4,9 +4,10 @@ Read only the sections required by the current operation. These are project requ
 
 ## Code tools
 
-- Use RustRover MCP (`mcp__rustrover__*`) for code search, understanding, analysis, refactoring and edits: `search_symbol`, `get_symbol_info` and `analyze_calls` for declarations, usages and call graphs; `rename_refactoring` for renames; `apply_patch` and `create_new_file` for edits; `get_file_problems`, `lint_files` and `run_inspection_kts` for analysis; `reformat_file` for formatting. Pass `projectPath` on every call. Use IDE `search_text` and `search_regex` only for strings and comments. Do not replace code intelligence with Bash/grep/rg scans, or code edits with sed, ad hoc scripts or hand edits.
-- Run build, test, Git, SSH and other shell commands directly through the shell/exec tool. RustRover's MCP terminal is not required; use it only for a specific IDE-terminal need or an explicit request. This does not permit shell-based code discovery when IDE tools can answer the question. Follow [builds and shell](#builds-and-shell) for host and command constraints.
-- If direct IDE tools are unavailable, open the tree in RustRover first (`open -a RustRover <path>`) and retry; explain any remaining limitation before a fallback. The existing `scripts/dev/ide_search.py text|regex|symbol|file <query> [--in <glob>]... [--context N]` helper queries the same IDE server and may serve as a fallback, not the default when direct MCP search works.
+- Prefer RustRover MCP (`mcp__rustrover__*`) for semantic navigation, types/usages, call graphs, analysis and refactoring when ready: `search_symbol`, `get_symbol_info` and `analyze_calls` for code intelligence; `rename_refactoring` for semantic renames; `get_file_problems`, `lint_files` and `run_inspection_kts` for analysis. Pass `projectPath` on every IDE call.
+- Use direct file tools for known-file reads, literal searches, documentation and simple edits. IDE `apply_patch`, `create_new_file` and `reformat_file` are optional when useful.
+- Run build, test, Git, SSH and other shell commands directly through the shell/exec tool. RustRover's MCP terminal is not required; use it only for a specific IDE-terminal need or an explicit request. Follow [builds and shell](#builds-and-shell) for host and command constraints.
+- Open RustRover only when semantic work warrants the setup. If IDE access fails, explain the limitation once and use an appropriate fallback without compulsory reopening or repeated retries. The existing `scripts/dev/ide_search.py text|regex|symbol|file <query> [--in <glob>]... [--context N]` helper queries the same IDE server and is optional when that server is ready and useful.
 
 ## Rust and API conventions
 
