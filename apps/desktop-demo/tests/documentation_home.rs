@@ -20,7 +20,7 @@ fn semantic_bounds(root: &cranpose_testing::PlacedSemanticsNode, label: &str) ->
     found.expect("named surface in accessibility tree")
 }
 
-fn click_control(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
+fn click_control_unsettled(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();
     let tree = cranpose_testing::placed_semantics_from_shell(robot.shell_mut())
@@ -44,6 +44,77 @@ fn click_control(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
         bounds.x + bounds.width * 0.5,
         bounds.y + bounds.height * 0.5,
     )
+}
+
+fn settle_motion(robot: &mut RobotTestRule<TestRenderer>) {
+    for _ in 0..120 {
+        robot.advance_time(16_666_667);
+        if !robot.shell_mut().has_active_animations()
+            && !robot.shell_mut().has_transient_frame_callbacks()
+        {
+            robot.wait_for_idle();
+            return;
+        }
+    }
+    panic!("documentation motion must settle");
+}
+
+fn click_control(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
+    let clicked = click_control_unsettled(robot, label);
+    settle_motion(robot);
+    clicked
+}
+
+#[test]
+fn selecting_a_chapter_animates_the_wheel_and_reader_together() {
+    let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    let before = semantic_bounds(
+        &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("wheel semantics"),
+        "State and effects",
+    );
+    assert!(click_control_unsettled(&mut robot, "Get started"));
+    for _ in 0..20 {
+        robot.advance_time(16_666_667);
+    }
+    let during = semantic_bounds(
+        &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("moving wheel"),
+        "State and effects",
+    );
+    for _ in 0..60 {
+        robot.advance_time(16_666_667);
+    }
+    let after = semantic_bounds(
+        &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("settled wheel"),
+        "State and effects",
+    );
+    assert!(
+        before.y > during.y + 5.0 && during.y > after.y + 5.0,
+        "selection needs intermediate positions: {before:?} -> {during:?} -> {after:?}"
+    );
+    assert!(robot.find_by_text("Create an application").exists());
+}
+
+#[test]
+fn manual_reader_scroll_interrupts_a_chapter_animation() {
+    let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+    });
+    assert!(click_control_unsettled(&mut robot, "Get started"));
+    for _ in 0..18 {
+        robot.advance_time(16_666_667);
+    }
+    robot.shell_mut().set_cursor(1040.0, 650.0);
+    robot.shell_mut().pointer_scrolled(0.0, 9000.0);
+    settle_motion(&mut robot);
+    assert!(robot
+        .find_by_text("Build native and browser interfaces in Rust.")
+        .exists());
+    assert!(click_control(&mut robot, "Get started"));
+    assert!(robot.find_by_text("Create an application").exists());
 }
 
 #[test]
@@ -79,11 +150,16 @@ fn reading_scroll_moves_the_tab_row_and_document_together() {
 }
 
 #[test]
-fn wheel_brand_rotates_and_a_release_keeps_the_wheel_moving() {
+fn dragging_and_releasing_keeps_the_wheel_moving() {
     let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::Documentation));
     });
-    let initial = text_bounds(&robot.get_all_rects(), "The guide.");
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    let initial = semantic_bounds(
+        &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("wheel semantics"),
+        "State and effects",
+    );
     robot.shell_mut().set_cursor(120.0, 550.0);
     robot.shell_mut().pointer_pressed_at_time(Some(0));
     for step in 1..=8 {
@@ -92,10 +168,12 @@ fn wheel_brand_rotates_and_a_release_keeps_the_wheel_moving() {
             .shell_mut()
             .set_cursor_at_time(120.0, 550.0 - step as f32 * 12.0, Some(step * 16));
     }
-    let held = text_bounds(&robot.get_all_rects(), "The guide.");
+    let tree =
+        cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("rotating wheel");
+    let held = semantic_bounds(&tree, "State and effects");
     assert!(
         held.y < initial.y - 30.0,
-        "the brand belongs to the rotating wheel"
+        "dragging must rotate the wheel: {initial:?} -> {held:?}"
     );
     robot
         .shell_mut()
@@ -103,7 +181,10 @@ fn wheel_brand_rotates_and_a_release_keeps_the_wheel_moving() {
     for _ in 0..30 {
         robot.advance_time(16_666_667);
     }
-    let released = text_bounds(&robot.get_all_rects(), "The guide.");
+    let released = semantic_bounds(
+        &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("coasting wheel"),
+        "State and effects",
+    );
     assert!(
         released.y < held.y - 30.0,
         "the wheel must coast after a fast release: {held:?} -> {released:?}"
@@ -124,7 +205,10 @@ fn wide_article_aligns_with_the_wheel_edge() {
         &robot.get_all_rects(),
         "Build native and browser interfaces in Rust.",
     );
-    assert!(text.x - glass.x <= 41.0, "article should align with the wheel, not the center of the remaining window: {text:?}, {glass:?}");
+    assert!(
+        text.x - glass.x <= 25.0 && text.x <= 325.0,
+        "article should align close to the wheel: {text:?}, {glass:?}"
+    );
 }
 
 #[test]
@@ -282,10 +366,10 @@ fn compact_wheel_reveals_the_current_chapter_after_reading_to_the_end() {
         .find_by_text("0.9 is the stabilization release line.")
         .exists());
     assert!(click_control(&mut robot, "Back to wheel"));
-    let current = robot
-        .find_by_text("Road to 1.0")
-        .bounds()
-        .expect("current chapter");
+    let current = semantic_bounds(
+        &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("current wheel"),
+        "Road to 1.0",
+    );
     assert!(current.y >= 0.0 && current.y + current.height <= 780.0);
     assert!(click_control(&mut robot, "Road to 1.0"));
     assert!(robot

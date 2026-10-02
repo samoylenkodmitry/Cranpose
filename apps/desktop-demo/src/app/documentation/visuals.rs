@@ -4,7 +4,7 @@ use cranpose_ui::{
     text::{FontWeight, SpanStyle, TextUnit},
     Box, BoxSpec, Brush, Color, GraphicsLayer, Modifier, Point, TextStyle,
 };
-use cranpose_ui_graphics::{Stroke, VectorPath};
+use cranpose_ui_graphics::{Stroke, TransformOrigin, VectorPath};
 
 pub(super) const INK: Color = Color(0.91, 0.95, 0.98, 1.0);
 pub(super) const MUTED: Color = Color(0.58, 0.67, 0.75, 1.0);
@@ -42,16 +42,16 @@ pub(super) struct WheelGeometry {
 
 impl WheelGeometry {
     pub fn new(width: f32, height: f32) -> Self {
-        let radius = width.max(780.0) * 0.9;
-        let left = (width * 0.27).clamp(290.0, 380.0) * 0.62;
-        let center = Point::new(radius + left, -radius * 0.12);
-        let focus_y = (height * 0.43).clamp(320.0, 360.0);
+        let radius = width.max(780.0) * 0.7;
+        let left = (width * 0.25).clamp(200.0, 300.0);
+        let center = Point::new(radius + left - 24.0, (height * 0.08).clamp(48.0, 80.0));
+        let focus_y = (height * 0.42).clamp(300.0, 360.0);
         Self {
             width,
             radius,
-            height: height.max(center.y + radius + 80.0),
+            height: height.max(1.0),
             center,
-            focus_angle: ((focus_y - center.y) / (radius + 120.0)).asin(),
+            focus_angle: ((focus_y - center.y) / (radius + 64.0)).asin(),
         }
     }
 
@@ -60,11 +60,11 @@ impl WheelGeometry {
     }
 
     pub fn reader_left(self) -> f32 {
-        (self.width * 0.27).clamp(290.0, 380.0)
+        (self.width * 0.25).clamp(200.0, 300.0)
     }
 
     pub fn section_angle(self) -> f32 {
-        120.0 / (self.radius + 120.0)
+        120.0 / (self.radius + 64.0)
     }
 
     pub fn point(self, angle: f32, radius: f32) -> Point {
@@ -75,61 +75,75 @@ impl WheelGeometry {
     }
 
     pub fn entry_modifier(self, position: f32, height: f32) -> Modifier {
-        self.item_modifier(position, height, 290.0, 120.0)
+        self.item_modifier(
+            position,
+            height,
+            270.0,
+            64.0,
+            -position * self.section_angle(),
+        )
     }
 
     pub fn brand_modifier(self, position: f32) -> Modifier {
-        self.item_modifier(position, 112.0, 246.0, 70.0)
+        self.item_modifier(position, 112.0, 246.0, 24.0, 0.0)
     }
 
-    fn item_modifier(self, position: f32, height: f32, width: f32, radial_offset: f32) -> Modifier {
+    fn item_modifier(
+        self,
+        position: f32,
+        height: f32,
+        width: f32,
+        radial_offset: f32,
+        rotation: f32,
+    ) -> Modifier {
         let angle = self.focus_angle + position * self.section_angle();
         let center = self.point(angle, self.radius + radial_offset);
         Modifier::empty()
             .size_points(width, height)
             .offset(center.x - width * 0.5, center.y - height * 0.5)
             .graphics_layer_value(GraphicsLayer {
-                rotation_z: -angle.to_degrees(),
+                rotation_z: rotation.to_degrees(),
                 ..Default::default()
             })
     }
 
-    fn rotate(self, point: Point, sin: f32, cos: f32) -> Point {
-        let x = point.x - self.center.x;
-        let y = point.y - self.center.y;
-        Point::new(
-            self.center.x + x * cos - y * sin,
-            self.center.y + x * sin + y * cos,
-        )
+    pub fn rotation_layer(self, position: f32) -> GraphicsLayer {
+        GraphicsLayer {
+            rotation_z: (position * self.section_angle()).to_degrees(),
+            transform_origin: TransformOrigin::new(
+                self.center.x / self.width,
+                self.center.y / self.height,
+            ),
+            ..Default::default()
+        }
     }
 }
 
 #[composable]
-pub(super) fn Backdrop() {
+pub(super) fn Backdrop(geometry: WheelGeometry) {
     Box(
         Modifier::empty()
             .fill_max_size()
-            .background(Color(0.025, 0.042, 0.061, 1.0)),
-        BoxSpec::default(),
-        || {},
-    );
-}
-
-#[composable]
-pub(super) fn WheelSurface(
-    geometry: WheelGeometry,
-    state: super::DocumentationState,
-    wheel_only: bool,
-) {
-    Box(
-        Modifier::empty()
-            .size_points(geometry.width, geometry.height())
+            .background(Color(0.025, 0.042, 0.061, 1.0))
             .draw_with_cache(move |cache| {
                 let glow = Brush::radial_gradient(
                     vec![Color(0.10, 0.48, 0.52, 0.38), Color(0.035, 0.10, 0.16, 0.0)],
                     Point::new(200.0, 420.0),
                     geometry.radius,
                 );
+                cache.on_draw_behind(move |scope| scope.draw_rect(glow.clone()));
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[composable]
+pub(super) fn WheelSurface(geometry: WheelGeometry) {
+    Box(
+        Modifier::empty()
+            .size_points(geometry.width, geometry.height())
+            .draw_with_cache(move |cache| {
                 let start = geometry.focus_angle - 0.8;
                 let sweep = 3.4;
                 let ticks: Vec<_> = (0..136)
@@ -155,9 +169,6 @@ pub(super) fn WheelSurface(
                     })
                     .collect();
                 cache.on_draw_behind(move |scope| {
-                    scope.draw_rect(glow.clone());
-                    let phase = state.position(wheel_only) * geometry.section_angle();
-                    let (sin, cos) = phase.sin_cos();
                     for inset in [0.0, -22.0, -112.0] {
                         let color = if inset == 0.0 {
                             Color(0.35, 0.86, 0.89, 0.7)
@@ -168,7 +179,7 @@ pub(super) fn WheelSurface(
                             Brush::solid(color),
                             geometry.center,
                             geometry.radius + inset,
-                            std::f32::consts::PI - start + phase,
+                            std::f32::consts::PI - start,
                             -sweep,
                             Stroke::new(if inset == 0.0 { 2.0 } else { 1.0 }),
                         );
@@ -176,16 +187,16 @@ pub(super) fn WheelSurface(
                     for &(from, to) in &ticks {
                         scope.draw_line(
                             Brush::solid(Color(0.50, 0.82, 0.89, 0.45)),
-                            geometry.rotate(from, sin, cos),
-                            geometry.rotate(to, sin, cos),
+                            from,
+                            to,
                             Stroke::new(1.0),
                         );
                     }
                     for &(from, to) in &spokes {
                         scope.draw_line(
                             Brush::solid(Color(0.31, 0.67, 0.76, 0.25)),
-                            geometry.rotate(from, sin, cos),
-                            geometry.rotate(to, sin, cos),
+                            from,
+                            to,
                             Stroke::new(1.0),
                         );
                     }
@@ -200,12 +211,13 @@ pub(super) fn reader_surface(modifier: Modifier) -> Modifier {
     let mut glass = Glass::clear();
     glass.shape = LiquidShape::RoundedRect(0.0);
     glass.tint = Some(Color(0.045, 0.085, 0.12, 0.24));
-    glass.blur_radius = Some(4.0);
+    glass.blur_radius = Some(0.8);
+    glass.dispersion = 1.0;
     glass.lift = Some(0.0);
     glass.contrast = Some(1.0);
     glass.saturation = Some(1.0);
-    glass.refraction_depth_dp = Some(2.0);
-    glass.transmission_refraction = 0.05;
+    glass.refraction_depth_dp = Some(12.0);
+    glass.transmission_refraction = 0.2;
     glass.foreground = Some(INK);
     glass.adaptive_frost = 0.0;
     glass.highlight = 0.25;

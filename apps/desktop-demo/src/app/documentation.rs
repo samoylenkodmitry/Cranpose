@@ -1,13 +1,16 @@
 use std::sync::OnceLock;
 
 use cranpose::liquid::{LiquidTheme, LiquidThemeSpec, SchemeMode};
-use cranpose_core::{mutableStateOf, remember, rememberMutableStateOf, with_key, MutableState};
+use cranpose_animation::{animate_float_as_state_with_initial, tween, Easing};
+use cranpose_core::{
+    mutableStateOf, remember, rememberMutableStateOf, with_key, MutableState, SideEffect,
+};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState};
 use cranpose_services::local_uri_handler;
 use cranpose_ui::{
     composable, rememberScrollableState, text::FontWeight, Alignment, Box, BoxSpec, Button,
-    ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier, Row,
-    RowSpec, Spacer, Text, VerticalAlignment,
+    ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier,
+    PointerEventKind, PointerInputScope, Row, RowSpec, Spacer, Text, VerticalAlignment,
 };
 use cranpose_ui_layout::Axis;
 
@@ -113,9 +116,17 @@ fn Brand() {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+struct SelectionMotion {
+    from: f32,
+    target: f32,
+    generation: u64,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 struct DocumentationState {
     reader_open: MutableState<bool>,
     browse_position: MutableState<f32>,
+    selection: MutableState<Option<SelectionMotion>>,
     page: LazyListState,
 }
 
@@ -131,34 +142,100 @@ impl DocumentationState {
         if wheel_only {
             return self.browse_position.get();
         }
+        self.reader_position()
+            .clamp(0.0, (chapters().len() - 1) as f32)
+    }
+
+    fn reader_position(self) -> f32 {
         let item = self.page.first_visible_item_index();
-        if item == 0 {
-            return 0.0;
-        }
         let offset = self.page.first_visible_item_scroll_offset();
+        if item == 0 {
+            return self.header_position()
+                + offset / self.page.get_cached_size(1).unwrap_or(1.0).max(1.0);
+        }
         let fraction = self
             .page
             .get_cached_size(item)
             .map_or(0.0, |height| offset / height.max(1.0));
-        (item.saturating_sub(1) as f32 + fraction).clamp(0.0, (chapters().len() - 1) as f32)
+        item as f32 - 1.0 + fraction
     }
 
-    fn select(self, index: usize) {
+    fn header_position(self) -> f32 {
+        -self.page.get_cached_size(0).unwrap_or(0.0)
+            / self.page.get_cached_size(1).unwrap_or(1.0).max(1.0)
+    }
+
+    fn select(self, index: usize, wheel_only: bool) {
+        self.animate_to(index as f32, wheel_only);
         self.reader_open.set(true);
-        self.page.scroll_to_item(index + 1, 0.0);
     }
 
-    fn rotate(self, delta: f32, wheel_only: bool) -> f32 {
-        let previous = self.position(wheel_only);
-        let position = (previous - delta / 120.0).clamp(0.0, (chapters().len() - 1) as f32);
-        self.browse_position.set(position);
-        let item = position.floor() as usize + 1;
+    fn animate_to(self, target: f32, wheel_only: bool) {
+        self.selection.set(Some(SelectionMotion {
+            from: if wheel_only {
+                self.browse_position.get()
+            } else {
+                self.reader_position()
+            },
+            target,
+            generation: self
+                .selection
+                .get()
+                .map_or(0, |motion| motion.generation.wrapping_add(1)),
+        }));
+    }
+
+    fn scroll_to_position(self, position: f32) {
+        if position < 0.0 {
+            let offset = self.page.get_cached_size(0).unwrap_or(0.0)
+                + position * self.page.get_cached_size(1).unwrap_or(1.0).max(1.0);
+            self.page.scroll_to_item(0, offset.max(0.0));
+            return;
+        }
+        let coordinate = position + 1.0;
+        let item = coordinate.floor() as usize;
         let offset = self
             .page
             .get_cached_size(item)
-            .map_or(0.0, |height| position.fract() * height);
+            .map_or(0.0, |height| coordinate.fract() * height);
         self.page.scroll_to_item(item, offset);
+    }
+
+    fn rotate(self, delta: f32, wheel_only: bool) -> f32 {
+        self.selection.set(None);
+        let previous = self.position(wheel_only);
+        let position = (previous - delta / 120.0).clamp(0.0, (chapters().len() - 1) as f32);
+        self.browse_position.set(position);
+        self.scroll_to_position(position);
         (previous - position) * 120.0
+    }
+}
+
+#[composable]
+fn AnimateSelection(state: DocumentationState) {
+    if let Some(motion) = state.selection.get() {
+        with_key(&motion.generation, || {
+            let reduced = cranpose_services::local_accessibility_options()
+                .current()
+                .reduce_motion;
+            let position = if reduced {
+                motion.target
+            } else {
+                animate_float_as_state_with_initial(
+                    motion.from,
+                    motion.target,
+                    tween(450, Easing::EaseInOut),
+                    "documentation chapter",
+                )
+                .get()
+            };
+            SideEffect(move || {
+                state.scroll_to_position(position);
+                if (position - motion.target).abs() < f32::EPSILON {
+                    state.selection.set(None);
+                }
+            });
+        });
     }
 }
 
@@ -202,7 +279,11 @@ fn WheelEntries(
     wheel_only: bool,
     interactive: bool,
 ) {
-    let position = state.position(wheel_only);
+    let position = if interactive {
+        state.position(wheel_only)
+    } else {
+        0.0
+    };
     let entry_height = 58.0
         * cranpose_services::local_accessibility_options()
             .current()
@@ -219,7 +300,7 @@ fn WheelEntries(
                         config.content_description = Some(chapters()[index].title.to_string());
                     }),
                     ButtonSpec::default(),
-                    move || state.select(index),
+                    move || state.select(index, wheel_only),
                     || {},
                 );
             } else {
@@ -232,19 +313,24 @@ fn WheelEntries(
 }
 
 #[composable]
-fn WheelLabels(state: DocumentationState, geometry: WheelGeometry, wheel_only: bool) {
+fn WheelVisuals(state: DocumentationState, geometry: WheelGeometry, wheel_only: bool) {
     Box(
-        Modifier::empty().fill_max_size().hide_from_accessibility(),
+        Modifier::empty()
+            .fill_max_size()
+            .graphics_layer_value(geometry.rotation_layer(state.position(wheel_only))),
         BoxSpec::default(),
         move || {
+            visuals::WheelSurface(geometry);
             Box(
-                geometry
-                    .brand_modifier(-1.35 - state.position(wheel_only))
-                    .padding(12.0),
+                geometry.brand_modifier(-1.35).padding(12.0),
                 BoxSpec::default(),
                 Brand,
             );
-            WheelEntries(state, geometry, wheel_only, false);
+            Box(
+                Modifier::empty().fill_max_size().hide_from_accessibility(),
+                BoxSpec::default(),
+                move || WheelEntries(state, geometry, wheel_only, false),
+            );
         },
     );
 }
@@ -276,7 +362,7 @@ fn ChapterNavigation(state: DocumentationState, index: usize) {
         move || {
             if index > 0 {
                 DocAction("Previous section", Modifier::empty(), move || {
-                    state.select(index - 1);
+                    state.select(index - 1, false);
                 });
             } else {
                 Text(
@@ -288,7 +374,7 @@ fn ChapterNavigation(state: DocumentationState, index: usize) {
             Spacer(Modifier::empty().weight(1.0));
             if index + 1 < chapters().len() {
                 DocAction("Next section", Modifier::empty(), move || {
-                    state.select(index + 1);
+                    state.select(index + 1, false);
                 });
             }
         },
@@ -298,7 +384,7 @@ fn ChapterNavigation(state: DocumentationState, index: usize) {
 #[composable]
 fn ReaderChapter(state: DocumentationState, index: usize, width: f32, height: f32, compact: bool) {
     let chapter = &chapters()[index];
-    let inset = if compact { 20.0 } else { 40.0 };
+    let inset = if compact { 20.0 } else { 24.0 };
     Box(
         visuals::reader_surface(
             Modifier::empty()
@@ -345,7 +431,7 @@ fn ReaderChapter(state: DocumentationState, index: usize, width: f32, height: f3
                             .background(BORDER),
                     );
                     DocAction("Back to top", Modifier::empty(), move || {
-                        state.page.scroll_to_item(0, 0.0);
+                        state.animate_to(state.header_position(), false);
                     });
                 },
             );
@@ -400,12 +486,24 @@ fn Reader(state: DocumentationState, width: f32, height: f32, compact: bool, hea
     let mut spec = LazyColumnSpec::new();
     spec.beyond_bounds_item_count = 0;
     LazyColumn(
-        Modifier::empty().fill_max_size().padding_each(
-            0.0,
-            if compact { 48.0 } else { 0.0 },
-            0.0,
-            0.0,
-        ),
+        Modifier::empty()
+            .fill_max_size()
+            .pointer_input((), move |scope: PointerInputScope| async move {
+                scope
+                    .await_pointer_event_scope(|events| async move {
+                        loop {
+                            let event = events.await_pointer_event().await;
+                            if matches!(
+                                event.kind,
+                                PointerEventKind::Down | PointerEventKind::Scroll
+                            ) {
+                                state.selection.set(None);
+                            }
+                        }
+                    })
+                    .await;
+            })
+            .padding_each(0.0, if compact { 48.0 } else { 0.0 }, 0.0, 0.0),
         state.page,
         spec,
         move |scope| {
@@ -433,6 +531,7 @@ pub(super) fn DocumentationTab(header: Option<super::AppHeaderState>) {
     let state = remember(|| DocumentationState {
         reader_open: mutableStateOf(false),
         browse_position: mutableStateOf(0.0),
+        selection: mutableStateOf(None),
         page: LazyListState::new(0, 0.0),
     })
     .with(|state| *state);
@@ -452,14 +551,14 @@ pub(super) fn DocumentationTab(header: Option<super::AppHeaderState>) {
                     .content_description("Cranpose documentation"),
                 BoxSpec::default(),
                 move || {
+                    AnimateSelection(state);
                     let size = viewport.get();
                     let width = size.width.max(1.0);
                     let compact = width < COMPACT_BREAKPOINT;
                     let geometry = WheelGeometry::new(width, size.height);
                     let reader_visible = !compact || state.reader_open.get();
-                    visuals::Backdrop();
-                    visuals::WheelSurface(geometry, state, !reader_visible);
-                    WheelLabels(state, geometry, !reader_visible);
+                    visuals::Backdrop(geometry);
+                    WheelVisuals(state, geometry, !reader_visible);
                     let header_height = header_size.get().height;
                     if reader_visible && (header.is_none() || header_height > 0.0) {
                         Reader(state, width, size.height, compact, header_height);
@@ -476,6 +575,7 @@ pub(super) fn DocumentationTab(header: Option<super::AppHeaderState>) {
                             RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
                             move || {
                                 DocAction("Back to wheel", Modifier::empty(), move || {
+                                    state.selection.set(None);
                                     state.browse_position.set(state.position(false));
                                     state.reader_open.set(false);
                                 });

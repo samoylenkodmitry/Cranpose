@@ -1,4 +1,4 @@
-use cranpose::{AppLauncher, Robot};
+use cranpose::{AppLauncher, Robot, SemanticElement, SemanticRect};
 use cranpose_testing::{find_button_exact_in_semantics, find_text_in_semantics, find_text_in_semantics_exact};
 use desktop_app::app;
 
@@ -25,6 +25,19 @@ fn capture(robot: &Robot, width: u32, stage: &str) {
         &robot.screenshot().expect("documentation screenshot"),
     )
     .expect("save documentation screenshot");
+}
+
+fn wheel_entry(robot: &Robot, title: &str) -> SemanticRect {
+    fn find(elements: &[SemanticElement], title: &str) -> Option<SemanticRect> {
+        elements.iter().find_map(|element| {
+            if element.clickable && element.text.as_deref() == Some(title) {
+                Some(element.bounds)
+            } else {
+                find(&element.children, title)
+            }
+        })
+    }
+    find(&robot.get_semantics().expect("wheel semantics"), title).expect("wheel entry")
 }
 
 fn return_to_top(robot: &Robot, width: u32, height: u32) {
@@ -117,10 +130,10 @@ pub(crate) fn main() {
                 click_button(&robot, "Back to wheel");
             }
             robot.drag_and_wait_for_frames(120.0, 550.0, 120.0, 454.0, 8).expect("flick the wheel");
-            let released = find_text_in_semantics_exact(&robot, "Get started").expect("wheel entry after release");
+            let released = wheel_entry(&robot, "Get started");
             robot.pump_frames(30).expect("wheel coast frames");
-            let coasted = find_text_in_semantics_exact(&robot, "Get started").expect("wheel entry after coasting");
-            assert!(coasted.1 < released.1 - 10.0, "wheel must continue rotating after release: {released:?} -> {coasted:?}");
+            let coasted = wheel_entry(&robot, "Get started");
+            assert!(coasted.y < released.y - 10.0, "wheel must continue rotating after release: {released:?} -> {coasted:?}");
             robot.touch_down(120.0, 550.0).expect("catch the spinning wheel");
             capture(&robot, width, "fling");
             robot.touch_up(120.0, 550.0).expect("release the stopped wheel");

@@ -29,8 +29,10 @@ under the glass. A quick drag and release lets the wheel coast; pressing it
 again stops the motion. Article text aligns with the left edge beside the wheel.
 Scrolling the wheel moves the article to the corresponding section; scrolling
 the article rotates the wheel to follow the current section. Select a wheel
-entry or use Previous section and Next section to jump directly to a chapter.
-Back to top returns to the tab strip. View on GitHub stays at the window's
+entry or use Previous section and Next section to animate to a chapter.
+The wheel and article move together; touching or scrolling interrupts the
+transition. Reduced motion opens the section immediately. Back to top returns
+to the tab strip. View on GitHub stays at the window's
 bottom-left corner. Narrow windows open on the wheel. Selecting a section opens
 the glass reader over it, and Back to wheel returns to the current section.
 Use Counter App for state, CompositionLocal for scoped values, Async Runtime for
