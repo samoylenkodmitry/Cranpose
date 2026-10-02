@@ -325,7 +325,7 @@ fn root_node_ids_are_the_records_whose_parent_is_outside_them_in_order() {
             .collect();
         let expected: Vec<NodeId> = (0..chains).map(|chain| 100 + chain * 3).collect();
         assert_eq!(
-            crate::slot::root_node_ids(&records).collect::<Vec<_>>(),
+            crate::slot::types::root_node_ids(&records).collect::<Vec<_>>(),
             expected,
             "{} records",
             records.len()

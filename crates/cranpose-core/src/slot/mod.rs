@@ -51,7 +51,6 @@ pub use table::SlotTable;
 pub(crate) use table::SlotWriteSession;
 #[cfg(test)]
 pub(crate) use table::ValueSlotError;
-pub(in crate::slot) use types::root_node_ids;
 pub(crate) use types::{
     ActiveGroupId, ActiveSubtreeRoot, BRANCH_PATH_ROOT, ChildCursor, DetachedSubtree,
     FinishGroupResult, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, NodeLifecycle,

@@ -1,6 +1,4 @@
-use super::super::{
-    NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession, root_node_ids,
-};
+use super::super::{NodeRecord, NodeSlotUpdate, RootNodeIds, SlotTable, SlotWriteSession};
 use crate::{AnchorId, NodeId};
 
 impl SlotTable {
@@ -28,7 +26,43 @@ impl SlotTable {
         &self,
         group_anchor: AnchorId,
     ) -> RootNodeIds {
-        root_node_ids(self.subtree_node_records(group_anchor)).collect()
+        let records = self.subtree_node_records(group_anchor);
+        let parent = records.first().map(|record| record.parent_id);
+        let roots: RootNodeIds = records
+            .iter()
+            .filter(|record| Some(record.parent_id) == parent)
+            .map(|record| record.id)
+            .collect();
+        #[cfg(any(test, debug_assertions))]
+        if crate::slot_validation_diagnostics_enabled() {
+            let expected: RootNodeIds = super::super::types::root_node_ids(records).collect();
+            assert_eq!(
+                roots, expected,
+                "the roots of a group subtree must be the records sharing its first record's parent"
+            );
+        }
+        roots
+    }
+
+    pub(in crate::slot) fn first_subtree_root_node_id(
+        &self,
+        group_anchor: AnchorId,
+    ) -> Option<NodeId> {
+        let first = self
+            .subtree_node_records(group_anchor)
+            .first()
+            .map(|record| record.id);
+        #[cfg(any(test, debug_assertions))]
+        if crate::slot_validation_diagnostics_enabled() {
+            assert_eq!(
+                first,
+                self.collect_subtree_root_node_ids(group_anchor)
+                    .first()
+                    .copied(),
+                "the first record of a group subtree must be one of its roots"
+            );
+        }
+        first
     }
 }
 

@@ -14,8 +14,8 @@ impl Composer {
         parent_hint: Option<NodeId>,
     ) -> Option<usize> {
         let parent_hint = parent_hint?;
-        let roots = self.with_slot_session_mut(|slots| slots.active_scope_root_node_ids(scope));
-        let first = roots.first().copied()?;
+        let first =
+            self.with_slot_session_mut(|slots| slots.active_scope_first_root_node_id(scope))?;
         let mut applier = self.borrow_applier();
         let mut siblings: SmallVec<[NodeId; 8]> = SmallVec::new();
         applier

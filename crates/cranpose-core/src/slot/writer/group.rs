@@ -1,7 +1,7 @@
 use super::{
     super::{
         ActiveGroupId, ActiveSubtreeRoot, ChildCursor, DetachedSubtree, GroupKey, GroupKeySeed,
-        GroupStart, GroupStartKind, RootNodeIds, SlotTable, SlotWriteSession,
+        GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
     },
     SlotWriteSessionState,
 };
@@ -234,14 +234,13 @@ impl SlotWriteSession<'_> {
         }
     }
 
-    pub(crate) fn active_scope_root_node_ids(&mut self, scope: &RecomposeScope) -> RootNodeIds {
-        let Some(group) = self.table.active_group_for_scope(scope) else {
-            return RootNodeIds::new();
-        };
-        let Some(anchor) = self.table.try_active_group_anchor(group) else {
-            return RootNodeIds::new();
-        };
-        self.table.collect_subtree_root_node_ids(anchor)
+    pub(crate) fn active_scope_first_root_node_id(
+        &mut self,
+        scope: &RecomposeScope,
+    ) -> Option<NodeId> {
+        let group = self.table.active_group_for_scope(scope)?;
+        let anchor = self.table.try_active_group_anchor(group)?;
+        self.table.first_subtree_root_node_id(anchor)
     }
 
     pub(crate) fn begin_recompose_at_scope(
