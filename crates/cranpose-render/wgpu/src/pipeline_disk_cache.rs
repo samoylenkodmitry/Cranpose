@@ -42,15 +42,15 @@ pub(crate) fn file_path() -> Option<PathBuf> {
     }
 }
 
-pub(crate) fn load(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
-    if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
-        log::info!(
-            "[pipeline-cache] not offered by {:?}; compiled pipelines persist only as far \
-             as the driver's own cache does",
-            device.adapter_info().backend
-        );
-        return None;
-    }
+/// What the last launch left for this one: the driver's compiled
+/// pipelines, where the device keeps them, and the shape pipelines that
+/// launch drew its first screen with.
+pub(crate) struct Loaded {
+    pub(crate) cache: Option<wgpu::PipelineCache>,
+    pub(crate) first_screen: Vec<u64>,
+}
+
+pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     let path = file_path();
     let file = path.as_deref().and_then(|path| match std::fs::read(path) {
         Ok(bytes) => Some(bytes),
@@ -60,7 +60,25 @@ pub(crate) fn load(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
             None
         }
     });
-    let data = file.as_deref().and_then(current_blob);
+    let contents = file.as_deref().and_then(current_contents);
+    let first_screen = contents
+        .as_ref()
+        .map_or_else(Vec::new, |contents| contents.first_screen.clone().collect());
+    if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
+        log::info!(
+            "[pipeline-cache] not offered by {:?}; compiled pipelines persist only as far \
+             as the driver's own cache does",
+            device.adapter_info().backend
+        );
+        return Loaded {
+            cache: None,
+            first_screen,
+        };
+    }
+    let data = contents
+        .as_ref()
+        .map(|contents| contents.blob)
+        .filter(|blob| !blob.is_empty());
     // SAFETY: `data` is this build's own `get_data` output, and `fallback:
     // true` has wgpu validate the header and fall back to an empty cache.
     #[expect(unsafe_code)]
@@ -73,48 +91,100 @@ pub(crate) fn load(device: &wgpu::Device) -> Option<wgpu::PipelineCache> {
     };
     match (data, &file) {
         (Some(data), _) => log::info!("[pipeline-cache] loaded {} B from disk", data.len()),
-        (None, Some(file)) => log::info!(
+        (None, Some(file)) if contents.is_none() => log::info!(
             "[pipeline-cache] cold: dropped {} B compiled from other shaders",
             file.len()
         ),
-        (None, None) => log::info!("[pipeline-cache] cold (no blob on disk)"),
+        (None, _) => log::info!("[pipeline-cache] cold (no blob on disk)"),
     }
-    Some(cache)
+    Loaded {
+        cache: Some(cache),
+        first_screen,
+    }
 }
 
-/// Names what fills a blob: the framework's WGSL sources, and this crate's
-/// version, which changes with each release of the shader rewrites, pipeline
-/// layouts and translator between those sources and the driver.
+/// The layout of a cache file: its key, the first screen's pipeline keys
+/// behind their count, then the driver's blob. A file in another layout
+/// carries another key, so it loads cold instead of being misread.
+const FILE_LAYOUT: u32 = 2;
+
+/// Names what fills a file: its layout, the framework's WGSL sources, and
+/// this crate's version, which changes with each release of the shader
+/// rewrites, pipeline layouts and translator between those sources and the
+/// driver, and with every pipeline key's layout.
 ///
 /// The driver keeps every pipeline of the blob it loads in the cache it saves,
 /// so a blob kept across shader changes only grows, and the driver holds all
-/// of it resident. A blob under another key loads cold and is replaced.
+/// of it resident. A file under another key loads cold and is replaced.
 fn blob_key() -> [u8; 8] {
     let mut hasher = FxHasher::default();
+    hasher.write_u32(FILE_LAYOUT);
     hasher.write_u64(cranpose_ui_graphics::framework_shaders::SOURCES_KEY);
     hasher.write(env!("CARGO_PKG_VERSION").as_bytes());
     hasher.finish().to_le_bytes()
 }
 
-/// The driver's blob within a cache file, if this build's key leads it.
-fn current_blob(file: &[u8]) -> Option<&[u8]> {
-    file.strip_prefix(blob_key().as_slice())
+/// A cache file this build wrote: its key, the first screen's pipeline
+/// keys behind their count, then the driver's blob.
+struct Contents<'a> {
+    first_screen: FirstScreenKeys<'a>,
+    blob: &'a [u8],
 }
 
-fn write_blob(path: &Path, data: &[u8]) -> std::io::Result<()> {
+#[derive(Clone)]
+struct FirstScreenKeys<'a>(&'a [u8]);
+
+impl Iterator for FirstScreenKeys<'_> {
+    type Item = u64;
+
+    fn next(&mut self) -> Option<u64> {
+        let (key, rest) = self.0.split_first_chunk::<8>()?;
+        self.0 = rest;
+        Some(u64::from_le_bytes(*key))
+    }
+}
+
+/// The file's contents, if this build's key leads it and it is whole.
+fn current_contents(file: &[u8]) -> Option<Contents<'_>> {
+    let rest = file.strip_prefix(blob_key().as_slice())?;
+    let (count, rest) = rest.split_first_chunk::<4>()?;
+    let keys_len = usize::try_from(u32::from_le_bytes(*count))
+        .ok()?
+        .checked_mul(8)?;
+    let (keys, blob) = rest.split_at_checked(keys_len)?;
+    Some(Contents {
+        first_screen: FirstScreenKeys(keys),
+        blob,
+    })
+}
+
+fn file_bytes(first_screen: &[u64], blob: &[u8]) -> Option<Vec<u8>> {
+    let count = u32::try_from(first_screen.len()).ok()?;
+    let mut bytes = Vec::with_capacity(12 + first_screen.len() * 8 + blob.len());
+    bytes.extend_from_slice(&blob_key());
+    bytes.extend_from_slice(&count.to_le_bytes());
+    for key in first_screen {
+        bytes.extend_from_slice(&key.to_le_bytes());
+    }
+    bytes.extend_from_slice(blob);
+    Some(bytes)
+}
+
+fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = std::fs::File::create(path)?;
-    file.write_all(&blob_key())?;
-    file.write_all(data)
+    file.write_all(bytes)
 }
 
-pub(crate) fn persist(cache: &wgpu::PipelineCache, path: &Path) {
+pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
     let started = Instant::now();
-    let Some(data) = cache.get_data() else {
+    let blob = cache
+        .and_then(wgpu::PipelineCache::get_data)
+        .unwrap_or_default();
+    let first_screen = first_screen_keys();
+    let Some(bytes) = file_bytes(&first_screen, &blob) else {
         return;
     };
-    if let Ok(existing) = std::fs::read(path)
-        && current_blob(&existing) == Some(data.as_slice())
-    {
+    if std::fs::read(path).is_ok_and(|existing| existing == bytes) {
         return;
     }
     if let Some(parent) = path.parent()
@@ -124,15 +194,41 @@ pub(crate) fn persist(cache: &wgpu::PipelineCache, path: &Path) {
         return;
     }
     let tmp = path.with_extension("tmp");
-    let written = write_blob(&tmp, &data).and_then(|()| std::fs::rename(&tmp, path));
+    let written = write_file(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, path));
     match written {
         Ok(()) => log::info!(
-            "[pipeline-cache] persisted {} B in {:.1} ms",
-            data.len(),
+            "[pipeline-cache] persisted {} B and {} first-screen pipelines in {:.1} ms",
+            blob.len(),
+            first_screen.len(),
             crate::render::instant_ms(started, Instant::now()),
         ),
         Err(error) => log::warn!("[pipeline-cache] write {path:?}: {error}"),
     }
+}
+
+/// How long after its creation a renderer names the shape pipelines it
+/// draws with, for the next launch to build ahead of its first frame.
+pub(crate) const FIRST_SCREEN_SPAN: Duration = Duration::from_secs(2);
+
+/// The shape pipelines, by their keys' bits, that this process's renderers
+/// drew their first screens with, in the order first drawn.
+static FIRST_SCREEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+/// Notes a shape pipeline a renderer drew its first screen with. The notes
+/// are written with the cache, for the next launch to build ahead of its
+/// first frame.
+pub(crate) fn note_first_screen_pipeline(key: u64) {
+    let mut keys = FIRST_SCREEN.lock().unwrap_or_else(PoisonError::into_inner);
+    if !keys.contains(&key) {
+        keys.push(key);
+    }
+}
+
+fn first_screen_keys() -> Vec<u64> {
+    FIRST_SCREEN
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
 }
 
 /// How long pipeline builds must pause before the cache is written. A burst
@@ -226,7 +322,7 @@ impl Drop for PersistWatcher {
     }
 }
 
-pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) -> Option<PersistWatcher> {
+pub(crate) fn spawn_persist_watcher(cache: Option<wgpu::PipelineCache>) -> Option<PersistWatcher> {
     let path = file_path()?;
     let stopped = Arc::new(AtomicBool::new(false));
     let watcher_stopped = Arc::clone(&stopped);
@@ -237,12 +333,12 @@ pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) -> Option<Persis
             loop {
                 match BUILDS.wait_for_quiet(written, PERSIST_QUIET, &watcher_stopped) {
                     Wake::Quiet(built) => {
-                        persist(&cache, &path);
+                        persist(cache.as_ref(), &path);
                         written = built;
                     }
                     Wake::Stopped(built) => {
                         if built != written {
-                            persist(&cache, &path);
+                            persist(cache.as_ref(), &path);
                         }
                         return;
                     }

@@ -134,6 +134,23 @@ impl LockedRenderer {
         Ok(with_app_context(headless_renderer_beside_locked()?, None))
     }
 
+    /// A renderer beside the locked one that compiles on the background
+    /// compiler, as an app's does.
+    pub fn compiling_in_background_beside_locked() -> Result<LockedRenderer, String> {
+        let device = device::HeadlessDevice::request(
+            wgpu::Backends::all(),
+            wgpu::Limits::default(),
+            "Background Compiling Test Device",
+        )?;
+        let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
+        device.attach(
+            &mut renderer,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            device::Pipelines::Background,
+        );
+        Ok(with_app_context(renderer, None))
+    }
+
     pub fn render_current_scene_to_texture(
         &mut self,
         width: u32,

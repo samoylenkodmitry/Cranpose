@@ -1388,7 +1388,150 @@ pub(crate) struct ShapePipelineKey {
     pub(crate) depth: ShapeDepth,
 }
 
+/// Packs a key's fields into a number, low bit first.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct KeyWriter {
+    bits: u64,
+    width: u32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl KeyWriter {
+    fn put(&mut self, value: u64, width: u32) {
+        self.bits |= value << self.width;
+        self.width += width;
+    }
+
+    fn put_byte(&mut self, value: Option<u8>) {
+        self.put(u64::from(value.is_some()), 1);
+        self.put(u64::from(value.unwrap_or_default()), 8);
+    }
+}
+
+/// Unpacks what [`KeyWriter`] packed, low bit first.
+struct KeyReader(u64);
+
+impl KeyReader {
+    fn take(&mut self, width: u32) -> u64 {
+        let value = self.0 & ((1 << width) - 1);
+        self.0 >>= width;
+        value
+    }
+
+    fn take_flag(&mut self) -> bool {
+        self.take(1) == 1
+    }
+
+    fn take_byte(&mut self) -> Option<u8> {
+        let present = self.take_flag();
+        let value = u8::try_from(self.take(8)).ok()?;
+        present.then_some(value)
+    }
+}
+
 impl ShapePipelineKey {
+    /// The key as a number a later launch reads back with
+    /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn to_bits(self) -> u64 {
+        let mut bits = KeyWriter::default();
+        bits.put(self.blend_mode as u64, 5);
+        bits.put(
+            match self.tier {
+                RunTier::Store => 0,
+                RunTier::Arena => 1,
+            },
+            1,
+        );
+        let variant = self.variant;
+        bits.put_byte(variant.kind);
+        bits.put_byte(variant.brush);
+        bits.put(u64::from(variant.solid), 1);
+        bits.put(
+            match variant.clip {
+                SegmentClip::Untested => 0,
+                SegmentClip::Tested => 1,
+                SegmentClip::Rounded => 2,
+            },
+            2,
+        );
+        bits.put(u64::from(variant.interior), 1);
+        bits.put(u64::from(variant.dither), 1);
+        bits.put(u64::from(variant.ablation.material), 1);
+        bits.put(u64::from(variant.ablation.fill), 1);
+        bits.put(
+            match self.turns {
+                ShapeTurns::None => 0,
+                ShapeTurns::All => 1,
+                ShapeTurns::Mixed => 2,
+            },
+            2,
+        );
+        bits.put(
+            match self.depth {
+                ShapeDepth::Off => 0,
+                ShapeDepth::Tested => 1,
+                ShapeDepth::Interior => 2,
+            },
+            2,
+        );
+        bits.bits
+    }
+
+    /// The key [`Self::to_bits`] packed, or `None` for a number no key
+    /// packs to.
+    pub(crate) fn from_bits(packed: u64) -> Option<Self> {
+        let mut bits = KeyReader(packed);
+        let blend_mode = *BlendMode::ALL.get(usize::try_from(bits.take(5)).ok()?)?;
+        let tier = match bits.take(1) {
+            0 => RunTier::Store,
+            _ => RunTier::Arena,
+        };
+        let kind = bits.take_byte();
+        let brush = bits.take_byte();
+        let solid = bits.take_flag();
+        let clip = match bits.take(2) {
+            0 => SegmentClip::Untested,
+            1 => SegmentClip::Tested,
+            2 => SegmentClip::Rounded,
+            _ => return None,
+        };
+        let interior = bits.take_flag();
+        let dither = bits.take_flag();
+        let ablation = ShapeAblation {
+            material: bits.take_flag(),
+            fill: bits.take_flag(),
+        };
+        let turns = match bits.take(2) {
+            0 => ShapeTurns::None,
+            1 => ShapeTurns::All,
+            2 => ShapeTurns::Mixed,
+            _ => return None,
+        };
+        let depth = match bits.take(2) {
+            0 => ShapeDepth::Off,
+            1 => ShapeDepth::Tested,
+            2 => ShapeDepth::Interior,
+            _ => return None,
+        };
+        (bits.0 == 0).then_some(Self {
+            blend_mode,
+            tier,
+            variant: ShapeVariant {
+                kind,
+                brush,
+                solid,
+                clip,
+                interior,
+                dither,
+                ablation,
+            },
+            turns,
+            depth,
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn general_for(blend_mode: BlendMode, tier: RunTier) -> Self {
         Self {
@@ -2888,13 +3031,16 @@ impl GpuRenderer {
         );
 
         #[cfg(not(target_arch = "wasm32"))]
-        let pipeline_cache = crate::pipeline_disk_cache::load(&device);
+        let crate::pipeline_disk_cache::Loaded {
+            cache: pipeline_cache,
+            first_screen,
+        } = crate::pipeline_disk_cache::load(&device);
         #[cfg(target_arch = "wasm32")]
-        let pipeline_cache: Option<wgpu::PipelineCache> = None;
+        let (pipeline_cache, first_screen): (Option<wgpu::PipelineCache>, Vec<u64>) =
+            (None, Vec::new());
         #[cfg(not(target_arch = "wasm32"))]
-        let pipeline_cache_watcher = pipeline_cache
-            .clone()
-            .and_then(crate::pipeline_disk_cache::spawn_persist_watcher);
+        let pipeline_cache_watcher =
+            crate::pipeline_disk_cache::spawn_persist_watcher(pipeline_cache.clone());
 
         let effects_started = Instant::now();
         let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
@@ -2927,6 +3073,9 @@ impl GpuRenderer {
             },
             adapter_backend,
             &pipeline_compiler,
+            first_screen
+                .into_iter()
+                .filter_map(ShapePipelineKey::from_bits),
         );
         let image_layouts = [
             Some(&uniform_bind_group_layout),

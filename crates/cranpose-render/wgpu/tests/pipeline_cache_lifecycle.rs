@@ -6,8 +6,10 @@ use std::{
 };
 
 use cranpose_render_common::{Renderer, graph::RenderGraph};
-use cranpose_render_wgpu::{debug_toggle_os, set_debug_toggle_os};
-use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect};
+use cranpose_render_wgpu::{
+    debug_toggle_os, pipelines_created, pipelines_created_off_frame, set_debug_toggle_os,
+};
+use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Rect};
 
 use crate::support;
 
@@ -155,5 +157,102 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
         !previous_cache.exists(),
         "a retired renderer rewrote its obsolete cache: {}",
         previous_cache.display()
+    );
+}
+
+/// A white square beside a rounded one, so a frame draws with more than one
+/// shape pipeline.
+fn squares() -> RenderGraph {
+    let square = |x: f32| Rect {
+        x,
+        y: 0.0,
+        width: 8.0,
+        height: 8.0,
+    };
+    RenderGraph::new(support::layer_node(
+        None,
+        16.0,
+        16.0,
+        vec![
+            support::draw_node(
+                DrawPrimitive::Rect {
+                    rect: square(0.0),
+                    brush: Brush::solid(Color::WHITE),
+                    stroke: None,
+                },
+                None,
+            ),
+            support::draw_node(
+                DrawPrimitive::RoundRect {
+                    rect: square(8.0),
+                    brush: Brush::solid(Color::WHITE),
+                    radii: CornerRadii::uniform(3.0),
+                    stroke: None,
+                },
+                None,
+            ),
+        ],
+    ))
+}
+
+/// Pipelines built on the frame thread while `renderer` draws its first
+/// frame.
+fn first_frame_builds(renderer: &mut support::LockedRenderer) -> u64 {
+    renderer.scene_mut().graph = Some(squares());
+    let before = pipelines_created();
+    let frame = renderer.capture_frame(16, 16).expect("first frame");
+    assert!(frame.pixels.as_chunks::<4>().0.contains(&[255; 4]));
+    pipelines_created() - before
+}
+
+/// Waits for the background compiler to fall quiet: no pipeline built off
+/// the frame for half a second.
+fn wait_for_warm_ups() {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen = pipelines_created_off_frame();
+    let mut quiet_since = Instant::now();
+    while quiet_since.elapsed() < Duration::from_millis(500) {
+        assert!(Instant::now() < deadline, "warm-ups never fell quiet");
+        std::thread::sleep(Duration::from_millis(20));
+        let built = pipelines_created_off_frame();
+        if built != seen {
+            seen = built;
+            quiet_since = Instant::now();
+        }
+    }
+}
+
+#[test]
+fn a_relaunch_builds_its_first_screens_shapes_before_its_first_frame() {
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("first-screen.bin");
+
+    let mut first_launch =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    let first_launch_builds = first_frame_builds(&mut first_launch);
+    let dropped_at = SystemTime::now();
+    drop(first_launch);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !fs::metadata(&cache)
+        .and_then(|metadata| metadata.modified())
+        .is_ok_and(|modified| modified >= dropped_at)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the first launch did not write what it drew with: {}",
+            cache.display()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let mut relaunch =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    wait_for_warm_ups();
+    let relaunch_builds = first_frame_builds(&mut relaunch);
+    assert!(
+        relaunch_builds < first_launch_builds,
+        "the relaunch built {relaunch_builds} pipelines in its first frame, \
+         the first launch {first_launch_builds}"
     );
 }
