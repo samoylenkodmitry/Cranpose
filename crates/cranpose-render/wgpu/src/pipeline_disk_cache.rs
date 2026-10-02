@@ -2,7 +2,11 @@ use std::{
     hash::Hasher,
     io::Write,
     path::{Path, PathBuf},
-    sync::{OnceLock, mpsc},
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
 };
 
 use cranpose_ui_graphics::FxHasher;
@@ -132,48 +136,122 @@ pub(crate) fn persist(cache: &wgpu::PipelineCache, path: &Path) {
     }
 }
 
-/// Decides, once a tick, whether the cache should be written: after the
-/// pipeline count has grown since the last write and then held still for a
-/// whole tick, so a burst of compiles is written once, after its last one,
-/// and a variant first reached late in a session reaches the disk too.
-#[derive(Default)]
-struct PersistWatch {
-    persisted: u64,
-    seen: u64,
+/// How long pipeline builds must pause before the cache is written. A burst
+/// of builds, such as a screen's first frames, is written once after its last
+/// build, and a session closed a moment after launch still keeps what the
+/// launch compiled, so the next launch skips those compiles.
+const PERSIST_QUIET: Duration = Duration::from_millis(500);
+
+/// Pipelines this process has built, for the watchers that write them back.
+static BUILDS: BuildSignal = BuildSignal::new();
+
+/// Counts a pipeline build and wakes the watchers waiting to write it back.
+pub(crate) fn note_pipeline_built() {
+    BUILDS.note_built();
 }
 
-impl PersistWatch {
-    fn observe(&mut self, created: u64) -> bool {
-        let quiet = created == self.seen;
-        self.seen = created;
-        if quiet && created != self.persisted {
-            self.persisted = created;
-            return true;
+/// A count of pipeline builds that watchers can wait on.
+struct BuildSignal {
+    built: Mutex<u64>,
+    changed: Condvar,
+}
+
+/// Why a watcher woke, with the build count at that moment.
+#[derive(Debug, PartialEq, Eq)]
+enum Wake {
+    /// Builds past the written count paused for the quiet period.
+    Quiet(u64),
+    /// The watcher's owner let it go.
+    Stopped(u64),
+}
+
+impl BuildSignal {
+    const fn new() -> Self {
+        Self {
+            built: Mutex::new(0),
+            changed: Condvar::new(),
         }
-        false
+    }
+
+    fn lock(&self) -> MutexGuard<'_, u64> {
+        self.built.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn note_built(&self) {
+        *self.lock() += 1;
+        self.changed.notify_all();
+    }
+
+    fn stop(&self, stopped: &AtomicBool) {
+        stopped.store(true, Ordering::Release);
+        // Holding the lock orders the flag against a watcher between its
+        // check and its wait, so the wake below cannot be lost.
+        let _held = self.lock();
+        self.changed.notify_all();
+    }
+
+    /// Sleeps until builds past `written` pause for `quiet`, or until the
+    /// watcher is stopped. Nothing wakes it while no pipeline is built.
+    fn wait_for_quiet(&self, written: u64, quiet: Duration, stopped: &AtomicBool) -> Wake {
+        let is_stopped = || stopped.load(Ordering::Acquire);
+        let mut built = self
+            .changed
+            .wait_while(self.lock(), |built| *built == written && !is_stopped())
+            .unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if is_stopped() {
+                return Wake::Stopped(*built);
+            }
+            let seen = *built;
+            let (next, waited) = self
+                .changed
+                .wait_timeout_while(built, quiet, |built| *built == seen && !is_stopped())
+                .unwrap_or_else(PoisonError::into_inner);
+            built = next;
+            if waited.timed_out() {
+                return Wake::Quiet(*built);
+            }
+        }
     }
 }
 
-const PERSIST_TICK: std::time::Duration = std::time::Duration::from_secs(2);
+/// Keeps the cache's watcher writing new pipelines to disk. Dropping it
+/// writes what is still unwritten and ends the watcher.
+pub(crate) struct PersistWatcher {
+    stopped: Arc<AtomicBool>,
+}
 
-pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) -> Option<mpsc::Sender<()>> {
+impl Drop for PersistWatcher {
+    fn drop(&mut self) {
+        BUILDS.stop(&self.stopped);
+    }
+}
+
+pub(crate) fn spawn_persist_watcher(cache: wgpu::PipelineCache) -> Option<PersistWatcher> {
     let path = file_path()?;
-    let (lifetime, stopped) = mpsc::channel();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let watcher_stopped = Arc::clone(&stopped);
+    let mut written = *BUILDS.lock();
     let spawned = std::thread::Builder::new()
         .name("cranpose-pl-cache".into())
         .spawn(move || {
-            let mut watch = PersistWatch::default();
-            while let Err(mpsc::RecvTimeoutError::Timeout) = stopped.recv_timeout(PERSIST_TICK) {
-                if watch.observe(
-                    crate::render::pipelines_created()
-                        + crate::render::pipelines_created_off_frame(),
-                ) {
-                    persist(&cache, &path);
+            loop {
+                match BUILDS.wait_for_quiet(written, PERSIST_QUIET, &watcher_stopped) {
+                    Wake::Quiet(built) => {
+                        persist(&cache, &path);
+                        written = built;
+                    }
+                    Wake::Stopped(built) => {
+                        if built != written {
+                            persist(&cache, &path);
+                        }
+                        return;
+                    }
                 }
             }
         });
     match spawned {
-        Ok(_) => Some(lifetime),
+        Ok(_) => Some(PersistWatcher { stopped }),
         Err(error) => {
             log::warn!("[pipeline-cache] persist thread failed to spawn: {error}");
             None

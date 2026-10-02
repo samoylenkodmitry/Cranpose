@@ -1081,6 +1081,7 @@ pub(crate) fn create_render_pipeline_logged<'a>(
     } else {
         PIPELINES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
+    crate::pipeline_disk_cache::note_pipeline_built();
     pipeline
 }
 
@@ -2684,7 +2685,7 @@ pub struct GpuRenderer {
     adapter_backend: wgpu::Backend,
     pipeline_cache: Option<wgpu::PipelineCache>,
     #[cfg(not(target_arch = "wasm32"))]
-    _pipeline_cache_watcher: Option<std::sync::mpsc::Sender<()>>,
+    _pipeline_cache_watcher: Option<crate::pipeline_disk_cache::PersistWatcher>,
     shape_pipelines: ShapePipelines,
     /// Image and glyph pipelines for passes without and with a depth buffer.
     image_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 4],

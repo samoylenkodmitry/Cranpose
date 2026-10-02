@@ -976,14 +976,21 @@ fn update_android_shell_geometry(
 ) -> Option<Size> {
     shell.renderer().set_root_scale(density);
     shell.set_density(density);
-    shell.set_font_scale_curve(crate::android_font_scale::font_scale_curve());
-    shell.set_rotary_scroll_factor(crate::android_input::android_rotary_scroll_factor(density));
+    log::info!("[startup] g2 density");
+    let curve = crate::android_font_scale::font_scale_curve();
+    log::info!("[startup] g2 font scale curve read");
+    shell.set_font_scale_curve(curve);
+    log::info!("[startup] g2 font scale curve set");
+    let rotary = crate::android_input::android_rotary_scroll_factor(density);
+    log::info!("[startup] g2 rotary read");
+    shell.set_rotary_scroll_factor(rotary);
 
     let (width, height) = shell.buffer_size();
     if width > 0 && height > 0 {
         let width_dp = width as f32 / density;
         let height_dp = height as f32 / density;
         shell.set_viewport(width_dp, height_dp);
+        log::info!("[startup] g2 viewport set");
         let actual = Size::new(width_dp, height_dp);
         cranpose_services::publish_host_surface_size(
             cranpose_services::host_surface::HostSurfaceSize {
@@ -1378,8 +1385,11 @@ where
 
     if let Some(shell) = app_shell {
         shell.renderer().set_root_scale(density);
+        log::info!("[startup] g root scale");
         shell.set_density(density);
+        log::info!("[startup] g density");
         set_android_ime_density(density);
+        log::info!("[startup] g ime density");
     }
 
     let actual_size = app_shell.as_mut().and_then(|shell| {
