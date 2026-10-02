@@ -86,11 +86,10 @@ struct GroupEntry {
 }
 
 struct GroupScopeEntry<'a> {
-    parent_scope: Option<RecomposeScope>,
     options: RecomposeOptions,
     start_kind: GroupStartKind,
-    host: &'a Rc<SlotsHost>,
-    restored_scopes: Option<Vec<ScopeId>>,
+    host: &'a SlotsHost,
+    group: crate::slot::ActiveGroupId,
 }
 
 struct SlotHostPassGuard {
@@ -129,7 +128,23 @@ impl Drop for SlotHostPassGuard {
 pub(crate) struct PendingMovable {
     pub(crate) key: crate::slot::GroupKey,
     pub(crate) placeholder: AnchorId,
-    pub(crate) parent_scope: Option<ScopeId>,
+    pub(crate) parent_scope: Option<Weak<RecomposeScopeInner>>,
+}
+
+fn reparent_restored_scopes(
+    host: &SlotsHost,
+    group: crate::slot::ActiveGroupId,
+    old_hint: Option<NodeId>,
+    parent_hint: Option<NodeId>,
+) {
+    host.with_write_session(|slots| {
+        slots.for_each_subtree_scope(group, |scope| {
+            if scope.parent_hint() == old_hint {
+                scope.set_parent_hint(parent_hint);
+            }
+            scope.reactivate();
+        });
+    });
 }
 
 fn movable_retain_key(id: Key) -> RetainKey {
@@ -140,7 +155,6 @@ fn movable_retain_key(id: Key) -> RetainKey {
 }
 
 pub(crate) struct ComposerRuntimeState {
-    scope_registry: RefCell<HashMap<ScopeId, RecomposeScope>>,
     retention_by_host: RefCell<HashMap<usize, RetentionManager>>,
     pending_movables_by_host: RefCell<HashMap<usize, Vec<PendingMovable>>>,
     retention_policy: Cell<RetentionPolicy>,
@@ -151,7 +165,6 @@ pub(crate) struct ComposerRuntimeState {
 impl Default for ComposerRuntimeState {
     fn default() -> Self {
         Self {
-            scope_registry: RefCell::new(HashMap::default()),
             retention_by_host: RefCell::new(HashMap::default()),
             pending_movables_by_host: RefCell::new(HashMap::default()),
             retention_policy: Cell::new(RetentionPolicy::default()),
@@ -162,30 +175,19 @@ impl Default for ComposerRuntimeState {
 }
 
 impl ComposerRuntimeState {
-    pub(crate) fn clear_host_storage_key(&self, host_key: usize) {
+    pub(crate) fn clear_host_storage_key(&self, host_key: usize, table: &mut SlotTable) {
         self.retention_by_host.borrow_mut().remove(&host_key);
         self.pending_movables_by_host.borrow_mut().remove(&host_key);
         self.live_hosts.borrow_mut().remove(&host_key);
-        let removed_scopes = {
-            let mut removed = Vec::new();
-            self.scope_registry.borrow_mut().retain(|_, scope| {
-                if scope.slots_storage_key() == Some(host_key) {
-                    removed.push(scope.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-            removed
-        };
-        for scope in removed_scopes {
-            scope.deactivate();
-        }
+        table.release_scopes();
     }
 
-    pub(crate) fn force_recompose_host_scopes(&self, host_key: usize) {
-        for scope in self.scope_registry.borrow().values() {
-            if scope.slots_storage_key() == Some(host_key) {
+    pub(crate) fn force_recompose_retained_scopes(&self, host_key: usize) {
+        if let Some(retention) = self.retention_by_host.borrow().get(&host_key) {
+            for scope in retention
+                .subtrees()
+                .flat_map(crate::slot::DetachedSubtree::scopes)
+            {
                 scope.force_recompose();
             }
         }
@@ -210,30 +212,12 @@ impl ComposerRuntimeState {
             .insert(host.storage_key(), Rc::downgrade(host));
     }
 
-    pub(crate) fn scope_for_id(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
-        self.scope_registry.borrow().get(&scope_id).cloned()
-    }
-
-    pub(crate) fn register_scope(&self, scope: &RecomposeScope) {
-        self.scope_registry
-            .borrow_mut()
-            .insert(scope.id(), scope.clone());
-    }
-
-    pub(crate) fn remove_scope(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
-        self.scope_registry.borrow_mut().remove(&scope_id)
-    }
-
     pub(crate) fn set_retention_policy(&self, policy: RetentionPolicy) {
         self.retention_policy.set(policy);
     }
 
     pub(crate) fn retention_policy(&self) -> RetentionPolicy {
         self.retention_policy.get()
-    }
-
-    pub(crate) fn scope_registry_len(&self) -> usize {
-        self.scope_registry.borrow().len()
     }
 
     pub(crate) fn take_retained(
@@ -396,7 +380,6 @@ impl ComposerRuntimeState {
         snapshot: &mut crate::SlotDebugSnapshot,
     ) {
         let retention = self.retention_debug_stats(host.storage_key());
-        snapshot.runtime_scope_registry_count = Some(self.scope_registry_len());
         snapshot.retained_subtree_count = retention.subtree_count;
         snapshot.retained_group_count = retention.group_count;
         snapshot.retained_payload_count = retention.payload_count;
@@ -451,13 +434,13 @@ impl ComposerRuntimeState {
         }
     }
 
-    pub(crate) fn clear_host(&self, host: &SlotsHost) {
+    pub(crate) fn clear_host(&self, host: &SlotsHost, table: &mut SlotTable) {
         let host_key = host.storage_key();
         debug_assert!(
             self.host_retention_is_empty(host),
             "host retention must be drained before clearing host ownership"
         );
-        self.clear_host_storage_key(host_key);
+        self.clear_host_storage_key(host_key, table);
     }
 
     fn deactivate_and_queue_subtrees(
@@ -467,10 +450,8 @@ impl ComposerRuntimeState {
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
     ) {
         for subtree in retention.into_subtrees() {
-            for scope_id in subtree.scope_ids() {
-                if let Some(scope) = self.remove_scope(scope_id) {
-                    scope.deactivate();
-                }
+            for scope in subtree.scopes() {
+                scope.deactivate();
             }
             table.invalidate_detached_subtree_anchors(&subtree);
             lifecycle.queue_subtree_disposal(subtree);
@@ -512,11 +493,11 @@ impl ComposerRuntimeState {
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
     ) {
         let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
-            self.clear_host_storage_key(host_key);
+            self.clear_host_storage_key(host_key, table);
             return;
         };
         self.deactivate_and_queue_subtrees(retention, table, lifecycle);
-        self.clear_host_storage_key(host_key);
+        self.clear_host_storage_key(host_key, table);
     }
 
     pub(crate) fn host_retention_is_empty(&self, host: &SlotsHost) -> bool {
@@ -680,6 +661,16 @@ impl Drop for SubcomposeStackGuard {
 }
 
 impl ComposerCore {
+    pub(crate) fn open_branch_fold(&self, key: Key) -> BranchGroupGuard {
+        let hosts = self.slot_hosts.borrow();
+        let host = hosts.last().unwrap_or(&self.slots);
+        BranchGroupGuard {
+            fold: host
+                .try_push_branch_fold(key)
+                .map(|token| (Rc::clone(host), token)),
+        }
+    }
+
     pub(crate) fn new(
         shared_state: Rc<ComposerRuntimeState>,
         slots: Rc<SlotsHost>,
@@ -734,20 +725,15 @@ pub struct Composer {
 }
 
 pub struct BranchGroupGuard {
-    composer: Composer,
-    fold_token: Option<usize>,
+    fold: Option<(Rc<SlotsHost>, usize)>,
 }
 
 impl Drop for BranchGroupGuard {
     fn drop(&mut self) {
-        let Some(token) = self.fold_token else {
+        let Some((host, token)) = &self.fold else {
             return;
         };
-        if !self
-            .composer
-            .active_slots_host()
-            .try_close_branch_fold(token)
-        {
+        if !host.try_close_branch_fold(*token) {
             log::error!("a branch fold guard closed while its slot host was busy");
         }
     }
@@ -842,9 +828,9 @@ impl Composer {
     }
 
     pub(crate) fn observe_scope<R>(&self, scope: &RecomposeScope, block: impl FnOnce() -> R) -> R {
-        let observer = self.observer();
-        let scope_clone = scope.clone();
-        observer.observe_reads(scope_clone, super::RecomposeScope::invalidate, block)
+        self.core
+            .observer
+            .observe_reads(scope.clone(), super::RecomposeScope::invalidate, block)
     }
 
     pub fn active_slots_host(&self) -> Rc<SlotsHost> {
@@ -856,23 +842,24 @@ impl Composer {
             .unwrap_or_else(|| Rc::clone(&self.core.slots))
     }
 
+    fn with_active_slots_host<R>(&self, f: impl FnOnce(&SlotsHost) -> R) -> R {
+        let hosts = self.core.slot_hosts.borrow();
+        f(hosts.last().unwrap_or(&self.core.slots))
+    }
+
     pub(crate) fn with_slots<R>(&self, f: impl FnOnce(&SlotTable) -> R) -> R {
-        let host = self.active_slots_host();
-        let slots = host.borrow();
-        f(&slots)
+        self.with_active_slots_host(|host| f(&host.borrow()))
     }
 
     pub(crate) fn with_slots_mut<R>(&self, f: impl FnOnce(&mut SlotTable) -> R) -> R {
-        let host = self.active_slots_host();
-        let mut slots = host.borrow_mut();
-        f(&mut slots)
+        self.with_active_slots_host(|host| f(&mut host.borrow_mut()))
     }
 
     pub(crate) fn with_slot_session_mut<R>(
         &self,
         f: impl FnOnce(&mut crate::slot::SlotWriteSession<'_>) -> R,
     ) -> R {
-        self.active_slots_host().with_write_session(f)
+        self.with_active_slots_host(|host| host.with_write_session(f))
     }
 
     pub(crate) fn try_with_slot_host_pass<R>(
@@ -971,7 +958,7 @@ impl Composer {
                 waiting.push(site);
                 continue;
             }
-            match site.parent_scope.and_then(|id| self.scope_for_id(id)) {
+            match site.parent_scope.as_ref().and_then(RecomposeScope::upgrade) {
                 Some(scope) => {
                     scope.force_recompose();
                     scope.invalidate();
@@ -1025,18 +1012,6 @@ impl Composer {
 
     pub(crate) fn scope_stack(&self) -> RefMut<'_, Vec<RecomposeScope>> {
         self.core.scope_stack.borrow_mut()
-    }
-
-    fn scope_for_id(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
-        self.core.shared_state.scope_for_id(scope_id)
-    }
-
-    fn register_scope(&self, scope: &RecomposeScope) {
-        self.core.shared_state.register_scope(scope);
-    }
-
-    fn remove_scope(&self, scope_id: ScopeId) -> Option<RecomposeScope> {
-        self.core.shared_state.remove_scope(scope_id)
     }
 
     pub(crate) fn local_stack(&self) -> RefMut<'_, LocalStackSnapshot> {
@@ -1220,19 +1195,19 @@ impl Composer {
 
     fn resolve_group_entry(
         &self,
+        host: &Rc<SlotsHost>,
         seed: crate::slot::GroupKeySeed,
         parent_scope_id: Option<ScopeId>,
     ) -> GroupEntry {
-        let host = self.active_slots_host();
-        let key = self.with_slot_session_mut(|slots| slots.reserve_group_key(seed));
+        let key = host.with_write_session(|slots| slots.reserve_group_key(seed));
         let retain_key = RetainKey::for_group(parent_scope_id, key);
         let restored = self
             .core
             .shared_state
-            .take_retained(&host, retain_key, |subtree| {
-                self.with_slot_session_mut(|slots| slots.retained_restore_ready(key, subtree))
+            .take_retained(host, retain_key, |subtree| {
+                host.with_write_session(|slots| slots.retained_restore_ready(key, subtree))
             })
-            .or_else(|| self.take_movable_from_another_table(&host, retain_key, key));
+            .or_else(|| self.take_movable_from_another_table(host, retain_key, key));
         if restored.is_some() || !key.is_movable() {
             return GroupEntry {
                 key,
@@ -1240,7 +1215,7 @@ impl Composer {
                 placeholder_for: None,
             };
         }
-        let attached_elsewhere = self.movable_attached_elsewhere(&host, key);
+        let attached_elsewhere = self.movable_attached_elsewhere(host, key);
         if !attached_elsewhere {
             return GroupEntry {
                 key,
@@ -1249,7 +1224,7 @@ impl Composer {
             };
         }
         let id = key.explicit_key.unwrap_or_default();
-        let placeholder = self.with_slot_session_mut(|slots| {
+        let placeholder = host.with_write_session(|slots| {
             slots.reserve_group_key(crate::slot::GroupKeySeed::movable_placeholder(id))
         });
         GroupEntry {
@@ -1279,7 +1254,7 @@ impl Composer {
         source
             .borrow_mut()
             .invalidate_detached_subtree_anchors(&subtree);
-        if self.with_slot_session_mut(|slots| slots.retained_restore_ready(key, &mut subtree)) {
+        if host.with_write_session(|slots| slots.retained_restore_ready(key, &mut subtree)) {
             return Some(subtree);
         }
         log::error!(
@@ -1294,7 +1269,7 @@ impl Composer {
     /// Whether the movable's content is attached to some parent that is not
     /// the one composing, in this slot table or in another.
     fn movable_attached_elsewhere(&self, host: &Rc<SlotsHost>, key: crate::slot::GroupKey) -> bool {
-        if self.with_slot_session_mut(|slots| slots.movable_attached_elsewhere(key)) {
+        if host.with_write_session(|slots| slots.movable_attached_elsewhere(key)) {
             return true;
         }
         let Some(id) = key.movable_id() else {
@@ -1308,34 +1283,39 @@ impl Composer {
 
     fn scope_for_started_group(
         &self,
+        host: &SlotsHost,
         group: crate::slot::ActiveGroupId,
-        scope_id: Option<ScopeId>,
+        scope: Option<RecomposeScope>,
     ) -> RecomposeScope {
-        if let Some(scope) = scope_id.and_then(|scope_id| self.scope_for_id(scope_id)) {
+        if let Some(scope) = scope {
             return scope;
         }
         let scope = RecomposeScope::new(self.runtime_handle());
-        self.register_scope(&scope);
-        self.with_slot_session_mut(|slots| slots.set_group_scope(group, scope.id()));
+        host.with_write_session(|slots| slots.set_group_scope(group, scope.clone()));
         scope
     }
 
     fn enter_group_scope(&self, scope_ref: &RecomposeScope, entry: GroupScopeEntry<'_>) {
         let GroupScopeEntry {
-            parent_scope,
             options,
             start_kind,
             host,
-            restored_scopes,
+            group,
         } = entry;
-        let lifetime_owner_scope = if parent_scope.is_none() {
-            self.core.subcomposition_owner_scope.borrow().clone()
-        } else {
-            None
-        };
         scope_ref.reactivate();
-        scope_ref.set_parent_scope(parent_scope);
-        scope_ref.set_lifetime_owner_scope(lifetime_owner_scope);
+        {
+            let mut stack = self.scope_stack();
+            let parent_scope = stack.last();
+            scope_ref.set_parent_scope(parent_scope);
+            if parent_scope.is_none() {
+                scope_ref.set_lifetime_owner_scope(
+                    self.core.subcomposition_owner_scope.borrow().as_ref(),
+                );
+            } else {
+                scope_ref.set_lifetime_owner_scope(None);
+            }
+            stack.push(scope_ref.clone());
+        }
         scope_ref.set_retention_mode(options.retention);
 
         if options.force_recompose {
@@ -1343,16 +1323,12 @@ impl Composer {
         } else if options.force_reuse {
             scope_ref.force_reuse();
         }
-        if matches!(start_kind, GroupStartKind::Restored) {
+        let restored = matches!(start_kind, GroupStartKind::Restored);
+        if restored {
             scope_ref.force_recompose();
         }
 
         scope_ref.set_slots_host(host);
-
-        {
-            let mut stack = self.scope_stack();
-            stack.push(scope_ref.clone());
-        }
 
         {
             let mut stack = self.subcompose_stack();
@@ -1361,106 +1337,90 @@ impl Composer {
             }
         }
 
-        scope_ref.snapshot_locals(self.current_local_stack());
+        scope_ref.snapshot_locals(&self.core.local_stack.borrow());
         let parent_hint = self.current_parent_hint();
-        if let Some(restored_scopes) = restored_scopes {
-            self.reparent_restored_scopes(scope_ref, &restored_scopes, parent_hint);
+        if restored {
+            reparent_restored_scopes(host, group, scope_ref.parent_hint(), parent_hint);
         }
         scope_ref.set_parent_hint(parent_hint);
-    }
-
-    fn reparent_restored_scopes(
-        &self,
-        root: &RecomposeScope,
-        restored_scopes: &[ScopeId],
-        parent_hint: Option<NodeId>,
-    ) {
-        let old_hint = root.parent_hint();
-        for scope in restored_scopes
-            .iter()
-            .filter_map(|scope_id| self.scope_for_id(*scope_id))
-        {
-            if scope.parent_hint() == old_hint {
-                scope.set_parent_hint(parent_hint);
-            }
-            scope.reactivate();
-        }
     }
 
     #[inline(never)]
     fn with_group_in_active_pass_dyn(
         &self,
+        host: &Rc<SlotsHost>,
         key: crate::slot::GroupKeySeed,
         f: &mut dyn FnMut(&Composer),
     ) {
         struct GroupGuard<'a> {
             composer: &'a Composer,
+            host: &'a Rc<SlotsHost>,
             scope: RecomposeScope,
         }
 
         impl Drop for GroupGuard<'_> {
             fn drop(&mut self) {
-                self.composer
-                    .close_current_group_body_for_scope(&self.scope);
+                self.composer.close_group_body(self.host, &self.scope);
                 self.scope.mark_recomposed();
                 #[expect(
                     clippy::redundant_closure_for_method_calls,
                     reason = "the method path is not general over the session lifetime"
                 )]
-                self.composer
-                    .with_slot_session_mut(|slots| slots.end_group());
+                self.host.with_write_session(|slots| slots.end_group());
                 if let Err(err) = self.composer.flush_pending_commands_if_large() {
                     log::error!("mid-composition command flush failed: {err}");
                 }
             }
         }
 
-        let parent_scope = self.current_recompose_scope();
         let options = self.pending_scope_options().take().unwrap_or_default();
-        let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
-        let host = self.active_slots_host();
+        let parent_scope_id = self
+            .core
+            .scope_stack
+            .borrow()
+            .last()
+            .map(RecomposeScope::id);
         let GroupEntry {
             key: reserved_key,
             restored,
             placeholder_for,
-        } = self.resolve_group_entry(key, parent_scope_id);
-        let restored_scopes = restored
-            .as_ref()
-            .map(crate::slot::DetachedSubtree::scope_ids);
+        } = self.resolve_group_entry(host, key, parent_scope_id);
         let parent_node = self.current_parent_hint();
-        let (group, anchor, start_scope_id, start_kind) = self.with_slot_session_mut(|slots| {
-            let GroupStart {
-                group,
-                anchor,
-                scope_id,
-                kind,
-            } = slots.begin_group(reserved_key, restored, parent_node);
-            (group, anchor, scope_id, kind)
-        });
-        let scope_ref = self.scope_for_started_group(group, start_scope_id);
-        self.enter_group_scope(
-            &scope_ref,
-            GroupScopeEntry {
-                parent_scope,
-                options,
-                start_kind,
-                host: &host,
-                restored_scopes,
-            },
-        );
+        let GroupStart {
+            group,
+            anchor,
+            scope,
+            kind,
+        } = host.with_write_session(|slots| slots.begin_group(reserved_key, restored, parent_node));
+        let scope_ref = self.scope_for_started_group(host, group, scope);
         if let Some(movable_key) = placeholder_for {
             self.core.shared_state.record_pending_movable(
-                &host,
+                host,
                 PendingMovable {
                     key: movable_key,
                     placeholder: anchor,
-                    parent_scope: parent_scope_id,
+                    parent_scope: self
+                        .core
+                        .scope_stack
+                        .borrow()
+                        .last()
+                        .map(RecomposeScope::downgrade),
                 },
             );
         }
+        self.enter_group_scope(
+            &scope_ref,
+            GroupScopeEntry {
+                options,
+                start_kind: kind,
+                host,
+                group,
+            },
+        );
 
         let guard = GroupGuard {
             composer: self,
+            host,
             scope: scope_ref,
         };
         if placeholder_for.is_none() {
@@ -1473,11 +1433,11 @@ impl Composer {
     fn with_group_seed_dyn(&self, key: crate::slot::GroupKeySeed, f: &mut dyn FnMut(&Composer)) {
         let host = self.active_slots_host();
         if host.has_active_pass() {
-            self.with_group_in_active_pass_dyn(key, f);
+            self.with_group_in_active_pass_dyn(&host, key, f);
             return;
         }
         self.with_slot_host_pass(host, crate::slot::SlotPassMode::Compose, |composer| {
-            composer.with_group_in_active_pass_dyn(key, f);
+            composer.with_group_in_active_pass_dyn(&composer.active_slots_host(), key, f);
         });
     }
 
@@ -1527,10 +1487,7 @@ impl Composer {
 
     #[doc(hidden)]
     pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard {
-        BranchGroupGuard {
-            composer: self.clone(),
-            fold_token: self.active_slots_host().try_push_branch_fold(key),
-        }
+        self.core.open_branch_fold(key)
     }
 
     fn dispose_detached_nodes(&self, nodes: impl IntoIterator<Item = NodeId>) {
@@ -1538,22 +1495,6 @@ impl Composer {
             self.commands_mut().push(Command::callback(move |applier| {
                 crate::slot::dispose_detached_node_now(applier, node_id)
             }));
-        }
-    }
-
-    fn deactivate_scope_ids(&self, scope_ids: impl IntoIterator<Item = ScopeId>) {
-        for scope_id in scope_ids {
-            if let Some(scope) = self.scope_for_id(scope_id) {
-                scope.deactivate();
-            }
-        }
-    }
-
-    fn dispose_scope_ids(&self, scope_ids: impl IntoIterator<Item = ScopeId>) {
-        for scope_id in scope_ids {
-            if let Some(scope) = self.remove_scope(scope_id) {
-                scope.deactivate();
-            }
         }
     }
 
@@ -1587,7 +1528,7 @@ impl Composer {
             return Ok(());
         };
         let root_detaches = self.detached_root_parent_commands(&subtree, "retention")?;
-        self.deactivate_scope_ids(subtree.scope_ids_iter());
+        subtree.scopes().for_each(RecomposeScope::deactivate);
         for (root, parent_id) in root_detaches {
             if let Some(parent_id) = parent_id {
                 self.commands_mut().push(Command::DetachChild {
@@ -1628,7 +1569,7 @@ impl Composer {
             .detached_root_parent_commands(&subtree, "disposal")?
             .into_iter()
             .map(|(root, _)| root);
-        self.dispose_scope_ids(subtree.scope_ids_iter());
+        subtree.scopes().for_each(RecomposeScope::deactivate);
         self.dispose_detached_nodes(root_nodes);
         slots_host.with_table_and_lifecycle_mut(|table, lifecycle| {
             table.invalidate_detached_subtree_anchors(&subtree);
@@ -1655,9 +1596,8 @@ impl Composer {
                 continue;
             }
             let retention_mode = subtree
-                .root_scope_id()
-                .and_then(|scope_id| self.scope_for_id(scope_id))
-                .map(|scope| scope.retention_mode())
+                .root_scope()
+                .map(RecomposeScope::retention_mode)
                 .unwrap_or_default();
             match retention_mode {
                 RetentionMode::DisposeWhenInactive => {
@@ -1671,19 +1611,9 @@ impl Composer {
         Ok(())
     }
 
-    fn handle_detached_children(
-        &self,
-        parent_scope: Option<ScopeId>,
-        detached: Vec<crate::slot::DetachedSubtree>,
-    ) {
-        let host = self.active_slots_host();
-        if let Err(err) = self.handle_detached_children_in_host(&host, parent_scope, detached) {
-            log::error!("detached subtree handling failed while closing a group: {err}");
-        }
-    }
-
     fn handle_finished_group_result(
         &self,
+        host: &Rc<SlotsHost>,
         parent_scope: Option<ScopeId>,
         result: FinishGroupResult,
     ) {
@@ -1697,16 +1627,27 @@ impl Composer {
             self.attach_root_nodes(root_nodes);
         }
         self.dispose_detached_nodes(direct_nodes);
-        self.handle_detached_children(parent_scope, detached_children);
+        if detached_children.is_empty() {
+            return;
+        }
+        if let Err(err) =
+            self.handle_detached_children_in_host(host, parent_scope, detached_children)
+        {
+            log::error!("detached subtree handling failed while closing a group: {err}");
+        }
     }
 
     pub(crate) fn close_current_group_body_for_scope(&self, scope: &RecomposeScope) {
+        self.close_group_body(&self.active_slots_host(), scope);
+    }
+
+    fn close_group_body(&self, host: &Rc<SlotsHost>, scope: &RecomposeScope) {
         #[expect(
             clippy::redundant_closure_for_method_calls,
             reason = "the method path is not general over the session lifetime"
         )]
-        let result = self.with_slot_session_mut(|slots| slots.finish_group_body());
-        self.handle_finished_group_result(Some(scope.id()), result);
+        let result = host.with_write_session(|slots| slots.finish_group_body());
+        self.handle_finished_group_result(host, Some(scope.id()), result);
         if let Some(popped) = self.scope_stack().pop() {
             debug_assert_eq!(
                 popped.id(),
@@ -2057,8 +1998,7 @@ impl Composer {
         *core.subcomposition_owner_scope.borrow_mut() = context
             .owner_scope
             .as_ref()
-            .and_then(Weak::upgrade)
-            .map(|inner| RecomposeScope { inner });
+            .and_then(RecomposeScope::upgrade);
         let composer = Composer::from_core(core);
         composer.subcompose_stack().push(SubcomposeFrame::default());
         let mut guard = SubcomposeStackGuard {
@@ -2114,13 +2054,31 @@ impl Composer {
     where
         F: FnMut(&Composer) + 'static,
     {
-        self.set_recompose_callback_boxed(Box::new(callback));
+        let stateless = (std::mem::size_of::<F>() == 0).then(std::any::TypeId::of::<F>);
+        if let Some(body) = stateless
+            && self.current_scope_reruns(body)
+        {
+            return;
+        }
+        self.set_recompose_callback_boxed(Box::new(callback), stateless);
+    }
+
+    fn current_scope_reruns(&self, body: std::any::TypeId) -> bool {
+        self.core
+            .scope_stack
+            .borrow()
+            .last()
+            .is_some_and(|scope| scope.reruns_stateless(&self.core.observer, body))
     }
 
     #[inline(never)]
-    fn set_recompose_callback_boxed(&self, callback: Box<dyn FnMut(&Composer)>) {
+    fn set_recompose_callback_boxed(
+        &self,
+        callback: Box<dyn FnMut(&Composer)>,
+        stateless: Option<std::any::TypeId>,
+    ) {
         if let Some(scope) = self.current_recompose_scope() {
-            scope.set_observed_recompose(self.observer(), callback);
+            scope.set_observed_recompose(self.observer(), callback, stateless);
         }
     }
 

@@ -29,5 +29,10 @@ use crate::{
 /// ```
 #[composable]
 pub fn Spacer(modifier: Modifier) -> NodeId {
-    compose_layout(modifier, EmptyMeasurePolicy, || {})
+    compose_layout(
+        modifier,
+        EmptyMeasurePolicy,
+        crate::density::density(),
+        || {},
+    )
 }

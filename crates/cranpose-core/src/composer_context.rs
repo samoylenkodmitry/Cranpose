@@ -59,6 +59,10 @@ pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
     })
 }
 
+pub(crate) fn with_current_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option<R> {
+    COMPOSER_STACK.with(|stack| stack.borrow().last().map(|core| f(core)))
+}
+
 /// Return the current composer from the thread-local stack.
 pub fn current_composer() -> Option<Composer> {
     COMPOSER_STACK.with(|stack| {

@@ -68,5 +68,5 @@ where
     F: FnMut() + 'static,
 {
     let policy = BoxMeasurePolicy::new(spec.content_alignment, spec.propagate_min_constraints);
-    compose_layout(modifier, policy, content)
+    compose_layout(modifier, policy, crate::density::density(), content)
 }

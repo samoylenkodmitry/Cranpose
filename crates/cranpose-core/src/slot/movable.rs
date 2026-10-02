@@ -126,6 +126,9 @@ impl SlotTable {
             if group.parent_anchor.is_valid() {
                 group.parent_anchor = owner(group.parent_anchor);
             }
+            if let Some(scope) = &group.scope {
+                scope.set_group_anchor(group.anchor);
+            }
         }
         for payload in &mut subtree.payloads {
             payload.anchor = payloads

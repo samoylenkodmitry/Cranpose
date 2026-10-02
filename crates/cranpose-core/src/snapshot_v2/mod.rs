@@ -391,6 +391,17 @@ pub fn current_snapshot() -> Option<AnySnapshot> {
         .unwrap_or(None)
 }
 
+pub(crate) fn current_snapshot_reads_into(observer: &ReadObserver) -> bool {
+    CURRENT_SNAPSHOT
+        .try_with(|cell| match &*cell.borrow() {
+            Some(AnySnapshot::TransparentMutable(snapshot)) => {
+                snapshot.can_reuse() && snapshot.reads_into(observer)
+            }
+            _ => false,
+        })
+        .unwrap_or(false)
+}
+
 pub(crate) fn set_current_snapshot(snapshot: Option<AnySnapshot>) {
     let _ = CURRENT_SNAPSHOT.try_with(|cell| {
         *cell.borrow_mut() = snapshot;

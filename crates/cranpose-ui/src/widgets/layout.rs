@@ -37,12 +37,17 @@ where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq + 'static,
 {
-    compose_layout(modifier, measure_policy, content)
+    compose_layout(modifier, measure_policy, crate::density::density(), content)
 }
 
 /// Emits a layout node in the calling composable's group, so a widget that
 /// is one layout composes in one group rather than its own and `Layout`'s.
-pub(crate) fn compose_layout<F, P>(modifier: Modifier, measure_policy: P, mut content: F) -> NodeId
+pub(crate) fn compose_layout<F, P>(
+    modifier: Modifier,
+    measure_policy: P,
+    composed_density: crate::density::Density,
+    mut content: F,
+) -> NodeId
 where
     F: FnMut() + 'static,
     P: MeasurePolicy + Clone + PartialEq + 'static,
@@ -65,32 +70,27 @@ where
         }
         Rc::clone(&holder.policy)
     };
-    let modifier_for_reset = modifier.clone();
-    let policy_for_reset = Rc::clone(&policy);
     let id = cranpose_core::with_current_composer(|composer| {
         composer.emit_recyclable_node(
             || LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
-            move |node| {
-                *node = LayoutNode::new(modifier_for_reset.clone(), Rc::clone(&policy_for_reset));
-            },
+            |node| *node = LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
         )
     });
-    let composed_density = crate::density::density();
+    let provided = modifier.provided_composition_locals();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
-        node.set_modifier(modifier.clone());
-        node.set_measure_policy(Rc::clone(&policy));
+        node.set_modifier(modifier);
+        node.set_measure_policy(policy);
         node.set_density(composed_density);
     }) {
         debug_assert!(false, "failed to update Layout node: {err}");
     }
     cranpose_core::push_parent(id);
-    compose_under_modifier_locals(&modifier, &mut content);
+    compose_under_locals(provided, &mut content);
     cranpose_core::pop_parent();
     id
 }
 
-fn compose_under_modifier_locals(modifier: &Modifier, content: &mut dyn FnMut()) {
-    let provided = modifier.provided_composition_locals();
+fn compose_under_locals(provided: Vec<cranpose_core::ProvidedValue>, content: &mut dyn FnMut()) {
     if provided.is_empty() {
         content();
         return;
@@ -139,9 +139,9 @@ pub fn SubcomposeLayout(
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
     let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut SubcomposeLayoutNode| {
-        node.set_modifier(modifier.clone());
-        node.set_measure_policy(Rc::clone(&policy));
-        node.set_captured_context(captured_context.clone());
+        node.set_modifier(modifier);
+        node.set_measure_policy(policy);
+        node.set_captured_context(captured_context);
         node.set_density(composed_density);
         if policy_captures_changed {
             node.invalidate_subcomposition();

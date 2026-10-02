@@ -40,13 +40,6 @@ pub struct Composition<A: Applier + 'static> {
 /// release builds so end users do not see the UI thread panic.
 pub const ROOT_RENDER_REPLAY_LIMIT: usize = 100;
 
-fn recompose_scope_telemetry_threshold_ms() -> Option<f64> {
-    std::env::var("CRANPOSE_RECOMPOSE_SCOPE_TELEMETRY_MS")
-        .ok()
-        .and_then(|value| value.parse::<f64>().ok())
-        .filter(|value| value.is_finite() && *value >= 0.0)
-}
-
 impl<A: Applier + 'static> Composition<A> {
     pub fn new(applier: A) -> Self {
         Self::with_runtime(applier, Runtime::new(scheduler_ref(DefaultScheduler)))
@@ -438,7 +431,8 @@ impl<A: Applier + 'static> Composition<A> {
             let mut host_group_index = 0usize;
             while host_group_index < scope_groups.len() {
                 let (host, scopes) = &scope_groups[host_group_index];
-                let scope_telemetry_threshold_ms = recompose_scope_telemetry_threshold_ms();
+                let scope_telemetry_threshold_ms =
+                    crate::env_threshold_ms!("CRANPOSE_RECOMPOSE_SCOPE_TELEMETRY_MS");
                 let shared_state = host
                     .runtime_state()
                     .or_else(|| scopes.first().and_then(RecomposeScope::slots_runtime_state))

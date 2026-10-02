@@ -1,11 +1,11 @@
 use super::{
     super::{
         ActiveGroupId, ActiveSubtreeRoot, ChildCursor, DetachedSubtree, GroupKey, GroupKeySeed,
-        GroupStart, GroupStartKind, RootNodeIds, SlotTable, SlotWriteSession,
+        GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
     },
     SlotWriteSessionState,
 };
-use crate::{AnchorId, NodeId, ScopeId};
+use crate::{AnchorId, NodeId, RecomposeScope};
 
 enum ActiveChildResolution {
     ReuseExpected { anchor: AnchorId },
@@ -53,7 +53,7 @@ impl SlotWriteSession<'_> {
         kind: GroupStartKind,
     ) -> Option<GroupStart<ActiveGroupId>> {
         let group_index = self.table.open_group_frame(self.state, anchor)?;
-        let scope_id = self.table.group_scope_id_at_index(group_index);
+        let scope = self.table.group_scope_at_index(group_index);
         let Some(group) = self.table.active_group_id_at_index(group_index) else {
             log::error!(
                 "slot writer could not create active group handle for group index {group_index}"
@@ -63,7 +63,7 @@ impl SlotWriteSession<'_> {
         Some(GroupStart {
             group,
             anchor,
-            scope_id,
+            scope,
             kind,
         })
     }
@@ -81,10 +81,9 @@ impl SlotWriteSession<'_> {
             log::error!(
                 "slot writer discarded stale group frame before beginning a child for anchor {group_anchor:?}"
             );
-            let Some(frame) = self.state.group_stack.pop() else {
+            if self.state.pop_group_frame().is_none() {
                 return;
-            };
-            self.state.recycle_group_frame(frame);
+            }
         }
     }
 
@@ -146,9 +145,7 @@ impl SlotWriteSession<'_> {
             return started;
         }
 
-        while let Some(frame) = self.state.group_stack.pop() {
-            self.state.recycle_group_frame(frame);
-        }
+        while self.state.pop_group_frame().is_some() {}
         let root_insert_index = self.table.group_count();
         self.state.advance_parent_after_child(root_insert_index);
         let root_anchor = self
@@ -164,7 +161,7 @@ impl SlotWriteSession<'_> {
         GroupStart {
             group: ActiveGroupId::new(0, 0),
             anchor: AnchorId::INVALID,
-            scope_id: None,
+            scope: None,
             kind: GroupStartKind::Inserted,
         }
     }
@@ -202,15 +199,7 @@ impl SlotWriteSession<'_> {
             };
         }
 
-        let search_start = self
-            .table
-            .repair_group_subtree_range_at_index(cursor.index(), "later sibling search start").map_or_else(|| {
-                let fallback = cursor.index().saturating_add(1).min(self.table.group_count());
-                log::error!(
-                    "slot writer could not repair expected child subtree at cursor {cursor:?} before keyed sibling search; using fallback search start {fallback}"
-                );
-                fallback
-            }, |range| range.as_group_range().end());
+        let search_start = self.group_subtree_end(cursor.index(), "later sibling search start");
         self.state
             .find_later_sibling(self.table, cursor.parent(), key, search_start)
             .map_or(ActiveChildResolution::InsertNew, |root| {
@@ -245,22 +234,24 @@ impl SlotWriteSession<'_> {
         }
     }
 
-    pub(crate) fn active_scope_root_node_ids(&mut self, scope_id: ScopeId) -> RootNodeIds {
-        let Some(group) = self.table.active_group_for_scope(scope_id) else {
-            return RootNodeIds::new();
-        };
-        let Some(anchor) = self.table.try_active_group_anchor(group) else {
-            return RootNodeIds::new();
-        };
-        self.table.collect_subtree_root_node_ids(anchor)
+    pub(crate) fn active_scope_first_root_node_id(
+        &mut self,
+        scope: &RecomposeScope,
+    ) -> Option<NodeId> {
+        let group = self.table.active_group_for_scope(scope)?;
+        let anchor = self.table.try_active_group_anchor(group)?;
+        self.table.first_subtree_root_node_id(anchor)
     }
 
-    pub(crate) fn begin_recompose_at_scope(&mut self, scope_id: ScopeId) -> Option<ActiveGroupId> {
+    pub(crate) fn begin_recompose_at_scope(
+        &mut self,
+        scope: &RecomposeScope,
+    ) -> Option<ActiveGroupId> {
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
         self.state
             .debug_assert_no_pending_payload_location_refreshes("begin_recompose_at_scope");
-        let group = self.table.active_group_for_scope(scope_id)?;
+        let group = self.table.active_group_for_scope(scope)?;
         let anchor = self.table.try_active_group_anchor(group)?;
         self.table.open_group_frame(self.state, anchor)?;
         Some(group)
@@ -300,18 +291,15 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn end_group(&mut self) {
-        let Some(frame) = self.state.group_stack.pop() else {
+        let Some(group_anchor) = self.state.pop_group_frame() else {
             log::error!("slot writer end_group called with an empty group stack");
             return;
         };
-        let group_anchor = frame.group_anchor;
         let Some(group_index) = self.table.active_group_index(group_anchor) else {
             log::error!("slot writer end_group ignored stale group frame anchor {group_anchor:?}");
-            self.state.recycle_group_frame(frame);
             return;
         };
-        let subtree_end = self.repaired_group_subtree_end(group_index, "group end cursor advance");
-        self.state.recycle_group_frame(frame);
+        let subtree_end = self.group_subtree_end(group_index, "group end cursor advance");
         self.state.advance_parent_after_child(subtree_end);
     }
 
@@ -329,40 +317,32 @@ impl SlotWriteSession<'_> {
             log::error!("slot writer skip_group ignored stale group frame anchor {group_anchor:?}");
             return;
         };
-        let subtree_len = self.repaired_group_subtree_len(group_index, "group skip cursor advance");
+        let subtree_end = self.group_subtree_end(group_index, "group skip cursor advance");
         let Some(frame) = self.state.group_stack.last_mut() else {
             log::error!("slot writer skip_group lost its active group frame before cursor advance");
             return;
         };
-        frame.skip_to_existing_group_end(group_index, subtree_len);
+        frame.skip_to_existing_group_end(subtree_end);
     }
 
-    pub(crate) fn set_group_scope(&mut self, group: ActiveGroupId, scope_id: ScopeId) -> bool {
-        self.table.assign_active_group_scope(group, scope_id)
+    pub(crate) fn set_group_scope(&mut self, group: ActiveGroupId, scope: RecomposeScope) -> bool {
+        self.table.assign_active_group_scope(group, scope)
     }
 
     pub(crate) fn end_recompose(&mut self) {
         self.end_group();
     }
 
-    fn repaired_group_subtree_len(&mut self, group_index: usize, operation: &'static str) -> usize {
-        self.table
-            .repair_group_subtree_range_at_index(group_index, operation).map_or_else(|| {
-                log::error!(
-                    "slot writer could not repair subtree length for group index {group_index} during {operation}; advancing by the root group only"
-                );
-                1
-            }, super::super::ranges::SubtreeRange::len)
-    }
-
-    fn repaired_group_subtree_end(&mut self, group_index: usize, operation: &'static str) -> usize {
-        self.table
-            .repair_group_subtree_range_at_index(group_index, operation).map_or_else(|| {
+    fn group_subtree_end(&self, group_index: usize, operation: &'static str) -> usize {
+        self.table.group_subtree_range_at_index(group_index).map_or_else(
+            || {
                 let fallback_end = group_index.saturating_add(1).min(self.table.group_count());
                 log::error!(
-                    "slot writer could not repair subtree end for group index {group_index} during {operation}; using fallback end {fallback_end}"
+                    "slot writer found the stored span of group index {group_index} outside the active groups during {operation}; using fallback end {fallback_end}"
                 );
                 fallback_end
-            }, |range| range.as_group_range().end())
+            },
+            |range| range.as_group_range().end(),
+        )
     }
 }

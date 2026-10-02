@@ -161,7 +161,7 @@ fn perf_retained_restore_refreshes_only_restored_payload_range() {
         begin_unkeyed(session, PARENT_KEY, None);
         let child = begin_unkeyed(session, CHILD_KEY, Some(restored));
         assert_eq!(child.kind, GroupStartKind::Restored);
-        assert_eq!(child.scope_id, Some(CHILD_SCOPE));
+        assert_eq!(scope_label(child.scope.as_ref()), Some(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -206,7 +206,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
     let (parent_anchor, child_anchor, child_slot) = harness.session(|session| {
         let parent = begin_unkeyed(session, PARENT_KEY, None);
         let child = begin_unkeyed(session, CHILD_KEY, None);
-        session.set_group_scope(child.group, CHILD_SCOPE);
+        session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let child_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -215,7 +215,10 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
         session.record_node_with_parent(CHILD_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         for index in 0..GRANDCHILD_COUNT {
             let grandchild = begin_keyed(session, GRANDCHILD_KEY, index as Key, None);
-            session.set_group_scope(grandchild.group, GRANDCHILD_SCOPE_BASE + index as ScopeId);
+            session.set_group_scope(
+                grandchild.group,
+                labeled_scope(GRANDCHILD_SCOPE_BASE + index as ScopeId),
+            );
             let _ = session.value_slot_with_kind(
                 PayloadKind::Internal,
                 crate::slot::BRANCH_PATH_ROOT,
@@ -282,7 +285,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
         let child = begin_unkeyed(session, CHILD_KEY, Some(restored));
         assert_eq!(child.kind, GroupStartKind::Restored);
         assert_eq!(child.anchor, child_anchor);
-        assert_eq!(child.scope_id, Some(CHILD_SCOPE));
+        assert_eq!(scope_label(child.scope.as_ref()), Some(CHILD_SCOPE));
         let restored_child_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -300,7 +303,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
             let grandchild = begin_keyed(session, GRANDCHILD_KEY, index as Key, None);
             assert_eq!(grandchild.kind, GroupStartKind::Reused);
             assert_eq!(
-                grandchild.scope_id,
+                scope_label(grandchild.scope.as_ref()),
                 Some(GRANDCHILD_SCOPE_BASE + index as ScopeId)
             );
             let _ = session.value_slot_with_kind(
@@ -335,7 +338,10 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
     let after = harness.table.debug_stats().mutation;
 
     let child_index = harness.table.current_group_index(child_anchor);
-    let child_range = harness.table.group_subtree_range_at_index(child_index);
+    let child_range = harness
+        .table
+        .group_subtree_range_at_index(child_index)
+        .expect("restored child span should fit the active groups");
     assert_eq!(child_range.root_index(), child_index);
     assert_eq!(child_range.len(), RESTORED_GROUP_COUNT);
     assert_eq!(
@@ -459,7 +465,7 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         let parent = begin_unkeyed(session, PARENT_KEY, None);
 
         let retained = begin_unkeyed(session, RETAINED_KEY, None);
-        session.set_group_scope(retained.group, RETAINED_SCOPE);
+        session.set_group_scope(retained.group, labeled_scope(RETAINED_SCOPE));
         let retained_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -646,7 +652,7 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
 
         let retained = begin_unkeyed(session, RETAINED_KEY, Some(restored));
         assert_eq!(retained.kind, GroupStartKind::Restored);
-        assert_eq!(retained.scope_id, Some(RETAINED_SCOPE));
+        assert_eq!(scope_label(retained.scope.as_ref()), Some(RETAINED_SCOPE));
         let restored_slot = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -710,7 +716,7 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
         for explicit_key in 0..CHILD_COUNT as Key {
             let child = begin_keyed(session, CHILD_KEY, explicit_key, None);
             if explicit_key == KEPT_EXPLICIT_KEY {
-                session.set_group_scope(child.group, CHILD_SCOPE);
+                session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
                 let _ = session.value_slot_with_kind(
                     PayloadKind::Internal,
                     crate::slot::BRANCH_PATH_ROOT,
@@ -733,7 +739,7 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
         let parent = begin_unkeyed(session, PARENT_KEY, None);
         assert_eq!(parent.anchor, parent_anchor);
         let child = begin_keyed(session, CHILD_KEY, KEPT_EXPLICIT_KEY, None);
-        session.set_group_scope(child.group, CHILD_SCOPE);
+        session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -764,7 +770,7 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
         0
     );
     assert_eq!(
-        harness.table.scope_index_anchor(CHILD_SCOPE),
+        active_scope_anchor(&harness.table, CHILD_SCOPE),
         Some(kept_anchor)
     );
     assert_eq!(harness.table.validate(), Ok(()));

@@ -5,7 +5,7 @@ use super::{
     SlotDebugScope, SlotDebugSnapshot, SlotTable, SlotTableLocalDebugStats,
     SlotTableMutationDebugStats,
 };
-use crate::{Key, ScopeId};
+use crate::{Key, RecomposeScope, ScopeId};
 
 impl SlotTable {
     fn group_heap_bytes(&self) -> usize {
@@ -18,7 +18,6 @@ impl SlotTable {
             + self.node_heap_bytes()
             + self.anchors.heap_bytes()
             + self.payload_anchors.heap_bytes()
-            + self.scope_index.heap_bytes()
     }
 
     pub fn debug_stats(&self) -> SlotTableLocalDebugStats {
@@ -46,8 +45,6 @@ impl SlotTable {
             free_anchor_count: self.anchors.free_len(),
             anchor_capacity: self.anchors.capacity(),
             anchor_heap_bytes: self.anchors.heap_bytes(),
-            scope_index_count: self.scope_index.len(),
-            scope_index_capacity: self.scope_index.capacity(),
             mutation: SlotTableMutationDebugStats {
                 payload_shift_bytes: self.payloads.shift_bytes(),
                 ..self.diagnostics.mutation()
@@ -63,7 +60,7 @@ impl SlotTable {
                 (
                     index,
                     group.key.static_key,
-                    group.scope_id,
+                    group.scope.as_ref().map(RecomposeScope::id),
                     group.subtree_len as usize,
                 )
             })
@@ -82,7 +79,7 @@ impl SlotTable {
                 static_key: group.key.static_key,
                 explicit_key: group.key.explicit_key,
                 ordinal: group.key.ordinal,
-                scope_id: group.scope_id,
+                scope_id: group.scope.as_ref().map(RecomposeScope::id),
                 depth: group.depth,
                 subtree_len: group.subtree_len,
                 payload_len: self.group_payload_len_at(index),
@@ -101,16 +98,15 @@ impl SlotTable {
         anchors.sort_by_key(|entry| entry.group_index);
 
         let mut scopes = self
-            .scope_index
-            .entries()
-            .filter_map(|(scope_id, anchor)| {
-                self.anchors
-                    .active_index(anchor)
-                    .map(|group_index| SlotDebugScope {
-                        scope_id,
-                        anchor,
-                        group_index,
-                    })
+            .groups
+            .iter()
+            .enumerate()
+            .filter_map(|(group_index, group)| {
+                group.scope.as_ref().map(|scope| SlotDebugScope {
+                    scope_id: scope.id(),
+                    anchor: group.anchor,
+                    group_index,
+                })
             })
             .collect::<Vec<_>>();
         scopes.sort_by_key(|entry| entry.scope_id);
@@ -119,8 +115,6 @@ impl SlotTable {
             active_payload_count: self.total_payload_count(),
             active_node_count: self.total_node_count(),
             active_scope_count: scopes.len(),
-            scope_index_count: self.scope_index.len(),
-            runtime_scope_registry_count: None,
             active_groups,
             anchors,
             scopes,
@@ -141,7 +135,7 @@ impl SlotTable {
                 line: format!(
                     "Group(key={:?}, scope={:?}, subtree_len={}, payload_len={}, node_len={})",
                     group.key,
-                    group.scope_id,
+                    group.scope.as_ref().map(RecomposeScope::id),
                     group.subtree_len,
                     self.group_payload_len_at(index),
                     self.group_node_len_at(index)

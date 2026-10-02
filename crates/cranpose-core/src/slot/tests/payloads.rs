@@ -127,7 +127,7 @@ fn payload_segment_insert_rejects_out_of_range_offset_without_mutating() {
         subtree_node_count: 0,
         generation: 0,
         anchor: owner,
-        scope_id: None,
+        scope: None,
     }];
     let mut payloads = vec![17_i32];
 
@@ -253,36 +253,6 @@ fn payload_range_outside_current_group_segment_is_ignored() {
 }
 
 #[test]
-fn payload_tail_cleanup_repairs_corrupt_group_payload_len() {
-    const GROUP_KEY: Key = 52_002;
-
-    let mut harness = SlotHarness::new();
-    let original = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
-    harness.table.groups[0].payload_len = 2;
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let reused = harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(
-            PayloadKind::Internal,
-            crate::slot::BRANCH_PATH_ROOT,
-            || 99_i32,
-        );
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-        slot
-    });
-    harness.finish_pass();
-
-    assert_eq!(reused, original);
-    assert_eq!(harness.table.groups[0].payload_len, 1);
-    assert_eq!(harness.table.total_payload_count(), 1);
-    assert_eq!(*harness.table.read_value::<i32>(reused), 17);
-    assert_eq!(harness.table.validate(), Ok(()));
-}
-
-#[test]
 fn payload_subrange_with_corrupt_segment_start_is_empty() {
     const GROUP_KEY: Key = 52_003;
 
@@ -312,37 +282,6 @@ fn payload_location_refresh_ignores_corrupt_group_payload_range() {
         .refresh_group_payload_anchor_locations(owner, 0);
     assert!(harness.table.group_payload_records_at(0).next().is_none());
     assert_eq!(harness.table.total_payload_count(), 1);
-}
-
-#[test]
-fn value_payload_reuses_after_corrupt_group_payload_start_repair() {
-    const GROUP_KEY: Key = 52_005;
-
-    let mut harness = SlotHarness::new();
-    let _slot = compose_single_i32_value_slot(&mut harness, GROUP_KEY, 17);
-
-    harness.table.groups[0].payload_start = u32::MAX;
-
-    harness.begin_pass(SlotPassMode::Compose);
-    let repaired = harness.session(|session| {
-        begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(
-            PayloadKind::Internal,
-            crate::slot::BRANCH_PATH_ROOT,
-            || 99_i32,
-        );
-        let result = session.finish_group_body();
-        assert!(result.detached_children.is_empty());
-        session.end_group();
-        slot
-    });
-    harness.finish_pass();
-
-    assert_eq!(*harness.table.read_value::<i32>(repaired), 17);
-    assert_eq!(harness.table.groups[0].payload_len, 1);
-    assert_eq!(harness.table.groups[0].payload_start, 0);
-    assert_eq!(harness.table.total_payload_count(), 1);
-    assert_eq!(harness.table.validate(), Ok(()));
 }
 
 #[test]

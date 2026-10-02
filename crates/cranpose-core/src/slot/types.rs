@@ -7,7 +7,7 @@ use std::{
 use smallvec::SmallVec;
 
 use super::{DeferredDrop, GroupRecord, checked_usize_to_u32};
-use crate::{AnchorId, Key, NodeId, ScopeId, collections::map::HashSet};
+use crate::{AnchorId, Key, NodeId, RecomposeScope, collections::map::HashSet};
 
 /// The root nodes of a group's subtree: most groups have a few, kept inline.
 pub(crate) type RootNodeIds = SmallVec<[NodeId; 4]>;
@@ -172,7 +172,7 @@ pub(crate) enum GroupStartKind {
 pub(crate) struct GroupStart<G> {
     pub(crate) group: G,
     pub(crate) anchor: AnchorId,
-    pub(crate) scope_id: Option<ScopeId>,
+    pub(crate) scope: Option<RecomposeScope>,
     pub(crate) kind: GroupStartKind,
 }
 
@@ -342,8 +342,8 @@ impl DetachedSubtree {
         self.groups.first().map(|group| group.parent_anchor)
     }
 
-    pub(crate) fn root_scope_id(&self) -> Option<ScopeId> {
-        self.groups.first().and_then(|group| group.scope_id)
+    pub(crate) fn root_scope(&self) -> Option<&RecomposeScope> {
+        self.groups.first().and_then(|group| group.scope.as_ref())
     }
 
     pub(crate) fn node_ids_iter(&self) -> impl Iterator<Item = NodeId> + '_ {
@@ -405,16 +405,12 @@ impl DetachedSubtree {
         self.groups.len()
     }
 
-    pub(crate) fn scope_ids(&self) -> Vec<ScopeId> {
-        self.scope_ids_iter().collect()
-    }
-
-    pub(crate) fn scope_ids_iter(&self) -> impl Iterator<Item = ScopeId> + '_ {
-        self.groups.iter().filter_map(|group| group.scope_id)
+    pub(crate) fn scopes(&self) -> impl Iterator<Item = &RecomposeScope> + '_ {
+        self.groups.iter().filter_map(|group| group.scope.as_ref())
     }
 
     pub(crate) fn scope_count(&self) -> usize {
-        self.scope_ids_iter().count()
+        self.scopes().count()
     }
 
     pub(crate) fn anchor_count(&self) -> usize {

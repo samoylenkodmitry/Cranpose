@@ -110,14 +110,118 @@ fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
     false
 }
 
-/// The call that records a parameter's new value in its `ParamState` and
-/// says whether it changed: `update_shared` for an `Rc` or `Arc`, whose
-/// unchanged allocation needs no comparison of its contents.
-fn param_state_update(ident: &Ident, ty: &Type) -> TokenStream2 {
+/// A composable call's parameters that are neither callbacks nor
+/// `impl Trait`, kept together in one slot and compared field by field: one
+/// slot lookup and one payload per call instead of one per parameter.
+struct PackedParams<'a> {
+    params: Vec<(&'a Ident, &'a Type)>,
+}
+
+impl PackedParams<'_> {
+    fn slot() -> Ident {
+        Ident::new("__params_slot", Span::mixed_site())
+    }
+
+    fn state_type(&self, core_path: &TokenStream2) -> TokenStream2 {
+        let types = self.params.iter().map(|(_, ty)| ty);
+        quote! { #core_path::ParamState<(#(#types,)*)> }
+    }
+
+    fn slot_stmt(&self, core_path: &TokenStream2, composer: &Ident) -> TokenStream2 {
+        let state = self.state_type(core_path);
+        let slot = Self::slot();
+        quote! {
+            let #slot = #composer.__use_param_slot(|| <#state>::default());
+        }
+    }
+
+    /// `setup` led by the statements that store the parameters and mark the
+    /// call changed when any differs from the last composition.
+    fn with_setup(
+        &self,
+        core_path: &TokenStream2,
+        composer: &Ident,
+        mut setup: Vec<TokenStream2>,
+    ) -> Vec<TokenStream2> {
+        if self.params.is_empty() {
+            return setup;
+        }
+        let state = self.state_type(core_path);
+        let slot = Self::slot();
+        let param_state = Ident::new("__param_state", Span::mixed_site());
+        let stored = Ident::new("__stored", Span::mixed_site());
+        let idents = self.params.iter().map(|(ident, _)| ident);
+        let refreshes =
+            self.params.iter().enumerate().map(|(index, (ident, ty))| {
+                param_field_refresh(core_path, &stored, ident, ty, index)
+            });
+        let slot_stmt = self.slot_stmt(core_path, composer);
+        setup.insert(
+            0,
+            quote! {
+                #slot_stmt
+                if #composer.with_slot_value_mut::<#state, _>(#slot, |#param_state| {
+                    #param_state.update_fields(
+                        || (#(::core::clone::Clone::clone(&#idents),)*),
+                        |#stored| false #(| #refreshes)*,
+                    )
+                }) {
+                    __changed = true;
+                }
+            },
+        );
+        setup
+    }
+
+    /// `setup` led by the statement that finds the parameters' slot.
+    fn with_slot(
+        &self,
+        core_path: &TokenStream2,
+        composer: &Ident,
+        mut setup: Vec<TokenStream2>,
+    ) -> Vec<TokenStream2> {
+        if !self.params.is_empty() {
+            setup.insert(0, self.slot_stmt(core_path, composer));
+        }
+        setup
+    }
+
+    /// The statements that read the stored parameters back for a
+    /// recomposition started from the call's scope.
+    fn reads(&self, core_path: &TokenStream2, composer: &Ident) -> Vec<TokenStream2> {
+        if self.params.is_empty() {
+            return Vec::new();
+        }
+        let state = self.state_type(core_path);
+        let slot = Self::slot();
+        let param_state = Ident::new("__param_state", Span::mixed_site());
+        let idents = self.params.iter().map(|(ident, _)| ident);
+        vec![quote! {
+            let (#(#idents,)*) = #composer.with_slot_value::<#state, _>(#slot, |#param_state| {
+                #param_state
+                    .value()
+                    .expect("composable parameter missing for recomposition")
+            });
+        }]
+    }
+}
+
+/// The call that brings field `index` of a call's stored parameters up to
+/// date with `ident` and says whether it changed: `refresh_shared_param` for
+/// an `Rc` or `Arc`, whose unchanged allocation needs no comparison of its
+/// contents.
+fn param_field_refresh(
+    core_path: &TokenStream2,
+    stored: &Ident,
+    ident: &Ident,
+    ty: &Type,
+    index: usize,
+) -> TokenStream2 {
+    let index = syn::Index::from(index);
     if is_shared_pointer(ty) {
-        quote! { state.update_shared(&#ident) }
+        quote! { #core_path::refresh_shared_param(&mut #stored.#index, &#ident) }
     } else {
-        quote! { state.update(&#ident) }
+        quote! { #core_path::refresh_param(&mut #stored.#index, &#ident) }
     }
 }
 
@@ -566,42 +670,19 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 } else if info.is_impl_trait {
                     quote! { __changed = true; }
                 } else {
-                    let ident = &info.ident;
-                    let ty = &info.ty;
-                    let update = param_state_update(ident, ty);
-                    quote! {
-                        let #slot_ident = #composer_ident
-                            .__use_param_slot(|| #core_path::ParamState::<#ty>::default());
-                        if #composer_ident.with_slot_value_mut::<#core_path::ParamState<#ty>, _>(
-                            #slot_ident,
-                            |state| #update,
-                        )
-                        {
-                            __changed = true;
-                        }
-                    }
+                    quote! {}
                 }
             })
             .collect();
 
-        let param_setup_recompose: Vec<TokenStream2> = param_info
+        let param_setup_recompose: Vec<TokenStream2> = param_state_slots
             .iter()
-            .zip(param_state_slots.iter())
             .zip(&param_is_callback)
-            .map(|((info, slot_ident), is_callback)| {
-                if *is_callback {
-                    quote! {
-                        let #slot_ident = #composer_ident
-                            .__use_param_slot(|| #core_path::CallbackHolder::new());
-                    }
-                } else if info.is_impl_trait {
-                    quote! {}
-                } else {
-                    let ty = &info.ty;
-                    quote! {
-                        let #slot_ident = #composer_ident
-                            .__use_param_slot(|| #core_path::ParamState::<#ty>::default());
-                    }
+            .filter(|(_, is_callback)| **is_callback)
+            .map(|(slot_ident, _)| {
+                quote! {
+                    let #slot_ident = #composer_ident
+                        .__use_param_slot(|| #core_path::CallbackHolder::new());
                 }
             })
             .collect();
@@ -661,27 +742,18 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
             .collect();
 
-        let reads_for_recompose: Vec<TokenStream2> = param_info
-            .iter()
-            .zip(param_state_slots.iter())
-            .zip(&param_is_callback)
-            .filter(|(_, is_callback)| !**is_callback)
-            .map(|((info, slot_ident), _)| {
-                let ident = &info.ident;
-                let ty = &info.ty;
-                quote! {
-                    let #ident = #composer_ident
-                        .with_slot_value::<#core_path::ParamState<#ty>, _>(
-                            #slot_ident,
-                            |state| {
-                                state
-                                    .value()
-                                    .expect("composable parameter missing for recomposition")
-                            },
-                        );
-                }
-            })
-            .collect();
+        let packed = PackedParams {
+            params: param_info
+                .iter()
+                .zip(&param_is_callback)
+                .filter(|(info, is_callback)| !**is_callback && !info.is_impl_trait)
+                .map(|(info, _)| (&info.ident, &info.ty))
+                .collect(),
+        };
+        let param_setup = packed.with_setup(&core_path, &composer_ident, param_setup);
+        let param_setup_recompose =
+            packed.with_slot(&core_path, &composer_ident, param_setup_recompose);
+        let reads_for_recompose = packed.reads(&core_path, &composer_ident);
 
         let body_ident = Ident::new(
             &format!("__cranpose_body_{}", func.sig.ident),

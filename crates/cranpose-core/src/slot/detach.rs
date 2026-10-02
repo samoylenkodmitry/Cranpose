@@ -104,48 +104,15 @@ impl SlotTable {
         true
     }
 
-    fn clear_conflicting_restored_scope_entries(&self, subtree: &mut DetachedSubtree) {
-        let restored_scope_entries = subtree
-            .groups
-            .iter()
-            .filter_map(|group| group.scope_id.map(|scope_id| (scope_id, group.anchor)))
-            .collect::<Vec<_>>();
-        if self
-            .scope_index
-            .restore_entries_available(&restored_scope_entries)
-        {
-            return;
-        }
-
-        for group in &mut subtree.groups {
-            let Some(scope_id) = group.scope_id else {
-                continue;
-            };
-            if self
-                .scope_index
-                .anchor(scope_id)
-                .is_some_and(|active_anchor| active_anchor != group.anchor)
-            {
-                log::error!(
-                    "clearing restored scope id {scope_id:?} from group anchor {:?} because it is already active elsewhere",
-                    group.anchor
-                );
-                group.scope_id = None;
-            }
-        }
-    }
-
     fn detach_subtree_at_index_internal(
         &mut self,
         root_index: usize,
         refresh_indexes: bool,
     ) -> DetachedSubtree {
         let root_parent_anchor = self.groups[root_index].parent_anchor;
-        let Some(removed_group_range) =
-            self.repair_group_subtree_range_at_index(root_index, "subtree detach")
-        else {
+        let Some(removed_group_range) = self.group_subtree_range_at_index(root_index) else {
             log::error!(
-                "slot table rejected detached subtree extraction for missing group index {root_index}"
+                "slot table rejected detached subtree extraction at group index {root_index}: its stored span lies outside the active groups"
             );
             return DetachedSubtree {
                 groups: Vec::new(),
@@ -176,7 +143,6 @@ impl SlotTable {
         let removed_payloads = self.detach_payloads_for_groups(root_index, &mut removed_groups);
         let removed_nodes = self.detach_nodes_for_groups(root_index, &mut removed_groups);
         self.clear_group_indexes(&removed_groups);
-        self.clear_scope_index_for_groups(&removed_groups);
         if refresh_indexes {
             self.refresh_group_indexes_from(root_index);
         }
@@ -207,14 +173,6 @@ impl SlotTable {
         &mut self,
         cursor: ChildCursor,
     ) -> Vec<DetachedSubtree> {
-        if !self.repair_child_cursor_parent_subtree(cursor, "subtree detach cursor") {
-            log::error!(
-                "slot table rejected subtree detach for unrecoverable child cursor parent={:?} index={}",
-                cursor.parent(),
-                cursor.index()
-            );
-            return Vec::new();
-        }
         let mut detached = Vec::new();
         let dirty_start = self
             .direct_child_anchor_at_cursor(cursor)
@@ -255,14 +213,6 @@ impl SlotTable {
         mut subtree: DetachedSubtree,
         parent_node: Option<NodeId>,
     ) -> Result<AnchorId, DetachedSubtree> {
-        if !self.repair_child_cursor_parent_subtree(cursor, "detached subtree restore cursor") {
-            log::error!(
-                "slot table rejected detached subtree restore for unrecoverable child cursor parent={:?} index={}",
-                cursor.parent(),
-                cursor.index()
-            );
-            return Err(subtree);
-        }
         if !self.subtree_restore_ready(cursor, key, &subtree) {
             return Err(subtree);
         }
@@ -276,12 +226,6 @@ impl SlotTable {
         let restored_subtree_len = i64::from(root.subtree_len);
         let restored_subtree_node_count = i64::from(root.subtree_node_count);
         let root_anchor = root.anchor;
-        self.clear_conflicting_restored_scope_entries(&mut subtree);
-        let restored_scope_entries = subtree
-            .groups
-            .iter()
-            .filter_map(|group| group.scope_id.map(|scope_id| (scope_id, group.anchor)))
-            .collect::<Vec<_>>();
 
         let target_root_depth = if parent_anchor.is_valid() {
             let Some(parent_index) = self.active_group_index(parent_anchor) else {
@@ -317,7 +261,6 @@ impl SlotTable {
         self.groups
             .splice(insert_index..insert_index, subtree.groups);
         self.refresh_group_indexes_from(insert_index);
-        self.restore_scope_index_entries(restored_scope_entries);
         self.adjust_ancestor_group_spans(
             parent_anchor,
             restored_subtree_len,

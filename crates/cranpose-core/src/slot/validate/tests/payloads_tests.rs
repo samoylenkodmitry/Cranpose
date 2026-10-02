@@ -20,7 +20,7 @@ fn one_payload_table() -> (SlotTable, AnchorId, PayloadAnchor) {
         subtree_node_count: 0,
         generation: 1,
         anchor: owner,
-        scope_id: None,
+        scope: None,
     });
     table.payloads.insert_item(
         table.payloads.len(),

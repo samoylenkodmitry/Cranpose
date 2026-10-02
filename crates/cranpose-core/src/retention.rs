@@ -332,12 +332,12 @@ impl RetentionManager {
                 }
             }
 
-            for scope_id in subtree.scope_ids_iter() {
-                if let Some(active_anchor) = table.scope_index_anchor(scope_id) {
+            for scope in subtree.scopes() {
+                if table.active_group_for_scope(scope).is_some() {
                     return Err(SlotInvariantError::RetainedScopeStillActive {
                         root_key,
-                        scope_id,
-                        active_anchor,
+                        scope_id: scope.id(),
+                        active_anchor: scope.group_anchor(),
                     });
                 }
             }

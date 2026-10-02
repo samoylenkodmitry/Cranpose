@@ -72,6 +72,14 @@ impl TransparentObserverMutableSnapshot {
         )
     }
 
+    pub(crate) fn reads_into(&self, observer: &ReadObserver) -> bool {
+        self.state
+            .read_observer
+            .borrow()
+            .as_ref()
+            .is_some_and(|installed| Arc::ptr_eq(installed, observer))
+    }
+
     /// Set the read observer (only allowed if reusable).
     pub fn set_read_observer(&self, observer: Option<ReadObserver>) {
         assert!(

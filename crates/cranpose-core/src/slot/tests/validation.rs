@@ -122,19 +122,19 @@ fn validate_reports_bad_subtree_len_structurally() {
 }
 
 #[test]
-fn validate_reports_scope_index_mismatch_structurally() {
+fn validate_reports_scope_of_another_group_structurally() {
     const SCOPE_ID: ScopeId = 64;
     const STALE_SCOPE_ID: ScopeId = 65;
 
-    let mut table = composed_parent_child_table(474, 475, Some(SCOPE_ID));
-    table.groups[1].scope_id = Some(STALE_SCOPE_ID);
+    let mut table = composed_parent_child_table(474, 475, Some(labeled_scope(SCOPE_ID)));
+    table.groups[1].scope = Some(labeled_scope(STALE_SCOPE_ID));
 
     assert_eq!(
         table.validate(),
-        Err(SlotInvariantError::ScopeIndexMismatch {
-            scope_id: STALE_SCOPE_ID,
-            expected: table.groups[1].anchor,
-            actual: None,
+        Err(SlotInvariantError::ScopeAnchorMismatch {
+            scope_id: labeled_scope(STALE_SCOPE_ID).id(),
+            group_anchor: table.groups[1].anchor,
+            scope_anchor: AnchorId::INVALID,
         })
     );
 }
@@ -491,7 +491,7 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
         for explicit_key in 0..GROUP_COUNT as Key {
             let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
             if explicit_key == KEPT_EXPLICIT_KEY {
-                session.set_group_scope(child.group, CHILD_SCOPE);
+                session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
                 let _ = session.value_slot_with_kind(
                     PayloadKind::Internal,
                     crate::slot::BRANCH_PATH_ROOT,
@@ -515,7 +515,7 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
         let parent = begin_unkeyed(session, PARENT_KEY, None);
         assert_eq!(parent.anchor, parent_anchor);
         let child = begin_keyed(session, CHILD_STATIC_KEY, KEPT_EXPLICIT_KEY, None);
-        session.set_group_scope(child.group, CHILD_SCOPE);
+        session.set_group_scope(child.group, labeled_scope(CHILD_SCOPE));
         let _ = session.value_slot_with_kind(
             PayloadKind::Internal,
             crate::slot::BRANCH_PATH_ROOT,
@@ -554,7 +554,7 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
     );
     assert_eq!(harness.table.group_node_record_at(1, 0).owner, child_anchor);
     assert_eq!(
-        harness.table.scope_index_anchor(CHILD_SCOPE),
+        active_scope_anchor(&harness.table, CHILD_SCOPE),
         Some(child_anchor)
     );
     assert_eq!(
@@ -1284,10 +1284,10 @@ fn validate_reports_node_count_mismatch_structurally() {
 }
 
 #[test]
-fn validate_reports_scope_index_stale_anchor_structurally() {
+fn validate_reports_scope_stale_anchor_structurally() {
     const SCOPE_ID: ScopeId = 67;
 
-    let mut table = composed_parent_child_table(492, 493, Some(SCOPE_ID));
+    let mut table = composed_parent_child_table(492, 493, Some(labeled_scope(SCOPE_ID)));
     let old_anchor = table.groups[1].anchor;
     let new_anchor = table.anchors.allocate();
 
@@ -1297,26 +1297,10 @@ fn validate_reports_scope_index_stale_anchor_structurally() {
 
     assert_eq!(
         table.validate(),
-        Err(SlotInvariantError::ScopeIndexMismatch {
-            scope_id: SCOPE_ID,
-            expected: new_anchor,
-            actual: Some(old_anchor),
-        })
-    );
-}
-
-#[test]
-fn validate_reports_scope_index_count_mismatch_structurally() {
-    const SCOPE_ID: ScopeId = 66;
-
-    let mut table = composed_parent_child_table(484, 485, Some(SCOPE_ID));
-    table.groups[1].scope_id = None;
-
-    assert_eq!(
-        table.validate(),
-        Err(SlotInvariantError::ScopeIndexCountMismatch {
-            expected: 0,
-            actual: 1,
+        Err(SlotInvariantError::ScopeAnchorMismatch {
+            scope_id: labeled_scope(SCOPE_ID).id(),
+            group_anchor: new_anchor,
+            scope_anchor: old_anchor,
         })
     );
 }

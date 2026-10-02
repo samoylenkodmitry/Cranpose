@@ -66,10 +66,11 @@ pub fn Row<F>(modifier: Modifier, spec: RowSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
 {
+    let density = crate::density::density();
     let policy = FlexMeasurePolicy::row(
         spec.horizontal_arrangement,
         spec.vertical_alignment,
-        crate::density::density().density(),
+        density.density(),
     );
-    compose_layout(modifier, policy, content)
+    compose_layout(modifier, policy, density, content)
 }

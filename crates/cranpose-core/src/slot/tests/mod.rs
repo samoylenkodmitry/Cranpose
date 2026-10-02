@@ -16,8 +16,10 @@ use super::{
     SlotWriteSessionState, ValueSlotError,
 };
 use crate::{
-    AnchorId, Applier, Key, MemoryApplier, Node, NodeId, ScopeId,
+    AnchorId, Applier, Key, MemoryApplier, Node, NodeId, RecomposeScope, ScopeId,
+    collections::map::HashMap,
     retention::{RetainKey, RetentionManager},
+    runtime::TestRuntime,
     slot::{
         ActiveGroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, NodeSlotUpdate,
         PayloadAnchor, ValueSlotId,
@@ -111,19 +113,14 @@ impl SlotHarness {
         retention: Option<&RetentionManager>,
         value_slots: &[ValueSlotId],
     ) -> SlotIdentitySnapshot {
-        let mut scope_ids = self
-            .table
-            .groups
-            .iter()
-            .filter_map(|group| group.scope_id)
-            .collect::<Vec<_>>();
+        let mut scope_ids = scope_labels(self.table.scopes());
         let mut retained_group_anchors = Vec::new();
         let mut retained_payload_anchors = Vec::new();
         let retention_stats = if let Some(retention) = retention {
             for subtree in retention.subtrees() {
                 retained_group_anchors.extend(subtree.groups.iter().map(|group| group.anchor));
                 retained_payload_anchors.extend(subtree.payloads.iter().map(PayloadIdentity::from));
-                scope_ids.extend(subtree.scope_ids_iter());
+                scope_ids.extend(scope_labels(subtree.scopes()));
             }
             retention.debug_stats()
         } else {
@@ -167,6 +164,46 @@ impl From<ValueSlotId> for PayloadIdentity {
     }
 }
 
+thread_local! {
+    static SCOPE_RUNTIME: TestRuntime = TestRuntime::new();
+    static LABELED_SCOPES: std::cell::RefCell<HashMap<ScopeId, RecomposeScope>> =
+        std::cell::RefCell::new(HashMap::default());
+}
+
+fn labeled_scope(label: ScopeId) -> RecomposeScope {
+    LABELED_SCOPES.with(|scopes| {
+        scopes
+            .borrow_mut()
+            .entry(label)
+            .or_insert_with(|| {
+                SCOPE_RUNTIME.with(|runtime| RecomposeScope::new_for_test(runtime.handle()))
+            })
+            .clone()
+    })
+}
+
+fn scope_label(scope: Option<&RecomposeScope>) -> Option<ScopeId> {
+    let scope = scope?;
+    LABELED_SCOPES.with(|scopes| {
+        scopes
+            .borrow()
+            .iter()
+            .find(|(_, labeled)| *labeled == scope)
+            .map(|(label, _)| *label)
+    })
+}
+
+fn scope_labels<'a>(scopes: impl Iterator<Item = &'a RecomposeScope>) -> Vec<ScopeId> {
+    scopes
+        .filter_map(|scope| scope_label(Some(scope)))
+        .collect()
+}
+
+fn active_scope_anchor(table: &SlotTable, label: ScopeId) -> Option<AnchorId> {
+    let group = table.active_group_for_scope(&labeled_scope(label))?;
+    table.try_active_group_anchor(group)
+}
+
 fn slot_retention_stats(stats: crate::retention::RetentionDebugStats) -> SlotRetentionDebugStats {
     SlotRetentionDebugStats {
         retained_subtree_count: stats.subtree_count,
@@ -202,7 +239,7 @@ fn begin_keyed(
 fn composed_parent_child_table(
     parent_key: Key,
     child_key: Key,
-    child_scope: Option<ScopeId>,
+    child_scope: Option<RecomposeScope>,
 ) -> SlotTable {
     let mut harness = SlotHarness::new();
     harness.begin_pass(SlotPassMode::Compose);
@@ -246,7 +283,7 @@ fn detached_single_child_with_options(
 
         let child = begin_unkeyed(session, child_key, None);
         if let Some(scope_id) = child_scope {
-            session.set_group_scope(child.group, scope_id);
+            session.set_group_scope(child.group, labeled_scope(scope_id));
         }
         if record_child_payload {
             let _ = session.value_slot_with_kind(
@@ -422,7 +459,7 @@ fn exercise_slot_write_session_surface(
 ) -> (ActiveGroupId, ValueSlotId) {
     let started = slots.begin_group(group_key, None, None);
     assert_eq!(started.kind, GroupStartKind::Inserted);
-    slots.set_group_scope(started.group, scope_id);
+    slots.set_group_scope(started.group, labeled_scope(scope_id));
 
     let slot =
         slots.value_slot_with_kind(PayloadKind::Internal, crate::slot::BRANCH_PATH_ROOT, || {

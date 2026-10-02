@@ -35,10 +35,6 @@ impl SlotTable {
             self.payloads.len(),
             "slot table active payload anchor count mismatch after {context}"
         );
-        assert!(
-            self.scope_index.len() <= self.groups.len(),
-            "slot table scope index has more entries than active groups after {context}"
-        );
     }
 }
 
@@ -80,7 +76,6 @@ impl SlotTable {
         anchors::validate_active_group_anchor_entries(self)?;
         payloads::validate_payload_anchor_registry_integrity(self)?;
         payloads::validate_payload_anchor_registry_count(self)?;
-        scopes::validate_scope_index_count(self)?;
         payloads::validate_payload_anchor_registry(self)?;
 
         Ok(())

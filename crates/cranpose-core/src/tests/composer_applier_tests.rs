@@ -2012,7 +2012,7 @@ fn test_stale_state_handle_try_with_returns_none() {
 }
 
 #[test]
-fn param_state_update_reuses_existing_buffer_via_clone_from() {
+fn a_refreshed_parameter_reuses_its_buffer_via_clone_from() {
     let mut state = crate::ParamState::<String> {
         value: Some(String::with_capacity(64)),
     };
@@ -2023,15 +2023,18 @@ fn param_state_update_reuses_existing_buffer_via_clone_from() {
         .push_str("seed value");
 
     let initial_ptr = state.value.as_ref().expect("seeded string").as_ptr();
-    let updated = "short replacement";
-    assert!(state.update(&updated.to_string()));
+    let updated = "short replacement".to_string();
+    assert!(state.update_fields(
+        || updated.clone(),
+        |stored| crate::refresh_param(stored, &updated)
+    ));
 
     let stored = state.value.as_ref().expect("updated string");
-    assert_eq!(stored, updated);
+    assert_eq!(stored, &updated);
     assert_eq!(
         stored.as_ptr(),
         initial_ptr,
-        "ParamState::update should reuse the existing String allocation when capacity permits",
+        "a refreshed parameter should reuse the existing String allocation when capacity permits",
     );
 }
 

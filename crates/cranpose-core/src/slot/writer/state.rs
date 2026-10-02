@@ -1,6 +1,6 @@
 use super::{
     super::{DetachedSubtree, SlotPassMode, SlotTable},
-    frames::{GroupFrame, RootFrame},
+    frames::{GroupFrameStack, RootFrame},
 };
 use crate::{AnchorId, collections::map::HashMap};
 
@@ -13,8 +13,7 @@ pub(in crate::slot) struct BranchFoldEntry {
 #[derive(Default)]
 pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) root: RootFrame,
-    pub(in crate::slot) group_stack: Vec<GroupFrame>,
-    frame_pool: Vec<GroupFrame>,
+    pub(in crate::slot) group_stack: GroupFrameStack,
     payload_location_refreshes: HashMap<AnchorId, usize>,
     rejected_restore_subtrees: Vec<DetachedSubtree>,
     branch_fold_entries: Vec<BranchFoldEntry>,
@@ -35,9 +34,7 @@ impl SlotWriteSessionState {
 
     pub(crate) fn reset_for_pass(&mut self, mode: SlotPassMode) {
         self.root.reset(matches!(mode, SlotPassMode::Compose));
-        while let Some(frame) = self.group_stack.pop() {
-            self.recycle_group_frame(frame);
-        }
+        self.group_stack.clear();
         self.payload_location_refreshes.clear();
         if !self.rejected_restore_subtrees.is_empty() {
             log::error!(
@@ -81,7 +78,6 @@ impl SlotWriteSessionState {
             .or_insert(start);
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub(in crate::slot) fn has_pending_payload_location_refreshes(&self) -> bool {
         !self.payload_location_refreshes.is_empty()
     }
@@ -269,17 +265,17 @@ impl SlotWriteSessionState {
         old_payload_len: usize,
         old_node_len: usize,
     ) {
-        let mut frame = self.frame_pool.pop().unwrap_or_default();
+        let fold_watermark = self.branch_fold_entries.len();
+        let frame = self.group_stack.push();
         frame.reset(anchor, next_child_index, old_payload_len, old_node_len);
-        frame.fold_watermark = self.branch_fold_entries.len();
-        self.group_stack.push(frame);
+        frame.fold_watermark = fold_watermark;
         self.branch_fold = None;
     }
 
-    pub(in crate::slot) fn recycle_group_frame(&mut self, mut frame: GroupFrame) {
-        frame.reset_for_pool();
-        self.frame_pool.push(frame);
+    pub(in crate::slot) fn pop_group_frame(&mut self) -> Option<AnchorId> {
+        let anchor = self.group_stack.pop()?.group_anchor;
         self.branch_fold = None;
+        Some(anchor)
     }
 }
 

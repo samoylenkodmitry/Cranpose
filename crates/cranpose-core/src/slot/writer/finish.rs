@@ -39,12 +39,20 @@ impl SlotTable {
             if !frame.mark_body_finished() {
                 return FinishGroupResult::empty();
             }
+            if frame.untouched_since_skip() {
+                let group_anchor = frame.group_anchor;
+                return FinishGroupResult {
+                    root_nodes: self.collect_subtree_root_node_ids(group_anchor),
+                    was_skipped: true,
+                    ..FinishGroupResult::empty()
+                };
+            }
 
             (
                 frame.group_anchor,
                 frame.payload_cursor,
                 frame.node_cursor,
-                frame.was_skipped,
+                frame.was_skipped(),
             )
         };
 

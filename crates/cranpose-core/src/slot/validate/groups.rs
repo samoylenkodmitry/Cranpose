@@ -238,7 +238,7 @@ impl SlotTreeChecks for ActiveSlotTreeChecks<'_> {
         _group_index: usize,
         group: &GroupRecord,
     ) -> Result<(), SlotInvariantError> {
-        scopes::validate_active_group_scope(self.table, group)
+        scopes::validate_active_group_scope(group)
     }
 
     fn validate_node(
