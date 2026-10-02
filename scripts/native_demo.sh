@@ -54,11 +54,21 @@ case "${1:-}" in
         cargo build --locked -p cranpose-native-demo --lib --target "$target" --profile "$profile"
         app="$build_root/$target/$profile_dir/CranposeNativeDemo.app"
         mkdir -p "$app"
-        xcrun --sdk "$sdk" swiftc -swift-version 5 -parse-as-library \
-            -target "$swift_target" -sdk "$(xcrun --sdk "$sdk" --show-sdk-path)" \
-            -I "$demo/generated/swift" \
-            -Xcc "-fmodule-map-file=$demo/generated/swift/CranposeDemoFFI.modulemap" \
-            "$demo/generated/swift/CranposeDemo.swift" "$demo/ios/CranposeView.swift" "$demo/ios/App.swift" \
+        modules="$build_root/$target/$profile_dir/native-modules"
+        mkdir -p "$modules"
+        swift_flags=(-swift-version 5 -parse-as-library -target "$swift_target"
+            -sdk "$(xcrun --sdk "$sdk" --show-sdk-path)" -I "$demo/generated/swift" -I "$modules")
+        for modulemap in "$demo/generated/swift/"*.modulemap; do
+            swift_flags+=(-Xcc "-fmodule-map-file=$modulemap")
+        done
+        xcrun --sdk "$sdk" swiftc "${swift_flags[@]}" -emit-library -static -emit-module \
+            -module-name CranposeBindings -emit-module-path "$modules/CranposeBindings.swiftmodule" \
+            "$demo/generated/swift/"*.swift -o "$modules/libCranposeBindings.a"
+        xcrun --sdk "$sdk" swiftc "${swift_flags[@]}" -emit-library -static -emit-module \
+            -module-name Cranpose -emit-module-path "$modules/Cranpose.swiftmodule" \
+            "$root/platforms/ios/Sources/Cranpose/"*.swift -o "$modules/libCranpose.a"
+        xcrun --sdk "$sdk" swiftc "${swift_flags[@]}" "$demo/ios/App.swift" \
+            "$modules/libCranpose.a" "$modules/libCranposeBindings.a" \
             "$build_root/$target/$profile_dir/libcranpose_native_demo.a" \
             -framework UIKit -framework WebKit -framework Metal -framework QuartzCore \
             -framework CoreGraphics -framework CoreText -framework Security -framework SystemConfiguration \

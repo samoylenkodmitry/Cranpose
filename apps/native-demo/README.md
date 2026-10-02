@@ -1,25 +1,114 @@
 # Native mobile embedding
 
-These are ordinary Kotlin/Android and Swift/UIKit applications. Each app has two modes:
+These ordinary Kotlin/Android and Swift/UIKit applications demonstrate both directions:
 
-| Mode | Demonstration |
+| Mode | Behavior |
 | --- | --- |
-| Native → Cranpose | Native controls surround a Cranpose component. Native and Rust buttons update the same Rust state. |
-| Cranpose → Native | Cranpose lays out a real Android WebView or WKWebView. Rust supplies its HTML and bounds; tapping its link updates Rust state. Rust can remove and remount the native view. |
+| Native → Cranpose | Native controls and Rust controls update one shared counter. |
+| Cranpose → Native | Cranpose positions a real Android WebView or WKWebView loading https://example.com. |
 
-The WebView page is bundled and needs neither network access nor an API key. Switching modes creates a fresh component. Android uses an Activity with a FrameLayout; iOS uses a UIViewController with a UIView. Neither demo starts the standalone Cranpose mobile application loop.
+The website mode opens by default. It requires internet access. The page can navigate and scroll;
+counter updates preserve its native instance and loaded document. Removing and mounting the
+WebView creates a fresh instance. Loading failures appear below the WebView.
+
+## Application API
+
+The reusable implementation lives in the framework:
+
+- `crates/cranpose-native`: composition ownership, worker, commands, frame callbacks, events and bindings.
+- `platforms/android`: the Android library containing `CranposeView`, factory lifecycle and optional `WebViewFactory`.
+- `platforms/ios/Sources/Cranpose`: the equivalent UIKit module.
+- `crates/cranpose`: lower-level `EmbeddedView` and renderer-independent `NativeViewHost`.
+
+The demo keeps its content and application events. It does not implement a render loop, pixel
+conversion, input routing, slot reconciliation or platform WebView management.
+
+Kotlin:
+
+```kotlin
+val component = CranposeView(
+    context,
+    createDemoComponent(nativeChildren = true, website = "https://example.com"),
+    mapOf("web" to WebViewFactory()),
+)
+component.onEvent = { event ->
+    if (event.name == "count") label.text = event.value
+}
+component.onError = { message -> label.text = message }
+container.addView(component)
+component.sendEvent("increment")
+```
+
+Swift:
+
+```swift
+let component = CranposeView(
+    session: createDemoComponent(nativeChildren: true, website: "https://example.com"),
+    factories: ["web": WebViewFactory()]
+)
+component.onEvent = { event in
+    if event.name == "count" { label.text = event.value }
+}
+component.onError = { message in label.text = message }
+container.addSubview(component)
+component.sendEvent("increment")
+```
+
+Lay out the component like any other native view. Both adapters handle attach/detach, visibility,
+application backgrounding, density, touch and display-frame scheduling. Call `close()` when
+permanently discarding a component; temporary detachment preserves its state. A closed component
+cannot be remounted. The Android demo closes its component from `onDestroy`.
+
+Rust applications export a factory returning `Arc<NativeSession>`. The factory passed to
+`NativeSession::new` executes on the owning worker, where non-Send composition state can be created.
+Return `NativeContent::new(content).on_event(handler)` to connect application input.
+`SendToHost(name, value)` delivers output after composition commits.
+
+```rust
+use cranpose::prelude::*;
+use cranpose_native::{SendToHost, WebView, WebViewEvent};
+
+WebView(
+    "https://example.com",
+    Modifier::empty().fill_max_width().height(300.0),
+    |event| match event {
+        WebViewEvent::Loaded(url) => println!("Loaded {url}"),
+        WebViewEvent::Failed(message) => eprintln!("{message}"),
+    },
+);
+SendToHost("ready", "true");
+```
+
+Use these composables within `NativeContent`; the runtime supplies their native-host context.
+
+## Custom native views
+
+Register a factory under the same kind on both platforms, then call
+`cranpose_native::NativeView(kind, configuration, modifier, on_event)` from Rust.
+
+Each factory implements `create` and returns a child with a native `view`, `update`,
+`setVisible` and `dispose`. The framework owns sizing, event routing and lifetime:
+
+- An existing slot keeps its instance across configuration and bounds changes.
+- Changing a slot's kind disposes the old child and creates the newly selected factory.
+- Unmounting a slot disposes its child. Stale events do not reach a new child.
+- Unknown factories report `onError` on both platforms.
+- Updates receive the latest configuration; a factory should avoid reloading unchanged content.
+
+A map adapter uses this contract with an application-selected map SDK and credentials.
+WebView is optional: register `WebViewFactory` only when it is needed.
+Both website adapters accept HTTPS, enable JavaScript and local DOM storage, allow HTTPS
+navigation, and report main-frame load or HTTP failures. They do not expose a JavaScript-to-Rust
+object or bypass certificate checks. The Android consuming app supplies its INTERNET permission.
 
 ## Build and run
 
-Run commands from the repository root. Use the repository Rust toolchain and `just`.
-Bindings are generated automatically with UniFFI from the shared Rust demo library.
-Generated Swift, Kotlin, headers and native libraries stay under `apps/native-demo/generated/` and are not committed.
+Run from the repository root with the repository Rust toolchain and `just`.
 
 ### Android
 
-Install JDK 17 or newer, Android SDK platform 37, the NDK and `cargo-ndk`.
-Set `ANDROID_HOME` to the SDK and add its platform-tools to `PATH`.
-The existing repository Gradle wrapper supplies Gradle.
+Install JDK 17+, Android SDK platform 37, the NDK and `cargo-ndk`.
+Set `ANDROID_HOME` and add its platform-tools to PATH.
 
 ```sh
 rustup target add aarch64-linux-android
@@ -28,70 +117,60 @@ adb -s DEVICE_SERIAL install -r apps/native-demo/android/app/build/outputs/apk/r
 adb -s DEVICE_SERIAL shell am start -n dev.cranpose.nativehost/.MainActivity
 ```
 
-The APK uses the debug signing key for local installation. The default Rust profile is `dev`; use `PROFILE=release just android-native-demo` for optimized Rust.
-For an x86_64 emulator, install the `x86_64-linux-android` Rust target and set `NATIVE_DEMO_ABI=x86_64` when building.
-After generating bindings and libraries, the `apps/native-demo/android` directory can also be opened in Android Studio.
+The APK uses local debug signing. Rust defaults to the dev profile; use
+`PROFILE=release just android-native-demo` for optimization.
+For x86_64 emulators install `x86_64-linux-android` and set `NATIVE_DEMO_ABI=x86_64`.
+
+The demo includes the framework as Gradle project `:cranpose`.
+`cranposeBindingsDir` points that module at the generated runtime Kotlin sources.
+Application bindings remain in the app source set. The library carries its own coroutine and JNA dependencies.
+Another application can include the same library project, generate bindings from its Rust library, and
+set the UniFFI `cdylib_name` to that library.
+
+To select another website when launching Android, append
+`--es website https://YOUR_SITE`. The `--ez native-component true` option starts the other demo mode.
 
 ### iOS
 
-On an Apple Silicon Mac with Xcode and its command-line tools:
+On an Apple Silicon Mac with Xcode:
 
 ```sh
 rustup target add aarch64-apple-ios-sim
 just ios-native-demo
-xcrun simctl install booted target/aarch64-apple-ios-sim/debug/CranposeNativeDemo.app
-xcrun simctl launch booted dev.cranpose.nativehost
+xcrun simctl install SIMULATOR_UDID target/aarch64-apple-ios-sim/debug/CranposeNativeDemo.app
+xcrun simctl launch SIMULATOR_UDID dev.cranpose.nativehost
 ```
 
-The script compiles the UIKit sources and generated Swift bindings, links the Rust static library, and signs the simulator app.
-`PROFILE=release just ios-native-demo` writes an optimized bundle under `target/aarch64-apple-ios-sim/release/`.
-`CARGO_TARGET_DIR` changes these output roots.
+The build creates separate `CranposeBindings` and `Cranpose` Swift modules.
+The first contains the generated runtime and application bindings; the second contains the reusable
+UIKit hosts and imports only the runtime API. The app imports both modules.
+Their static libraries and Swift modules are under `target/TARGET/PROFILE/native-modules`.
+The same source module can be compiled against another application's generated `CranposeBindings`.
 
-For a physical device, install `aarch64-apple-ios` and run `just ios-native-demo aarch64-apple-ios`. Device installation additionally needs your Apple development signing identity and provisioning profile for `dev.cranpose.nativehost`; the default ad hoc simulator signature is insufficient. The demo does not configure a development team or provision a device.
+`PROFILE=release just ios-native-demo` creates optimized Rust.
+`CARGO_TARGET_DIR` changes the output root.
+Physical devices use `just ios-native-demo aarch64-apple-ios` and additionally require an Apple
+signing identity and provisioning profile. The default signature supports the simulator only.
 
-## Framework APIs
+## Rendering scope
 
-`AppLauncher::create_embedded_view(width, height, density, content)` creates an independent `EmbeddedView` with no window or event loop. Dimensions are physical pixels; layout, native slots and pointer coordinates use logical points. Configure fonts on the launcher as usual.
+The native host APIs have the same concepts and lifecycle on Android and iOS, with idiomatic
+Kotlin/Swift syntax. Shared Cranpose content uses the same renderer; surrounding native controls
+retain their platform appearance. Other platforms can use the lower-level Rust primitives;
+this package currently supplies Android and UIKit host views.
 
-```rust
-use cranpose::{AppLauncher, native_view::{NativeView, NativeViewHost}, prelude::*};
+Presentation currently reads changed GPU images into native bitmap/image views. Idle compositions
+do not read pixels or poll for frames. This is a portable implementation with full image transfers
+for changed frames. The presentation details are private to the framework, so an application does
+not need to change its integration when a native GPU surface backend is added.
 
-let native = NativeViewHost::default();
-let content_host = native.clone();
-let mut component = AppLauncher::new().create_embedded_view(720, 960, 2.0, move || {
-    NativeView(
-        content_host.clone(),
-        "web",
-        "<html><body>Hello from Rust</body></html>",
-        Modifier::empty().fill_max_width().height(210.0),
-        |event| println!("Native event: {event}"),
-    );
-})?;
-let mut pixels = Vec::new();
-if component.draw(&mut pixels)? {
-    let children = native.layout(component.shell().layout_tree());
-    println!("Present {} bytes with {} native children", pixels.len(), children.len());
-}
-Ok::<(), cranpose::embedded_view::EmbeddedViewError>(())
-```
+Native children are axis-aligned overlays above Cranpose, clipped to their host container.
+Ancestor clipping, arbitrary transforms, interleaved z-order and Cranpose effects over a native
+child are not supported. Hide native children before displaying overlapping Cranpose popups.
+The adapters route one touch pointer and do not yet bridge Rust text input or accessibility.
+The native WebView retains its own input and accessibility.
 
-Enable Cranpose's `renderer-wgpu` feature for `EmbeddedView`. `NativeView` itself is renderer-independent.
-
-The launcher configures embedded fonts. Platform services and application lifecycle belong to the native host; these adapters do not initialize the standalone Android/iOS service backends.
-
-Keep each component on its owning thread. Route input through `component.shell()`, call `resize` after native layout/density changes, and call `set_visible` when detached or hidden. Install `set_frame_waker` and honor `frame_schedule` so idle components do not poll. `draw` returns false without reading back pixels when the view is unchanged or hidden.
-
-`NativeViewHost` owns the application's native factory requests. `NativeView` reserves a sized layout slot; it does not invoke platform APIs on the Rust thread. The platform creates a view for `kind`, updates it from `value`, and routes its events through `dispatch(id, event)`. Keep the host stable, preserve native instances while their IDs remain mounted, and dispose missing IDs. If a slot's kind changes, recreate its native instance. A map adapter can use the same mechanism with an application-defined `map` factory and configuration.
-
-## Adapter architecture and limits
-
-The demo's UniFFI bridge owns the composition and GPU on one Rust worker thread. Native hosts coalesce frame requests, await rendering off the UI thread, and update UIKit/Android views on the UI thread. The GPU target and readback buffer are reused; unchanged frames carry no pixels. The native WebView receives touch, focus and accessibility directly.
-
-The portable `EmbeddedView` adapter reads GPU pixels into native images. It is appropriate for demonstrating integration, but incurs a full image transfer for changed frames; it is not a zero-copy Metal/SurfaceView integration. A Rust GPU host can use `AppShell<WgpuRenderer>` directly with its own target.
-
-Native children are axis-aligned overlays above Cranpose drawing, clipped to the host container. Arbitrary transforms, ancestor clipping, interleaved z-order and Cranpose effects over a native child are not supported. Hide native children when presenting overlapping Cranpose popups. These example hosts route one touch pointer; they do not implement a native text-input or accessibility bridge for the Rust-rendered content. Native WebView accessibility remains available.
-
-## Tests
+## Validation
 
 ```sh
 just test-native-demo
@@ -99,6 +178,8 @@ just test-native-demo-android DEVICE_SERIAL
 just test-native-demo-ios SIMULATOR_UDID
 ```
 
-Build the corresponding app first. Android tests install a debug APK on the selected device. iOS tests reuse the repository's LiquidReference XCTest runner against the separately installed demo.
-
-The Rust tests cover slot bounds and stable identity, state updates, disposal, touch routing, resizing and density changes, invalid dimensions, hidden views and idle-frame suppression. Native UI tests exercise native → Rust, Rust → native host, and WebView → Rust events, plus native child removal and remounting.
+Build the corresponding app first. Rust tests cover sessions, event isolation, visibility,
+resizing, native identity, load events and shutdown. Native UI tests cover the two embedding
+directions, a live website, shared state, WebView preservation, and removal/remounting.
+The live website tests require internet access. Pull-request CI builds both native applications
+and their framework modules; simulator UI tests use the explicit recipes above.

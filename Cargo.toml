@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/cranpose-native",
     "crates/cranpose-app-shell",
     "crates/cranpose",
     "crates/cranpose-assets",
@@ -56,6 +57,7 @@ cranpose-animation = { path = "crates/cranpose-animation", version = "0.9.1" }
 cranpose-capabilities = { path = "crates/cranpose-capabilities", version = "0.9.1" }
 cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.9.1" }
 cranpose = { path = "crates/cranpose", version = "0.9.1", default-features = false }
+cranpose-native = { path = "crates/cranpose-native", version = "0.9.1" }
 cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.9.1" }
 cranpose-audio = { path = "crates/cranpose-audio", version = "0.9.1", default-features = false }
 cranpose-core = { path = "crates/cranpose-core", version = "0.9.1" }

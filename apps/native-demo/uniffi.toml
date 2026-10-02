@@ -1,7 +1,2 @@
 [defaults.bindings.kotlin]
-package_name = "dev.cranpose.nativehost.generated"
 cdylib_name = "cranpose_native_demo"
-
-[defaults.bindings.swift]
-module_name = "CranposeDemo"
-ffi_module_name = "CranposeDemoFFI"

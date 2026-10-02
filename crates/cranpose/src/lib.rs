@@ -16,6 +16,8 @@ pub mod embedded_view;
 mod frame_readback;
 /// Native views mounted in a Cranpose layout by an application-owned host.
 pub mod native_view;
+#[cfg(all(feature = "renderer-wgpu", not(target_arch = "wasm32")))]
+mod offscreen_instance;
 mod scoped_weak_stack;
 #[cfg(all(feature = "android", target_os = "android"))]
 pub use android_file_picker::open_content_uri;

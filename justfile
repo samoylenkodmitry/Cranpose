@@ -570,6 +570,7 @@ ios-native-demo target="aarch64-apple-ios-sim":
     bash scripts/native_demo.sh ios {{quote(target)}}
 
 test-native-demo:
+    cargo test --locked -p cranpose-native --test integration
     cargo test --locked -p cranpose --features renderer-wgpu,renderer-pixels --test integration
     cargo test --locked -p cranpose-native-demo --test integration
     cargo test --locked -p cranpose --no-default-features --features embed --lib

@@ -11,7 +11,7 @@ android {
         versionName = "1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
-    sourceSets["main"].kotlin.srcDir("../../generated/kotlin")
+    sourceSets["main"].kotlin.srcDir("../../generated/kotlin/uniffi/cranpose_native_demo")
     sourceSets["main"].jniLibs.srcDir("../../generated/jniLibs")
     buildTypes {
         release {
@@ -26,8 +26,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":cranpose"))
     implementation("net.java.dev.jna:jna:5.17.0@aar")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }

@@ -1,5 +1,6 @@
 package dev.cranpose.nativehost
 
+import dev.cranpose.CranposeView
 import android.content.Intent
 import android.os.SystemClock
 import android.view.MotionEvent
@@ -22,7 +23,7 @@ class NativeEmbeddingTest {
     fun nativeRustAndWebViewExchangeEvents() {
         val activity = instrumentation.startActivitySync(Intent(
             instrumentation.targetContext, MainActivity::class.java
-        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
+        ).putExtra("native-component", true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
         try {
             awaitCondition { onMain { activity.window.decorView.hasWindowFocus() } }
             awaitCount(activity, 0)
@@ -32,12 +33,33 @@ class NativeEmbeddingTest {
             awaitCount(activity, 2)
             nativeClick(activity, "switch-mode")
             awaitCount(activity, 0)
-            awaitCondition {
-                clickWebLink(instrumentation.uiAutomation.rootInActiveWindow)
+            awaitCondition { containsText(instrumentation.uiAutomation.rootInActiveWindow, "Learn more") }
+            val originalWeb = onMain { views(activity.window.decorView).filterIsInstance<WebView>().first() }
+            assertTrue(onMain { originalWeb.url?.startsWith("https://example.com") == true })
+            val marker = java.util.concurrent.CountDownLatch(1)
+            instrumentation.runOnMainSync {
+                originalWeb.evaluateJavascript("window.cranposeMarker = 'preserved'") { marker.countDown() }
             }
-            awaitCount(activity, 1)
+            assertTrue(marker.await(5, java.util.concurrent.TimeUnit.SECONDS))
             nativeClick(activity, "native-increment")
+            awaitCount(activity, 1)
+            assertSame(originalWeb, onMain { views(activity.window.decorView).filterIsInstance<WebView>().first() })
+            val component = onMain { views(activity.window.decorView).filterIsInstance<CranposeView>().first() }
+            instrumentation.runOnMainSync {
+                component.visibility = View.INVISIBLE
+                component.sendEvent("increment")
+            }
+            SystemClock.sleep(100)
+            instrumentation.runOnMainSync { component.visibility = View.VISIBLE }
             awaitCount(activity, 2)
+            assertSame(originalWeb, onMain { views(activity.window.decorView).filterIsInstance<WebView>().first() })
+            val checked = java.util.concurrent.CountDownLatch(1)
+            var value: String? = null
+            instrumentation.runOnMainSync {
+                originalWeb.evaluateJavascript("window.cranposeMarker") { value = it; checked.countDown() }
+            }
+            assertTrue(checked.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals("\"preserved\"", value)
             tapRust(activity, 170f, 96f)
             awaitCondition { onMain { views(activity.window.decorView).none { it is WebView } } }
             tapRust(activity, 170f, 96f)
@@ -85,15 +107,10 @@ class NativeEmbeddingTest {
         if (root is ViewGroup) for (index in 0 until root.childCount) yieldAll(views(root.getChildAt(index)))
     }
 
-    private fun clickWebLink(node: AccessibilityNodeInfo?): Boolean {
+    private fun containsText(node: AccessibilityNodeInfo?, expected: String): Boolean {
         if (node == null) return false
-        if (node.text?.toString() == "Add from the native WebView") {
-            val bounds = android.graphics.Rect()
-            node.getBoundsInScreen(bounds)
-            tapAt(bounds.exactCenterX(), bounds.exactCenterY())
-            return true
-        }
-        for (index in 0 until node.childCount) if (clickWebLink(node.getChild(index))) return true
+        if (node.text?.toString() == expected) return true
+        for (index in 0 until node.childCount) if (containsText(node.getChild(index), expected)) return true
         return false
     }
 

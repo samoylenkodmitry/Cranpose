@@ -160,9 +160,7 @@ pub(crate) struct HeadlessGpu {
 
 impl HeadlessGpu {
     pub(crate) fn request() -> Result<Self, EmbedError> {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::all();
-        let instance = wgpu::Instance::new(descriptor);
+        let instance = &crate::offscreen_instance::OFFSCREEN_INSTANCE;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
             ..wgpu::RequestAdapterOptions::default()

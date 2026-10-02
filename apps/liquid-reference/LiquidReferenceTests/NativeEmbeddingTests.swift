@@ -6,6 +6,7 @@ final class NativeEmbeddingTests: XCTestCase {
     func testNativeAndCranposeViewsExchangeEvents() {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "dev.cranpose.nativehost")
+        app.launchArguments = ["--native-component"]
         app.launch()
         defer {
             let attachment = XCTAttachment(screenshot: app.screenshot())
@@ -37,14 +38,15 @@ final class NativeEmbeddingTests: XCTestCase {
         app.buttons["Cranpose → Native"].tap()
         let web = app.webViews.firstMatch
         XCTAssertTrue(web.waitForExistence(timeout: 20))
-        let link = web.links["Add from the native WebView"]
-        XCTAssertTrue(link.waitForExistence(timeout: 10))
-        link.tap()
+        XCTAssertTrue(web.links["Learn more"].waitForExistence(timeout: 30))
+        app.buttons["native-increment"].tap()
         expectation(for: NSPredicate(format: "label == %@", "Host received: 1"), evaluatedWith: count)
         waitForExpectations(timeout: 10)
-        app.buttons["native-increment"].tap()
-        expectation(for: NSPredicate(format: "label == %@", "Host received: 2"), evaluatedWith: count)
-        waitForExpectations(timeout: 10)
+        XCTAssertTrue(web.links["Learn more"].exists)
+        XCUIDevice.shared.press(.home)
+        app.activate()
+        XCTAssertTrue(web.links["Learn more"].waitForExistence(timeout: 10))
+        XCTAssertEqual(count.label, "Host received: 1")
         let host = app.otherElements["cranpose-component"]
         host.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 170, dy: 96)).tap()
         expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: web)

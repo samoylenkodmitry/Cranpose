@@ -19,10 +19,8 @@ workspace = true
 [dependencies]
 cranpose = { workspace = true, features = ["renderer-wgpu", "embedded-default-font"] }
 cranpose-core.workspace = true
-thiserror = "2.0.20"
-tokio = { version = "1.53.1", default-features = false, features = ["sync"] }
+cranpose-native.workspace = true
 uniffi = { version = "0.32.2", default-features = false }
-web-time.workspace = true
 
 [[bin]]
 name = "native-demo-bindgen"

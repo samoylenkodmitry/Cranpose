@@ -3,7 +3,7 @@ use std::sync::Arc;
 use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 
-use crate::{AppSettings, frame_readback::FrameTarget};
+use crate::{AppSettings, frame_readback::FrameTarget, offscreen_instance::OFFSCREEN_INSTANCE};
 
 const FRAME_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -39,6 +39,7 @@ pub enum EmbeddedViewError {
 /// This component starts no application, window or event loop. The host owns
 /// lifecycle, input and scheduling through [Self::shell]. All methods run on
 /// the creating thread. Each instance has its own composition and app context.
+/// Offscreen components share GPU backend initialization across worker threads.
 ///
 /// [Self::draw] renders to a reusable GPU target and reads pixels only when
 /// changed. This portable adapter copies pixels; it is not a zero-copy native
@@ -67,11 +68,12 @@ impl EmbeddedView {
         content: impl FnMut() + 'static,
     ) -> Result<Self, EmbeddedViewError> {
         validate_size(width, height, density, u32::MAX)?;
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::LowPower,
-            ..Default::default()
-        }))?;
+        let adapter = pollster::block_on(OFFSCREEN_INSTANCE.request_adapter(
+            &wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                ..Default::default()
+            },
+        ))?;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("Cranpose embedded view"),

@@ -1,4 +1,6 @@
 import UIKit
+import Cranpose
+import CranposeBindings
 
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -36,7 +38,7 @@ final class DemoController: UIViewController {
         title.text = "Cranpose + UIKit"
         title.font = .preferredFont(forTextStyle: .largeTitle)
         stack.addArrangedSubview(title)
-        modes.selectedSegmentIndex = 0
+        modes.selectedSegmentIndex = ProcessInfo.processInfo.arguments.contains("--native-component") ? 0 : 1
         modes.addTarget(self, action: #selector(changeMode), for: .valueChanged)
         stack.addArrangedSubview(modes)
         let button = UIButton(type: .system)
@@ -51,19 +53,22 @@ final class DemoController: UIViewController {
         changeMode()
     }
 
-    @objc private func increment() { component?.increment() }
+    @objc private func increment() { component?.sendEvent("increment") }
 
     @objc private func changeMode() {
         component?.close()
         component?.removeFromSuperview()
-        let child = CranposeView(nativeChildren: modes.selectedSegmentIndex == 1)
-        child.onCount = { [weak self] value in self?.count.text = "Host received: \(value)" }
+        let child = CranposeView(session: createDemoComponent(nativeChildren: modes.selectedSegmentIndex == 1, website: "https://example.com"),
+            factories: ["web": WebViewFactory()])
+        child.onEvent = { [weak self] event in
+            if event.name == "count" { self?.count.text = "Host received: \(event.value)" }
+        }
         child.onError = { [weak self] error in
             print("Cranpose native host: \(error)")
             self?.count.text = error
         }
         stack.addArrangedSubview(child)
-        let height = child.heightAnchor.constraint(equalToConstant: modes.selectedSegmentIndex == 0 ? 260 : 480)
+        let height = child.heightAnchor.constraint(equalToConstant: modes.selectedSegmentIndex == 0 ? 260 : 560)
         height.priority = .defaultHigh
         height.isActive = true
         component = child

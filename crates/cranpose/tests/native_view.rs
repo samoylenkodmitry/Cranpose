@@ -109,3 +109,39 @@ fn hosts_do_not_share_native_events() {
     assert_eq!(first.layout(a.layout_tree())[0].value, "1");
     assert_eq!(second.layout(b.layout_tree())[0].value, "0");
 }
+
+#[test]
+fn changing_factory_retires_old_events() {
+    let host = NativeViewHost::default();
+    let content_host = host.clone();
+    let kind = Rc::new(Cell::new(None::<MutableState<bool>>));
+    let content_kind = Rc::clone(&kind);
+    let received = Rc::new(Cell::new(0));
+    let content_received = Rc::clone(&received);
+    let mut shell = AppShell::new_with_size(
+        PixelsRenderer::new(),
+        default_root_key(),
+        move || {
+            let alternate = rememberMutableStateOf(|| false);
+            content_kind.set(Some(alternate));
+            let received = Rc::clone(&content_received);
+            NativeView(
+                content_host.clone(),
+                if alternate.value() { "map" } else { "web" },
+                "",
+                Modifier::empty().width(100.0).height(60.0),
+                move |_| received.set(received.get() + 1),
+            );
+        },
+        (320, 240),
+        (320.0, 240.0),
+    );
+    let old = host.layout(shell.layout_tree())[0].id;
+    kind.get().expect("mounted").set(true);
+    shell.update();
+    let replacement = host.layout(shell.layout_tree());
+    assert_eq!(replacement[0].kind, "map");
+    assert!(!host.dispatch(old, "late completion from disposed WebView"));
+    assert!(host.dispatch(replacement[0].id, "current event"));
+    assert_eq!(received.get(), 1);
+}

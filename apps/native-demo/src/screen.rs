@@ -1,19 +1,13 @@
 use std::{cell::Cell, rc::Rc};
 
-use cranpose::{
-    native_view::{NativeView, NativeViewHost},
-    prelude::*,
-};
+use cranpose::prelude::*;
 use cranpose_core::{MutableState, rememberMutableStateOf};
+use cranpose_native::{SendToHost, WebView, WebViewEvent};
 
 #[derive(Clone, Default)]
 pub(crate) struct DemoState(Rc<Cell<Option<MutableState<i32>>>>);
 
 impl DemoState {
-    pub(crate) fn count(&self) -> i32 {
-        self.0.get().map_or(0, |state| state.value())
-    }
-
     pub(crate) fn increment(&self) {
         if let Some(state) = self.0.get() {
             state.set(state.value().saturating_add(1));
@@ -21,10 +15,13 @@ impl DemoState {
     }
 }
 
-pub(crate) fn content(host: NativeViewHost, state: DemoState, native_children: bool) {
+pub(crate) fn content(state: DemoState, native_children: bool, website: Rc<str>) {
     let count = rememberMutableStateOf(|| 0_i32);
     let show = rememberMutableStateOf(|| native_children);
+    let status = rememberMutableStateOf(|| String::from("Loading website…"));
     state.0.set(Some(count));
+    SendToHost("count", count.value().to_string());
+    SendToHost("web-status", status.value());
     Column(
         Modifier::empty()
             .fill_max_size()
@@ -58,21 +55,15 @@ pub(crate) fn content(host: NativeViewHost, state: DemoState, native_children: b
                 },
             );
             if native_children && show.value() {
-                let html = format!(
-                    "<html><meta name='viewport' content='width=device-width,initial-scale=1'><body style='font:18px -apple-system,Roboto,sans-serif;background:#e0f4ed;padding:12px'><b>Native WebView</b><p>Configured by Rust. Count: {}</p><a href='cranpose:increment'>Add from the native WebView</a><p>This page is bundled; no network or API key is needed.</p></body></html>",
-                    count.value()
-                );
-                NativeView(
-                    host.clone(),
-                    "web",
-                    &html,
-                    Modifier::empty().fill_max_width().height(210.0),
-                    move |event| {
-                        if event == "increment" {
-                            count.set(count.value().saturating_add(1));
-                        }
+                WebView(
+                    &website,
+                    Modifier::empty().fill_max_width().height(300.0),
+                    move |event| match event {
+                        WebViewEvent::Loaded(url) => status.set(format!("Loaded: {url}")),
+                        WebViewEvent::Failed(message) => status.set(format!("Failed: {message}")),
                     },
                 );
+                Text(status.value(), Modifier::empty(), body_style());
             }
             Text(
                 "Native buttons and Rust buttons update the same component.",

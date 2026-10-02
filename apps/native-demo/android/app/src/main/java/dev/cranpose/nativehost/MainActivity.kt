@@ -1,5 +1,8 @@
 package dev.cranpose.nativehost
 
+import dev.cranpose.CranposeView
+import dev.cranpose.WebViewFactory
+import uniffi.cranpose_native_demo.createDemoComponent
 import android.app.Activity
 import android.os.Bundle
 import android.widget.Button
@@ -10,10 +13,11 @@ class MainActivity : Activity() {
     private lateinit var column: LinearLayout
     private lateinit var count: TextView
     private var component: CranposeView? = null
-    private var nativeChildren = false
+    private var nativeChildren = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        nativeChildren = !intent.getBooleanExtra("native-component", false)
         column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             val padding = (16 * resources.displayMetrics.density).toInt()
@@ -35,7 +39,7 @@ class MainActivity : Activity() {
         setContentView(column)
         column.addView(TextView(this).apply { text = "Cranpose + Android"; textSize = 28f })
         column.addView(Button(this).apply {
-            text = "Switch: Cranpose contains native"
+            text = if (nativeChildren) "Switch: native contains Cranpose" else "Switch: Cranpose contains native"
             contentDescription = "switch-mode"
             setOnClickListener {
                 nativeChildren = !nativeChildren
@@ -46,7 +50,7 @@ class MainActivity : Activity() {
         column.addView(Button(this).apply {
             text = "Add from native Android"
             contentDescription = "native-increment"
-            setOnClickListener { component?.increment() }
+            setOnClickListener { component?.sendEvent("increment") }
         })
         count = TextView(this).apply { text = "Host received: 0"; textSize = 18f; tag = "host-count" }
         column.addView(count)
@@ -55,8 +59,9 @@ class MainActivity : Activity() {
 
     private fun mount() {
         component?.let { it.close(); column.removeView(it) }
-        val child = CranposeView(this, nativeChildren)
-        child.onCount = { count.text = "Host received: $it" }
+        val child = CranposeView(this, createDemoComponent(nativeChildren, intent.getStringExtra("website") ?: "https://example.com"),
+            mapOf("web" to WebViewFactory()))
+        child.onEvent = { if (it.name == "count") count.text = "Host received: ${it.value}" }
         child.onError = { count.text = it }
         val height = if (nativeChildren) 0 else (260 * resources.displayMetrics.density).toInt()
         column.addView(child, LinearLayout.LayoutParams(

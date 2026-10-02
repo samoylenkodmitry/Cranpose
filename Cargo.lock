@@ -1250,8 +1250,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "cranpose-native-demo"
-version = "0.1.177"
+name = "cranpose-native"
+version = "0.9.0"
 dependencies = [
  "cranpose",
  "cranpose-core",
@@ -1260,6 +1260,17 @@ dependencies = [
  "tokio",
  "uniffi",
  "web-time",
+]
+
+[[package]]
+name = "cranpose-native-demo"
+version = "0.9.0"
+dependencies = [
+ "cranpose",
+ "cranpose-core",
+ "cranpose-native",
+ "pollster",
+ "uniffi",
 ]
 
 [[package]]

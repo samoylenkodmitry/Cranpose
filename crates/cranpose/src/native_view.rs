@@ -19,10 +19,21 @@ struct Registry {
     slots: Vec<Slot>,
 }
 
+impl Registry {
+    fn allocate_id(&mut self) -> u64 {
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .expect("native view ID exhausted");
+        self.next_id
+    }
+}
+
 /// Owns native-view requests for one Cranpose component.
 ///
 /// Each platform host reconciles the snapshots from [Self::layout] with its
-/// child views. IDs survive recomposition and are never reused by this host.
+/// child views. IDs survive recomposition while the factory kind stays the same
+/// and are never reused by this host. Changing kind retires the old identity.
 /// Dropping a composable removes its request; an empty snapshot removes all
 /// native children. Native children render above Cranpose and own their input.
 #[derive(Clone, Default)]
@@ -63,14 +74,32 @@ impl NativeViewHost {
     /// Returns mounted native children in layout order, including offscreen
     /// children so scrolling preserves their state. An absent layout mounts none.
     pub fn layout(&self, tree: Option<&LayoutTree>) -> Vec<NativeViewLayout> {
+        let mut result = Vec::new();
+        self.for_each_layout(tree, |id, kind, value, bounds| {
+            result.push(NativeViewLayout {
+                id,
+                kind: kind.to_owned(),
+                value: value.to_owned(),
+                bounds,
+            });
+        });
+        result
+    }
+
+    /// Visits mounted children without allocating an intermediate owned snapshot.
+    ///
+    /// Configuration strings remain borrowed for the duration of each callback.
+    pub fn for_each_layout(
+        &self,
+        tree: Option<&LayoutTree>,
+        mut visit: impl FnMut(u64, &str, &str, Rect),
+    ) {
         let registry = self.registry.borrow();
-        let mut result = Vec::with_capacity(registry.slots.len());
         if !registry.slots.is_empty()
             && let Some(tree) = tree
         {
-            collect_layout(tree.root(), &registry.slots, &mut result);
+            collect_layout(tree.root(), &registry.slots, &mut visit);
         }
-        result
     }
 
     /// Delivers an application event from a mounted native child.
@@ -108,17 +137,12 @@ impl Drop for Mount {
     }
 }
 
-fn collect_layout(node: &LayoutBox, slots: &[Slot], result: &mut Vec<NativeViewLayout>) {
+fn collect_layout(node: &LayoutBox, slots: &[Slot], visit: &mut impl FnMut(u64, &str, &str, Rect)) {
     if let Some(slot) = slots.iter().find(|slot| slot.node == node.node_id) {
-        result.push(NativeViewLayout {
-            id: slot.id,
-            kind: slot.kind.clone(),
-            value: slot.value.clone(),
-            bounds: node.rect,
-        });
+        visit(slot.id, &slot.kind, &slot.value, node.rect);
     }
     for child in &node.children {
-        collect_layout(child, slots, result);
+        collect_layout(child, slots, visit);
     }
 }
 
@@ -140,11 +164,7 @@ pub fn NativeView(
     let node = Spacer(modifier);
     let mount = remember(|| {
         let mut registry = host.registry.borrow_mut();
-        registry.next_id = registry
-            .next_id
-            .checked_add(1)
-            .expect("native view ID exhausted");
-        let id = registry.next_id;
+        let id = registry.allocate_id();
         registry.slots.push(Slot {
             id,
             node,
@@ -157,9 +177,14 @@ pub fn NativeView(
             id,
         }
     });
-    mount.with(|mount| {
+    mount.update(|mount| {
         let mut registry = mount.host.registry.borrow_mut();
-        if let Some(slot) = registry.slots.iter_mut().find(|slot| slot.id == mount.id) {
+        if let Some(index) = registry.slots.iter().position(|slot| slot.id == mount.id) {
+            if registry.slots[index].kind != kind {
+                mount.id = registry.allocate_id();
+            }
+            let slot = &mut registry.slots[index];
+            slot.id = mount.id;
             slot.node = node;
             if slot.kind != kind {
                 kind.clone_into(&mut slot.kind);

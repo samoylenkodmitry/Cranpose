@@ -470,10 +470,16 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
 ];
 
-const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[DuplicateDebt {
-    family: "env_filter",
-    reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
-}];
+const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[
+    DuplicateDebt {
+        family: "env_filter",
+        reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
+    },
+    DuplicateDebt {
+        family: "rustc-hash",
+        reason: "UniFFI 0.32.2 binding generation uses Askama 0.16 with rustc-hash ^2; naga, naga-types and wgpu-core 30.0.1 require ^1.1. The split is confined to the bindings tool feature",
+    },
+];
 
 const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] =
     &["pixels", "wgpu", "wgpu-core", "wgpu-hal", "naga"];
