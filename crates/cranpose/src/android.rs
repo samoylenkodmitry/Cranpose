@@ -976,13 +976,22 @@ fn update_android_shell_geometry(
 ) -> Option<Size> {
     shell.renderer().set_root_scale(density);
     shell.set_density(density);
-    log::info!("[startup] g2 density");
+    log::info!(
+        "[startup] g2 density recompose={}",
+        shell.__should_recompose()
+    );
     let curve = crate::android_font_scale::font_scale_curve();
     log::info!("[startup] g2 font scale curve read");
     shell.set_font_scale_curve(curve);
-    log::info!("[startup] g2 font scale curve set");
+    log::info!(
+        "[startup] g2 font scale curve set recompose={}",
+        shell.__should_recompose()
+    );
     let rotary = crate::android_input::android_rotary_scroll_factor(density);
-    log::info!("[startup] g2 rotary read");
+    log::info!(
+        "[startup] g2 rotary read recompose={}",
+        shell.__should_recompose()
+    );
     shell.set_rotary_scroll_factor(rotary);
 
     let (width, height) = shell.buffer_size();
@@ -990,7 +999,10 @@ fn update_android_shell_geometry(
         let width_dp = width as f32 / density;
         let height_dp = height as f32 / density;
         shell.set_viewport(width_dp, height_dp);
-        log::info!("[startup] g2 viewport set");
+        log::info!(
+            "[startup] g2 viewport set recompose={}",
+            shell.__should_recompose()
+        );
         let actual = Size::new(width_dp, height_dp);
         cranpose_services::publish_host_surface_size(
             cranpose_services::host_surface::HostSurfaceSize {
@@ -999,7 +1011,15 @@ fn update_android_shell_geometry(
                 scale: density,
             },
         );
+        log::info!(
+            "[startup] g2 published host size recompose={}",
+            shell.__should_recompose()
+        );
         android_host_window::sync_android_host_window_actual_size(host_window_registry, actual);
+        log::info!(
+            "[startup] g2 host window synced recompose={}",
+            shell.__should_recompose()
+        );
         Some(actual)
     } else {
         None
@@ -1357,8 +1377,20 @@ where
             (width as f32 / density, height as f32 / density),
             density,
         );
+        log::info!(
+            "[startup] after new recompose={}",
+            shell.__should_recompose()
+        );
         shell.set_semantics_enabled(true);
+        log::info!(
+            "[startup] semantics recompose={}",
+            shell.__should_recompose()
+        );
         crate::accessibility::install_inspector(&mut shell, settings.developer_inspector);
+        log::info!(
+            "[startup] inspector recompose={}",
+            shell.__should_recompose()
+        );
 
         *app_shell = Some(shell);
 
@@ -1422,11 +1454,20 @@ where
 
     if let Some(shell) = app_shell {
         shell.renderer().set_root_scale(density);
-        log::info!("[startup] g root scale");
+        log::info!(
+            "[startup] g root scale recompose={}",
+            shell.__should_recompose()
+        );
         shell.set_density(density);
-        log::info!("[startup] g density");
+        log::info!(
+            "[startup] g density recompose={}",
+            shell.__should_recompose()
+        );
         set_android_ime_density(density);
-        log::info!("[startup] g ime density");
+        log::info!(
+            "[startup] g ime density recompose={}",
+            shell.__should_recompose()
+        );
     }
 
     let actual_size = app_shell.as_mut().and_then(|shell| {
@@ -2279,6 +2320,9 @@ pub fn run(
                                         }
 
                                         gpu_resources = Some(resources);
+                                        if let Some(shell) = app_shell.as_ref() {
+                                            log::info!("[startup] init done recompose={}", shell.__should_recompose());
+                                        }
                                         log::info!("Rendering initialized successfully");
                                     }
                                     Err(error) => {

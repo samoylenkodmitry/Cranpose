@@ -1451,6 +1451,16 @@ mod tests;
 #[path = "tests/surface_tests.rs"]
 mod surface_tests;
 
+impl<R: Renderer> AppShell<R>
+where
+    R::Error: Debug,
+{
+    #[doc(hidden)]
+    pub fn __should_recompose(&self) -> bool {
+        self.app.composition.should_recompose()
+    }
+}
+
 #[doc(hidden)]
 pub fn __startup_probe(label: &str) {
     let Some(t0) = std::env::var("STARTUP_T0_NS")
