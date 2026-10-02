@@ -41,8 +41,6 @@ struct CycleSample {
     live_node_heap_bytes: usize,
     slot_table_heap_bytes: usize,
     slot_group_count: usize,
-    observer_scopes_len: usize,
-    observed_state_count: usize,
     recompose_scopes_len: usize,
     frame_callbacks_len: usize,
     local_tasks_len: usize,
@@ -75,15 +73,15 @@ pub(crate) fn main() {
             }
 
             println!(
-                "\n{:>3} {:>8} {:>8} {:>8} {:>8} {:>5} {:>6} {:>6} {:>6} {:>11} {:>5} {:>11} {:>6} {:>7} {:>11} {:>11} {:>8} {:>7} {:>7} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7}",
+                "\n{:>3} {:>8} {:>8} {:>8} {:>8} {:>5} {:>6} {:>6} {:>6} {:>11} {:>5} {:>11} {:>6} {:>7} {:>11} {:>11} {:>8} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7}",
                 "cyc", "drag_avg", "drag_p95", "work_avg", "work_p95", "pass", "effect",
                 "isolay", "lcache", "lcache_B", "pool", "pool_B", "tcache", "nodes",
-                "node_heap", "slot_heap", "groups", "obs_sc", "obs_st", "rscopes",
+                "node_heap", "slot_heap", "groups", "rscopes",
                 "frcb", "ltask", "task", "uicont", "cells"
             );
             for (i, s) in samples.iter().enumerate() {
                 println!(
-                    "{:>3} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>5} {:>6} {:>6} {:>6} {:>11} {:>5} {:>11} {:>6} {:>7} {:>11} {:>11} {:>8} {:>7} {:>7} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7}",
+                    "{:>3} {:>8.2} {:>8.2} {:>8.2} {:>8.2} {:>5} {:>6} {:>6} {:>6} {:>11} {:>5} {:>11} {:>6} {:>7} {:>11} {:>11} {:>8} {:>7} {:>6} {:>6} {:>6} {:>7} {:>7}",
                     i,
                     s.drag_work_avg_ms,
                     s.drag_work_p95_ms,
@@ -101,8 +99,6 @@ pub(crate) fn main() {
                     s.live_node_heap_bytes,
                     s.slot_table_heap_bytes,
                     s.slot_group_count,
-                    s.observer_scopes_len,
-                    s.observed_state_count,
                     s.recompose_scopes_len,
                     s.frame_callbacks_len,
                     s.local_tasks_len,
@@ -114,7 +110,7 @@ pub(crate) fn main() {
 
             let early = &samples[1];
             let late = &samples[cycles - 1];
-            let structural: [(&str, f64, f64, f64); 7] = [
+            let structural: [(&str, f64, f64, f64); 6] = [
                 ("pass_count", early.pass_count as f64, late.pass_count as f64, 1.30),
                 (
                     "effect_applies",
@@ -138,12 +134,6 @@ pub(crate) fn main() {
                     "nodes_len",
                     early.nodes_len as f64,
                     late.nodes_len as f64,
-                    1.10,
-                ),
-                (
-                    "observer_scopes_len",
-                    early.observer_scopes_len as f64,
-                    late.observer_scopes_len as f64,
                     1.10,
                 ),
                 (
@@ -298,14 +288,14 @@ fn sample(robot: &Robot, drag: (f32, f32), cycle: usize) -> CycleSample {
         .get_runtime_leak_debug_stats()
         .expect("runtime leak stats");
     println!(
-        "cycle {cycle:>2}: drag {:.2}ms idle {:.2}ms | passes {} effects {} layers {} | nodes {} obs {} frcb {} cells {}",
+        "cycle {cycle:>2}: drag {:.2}ms idle {:.2}ms | passes {} effects {} layers {} | nodes {} scopes {} frcb {} cells {}",
         drag.0,
         fps.work_avg_ms,
         render.pass_count,
         render.effect_applies,
         render.isolated_layer_renders,
         leak.applier_stats.nodes_len,
-        leak.observer_stats.scopes_len,
+        leak.recompose_scope_stats.len,
         leak.runtime_stats.frame_callbacks_len,
         leak.state_arena_stats.cells_len,
     );
@@ -326,8 +316,6 @@ fn sample(robot: &Robot, drag: (f32, f32), cycle: usize) -> CycleSample {
         live_node_heap_bytes: leak.live_node_heap_bytes,
         slot_table_heap_bytes: leak.slot_table_heap_bytes,
         slot_group_count: leak.slot_stats.group_count,
-        observer_scopes_len: leak.observer_stats.scopes_len,
-        observed_state_count: leak.observer_stats.observed_state_count,
         recompose_scopes_len: leak.recompose_scope_stats.len,
         frame_callbacks_len: leak.runtime_stats.frame_callbacks_len,
         local_tasks_len: leak.runtime_stats.local_tasks_len,

@@ -5,8 +5,7 @@ use std::{
 };
 
 use cranpose_core::{
-    Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SnapshotStateObserver,
-    SubcomposeState,
+    Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
 };
 use cranpose_foundation::{
     InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
@@ -1370,17 +1369,6 @@ pub struct SubcomposeLayoutNodeHandle {
 }
 
 impl SubcomposeLayoutNodeHandle {
-    pub(crate) fn observer_for_measure(&self) -> SnapshotStateObserver {
-        let observer = self
-            .inner
-            .borrow_mut()
-            .measure_observer
-            .get_or_insert_with(|| SnapshotStateObserver::new(|callback| callback()))
-            .clone();
-        observer.prune_dead_scopes();
-        observer
-    }
-
     pub(crate) fn note_slot_host(&self, slot_host: &Rc<cranpose_core::SlotsHost>) {
         let Ok(inner) = self.inner.try_borrow() else {
             return;
@@ -1603,7 +1591,6 @@ struct SubcomposeLayoutNodeInner {
     placement_scratch: Vec<Placement>,
     measured_children_scratch: Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>>,
     captured_context: Option<cranpose_core::CapturedCompositionContext>,
-    measure_observer: Option<SnapshotStateObserver>,
     density: crate::density::Density,
 }
 
@@ -1664,7 +1651,6 @@ impl SubcomposeLayoutNodeInner {
             placement_scratch: Vec::new(),
             measured_children_scratch: Rc::new(RefCell::new(HashMap::default())),
             captured_context: None,
-            measure_observer: None,
             density: crate::density::Density::default(),
         }
     }

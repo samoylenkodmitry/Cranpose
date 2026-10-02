@@ -1,9 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::{
-    self, Applier, ConcreteApplierHost, MutableState, Node, SlotTable, SlotsHost,
-    SnapshotStateObserver,
-};
+use cranpose_core::{self, Applier, ConcreteApplierHost, MutableState, Node, SlotTable, SlotsHost};
 use smallvec::SmallVec;
 
 use super::*;
@@ -50,14 +47,8 @@ fn setup_composer(
         applier,
         cranpose_core::MemoryApplier::new(),
     )));
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    let composer = cranpose_core::Composer::new(
-        Rc::clone(&slots_host),
-        applier_host.clone(),
-        handle,
-        observer,
-        root,
-    );
+    let composer =
+        cranpose_core::Composer::new(Rc::clone(&slots_host), applier_host.clone(), handle, root);
     (composer, slots_host, applier_host)
 }
 

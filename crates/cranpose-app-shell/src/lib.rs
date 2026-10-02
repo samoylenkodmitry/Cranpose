@@ -91,7 +91,6 @@ use cranpose_core::{
     CompositionPassDebugStats, SlotId,
     runtime::{RuntimeDebugStats, StateArenaDebugStats},
     snapshot_pinning::{SnapshotPinningDebugStats, debug_snapshot_pinning_stats},
-    snapshot_state_observer::SnapshotStateObserverDebugStats,
     snapshot_v2::{SnapshotV2DebugStats, debug_snapshot_v2_stats},
 };
 #[cfg(any(test, feature = "test-support"))]
@@ -453,7 +452,6 @@ pub struct RuntimeLeakDebugStats {
     pub slot_table_heap_bytes: usize,
     pub pass_stats: CompositionPassDebugStats,
     pub slot_stats: SlotTableDebugStats,
-    pub observer_stats: SnapshotStateObserverDebugStats,
     pub runtime_stats: RuntimeDebugStats,
     pub state_arena_stats: StateArenaDebugStats,
     pub recompose_scope_stats: RecomposeScopeRegistryDebugStats,

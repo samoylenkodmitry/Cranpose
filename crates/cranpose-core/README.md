@@ -894,56 +894,33 @@ slots.set_group_scope(started.group, scope_id);
 slots.begin_recompose_at_scope(scope_id);
 ```
 
-**Snapshot integration:**
+**State integration:**
 ```rust,ignore
-// Snapshot observer tracks which scopes read which state
-let observer = SnapshotStateObserver::new(|scope_id| {
-    invalidate_scope(scope_id);
-});
+// A state read inside a composable subscribes the scope composing it.
+let value = count.value(); // records the current scope among `count`'s watchers
 
-snapshot.set_read_observer(Box::new(move |state_obj| {
-    observer.observe_read(current_scope, state_obj);
-}));
+// A write, or a snapshot applied with a write, invalidates those watchers.
+count.set(value + 1);
 ```
 
 **Flow:**
-1. Composition reads state → observer records `(scope, state_obj)` mapping
-2. State changes → observer invalidates affected scopes
+1. Composition reads a state → the state records the reading scope among its watchers
+2. The state changes, directly or through an applied snapshot → its watchers are invalidated
 3. Active scope index resolves the group anchor → recompose at that group
+
+A read that must not subscribe uses `get_non_reactive`.
 
 Detached scopes are intentionally absent from the active scope index. When a retained subtree is
 restored, its scope is reactivated and can re-enter normal recomposition.
 
 #### 3. Invalidation Tracking
 
+Each `MutableState` keeps the scopes that read it. Reading it while a scope composes adds that
+scope; writing it, or applying a snapshot that wrote it, invalidates them, and the runtime queues
+them for the next recomposition pass:
+
 ```rust,ignore
-pub struct SnapshotStateObserver {
-    observations: HashMap<ScopeId, HashSet<StateObjectId>>,
-    reverse: HashMap<StateObjectId, HashSet<ScopeId>>,
-}
-
-impl SnapshotStateObserver {
-    pub fn observe_read(&mut self, scope: ScopeId, obj: StateObjectId) {
-        self.observations.entry(scope).or_default().insert(obj);
-        self.reverse.entry(obj).or_default().insert(scope);
-    }
-
-    pub fn notify_changed(&mut self, obj: StateObjectId) -> Vec<ScopeId> {
-        self.reverse.get(&obj).cloned().unwrap_or_default().collect()
-    }
-}
-```
-
-**Recomposition flow:**
-```rust,ignore
-// 1. Apply snapshot changes
-snapshot.apply()?;
-
-// 2. Get invalidated scopes
-let invalid_scopes = observer.notify_changed_objects(&changed_objects);
-
-// 3. Recompose each scope
-for scope in invalid_scopes {
+for scope in runtime.take_invalidated_scopes() {
     composer.recompose_group(scope);
 }
 ```

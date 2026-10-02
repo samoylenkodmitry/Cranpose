@@ -4990,3 +4990,83 @@ fn effective_activity_follows_the_lifetime_owner() {
     content.set_lifetime_owner_scope(None);
     assert!(content.is_effectively_active());
 }
+
+mod read_tracking {
+    use std::cell::Cell;
+
+    use super::*;
+
+    thread_local! {
+        pub(super) static SHOWN: Cell<u32> = const { Cell::new(0) };
+        pub(super) static READER_RUNS: Cell<u32> = const { Cell::new(0) };
+    }
+
+    #[composable]
+    pub(super) fn Reader(value: MutableState<u32>) {
+        READER_RUNS.with(|runs| runs.set(runs.get() + 1));
+        SHOWN.with(|shown| shown.set(value.value()));
+    }
+
+    #[composable]
+    pub(super) fn Parent(tick: MutableState<u32>, value: MutableState<u32>) {
+        let _ = tick.value();
+        Reader(value);
+    }
+
+    #[composable]
+    pub(super) fn Peeker(value: MutableState<u32>) {
+        READER_RUNS.with(|runs| runs.set(runs.get() + 1));
+        SHOWN.with(|shown| shown.set(value.get_non_reactive()));
+    }
+}
+
+#[test]
+fn a_skipped_reader_still_follows_the_state_it_read() {
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let tick = MutableState::with_runtime(0_u32, runtime.clone());
+    let value = MutableState::with_runtime(1_u32, runtime);
+    composition
+        .render(location_key(file!(), line!(), column!()), move || {
+            read_tracking::Parent(tick, value)
+        })
+        .expect("initial composition");
+    read_tracking::READER_RUNS.with(|runs| runs.set(0));
+
+    tick.set(1);
+    composition
+        .process_invalid_scopes()
+        .expect("parent recomposes");
+    assert_eq!(
+        read_tracking::READER_RUNS.with(Cell::get),
+        0,
+        "the reader's parameter did not change, so it skipped"
+    );
+
+    value.set(2);
+    composition
+        .process_invalid_scopes()
+        .expect("reader recomposes");
+    assert_eq!(read_tracking::SHOWN.with(Cell::get), 2);
+    assert_eq!(read_tracking::READER_RUNS.with(Cell::get), 1);
+}
+
+#[test]
+fn a_non_reactive_read_does_not_subscribe_its_scope() {
+    let mut composition = test_composition();
+    let value = MutableState::with_runtime(1_u32, composition.runtime_handle());
+    composition
+        .render(location_key(file!(), line!(), column!()), move || {
+            read_tracking::Peeker(value)
+        })
+        .expect("initial composition");
+    read_tracking::READER_RUNS.with(|runs| runs.set(0));
+
+    value.set(2);
+    composition
+        .process_invalid_scopes()
+        .expect("nothing to recompose");
+
+    assert_eq!(read_tracking::READER_RUNS.with(Cell::get), 0);
+    assert_eq!(read_tracking::SHOWN.with(Cell::get), 1);
+}

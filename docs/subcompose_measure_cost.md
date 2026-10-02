@@ -42,9 +42,8 @@ almost the same amount — in every pass, in both rounds.
 
 Every subcompose measure pass runs `perform_subcompose` →
 `Composer::subcompose_slot`, a compose walk over the retained slot
-table, with a fresh `SnapshotStateObserver` and a fresh `Composer`
-constructed per pass (`crates/cranpose-ui/src/layout/mod.rs`, observer
-construction in `measure_subcompose_node`). During scroll the
+table, with a fresh `Composer` constructed per pass
+(`crates/cranpose-ui/src/layout/mod.rs`, `measure_subcompose_node`). During scroll the
 boundary's descendants are dirty every frame, so the
 cached/retained-activation path never engages and the walk runs every
 pass. Its cost scales with what is IN the slot:

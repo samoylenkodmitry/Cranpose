@@ -6,8 +6,8 @@ use crate::{
     Applier, ApplierGuard, ApplierHost, CommandQueue, Composer, CompositionPassDebugStats,
     ConcreteApplierHost, DefaultScheduler, Key, NodeError, NodeId, RecomposeScope, RetentionPolicy,
     Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable, SlotTableDebugStats, SlotsHost,
-    SnapshotStateObserver, collections::map::HashMap, debug_scope_invalidation_sources,
-    debug_scope_label, runtime, scheduler_ref, snapshot_state_observer,
+    collections::map::HashMap, debug_scope_invalidation_sources, debug_scope_label, runtime,
+    scheduler_ref,
 };
 
 pub struct Composition<A: Applier + 'static> {
@@ -15,7 +15,6 @@ pub struct Composition<A: Applier + 'static> {
     pub(crate) slots: Rc<SlotsHost>,
     pub(crate) applier: Rc<ConcreteApplierHost<A>>,
     pub(crate) runtime: Runtime,
-    pub(crate) observer: SnapshotStateObserver,
     pub(crate) root: Option<NodeId>,
     pub(crate) root_key: Option<Key>,
     pub(crate) root_render_requested: bool,
@@ -49,17 +48,11 @@ impl<A: Applier + 'static> Composition<A> {
         let composer_state = Rc::new(crate::composer::ComposerRuntimeState::default());
         let slots = Rc::new(SlotsHost::new(SlotTable::new()));
         let applier = Rc::new(ConcreteApplierHost::new(applier));
-        let observer_handle = runtime.handle();
-        let observer = SnapshotStateObserver::new(move |callback| {
-            observer_handle.enqueue_ui_task(callback);
-        });
-        observer.start();
         Self {
             composer_state,
             slots,
             applier,
             runtime,
-            observer,
             root: None,
             root_key: None,
             root_render_requested: false,
@@ -153,7 +146,6 @@ impl<A: Applier + 'static> Composition<A> {
 
     fn finalize_runtime_state(&mut self) {
         let runtime_handle = self.runtime_handle();
-        self.observer.prune_dead_scopes();
         if !self.runtime.has_updates()
             && !runtime_handle.has_invalid_scopes()
             && !runtime_handle.has_frame_callbacks()
@@ -209,10 +201,8 @@ impl<A: Applier + 'static> Composition<A> {
                 Rc::clone(&self.slots),
                 self.applier.clone(),
                 runtime_handle.clone(),
-                self.observer.clone(),
                 self.root,
             );
-            self.observer.begin_frame();
             let (root, commands, side_effects, compact_applier) = composer.install(|composer| {
                 let ((), outcome) = composer.try_with_slot_host_pass(
                     Rc::clone(&self.slots),
@@ -362,10 +352,6 @@ impl<A: Applier + 'static> Composition<A> {
         self.slots.debug_snapshot()
     }
 
-    pub fn debug_observer_stats(&self) -> snapshot_state_observer::SnapshotStateObserverDebugStats {
-        self.observer.debug_stats()
-    }
-
     pub fn debug_last_pass_stats(&self) -> CompositionPassDebugStats {
         self.last_pass_stats
     }
@@ -444,11 +430,9 @@ impl<A: Applier + 'static> Composition<A> {
                         Rc::clone(host),
                         self.applier_host(),
                         runtime_clone.clone(),
-                        self.observer.clone(),
                         self.root,
                     );
                     composer.parent_stack().clear();
-                    self.observer.begin_frame();
                     let (root, commands, side_effects, requested_root_render, compact_applier) =
                         composer.install(|composer| {
                             let ((), outcome) = composer.try_with_slot_host_pass(
@@ -540,7 +524,6 @@ impl<A: Applier + 'static> Composition<A> {
             Rc::clone(&host),
             self.applier_host(),
             runtime_handle.clone(),
-            self.observer.clone(),
             self.root,
         );
         let commands = composer.install(|composer| {
@@ -587,7 +570,6 @@ impl<A: Applier + 'static> Composition<A> {
 
 impl<A: Applier + 'static> Drop for Composition<A> {
     fn drop(&mut self) {
-        self.observer.stop();
         self.teardown = Some(runtime::enter_state_teardown_scope());
     }
 }

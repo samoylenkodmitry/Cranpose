@@ -110,7 +110,6 @@ where
             slot_table_heap_bytes: self.app.composition.slot_table_heap_bytes(),
             pass_stats: self.app.composition.debug_last_pass_stats(),
             slot_stats: self.app.composition.debug_slot_table_stats(),
-            observer_stats: self.app.composition.debug_observer_stats(),
             runtime_stats: runtime.debug_stats(),
             state_arena_stats: runtime.state_arena_debug_stats(),
             recompose_scope_stats: debug_recompose_scope_registry_stats(),

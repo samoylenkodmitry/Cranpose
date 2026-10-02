@@ -37,9 +37,7 @@ fn scope_update_reuses_storage_and_replaces_payload_and_callback() {
     let second = Rc::new(String::from("second"));
     let delivered = Rc::new(RefCell::new(Vec::new()));
     let mut entry = ScopeEntry::new(0, first.clone(), Rc::new(|_| panic!("stale callback")));
-    let ScopeStorage::Owned(stored) = &entry.scope else {
-        panic!("expected owned scope");
-    };
+    let stored = &entry.scope;
     let address = stored.downcast_ref::<Rc<String>>().unwrap() as *const Rc<String>;
     let received = delivered.clone();
     entry.update(
@@ -58,9 +56,7 @@ fn scope_update_reuses_storage_and_replaces_payload_and_callback() {
     assert_eq!(Rc::strong_count(&second), 2);
     entry.notify();
     assert_eq!(*delivered.borrow(), vec!["second"]);
-    let ScopeStorage::Owned(stored) = &entry.scope else {
-        panic!("expected owned scope");
-    };
+    let stored = &entry.scope;
     assert_eq!(
         stored.downcast_ref::<Rc<String>>().unwrap() as *const Rc<String>,
         address
@@ -69,9 +65,8 @@ fn scope_update_reuses_storage_and_replaces_payload_and_callback() {
     assert_eq!(Rc::strong_count(&second), 1);
 }
 
-/// A callback that captures nothing does the same thing for every scope, as
-/// `RecomposeScope::invalidate` does for every group: its scopes share one
-/// `Rc` instead of each allocating one.
+/// A callback that captures nothing does the same thing for every scope: its
+/// scopes share one `Rc` instead of each allocating one.
 #[test]
 fn scopes_observed_with_a_capture_free_callback_share_it() {
     let _guard = reset_runtime_for_tests();
@@ -154,7 +149,6 @@ fn reobservation_across_storage_thresholds_replaces_dependencies_and_callbacks()
         .into_iter()
         .enumerate()
     {
-        observer.begin_frame();
         let recorded = notifications.clone();
         observer.observe_reads(
             TestScope("changing"),
@@ -197,7 +191,6 @@ fn reobservation_preserves_notifications_when_dependencies_repeat_or_change() {
         .into_iter()
         .enumerate()
     {
-        observer.begin_frame();
         let received = notifications.clone();
         observer.observe_reads(
             TestScope("repeated"),
@@ -248,7 +241,6 @@ fn stateless_scope_can_start_observing_and_replace_its_callback_before_the_block
     assert_eq!(Rc::strong_count(&notifications), 1);
     assert_eq!(observer.debug_stats().scopes_len, 0);
     for generation in 1..=2 {
-        observer.begin_frame();
         let delivered = notifications.clone();
         observer.observe_reads(
             TestScope("changing"),
@@ -354,7 +346,6 @@ fn repeated_owned_scope_observations_reuse_the_same_entry() {
 
     let stats = observer.debug_stats();
     assert_eq!(stats.scopes_len, 1);
-    assert_eq!(stats.recompose_scopes_len, 0);
 }
 
 #[test]
@@ -635,38 +626,15 @@ fn shared_state_notifies_scopes_in_registration_order() {
 }
 
 #[test]
-fn updating_a_recompose_scope_entry_keeps_its_scope_or_takes_the_new_one() {
-    let _guard = reset_runtime_for_tests();
-    let runtime = crate::TestRuntime::new();
-    let scope = RecomposeScope::new_for_test(runtime.handle());
-    let other = RecomposeScope::new_for_test(runtime.handle());
-    let mut entry = ScopeEntry::new(0, scope.clone(), Rc::new(|_| {}));
-    let weak_count = Rc::weak_count(&scope.inner);
-
-    entry.update_scope(&scope);
-    assert_eq!(Rc::strong_count(&scope.inner), 1);
-    assert_eq!(Rc::weak_count(&scope.inner), weak_count);
-    assert!(entry.matches_scope(&scope));
-
-    entry.update_scope(&other);
-    assert!(entry.matches_scope(&other));
-    assert!(!entry.matches_scope(&scope));
-    assert_eq!(Rc::weak_count(&scope.inner), weak_count - 1);
-}
-
-#[test]
-fn stateless_recompose_scope_does_not_retain_observer_entry() {
+fn a_stateless_scope_does_not_retain_an_observer_entry() {
     let _guard = reset_runtime_for_tests();
 
     let observer = SnapshotStateObserver::new(|callback| callback());
-    let runtime = crate::TestRuntime::new();
-    let scope = RecomposeScope::new_for_test(runtime.handle());
 
-    observer.observe_reads(scope, |_| {}, || {});
+    observer.observe_reads(TestScope("stateless"), |_| {}, || {});
 
     let stats = observer.debug_stats();
     assert_eq!(stats.scopes_len, 0);
-    assert_eq!(stats.recompose_scopes_len, 0);
     assert_eq!(stats.stateless_scope_count, 0);
 }
 
@@ -676,8 +644,7 @@ fn scope_that_stops_reading_state_is_removed_immediately() {
 
     let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
     let observer = SnapshotStateObserver::new(|callback| callback());
-    let runtime = crate::TestRuntime::new();
-    let scope = RecomposeScope::new_for_test(runtime.handle());
+    let scope = TestScope("scope");
     let triggered = Rc::new(Cell::new(0));
     let observer_trigger = Rc::clone(&triggered);
 
@@ -691,13 +658,11 @@ fn scope_that_stops_reading_state_is_removed_immediately() {
 
     let after_stateful = observer.debug_stats();
     assert_eq!(after_stateful.scopes_len, 1);
-    assert_eq!(after_stateful.recompose_scopes_len, 1);
 
     observer.observe_reads(scope, |_| {}, || {});
 
     let after_stateless = observer.debug_stats();
     assert_eq!(after_stateless.scopes_len, 0);
-    assert_eq!(after_stateless.recompose_scopes_len, 0);
 
     let snapshot = take_mutable_snapshot(None, None);
     snapshot.enter(|| {
@@ -706,224 +671,4 @@ fn scope_that_stops_reading_state_is_removed_immediately() {
     snapshot.apply().check();
 
     assert_eq!(triggered.get(), 0);
-}
-
-#[test]
-fn begin_frame_releases_dropped_scopes_before_the_app_can_idle() {
-    let _guard = reset_runtime_for_tests();
-
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    let runtime = crate::TestRuntime::new();
-    let scope = RecomposeScope::new_for_test(runtime.handle());
-
-    observer.observe_reads(
-        scope.clone(),
-        |_| {},
-        || {
-            let _ = state.get();
-        },
-    );
-
-    let before_prune = observer.debug_stats();
-    assert_eq!(before_prune.scopes_len, 1);
-    assert_eq!(before_prune.recompose_scopes_len, 1);
-
-    drop(scope);
-    observer.begin_frame();
-    let after_prune = observer.debug_stats();
-    assert_eq!(after_prune.scopes_len, 0);
-    assert_eq!(after_prune.recompose_scopes_len, 0);
-    assert_eq!(after_prune.observed_state_count, 0);
-    assert!(observer.inner.observed_to_scopes.borrow().is_empty());
-}
-
-#[test]
-fn an_explicit_prune_drops_a_dead_scope_entry_at_once() {
-    let _guard = reset_runtime_for_tests();
-
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    let runtime = crate::TestRuntime::new();
-    let scope = RecomposeScope::new_for_test(runtime.handle());
-    observer.observe_reads(
-        scope.clone(),
-        |_| {},
-        || {
-            let _ = state.get();
-        },
-    );
-    drop(scope);
-    observer.prune_dead_scopes();
-    let stats = observer.debug_stats();
-    assert_eq!((stats.scopes_len, stats.recompose_scopes_len), (0, 0));
-}
-
-fn observe_recompose_scope(
-    observer: &SnapshotStateObserver,
-    scope: &RecomposeScope,
-    state: &SnapshotMutableState<i32>,
-) {
-    observer.observe_reads(
-        scope.clone(),
-        |_| {},
-        || {
-            let _ = state.get();
-        },
-    );
-}
-
-#[test]
-fn unchanged_frames_do_not_scan_observer_entries() {
-    let _guard = reset_runtime_for_tests();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    let runtime = crate::TestRuntime::new();
-    let scope = RecomposeScope::new_for_test(runtime.handle());
-    observe_recompose_scope(&observer, &scope, &state);
-    observer.prune_dead_scopes();
-    let entries = observer.inner.indexed_scopes.borrow_mut();
-    for _ in 0..128 {
-        observer.begin_frame();
-        observer.prune_dead_scopes();
-    }
-    assert_eq!(entries.len(), 1);
-}
-
-#[test]
-fn every_observer_releases_a_shared_dropped_scope() {
-    let _guard = reset_runtime_for_tests();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let observers =
-        std::array::from_fn::<_, 2, _>(|_| SnapshotStateObserver::new(|callback| callback()));
-    let runtime = crate::TestRuntime::new();
-    let scope = RecomposeScope::new_for_test(runtime.handle());
-    for observer in &observers {
-        observe_recompose_scope(observer, &scope, &state);
-    }
-    drop(scope);
-    for observer in observers {
-        observer.begin_frame();
-        assert_eq!(observer.debug_stats().observed_state_count, 0);
-        assert!(observer.inner.observed_to_scopes.borrow().is_empty());
-    }
-}
-
-fn observe_counting_scope(
-    observer: &SnapshotStateObserver,
-    scope: &RecomposeScope,
-    state: &Arc<SnapshotMutableState<i32>>,
-    notified: &Rc<Cell<[u32; 2]>>,
-    index: usize,
-) {
-    let notified = Rc::clone(notified);
-    observer.observe_reads(
-        scope.clone(),
-        move |_| {
-            let mut counts = notified.get();
-            counts[index] += 1;
-            notified.set(counts);
-        },
-        || {
-            let _ = state.get();
-        },
-    );
-}
-
-fn observe_shared_scope(
-    scope: &RecomposeScope,
-    state: &Arc<SnapshotMutableState<i32>>,
-    notified: &Rc<Cell<[u32; 2]>>,
-) -> [SnapshotStateObserver; 2] {
-    let observers =
-        std::array::from_fn::<_, 2, _>(|_| SnapshotStateObserver::new(|callback| callback()));
-    for (index, observer) in observers.iter().enumerate() {
-        observer.start();
-        observe_counting_scope(observer, scope, state, notified, index);
-    }
-    observers
-}
-
-fn change_state(state: &SnapshotMutableState<i32>, value: i32) {
-    let snapshot = take_mutable_snapshot(None, None);
-    snapshot.enter(|| {
-        state.set(value);
-    });
-    snapshot.apply().check();
-}
-
-#[test]
-fn clearing_a_shared_scope_in_one_observer_keeps_the_other_notified() {
-    let _guard = reset_runtime_for_tests();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let runtime = crate::TestRuntime::new();
-    let scope = RecomposeScope::new_for_test(runtime.handle());
-    let notified = Rc::new(Cell::new([0, 0]));
-    let observers = observe_shared_scope(&scope, &state, &notified);
-
-    observers[0].clear(&scope);
-    observe_counting_scope(&observers[1], &scope, &state, &notified, 1);
-    change_state(&state, 1);
-
-    assert_eq!(notified.get(), [0, 1]);
-}
-
-#[test]
-fn dropping_one_observer_of_a_shared_scope_keeps_the_other_notified() {
-    let _guard = reset_runtime_for_tests();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let runtime = crate::TestRuntime::new();
-    let scope = RecomposeScope::new_for_test(runtime.handle());
-    let notified = Rc::new(Cell::new([0, 0]));
-    let [first, second] = observe_shared_scope(&scope, &state, &notified);
-
-    drop(first);
-    change_state(&state, 1);
-    second.observe_reads(scope, |_| {}, || {});
-    change_state(&state, 2);
-
-    assert_eq!(notified.get(), [0, 1]);
-    assert_eq!(second.debug_stats().scopes_len, 0);
-}
-
-#[test]
-fn pruning_also_releases_scopes_owned_by_removed_callbacks() {
-    let _guard = reset_runtime_for_tests();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let observer = SnapshotStateObserver::new(|callback| callback());
-    let runtime = crate::TestRuntime::new();
-    let first = RecomposeScope::new_for_test(runtime.handle());
-    let second = RecomposeScope::new_for_test(runtime.handle());
-    observe_recompose_scope(&observer, &second, &state);
-    observer.observe_reads(
-        first.clone(),
-        move |_| {
-            let _ = second.is_active();
-        },
-        || {
-            let _ = state.get();
-        },
-    );
-    drop(first);
-    observer.prune_dead_scopes();
-    assert_eq!(observer.debug_stats().scopes_len, 0);
-    assert!(observer.inner.observed_to_scopes.borrow().is_empty());
-}
-
-#[test]
-fn composition_releases_dropped_observations_before_becoming_idle() {
-    let _guard = reset_runtime_for_tests();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let mut composition = crate::Composition::new(crate::MemoryApplier::new());
-    let scope = RecomposeScope::new_for_test(composition.runtime_handle());
-    observe_recompose_scope(&composition.observer, &scope, &state);
-    assert_eq!(composition.debug_observer_stats().observed_state_count, 1);
-    drop(scope);
-    assert!(
-        !composition
-            .process_invalid_scopes()
-            .expect("idle reconciliation")
-    );
-    assert!(!composition.should_render());
-    assert_eq!(composition.debug_observer_stats().observed_state_count, 0);
 }

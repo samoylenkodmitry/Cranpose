@@ -1665,12 +1665,10 @@ impl LayoutBuilderState {
         let mut slots_guard = SlotsGuard::take(&self.slots);
         let slots_host = slots_guard.host();
         let applier_host_dyn: Rc<dyn ApplierHost> = Rc::clone(&self.applier) as Rc<dyn ApplierHost>;
-        let observer = node_handle.observer_for_measure();
         let composer = Composer::new(
             Rc::clone(&slots_host),
             applier_host_dyn,
             runtime_handle,
-            observer,
             Some(node_id),
         );
         composer.enter_phase(Phase::Measure);
