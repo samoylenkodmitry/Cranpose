@@ -681,10 +681,23 @@ enum RecomposeCallback {
     },
 }
 
+thread_local! {
+    static SCOPE_ACTIVITY_EPOCH: Cell<u64> = const { Cell::new(1) };
+}
+
+fn scope_activity_epoch() -> u64 {
+    SCOPE_ACTIVITY_EPOCH.with(Cell::get)
+}
+
+fn note_scope_activity_change() {
+    let _ = SCOPE_ACTIVITY_EPOCH.try_with(|epoch| epoch.set(epoch.get() + 1));
+}
+
 fn link_scope(link: &RefCell<Option<Weak<RecomposeScopeInner>>>, target: Option<&RecomposeScope>) {
     let mut link = link.borrow_mut();
     if link.as_ref().map(Weak::as_ptr) != target.map(|scope| Rc::as_ptr(&scope.inner)) {
         *link = target.map(RecomposeScope::downgrade);
+        note_scope_activity_change();
     }
 }
 
@@ -693,6 +706,7 @@ pub(crate) struct RecomposeScopeInner {
     invalid: Cell<bool>,
     enqueued: Cell<bool>,
     active: Cell<bool>,
+    active_epoch: Cell<u64>,
     deactivations: Cell<u64>,
     composed_once: Cell<bool>,
     pending_recompose: Cell<bool>,
@@ -743,6 +757,24 @@ impl RecomposeScopeInner {
             .map_or(ScopeOwner::Dropped, ScopeOwner::Live)
     }
 
+    fn is_effectively_active(&self, epoch: u64) -> bool {
+        if self.active_epoch.get() == epoch {
+            return true;
+        }
+        if !self.active.get() {
+            return false;
+        }
+        let active = match self.owner() {
+            ScopeOwner::Root => true,
+            ScopeOwner::Dropped => false,
+            ScopeOwner::Live(owner) => owner.is_effectively_active(epoch),
+        };
+        if active {
+            self.active_epoch.set(epoch);
+        }
+        active
+    }
+
     fn new(runtime: RuntimeHandle) -> Self {
         runtime.increment_live_recompose_scope_count();
         Self {
@@ -750,6 +782,7 @@ impl RecomposeScopeInner {
             invalid: Cell::new(false),
             enqueued: Cell::new(false),
             active: Cell::new(true),
+            active_epoch: Cell::new(0),
             deactivations: Cell::new(0),
             composed_once: Cell::new(false),
             pending_recompose: Cell::new(false),
@@ -787,6 +820,7 @@ fn push_unique_state_id(ids: &mut StateIds, state_id: StateId) {
 
 impl Drop for RecomposeScopeInner {
     fn drop(&mut self) {
+        note_scope_activity_change();
         self.observers.release();
         let id = self.id();
         self.runtime.decrement_live_recompose_scope_count();
@@ -889,22 +923,7 @@ impl RecomposeScope {
     }
 
     pub(crate) fn is_effectively_active(&self) -> bool {
-        if !self.is_active() {
-            return false;
-        }
-        let mut owner = self.inner.owner();
-        loop {
-            match owner {
-                ScopeOwner::Root => return true,
-                ScopeOwner::Dropped => return false,
-                ScopeOwner::Live(scope) => {
-                    if !scope.active.get() {
-                        return false;
-                    }
-                    owner = scope.owner();
-                }
-            }
-        }
+        self.inner.is_effectively_active(scope_activity_epoch())
     }
 
     fn record_state_subscription(&self, state_id: StateId) {
@@ -1134,6 +1153,7 @@ impl RecomposeScope {
         if !self.inner.active.replace(false) {
             return;
         }
+        note_scope_activity_change();
         self.inner
             .deactivations
             .set(self.inner.deactivations.get() + 1);

@@ -4949,3 +4949,44 @@ fn a_scope_that_grows_places_its_new_node_among_its_own_nodes() {
     );
     assert_composition_valid(&composition);
 }
+
+#[test]
+fn effective_activity_follows_every_change_to_the_owner_chain() {
+    let runtime = TestRuntime::new();
+    let root = RecomposeScope::new_for_test(runtime.handle());
+    let parent = RecomposeScope::new_for_test(runtime.handle());
+    let child = RecomposeScope::new_for_test(runtime.handle());
+    parent.set_parent_scope(Some(&root));
+    child.set_parent_scope(Some(&parent));
+    assert!(child.is_effectively_active());
+
+    root.deactivate();
+    assert!(!child.is_effectively_active());
+    root.reactivate();
+    assert!(child.is_effectively_active());
+
+    let inactive = RecomposeScope::new_for_test(runtime.handle());
+    inactive.deactivate();
+    assert!(child.is_effectively_active());
+    parent.set_parent_scope(Some(&inactive));
+    assert!(!child.is_effectively_active());
+    parent.set_parent_scope(Some(&root));
+    assert!(child.is_effectively_active());
+
+    drop(root);
+    assert!(!child.is_effectively_active());
+}
+
+#[test]
+fn effective_activity_follows_the_lifetime_owner() {
+    let runtime = TestRuntime::new();
+    let owner = RecomposeScope::new_for_test(runtime.handle());
+    let content = RecomposeScope::new_for_test(runtime.handle());
+    content.set_lifetime_owner_scope(Some(&owner));
+    assert!(content.is_effectively_active());
+
+    owner.deactivate();
+    assert!(!content.is_effectively_active());
+    content.set_lifetime_owner_scope(None);
+    assert!(content.is_effectively_active());
+}
