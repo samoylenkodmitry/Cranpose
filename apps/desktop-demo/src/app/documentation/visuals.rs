@@ -2,7 +2,7 @@ use cranpose::liquid::{Glass, LiquidModifierExt, LiquidShape};
 use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle, TextUnit},
-    Box, BoxSpec, Brush, Color, Modifier, Point, ScrollState, TextStyle,
+    Box, BoxSpec, Brush, Color, Modifier, Point, TextStyle,
 };
 use cranpose_ui_graphics::{Stroke, VectorPath};
 
@@ -45,7 +45,7 @@ impl WheelGeometry {
         Self {
             width,
             radius,
-            center: Point::new(radius + left, 230.0),
+            center: Point::new(radius + left, 330.0),
         }
     }
 
@@ -55,6 +55,10 @@ impl WheelGeometry {
 
     pub fn reader_left(self) -> f32 {
         (self.width * 0.27).clamp(290.0, 380.0)
+    }
+
+    pub fn section_angle(self) -> f32 {
+        120.0 / (self.radius + 120.0)
     }
 
     pub fn point(self, angle: f32, radius: f32) -> Point {
@@ -77,10 +81,11 @@ pub(super) fn Backdrop() {
 }
 
 #[composable]
-pub(super) fn WheelSurface(geometry: WheelGeometry, page: ScrollState) {
-    let reduced = cranpose_services::local_accessibility_options()
-        .current()
-        .reduce_motion;
+pub(super) fn WheelSurface(
+    geometry: WheelGeometry,
+    state: super::DocumentationState,
+    wheel_only: bool,
+) {
     Box(
         Modifier::empty()
             .size_points(geometry.width, geometry.height())
@@ -129,9 +134,9 @@ pub(super) fn WheelSurface(geometry: WheelGeometry, page: ScrollState) {
                             Stroke::new(1.0),
                         );
                     }
-                    let phase = if reduced { 0.0 } else { page.value() * 0.00012 };
-                    for index in 0..10 {
-                        let angle = index as f32 * 0.145 - phase + 0.073;
+                    let phase = state.position(wheel_only) * geometry.section_angle();
+                    for index in 0..super::chapters().len() {
+                        let angle = (index as f32 + 0.5) * geometry.section_angle() - phase;
                         scope.draw_line(
                             Brush::solid(Color(0.31, 0.67, 0.76, 0.25)),
                             geometry.point(angle, geometry.radius + 255.0),

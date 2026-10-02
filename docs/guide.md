@@ -22,11 +22,14 @@ quality or complete Compose parity.
 
 Documentation is the first desktop tab. Every existing demonstration is still
 available in the tab strip, or through the Tabs picker on a narrow window.
-The entire documentation page scrolls, including the tab strip. A large section
-wheel curves beneath the glass reading surface. Select an exposed chapter on
-the wheel, use Previous section and Next section above the article, or open
-Sections to reach any chapter. Back to top returns to the tab strip. The compact
-layout keeps the same page scroll and provides the full Sections menu.
+The guide is one continuous document; its tab strip scrolls away with the text.
+A large, independently scrollable section wheel curves beneath the glass reader.
+Scrolling the wheel moves the article to the corresponding section; scrolling
+the article rotates the wheel to follow the current section. Select a wheel
+entry or use Previous section and Next section to jump directly to a chapter.
+Back to top returns to the tab strip. View on GitHub stays at the window's
+bottom-left corner. Narrow windows open on the wheel. Selecting a section opens
+the glass reader over it, and Back to wheel returns to the current section.
 Use Counter App for state, CompositionLocal for scoped values, Async Runtime for
 effects, Layout and Lazy List for measurement and scrolling, Text Input and
 Text for editing and typography, and Liquid UI for the glass component library.

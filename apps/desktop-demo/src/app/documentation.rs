@@ -1,15 +1,15 @@
 use std::sync::OnceLock;
 
 use cranpose::liquid::{LiquidTheme, LiquidThemeSpec, SchemeMode};
-use cranpose_core::{
-    mutableStateOf, remember, rememberMutableStateOf, with_key, LaunchedEffect, MutableState,
-};
+use cranpose_core::{mutableStateOf, remember, rememberMutableStateOf, with_key, MutableState};
+use cranpose_foundation::lazy::{LazyListScope, LazyListState};
 use cranpose_services::local_uri_handler;
 use cranpose_ui::{
-    composable, text::FontWeight, Alignment, Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec,
-    GraphicsLayer, LinearArrangement, Modifier, Row, RowSpec, ScrollState, Spacer, Text,
-    VerticalAlignment,
+    composable, rememberDraggableState, text::FontWeight, Alignment, Box, BoxSpec, Button,
+    ButtonSpec, Column, ColumnSpec, GraphicsLayer, LazyColumn, LazyColumnSpec, LinearArrangement,
+    Modifier, Row, RowSpec, Spacer, Text, VerticalAlignment,
 };
+use cranpose_ui_layout::Axis;
 
 use super::markdown::MarkdownDocument;
 mod visuals;
@@ -92,19 +92,17 @@ fn RepositoryLink() {
 }
 
 #[composable]
-fn Brand(compact: bool) {
+fn Brand() {
     Column(
         Modifier::empty(),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
             Text("CRANPOSE", Modifier::empty(), caption_style(ACCENT));
-            if !compact {
-                Text(
-                    "The guide.",
-                    Modifier::empty().heading(),
-                    text_style(30.0, INK, FontWeight::BOLD),
-                );
-            }
+            Text(
+                "The guide.",
+                Modifier::empty().heading(),
+                text_style(30.0, INK, FontWeight::BOLD),
+            );
             Text(
                 "0.9.0 · toward 1.0",
                 Modifier::empty(),
@@ -116,23 +114,57 @@ fn Brand(compact: bool) {
 
 #[derive(Clone, Copy, PartialEq)]
 struct DocumentationState {
-    selected: MutableState<usize>,
-    menu_open: MutableState<bool>,
-    page: ScrollState,
+    reader_open: MutableState<bool>,
+    browse_position: MutableState<f32>,
+    page: LazyListState,
 }
 
 impl DocumentationState {
+    fn selected(self) -> usize {
+        self.page
+            .first_visible_item_index()
+            .saturating_sub(1)
+            .min(chapters().len() - 1)
+    }
+
+    fn position(self, wheel_only: bool) -> f32 {
+        if wheel_only {
+            return self.browse_position.get();
+        }
+        let item = self.page.first_visible_item_index();
+        if item == 0 {
+            return 0.0;
+        }
+        let offset = self.page.first_visible_item_scroll_offset();
+        let fraction = self
+            .page
+            .get_cached_size(item)
+            .map_or(0.0, |height| offset / height.max(1.0));
+        (item.saturating_sub(1) as f32 + fraction).clamp(0.0, (chapters().len() - 1) as f32)
+    }
+
     fn select(self, index: usize) {
-        self.selected.set(index);
-        self.menu_open.set(false);
-        self.page.scroll_to(0.0);
+        self.reader_open.set(true);
+        self.page.scroll_to_item(index + 1, 0.0);
+    }
+
+    fn rotate(self, delta: f32, wheel_only: bool) {
+        let position =
+            (self.position(wheel_only) - delta / 120.0).clamp(0.0, (chapters().len() - 1) as f32);
+        self.browse_position.set(position);
+        let item = position.floor() as usize + 1;
+        let offset = self
+            .page
+            .get_cached_size(item)
+            .map_or(0.0, |height| position.fract() * height);
+        self.page.scroll_to_item(item, offset);
     }
 }
 
 #[composable]
 fn ChapterButton(index: usize, state: DocumentationState, modifier: Modifier) {
     let chapter = &chapters()[index];
-    let active = state.selected.get() == index;
+    let active = state.selected() == index;
     Button(
         modifier
             .padding_each(12.0, 14.0, 12.0, 14.0)
@@ -174,66 +206,49 @@ fn ChapterButton(index: usize, state: DocumentationState, modifier: Modifier) {
 }
 
 #[composable]
-fn SectionWheel(state: DocumentationState, geometry: WheelGeometry) {
-    let selected = state.selected.get();
-    let reduce_motion = cranpose_services::local_accessibility_options()
-        .current()
-        .reduce_motion;
+fn SectionWheel(state: DocumentationState, geometry: WheelGeometry, height: f32, compact: bool) {
+    let drag = rememberDraggableState(move |delta| state.rotate(delta, compact));
+    let position = state.position(compact);
+    let entry_height = 58.0
+        * cranpose_services::local_accessibility_options()
+            .current()
+            .font_scale
+            .max(1.0);
+    let exposed_width = if compact {
+        geometry.width
+    } else {
+        geometry.reader_left()
+    };
     Box(
         Modifier::empty()
-            .size_points(geometry.width, geometry.height())
-            .content_description("Documentation wheel"),
+            .width(exposed_width)
+            .height((height - 250.0).max(1.0))
+            .offset(0.0, 190.0)
+            .clip_to_bounds()
+            .content_description("Documentation wheel")
+            .draggable(Axis::Vertical, drag),
         BoxSpec::default(),
         move || {
-            visuals::WheelSurface(geometry, state.page);
-            Box(
-                Modifier::empty().offset(28.0, 34.0),
-                BoxSpec::default(),
-                || Brand(false),
-            );
-            Box(
-                Modifier::empty()
-                    .width(geometry.reader_left())
-                    .height(geometry.height() - 180.0)
-                    .offset(0.0, 180.0)
-                    .clip_to_bounds(),
-                BoxSpec::default(),
-                move || {
-                    for index in 0..chapters().len() {
-                        with_key(&index, || {
-                            let resting_angle = (index as f32 - selected as f32) * 0.145;
-                            let resting_center =
-                                geometry.point(resting_angle, geometry.radius + 120.0);
-                            let modifier = Modifier::empty()
-                                .size_points(246.0, 58.0)
-                                .offset(resting_center.x - 123.0, resting_center.y - 209.0)
-                                .graphics_layer(move || {
-                                    let travel = if reduce_motion {
-                                        0.0
-                                    } else {
-                                        state.page.value() * 0.00012
-                                    };
-                                    let angle = resting_angle - travel;
-                                    let center = geometry.point(angle, geometry.radius + 120.0);
-                                    GraphicsLayer {
-                                        translation_x: center.x - resting_center.x,
-                                        translation_y: center.y - resting_center.y,
-                                        rotation_z: -angle.to_degrees(),
-                                        ..Default::default()
-                                    }
-                                });
-                            ChapterButton(index, state, modifier);
+            for index in 0..chapters().len() {
+                with_key(&index, || {
+                    let angle = (index as f32 - position) * geometry.section_angle();
+                    let center = geometry.point(angle, geometry.radius + 120.0);
+                    let modifier = Modifier::empty()
+                        .size_points(246.0, entry_height)
+                        .offset(center.x - 123.0, center.y - 190.0 - entry_height * 0.5)
+                        .graphics_layer_value(GraphicsLayer {
+                            rotation_z: -angle.to_degrees(),
+                            ..Default::default()
                         });
-                    }
-                },
-            );
+                    ChapterButton(index, state, modifier);
+                });
+            }
         },
     );
 }
 
 #[composable]
-fn ChapterNavigation(state: DocumentationState) {
-    let index = state.selected.get();
+fn ChapterNavigation(state: DocumentationState, index: usize) {
     Row(
         Modifier::empty().fill_max_width(),
         RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
@@ -260,14 +275,14 @@ fn ChapterNavigation(state: DocumentationState) {
 }
 
 #[composable]
-fn Reader(state: DocumentationState, width: f32, min_height: f32, compact: bool) {
-    let chapter = &chapters()[state.selected.get()];
+fn ReaderChapter(state: DocumentationState, index: usize, width: f32, height: f32, compact: bool) {
+    let chapter = &chapters()[index];
     let inset = if compact { 20.0 } else { 40.0 };
     Box(
         visuals::reader_surface(
             Modifier::empty()
                 .width(width)
-                .height_in(min_height, f32::INFINITY),
+                .height_in(height, f32::INFINITY),
         )
         .content_description("Documentation glass"),
         BoxSpec::new().content_alignment(Alignment::TOP_CENTER),
@@ -275,7 +290,7 @@ fn Reader(state: DocumentationState, width: f32, min_height: f32, compact: bool)
             Column(
                 Modifier::empty()
                     .width(width.min(840.0))
-                    .padding_each(inset, 34.0, inset, 40.0),
+                    .padding_each(inset, 34.0, inset, 76.0),
                 ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(24.0)),
                 move || {
                     Row(
@@ -283,7 +298,7 @@ fn Reader(state: DocumentationState, width: f32, min_height: f32, compact: bool)
                         RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
                         move || {
                             Text(
-                                "DOCUMENTATION",
+                                if compact { "GUIDE" } else { "DOCUMENTATION" },
                                 Modifier::empty().weight(1.0),
                                 caption_style(MUTED),
                             );
@@ -292,54 +307,25 @@ fn Reader(state: DocumentationState, width: f32, min_height: f32, compact: bool)
                                 Modifier::empty(),
                                 caption_style(ACCENT),
                             );
-                            DocAction(
-                                if state.menu_open.get() {
-                                    "Close sections"
-                                } else {
-                                    "Sections"
-                                },
-                                Modifier::empty(),
-                                move || {
-                                    state.menu_open.update(|open| *open = !*open);
-                                    state.page.scroll_to(0.0);
-                                },
-                            );
                         },
                     );
-                    if compact {
-                        Brand(true);
-                    }
-                    if state.menu_open.get() {
-                        Text(
-                            "Explore the guide",
-                            Modifier::empty().heading(),
-                            text_style(30.0, INK, FontWeight::BOLD),
-                        );
-                        for index in 0..chapters().len() {
-                            with_key(&index, || {
-                                ChapterButton(index, state, Modifier::empty().fill_max_width());
-                            });
-                        }
-                    } else {
-                        Text(
-                            chapter.title,
-                            Modifier::empty().heading(),
-                            text_style(if compact { 34.0 } else { 46.0 }, INK, FontWeight::BOLD),
-                        );
-                        Spacer(Modifier::empty().width(44.0).height(3.0).background(ACCENT));
-                        ChapterNavigation(state);
-                        MarkdownDocument(chapter.body, GUIDE_URL);
-                        Spacer(
-                            Modifier::empty()
-                                .fill_max_width()
-                                .height(1.0)
-                                .background(BORDER),
-                        );
-                        DocAction("Back to top", Modifier::empty(), move || {
-                            state.page.scroll_to(0.0);
-                        });
-                    }
-                    RepositoryLink();
+                    Text(
+                        chapter.title,
+                        Modifier::empty().heading(),
+                        text_style(if compact { 34.0 } else { 46.0 }, INK, FontWeight::BOLD),
+                    );
+                    Spacer(Modifier::empty().width(44.0).height(3.0).background(ACCENT));
+                    ChapterNavigation(state, index);
+                    MarkdownDocument(chapter.body, GUIDE_URL);
+                    Spacer(
+                        Modifier::empty()
+                            .fill_max_width()
+                            .height(1.0)
+                            .background(BORDER),
+                    );
+                    DocAction("Back to top", Modifier::empty(), move || {
+                        state.page.scroll_to_item(0, 0.0);
+                    });
                 },
             );
         },
@@ -347,12 +333,91 @@ fn Reader(state: DocumentationState, width: f32, min_height: f32, compact: bool)
 }
 
 #[composable]
+fn GuideHeader(header: Option<super::AppHeaderState>) {
+    if let Some(header) = header {
+        super::AppHeader(
+            header.active_tab,
+            header.picker_open,
+            header.showing_source,
+            header.is_compact,
+        );
+    }
+}
+
+#[composable]
+fn ScrollingHeader(
+    header: Option<super::AppHeaderState>,
+    state: DocumentationState,
+    size: MutableState<cranpose_ui::Size>,
+    reader_visible: bool,
+) {
+    let header_height = size.get().height;
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .report_size_state(size)
+            .graphics_layer(move || {
+                let translation_y = if !reader_visible {
+                    0.0
+                } else if state.page.first_visible_item_index() == 0 {
+                    -state.page.first_visible_item_scroll_offset()
+                } else {
+                    -header_height
+                };
+                GraphicsLayer {
+                    translation_y,
+                    ..Default::default()
+                }
+            }),
+        BoxSpec::default(),
+        move || GuideHeader(header),
+    );
+}
+
+#[composable]
+fn Reader(state: DocumentationState, width: f32, height: f32, compact: bool, header_height: f32) {
+    let reader_left = if compact {
+        0.0
+    } else {
+        WheelGeometry::new(width).reader_left()
+    };
+    let mut spec = LazyColumnSpec::new();
+    spec.beyond_bounds_item_count = 0;
+    LazyColumn(
+        Modifier::empty().fill_max_size().padding_each(
+            0.0,
+            if compact { 48.0 } else { 0.0 },
+            0.0,
+            0.0,
+        ),
+        state.page,
+        spec,
+        move |scope| {
+            scope.item_keyed(Some(0), Some(0), move || {
+                Spacer(Modifier::empty().height(header_height));
+            });
+            scope.items(chapters().len(), move |index| {
+                Row(
+                    Modifier::empty().fill_max_width(),
+                    RowSpec::default(),
+                    move || {
+                        Spacer(Modifier::empty().width(reader_left));
+                        ReaderChapter(state, index, width - reader_left, height, compact);
+                    },
+                );
+            });
+        },
+    );
+}
+
+#[composable]
 pub(super) fn DocumentationTab(header: Option<super::AppHeaderState>) {
     let viewport = rememberMutableStateOf(cranpose_ui::Size::default);
+    let header_size = rememberMutableStateOf(cranpose_ui::Size::default);
     let state = remember(|| DocumentationState {
-        selected: mutableStateOf(0usize),
-        menu_open: mutableStateOf(false),
-        page: ScrollState::new(0.0),
+        reader_open: mutableStateOf(false),
+        browse_position: mutableStateOf(0.0),
+        page: LazyListState::new(0, 0.0),
     })
     .with(|state| *state);
     LiquidTheme(
@@ -375,56 +440,52 @@ pub(super) fn DocumentationTab(header: Option<super::AppHeaderState>) {
                     let width = size.width.max(1.0);
                     let compact = width < COMPACT_BREAKPOINT;
                     let geometry = WheelGeometry::new(width);
-                    let reader_left = if compact { 0.0 } else { geometry.reader_left() };
-                    let min_height = geometry.height().max(size.height);
-                    let menu_open = state.menu_open.get();
-                    let selection = state.selected.get();
-                    let viewport_height = size.height;
-                    let font_scale = cranpose_services::local_accessibility_options()
-                        .current()
-                        .font_scale;
-                    LaunchedEffect((menu_open, selection), move |_| {
-                        if menu_open {
-                            state.page.scroll_to(
-                                (240.0 + selection as f32 * 64.0 * font_scale.max(1.0)
-                                    - viewport_height * 0.5)
-                                    .max(0.0),
-                            );
-                        }
-                    });
+                    let reader_visible = !compact || state.reader_open.get();
                     visuals::Backdrop();
-                    Column(
-                        Modifier::empty()
-                            .fill_max_size()
-                            .vertical_scroll(state.page, false),
-                        ColumnSpec::default(),
-                        move || {
-                            if let Some(header) = header {
-                                super::AppHeader(
-                                    header.active_tab,
-                                    header.picker_open,
-                                    header.showing_source,
-                                    header.is_compact,
+                    visuals::WheelSurface(geometry, state, !reader_visible);
+                    if !compact || !reader_visible {
+                        Box(
+                            Modifier::empty().offset(28.0, 110.0),
+                            BoxSpec::default(),
+                            Brand,
+                        );
+                    }
+                    let header_height = header_size.get().height;
+                    if reader_visible && (header.is_none() || header_height > 0.0) {
+                        Reader(state, width, size.height, compact, header_height);
+                    }
+                    ScrollingHeader(header, state, header_size, reader_visible);
+                    if !compact || !reader_visible {
+                        SectionWheel(state, geometry, size.height, compact);
+                    }
+                    if compact && reader_visible {
+                        Row(
+                            visuals::reader_surface(
+                                Modifier::empty().fill_max_width().height(48.0),
+                            ),
+                            RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
+                            move || {
+                                DocAction("Back to wheel", Modifier::empty(), move || {
+                                    state.browse_position.set(state.position(false));
+                                    state.reader_open.set(false);
+                                });
+                                Spacer(Modifier::empty().weight(1.0));
+                                Text(
+                                    chapters()[state.selected()].number.as_str(),
+                                    Modifier::empty().padding(12.0),
+                                    caption_style(ACCENT),
                                 );
-                            }
+                            },
+                        );
+                    }
+                    Box(
+                        Modifier::empty().fill_max_size(),
+                        BoxSpec::new().content_alignment(Alignment::BOTTOM_START),
+                        || {
                             Box(
-                                Modifier::empty().fill_max_width().clip_to_bounds(),
+                                visuals::reader_surface(Modifier::empty()),
                                 BoxSpec::default(),
-                                move || {
-                                    if !compact {
-                                        SectionWheel(state, geometry);
-                                    } else {
-                                        visuals::WheelSurface(geometry, state.page);
-                                    }
-                                    Row(
-                                        Modifier::empty().fill_max_width(),
-                                        RowSpec::default(),
-                                        move || {
-                                            Spacer(Modifier::empty().width(reader_left));
-                                            Reader(state, width - reader_left, min_height, compact);
-                                        },
-                                    );
-                                },
+                                RepositoryLink,
                             );
                         },
                     );

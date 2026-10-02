@@ -37,45 +37,34 @@ pub(crate) fn main() {
         .with_headless(true)
         .with_test_driver(move |robot| {
             robot.wait_for_idle().expect("documentation startup");
-            robot
-                .validate_content("Build native and browser interfaces in Rust.")
-                .expect("offline documentation opens first");
-            capture(&robot, width, "home");
             if compact {
-                click_button(&robot, "Sections");
-                capture(&robot, width, "sections");
+                robot.validate_content("Welcome").expect("compact wheel opens first");
+                assert!(find_text_in_semantics(&robot, "Build native and browser interfaces in Rust.").is_none());
+            } else {
+                robot.validate_content("Build native and browser interfaces in Rust.").expect("offline reader");
+            }
+            capture(&robot, width, "home");
+            let github_before = find_text_in_semantics_exact(&robot, "View on GitHub").expect("fixed repository link");
+            assert!(github_before.0 < 100.0 && github_before.1 > height as f32 - 55.0);
+            robot.move_to(160.0, height as f32 * 0.65).expect("hover wheel");
+            robot.mouse_scroll_sequence_and_wait_for_frames(0.0, -150.0, 5).expect("rotate wheel independently");
+            robot.wait_for_idle().expect("wheel settles");
+            capture(&robot, width, "wheel-scrolling");
+            if !compact {
+                robot.validate_content("Create an application").expect("wheel scroll navigates the document");
             }
             click_button(&robot, "Get started");
-            robot
-                .validate_content("Create an application")
-                .expect("chapter changed");
+            robot.validate_content("Create an application").expect("selected chapter is readable");
             capture(&robot, width, "get-started");
-            let tabs_before = (!compact)
-                .then(|| find_text_in_semantics_exact(&robot, "Counter App").expect("tab row"));
-            let (_, title_y, _, _) =
-                find_text_in_semantics(&robot, "Create an application").expect("article heading");
-            robot
-                .move_to(width as f32 * 0.90, height as f32 * 0.70)
-                .expect("hover document");
-            robot
-                .mouse_scroll_sequence_and_wait_for_frames(0.0, -90.0, 3)
-                .expect("scroll the whole guide");
-            robot.wait_for_idle().expect("page settles");
+            let (_, title_y, _, _) = find_text_in_semantics(&robot, "Create an application").expect("article heading");
+            robot.move_to(width as f32 * 0.90, height as f32 * 0.70).expect("hover document");
+            robot.mouse_scroll_sequence_and_wait_for_frames(0.0, -90.0, 3).expect("scroll reader");
+            robot.wait_for_idle().expect("reader settles");
             capture(&robot, width, "scrolling");
-            let (_, scrolled_title_y, _, _) =
-                find_text_in_semantics(&robot, "Create an application")
-                    .expect("scrolled article heading");
-            assert!(title_y - scrolled_title_y > 50.0, "the page must scroll: {title_y} -> {scrolled_title_y}");
-            if let Some((_, tabs_y, _, _)) = tabs_before {
-                let (_, scrolled_tabs_y, _, _) =
-                    find_text_in_semantics_exact(&robot, "Counter App")
-                        .expect("scrolled tab row");
-                assert!(
-                    (tabs_y - scrolled_tabs_y - (title_y - scrolled_title_y)).abs() < 1.0,
-                    "tabs and article share the same page scroll"
-                );
-                assert!(scrolled_tabs_y < 0.0, "tabs scroll out of view");
-            }
+            let (_, scrolled_title_y, _, _) = find_text_in_semantics(&robot, "Create an application").expect("scrolled article heading");
+            assert!(title_y - scrolled_title_y > 50.0, "the document must scroll");
+            let github_after = find_text_in_semantics_exact(&robot, "View on GitHub").expect("fixed repository link after scrolling");
+            assert!((github_after.1 - github_before.1).abs() < 1.0);
             for _ in 0..30 {
                 let (_, y, _, _) = find_text_in_semantics(&robot, "use cranpose::prelude::*;")
                     .expect("code block");
@@ -87,24 +76,19 @@ pub(crate) fn main() {
                     .expect("scroll to code");
             }
             capture(&robot, width, "code");
-            robot
-                .mouse_scroll_sequence_and_wait_for_frames(0.0, -12000.0, 25)
-                .expect("scroll to the end");
-            robot.wait_for_idle().expect("end of page");
-            capture(&robot, width, "end");
+            if compact {
+                click_button(&robot, "Back to wheel");
+                capture(&robot, width, "back-to-wheel");
+                assert!(find_text_in_semantics(&robot, "Create an application").is_none());
+                click_button(&robot, "Get started");
+                robot.validate_content("Create an application").expect("reopen the reader");
+            }
             click_button(&robot, "Back to top");
-            robot
-                .validate_content("Create an application")
-                .expect("return to article top");
             if !compact {
                 click_button(&robot, "Counter App");
-                robot
-                    .validate_content("Increment")
-                    .expect("existing counter remains available");
+                robot.validate_content("Increment").expect("existing demo remains available");
                 click_button(&robot, "Documentation");
-                robot
-                    .validate_content("Build native and browser interfaces in Rust.")
-                    .expect("return to documentation");
+                robot.validate_content("Build native and browser interfaces in Rust.").expect("return to documentation");
             }
             robot.exit().expect("exit documentation robot");
         })
