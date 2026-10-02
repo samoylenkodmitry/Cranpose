@@ -377,6 +377,10 @@ fn replace_dirty_layers_from_applier(
             let node_id = layer_identity(child_layer).expect("dirty layer must have a node id");
             collect_layer_node_ids(child_layer, changed_nodes);
             let previous = HitGraphState::of(child_layer);
+            // Nodes that leave this subtree are gone from the scene: nothing
+            // remains to update for them, and a dirty one would otherwise go
+            // unmatched and rebuild the whole scene.
+            remove_dirty_descendants(child_layer, dirty_nodes);
             release_for_rebuild(child_layer);
             let context = LowerContext {
                 inherited_motion_context_animated: parent.motion_context_animated,
@@ -728,9 +732,14 @@ impl TranslateGeometry {
 /// Moves `container`'s previous children that stay into `scratch.kept`, in
 /// their new order, and the subtrees of those that leave into the layer
 /// pool, so the entering children are built in their allocations.
+/// Recycles the children that leave `container`. Their nodes leave the
+/// dirty set with them: nothing remains to update for a node the scene no
+/// longer shows, and one left dirty would go unmatched and rebuild the whole
+/// scene.
 fn recycle_leaving_children(
     container: &mut LayerNode,
     scratch: &mut TranslateScratch,
+    dirty_nodes: &mut HashSet<NodeId>,
     changed_nodes: &mut Vec<NodeId>,
 ) {
     let TranslateScratch {
@@ -753,14 +762,19 @@ fn recycle_leaving_children(
     }));
     for leaving in retained.drain(..).flatten() {
         collect_layer_node_ids(&leaving, changed_nodes);
+        forget_dirty_subtree(&leaving, dirty_nodes);
         crate::layer_recycling::recycle(leaving);
     }
 }
 
+/// Builds the children that enter `container`. They are built from the
+/// applier's current state, so their nodes leave the dirty set: the walk
+/// beneath would otherwise build each of them a second time.
 fn build_entering_children(
     applier: &MemoryApplier,
     container: &LayerNode,
     scratch: &mut TranslateScratch,
+    dirty_nodes: &mut HashSet<NodeId>,
     geometry: TranslateGeometry,
     inherited: (bool, bool),
 ) {
@@ -784,6 +798,7 @@ fn build_entering_children(
             &mut lowered,
             children_ancestor_hashed,
         );
+        forget_dirty_subtree(&lowered, dirty_nodes);
         entering.push((*child_id, lowered));
     }
 }
@@ -953,11 +968,12 @@ fn translate_layer_from_data(
     let children_ancestor_hashed =
         crate::graph_hash::layer_children_ancestor_hashed(container, container_ancestor_hashed);
     if !children_unchanged {
-        recycle_leaving_children(container, &mut scratch, changed_nodes);
+        recycle_leaving_children(container, &mut scratch, dirty_nodes, changed_nodes);
         build_entering_children(
             applier,
             container,
             &mut scratch,
+            dirty_nodes,
             geometry,
             (
                 child_inherited_translated_content_context,
@@ -1054,6 +1070,14 @@ fn collect_layer_node_ids(layer: &LayerNode, out: &mut Vec<NodeId>) {
             collect_layer_node_ids(child_layer, out);
         }
     }
+}
+
+/// Takes `layer`'s node and every node beneath it out of `dirty_nodes`.
+fn forget_dirty_subtree(layer: &LayerNode, dirty_nodes: &mut HashSet<NodeId>) {
+    if let Some(node_id) = layer_identity(layer) {
+        dirty_nodes.remove(&node_id);
+    }
+    remove_dirty_descendants(layer, dirty_nodes);
 }
 
 fn remove_dirty_descendants(layer: &LayerNode, dirty_nodes: &mut HashSet<NodeId>) {
