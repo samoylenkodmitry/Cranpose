@@ -56,6 +56,11 @@ pub(crate) fn main() {
             click_button(&robot, "Get started");
             robot.validate_content("Create an application").expect("selected chapter is readable");
             capture(&robot, width, "get-started");
+            if !compact {
+                if let Some((_, y, _, height)) = find_text_in_semantics_exact(&robot, "Counter App") {
+                    assert!(y + height <= 0.0, "the tabs must scroll completely out of view: y={y}, height={height}");
+                }
+            }
             let (_, title_y, _, _) = find_text_in_semantics(&robot, "Create an application").expect("article heading");
             robot.move_to(width as f32 * 0.90, height as f32 * 0.70).expect("hover document");
             robot.mouse_scroll_sequence_and_wait_for_frames(0.0, -90.0, 3).expect("scroll reader");
@@ -89,7 +94,17 @@ pub(crate) fn main() {
                 robot.validate_content("Increment").expect("existing demo remains available");
                 click_button(&robot, "Documentation");
                 robot.validate_content("Build native and browser interfaces in Rust.").expect("return to documentation");
+            } else {
+                click_button(&robot, "Back to wheel");
             }
+            robot.drag_and_wait_for_frames(120.0, 550.0, 120.0, 454.0, 8).expect("flick the wheel");
+            let released = find_text_in_semantics_exact(&robot, "Get started").expect("wheel entry after release");
+            robot.pump_frames(30).expect("wheel coast frames");
+            let coasted = find_text_in_semantics_exact(&robot, "Get started").expect("wheel entry after coasting");
+            assert!(coasted.1 < released.1 - 10.0, "wheel must continue rotating after release: {released:?} -> {coasted:?}");
+            robot.touch_down(120.0, 550.0).expect("catch the spinning wheel");
+            capture(&robot, width, "fling");
+            robot.touch_up(120.0, 550.0).expect("release the stopped wheel");
             robot.exit().expect("exit documentation robot");
         })
         .run(app::DesktopApp);

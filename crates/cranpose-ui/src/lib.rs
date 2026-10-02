@@ -98,7 +98,10 @@ pub use debug::{
     log_render_scene, log_screen_summary,
 };
 pub use density::{Density, DensityMeasureScope, density, local_density};
-pub use draggable::{DragDeltaHandler, DraggableState, rememberDraggableState};
+pub use draggable::{
+    DragDeltaHandler, DraggableState, ScrollableState, rememberDraggableState,
+    rememberScrollableState,
+};
 pub use draw::{
     DrawCacheBuilder, DrawCommand, DrawCommandFn, command_draw_scope, command_draw_scope_reusing,
     execute_draw_commands,

@@ -5,9 +5,9 @@ use cranpose_core::{mutableStateOf, remember, rememberMutableStateOf, with_key, 
 use cranpose_foundation::lazy::{LazyListScope, LazyListState};
 use cranpose_services::local_uri_handler;
 use cranpose_ui::{
-    composable, rememberDraggableState, text::FontWeight, Alignment, Box, BoxSpec, Button,
-    ButtonSpec, Column, ColumnSpec, GraphicsLayer, LazyColumn, LazyColumnSpec, LinearArrangement,
-    Modifier, Row, RowSpec, Spacer, Text, VerticalAlignment,
+    composable, rememberScrollableState, text::FontWeight, Alignment, Box, BoxSpec, Button,
+    ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LinearArrangement, Modifier, Row,
+    RowSpec, Spacer, Text, VerticalAlignment,
 };
 use cranpose_ui_layout::Axis;
 
@@ -148,9 +148,9 @@ impl DocumentationState {
         self.page.scroll_to_item(index + 1, 0.0);
     }
 
-    fn rotate(self, delta: f32, wheel_only: bool) {
-        let position =
-            (self.position(wheel_only) - delta / 120.0).clamp(0.0, (chapters().len() - 1) as f32);
+    fn rotate(self, delta: f32, wheel_only: bool) -> f32 {
+        let previous = self.position(wheel_only);
+        let position = (previous - delta / 120.0).clamp(0.0, (chapters().len() - 1) as f32);
         self.browse_position.set(position);
         let item = position.floor() as usize + 1;
         let offset = self
@@ -158,92 +158,113 @@ impl DocumentationState {
             .get_cached_size(item)
             .map_or(0.0, |height| position.fract() * height);
         self.page.scroll_to_item(item, offset);
+        (previous - position) * 120.0
     }
 }
 
 #[composable]
-fn ChapterButton(index: usize, state: DocumentationState, modifier: Modifier) {
+fn ChapterLabel(index: usize, active: bool) {
     let chapter = &chapters()[index];
-    let active = state.selected() == index;
-    Button(
-        modifier
-            .padding_each(12.0, 14.0, 12.0, 14.0)
-            .semantics(move |config| {
-                config.selected = Some(active);
-                config.content_description = Some(chapter.title.to_string());
-            }),
-        ButtonSpec::default(),
-        move || state.select(index),
+    Row(
+        Modifier::empty()
+            .fill_max_width()
+            .padding_each(12.0, 14.0, 12.0, 14.0),
+        RowSpec::new()
+            .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
+            .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            Row(
-                Modifier::empty().fill_max_width(),
-                RowSpec::new()
-                    .horizontal_arrangement(LinearArrangement::SpacedBy(12.0))
-                    .vertical_alignment(VerticalAlignment::CenterVertically),
-                move || {
-                    Text(
-                        chapter.number.as_str(),
-                        Modifier::empty().width(22.0),
-                        text_style(11.0, if active { ACCENT } else { MUTED }, FontWeight::BOLD),
-                    );
-                    Text(
-                        chapter.title,
-                        Modifier::empty().weight(1.0),
-                        text_style(
-                            14.0,
-                            INK,
-                            if active {
-                                FontWeight::BOLD
-                            } else {
-                                FontWeight::NORMAL
-                            },
-                        ),
-                    );
-                },
+            Text(
+                chapter.number.as_str(),
+                Modifier::empty().width(22.0),
+                text_style(11.0, if active { ACCENT } else { MUTED }, FontWeight::BOLD),
+            );
+            Text(
+                chapter.title,
+                Modifier::empty().weight(1.0),
+                text_style(
+                    14.0,
+                    INK,
+                    if active {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::NORMAL
+                    },
+                ),
             );
         },
     );
 }
 
 #[composable]
-fn SectionWheel(state: DocumentationState, geometry: WheelGeometry, height: f32, compact: bool) {
-    let drag = rememberDraggableState(move |delta| state.rotate(delta, compact));
-    let position = state.position(compact);
+fn WheelEntries(
+    state: DocumentationState,
+    geometry: WheelGeometry,
+    wheel_only: bool,
+    interactive: bool,
+) {
+    let position = state.position(wheel_only);
     let entry_height = 58.0
         * cranpose_services::local_accessibility_options()
             .current()
             .font_scale
             .max(1.0);
-    let exposed_width = if compact {
-        geometry.width
-    } else {
-        geometry.reader_left()
-    };
-    Box(
-        Modifier::empty()
-            .width(exposed_width)
-            .height((height - 250.0).max(1.0))
-            .offset(0.0, 190.0)
-            .clip_to_bounds()
-            .content_description("Documentation wheel")
-            .draggable(Axis::Vertical, drag),
-        BoxSpec::default(),
-        move || {
-            for index in 0..chapters().len() {
-                with_key(&index, || {
-                    let angle = (index as f32 - position) * geometry.section_angle();
-                    let center = geometry.point(angle, geometry.radius + 120.0);
-                    let modifier = Modifier::empty()
-                        .size_points(246.0, entry_height)
-                        .offset(center.x - 123.0, center.y - 190.0 - entry_height * 0.5)
-                        .graphics_layer_value(GraphicsLayer {
-                            rotation_z: -angle.to_degrees(),
-                            ..Default::default()
-                        });
-                    ChapterButton(index, state, modifier);
+    for index in 0..chapters().len() {
+        with_key(&index, || {
+            let modifier = geometry.entry_modifier(index as f32 - position, entry_height);
+            let active = state.selected() == index;
+            if interactive {
+                Button(
+                    modifier.semantics(move |config| {
+                        config.selected = Some(active);
+                        config.content_description = Some(chapters()[index].title.to_string());
+                    }),
+                    ButtonSpec::default(),
+                    move || state.select(index),
+                    || {},
+                );
+            } else {
+                Box(modifier, BoxSpec::default(), move || {
+                    ChapterLabel(index, active);
                 });
             }
+        });
+    }
+}
+
+#[composable]
+fn WheelLabels(state: DocumentationState, geometry: WheelGeometry, wheel_only: bool) {
+    Box(
+        Modifier::empty().fill_max_size().hide_from_accessibility(),
+        BoxSpec::default(),
+        move || {
+            Box(
+                geometry
+                    .brand_modifier(-1.35 - state.position(wheel_only))
+                    .padding(12.0),
+                BoxSpec::default(),
+                Brand,
+            );
+            WheelEntries(state, geometry, wheel_only, false);
         },
+    );
+}
+
+#[composable]
+fn SectionWheel(state: DocumentationState, geometry: WheelGeometry, height: f32, compact: bool) {
+    let scroll = rememberScrollableState(move |delta| state.rotate(delta, compact));
+    Box(
+        Modifier::empty()
+            .width(if compact {
+                geometry.width
+            } else {
+                geometry.reader_left()
+            })
+            .height((height - 44.0).max(1.0))
+            .clip_to_bounds()
+            .content_description("Documentation wheel")
+            .scrollable(Axis::Vertical, scroll),
+        BoxSpec::default(),
+        move || WheelEntries(state, geometry, compact, true),
     );
 }
 
@@ -285,7 +306,7 @@ fn ReaderChapter(state: DocumentationState, index: usize, width: f32, height: f3
                 .height_in(height, f32::INFINITY),
         )
         .content_description("Documentation glass"),
-        BoxSpec::new().content_alignment(Alignment::TOP_CENTER),
+        BoxSpec::new().content_alignment(Alignment::TOP_START),
         move || {
             Column(
                 Modifier::empty()
@@ -352,23 +373,18 @@ fn ScrollingHeader(
     reader_visible: bool,
 ) {
     let header_height = size.get().height;
+    let offset = if !reader_visible {
+        -(state.position(true) * 120.0).min(header_height)
+    } else if state.page.first_visible_item_index() == 0 {
+        -state.page.first_visible_item_scroll_offset()
+    } else {
+        -header_height
+    };
     Box(
         Modifier::empty()
             .fill_max_width()
             .report_size_state(size)
-            .graphics_layer(move || {
-                let translation_y = if !reader_visible {
-                    0.0
-                } else if state.page.first_visible_item_index() == 0 {
-                    -state.page.first_visible_item_scroll_offset()
-                } else {
-                    -header_height
-                };
-                GraphicsLayer {
-                    translation_y,
-                    ..Default::default()
-                }
-            }),
+            .offset(0.0, offset),
         BoxSpec::default(),
         move || GuideHeader(header),
     );
@@ -379,7 +395,7 @@ fn Reader(state: DocumentationState, width: f32, height: f32, compact: bool, hea
     let reader_left = if compact {
         0.0
     } else {
-        WheelGeometry::new(width).reader_left()
+        WheelGeometry::new(width, height).reader_left()
     };
     let mut spec = LazyColumnSpec::new();
     spec.beyond_bounds_item_count = 0;
@@ -439,25 +455,19 @@ pub(super) fn DocumentationTab(header: Option<super::AppHeaderState>) {
                     let size = viewport.get();
                     let width = size.width.max(1.0);
                     let compact = width < COMPACT_BREAKPOINT;
-                    let geometry = WheelGeometry::new(width);
+                    let geometry = WheelGeometry::new(width, size.height);
                     let reader_visible = !compact || state.reader_open.get();
                     visuals::Backdrop();
                     visuals::WheelSurface(geometry, state, !reader_visible);
-                    if !compact || !reader_visible {
-                        Box(
-                            Modifier::empty().offset(28.0, 110.0),
-                            BoxSpec::default(),
-                            Brand,
-                        );
-                    }
+                    WheelLabels(state, geometry, !reader_visible);
                     let header_height = header_size.get().height;
                     if reader_visible && (header.is_none() || header_height > 0.0) {
                         Reader(state, width, size.height, compact, header_height);
                     }
-                    ScrollingHeader(header, state, header_size, reader_visible);
                     if !compact || !reader_visible {
                         SectionWheel(state, geometry, size.height, compact);
                     }
+                    ScrollingHeader(header, state, header_size, reader_visible);
                     if compact && reader_visible {
                         Row(
                             visuals::reader_surface(

@@ -2,7 +2,7 @@ use cranpose::liquid::{Glass, LiquidModifierExt, LiquidShape};
 use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle, TextUnit},
-    Box, BoxSpec, Brush, Color, Modifier, Point, TextStyle,
+    Box, BoxSpec, Brush, Color, GraphicsLayer, Modifier, Point, TextStyle,
 };
 use cranpose_ui_graphics::{Stroke, VectorPath};
 
@@ -36,16 +36,20 @@ pub(super) struct WheelGeometry {
     pub width: f32,
     pub radius: f32,
     center: Point,
+    focus_angle: f32,
 }
 
 impl WheelGeometry {
-    pub fn new(width: f32) -> Self {
-        let radius = width.max(780.0) * 0.82;
-        let left = (width * 0.27).clamp(290.0, 380.0) - 18.0;
+    pub fn new(width: f32, height: f32) -> Self {
+        let radius = width.max(780.0) * 0.9;
+        let left = (width * 0.27).clamp(290.0, 380.0) * 0.62;
+        let center = Point::new(radius + left, -radius * 0.12);
+        let focus_y = (height * 0.43).clamp(260.0, 360.0);
         Self {
             width,
             radius,
-            center: Point::new(radius + left, 330.0),
+            center,
+            focus_angle: ((focus_y - center.y) / (radius + 120.0)).asin(),
         }
     }
 
@@ -65,6 +69,35 @@ impl WheelGeometry {
         Point::new(
             self.center.x - radius * angle.cos(),
             self.center.y + radius * angle.sin(),
+        )
+    }
+
+    pub fn entry_modifier(self, position: f32, height: f32) -> Modifier {
+        self.item_modifier(position, height, 290.0, 120.0)
+    }
+
+    pub fn brand_modifier(self, position: f32) -> Modifier {
+        self.item_modifier(position, 112.0, 246.0, 70.0)
+    }
+
+    fn item_modifier(self, position: f32, height: f32, width: f32, radial_offset: f32) -> Modifier {
+        let angle = self.focus_angle + position * self.section_angle();
+        let center = self.point(angle, self.radius + radial_offset);
+        Modifier::empty()
+            .size_points(width, height)
+            .offset(center.x - width * 0.5, center.y - height * 0.5)
+            .graphics_layer_value(GraphicsLayer {
+                rotation_z: -angle.to_degrees(),
+                ..Default::default()
+            })
+    }
+
+    fn rotate(self, point: Point, sin: f32, cos: f32) -> Point {
+        let x = point.x - self.center.x;
+        let y = point.y - self.center.y;
+        Point::new(
+            self.center.x + x * cos - y * sin,
+            self.center.y + x * sin + y * cos,
         )
     }
 }
@@ -95,11 +128,11 @@ pub(super) fn WheelSurface(
                     Point::new(200.0, 420.0),
                     geometry.radius,
                 );
-                let start = -0.30;
-                let sweep = 2.0;
-                let ticks: Vec<_> = (0..80)
+                let start = geometry.focus_angle - 0.8;
+                let sweep = 3.4;
+                let ticks: Vec<_> = (0..136)
                     .map(|index| {
-                        let angle = start + sweep * index as f32 / 80.0;
+                        let angle = start + sweep * index as f32 / 136.0;
                         (
                             geometry.point(angle, geometry.radius - 26.0),
                             geometry.point(
@@ -109,8 +142,20 @@ pub(super) fn WheelSurface(
                         )
                     })
                     .collect();
+                let spokes: Vec<_> = (-2..super::chapters().len() as i32)
+                    .map(|index| {
+                        let angle =
+                            geometry.focus_angle + (index as f32 + 0.5) * geometry.section_angle();
+                        (
+                            geometry.point(angle, geometry.radius + 280.0),
+                            geometry.point(angle, geometry.radius - 210.0),
+                        )
+                    })
+                    .collect();
                 cache.on_draw_behind(move |scope| {
                     scope.draw_rect(glow.clone());
+                    let phase = state.position(wheel_only) * geometry.section_angle();
+                    let (sin, cos) = phase.sin_cos();
                     for inset in [0.0, -22.0, -112.0] {
                         let color = if inset == 0.0 {
                             Color(0.35, 0.86, 0.89, 0.7)
@@ -121,7 +166,7 @@ pub(super) fn WheelSurface(
                             Brush::solid(color),
                             geometry.center,
                             geometry.radius + inset,
-                            std::f32::consts::PI - start,
+                            std::f32::consts::PI - start + phase,
                             -sweep,
                             Stroke::new(if inset == 0.0 { 2.0 } else { 1.0 }),
                         );
@@ -129,18 +174,16 @@ pub(super) fn WheelSurface(
                     for &(from, to) in &ticks {
                         scope.draw_line(
                             Brush::solid(Color(0.50, 0.82, 0.89, 0.45)),
-                            from,
-                            to,
+                            geometry.rotate(from, sin, cos),
+                            geometry.rotate(to, sin, cos),
                             Stroke::new(1.0),
                         );
                     }
-                    let phase = state.position(wheel_only) * geometry.section_angle();
-                    for index in 0..super::chapters().len() {
-                        let angle = (index as f32 + 0.5) * geometry.section_angle() - phase;
+                    for &(from, to) in &spokes {
                         scope.draw_line(
                             Brush::solid(Color(0.31, 0.67, 0.76, 0.25)),
-                            geometry.point(angle, geometry.radius + 255.0),
-                            geometry.point(angle, geometry.radius - 210.0),
+                            geometry.rotate(from, sin, cos),
+                            geometry.rotate(to, sin, cos),
                             Stroke::new(1.0),
                         );
                     }

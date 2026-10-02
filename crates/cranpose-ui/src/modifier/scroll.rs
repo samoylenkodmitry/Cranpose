@@ -14,7 +14,7 @@ use web_time::Instant;
 
 use super::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata};
 use crate::{
-    draggable::DraggableState,
+    draggable::{DraggableState, ScrollableState},
     fling_animation::{
         FlingAnimation, MIN_FLING_VELOCITY, SettleAnimation, SpringParams, fling_rest_position,
     },
@@ -394,6 +394,26 @@ impl ScrollTarget for DraggableState {
 
     fn set_dragging(&self, dragging: bool) {
         DraggableState::set_dragging(self, dragging);
+    }
+}
+
+impl ScrollTarget for ScrollableState {
+    fn apply_delta(&self, delta: f32) -> f32 {
+        self.dispatch_raw_delta(delta)
+    }
+
+    fn apply_fling_delta(&self, delta: f32) -> f32 {
+        -self.dispatch_raw_delta(-delta)
+    }
+
+    fn invalidate(&self) {}
+
+    fn current_offset(&self) -> f32 {
+        -self.offset()
+    }
+
+    fn set_dragging(&self, dragging: bool) {
+        ScrollableState::set_dragging(self, dragging);
     }
 }
 
@@ -1719,6 +1739,33 @@ impl Modifier {
     /// and downwards for [`Axis::Vertical`].
     pub fn draggable(self, axis: Axis, state: DraggableState) -> Self {
         self.then(draggable_impl(axis, state, None))
+    }
+
+    /// Scrolls content with custom placement along `axis`.
+    ///
+    /// Supplies drag, wheel and inertial scrolling without translating or
+    /// clipping layout. A new pointer press interrupts the fling. The state's
+    /// consumption handler stops it when the content reaches a boundary.
+    pub fn scrollable(self, axis: Axis, state: ScrollableState) -> Self {
+        let is_vertical = axis.is_vertical();
+        let identity = state.identity();
+        let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
+            state_identity: identity,
+            is_vertical,
+        });
+        self.then(Modifier::with_element(MotionContextAnimatedElement::new(
+            motion_context.clone(),
+        )))
+        .then(drag_gesture_input(
+            (identity, is_vertical),
+            DragGesture {
+                target: state,
+                is_vertical,
+                reverse_input: false,
+                motion_context,
+                guard: None,
+            },
+        ))
     }
 
     /// Drags along `axis` only while `guard` says so.

@@ -24,6 +24,9 @@ Documentation is the first desktop tab. Every existing demonstration is still
 available in the tab strip, or through the Tabs picker on a narrow window.
 The guide is one continuous document; its tab strip scrolls away with the text.
 A large, independently scrollable section wheel curves beneath the glass reader.
+Its branding, chapter labels and markings rotate together and remain visible
+under the glass. A quick drag and release lets the wheel coast; pressing it
+again stops the motion. Article text aligns with the left edge beside the wheel.
 Scrolling the wheel moves the article to the corresponding section; scrolling
 the article rotates the wheel to follow the current section. Select a wheel
 entry or use Previous section and Next section to jump directly to a chapter.

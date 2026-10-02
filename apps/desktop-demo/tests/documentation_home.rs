@@ -69,6 +69,62 @@ fn reading_scroll_moves_the_tab_row_and_document_together() {
         (title_before.y - title_after.y - displacement).abs() < 1.0,
         "the article and tabs must share one scroll offset: tabs {tabs_before:?} -> {tabs_after:?}, title {title_before:?} -> {title_after:?}"
     );
+    assert!(click_control(&mut robot, "Get started"));
+    let after_jump = robot.get_all_rects();
+    let tabs = text_bounds(&after_jump, "Counter App");
+    assert!(
+        tabs.y + tabs.height <= 0.0,
+        "tabs must leave the window after a chapter jump: {tabs:?}"
+    );
+}
+
+#[test]
+fn wheel_brand_rotates_and_a_release_keeps_the_wheel_moving() {
+    let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+    });
+    let initial = text_bounds(&robot.get_all_rects(), "The guide.");
+    robot.shell_mut().set_cursor(120.0, 550.0);
+    robot.shell_mut().pointer_pressed_at_time(Some(0));
+    for step in 1..=8 {
+        robot.advance_time(16_666_667);
+        robot
+            .shell_mut()
+            .set_cursor_at_time(120.0, 550.0 - step as f32 * 12.0, Some(step * 16));
+    }
+    let held = text_bounds(&robot.get_all_rects(), "The guide.");
+    assert!(
+        held.y < initial.y - 30.0,
+        "the brand belongs to the rotating wheel"
+    );
+    robot
+        .shell_mut()
+        .pointer_released_at_position_time(120.0, 454.0, Some(136));
+    for _ in 0..30 {
+        robot.advance_time(16_666_667);
+    }
+    let released = text_bounds(&robot.get_all_rects(), "The guide.");
+    assert!(
+        released.y < held.y - 30.0,
+        "the wheel must coast after a fast release: {held:?} -> {released:?}"
+    );
+}
+
+#[test]
+fn wide_article_aligns_with_the_wheel_edge() {
+    let mut robot = RobotTestRule::new(1800, 1000, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    let tree =
+        cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("reader semantics");
+    let glass = semantic_bounds(&tree, "Documentation glass");
+    let text = text_bounds(
+        &robot.get_all_rects(),
+        "Build native and browser interfaces in Rust.",
+    );
+    assert!(text.x - glass.x <= 41.0, "article should align with the wheel, not the center of the remaining window: {text:?}, {glass:?}");
 }
 
 #[test]
@@ -126,7 +182,9 @@ fn documentation_is_usable_in_a_compact_window() {
         .exists());
     assert!(robot.find_by_text("Welcome").exists());
     assert!(robot.find_by_text("View on GitHub").exists());
-    robot.drag(150.0, 620.0, 150.0, 440.0);
+    robot.move_to(150.0, 620.0);
+    robot.shell_mut().pointer_scrolled(0.0, -150.0);
+    robot.wait_for_idle();
     assert!(!robot.find_by_text("Create an application").exists());
     assert!(click_control(&mut robot, "Get started"));
     assert!(robot.find_by_text("Create an application").exists());
