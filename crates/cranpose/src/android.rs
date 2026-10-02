@@ -1006,6 +1006,31 @@ fn update_android_shell_geometry(
     }
 }
 
+/// Sizes the surface to the window's `width` x `height`. Android reports a
+/// resize after every surface it creates, at the size the surface was just
+/// set up with; a size the surface already has needs nothing.
+fn resize_android_surface(
+    resources: &mut GpuResources,
+    shell: &mut AppShell<WgpuRenderer>,
+    width: u32,
+    height: u32,
+    present_thread: bool,
+) {
+    if (resources.config.width, resources.config.height) == (width, height) {
+        return;
+    }
+    resources.config.width = width;
+    resources.config.height = height;
+    if present_thread {
+        let renderer = shell.renderer();
+        renderer.note_surface_reconfigured();
+        renderer.present_reconfigure(resources.config.clone());
+        resources.surface_dirty = true;
+    } else if let Some(surface) = resources.surface.as_ref() {
+        surface.configure(&resources.device, &resources.config);
+    }
+}
+
 fn apply_initialized_android_rendering(
     gpu_resources: &mut Option<GpuResources>,
     current_host_window_size: &mut Size,
@@ -1254,6 +1279,21 @@ fn drop_android_surface(
     }
 }
 
+/// Gives the present thread the window's new surface, or the new size of
+/// the one it has. Frames published afterwards queue behind it.
+fn hand_surface_to_present_thread(renderer: &mut WgpuRenderer, setup: &mut AndroidGpuSetup) {
+    renderer.note_surface_reconfigured();
+    match setup.surface.take() {
+        Some(surface) => {
+            renderer.present_replace_surface(surface, setup.resources.config.clone());
+        }
+        None => {
+            renderer.present_reconfigure(setup.resources.config.clone());
+        }
+    }
+    setup.resources.surface_dirty = true;
+}
+
 #[expect(clippy::too_many_arguments)]
 fn initialize_android_rendering<F>(
     instance: &wgpu::Instance,
@@ -1283,11 +1323,16 @@ where
     )?;
     log::info!("[startup] gpu resources created");
 
+    let mut surface_handed = false;
     if app_shell.is_none() {
         let fonts = settings.resolve_font_set();
         let mut renderer = WgpuRenderer::with_font_set(fonts);
         if present_thread {
             init_gpu_threaded_for_android(&mut renderer, &setup.resources, frame_driver)?;
+            // The present thread sets the surface up while the first frame
+            // composes.
+            hand_surface_to_present_thread(&mut renderer, &mut setup);
+            surface_handed = true;
         } else {
             renderer.init_gpu(
                 setup.resources.device.clone(),
@@ -1343,18 +1388,10 @@ where
 
     if present_thread {
         if let Some(shell) = app_shell.as_mut() {
-            let renderer = shell.renderer();
-            renderer.note_surface_reconfigured();
-            match setup.surface.take() {
-                Some(surface) => {
-                    renderer.present_replace_surface(surface, setup.resources.config.clone());
-                }
-                None => {
-                    renderer.present_reconfigure(setup.resources.config.clone());
-                }
+            if !surface_handed {
+                hand_surface_to_present_thread(shell.renderer(), &mut setup);
             }
             log::info!("[startup] surface handed to present thread");
-            setup.resources.surface_dirty = true;
             shell.mark_dirty();
         }
     } else {
@@ -2277,16 +2314,13 @@ pub fn run(
                                 if let (Some(resources), Some(shell)) =
                                     (&mut gpu_resources, &mut app_shell)
                                     && width > 0 && height > 0 {
-                                        resources.config.width = width;
-                                        resources.config.height = height;
-                                        if present_thread {
-                                            let renderer = shell.renderer();
-                                            renderer.note_surface_reconfigured();
-                                            renderer.present_reconfigure(resources.config.clone());
-                                            resources.surface_dirty = true;
-                                        } else if let Some(surface) = resources.surface.as_ref() {
-                                            surface.configure(&resources.device, &resources.config);
-                                        }
+                                        resize_android_surface(
+                                            resources,
+                                            shell,
+                                            width,
+                                            height,
+                                            present_thread,
+                                        );
 
                                         shell.set_buffer_size(width, height);
 
