@@ -30,8 +30,10 @@ pub(crate) struct DisplayedFrame {
     pub(crate) present_returned_ns: i64,
     pub(crate) queued_behind: u32,
     /// How much earlier than needed the compositor could have taken the
-    /// frame for the refresh it was shown at, as the display reports it.
-    pub(crate) present_margin_ns: i64,
+    /// frame for the refresh it was shown at, as the display reports it;
+    /// `None` when the report is out of range, as the Mate's are for
+    /// frames whose GPU work runs long.
+    pub(crate) present_margin_ns: Option<i64>,
 }
 
 /// Tags every present with a present time and hands on the records the
@@ -131,7 +133,7 @@ impl cranpose_render_wgpu::PresentObserver for DisplayTimingObserver {
                     shown_ns,
                     present_returned_ns: shown.present_returned_ns,
                     queued_behind: shown.queued_behind,
-                    present_margin_ns: i64::try_from(record.present_margin).unwrap_or(i64::MAX),
+                    present_margin_ns: i64::try_from(record.present_margin).ok(),
                 });
             }
         }

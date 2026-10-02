@@ -378,6 +378,7 @@ pub(crate) struct AndroidFrameTelemetry {
     /// each, the last bucket counting that many or more.
     queued_behind: [u32; QUEUED_BEHIND_BUCKETS],
     present_margin_us: Vec<i32>,
+    unreported_margins: u32,
     last_present_ns: i64,
     idle_iterations: u32,
     window_start_ns: i64,
@@ -404,6 +405,7 @@ impl AndroidFrameTelemetry {
             present_return_to_display_us: Vec::with_capacity(window_frames),
             queued_behind: [0; QUEUED_BEHIND_BUCKETS],
             present_margin_us: Vec::with_capacity(window_frames),
+            unreported_margins: 0,
             last_present_ns: 0,
             idle_iterations: 0,
             window_start_ns: 0,
@@ -528,14 +530,16 @@ impl AndroidFrameTelemetry {
             .collect::<Vec<_>>()
             .join(" ");
         log::warn!("[android-frame]   queued_behind {queued_behind}");
-        if !self.present_margin_us.is_empty() {
+        if !self.present_margin_us.is_empty() || self.unreported_margins > 0 {
             self.present_margin_us.sort_unstable();
             let margins = &self.present_margin_us;
             log::warn!(
-                "[android-frame]   present_margin_ms p10={:.2} p50={:.2} p90={:.2}",
+                "[android-frame]   present_margin_ms n={} p10={:.2} p50={:.2} p90={:.2} unreported={}",
+                margins.len(),
                 ms(percentile(margins, 0.10)),
                 ms(percentile(margins, 0.50)),
                 ms(percentile(margins, 0.90)),
+                self.unreported_margins,
             );
         }
     }
@@ -547,10 +551,13 @@ impl AndroidFrameTelemetry {
         &mut self,
         present_return_to_display_ns: i64,
         queued_behind: u32,
-        present_margin_ns: i64,
+        present_margin_ns: Option<i64>,
     ) {
         if self.enabled {
-            self.present_margin_us.push(us(present_margin_ns));
+            match present_margin_ns {
+                Some(margin_ns) => self.present_margin_us.push(us(margin_ns)),
+                None => self.unreported_margins += 1,
+            }
             self.present_return_to_display_us
                 .push(us(present_return_to_display_ns));
             let bucket = usize::try_from(queued_behind)
@@ -620,6 +627,7 @@ impl AndroidFrameTelemetry {
         self.present_return_to_display_us.clear();
         self.queued_behind = [0; QUEUED_BEHIND_BUCKETS];
         self.present_margin_us.clear();
+        self.unreported_margins = 0;
         self.idle_iterations = 0;
         self.window_start_ns = 0;
     }
