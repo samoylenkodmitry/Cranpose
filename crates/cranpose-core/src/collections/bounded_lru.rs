@@ -135,7 +135,13 @@ where
             let old_value = std::mem::replace(&mut self.slot_mut(slot).value, value);
             return Some((key, old_value));
         }
+        self.insert_absent(key, value).1
+    }
 
+    /// Stores `key`, which the cache does not hold, as the most recently
+    /// used entry. Returns its slot and the least recently used entry it
+    /// pushed out.
+    pub(super) fn insert_absent(&mut self, key: K, value: V) -> (u32, Option<(K, V)>) {
         let evicted = if self.index.len() == self.cap.get() {
             self.pop_lru()
         } else {
@@ -149,7 +155,14 @@ where
             hasher.hash_one(&occupied(slots, slot).key)
         });
         self.link_newest(slot);
-        evicted
+        (slot, evicted)
+    }
+
+    /// The value in `slot`, from [`Self::find`] or [`Self::insert_absent`]
+    /// with no change between, marked most recently used.
+    pub(super) fn touch_mut(&mut self, slot: u32) -> &mut V {
+        self.promote(slot);
+        &mut self.slot_mut(slot).value
     }
 
     pub fn put(&mut self, key: K, value: V) -> Option<V> {
@@ -174,15 +187,25 @@ where
     }
 
     pub fn pop(&mut self, key: &K) -> Option<V> {
+        self.remove(key).map(|(_, value)| value)
+    }
+
+    /// Takes the entry under `key` out of the cache, key and value.
+    pub(super) fn remove<Q>(&mut self, key: &Q) -> Option<(K, V)>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let hash = self.hasher.hash_one(key);
         let slots = &self.slots;
         let (slot, _) = self
             .index
-            .find_entry(hash, |&slot| occupied(slots, slot).key == *key)
+            .find_entry(hash, |&slot| occupied(slots, slot).key.borrow() == key)
             .ok()?
             .remove();
         self.unlink(slot);
-        Some(self.release_slot(slot).value)
+        let entry = self.release_slot(slot);
+        Some((entry.key, entry.value))
     }
 
     /// Entries most recently used first.
@@ -195,7 +218,8 @@ where
         })
     }
 
-    fn find<Q>(&self, key: &Q) -> Option<u32>
+    /// The slot holding `key`, for [`Self::touch_mut`].
+    pub(super) fn find<Q>(&self, key: &Q) -> Option<u32>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,

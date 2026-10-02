@@ -23,7 +23,7 @@ fn an_entry_leaves_after_idle_passes_without_a_lookup() {
 
 #[test]
 fn a_lookup_keeps_an_entry_and_the_idle_ones_leave_oldest_first() {
-    let mut cache = PassAgedCache::with_capacity_at_least_one(8);
+    let mut cache = PassAgedCache::with_capacity_at_least_one(16);
     cache.push(1, "kept");
     cache.push(2, "old");
     cache.push(3, "older-use");
@@ -40,19 +40,35 @@ fn a_lookup_keeps_an_entry_and_the_idle_ones_leave_oldest_first() {
 
 #[test]
 fn the_bound_still_pushes_out_the_least_recently_used() {
-    let mut cache = PassAgedCache::with_capacity_at_least_one(2);
+    let mut cache = PassAgedCache::with_capacity_at_least_one(8);
     cache.push(1, "one");
     cache.push(2, "two");
     let _ = cache.get(&1);
+    cache.push(3, "three");
 
-    assert_eq!(cache.push(3, "three"), Some((2, "two")));
+    assert_eq!(cache.push(4, "four"), Some((2, "two")));
     assert_eq!(
-        cache.push(3, "again"),
-        Some((3, "three")),
+        cache.push(4, "again"),
+        Some((4, "four")),
         "a replaced value"
     );
-    assert_eq!(cache.pop_lru(), Some((1, "one")));
-    assert_eq!(cache.len(), 1);
+    assert_eq!(cache.get(&1), Some(&"one"));
+    assert_eq!(cache.len(), 3);
+}
+
+#[test]
+fn a_stream_of_entries_used_once_leaves_the_hit_ones_in_place() {
+    let mut cache = PassAgedCache::with_capacity_at_least_one(8);
+    cache.push(0, "kept");
+    let _ = cache.get(&0);
+
+    for price in 1..=100 {
+        cache.push(price, "price");
+        let _ = passes(&mut cache, 1);
+    }
+
+    assert_eq!(cache.get(&0), Some(&"kept"));
+    assert_eq!(cache.len(), 3, "a quarter of the bound holds the stream");
 }
 
 #[test]
