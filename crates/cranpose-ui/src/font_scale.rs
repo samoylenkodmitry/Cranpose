@@ -82,11 +82,20 @@ impl FontScaleCurve {
     /// that actually bend. Anything the platform could not have produced — an
     /// empty or unsorted set, a non-finite or non-positive value, or more bends
     /// than [`MAX_FONT_SCALE_KNOTS`] — is refused, and the caller gets the
-    /// multiplier rather than a curve nobody measured.
+    /// multiplier rather than a curve nobody measured. Samples that all lie on
+    /// the multiplier's own line are the multiplier, and come back as it, so a
+    /// platform answering with the plain setting gives a curve equal to
+    /// [`FontScaleCurve::linear`].
     pub fn from_samples(scale: f32, samples: &[(f32, f32)]) -> Self {
         let Some(kept) = compress(samples) else {
             return Self::linear(scale);
         };
+        if kept
+            .iter()
+            .all(|(sp, dp)| (dp - sp * scale).abs() <= COLLINEAR_EPSILON_DP)
+        {
+            return Self::linear(scale);
+        }
         let mut curve = Self::linear(scale);
         for (index, knot) in kept.iter().enumerate() {
             curve.knots[index] = *knot;
