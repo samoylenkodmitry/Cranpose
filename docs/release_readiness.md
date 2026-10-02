@@ -61,14 +61,22 @@ latency.
 
 On 2026-10-02, using the pinned toolchain on macm3:
 
-- `cargo nextest run --cargo-profile ci -p desktop-app --no-fail-fast`:
-  331 passed, one configured skip. This includes offline startup, chapter
-  selection at desktop and compact widths, all-tab rendering and accessibility.
+- `cargo nextest run --cargo-profile ci -p desktop-app -p cranpose-ui -p cranpose-app-shell --no-fail-fast`:
+  2,091 passed, four configured skips. This includes 18 documentation regressions,
+  offline startup, animated chapter selection and interruption, wheel fling,
+  compact navigation, all-tab rendering and accessibility. A GPU pixel regression
+  verifies repeated window growth and shrinkage without stale clipping and keeps
+  the repository link visible at the resized window's corner.
+- GPU robot runs passed at 390×780, 800×600, 1100×820 and 1440×1000, covering
+  continuous reading, tabs scrolling out of view, wheel/article synchronization,
+  chapter actions, compact back navigation and fling interruption. Captures
+  confirm the wheel's labels and markings rotate together beneath the glass.
 - `cargo nextest run --cargo-profile ci -p cranpose-render-common -p cranpose-ui
   -E 'test(annotated_text_baselines) or test(widget_composition)'`:
   49 passed; unrelated tests were filtered out.
-- Local `just precommit` passed; 82 relative links in the changed Markdown
-  files resolved to existing targets.
+- `just clippy` passed for the workspace, all targets and the facade crate.
+  Local `just precommit` passed; 82 relative links in the original documentation
+  refresh resolved to existing targets.
 
 These results do not refresh physical-device or cross-framework measurements.
 

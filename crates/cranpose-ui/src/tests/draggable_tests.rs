@@ -10,12 +10,14 @@ use cranpose_ui_layout::Axis;
 
 use crate::{Modifier, collect_modifier_slices, draggable::DraggableState};
 
-fn with_test_runtime<T>(body: impl FnOnce() -> T) -> T {
+pub(super) fn with_test_runtime<T>(body: impl FnOnce() -> T) -> T {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));
     body()
 }
 
-fn pointer_handler_for(modifier: Modifier) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeChain) {
+pub(super) fn pointer_handler_for(
+    modifier: Modifier,
+) -> (Rc<dyn Fn(PointerEvent)>, ModifierNodeChain) {
     let elements = modifier.elements();
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
@@ -29,7 +31,7 @@ fn pointer_handler_for(modifier: Modifier) -> (Rc<dyn Fn(PointerEvent)>, Modifie
     (handler, chain)
 }
 
-fn event(kind: PointerEventKind, x: f32, y: f32) -> PointerEvent {
+pub(super) fn event(kind: PointerEventKind, x: f32, y: f32) -> PointerEvent {
     PointerEvent::new(kind, Point { x, y }, Point { x, y })
         .with_buttons(PointerButtons::new().with(PointerButton::Primary))
 }

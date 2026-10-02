@@ -75,6 +75,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 cranpose-ui-graphics = { workspace = true }
 pulldown-cmark = { version = "0.13.4", default-features = false }
+cranpose-ui-layout.workspace = true
 
 # Non-WASM dependencies
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

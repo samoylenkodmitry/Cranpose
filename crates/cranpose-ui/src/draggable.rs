@@ -33,7 +33,7 @@ use cranpose_core::{MutableState, State, remember};
 pub type DragDeltaHandler = Rc<dyn Fn(f32)>;
 
 struct DraggableStateInner {
-    on_delta: RefCell<DragDeltaHandler>,
+    on_delta: RefCell<Rc<dyn Fn(f32) -> f32>>,
     dragging: MutableState<bool>,
     offset: Cell<f32>,
 }
@@ -59,6 +59,13 @@ impl DraggableState {
     /// Prefer [`rememberDraggableState`] inside a composition; this is for
     /// callers that own the state themselves.
     pub fn new(on_delta: impl Fn(f32) + 'static) -> Self {
+        Self::new_consuming(move |delta| {
+            on_delta(delta);
+            delta
+        })
+    }
+
+    fn new_consuming(on_delta: impl Fn(f32) -> f32 + 'static) -> Self {
         let runtime = cranpose_core::current_runtime_handle()
             .expect("DraggableState::new requires an active runtime");
         Self {
@@ -75,6 +82,13 @@ impl DraggableState {
     /// A composition calls this every recomposition so the handler closes over
     /// the current values rather than the ones the first composition captured.
     pub fn update_handler(&self, on_delta: impl Fn(f32) + 'static) {
+        self.update_consuming_handler(move |delta| {
+            on_delta(delta);
+            delta
+        });
+    }
+
+    fn update_consuming_handler(&self, on_delta: impl Fn(f32) -> f32 + 'static) {
         *self.inner.on_delta.borrow_mut() = Rc::new(on_delta);
     }
 
@@ -100,12 +114,17 @@ impl DraggableState {
     /// This is how a control is driven from outside a gesture — a keyboard
     /// arrow, a test, an animation — through exactly the path a finger takes.
     pub fn drag_by(&self, delta: f32) {
+        self.dispatch_delta(delta);
+    }
+
+    fn dispatch_delta(&self, delta: f32) -> f32 {
         if !delta.is_finite() || delta == 0.0 {
-            return;
+            return 0.0;
         }
-        self.inner.offset.set(self.inner.offset.get() + delta);
         let handler = Rc::clone(&self.inner.on_delta.borrow());
-        handler(delta);
+        let consumed = handler(delta);
+        self.inner.offset.set(self.inner.offset.get() + consumed);
+        consumed
     }
 
     pub(crate) fn identity(&self) -> usize {
@@ -128,9 +147,63 @@ pub fn rememberDraggableState(on_delta: impl Fn(f32) + 'static) -> DraggableStat
     state
 }
 
+/// Scroll input for content that supplies its own placement, such as a wheel.
+///
+/// The handler receives logical pixel deltas, positive down or right, and
+/// returns the amount consumed. A partial consumption stops a fling at a
+/// boundary. `Modifier::scrollable` supplies drag, wheel and fling gestures
+/// without applying a linear layout translation.
+#[derive(Clone, PartialEq)]
+pub struct ScrollableState {
+    drag: DraggableState,
+}
+
+impl ScrollableState {
+    /// Creates a scroll state with a delta consumption handler.
+    pub fn new(on_delta: impl Fn(f32) -> f32 + 'static) -> Self {
+        Self {
+            drag: DraggableState::new_consuming(on_delta),
+        }
+    }
+
+    /// Applies a scroll delta and returns the amount consumed by the content.
+    pub fn dispatch_raw_delta(&self, delta: f32) -> f32 {
+        self.drag.dispatch_delta(delta)
+    }
+
+    /// Whether a pointer is currently dragging this content.
+    pub fn is_dragging(&self) -> bool {
+        self.drag.is_dragging()
+    }
+
+    pub(crate) fn identity(&self) -> usize {
+        self.drag.identity()
+    }
+
+    pub(crate) fn offset(&self) -> f32 {
+        self.drag.offset()
+    }
+
+    pub(crate) fn set_dragging(&self, dragging: bool) {
+        self.drag.set_dragging(dragging);
+    }
+}
+
+/// Remembers scroll input state and updates its consumption handler.
+#[track_caller]
+pub fn rememberScrollableState(on_delta: impl Fn(f32) -> f32 + 'static) -> ScrollableState {
+    let state = remember(|| ScrollableState::new(|_| 0.0)).with(Clone::clone);
+    state.drag.update_consuming_handler(on_delta);
+    state
+}
+
 #[cfg(test)]
 #[path = "tests/draggable_tests.rs"]
 mod draggable_tests;
+
+#[cfg(test)]
+#[path = "tests/scrollable_tests.rs"]
+mod scrollable_tests;
 
 #[cfg(test)]
 #[path = "tests/draggable_drag_state_tests.rs"]

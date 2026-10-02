@@ -20,6 +20,9 @@ use crate::{
 /// - [`LinkAnnotation::Url`] → calls `open_url(url)` (platform provides the URI handler).
 /// - [`LinkAnnotation::Clickable`] → calls the handler stored in the annotation.
 ///
+/// Accepts owned or shared text. Passing an [`Rc<AnnotatedString>`] reuses its
+/// prepared text and annotations without copying them.
+///
 /// # Example — opening a URL
 ///
 /// ```rust,ignore
@@ -64,12 +67,12 @@ use crate::{
 /// Equivalent to `Text(buildAnnotatedString { withLink(LinkAnnotation.Url(…)) { … } })`.
 /// The `open_url` parameter corresponds to the platform-provided `LocalUriHandler`.
 pub fn LinkedText(
-    text: AnnotatedString,
+    text: impl Into<Rc<AnnotatedString>>,
     modifier: Modifier,
     style: TextStyle,
     open_url: impl Fn(&str) + 'static,
 ) -> NodeId {
-    let text = Rc::new(text);
+    let text = text.into();
     let text_for_links = text.clone();
     let open_url: Rc<dyn Fn(&str)> = Rc::new(open_url);
     let modifier = modifier.stable_semantics(link_actions(Rc::clone(&text), Rc::clone(&open_url)));

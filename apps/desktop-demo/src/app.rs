@@ -623,10 +623,23 @@ pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
 #[composable]
 fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, padding: f32) {
     let is_active = active_tab.get() == tab;
+    let documentation = active_tab.get() == DemoTab::Documentation;
     Button(
         Modifier::empty()
-            .rounded_corners(12.0)
+            .rounded_corners(if documentation { 0.0 } else { 12.0 })
             .draw_behind(move |scope| {
+                if documentation {
+                    if is_active {
+                        let size = scope.size();
+                        scope.draw_line(
+                            Brush::solid(Color(0.45, 0.89, 0.91, 1.0)),
+                            Point::new(0.0, size.height - 1.5),
+                            Point::new(size.width, size.height - 1.5),
+                            cranpose_ui_graphics::Stroke::new(3.0),
+                        );
+                    }
+                    return;
+                }
                 scope.draw_round_rect(
                     Brush::solid(if is_active {
                         Color(0.2, 0.45, 0.9, 1.0)
@@ -656,6 +669,7 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
 
 #[composable]
 fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
+    let documentation = active_tab.get() == DemoTab::Documentation;
     let tabs_scroll_state =
         cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
     Row(
@@ -667,10 +681,22 @@ fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
         move || {
             Row(
                 Modifier::empty().padding_each(
+                    if documentation {
+                        0.0
+                    } else {
+                        DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING
+                    },
                     DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
-                    DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
-                    DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
-                    DEMO_TAB_BAR_PADDING,
+                    if documentation {
+                        0.0
+                    } else {
+                        DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING
+                    },
+                    if documentation {
+                        0.0
+                    } else {
+                        DEMO_TAB_BAR_PADDING
+                    },
                 ),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move || {
@@ -861,9 +887,24 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     let picker_open = cranpose_core::rememberMutableStateOf(|| false);
     let window_size = cranpose_core::rememberMutableStateOf(Size::default);
     cranpose_ui::Box(
-        Modifier::empty().fill_max_size(),
+        Modifier::empty()
+            .fill_max_size()
+            .report_size_state(window_size),
         BoxSpec::default(),
         move || {
+            let is_compact = window_size.get().width < COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH;
+            if active_tab.get() == DemoTab::Documentation
+                && !showing_source.get()
+                && !picker_open.get()
+            {
+                documentation::DocumentationTab(Some(AppHeaderState {
+                    active_tab,
+                    picker_open,
+                    showing_source,
+                    is_compact,
+                }));
+                return;
+            }
             let content_modifier = Modifier::empty().fill_max_width().weight(1.0).padding_each(
                 DEMO_PAGE_PADDING,
                 0.0,
@@ -871,18 +912,11 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                 DEMO_PAGE_PADDING,
             );
             Column(
-                Modifier::empty()
-                    .fill_max_size()
-                    .report_size_state(window_size),
+                Modifier::empty().fill_max_size(),
                 ColumnSpec::default(),
                 move || {
-                    let is_compact = window_size.get().width < COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH;
-
-                    if is_compact {
-                        CompactAppBar(active_tab, picker_open);
-                    } else {
-                        TabBarHorizontal(active_tab);
-
+                    AppHeader(active_tab, picker_open, showing_source, is_compact);
+                    if !is_compact {
                         Spacer(Modifier::empty().size_points(0.0, 12.0));
                     }
 
@@ -899,18 +933,50 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                     }
                 },
             );
+        },
+    );
+}
+
+#[composable]
+fn AppHeader(
+    active_tab: cranpose_core::MutableState<DemoTab>,
+    picker_open: cranpose_core::MutableState<bool>,
+    showing_source: cranpose_core::MutableState<bool>,
+    is_compact: bool,
+) {
+    cranpose_ui::Box(
+        Modifier::empty().fill_max_width(),
+        BoxSpec::default(),
+        move || {
+            if is_compact {
+                CompactAppBar(active_tab, picker_open);
+            } else {
+                TabBarHorizontal(active_tab);
+            }
             source_view::SourceToggleButton(
                 showing_source,
                 Modifier::empty()
                     .align(cranpose_ui::Alignment::TOP_START)
                     .offset(
-                        DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
+                        if active_tab.get() == DemoTab::Documentation {
+                            12.0
+                        } else {
+                            DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING
+                        },
                         FLOATING_TOGGLE_TOP,
                     ),
                 true,
             );
         },
     );
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct AppHeaderState {
+    active_tab: cranpose_core::MutableState<DemoTab>,
+    picker_open: cranpose_core::MutableState<bool>,
+    showing_source: cranpose_core::MutableState<bool>,
+    is_compact: bool,
 }
 
 #[composable]
@@ -967,7 +1033,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
 #[composable]
 fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_state: WinampTabState) {
     match active {
-        DemoTab::Documentation => documentation::DocumentationTab(),
+        DemoTab::Documentation => documentation::DocumentationTab(None),
         DemoTab::Counter => counter_app(),
         DemoTab::CompositionLocal => composition_local_example(),
         DemoTab::Async => async_runtime_example(),

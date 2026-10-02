@@ -461,6 +461,13 @@ async fn fetch_markdown(client: &HttpClientRef, url: &str) -> Result<String, Str
 const DEFAULT_URL: &str =
     "https://raw.githubusercontent.com/samoylenkodmitry/s-a--m.github.io/refs/heads/master/_leetcode_source/2023-07-14-leetcode_daily.md";
 
+#[derive(Clone, Copy, Default, PartialEq)]
+pub(super) enum MarkdownAppearance {
+    #[default]
+    Standard,
+    Reader,
+}
+
 #[composable]
 pub(super) fn MarkdownDocument(markdown: &'static str, base_url: &'static str) {
     let blocks = cranpose_core::rememberKeyed((markdown, base_url), |(markdown, base_url)| {
@@ -468,7 +475,17 @@ pub(super) fn MarkdownDocument(markdown: &'static str, base_url: &'static str) {
             markdown, base_url,
         )))
     });
-    render_markdown_blocks(blocks);
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(18.0)),
+        move || {
+            for (index, block) in blocks.iter().enumerate() {
+                cranpose_core::with_key(&index, || {
+                    render_markdown_block(block, MarkdownAppearance::Reader);
+                });
+            }
+        },
+    );
 }
 
 #[composable]
@@ -765,15 +782,19 @@ fn MarkdownBlocksList(
         spec,
         move |scope| {
             use cranpose_foundation::lazy::LazyListScopeExt;
-            scope.items_indexed_rc(blocks, |_index, block| match block {
-                MarkdownBlock::Text(annotated) => render_text_block(annotated.clone()),
-                MarkdownBlock::Image { url, alt } => {
-                    MarkdownImage(url.clone(), alt.clone());
-                }
-                MarkdownBlock::Rule => render_rule(),
+            scope.items_indexed_rc(blocks, move |_index, block| {
+                render_markdown_block(block, MarkdownAppearance::Standard);
             });
         },
     );
+}
+
+fn render_markdown_block(block: &MarkdownBlock, appearance: MarkdownAppearance) {
+    match block {
+        MarkdownBlock::Text(annotated) => render_text_block(annotated.clone(), appearance),
+        MarkdownBlock::Image { url, alt } => MarkdownImage(url.clone(), alt.clone()),
+        MarkdownBlock::Rule => render_rule(),
+    }
 }
 
 fn markdown_scrollbar_style() -> LazyScrollbarStyle {
@@ -809,14 +830,37 @@ fn render_markdown_blocks_with_state(
 }
 
 #[composable]
-fn render_text_block(annotated: Rc<AnnotatedString>) {
+fn render_text_block(annotated: Rc<AnnotatedString>, appearance: MarkdownAppearance) {
+    let code_panel = appearance == MarkdownAppearance::Reader
+        && annotated.span_styles.iter().any(|span| {
+            span.range.start == 0
+                && span.range.end == annotated.text.len()
+                && span.item.font_family == Some(FontFamily::Monospace)
+        });
+    let modifier = Modifier::empty().fill_max_width();
+    let modifier = if code_panel {
+        modifier
+            .background(Color(0.065, 0.095, 0.13, 1.0))
+            .padding(14.0)
+    } else {
+        modifier.padding(2.0)
+    };
     let text_style = TextStyle {
         span_style: SpanStyle {
             color: Some(Color(0.88, 0.90, 0.96, 1.0)),
-            font_size: TextUnit::Sp(14.0),
+            font_size: TextUnit::Sp(match appearance {
+                MarkdownAppearance::Standard => 14.0,
+                MarkdownAppearance::Reader if code_panel => 14.0,
+                MarkdownAppearance::Reader => 16.0,
+            }),
             ..Default::default()
         },
         paragraph_style: ParagraphStyle {
+            line_height: match appearance {
+                MarkdownAppearance::Standard => TextUnit::Unspecified,
+                MarkdownAppearance::Reader if code_panel => TextUnit::Sp(22.0),
+                MarkdownAppearance::Reader => TextUnit::Sp(25.0),
+            },
             platform_style: Some(PlatformParagraphStyle {
                 include_font_padding: None,
                 shaping: Some(TextShaping::Basic),
@@ -827,22 +871,13 @@ fn render_text_block(annotated: Rc<AnnotatedString>) {
 
     if !annotated.link_annotations.is_empty() {
         let uri_handler = local_uri_handler().current();
-        LinkedText(
-            (*annotated).clone(),
-            Modifier::empty().fill_max_width().padding(2.0),
-            text_style,
-            move |url| {
-                if let Err(err) = uri_handler.open_uri(url) {
-                    log::error!("Failed to open URL {url}: {err:#}");
-                }
-            },
-        );
+        LinkedText(annotated, modifier, text_style, move |url| {
+            if let Err(err) = uri_handler.open_uri(url) {
+                log::error!("Failed to open URL {url}: {err:#}");
+            }
+        });
     } else {
-        Text(
-            annotated,
-            Modifier::empty().fill_max_width().padding(2.0),
-            text_style,
-        );
+        Text(annotated, modifier, text_style);
     }
 }
 
