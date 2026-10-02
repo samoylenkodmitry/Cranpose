@@ -670,6 +670,7 @@ impl AndroidFrameDriver {
             telemetry.note_shown(
                 frame.shown_ns - frame.present_returned_ns,
                 frame.queued_behind,
+                frame.present_margin_ns,
             );
         }
     }
