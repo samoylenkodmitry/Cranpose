@@ -50,7 +50,7 @@ fn lens_layers(shell: &AppShell<ScopedUpdateCountingRenderer>) -> Vec<GraphicsLa
         if layer.graphics_layer.backdrop_effect.is_some() {
             out.push(GraphicsLayer {
                 translation_x: 0.0,
-                ..layer.graphics_layer.clone()
+                ..(*layer.graphics_layer).clone()
             });
         }
         for child in &layer.children {

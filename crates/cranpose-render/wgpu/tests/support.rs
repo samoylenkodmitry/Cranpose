@@ -741,7 +741,8 @@ pub fn shader_probe_graph(bounds: Rect, shader: RuntimeShader) -> RenderGraph {
         graphics_layer: cranpose_ui_graphics::GraphicsLayer {
             render_effect: Some(RenderEffect::runtime_shader(shader)),
             ..Default::default()
-        },
+        }
+        .into(),
         children: vec![solid_rect(bounds, Color::WHITE)],
         ..Default::default()
     })
@@ -771,7 +772,7 @@ pub mod clip_band {
         let child = LayerNode {
             local_bounds: CHILD,
             transform_to_parent: layer_transform_to_parent(CHILD, placement, &layer),
-            graphics_layer: layer,
+            graphics_layer: layer.into(),
             children,
             ..Default::default()
         };
@@ -786,7 +787,8 @@ pub mod clip_band {
             graphics_layer: GraphicsLayer {
                 clip: true,
                 ..GraphicsLayer::default()
-            },
+            }
+            .into(),
             children: vec![RenderNode::Layer(std::boxed::Box::new(child))],
             ..Default::default()
         };
@@ -1304,27 +1306,11 @@ pub fn contract_layer(
 ) -> LayerNode {
     LayerNode {
         node_id,
-        wraps: None,
         local_bounds,
-        node_bounds: None,
         transform_to_parent,
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        origin_in_parent: Point::default(),
-        graphics_layer: cranpose_ui_graphics::GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
-        hit_test: None,
-        has_hit_targets: false,
-        has_origin_sinks: false,
-        draws_within_bounds: false,
-        isolation: cranpose_render_common::graph::IsolationReasons::default(),
         cache_policy,
-        cache_hashes: cranpose_render_common::raster_cache::LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
         children,
+        ..Default::default()
     }
 }
 

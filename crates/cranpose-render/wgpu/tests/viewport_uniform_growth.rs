@@ -29,7 +29,8 @@ fn tiles(rows: u32, ink: [u8; 3]) -> RenderGraph {
             layer.graphics_layer = GraphicsLayer {
                 compositing_strategy: CompositingStrategy::Offscreen,
                 ..Default::default()
-            };
+            }
+            .into();
             layer.transform_to_parent = ProjectiveTransform::translation(
                 (index % COLUMNS * TILE) as f32,
                 (index / COLUMNS * TILE) as f32,

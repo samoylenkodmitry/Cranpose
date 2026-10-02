@@ -764,7 +764,7 @@ fn extract_lens(
     parent: ProjectiveTransform,
 ) -> Option<cranpose_render_common::graph::LayerNode> {
     let mut foreground = extract_lens_stage(layer, parent, 3.0)?;
-    let background = extract_lens_stage(layer, parent, 2.0)?;
+    let mut background = extract_lens_stage(layer, parent, 2.0)?;
     assert_eq!(
         foreground.transform_to_parent,
         background.transform_to_parent
@@ -773,8 +773,15 @@ fn extract_lens(
         background
             .graphics_layer
             .backdrop_effect
-            .unwrap()
-            .then(foreground.graphics_layer.backdrop_effect.take().unwrap()),
+            .take()
+            .expect("background lens effect")
+            .then(
+                foreground
+                    .graphics_layer
+                    .backdrop_effect
+                    .take()
+                    .expect("foreground lens effect"),
+            ),
     );
     Some(foreground)
 }

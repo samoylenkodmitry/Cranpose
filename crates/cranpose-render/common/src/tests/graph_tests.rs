@@ -296,7 +296,8 @@ fn a_clip_or_a_shadow_decides_containment_whatever_the_content() {
         graphics_layer: GraphicsLayer {
             shadow_elevation: 6.0,
             ..Default::default()
-        },
+        }
+        .into(),
         draws_within_bounds: true,
         ..bounded(20.0, 20.0, Vec::new())
     }));

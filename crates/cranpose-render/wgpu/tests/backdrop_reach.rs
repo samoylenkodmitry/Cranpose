@@ -56,7 +56,8 @@ fn page() -> RenderGraph {
         graphics_layer: GraphicsLayer {
             backdrop_effect: Some(RenderEffect::blur(BLUR_RADIUS)),
             ..GraphicsLayer::default()
-        },
+        }
+        .into(),
         ..control
     };
     let band = cranpose_render_common::graph::LayerNode {
@@ -64,7 +65,8 @@ fn page() -> RenderGraph {
         graphics_layer: GraphicsLayer {
             clip: true,
             ..GraphicsLayer::default()
-        },
+        }
+        .into(),
         ..support::layer_node(
             None,
             band_bounds.width,

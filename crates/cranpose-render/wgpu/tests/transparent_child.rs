@@ -59,6 +59,39 @@ fn capture(renderer: &mut support::LockedRenderer, page: Vec<RenderNode>) -> Cap
     )
 }
 
+#[test]
+fn changing_a_cloned_layers_opacity_preserves_the_original_picture() {
+    let mut renderer = support::headless_renderer().expect("GPU required for opacity probe");
+    for explicit in [false, true] {
+        let mut layer = support::layer_node(
+            None,
+            WIDTH as f32,
+            HEIGHT as f32,
+            vec![support::solid_rect(BAR, cranpose_ui_graphics::Color::RED)],
+        );
+        if explicit {
+            layer.graphics_layer = GraphicsLayer::default().into();
+        }
+        let original = vec![RenderNode::Layer(Box::new(layer))];
+        let expected = capture(&mut renderer, original.clone());
+        let mut hidden = original.clone();
+        let Some(RenderNode::Layer(layer)) = hidden.first_mut() else {
+            panic!("visible layer");
+        };
+        layer.graphics_layer.alpha = 0.0;
+        let hidden = capture(&mut renderer, hidden);
+        assert!(
+            hidden.pixels != expected.pixels,
+            "opacity must change the picture"
+        );
+        let unchanged = capture(&mut renderer, original);
+        assert!(
+            unchanged.pixels == expected.pixels,
+            "changing a clone changed the original picture"
+        );
+    }
+}
+
 /// An empty layer under a shader that keeps a transparent source
 /// transparent composites nothing, so the renderer draws nothing for it;
 /// the same shader undeclared shades the layer's pixels to the same page,

@@ -1,4 +1,3 @@
-use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 use cranpose_ui::{
     text::TextMotion,
     text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult},
@@ -290,25 +289,15 @@ fn clip_to_bounds_clips_shadow_and_content() {
 fn collect_hits_from_graph_only_populates_hit_regions() {
     let layer = cranpose_render_common::graph::LayerNode {
         node_id: Some(7),
-        wraps: None,
         local_bounds: Rect {
             x: 0.0,
             y: 0.0,
             width: 40.0,
             height: 24.0,
         },
-        node_bounds: None,
         transform_to_parent: cranpose_render_common::graph::ProjectiveTransform::translation(
             12.0, 8.0,
         ),
-        motion_context_animated: false,
-        translated_content_context: false,
-        translated_content_offset: Point::default(),
-        content_offset: Point::default(),
-        origin_in_parent: cranpose_ui_graphics::Point::default(),
-        graphics_layer: GraphicsLayer::default(),
-        clip_to_bounds: false,
-        shadow_clip: None,
         hit_test: Some(cranpose_render_common::graph::HitTestNode {
             shape: None,
             handlers: Rc::new(cranpose_ui::collect_slices_from_modifier(
@@ -316,13 +305,7 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
             )),
         }),
         has_hit_targets: true,
-        has_origin_sinks: false,
-        draws_within_bounds: false,
-        isolation: cranpose_render_common::graph::IsolationReasons::default(),
-        cache_policy: cranpose_render_common::graph::CachePolicy::None,
-        cache_hashes: LayerRasterCacheHashes::default(),
-        cache_hashes_valid: false,
-        children: vec![],
+        ..Default::default()
     };
     let mut scene = crate::scene::Scene::new();
 

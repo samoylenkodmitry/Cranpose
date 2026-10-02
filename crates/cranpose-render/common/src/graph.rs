@@ -1,4 +1,8 @@
-use std::{mem::size_of, ops::Range, rc::Rc};
+use std::{
+    mem::size_of,
+    ops::{Deref, DerefMut, Range},
+    rc::Rc,
+};
 
 use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_ui::{
@@ -108,6 +112,51 @@ pub struct PrimitiveEntry {
     pub node: PrimitiveNode,
 }
 
+/// Scene properties with implicit defaults and independently mutable clones.
+#[derive(Clone, Debug, Default)]
+pub struct LayerProperties(Option<Box<GraphicsLayer>>);
+
+impl LayerProperties {
+    pub(crate) fn replace(&mut self, value: Option<GraphicsLayer>) {
+        match (&mut self.0, value) {
+            (Some(current), Some(value)) => **current = value,
+            (storage, value) => *storage = value.map(Box::new),
+        }
+    }
+}
+
+impl Deref for LayerProperties {
+    type Target = GraphicsLayer;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().unwrap_or(&GraphicsLayer::DEFAULT)
+    }
+}
+
+impl DerefMut for LayerProperties {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.get_or_insert_with(Box::default)
+    }
+}
+
+impl From<GraphicsLayer> for LayerProperties {
+    fn from(value: GraphicsLayer) -> Self {
+        Self(Some(Box::new(value)))
+    }
+}
+
+impl From<Option<GraphicsLayer>> for LayerProperties {
+    fn from(value: Option<GraphicsLayer>) -> Self {
+        Self(value.map(Box::new))
+    }
+}
+
+impl PartialEq for LayerProperties {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
 #[derive(Clone)]
 pub struct LayerNode {
     pub node_id: Option<NodeId>,
@@ -134,7 +183,7 @@ pub struct LayerNode {
     /// each layer's content offset and graphics-layer translation, to find the
     /// window origin of a subtree they rebuild.
     pub origin_in_parent: Point,
-    pub graphics_layer: GraphicsLayer,
+    pub graphics_layer: LayerProperties,
     pub clip_to_bounds: bool,
     pub shadow_clip: Option<Rect>,
     pub hit_test: Option<HitTestNode>,
@@ -174,7 +223,7 @@ impl Default for LayerNode {
             translated_content_context: false,
             translated_content_offset: Point::default(),
             origin_in_parent: Point::default(),
-            graphics_layer: GraphicsLayer::default(),
+            graphics_layer: LayerProperties::default(),
             clip_to_bounds: false,
             shadow_clip: None,
             hit_test: None,
@@ -462,6 +511,11 @@ impl RenderGraph {
 
 fn layer_heap_bytes(layer: &LayerNode) -> usize {
     size_of::<RenderNode>() * layer.children.capacity()
+        + layer
+            .graphics_layer
+            .0
+            .as_ref()
+            .map_or(0, |_| size_of::<GraphicsLayer>())
         + layer
             .children
             .iter()

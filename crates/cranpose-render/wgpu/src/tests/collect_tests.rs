@@ -230,7 +230,8 @@ fn rounded_layer(radius: f32, content: RenderNode) -> LayerNode {
             clip: true,
             shape: LayerShape::Rounded(RoundedCornerShape::uniform(radius)),
             ..Default::default()
-        },
+        }
+        .into(),
         children: vec![content],
         ..Default::default()
     }
@@ -333,7 +334,8 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
             clip: true,
             shape: LayerShape::Rounded(RoundedCornerShape::uniform(2.0)),
             ..Default::default()
-        },
+        }
+        .into(),
         transform_to_parent: ProjectiveTransform::translation(979.3333, 220.33334),
         children: vec![shapes_run(vec![white_rect(rect(0.0, 0.0, 218.33333, 4.0))])],
         ..Default::default()
@@ -518,7 +520,7 @@ fn turned_layer(
     LayerNode {
         local_bounds: rect(0.0, 0.0, 60.0, 40.0),
         transform_to_parent: transform,
-        graphics_layer,
+        graphics_layer: graphics_layer.into(),
         children,
         ..Default::default()
     }
@@ -836,7 +838,8 @@ fn row_at(y: f32, draws_within_bounds: bool, shadow_elevation: f32) -> LayerNode
         graphics_layer: GraphicsLayer {
             shadow_elevation,
             ..Default::default()
-        },
+        }
+        .into(),
         draws_within_bounds,
         children: vec![run(vec![solid(rect(0.0, 0.0, 100.0, 40.0))])],
         ..Default::default()
