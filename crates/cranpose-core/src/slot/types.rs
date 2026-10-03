@@ -509,12 +509,11 @@ pub(in crate::slot) fn root_node_ids(nodes: &[NodeRecord]) -> impl Iterator<Item
 fn root_node_records(nodes: &[NodeRecord]) -> impl Iterator<Item = &NodeRecord> {
     let hashed: Option<HashSet<NodeId>> =
         (nodes.len() > ROOT_SCAN_LIMIT).then(|| nodes.iter().map(|node| node.id).collect());
-    nodes.iter().filter_map(move |node| {
-        let parent_outside = node.parent_id.is_none_or(|parent_id| match &hashed {
+    nodes.iter().filter(move |node| {
+        node.parent_id.is_none_or(|parent_id| match &hashed {
             Some(ids) => !ids.contains(&parent_id),
             None => nodes.iter().all(|other| other.id != parent_id),
-        });
-        parent_outside.then_some(node)
+        })
     })
 }
 

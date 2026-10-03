@@ -4,7 +4,9 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, ApplierHost, ConcreteApplierHost, MemoryApplier, Node, NodeDisposal, NodeId,
+    Applier, ApplierHost, Composer, ConcreteApplierHost, DefaultScheduler, Key, MemoryApplier,
+    Node, NodeDisposal, NodeError, NodeId, Phase, RecomposeOptions, Runtime, SlotTable, SlotsHost,
+    scheduler_ref,
 };
 
 struct DropCount(Rc<Cell<usize>>);
@@ -144,4 +146,141 @@ fn deferred_disposal_preserves_a_new_node_that_reuses_the_same_id() {
     assert_eq!(first_drops.get(), 1);
     assert_eq!(replacement_drops.get(), 0);
     assert!(host.borrow_typed().get_mut(replacement).is_ok());
+}
+
+struct RetryApplier {
+    inner: MemoryApplier,
+    fail_disposal: Rc<Cell<bool>>,
+}
+
+impl Applier for RetryApplier {
+    fn create(&mut self, node: Box<dyn Node>) -> NodeId {
+        self.inner.create(node)
+    }
+
+    fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
+        if self.fail_disposal.get() {
+            return Err(NodeError::TypeMismatch {
+                id,
+                expected: "retry gate is closed",
+            });
+        }
+        self.inner.get_mut(id)
+    }
+
+    fn remove(&mut self, id: NodeId) -> Result<(), NodeError> {
+        if self.fail_disposal.get() {
+            return Err(NodeError::TypeMismatch {
+                id,
+                expected: "retry gate is closed",
+            });
+        }
+        self.inner.remove(id)
+    }
+
+    fn node_generation(&self, id: NodeId) -> u32 {
+        self.inner.node_generation(id)
+    }
+
+    fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError> {
+        self.inner.insert_with_id(id, node)
+    }
+}
+
+struct RememberedResource(Rc<Cell<usize>>);
+
+impl Drop for RememberedResource {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+struct UnmountCount(Rc<Cell<usize>>);
+
+impl Node for UnmountCount {
+    fn unmount(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+#[test]
+fn failed_retained_host_reset_keeps_owned_disposal_for_retry() {
+    const BRANCH_KEY: Key = 0x5ec0;
+
+    let fail_disposal = Rc::new(Cell::new(false));
+    let host = Rc::new(ConcreteApplierHost::new(RetryApplier {
+        inner: MemoryApplier::new(),
+        fail_disposal: Rc::clone(&fail_disposal),
+    }));
+    let root_slots = Rc::new(SlotsHost::new(SlotTable::default()));
+    let secondary_slots = Rc::new(SlotsHost::new(SlotTable::default()));
+    let applier: Rc<dyn ApplierHost> = host.clone();
+    let runtime = Runtime::new(scheduler_ref(DefaultScheduler));
+    let composer = Composer::new(root_slots, applier, runtime.handle(), None);
+    composer.enter_phase(Phase::Measure);
+
+    let resource_drops = Rc::new(Cell::new(0));
+    let unmounts = Rc::new(Cell::new(0));
+    let emitted_node = Rc::new(Cell::new(None));
+    let subcompose = |show_branch: bool| {
+        let resource_drops = Rc::clone(&resource_drops);
+        let unmounts = Rc::clone(&unmounts);
+        let emitted_node = Rc::clone(&emitted_node);
+        composer
+            .subcompose_slot(&secondary_slots, None, |composer| {
+                if show_branch {
+                    composer.cranpose_with_reuse(
+                        BRANCH_KEY,
+                        RecomposeOptions::default(),
+                        |composer| {
+                            let _resource = composer
+                                .remember(|| RememberedResource(Rc::clone(&resource_drops)));
+                            emitted_node.set(Some(
+                                composer.emit_node(|| UnmountCount(Rc::clone(&unmounts))),
+                            ));
+                        },
+                    );
+                }
+            })
+            .expect("subcompose retained branch");
+    };
+
+    subcompose(true);
+    let retained_node = emitted_node.get().expect("branch emits a node");
+    subcompose(false);
+    assert_eq!(resource_drops.get(), 0);
+    assert_eq!(unmounts.get(), 0);
+
+    fail_disposal.set(true);
+    assert!(secondary_slots.reset().is_err());
+    assert_eq!(
+        resource_drops.get(),
+        0,
+        "failed disposal keeps remembered state"
+    );
+    assert_eq!(
+        unmounts.get(),
+        0,
+        "failed disposal has not unmounted the node"
+    );
+    assert!(host.borrow_typed().inner.get_mut(retained_node).is_ok());
+
+    assert!(
+        secondary_slots.reset().is_err(),
+        "a retry must still report failure"
+    );
+    assert_eq!(
+        resource_drops.get(),
+        0,
+        "repeated failure keeps state alive"
+    );
+    assert_eq!(unmounts.get(), 0, "repeated failure does not unmount");
+
+    fail_disposal.set(false);
+    secondary_slots
+        .reset()
+        .expect("reset retries queued disposal");
+    assert_eq!(resource_drops.get(), 1, "remembered state releases once");
+    assert_eq!(unmounts.get(), 1, "retained node unmounts once");
+    assert!(host.borrow_typed().inner.get_mut(retained_node).is_err());
 }

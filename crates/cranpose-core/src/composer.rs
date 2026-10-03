@@ -464,9 +464,7 @@ impl ComposerRuntimeState {
         table: &mut SlotTable,
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
     ) -> Result<(), NodeError> {
-        let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
-            return Ok(());
-        };
+        let retention = self.retention_by_host.borrow_mut().remove(&host_key);
         let applier_host = self
             .applier_host
             .borrow()
@@ -474,13 +472,15 @@ impl ComposerRuntimeState {
             .and_then(std::rc::Weak::upgrade);
         if let Some(applier_host) = applier_host {
             let mut disposal = crate::NodeDisposal::default();
-            for subtree in retention.into_subtrees() {
-                subtree.scopes().for_each(RecomposeScope::deactivate);
-                table.invalidate_detached_subtree_anchors(&subtree);
-                disposal.retain_subtree(subtree);
+            if let Some(retention) = retention {
+                for subtree in retention.into_subtrees() {
+                    subtree.scopes().for_each(RecomposeScope::deactivate);
+                    table.invalidate_detached_subtree_anchors(&subtree);
+                    disposal.retain_subtree(subtree);
+                }
             }
             applier_host.dispose_nodes(disposal)?;
-        } else {
+        } else if let Some(retention) = retention {
             self.deactivate_and_queue_subtrees(retention, table, lifecycle);
         }
         Ok(())

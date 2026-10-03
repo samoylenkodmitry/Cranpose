@@ -187,8 +187,10 @@ impl<A: Applier + 'static> ApplierHost for ConcreteApplierHost<A> {
 
     fn dispose_nodes(&self, disposal: NodeDisposal) -> Result<(), NodeError> {
         self.disposals.enqueue(disposal);
-        if let Ok(mut applier) = self.try_borrow_typed() {
-            return applier.flush_disposals();
+        if let Ok(mut applier) = self.inner.try_borrow_mut() {
+            return self.disposals.flush(&mut *applier, |applier, node| {
+                dispose_detached_node_now(applier, node)
+            });
         }
         Ok(())
     }

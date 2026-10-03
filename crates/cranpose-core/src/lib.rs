@@ -4595,7 +4595,12 @@ impl SlotsHost {
         lifecycle.flush_pending_drops();
         if let Some(state) = inner.runtime_state.clone() {
             let host_key = self.storage_key();
-            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)?;
+            if let Err(error) =
+                state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
+            {
+                inner.lifecycle = lifecycle;
+                return Err(error);
+            }
             state.clear_host(self, &mut inner.table);
             lifecycle.flush_pending_drops();
         }
@@ -4620,7 +4625,12 @@ impl SlotsHost {
         let mut lifecycle = std::mem::take(&mut inner.lifecycle);
         if let Some(state) = runtime_state {
             let host_key = self.storage_key();
-            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)?;
+            if let Err(error) =
+                state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
+            {
+                inner.lifecycle = lifecycle;
+                return Err(error);
+            }
             state.clear_host(self, &mut inner.table);
         }
         lifecycle.dispose_slot_table(&mut inner.table);

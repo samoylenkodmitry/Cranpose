@@ -57,7 +57,7 @@ impl Fixture {
         let state = state_capture
             .borrow()
             .as_ref()
-            .cloned()
+            .copied()
             .expect("lazy list state was captured");
         let mut fixture = Self { composition, state };
         fixture.measure();
