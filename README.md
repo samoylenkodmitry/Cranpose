@@ -183,19 +183,23 @@ history behind the current architecture is
 Release binaries for the desktop platforms are attached to each
 [release](https://github.com/samoylenkodmitry/Cranpose/releases).
 
-The iOS implementation is built from `apps/desktop-demo`; the standalone
-`apps/isolated-demo` template does not include an iOS target.
-
 ## Building
+
+The commands below run from the `cranpose-showcase` checkout created in **Quick
+start**. The [Cranpose Guide](docs/guide.md#get-started) also covers a project built
+from an empty Cargo package.
 
 ### Desktop (Linux/macOS/Windows)
 
+Use a computer with the target desktop OS and a GPU driver for Vulkan, Metal or
+DirectX 12.
+
 ```bash
-cd apps/isolated-demo
 cargo run --features desktop,renderer-wgpu
 ```
 
-macOS `.app` bundles come from the workspace task runner:
+To package the Cranpose demo as a macOS `.app`, run the workspace task from the
+Cranpose repository root:
 
 ```bash
 cargo xtask bundle-macos \
@@ -223,9 +227,8 @@ application's own the same way.
 
 ### Android
 
-Use the [cranpose-showcase starter](https://github.com/samoylenkodmitry/cranpose-showcase)
-on Windows, Linux or macOS with the Android SDK, NDK and the project's JDK.
-From the starter checkout, build an APK for an ARM device:
+Use Windows, Linux or macOS with the Android SDK, NDK and the project's JDK.
+Build an APK for an ARM Android device from the starter checkout:
 
 ```bash
 cd android
@@ -234,27 +237,34 @@ cd android
 
 ### iOS
 
-The app is a pure-Rust binary — winit starts `UIApplicationMain`, so there is no
-Objective-C entry point and no Xcode project. See
-[`apps/ios-demo/README.md`](apps/ios-demo/README.md).
+Use a Mac with Xcode and an iOS simulator runtime. From the starter checkout, run
+the Apple Silicon simulator build:
 
 ```bash
 rustup target add aarch64-apple-ios-sim aarch64-apple-ios
-cd apps/ios-demo
 ./ios/run-sim.sh
 ```
 
+For Intel Macs, use the `x86_64-apple-ios` target through the manual steps in the
+[iOS guide](docs/guide.md#run-on-ios). Device builds need an iPhone or iPad,
+a development certificate and a provisioning profile. Developers
+on Windows or Linux can use a GitHub macOS runner; the guide includes a
+[workflow example](docs/guide.md#build-apple-targets-with-github-actions).
+
 ### Web (WASM)
 
+Build on Windows, Linux or macOS. Use Git Bash for the shell script on Windows.
+Run the starter in a browser with WebGPU support and a compatible GPU driver:
+
 ```bash
-# Prerequisites: rustup target add wasm32-unknown-unknown && cargo install wasm-pack
-cd apps/isolated-demo
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
 ./build-web.sh
+cd dist
 python3 -m http.server 8080
 ```
 
-Open `http://localhost:8080`. WebGL2 is the default backend; append
-`?backend=webgpu` to the URL to force WebGPU when the browser supports it.
+Open `http://localhost:8080`. Use HTTPS for a public web host.
 
 ### Inside an IDE (IntelliJ plugin)
 
