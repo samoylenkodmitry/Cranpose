@@ -1,4 +1,4 @@
-use cranpose_ui::{composable, Box, BoxSpec, Color, Modifier};
+use cranpose_ui::{composable, Box, BoxSpec, Modifier};
 
 struct Preview {
     id: &'static str,
@@ -21,13 +21,14 @@ pub(super) fn find(fence: &str, source: &str) -> Option<usize> {
 pub(super) fn GuidePreview(index: usize) {
     let preview = &PREVIEWS[index];
     Box(
-        Modifier::empty()
-            .fill_max_width()
-            .height(240.0)
-            .clip_to_bounds()
-            .background(Color(0.10, 0.14, 0.18, 1.0))
-            .content_description(format!("Interactive example: {}", preview.id))
-            .padding(16.0),
+        super::guide_style::code_surface(
+            Modifier::empty()
+                .fill_max_width()
+                .height(240.0)
+                .clip_to_bounds(),
+        )
+        .content_description(format!("Interactive example: {}", preview.id))
+        .padding(16.0),
         BoxSpec::default(),
         preview.render,
     );

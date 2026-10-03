@@ -1,4 +1,3 @@
-use cranpose::liquid::{Glass, LiquidModifierExt, LiquidShape};
 use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle, TextUnit},
@@ -6,7 +5,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{Stroke, VectorPath};
 
-pub(super) const INK: Color = Color(0.91, 0.95, 0.98, 1.0);
+pub(super) use super::super::guide_style::{reader_surface, INK};
 pub(super) const MUTED: Color = Color(0.58, 0.67, 0.75, 1.0);
 pub(super) const ACCENT: Color = Color(0.45, 0.89, 0.91, 1.0);
 pub(super) const BORDER: Color = Color(0.21, 0.33, 0.39, 0.60);
@@ -205,26 +204,6 @@ pub(super) fn WheelSurface(geometry: WheelGeometry, position: impl Fn() -> f32 +
         BoxSpec::default(),
         || {},
     );
-}
-
-pub(super) fn reader_surface(modifier: Modifier) -> Modifier {
-    let mut glass = Glass::clear();
-    glass.shape = LiquidShape::RoundedRect(0.0);
-    glass.tint = Some(Color(0.045, 0.085, 0.12, 0.24));
-    glass.blur_radius = Some(0.8);
-    glass.dispersion = 1.0;
-    glass.lift = Some(0.0);
-    glass.contrast = Some(1.0);
-    glass.saturation = Some(1.0);
-    glass.refraction_depth_dp = Some(12.0);
-    glass.transmission_refraction = 0.2;
-    glass.foreground = Some(INK);
-    glass.adaptive_frost = 0.0;
-    glass.highlight = 0.25;
-    glass.rim_reflection = 0.2;
-    glass.face_lighting = false;
-    glass.shadow = false;
-    modifier.glass_effect(glass)
 }
 
 #[composable]
