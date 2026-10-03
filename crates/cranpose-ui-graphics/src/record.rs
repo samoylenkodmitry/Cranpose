@@ -70,13 +70,17 @@ pub const ARC_BAND_MIN_RADIUS: f32 = 11.0;
 /// A band whose inner radius is within the strip's margin of the centre is
 /// a disc: its strip would be the whole disc's quad and more.
 pub const ARC_BAND_MIN_INNER_RADIUS: f32 = 1.0;
-/// The pixels a band's strip extends past the ring on each side, so the
-/// edge the fragment stage anti-aliases lies inside the strip. `band_position`
-/// in `shape.wgsl` pads by the same amount.
-pub const BAND_MARGIN: f32 = 1.0;
-/// Device-pixel padding for an arc's oriented quad: half-pixel antialias
-/// support plus a sixteenth pixel for rasterization rounding.
-pub const BAND_QUAD_MARGIN: f32 = 0.5 + 1.0 / 16.0;
+/// The device pixels a band's quad or strip, and a line's quad, extend past
+/// the shape on each side: the half pixel the fragment stage anti-aliases
+/// plus a sixteenth pixel for rasterization rounding. `band_position` in
+/// `shape.wgsl` pads by the same amount.
+pub const BAND_MARGIN: f32 = 0.5 + 1.0 / 16.0;
+/// The widest angle one segment of a band's strip spans. Past a quarter
+/// turn a strip's outer polygon is larger than the square around the band's
+/// padded disc, so a band whose padded sweep needs wider segments than its
+/// class has, which only a render scale below the recording's can make,
+/// draws that square instead.
+pub const BAND_MAX_STEP: f32 = std::f32::consts::FRAC_PI_2;
 /// The radians a band's strip extends past each end of its sweep beyond
 /// the angle the ring's padded half-width subtends at its padded inner
 /// radius, which covers every cap and the margin; float slack only.
@@ -137,7 +141,6 @@ const SEGMENT_WASTE_QUADS: u32 = 512;
 struct BandRing {
     mid: f32,
     ring_half: f32,
-    range_start: f32,
     range: f32,
     segments_per_radian: f32,
 }
@@ -155,11 +158,10 @@ impl BandRing {
     fn new(inner: f32, outer: f32, start: f32, sweep: f32) -> Self {
         let mid = (outer + inner) * 0.5;
         let ring_half = at_least((outer - inner) * 0.5, 0.0) + BAND_MARGIN;
-        let (range_start, range) = Self::padded_range(mid, ring_half, start, sweep);
+        let (_, range) = band_padded_range(mid, ring_half, start, sweep);
         Self {
             mid,
             ring_half,
-            range_start,
             range,
             segments_per_radian: Self::segments_per_radian(outer),
         }
@@ -173,24 +175,6 @@ impl BandRing {
             + usize::from(outer_radius > ARC_RING_RADII[1])
             + usize::from(outer_radius > ARC_RING_RADII[2]);
         ARC_RING_SEGMENTS_PER_RADIAN[bucket]
-    }
-
-    /// Where the strip starts and the padded sweep it covers, which the
-    /// record carries for the vertex stage: the angular pad is bounded
-    /// above (atan(x) is at most x), so no transcendental per arc, and a
-    /// sweep the pad closes is the full circle.
-    fn padded_range(mid: f32, ring_half: f32, start: f32, sweep: f32) -> (f32, f32) {
-        let inner_padded = mid - ring_half;
-        if inner_padded <= 0.0 {
-            return (0.0, TAU);
-        }
-        let pad = ring_half / inner_padded + BAND_ANGULAR_PAD;
-        let padded = sweep + pad + pad;
-        if padded < TAU {
-            (start - pad, padded)
-        } else {
-            (0.0, TAU)
-        }
     }
 
     /// The fewest of [`ARC_BUCKET_SEGMENTS`] whose step over the padded
@@ -223,6 +207,26 @@ impl BandRing {
 
 fn vertex_pixels(vertices: u32) -> f32 {
     vertices as f32 * BAND_VERTEX_PIXELS
+}
+
+/// Where a band's strip starts and the padded sweep it covers, for a band of
+/// centre-line radius `mid` and padded half-width `ring_half` over `start`
+/// and `sweep`, in one unit: the angular pad is bounded above (atan(x) is at
+/// most x), so no transcendental per band, and a sweep the pad closes is the
+/// full circle. The vertex stage takes it in device pixels, where the
+/// [`BAND_MARGIN`] the half-width includes is measured.
+pub fn band_padded_range(mid: f32, ring_half: f32, start: f32, sweep: f32) -> (f32, f32) {
+    let inner_padded = mid - ring_half;
+    if inner_padded <= 0.0 {
+        return (0.0, TAU);
+    }
+    let pad = ring_half / inner_padded + BAND_ANGULAR_PAD;
+    let padded = sweep + pad + pad;
+    if padded < TAU {
+        (start - pad, padded)
+    } else {
+        (0.0, TAU)
+    }
 }
 
 /// The bucket of [`ARC_BUCKET_SEGMENTS`] a strip of `segments` draws from.
@@ -1128,7 +1132,7 @@ impl ShapeRecorder {
                 ring.outer_radius,
             ];
             source = [ring.mid_radius(), ring.inner_radius, 0.0, TAU];
-            arc_normalized = [0.0, TAU, band.range_start, band.range];
+            arc_normalized = [0.0, TAU, 0.0, 0.0];
             bucket = Some(ring_bucket);
         }
         self.push_shape(
@@ -1217,12 +1221,7 @@ impl ShapeRecorder {
             },
             ShapeRecordCurve {
                 radii: [0.0; 4],
-                arc_normalized: [
-                    geometry.start_angle,
-                    geometry.sweep_angle,
-                    ring.range_start,
-                    ring.range,
-                ],
+                arc_normalized: [geometry.start_angle, geometry.sweep_angle, 0.0, 0.0],
             },
             [
                 args.radius,

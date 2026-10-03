@@ -359,17 +359,50 @@ fn arc_coverage_matches_the_frozen_distance_function() {
     }
 }
 
+fn tiny_arcs() -> CommandRecording {
+    const GRID: usize = 24;
+    let canvas = SIDE as f32 * 20.0;
+    let mut scope = DrawScopeDefault::new(Size::new(canvas, canvas));
+    for index in 0..GRID * GRID {
+        let (row, column) = (index / GRID, index % GRID);
+        scope.draw_arc(
+            Brush::solid(Color(
+                0.2 + (index % 7) as f32 * 0.1,
+                0.3 + (index % 5) as f32 * 0.12,
+                0.9 - (index % 3) as f32 * 0.2,
+                0.6 + (index % 4) as f32 * 0.1,
+            )),
+            Point::new(70.0 + column as f32 * 131.0, 70.0 + row as f32 * 131.0),
+            12.0 + (index % 9) as f32,
+            index as f32 * 0.37,
+            0.6 + (index % 6) as f32 * 0.35,
+            Stroke::new(2.0 + (index % 3) as f32)
+                .with_cap([StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square][index % 3]),
+        );
+    }
+    let recording = scope.finish();
+    assert!(
+        recording
+            .shapes()
+            .iter()
+            .filter(cranpose_ui_graphics::ShapeRecord::is_banded)
+            .count()
+            > GRID * GRID / 2
+    );
+    recording
+}
+
 #[test]
-fn arc_quad_bounds_preserve_the_original_coverage() {
+fn arc_band_bounds_preserve_the_original_coverage() {
     let _lock = support::gpu_test_lock();
     let raster = ArcRaster::new(&arcs());
     let mut replaced = 0;
     let reference: String = SHAPE_WGSL
         .lines()
         .map(|line| {
-            if line.starts_with("const BAND_QUAD_MARGIN:") {
+            if line.starts_with("const BAND_MARGIN:") {
                 replaced += 1;
-                "const BAND_QUAD_MARGIN: f32 = 1.0;\n".to_owned()
+                "const BAND_MARGIN: f32 = 2.0;\n".to_owned()
             } else if line.trim().starts_with("let width = select(half_width,") {
                 replaced += 1;
                 "let width = half_width;\n".to_owned()
@@ -379,12 +412,33 @@ fn arc_quad_bounds_preserve_the_original_coverage() {
         })
         .collect();
     assert_eq!(replaced, 2);
-    let reference = pipeline(&raster.device, &reference, 1, -1);
-    let current = pipeline(&raster.device, SHAPE_WGSL, 1, -1);
-    for scale in [0.25, 0.75, 1.0, 1.25, 2.75] {
-        for clipped in [false, true] {
-            let values = placement(scale, [0.37, -0.19], clipped);
-            raster.assert_matches(&reference, &current, 1, &values);
+    for segments in [1, 2, 8] {
+        let reference_pipeline = pipeline(&raster.device, &reference, segments, -1);
+        let current = pipeline(&raster.device, SHAPE_WGSL, segments, -1);
+        for scale in [0.25, 0.75, 1.0, 1.25, 2.75] {
+            for clipped in [false, true] {
+                let values = placement(scale, [0.37, -0.19], clipped);
+                raster.assert_matches(&reference_pipeline, &current, segments, &values);
+            }
+        }
+    }
+}
+
+#[test]
+fn strips_at_a_fraction_of_the_recorded_scale_cover_their_arcs_as_quads_do() {
+    let _lock = support::gpu_test_lock();
+    let raster = ArcRaster::new(&tiny_arcs());
+    let quads = SHAPE_WGSL.replace(
+        "override SHAPE_BANDS: bool = true;",
+        "override SHAPE_BANDS: bool = false;",
+    );
+    assert_ne!(quads, SHAPE_WGSL);
+    for segments in [2, 8] {
+        let reference = pipeline(&raster.device, &quads, segments, -1);
+        let current = pipeline(&raster.device, SHAPE_WGSL, segments, -1);
+        for scale in [0.05, 0.1, 0.25] {
+            let values = placement(scale, [0.37, -0.19], false);
+            raster.assert_matches(&reference, &current, segments, &values);
         }
     }
 }
