@@ -108,6 +108,44 @@ fn check_counter_preview(robot: &Robot, width: u32, height: u32) {
     capture(robot, width, "interactive-example");
  }
 
+fn check_mobile_tables_and_controls(robot: &Robot, width: u32, height: u32) {
+    for (chapter, target, stage) in [
+        ("Testing", "Test scope", "table"),
+        ("Liquid components", "Save", "glass-button"),
+    ] {
+        robot.move_to(width as f32 - 40.0, height as f32 * 0.65).expect("hover chapter list");
+        let mut found = false;
+        for _ in 0..30 {
+            if let Some((_, y, _, button_height)) = find_button_exact_in_semantics(robot, chapter) {
+                if y >= 96.0 && y + button_height < height as f32 - 60.0 {
+                    found = true;
+                    break;
+                }
+            }
+            robot.mouse_scroll_and_wait_for_frame(0.0, -120.0).expect("scroll chapter list");
+        }
+        assert!(found, "chapter list reaches {chapter}");
+        click_button(robot, chapter);
+        let mut found = false;
+        for _ in 0..60 {
+            if let Some((_, y, _, label_height)) = find_text_in_semantics_exact(robot, target) {
+                if y >= 80.0 && y + label_height < height as f32 - 100.0 {
+                    found = true;
+                    break;
+                }
+            }
+            robot.mouse_scroll_and_wait_for_frame(0.0, -120.0).expect("scroll to guide example");
+        }
+        assert!(found, "guide displays {target}");
+        if stage == "glass-button" {
+            click_button(robot, "Save");
+            robot.validate_content("Saved").expect("glass button state");
+        }
+        capture(robot, width, stage);
+        click_button(robot, "Back to wheel");
+    }
+}
+
 pub(crate) fn main() {
     let (width, height) = match std::env::var("CRANPOSE_DOCS_VIEWPORT").as_deref() {
         Ok("compact") => (390, 780),
@@ -180,6 +218,9 @@ pub(crate) fn main() {
                 click_button(&robot, "Back to wheel");
             }
             check_wheel_fling(&robot, width, height, compact);
+            if compact {
+                check_mobile_tables_and_controls(&robot, width, height);
+            }
             robot.exit().expect("exit documentation robot");
         })
         .run(app::DesktopApp);

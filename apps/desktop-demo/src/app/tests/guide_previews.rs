@@ -148,3 +148,42 @@ fn markdown_table_keeps_columns_and_scrolls_horizontally() {
     assert!(after.x + after.width <= 320.0);
     assert!(robot.find_by_text("Click").exists());
 }
+
+#[test]
+fn guide_previews_fit_a_bounded_phone_container() {
+    let guide = include_str!("../../../../../docs/guide.md");
+    for id in guide
+        .lines()
+        .filter_map(|line| line.strip_prefix("```rust preview="))
+    {
+        let id = id.split_whitespace().next().expect("preview id");
+        let mut robot = RobotTestRule::new(390, 3200, TestRenderer::default(), move || {
+            cranpose::liquid::LiquidTheme(
+                cranpose::liquid::LiquidThemeSpec::default(),
+                move || {
+                    MarkdownDocument(example(id), "", 390.0);
+                },
+            );
+        });
+        robot.shell_mut().set_semantics_enabled(true);
+        robot.wait_for_idle();
+        let tree = cranpose_testing::placed_semantics_from_shell(robot.shell_mut())
+            .expect("preview semantics");
+        let label = format!("Interactive example: {id}");
+        let mut bounds = None;
+        tree.visit(&mut |node| {
+            if node.label.as_deref() == Some(label.as_str()) {
+                bounds = Some(node.target_bounds());
+            }
+        });
+        let bounds = bounds.unwrap_or_else(|| panic!("preview {id}"));
+        assert!(
+            bounds.width > 0.0 && bounds.x + bounds.width <= 390.0,
+            "preview {id}: {bounds:?}"
+        );
+        assert!(
+            bounds.height <= 240.0 && bounds.y + bounds.height <= 3200.0,
+            "preview {id}: {bounds:?}"
+        );
+    }
+}

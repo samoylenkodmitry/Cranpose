@@ -306,6 +306,9 @@ fn WheelEntries(
 fn WheelVisuals(state: DocumentationState, geometry: WheelGeometry, wheel_only: bool) {
     visuals::WheelSurface(geometry, move || state.position(wheel_only));
     if geometry.width < COMPACT_BREAKPOINT {
+        if !wheel_only {
+            return;
+        }
         Box(
             Modifier::empty().offset(12.0, 130.0).width(154.0),
             BoxSpec::default(),
