@@ -131,6 +131,22 @@ fn a_cache_file_another_build_left_is_replaced_with_this_renderers_pipelines() {
 }
 
 #[test]
+fn dropping_a_renderer_finishes_its_pending_cache_write() {
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("pending-at-shutdown.bin");
+    let Some(mut renderer) = caching_renderer() else {
+        return;
+    };
+    renderer.capture_frame(16, 16).expect("first frame");
+    drop(renderer);
+    assert!(
+        fs::read(&cache).is_ok_and(|bytes| !bytes.is_empty()),
+        "dropping the renderer must finish its pending cache write"
+    );
+}
+
+#[test]
 fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
     let _lock = support::gpu_test_lock();
     let files = CacheFiles::new();
@@ -144,7 +160,6 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
 
     let graph = renderer.scene_mut().graph.take();
     drop(renderer);
-    std::thread::sleep(Duration::from_secs(3));
     fs::remove_file(&previous_cache).expect("remove retired renderer's cache file");
     let replacement_cache = files.select("replacement.bin");
     let mut renderer = support::LockedRenderer::beside_locked().expect("replacement GPU required");
@@ -152,7 +167,6 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
     let replacement = renderer.capture_frame(16, 16).expect("replacement frame");
     assert_eq!(replacement.pixels, original.pixels);
     wait_for_cache(&replacement_cache);
-    std::thread::sleep(Duration::from_secs(3));
     assert!(
         !previous_cache.exists(),
         "a retired renderer rewrote its obsolete cache: {}",
@@ -334,7 +348,6 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
             }
             "closed" => {
                 wait_for_warm_ups();
-                std::thread::sleep(Duration::from_secs(1));
             }
             "reopened" => {
                 wait_for_warm_ups();
@@ -353,7 +366,6 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
                 )));
                 renderer.capture_frame(16, 16).expect("empty screen");
                 wait_for_warm_ups();
-                std::thread::sleep(Duration::from_secs(1));
             }
             "changed-screen" => {
                 wait_for_warm_ups();
@@ -367,6 +379,7 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
         return;
     }
 
+    let _lock = support::gpu_test_lock();
     let files = CacheFiles::new();
     let cache = files.select("closed-before-first-frame.bin");
     for phase in [

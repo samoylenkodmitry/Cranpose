@@ -350,11 +350,17 @@ impl PersistSignal {
 /// writes what is still unwritten and ends the watcher.
 pub(crate) struct PersistWatcher {
     stopped: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for PersistWatcher {
     fn drop(&mut self) {
         CHANGES.stop(&self.stopped);
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            log::warn!("[pipeline-cache] persist thread panicked during shutdown");
+        }
     }
 }
 
@@ -382,7 +388,10 @@ pub(crate) fn spawn_persist_watcher(cache: Option<wgpu::PipelineCache>) -> Optio
             }
         });
     match spawned {
-        Ok(_) => Some(PersistWatcher { stopped }),
+        Ok(thread) => Some(PersistWatcher {
+            stopped,
+            thread: Some(thread),
+        }),
         Err(error) => {
             log::warn!("[pipeline-cache] persist thread failed to spawn: {error}");
             None

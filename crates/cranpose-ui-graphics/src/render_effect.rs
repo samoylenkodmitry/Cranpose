@@ -427,6 +427,8 @@ impl RuntimeShader {
     /// unless the shader declares its specialization exact with
     /// [`Self::set_specialization_exact`]: then the renderer compiles it in
     /// the background and draws with the general pipeline meanwhile.
+    /// A requested warm-up without an existing general pipeline finishes
+    /// before its first draw instead of compiling a new stand-in.
     pub fn set_override(&mut self, name: &'static str, value: f64) {
         let position = self
             .overrides()
@@ -733,6 +735,8 @@ impl RuntimeShader {
     /// with the general pipeline until they land. An override that selects
     /// a different picture, such as a pass switch, must leave this unset;
     /// its pipeline compiles inside the frame that first draws it.
+    /// An explicitly requested warm-up uses an existing general pipeline
+    /// while pending, or finishes before drawing if none exists.
     pub fn set_specialization_exact(&mut self, exact: bool) {
         if self.specialization_exact() == exact {
             return;
