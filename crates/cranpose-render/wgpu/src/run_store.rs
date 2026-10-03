@@ -4,13 +4,15 @@ use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::map::HashMap;
 use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_color};
 use cranpose_ui_graphics::{
-    ARC_BUCKETS, BrushRecord, Color, GradientStopRecord, GraphicsLayer, RecordLane, RecordSegment,
-    ShapeRecordBody, ShapeRecordCurve, band_class_segments, strip_index_pattern, strip_indices,
+    ARC_BUCKETS, BrushRecord, Color, FRAGMENT_KIND_ARC, GradientStopRecord, GraphicsLayer,
+    RecordLane, RecordSegment, RecordTables, ShapeRecordBody, ShapeRecordCurve,
+    band_class_segments, strip_index_pattern, strip_indices,
 };
 use smallvec::SmallVec;
 use wgpu::util::DeviceExt;
 
 use crate::{
+    arc_trig_fill::{ArcTrigFill, TrigBindings},
     frame_graph::{FrameCommandRecorder, FrameCommandStats, UploadPlacement, place_upload},
     geometry::{
         SegmentTransform, canonicalized_scaled_rect, snap_delta_for_anchor,
@@ -53,6 +55,7 @@ const PLACEMENT_TURNED: u32 = 16;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RunBufferMode {
     pub(crate) storage: bool,
+    pub(crate) trig_fill: bool,
 }
 
 impl RunBufferMode {
@@ -65,10 +68,17 @@ impl RunBufferMode {
         if limits.max_storage_buffers_per_shader_stage >= TABLE_COUNT as u32
             && _downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
         {
-            return Self { storage: true };
+            return Self {
+                storage: true,
+                trig_fill: _downlevel.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
+                    && crate::arc_trig_fill::fits(limits),
+            };
         }
         let _ = limits;
-        Self { storage: false }
+        Self {
+            storage: false,
+            trig_fill: false,
+        }
     }
 
     pub(crate) fn binding_type(self) -> wgpu::BufferBindingType {
@@ -269,6 +279,7 @@ pub(crate) struct RunBuffers {
     capacities: [usize; BUFFER_COUNT],
     pub(crate) bind_group: wgpu::BindGroup,
     mode: RunBufferMode,
+    trig_fill: Option<TrigBindings>,
 }
 
 /// Bytes compared at a time when a stored run's tables change, so the
@@ -313,6 +324,7 @@ impl RunBuffers {
             capacities,
             bind_group,
             mode,
+            trig_fill: None,
         }
     }
 
@@ -360,7 +372,49 @@ impl RunBuffers {
         if fresh.contains(&true) {
             self.bind_group = Self::bind(device, layout, &self.buffers);
         }
+        if fresh[BODY_BUFFER] || fresh[CURVE_BUFFER] {
+            self.trig_fill = None;
+        }
         fresh
+    }
+
+    fn upload_records(
+        &mut self,
+        device: &wgpu::Device,
+        recorder: &mut impl FrameCommandRecorder,
+        (previous, tables): (&RecordTables, &RecordTables),
+        whole: [bool; 2],
+        fill: Option<&ArcTrigFill>,
+    ) -> FrameCommandStats {
+        let mut records = self.write_changed(
+            device,
+            recorder,
+            BODY_BUFFER,
+            previous.shapes.bodies(),
+            tables.shapes.bodies(),
+            whole[0],
+        );
+        let curves = self.write_changed(
+            device,
+            recorder,
+            CURVE_BUFFER,
+            previous.shapes.curves(),
+            tables.shapes.curves(),
+            whole[1],
+        );
+        if let Some(fill) = fill
+            && curves.upload_bytes > 0
+            && tables_hold_arcs(tables)
+        {
+            let buffers = &self.buffers;
+            let bindings = self
+                .trig_fill
+                .get_or_insert_with(|| fill.bind(&buffers[BODY_BUFFER], &buffers[CURVE_BUFFER]));
+            let mut pass = recorder.begin_compute_pass("Stored Run Arc Trig Fill");
+            fill.dispatch(&mut pass, bindings, tables.shapes.len() as u32);
+        }
+        records += curves;
+        records
     }
 
     fn write<T: Pod>(
@@ -439,10 +493,28 @@ impl RunBuffers {
 
 fn buffer_usage(mode: RunBufferMode, index: usize) -> wgpu::BufferUsages {
     if index == BODY_BUFFER || index == CURVE_BUFFER {
-        wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX
+        let records = wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX;
+        if mode.trig_fill {
+            records | wgpu::BufferUsages::STORAGE
+        } else {
+            records
+        }
     } else {
         mode.usage()
     }
+}
+
+fn tables_hold_arcs(tables: &RecordTables) -> bool {
+    tables.segments.iter().any(segment_holds_arcs)
+}
+
+fn active_fill(mode: RunBufferMode, fill: Option<&ArcTrigFill>) -> Option<&ArcTrigFill> {
+    mode.trig_fill
+        .then(|| fill.expect("a store whose mode fills arc trig rows was handed its fill"))
+}
+
+fn segment_holds_arcs(segment: &RecordSegment) -> bool {
+    segment.lane == RecordLane::Shapes && segment.kinds & (1 << FRAGMENT_KIND_ARC) != 0
 }
 
 /// A recording's tables resident on the GPU, keyed by its command.
@@ -559,10 +631,12 @@ pub(crate) struct ArenaStaging {
     painted: Vec<GradientStopRecord>,
     draws: Vec<RunDrawCall>,
     pub(crate) fill: ShapeFill,
+    arcs: bool,
 }
 
 impl ArenaStaging {
     fn clear(&mut self) {
+        self.arcs = false;
         self.bodies.clear();
         self.curves.clear();
         self.brushes.clear();
@@ -636,6 +710,8 @@ struct ArenaGeneration {
     capacities: [u64; BUFFER_COUNT],
     staged: [Vec<u8>; BUFFER_COUNT],
     bind_group: wgpu::BindGroup,
+    arcs: bool,
+    trig_fill: Option<TrigBindings>,
 }
 
 impl ArenaGeneration {
@@ -660,6 +736,8 @@ impl ArenaGeneration {
             capacities,
             staged: Default::default(),
             bind_group,
+            arcs: false,
+            trig_fill: None,
         }
     }
 
@@ -753,7 +831,7 @@ impl ArenaTables {
                 current.map_or(0, |generation| generation.staged[index].len() as u64),
                 tables[index].len() as u64,
                 self.bindings[index],
-                self.alignment,
+                self.table_alignment(index),
                 current.map(|generation| generation.capacities[index]),
             )
         });
@@ -799,6 +877,41 @@ impl ArenaTables {
         }
     }
 
+    fn table_alignment(&self, table: usize) -> u64 {
+        if self.mode.trig_fill && table == BODY_BUFFER {
+            self.alignment * (ELEMENT_SIZES[BODY_BUFFER] / ELEMENT_SIZES[CURVE_BUFFER]) as u64
+        } else {
+            self.alignment
+        }
+    }
+
+    fn fill_trig(
+        &mut self,
+        device: &wgpu::Device,
+        recorder: &mut impl FrameCommandRecorder,
+        fill: &ArcTrigFill,
+    ) {
+        let mut generations = self
+            .generations
+            .iter_mut()
+            .filter(|generation| generation.arcs)
+            .peekable();
+        if generations.peek().is_none() {
+            return;
+        }
+        let mut pass = recorder.begin_frame_compute_pass(device, "Arena Arc Trig Fill");
+        for generation in generations {
+            let rows = generation.staged[CURVE_BUFFER].len() / ELEMENT_SIZES[CURVE_BUFFER];
+            let bind_group = generation.trig_fill.get_or_insert_with(|| {
+                fill.bind(
+                    &generation.buffers[BODY_BUFFER],
+                    &generation.buffers[CURVE_BUFFER],
+                )
+            });
+            fill.dispatch(&mut pass, bind_group, rows as u32);
+        }
+    }
+
     fn stage_pending(
         &mut self,
         device: &wgpu::Device,
@@ -823,6 +936,7 @@ impl ArenaTables {
         let keep = self.generations.len().saturating_sub(1);
         self.generations.drain(..keep);
         for generation in &mut self.generations {
+            generation.arcs = false;
             for staged in &mut generation.staged {
                 staged.clear();
             }
@@ -841,6 +955,7 @@ pub(crate) struct RunStore {
     strip_indices: [StripIndexBuffer; ARC_BUCKETS],
     frame: u64,
     fill_stats: bool,
+    trig_fill: Option<ArcTrigFill>,
 }
 
 impl RunStore {
@@ -875,6 +990,25 @@ impl RunStore {
             scratch_stops: Vec::new(),
             strip_indices: Default::default(),
             frame: 0,
+            trig_fill: None,
+        }
+    }
+
+    pub(crate) fn attach_trig_fill(&mut self, fill: ArcTrigFill) {
+        debug_assert!(
+            self.mode.trig_fill,
+            "only a filling mode runs the arc trig fill"
+        );
+        self.trig_fill = Some(fill);
+    }
+
+    pub(crate) fn fill_arena_trig(
+        &mut self,
+        device: &wgpu::Device,
+        recorder: &mut impl FrameCommandRecorder,
+    ) {
+        if let Some(fill) = active_fill(self.mode, self.trig_fill.as_ref()) {
+            self.arena.fill_trig(device, recorder, fill);
         }
     }
 
@@ -1031,6 +1165,7 @@ impl RunStore {
         let layout = &self.layout;
         let frame = self.frame;
         let mode = self.mode;
+        let trig_fill = active_fill(mode, self.trig_fill.as_ref());
         let scratch_stops = &mut self.scratch_stops;
         let entry = self.stored.entry(command).or_insert_with(|| StoredRun {
             buffers: RunBuffers::new(
@@ -1072,21 +1207,15 @@ impl RunStore {
                 ],
             );
             let previous = entry.recorder.tables();
-            stats += entry.buffers.write_changed(
+            stats += entry.buffers.upload_records(
                 device,
                 recorder,
-                BODY_BUFFER,
-                previous.shapes.bodies(),
-                tables.shapes.bodies(),
-                first_use || fresh[BODY_BUFFER],
-            );
-            stats += entry.buffers.write_changed(
-                device,
-                recorder,
-                CURVE_BUFFER,
-                previous.shapes.curves(),
-                tables.shapes.curves(),
-                first_use || fresh[CURVE_BUFFER],
+                (previous, tables),
+                [
+                    first_use || fresh[BODY_BUFFER],
+                    first_use || fresh[CURVE_BUFFER],
+                ],
+                trig_fill,
             );
             stats += entry.buffers.write_changed(
                 device,
@@ -1227,6 +1356,7 @@ impl RunStore {
             let class_segments = mode
                 .storage
                 .then(|| band_class_segments(segment.band_class));
+            staging.arcs |= segment_holds_arcs(segment);
             let mut segment_complete = true;
             for index in segment.range() {
                 if skipped < from {
@@ -1332,6 +1462,7 @@ impl RunStore {
                 bytemuck::cast_slice(&staging.placements),
             ],
         );
+        self.arena.generations[placed.generation].arcs |= staging.arcs;
         self.arena.chunks[chunk] = placed;
         let fill = self.fill_stats.then_some(staging.fill);
         self.arena.staging = staging;

@@ -328,6 +328,7 @@ override SHAPE_TIER: u32 = TIER_STORE;
 // Whether banded arcs draw as strips on this tier; false on the uniform
 // floor, which draws every record as its quad.
 override SHAPE_BANDS: bool = true;
+override SHAPE_TRIG_FILLED: bool = false;
 // Which records the pipeline draws turned: a layer drawn in place under a
 // turn grows its quads by `BAND_QUAD_MARGIN`, so the pixels a turned edge
 // crosses outside the rect are shaded too, and its fragments evaluate their
@@ -377,6 +378,7 @@ struct RecordGeometry {
     rect: vec4<f32>,
     canonicalize: bool,
     scale: f32,
+    trig: vec4<f32>,
 }
 
 fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry {
@@ -395,6 +397,11 @@ fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry 
     geometry.rect = vec4<f32>(left, top, right - left, bottom - top);
     geometry.canonicalize = canonicalize;
     geometry.scale = scale;
+    if (kind == RECORD_KIND_ARC) {
+        geometry.trig = arc_row(record);
+    } else if ((record.flags & RECORD_ARC_BANDED) != 0u) {
+        geometry.trig = FULL_TURN_TRIG;
+    }
     return geometry;
 }
 
@@ -549,7 +556,7 @@ fn shape_output(
         let low = min(start, end) - reach;
         output.rect = vec4<f32>(low, max(start, end) + reach - low);
     } else if (kind == RECORD_KIND_ARC) {
-        output.radii = arc_trig(record.arc_normalized.x, record.arc_normalized.y);
+        output.radii = geometry.trig;
         let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
         output.stroke_params = vec4<f32>(
             0.0,
@@ -666,9 +673,13 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
     if (SHAPE_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
         let segments = 1u << ((record.flags >> RECORD_BAND_CLASS_SHIFT) & RECORD_BAND_CLASS_MASK);
         if (local >= segments * 2u + 2u) {
-            return pinned(band_position(record, placement, segments, 1u, segments), placement);
+            return pinned(
+                band_position(record, placement, geometry.trig, segments, 1u, segments),
+                placement,
+            );
         }
-        let position = band_position(record, placement, local >> 1u, local & 1u, segments);
+        let position =
+            band_position(record, placement, geometry.trig, local >> 1u, local & 1u, segments);
         return shape_output(record, placement, geometry, position);
     }
     if (local >= 4u) {
@@ -851,17 +862,25 @@ fn fs_interior(input: InteriorOutput) -> @location(0) vec4<f32> {
     return input.color;
 }
 
+const FULL_TURN_TRIG: vec4<f32> = vec4<f32>(0.0, -1.0, 0.0, -1.0);
+
 // A band's trig from its normalized start and sweep: the mid-angle sine and
 // cosine and the half-sweep sine and cosine, with the full circle's
-// sentinel. Derived here, per vertex, rather than recorded per arc on the
-// CPU; `cranpose_ui_graphics::arc_trig` mirrors it.
+// sentinel. `cranpose_ui_graphics::arc_trig` mirrors it.
 fn arc_trig(start: f32, sweep: f32) -> vec4<f32> {
     if (sweep >= TAU && start == 0.0) {
-        return vec4<f32>(0.0, -1.0, 0.0, -1.0);
+        return FULL_TURN_TRIG;
     }
     let half = clamp(sweep, 0.0, TAU) * 0.5;
     let mid = start + half;
     return vec4<f32>(sin(mid), cos(mid), max(sin(half), 0.0), cos(half));
+}
+
+fn arc_row(record: ShapeRecord) -> vec4<f32> {
+    if (SHAPE_TRIG_FILLED) {
+        return record.radii;
+    }
+    return arc_trig(record.arc_normalized.x, record.arc_normalized.y);
 }
 
 // A line record in device space: its midpoint, the unit direction from its
@@ -927,6 +946,7 @@ fn line_coverage(p: vec2<f32>, frame: vec4<f32>, params: vec4<f32>, cap: u32) ->
 fn band_position(
     record: ShapeRecord,
     placement: Placement,
+    trig: vec4<f32>,
     boundary: u32,
     side: u32,
     segments: u32,
@@ -939,7 +959,6 @@ fn band_position(
     let margin = select(BAND_MARGIN, BAND_QUAD_MARGIN, segments == 1u);
     let ring_half = max((outer - inner) * 0.5, 0.0) + margin;
     if (segments == 1u) {
-        let trig = arc_trig(record.arc_normalized.x, record.arc_normalized.y);
         let half_width = mid * trig.z + ring_half;
         let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
         let cap_width = (mid + ring_half) * trig.z + margin * trig.w;
@@ -1088,10 +1107,10 @@ fn sdf_stroked_rounded_rect(
 // half-planes.
 //
 // The two direction vectors are (sin, cos) of the sweep's midpoint angle and
-// of the half sweep. They are constants of the shape, so the vertex stage
-// computes them once per vertex (`arc_trig`) instead of this shader paying
-// four transcendentals on every fragment — in an arc-heavy scene that is by
-// far the largest ALU term of the whole pipeline.
+// of the half sweep. They are constants of the shape, so they arrive with
+// the record (`arc_row`) instead of this shader paying four transcendentals
+// on every fragment — in an arc-heavy scene that is by far the largest ALU
+// term of the whole pipeline.
 fn sdf_arc_band(
     p: vec2<f32>,
     center: vec2<f32>,

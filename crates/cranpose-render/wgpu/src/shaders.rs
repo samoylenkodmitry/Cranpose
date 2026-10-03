@@ -42,6 +42,12 @@ pub(crate) fn storage_shape_shader() -> String {
     source
 }
 
+pub(crate) fn filling_shape_shader() -> String {
+    let mut source = storage_shape_shader();
+    source.push_str(cranpose_ui_graphics::framework_shaders::ARC_TRIG_FILL_WGSL);
+    source
+}
+
 /// The line of `blur_fs.wgsl` that the kernel's pair taps replace.
 const BLUR_KERNEL_PAIRS_MARKER: &str = "    // BLUR_KERNEL_PAIRS\n";
 

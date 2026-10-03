@@ -10,6 +10,7 @@ pub use debug_toggles::{
 pub use offscreen::composition_bytes_per_pixel;
 pub use render::presentable_root_usages;
 mod ablation;
+mod arc_trig_fill;
 mod capture_hash;
 mod collect;
 mod draw_pass;

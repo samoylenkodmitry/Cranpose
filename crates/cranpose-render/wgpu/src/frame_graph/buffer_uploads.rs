@@ -21,13 +21,7 @@ impl BufferUploads {
         let Some(size) = wgpu::BufferSize::new(bytes.len() as u64) else {
             return 0;
         };
-        let encoder = encoder.unwrap_or_else(|| {
-            self.before_passes.get_or_insert_with(|| {
-                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Frame Buffer Uploads"),
-                })
-            })
-        });
+        let encoder = encoder.unwrap_or_else(|| before_passes_in(&mut self.before_passes, device));
         self.belt
             .get_or_insert_with(|| {
                 wgpu::util::StagingBelt::new(device.clone(), STAGING_CHUNK_BYTES)
@@ -36,6 +30,10 @@ impl BufferUploads {
             .copy_from_slice(bytes);
         self.frame_bytes += size.get();
         size.get()
+    }
+
+    pub(crate) fn before_passes(&mut self, device: &wgpu::Device) -> &mut wgpu::CommandEncoder {
+        before_passes_in(&mut self.before_passes, device)
     }
 
     pub(crate) fn take_before_passes(&mut self) -> Option<wgpu::CommandEncoder> {
@@ -66,6 +64,17 @@ impl BufferUploads {
         }
         self.frame_bytes = 0;
     }
+}
+
+fn before_passes_in<'a>(
+    before_passes: &'a mut Option<wgpu::CommandEncoder>,
+    device: &wgpu::Device,
+) -> &'a mut wgpu::CommandEncoder {
+    before_passes.get_or_insert_with(|| {
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("Frame Buffer Uploads"),
+        })
+    })
 }
 
 #[cfg(test)]

@@ -34,6 +34,7 @@ use web_time::Instant;
 use crate::{
     DebugCpuAllocationStats,
     ablation::{Ablation, ShapeAblation},
+    arc_trig_fill::ArcTrigFill,
     collect::LayerScene,
     debug_toggles::DebugToggle,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
@@ -1000,7 +1001,9 @@ pub(crate) fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
 
 /// The shape shader's source for `mode`, built when its module is parsed.
 fn shape_shader_source(mode: RunBufferMode) -> fn() -> Cow<'static, str> {
-    if mode.storage {
+    if mode.trig_fill {
+        || Cow::Owned(shaders::filling_shape_shader())
+    } else if mode.storage {
         || Cow::Owned(shaders::storage_shape_shader())
     } else {
         || Cow::Borrowed(shaders::SHADER)
@@ -1069,8 +1072,12 @@ pub(crate) fn create_render_pipeline_logged<'a>(
     mut descriptor: wgpu::RenderPipelineDescriptor<'a>,
 ) -> wgpu::RenderPipeline {
     descriptor.cache = cache;
+    build_pipeline_logged(tag, || device.create_render_pipeline(&descriptor))
+}
+
+pub(crate) fn build_pipeline_logged<T>(tag: &str, build: impl FnOnce() -> T) -> T {
     let started = Instant::now();
-    let pipeline = device.create_render_pipeline(&descriptor);
+    let pipeline = build();
     log::info!(
         "[pipeline-create] {tag} {:.1}ms on {}",
         instant_ms(started, Instant::now()),
@@ -1604,6 +1611,7 @@ pub(crate) fn create_shape_pipeline(
         ("SHAPE_TURNS", turns.constant()),
         ("SHAPE_TIER", f64::from(tier as u8)),
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
+        ("SHAPE_TRIG_FILLED", f64::from(u8::from(mode.trig_fill))),
         ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
         ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
     ];
@@ -2950,7 +2958,7 @@ impl GpuRenderer {
         device.set_device_lost_callback(|reason, message| {
             log::error!("[gpu-device] device lost ({reason:?}): {message}");
         });
-        let run_store = RunStore::new(
+        let mut run_store = RunStore::new(
             &device,
             RunBufferMode::for_device(&device, adapter_downlevel),
         );
@@ -3050,24 +3058,38 @@ impl GpuRenderer {
         let effects_ms = instant_ms(effects_started, Instant::now());
         let mut frame_graph_executor = WgpuFrameGraphExecutor::new();
         frame_graph_executor.init_pass_timing(&device, &queue);
+        let shape_shader = SharedShader::new(
+            &device,
+            adapter_backend,
+            "Shape Shader",
+            shape_shader_source(run_store.mode()),
+            &[Some(&uniform_bind_group_layout), Some(run_store.layout())],
+        );
+        if run_store.mode().trig_fill {
+            let fill = ArcTrigFill::new(
+                &device,
+                adapter_backend,
+                pipeline_cache.clone(),
+                shape_shader.clone(),
+            );
+            if first_screen.contains(&crate::arc_trig_fill::FIRST_SCREEN_KEY) {
+                fill.warm(&pipeline_compiler);
+            }
+            run_store.attach_trig_fill(fill);
+        }
         let shape_pipelines = ShapePipelines::new(
             ShapePipelineFactory {
                 device: Arc::clone(&device),
                 cache: pipeline_cache.clone(),
                 format: composition_format,
-                shader: SharedShader::new(
-                    &device,
-                    adapter_backend,
-                    "Shape Shader",
-                    shape_shader_source(run_store.mode()),
-                    &[Some(&uniform_bind_group_layout), Some(run_store.layout())],
-                ),
+                shader: shape_shader,
                 mode: run_store.mode(),
             },
             adapter_backend,
             &pipeline_compiler,
             first_screen
                 .into_iter()
+                .filter(|&bits| bits != crate::arc_trig_fill::FIRST_SCREEN_KEY)
                 .filter_map(ShapePipelineKey::from_bits),
         );
         let image_layouts = [
@@ -4064,6 +4086,7 @@ impl GpuRenderer {
         upload += self
             .text_glyph_run_arena
             .stage_pending(&self.device, recorder);
+        self.run_store.fill_arena_trig(&self.device, recorder);
         self.frame_stats.record_command_stats(upload);
     }
     /// Claims this frame's next viewport uniform slot for `params`.

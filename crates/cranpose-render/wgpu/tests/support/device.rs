@@ -71,6 +71,11 @@ impl HeadlessDevice {
         })
     }
 
+    pub fn without(mut self, flags: wgpu::DownlevelFlags) -> Self {
+        self.downlevel.remove(flags);
+        self
+    }
+
     /// Gives `renderer` this device. With [`Pipelines::Inline`] it compiles
     /// every pipeline where first needed, so its frames never draw with a
     /// stand-in: what a reference renderer needs.

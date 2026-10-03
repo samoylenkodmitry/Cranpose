@@ -1039,6 +1039,14 @@ pub(crate) trait FrameCommandRecorder {
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_>;
 
+    fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_>;
+
+    fn begin_frame_compute_pass(
+        &mut self,
+        device: &wgpu::Device,
+        label: &'static str,
+    ) -> wgpu::ComputePass<'_>;
+
     /// A pass with one color attachment that loads with `load_op` and
     /// stores, the shape of every pass this renderer records.
     fn begin_color_pass<'p>(
@@ -1129,6 +1137,13 @@ pub(crate) trait FrameCommandRecorder {
     fn recorded_pass_count(&self) -> u32;
 }
 
+fn compute_pass_descriptor(label: &'static str) -> wgpu::ComputePassDescriptor<'static> {
+    wgpu::ComputePassDescriptor {
+        label: Some(label),
+        timestamp_writes: None,
+    }
+}
+
 impl FrameCommandRecorder for PassContext<'_> {
     fn stage_frame_buffer_copy(
         &mut self,
@@ -1171,6 +1186,22 @@ impl FrameCommandRecorder for PassContext<'_> {
             fence_profile::split(self.device, self.encoder, Some(&bucket));
         }
         crate::pass_timing::begin_timed_render_pass(self.pass_timer, self.encoder, descriptor)
+    }
+
+    fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_> {
+        self.encoder
+            .begin_compute_pass(&compute_pass_descriptor(label))
+    }
+
+    fn begin_frame_compute_pass(
+        &mut self,
+        device: &wgpu::Device,
+        label: &'static str,
+    ) -> wgpu::ComputePass<'_> {
+        self.uploads
+            .buffers
+            .before_passes(device)
+            .begin_compute_pass(&compute_pass_descriptor(label))
     }
 
     fn upload_uniform(
@@ -1374,6 +1405,22 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_> {
         crate::pass_timing::begin_timed_render_pass(self.pass_timer, &mut self.encoder, descriptor)
+    }
+
+    fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_> {
+        self.encoder
+            .begin_compute_pass(&compute_pass_descriptor(label))
+    }
+
+    fn begin_frame_compute_pass(
+        &mut self,
+        device: &wgpu::Device,
+        label: &'static str,
+    ) -> wgpu::ComputePass<'_> {
+        self.uploads
+            .buffers
+            .before_passes(device)
+            .begin_compute_pass(&compute_pass_descriptor(label))
     }
 
     fn upload_uniform(
