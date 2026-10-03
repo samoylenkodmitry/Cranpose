@@ -1025,9 +1025,6 @@ const SHAPE_KIND_LINE: u32 = 3u;
 // and whether any record carries a clip. A fixed value folds the branches
 // the batch cannot take out of the program; the record data stays the same,
 // so the general program and every specialised one shade one record alike.
-// Conditions join these constants with `&` and `|`, never `&&` and `||`:
-// naga lowers a short circuit to a branch on a local variable, which a
-// driver folds only after inlining every call behind it.
 override SHAPE_KIND_FIXED: i32 = -1;
 override SHAPE_KINDS: u32 = 15u;
 override DRAWS_STROKES: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_STROKE)) != 0u;
