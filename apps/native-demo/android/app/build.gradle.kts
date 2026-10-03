@@ -27,7 +27,7 @@ android {
 
 dependencies {
     implementation(project(":cranpose"))
-    implementation("net.java.dev.jna:jna:5.17.0@aar")
+    implementation("net.java.dev.jna:jna:5.19.1@aar")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
 }

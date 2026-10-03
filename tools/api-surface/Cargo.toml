@@ -2,7 +2,7 @@
 name = "cranpose-api-surface"
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
+license = "Apache-2.0 OR MIT"
 publish = false
 description = "Dumps the reachable public API surface of the Cranpose workspace crates and of an AndroidX Compose checkout, for docs/compose_api_parity.md"
 

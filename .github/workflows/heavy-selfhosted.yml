@@ -44,7 +44,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -117,7 +117,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -176,14 +176,14 @@ jobs:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provision toolchain
         run: scripts/ci/provision_toolchain.sh
       - name: Build both targets and launch the simulator
         run: just watchos
       - name: Keep bundles and simulator evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: watchos
           path: |
@@ -205,7 +205,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -295,7 +295,7 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -331,7 +331,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Skip work this exact tree already passed
         id: memo

@@ -33,7 +33,7 @@ jobs:
     outputs:
       should_publish: ${{ steps.sync.outputs.should_publish }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Provision the pinned Rust toolchain
@@ -132,7 +132,7 @@ jobs:
       #
       # What this job must publish is the tree the tag names. That is true
       # whatever main does next.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -198,7 +198,7 @@ jobs:
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
@@ -292,7 +292,7 @@ jobs:
         run: |
           set -euo pipefail
           rustup target add wasm32-unknown-unknown
-          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
+          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.15.0 --locked
           apps/isolated-demo/build-web.sh
 
       # The Gradle plugin has no Maven coordinate: apps/isolated-demo/android's

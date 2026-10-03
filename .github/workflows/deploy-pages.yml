@@ -22,7 +22,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Release publication can move a tag onto the generated version-bump
           # commit. Resolve the selected ref at job start so queued deployments
@@ -61,7 +61,7 @@ jobs:
           fi
 
       - name: Install wasm-pack
-        run: cargo install wasm-pack --version 0.13.1
+        run: cargo install wasm-pack --version 0.15.0
 
       - name: Build WASM demo (optimized for size)
         run: |
@@ -87,7 +87,7 @@ jobs:
           "$(brew --prefix)/bin/gtar" --version
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: ${{ env.CRANPOSE_PAGES_SITE_ROOT }}
           retention-days: 1
@@ -101,4 +101,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

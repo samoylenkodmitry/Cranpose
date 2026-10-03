@@ -38,7 +38,7 @@ command -v just >/dev/null || cargo install just --locked
 # startup and two binaries. nextest runs them in parallel -- same 5452 tests in
 # 62s. It does not run doctests, so `just test` still runs those with cargo.
 command -v cargo-nextest >/dev/null \
-    || cargo install cargo-nextest --locked --version 0.9.145
+    || cargo install cargo-nextest --locked --version 0.9.146
 
 # One sccache server serves every job on a host, and it keeps the cache
 # directory of whichever job started it. The robot and Android jobs name the

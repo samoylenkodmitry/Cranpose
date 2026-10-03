@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Cranpose desktop demo application."
 repository = "https://github.com/samoylenkodmitry/cranpose"
-license = "Apache-2.0"
+license = "Apache-2.0 OR MIT"
 autotests = false
 
 [lints]
@@ -85,7 +85,7 @@ env_logger = { version = "0.11", optional = true }
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
-wasm-bindgen-futures = "0.4.78"
+wasm-bindgen-futures = "0.4.79"
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
 

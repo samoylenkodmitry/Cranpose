@@ -3,7 +3,7 @@ name = "isolated-demo"
 version = "0.1.0"
 edition = "2021"
 description = "Isolated Cranpose demo using crates.io dependencies"
-license = "Apache-2.0"
+license = "Apache-2.0 OR MIT"
 repository = "https://github.com/samoylenkodmitry/cranpose"
 publish = false
 
@@ -69,7 +69,7 @@ web-sys = { version = "0.3", features = [
 ] }
 
 [target.wasm32-unknown-unknown.dependencies]
-wasm-bindgen-futures = "0.4.71"
+wasm-bindgen-futures = "0.4.79"
 
 [workspace]
 
