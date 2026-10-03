@@ -102,7 +102,21 @@ impl PipelineKey {
 
 struct ShaderSource {
     text: Arc<str>,
-    module: LazyGpuResource<Option<wgpu::ShaderModule>>,
+    module: LazyGpuResource<Option<RuntimeShaderModule>>,
+}
+
+impl ShaderSource {
+    fn new(shader: &RuntimeShader) -> Self {
+        Self {
+            text: Arc::from(shader.source()),
+            module: LazyGpuResource::new("runtime-shader module"),
+        }
+    }
+}
+
+struct RuntimeShaderModule {
+    module: wgpu::ShaderModule,
+    position_independent: bool,
 }
 
 #[derive(Clone)]
@@ -116,6 +130,16 @@ struct PipelineFactory {
     counters: Arc<BuildCounters>,
 }
 
+impl PipelineFactory {
+    fn module(&self, source: &str, source_hash: u64) -> Option<RuntimeShaderModule> {
+        #[cfg(test)]
+        self.counters
+            .modules
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        create_runtime_shader_module(&self.device, source, source_hash, self.backend)
+    }
+}
+
 #[cfg(test)]
 #[derive(Default)]
 struct BuildCounters {
@@ -127,7 +151,7 @@ struct PipelineJob {
     factory: PipelineFactory,
     source: Arc<str>,
     key: PipelineKey,
-    module: LazyGpuResource<Option<wgpu::ShaderModule>>,
+    module: LazyGpuResource<Option<RuntimeShaderModule>>,
     constants: Vec<(&'static str, f64)>,
     variant: ShaderDrawVariant,
 }
@@ -143,14 +167,7 @@ impl PipelineJob {
             variant,
         } = self;
         let module = module
-            .get_or_init(factory.backend, || {
-                #[cfg(test)]
-                factory
-                    .counters
-                    .modules
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                create_runtime_shader_module(&factory.device, &source, key.source, factory.backend)
-            })
+            .get_or_init(factory.backend, || factory.module(&source, key.source))
             .as_ref()?;
         let mode = key.mode;
         #[cfg(test)]
@@ -171,7 +188,7 @@ impl PipelineJob {
             ),
             "RuntimeShader Effect Pipeline",
             &factory.layout,
-            module,
+            &module.module,
             "effect_fs",
             &constants,
             wgpu::ColorTargetState {
@@ -298,10 +315,7 @@ impl ShaderPipelineCache {
         let source = self
             .sources
             .entry(key.source)
-            .or_insert_with(|| ShaderSource {
-                text: Arc::from(shader.source()),
-                module: LazyGpuResource::new("runtime-shader module"),
-            });
+            .or_insert_with(|| ShaderSource::new(shader));
         let mut constants = if key.overrides == 0 {
             Vec::new()
         } else {
@@ -323,6 +337,24 @@ impl ShaderPipelineCache {
             constants,
             variant,
         }
+    }
+
+    pub(crate) fn position_independent(&mut self, shader: &RuntimeShader) -> bool {
+        if shader.position_independent() {
+            return true;
+        }
+        let hash = shader.source_hash();
+        let source = self
+            .sources
+            .entry(hash)
+            .or_insert_with(|| ShaderSource::new(shader));
+        source
+            .module
+            .get_or_init(self.factory.backend, || {
+                self.factory.module(&source.text, hash)
+            })
+            .as_ref()
+            .is_some_and(|module| module.position_independent)
     }
 
     fn slot(&mut self, key: PipelineKey) -> LazyGpuResource<Option<wgpu::RenderPipeline>> {
@@ -408,20 +440,26 @@ fn create_runtime_shader_module(
     source: &str,
     source_hash: u64,
     backend: wgpu::Backend,
-) -> Option<wgpu::ShaderModule> {
-    if let Err(err) = validate_runtime_shader_source(source, backend) {
-        log::warn!(
-            "Disabling RuntimeShader (hash={source_hash}): {err}. Falling back to pass-through."
-        );
-        return None;
-    }
-    Some(device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("RuntimeShader Effect"),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
-    }))
+) -> Option<RuntimeShaderModule> {
+    let position_independent = match validate_runtime_shader_source(source, backend) {
+        Ok(independent) => independent,
+        Err(err) => {
+            log::warn!(
+                "Disabling RuntimeShader (hash={source_hash}): {err}. Falling back to pass-through."
+            );
+            return None;
+        }
+    };
+    Some(RuntimeShaderModule {
+        module: device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("RuntimeShader Effect"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        }),
+        position_independent,
+    })
 }
 
-fn validate_runtime_shader_source(source: &str, backend: wgpu::Backend) -> Result<(), String> {
+fn validate_runtime_shader_source(source: &str, backend: wgpu::Backend) -> Result<bool, String> {
     let module =
         naga::front::wgsl::parse_str(source).map_err(|err| format!("WGSL parse error: {err}"))?;
 
@@ -433,13 +471,13 @@ fn validate_runtime_shader_source(source: &str, backend: wgpu::Backend) -> Resul
         return Err("missing required vertex entry point `fullscreen_vs`".to_string());
     }
 
-    let has_effect_fs = module
+    let fragment = module
         .entry_points
         .iter()
-        .any(|ep| ep.stage == ShaderStage::Fragment && ep.name == "effect_fs");
-    if !has_effect_fs {
+        .position(|ep| ep.stage == ShaderStage::Fragment && ep.name == "effect_fs");
+    let Some(fragment) = fragment else {
         return Err("missing required fragment entry point `effect_fs`".to_string());
-    }
+    };
 
     let mut validator = naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
@@ -451,7 +489,52 @@ fn validate_runtime_shader_source(source: &str, backend: wgpu::Backend) -> Resul
 
     validate_runtime_shader_backend_support(&module, &module_info, backend)?;
 
-    Ok(())
+    Ok(fragment_position_independent(
+        &module,
+        &module_info,
+        fragment,
+    ))
+}
+
+fn is_position(binding: &Option<naga::Binding>) -> bool {
+    matches!(
+        binding,
+        Some(naga::Binding::BuiltIn(naga::BuiltIn::Position { .. }))
+    )
+}
+
+fn fragment_position_independent(
+    module: &naga::Module,
+    info: &naga::valid::ModuleInfo,
+    fragment: usize,
+) -> bool {
+    let function = &module.entry_points[fragment].function;
+    let info = info.get_entry_point(fragment);
+    function.expressions.iter().all(|(handle, expression)| {
+        let naga::Expression::FunctionArgument(index) = expression else {
+            return true;
+        };
+        let argument = &function.arguments[*index as usize];
+        if is_position(&argument.binding) {
+            return info[handle].ref_count == 0;
+        }
+        let naga::TypeInner::Struct { members, .. } = &module.types[argument.ty].inner else {
+            return true;
+        };
+        if !members.iter().any(|member| is_position(&member.binding)) {
+            return true;
+        }
+        let safe_uses = function
+            .expressions
+            .iter()
+            .filter(|(_, expression)| {
+                matches!(expression,
+                naga::Expression::AccessIndex { base, index }
+                    if *base == handle && !is_position(&members[*index as usize].binding))
+            })
+            .count();
+        safe_uses == info[handle].ref_count
+    })
 }
 
 fn validate_runtime_shader_backend_support(
