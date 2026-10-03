@@ -407,6 +407,7 @@ impl ShaderPipelineCache {
             || key == general
             || !self.compiler.is_active()
             || !shader.specialization_exact()
+            || (self.pipelines.contains_key(&key) && !self.ready(general))
         {
             let fit = if key.is_general() {
                 ShaderPipelineFit::General

@@ -110,7 +110,6 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
 }
 
 const FILE_LAYOUT: u32 = 3;
-const FIRST_SCREEN_KEY_LAYOUT: &[u8; 8] = b"CPKEY001";
 
 /// Names what fills a file: its layout, the framework's WGSL sources, and
 /// this crate's version, which changes with each release of the shader
@@ -158,7 +157,7 @@ impl ExactSizeIterator for FirstScreenKeys<'_> {
 
 fn current_contents(file: &[u8]) -> Option<Contents<'_>> {
     let (build, rest) = file.split_first_chunk::<8>()?;
-    let rest = rest.strip_prefix(FIRST_SCREEN_KEY_LAYOUT.as_slice())?;
+    let rest = rest.strip_prefix(crate::render::ShapePipelineKey::DISK_LAYOUT.as_slice())?;
     let (count, rest) = rest.split_first_chunk::<4>()?;
     let keys_len = usize::try_from(u32::from_le_bytes(*count))
         .ok()?
@@ -174,7 +173,7 @@ fn file_bytes(first_screen: impl ExactSizeIterator<Item = u64>, blob: &[u8]) -> 
     let count = u32::try_from(first_screen.len()).ok()?;
     let mut bytes = Vec::with_capacity(20 + first_screen.len() * 8 + blob.len());
     bytes.extend_from_slice(&blob_key());
-    bytes.extend_from_slice(FIRST_SCREEN_KEY_LAYOUT);
+    bytes.extend_from_slice(&crate::render::ShapePipelineKey::DISK_LAYOUT);
     bytes.extend_from_slice(&count.to_le_bytes());
     for key in first_screen {
         bytes.extend_from_slice(&key.to_le_bytes());

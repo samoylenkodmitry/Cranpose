@@ -1434,6 +1434,9 @@ impl KeyReader {
 }
 
 impl ShapePipelineKey {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY001";
+
     /// The key as a number a later launch reads back with
     /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
     #[cfg(not(target_arch = "wasm32"))]
