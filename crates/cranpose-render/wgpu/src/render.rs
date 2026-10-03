@@ -3247,8 +3247,8 @@ impl GpuRenderer {
         renderer
     }
 
-    fn ensure_shape_pipeline(&mut self, key: ShapePipelineKey) {
-        self.shape_pipelines.ensure(key);
+    fn ensure_shape_pipeline(&mut self, key: ShapePipelineKey, vertices: u64) {
+        self.shape_pipelines.ensure(key, vertices);
     }
 
     /// Queues the shader warm-ups requested since the last call, each at the
@@ -4112,6 +4112,7 @@ impl GpuRenderer {
             recorder.record_pass();
         }
         self.stage_frame_uploads(recorder);
+        self.shape_pipelines.request_wanted();
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
         Ok(())
@@ -4539,10 +4540,10 @@ impl GpuRenderer {
 
     /// Prepares `key`'s pipeline and, in a pass with a depth buffer, the
     /// one laying down its opaque interiors.
-    fn ensure_run_pipelines(&mut self, key: ShapePipelineKey) {
-        self.ensure_shape_pipeline(key);
+    fn ensure_run_pipelines(&mut self, key: ShapePipelineKey, vertices: u64) {
+        self.ensure_shape_pipeline(key, vertices);
         if let Some(interior) = key.interior() {
-            self.ensure_shape_pipeline(interior);
+            self.ensure_shape_pipeline(interior, vertices);
         }
     }
 
@@ -4605,7 +4606,13 @@ impl GpuRenderer {
             self.viewport_uniforms
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
         for draw in &draws {
-            self.ensure_run_pipelines(draw.key);
+            self.ensure_run_pipelines(
+                draw.key,
+                crate::run_store::draw_vertices(
+                    draw.records.end - draw.records.start,
+                    draw.band_class,
+                ),
+            );
         }
         StoreRunBatch {
             command,
@@ -4649,26 +4656,27 @@ impl GpuRenderer {
         let ablation = self.ablation.shape;
         let turn = viewport.transform;
         let turns = ShapeTurns::of(turn, mixed_turns);
-        let mut keys: SmallVec<[ShapePipelineKey; 4]> = SmallVec::new();
-        let taken =
-            self.run_store
-                .append_arena(chunk, run, window, (root_scale, turn), &mut |segment| {
-                    let key = Self::run_pipeline_key(
-                        segment,
-                        placement,
-                        RunTier::Arena,
-                        ablation,
-                        turns,
-                        (depth, clip),
-                        viewport,
-                    );
-                    if !keys.contains(&key) {
-                        keys.push(key);
-                    }
-                    key
-                });
-        for key in keys {
-            self.ensure_run_pipelines(key);
+        let mut keys: SmallVec<[(ShapePipelineKey, u64); 4]> = SmallVec::new();
+        let taken = self.run_store.append_arena(
+            chunk,
+            run,
+            window,
+            (root_scale, turn),
+            &mut |segment| {
+                Self::run_pipeline_key(
+                    segment,
+                    placement,
+                    RunTier::Arena,
+                    ablation,
+                    turns,
+                    (depth, clip),
+                    viewport,
+                )
+            },
+            &mut keys,
+        );
+        for (key, vertices) in keys {
+            self.ensure_run_pipelines(key, vertices);
         }
         taken
     }

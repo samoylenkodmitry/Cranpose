@@ -6,7 +6,7 @@ use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_
 use cranpose_ui_graphics::{
     ARC_BUCKETS, BrushRecord, Color, FRAGMENT_KIND_ARC, GradientStopRecord, GraphicsLayer,
     RecordLane, RecordSegment, RecordTables, ShapeRecordBody, ShapeRecordCurve,
-    band_class_segments, strip_index_pattern, strip_indices,
+    band_class_segments, strip_index_pattern, strip_indices, strip_vertices,
 };
 use smallvec::SmallVec;
 use wgpu::util::DeviceExt;
@@ -944,6 +944,10 @@ impl ArenaTables {
     }
 }
 
+pub(crate) fn draw_vertices(records: u32, band_class: u8) -> u64 {
+    u64::from(records) * u64::from(strip_vertices(band_class_segments(band_class)))
+}
+
 /// The GPU home of every run: retained tables per command, and the
 /// per-pass arena chunks small runs are copied into.
 pub(crate) struct RunStore {
@@ -1329,6 +1333,7 @@ impl RunStore {
         window: std::ops::Range<u32>,
         (root_scale, turn): (f32, SegmentTransform),
         key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
+        wanted: &mut SmallVec<[(crate::render::ShapePipelineKey, u64); 4]>,
     ) -> u32 {
         let from = window.start;
         let mode = self.mode;
@@ -1357,17 +1362,15 @@ impl RunStore {
                 .storage
                 .then(|| band_class_segments(segment.band_class));
             staging.arcs |= segment_holds_arcs(segment);
-            let mut segment_complete = true;
+            let segment_start = taken;
+            let mut stopped = false;
             for index in segment.range() {
                 if skipped < from {
                     skipped += 1;
                     continue;
                 }
-                if from + taken >= window.end {
-                    return taken;
-                }
-                if staging.bodies.len() >= record_limit {
-                    segment_complete = false;
+                if from + taken >= window.end || staging.bodies.len() >= record_limit {
+                    stopped = true;
                     break;
                 }
                 let mut body = tables.shapes.bodies()[index];
@@ -1381,7 +1384,7 @@ impl RunStore {
                             && (staging.brushes.len() >= BRUSH_CHUNK
                                 || staging.stops.len() + brush.stop_count as usize > STOP_CHUNK)
                         {
-                            segment_complete = false;
+                            stopped = true;
                             break;
                         }
                         painted_stops(&tables.stops[stop_range], &layer, &mut staging.painted);
@@ -1410,8 +1413,15 @@ impl RunStore {
                 }
                 taken += 1;
             }
-            if !segment_complete {
-                return taken;
+            if taken > segment_start {
+                let vertices = draw_vertices(taken - segment_start, band_class);
+                match wanted.iter_mut().find(|(wanted, _)| *wanted == key) {
+                    Some((_, total)) => *total += vertices,
+                    None => wanted.push((key, vertices)),
+                }
+            }
+            if stopped {
+                break;
             }
         }
         taken
