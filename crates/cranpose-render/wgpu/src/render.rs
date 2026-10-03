@@ -3740,6 +3740,7 @@ impl GpuRenderer {
             );
         }
         if result.is_ok() {
+            self.shape_pipelines.finish_frame();
             returns.outcome = PresentOutcome::Presented;
         }
         result

@@ -49,6 +49,7 @@ pub(crate) struct ShapePipelines {
     /// Whether a draw takes the general pipeline while its specialized one
     /// builds on the background compiler.
     asynchronous: bool,
+    first_frame: bool,
     #[cfg(not(target_arch = "wasm32"))]
     created: web_time::Instant,
 }
@@ -75,6 +76,7 @@ impl ShapePipelines {
         Self {
             slots,
             asynchronous,
+            first_frame: true,
             #[cfg(not(target_arch = "wasm32"))]
             created: web_time::Instant::now(),
         }
@@ -84,16 +86,23 @@ impl ShapePipelines {
         self.slots.settle_demanded();
     }
 
+    pub(crate) fn finish_frame(&mut self) {
+        self.first_frame = false;
+    }
+
     pub(crate) fn ensure(&mut self, key: ShapePipelineKey) {
         let need = self.slots.need(key);
         #[cfg(not(target_arch = "wasm32"))]
-        if need.first && self.created.elapsed() <= crate::pipeline_disk_cache::FIRST_SCREEN_SPAN {
+        if need.first
+            && (self.first_frame
+                || self.created.elapsed() <= crate::pipeline_disk_cache::FIRST_SCREEN_SPAN)
+        {
             crate::pipeline_disk_cache::note_first_screen_pipeline(key.to_bits());
         }
         if need.ready {
             return;
         }
-        if self.asynchronous && !key.is_general() {
+        if self.asynchronous && !self.first_frame && !key.is_general() {
             self.slots.build(key.general());
             self.slots.request(key);
         } else {
@@ -153,8 +162,11 @@ impl<B: KeyedBuild> Slots<B> {
         }
     }
 
-    fn entry(&mut self, key: ShapePipelineKey) -> &mut Entry<B::Output> {
-        self.entries.entry(key).or_insert_with(|| Entry {
+    fn entry(
+        entries: &mut HashMap<ShapePipelineKey, Entry<B::Output>>,
+        key: ShapePipelineKey,
+    ) -> &mut Entry<B::Output> {
+        entries.entry(key).or_insert_with(|| Entry {
             value: Arc::new(OnceLock::new()),
             needed: false,
             queued: false,
@@ -163,7 +175,7 @@ impl<B: KeyedBuild> Slots<B> {
 
     /// Records that a draw needs `key`.
     pub(crate) fn need(&mut self, key: ShapePipelineKey) -> Need {
-        let entry = self.entry(key);
+        let entry = Self::entry(&mut self.entries, key);
         let first = !entry.needed;
         entry.needed = true;
         Need {
@@ -194,7 +206,7 @@ impl<B: KeyedBuild> Slots<B> {
     fn queue(&mut self, key: ShapePipelineKey, lane: CompileLane) {
         let builder = Arc::clone(&self.builder);
         let stopped = Arc::clone(&self.stopped);
-        let entry = self.entry(key);
+        let entry = Self::entry(&mut self.entries, key);
         entry.queued = true;
         let value = Arc::clone(&entry.value);
         self.compiler.enqueue(lane, move || {
@@ -207,8 +219,9 @@ impl<B: KeyedBuild> Slots<B> {
     /// Builds `key`'s value here unless a job already built it, or waits
     /// for the job building it.
     pub(crate) fn build(&mut self, key: ShapePipelineKey) {
-        let builder = Arc::clone(&self.builder);
-        self.entry(key).value.get_or_init(|| builder.build(key));
+        Self::entry(&mut self.entries, key)
+            .value
+            .get_or_init(|| self.builder.build(key));
     }
 
     pub(crate) fn get(&self, key: ShapePipelineKey) -> Option<&B::Output> {

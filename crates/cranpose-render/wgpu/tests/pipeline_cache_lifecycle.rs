@@ -231,20 +231,8 @@ fn a_relaunch_builds_its_first_screens_shapes_before_its_first_frame() {
     let mut first_launch =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
     let first_launch_builds = first_frame_builds(&mut first_launch);
-    let dropped_at = SystemTime::now();
     drop(first_launch);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while !fs::metadata(&cache)
-        .and_then(|metadata| metadata.modified())
-        .is_ok_and(|modified| modified >= dropped_at)
-    {
-        assert!(
-            Instant::now() < deadline,
-            "the first launch did not write what it drew with: {}",
-            cache.display()
-        );
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    wait_for_cache(&cache);
 
     let mut relaunch =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");

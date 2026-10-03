@@ -70,11 +70,45 @@ fn capture(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u
         .pixels
 }
 
+#[test]
+fn the_first_scene_is_specialized_before_gameplay_starts() {
+    let _lock = support::gpu_test_lock();
+    for stored in [false, true] {
+        let mut renderer = support::LockedRenderer::compiling_in_background_beside_locked()
+            .expect("Vulkan renderer");
+        let scene = graph(stored, 0.0);
+        let first = capture(&mut renderer, &scene);
+        let stats = renderer.last_frame_stats().expect("first frame statistics");
+        assert!(support::distinct_colors(&first) > 8);
+        assert_eq!(
+            stats.shape_pipeline_fallback_draws, 0,
+            "the first presentation must not leave its shape shaders compiling during gameplay"
+        );
+        assert!(stats.shape_specialized_draws > 0);
+        for phase in [3.75, 7.5, 0.0] {
+            let animated = capture(&mut renderer, &graph(stored, phase));
+            assert_eq!(
+                renderer
+                    .last_frame_stats()
+                    .expect("animated frame statistics")
+                    .shape_pipeline_fallback_draws,
+                0
+            );
+            if phase == 0.0 {
+                assert_eq!(first, animated);
+            } else {
+                assert_ne!(first, animated);
+            }
+        }
+    }
+}
+
 fn check_transition(limits: wgpu::Limits) {
     for stored in [false, true] {
         let mut renderer =
             support::headless_renderer_configured(limits.clone(), wgpu::Backends::VULKAN)
                 .expect("Vulkan renderer");
+        capture(&mut renderer, &RenderGraph::new(LayerNode::default()));
         let scene = graph(stored, 0.0);
         let first = capture(&mut renderer, &scene);
         let first_stats = renderer.last_frame_stats().expect("first frame statistics");
