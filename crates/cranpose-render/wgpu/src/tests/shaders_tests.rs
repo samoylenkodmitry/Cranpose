@@ -153,12 +153,15 @@ fn offset_shader_validates_for_webgpu() {
 }
 
 #[test]
-fn shape_shader_validates_for_webgpu_in_both_table_forms() {
+fn shape_shader_validates_for_webgpu_in_every_table_form() {
     if let Err(err) = validate_wgsl_module(super::SHADER) {
         panic!("shape.wgsl must validate for WebGPU: {err}");
     }
     if let Err(err) = validate_wgsl_module(&storage_shape_shader()) {
         panic!("shape.wgsl with storage tables must validate for WebGPU: {err}");
+    }
+    if let Err(err) = validate_wgsl_module(&super::filling_shape_shader()) {
+        panic!("shape.wgsl with storage tables and the arc trig fill must validate: {err}");
     }
 }
 
@@ -362,7 +365,7 @@ fn shape_shader_declares_the_record_layout_the_recorder_writes() {
         "fn vs_record_gradient_fill(",
         "fn fs_gradient_fill(",
         "override BRUSH_KIND_FIXED: i32",
-        "override TIER_ARENA: bool",
+        "override SHAPE_TIER: u32",
     ] {
         assert!(
             super::SHADER.contains(needle),

@@ -1088,14 +1088,6 @@ fn composites_nothing(child: &ChildLayer) -> bool {
                     .is_none_or(RenderEffect::preserves_transparency)))
 }
 
-fn shader_tail_composites(child: &ChildLayer, shader: &RuntimeShader) -> bool {
-    let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
-    shader.position_independent()
-        && shader.substrates().is_empty()
-        && child.blend_mode == BlendMode::SrcOver
-        && (plain || shader.batched_source())
-}
-
 /// The child's layer bounds in the pixels of a surface at `surface_rect`.
 fn layer_pixel_rect(child: &ChildLayer, surface_rect: DeviceRect, scale: f32) -> [f32; 4] {
     let bounds = DeviceRect::from_logical(child.local_bounds, scale);
@@ -1136,33 +1128,6 @@ fn shader_tail_composite(
             alpha: child.alpha,
         },
     }
-}
-
-fn shader_tail_over_surface(
-    child: &ChildLayer,
-    surface: &SurfaceRender,
-    snap: Point,
-    z: usize,
-    scale: f32,
-    visible: DeviceRect,
-) -> Option<ResolvedComposite> {
-    let Some(RenderEffect::Shader { shader }) = &child.effect else {
-        return None;
-    };
-    let dest = surface.grid_dest?;
-    let visible = dest.intersect(visible)?;
-    shader_tail_composites(child, shader).then(|| {
-        shader_tail_composite(
-            child,
-            shader,
-            z,
-            surface.source.clone(),
-            dest,
-            layer_pixel_rect(child, surface.rect, surface.scale),
-            grid_rounded_mask(child, snap, scale),
-            visible,
-        )
-    })
 }
 
 const TRANSPARENT_SOURCE: &str = "transparent source";
@@ -3939,7 +3904,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(surface) = resolved else {
             return Ok(());
         };
-        if let Some(composite) = shader_tail_over_surface(child, &surface, snap, z, scale, shown) {
+        if let Some(composite) =
+            self.shader_tail_over_surface(child, &surface, snap, z, scale, shown)
+        {
             pass.pending.push(composite);
             return Ok(());
         }
@@ -4053,13 +4020,46 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(CompositeSource { texture, content })
     }
 
-    /// Renders the child's content into its own texture, from the layer
-    /// cache when its pixels are a pure function of its content.
-    /// A translated child that draws nothing itself and whose effect is one
-    /// runtime shader composites as that shader drawn straight into the final
-    /// pass over a shared transparent input, so it costs no surface pass.
-    /// The shader must apply the child's clip and alpha itself, unless the
-    /// child has neither.
+    fn shader_tail_composites(&mut self, child: &ChildLayer, shader: &RuntimeShader) -> bool {
+        let plain = child.alpha >= 1.0 && child.rounded_clip.is_none();
+        shader.substrates().is_empty()
+            && child.blend_mode == BlendMode::SrcOver
+            && (plain || shader.batched_source())
+            && self
+                .renderer
+                .effect_renderer
+                .shader_cache
+                .position_independent(shader)
+    }
+
+    fn shader_tail_over_surface(
+        &mut self,
+        child: &ChildLayer,
+        surface: &SurfaceRender,
+        snap: Point,
+        z: usize,
+        scale: f32,
+        visible: DeviceRect,
+    ) -> Option<ResolvedComposite> {
+        let Some(RenderEffect::Shader { shader }) = &child.effect else {
+            return None;
+        };
+        let dest = surface.grid_dest?;
+        let visible = dest.intersect(visible)?;
+        self.shader_tail_composites(child, shader).then(|| {
+            shader_tail_composite(
+                child,
+                shader,
+                z,
+                surface.source.clone(),
+                dest,
+                layer_pixel_rect(child, surface.rect, surface.scale),
+                grid_rounded_mask(child, snap, scale),
+                visible,
+            )
+        })
+    }
+
     fn shader_only_child(
         &mut self,
         child: &ChildLayer,
@@ -4075,7 +4075,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         let support =
             child_composite_support(child, shader.output_support(), snap, scale, visible)?;
-        if !draws_nothing(&child.content) || !shader_tail_composites(child, shader) {
+        if !draws_nothing(&child.content) || !self.shader_tail_composites(child, shader) {
             return None;
         }
         let surface_logical = child_surface_rect(child, scale)?;

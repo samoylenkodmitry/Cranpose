@@ -10,7 +10,8 @@ const BUFFERED_MISSES: i64 = BUFFERED_MISSES_TO_RISE as i64;
 
 /// When a pacer from [`buffered`] came down to two frames queued, after
 /// the display showed its unpaced queue full.
-const STUFFED: i64 = FULL_HISTORY as i64 * VSYNC;
+const READY_FRAMES: i64 = (MISS_WINDOW + 1) as i64;
+const STUFFED: i64 = READY_FRAMES * VSYNC;
 
 /// When a pacer from [`shallow`] has settled at one frame queued: the hold
 /// at two brings it down, and a stable stretch settles it there.
@@ -19,15 +20,18 @@ const SETTLED: i64 = STUFFED + FIRST_HOLD_NS + STABLE_LEVEL_NS;
 /// A pacer paced at two frames queued since [`STUFFED`].
 fn buffered() -> FramePacer {
     let mut pacer = FramePacer::default();
-    shown_run(&mut pacer, 0, FULL_HISTORY as i64, 3);
-    assert_eq!(pacer.level(STUFFED), Some(Level::Buffered));
+    shown_run(&mut pacer, 0, READY_FRAMES, 3);
+    assert_eq!(pacer.level(STUFFED, VSYNC), Some(Level::Buffered));
     pacer
 }
 
 /// A pacer settled at one frame queued, the last frame shown at [`SETTLED`].
 fn shallow() -> FramePacer {
     let mut pacer = buffered();
-    assert_eq!(pacer.level(STUFFED + FIRST_HOLD_NS), Some(Level::Shallow));
+    assert_eq!(
+        pacer.level(STUFFED + FIRST_HOLD_NS, VSYNC),
+        Some(Level::Shallow)
+    );
     pacer.record_shown(SETTLED, 1, VSYNC);
     pacer
 }
@@ -58,7 +62,7 @@ fn begin_at(pacer: &mut FramePacer, vsync: i64) -> bool {
 }
 
 fn level(pacer: &mut FramePacer, now: i64) -> Option<Level> {
-    pacer.level(now)
+    pacer.level(now, VSYNC)
 }
 
 #[test]
@@ -79,24 +83,26 @@ fn frames_start_unpaced_until_the_display_reports_one() {
 
 #[test]
 fn a_loop_that_leaves_the_queue_shallow_stays_unpaced() {
-    let mut pacer = FramePacer::default();
-    let now = shown_run(&mut pacer, 0, 60, 2);
-    assert_eq!(
-        level(&mut pacer, now + 60 * FIRST_HOLD_NS),
-        Some(Level::Unpaced)
-    );
+    for depth in [0, 1] {
+        let mut pacer = FramePacer::default();
+        let now = shown_run(&mut pacer, 0, 60, depth);
+        assert!(begin_at(&mut pacer, now));
+        assert!(pacer.begin_frame(now + VSYNC / 2, now, VSYNC));
+        assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+    }
 }
 
 #[test]
 fn a_loop_that_fills_the_queue_is_paced_at_two_frames_queued() {
     let mut pacer = FramePacer::default();
-    let now = shown_run(&mut pacer, 0, FULL_HISTORY as i64 - 1, 3);
-    let now = shown_run(&mut pacer, now, 1, 2);
+    let now = shown_run(&mut pacer, 0, READY_FRAMES, 1);
+    let now = shown_run(&mut pacer, now, FULL_HISTORY as i64 - 1, 3);
+    let now = shown_run(&mut pacer, now, 1, 1);
     let now = shown_run(&mut pacer, now, FULL_HISTORY as i64 - 1, 3);
     assert_eq!(
         level(&mut pacer, now),
         Some(Level::Unpaced),
-        "a queue that fell to two now and then is not full"
+        "a queue that fell to one has not stayed ahead of the display"
     );
     let now = shown_run(&mut pacer, now, 1, 3);
     assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
@@ -106,6 +112,81 @@ fn a_loop_that_fills_the_queue_is_paced_at_two_frames_queued() {
     );
     assert!(begin_at(&mut pacer, now + VSYNC));
     assert!(!pacer.begin_frame(now + VSYNC * 3 / 2, now + VSYNC, VSYNC));
+}
+
+#[test]
+fn a_swapchain_capped_at_two_queued_frames_can_drain_to_one() {
+    let mut pacer = FramePacer::default();
+    let now = shown_run(&mut pacer, 0, READY_FRAMES, 2);
+    assert!(begin_at(&mut pacer, now));
+    assert_eq!(pacer.current_level(), Some(Level::Buffered));
+    assert!(!pacer.begin_frame(now + VSYNC / 2, now, VSYNC));
+
+    let shallow_at = now + FIRST_HOLD_NS;
+    shown_run(
+        &mut pacer,
+        shallow_at - HISTORY as i64 * VSYNC,
+        HISTORY as i64,
+        2,
+    );
+    assert!(!begin_at(&mut pacer, shallow_at));
+    assert_eq!(pacer.current_level(), Some(Level::Shallow));
+    pacer.record_shown(shallow_at + VSYNC, 1, VSYNC);
+    assert!(begin_at(&mut pacer, shallow_at + VSYNC));
+    assert!(!pacer.begin_frame(shallow_at + VSYNC * 3 / 2, shallow_at + VSYNC, VSYNC));
+}
+
+#[test]
+fn an_intermittently_two_deep_queue_keeps_starting_due_frames() {
+    let mut pacer = FramePacer::default();
+    for frame in 0..120 {
+        let now = (frame + 1) * VSYNC;
+        let depth = if frame % (FULL_HISTORY as i64 - 1) == 0 {
+            1
+        } else {
+            2
+        };
+        pacer.record_shown(now, depth, VSYNC);
+        assert!(begin_at(&mut pacer, now));
+        assert!(pacer.begin_frame(now + VSYNC / 2, now, VSYNC));
+        assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+    }
+}
+
+#[test]
+fn a_slow_loop_stays_unpaced_even_when_its_swapchain_stays_full() {
+    for depth in [2, 3] {
+        for missed_every in [1, 20] {
+            for late_periods in [2, 5] {
+                let mut pacer = FramePacer::default();
+                let mut now = VSYNC;
+                for frame in 0..256 {
+                    let periods = if frame % missed_every == 0 {
+                        late_periods
+                    } else {
+                        1
+                    };
+                    now += periods * VSYNC;
+                    pacer.record_shown(now, depth, VSYNC);
+                    assert!(begin_at(&mut pacer, now));
+                    assert!(pacer.begin_frame(now + VSYNC / 2, now, VSYNC));
+                    assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn an_unpaced_loop_does_not_use_a_full_queue_reported_before_it_was_idle() {
+    for depth in [2, 3] {
+        let mut pacer = FramePacer::default();
+        let now = shown_run(&mut pacer, 0, READY_FRAMES, depth);
+        let resumed = now + SHOWN_FRESH_VSYNCS * VSYNC;
+        assert!(begin_at(&mut pacer, resumed));
+        assert!(pacer.begin_frame(resumed + VSYNC / 2, resumed, VSYNC));
+        assert_eq!(pacer.current_level(), Some(Level::Unpaced));
+    }
 }
 
 #[test]
@@ -278,8 +359,8 @@ fn a_retried_buffered_queue_holds_through_the_misses_a_loop_that_keeps_up_makes(
     let now = missed_run(&mut pacer, SETTLED + VSYNC, SHALLOW_MISSES);
     let now = missed_run(&mut pacer, now + VSYNC, BUFFERED_MISSES);
     assert_eq!(level(&mut pacer, now), Some(Level::Unpaced));
-    let now = shown_run(&mut pacer, now + VSYNC, FULL_HISTORY as i64, 3);
-    let back = now + FIRST_HOLD_NS;
+    let now = shown_run(&mut pacer, now + VSYNC, READY_FRAMES, 2);
+    let back = shown_run(&mut pacer, now, FIRST_HOLD_NS / VSYNC + 1, 2);
     assert_eq!(level(&mut pacer, back), Some(Level::Buffered));
     let now = missed_run(&mut pacer, back, 2);
     assert_eq!(
@@ -340,13 +421,13 @@ fn an_unpaced_loop_comes_down_only_once_its_hold_is_over_and_the_queue_is_full()
     let now = missed_run(&mut pacer, SETTLED + VSYNC, SHALLOW_MISSES);
     let now = missed_run(&mut pacer, now + VSYNC, BUFFERED_MISSES);
     assert_eq!(level(&mut pacer, now), Some(Level::Unpaced));
-    let now = shown_run(&mut pacer, now + VSYNC, FULL_HISTORY as i64, 3);
+    let now = shown_run(&mut pacer, now + VSYNC, READY_FRAMES, 2);
     assert_eq!(
         level(&mut pacer, now),
         Some(Level::Unpaced),
         "a full queue waits for the hold"
     );
-    let over = now + FIRST_HOLD_NS;
+    let over = shown_run(&mut pacer, now, FIRST_HOLD_NS / VSYNC + 1, 2);
     assert_eq!(level(&mut pacer, over), Some(Level::Buffered));
     assert_eq!(
         level(&mut pacer, over + FIRST_HOLD_NS),
@@ -493,75 +574,16 @@ fn rising_a_level_drops_the_lead() {
     );
 }
 
-/// A pacer running unpaced whose frames each waited `wait_ns` for the
-/// renderer over one hold window.
-fn unpaced_waiting(wait_ns: i64) -> FramePacer {
+#[test]
+fn an_unpaced_loop_starts_every_due_frame_at_once() {
     let mut pacer = FramePacer::default();
-    pacer.record_shown(VSYNC, 2, VSYNC);
+    pacer.record_shown(VSYNC, 1, VSYNC);
     assert_eq!(pacer.current_level(), Some(Level::Unpaced));
-    for _ in 0..crate::unpaced_hold::WINDOW {
-        pacer.record_handoff_wait(wait_ns, VSYNC);
-    }
-    pacer
-}
-
-#[test]
-fn an_unpaced_frame_that_would_only_wait_for_the_renderer_is_held_after_a_return() {
-    let mut pacer = unpaced_waiting(12_000_000);
-    let hold = pacer.current_hold_ns();
-    assert_eq!(hold, 5_000_000);
     let vsync = 10 * VSYNC;
-    let returned = vsync + 1_000_000;
-    pacer.note_frame_returned(returned);
-
-    let during = returned + hold / 2;
-    assert!(!pacer.slot_open(during, vsync, VSYNC));
-    assert_eq!(
-        pacer.lead_wake_ns(during, vsync, VSYNC),
-        Some(returned + hold),
-        "the loop wakes when the hold ends"
-    );
-    assert!(!pacer.begin_frame(during, vsync, VSYNC));
-
-    let after = returned + hold;
-    assert!(pacer.slot_open(after, vsync, VSYNC));
-    assert!(pacer.begin_frame(after, vsync, VSYNC));
-    assert!(
-        pacer.begin_frame(after + 1_000_000, vsync, VSYNC),
-        "only a return starts another hold"
-    );
-}
-
-#[test]
-fn a_loop_that_finds_the_renderer_free_is_not_held() {
-    let mut pacer = unpaced_waiting(1_000_000);
-    assert_eq!(pacer.current_hold_ns(), 0);
-    pacer.note_frame_returned(10 * VSYNC);
-    assert!(pacer.begin_frame(10 * VSYNC, 10 * VSYNC, VSYNC));
-}
-
-#[test]
-fn a_paced_loop_ignores_hand_off_waits() {
-    let mut pacer = buffered();
-    for _ in 0..crate::unpaced_hold::WINDOW {
-        pacer.record_handoff_wait(12_000_000, VSYNC);
+    for frame in 0..60 {
+        let now = vsync + frame * 4_000_000;
+        assert!(pacer.slot_open(now, vsync, VSYNC));
+        assert_eq!(pacer.lead_wake_ns(now, vsync, VSYNC), None);
+        assert!(pacer.begin_frame(now, vsync, VSYNC));
     }
-    assert_eq!(pacer.current_hold_ns(), 0);
-    pacer.note_frame_returned(STUFFED);
-    assert_eq!(pacer.lead_wake_ns(STUFFED, STUFFED, VSYNC), None);
-}
-
-#[test]
-fn a_change_of_level_stops_holding_frames() {
-    let mut pacer = unpaced_waiting(12_000_000);
-    assert_eq!(pacer.current_hold_ns(), 5_000_000);
-    let now = shown_run(&mut pacer, 2 * VSYNC, FULL_HISTORY as i64, 3);
-    pacer.note_frame_returned(now);
-    assert_eq!(level(&mut pacer, now), Some(Level::Buffered));
-    assert_eq!(pacer.current_hold_ns(), 0);
-    assert_eq!(
-        pacer.lead_wake_ns(now, now, VSYNC),
-        None,
-        "a hold noted before the change is gone with it"
-    );
 }

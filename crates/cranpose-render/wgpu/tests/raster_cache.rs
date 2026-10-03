@@ -734,11 +734,20 @@ fn an_animated_shader_keeps_animating_inside_a_cacheable_container() {
     );
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum ShaderCoordinates {
+    Uv,
+    Fragment,
+    ForwardedFragment,
+    FragmentArgument,
+}
+
 fn scaled_shader_graph(
     scale: f32,
     separate_pass: bool,
-    pixel_position: bool,
+    coordinates: ShaderCoordinates,
     empty: bool,
+    declared: bool,
 ) -> RenderGraph {
     let mut shaded = shaded_runtime_shader_layer(30_201, 0.25);
     shaded.cache_policy = CachePolicy::None;
@@ -762,31 +771,39 @@ fn scaled_shader_graph(
             ),
         ]
     };
-    let source = format!(
-        "{}\n{}",
-        cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
-        r"@fragment
-fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let source = textureSample(input_texture, input_sampler, input.uv);
-    let light = 0.1 + 0.4 * input.uv.x * input.uv.y;
-    return vec4<f32>(mix(source.rgb * source.rgb, vec3<f32>(source.a), light), source.a);
-}"
-    );
-    let source = if pixel_position {
-        source
-            .replace(
-                "input.uv.x * input.uv.y",
-                "fract(input.position.x / 17.0) * fract(input.position.y / 11.0)",
-            )
-            .replace(
-                "textureSample(input_texture, input_sampler, input.uv)",
-                "vec4<f32>(0.2, 0.3, 0.4, 0.7)",
-            )
-    } else {
-        source
+    let (helper, argument, light) = match coordinates {
+        ShaderCoordinates::Uv => ("", "input: VertexOutput", "input.uv.x * input.uv.y"),
+        ShaderCoordinates::Fragment => (
+            "",
+            "input: VertexOutput",
+            "fract(input.position.x / 17.0) * fract(input.position.y / 11.0)",
+        ),
+        ShaderCoordinates::ForwardedFragment => (
+            "fn lighting(input: VertexOutput) -> f32 { return fract(input.position.x / 17.0) * fract(input.position.y / 11.0); }",
+            "input: VertexOutput",
+            "lighting(input)",
+        ),
+        ShaderCoordinates::FragmentArgument => (
+            "",
+            "@builtin(position) position: vec4<f32>",
+            "fract(position.x / 17.0) * fract(position.y / 11.0)",
+        ),
     };
+    let sample = if coordinates == ShaderCoordinates::Uv && !empty {
+        "textureSample(input_texture, input_sampler, input.uv)"
+    } else {
+        "vec4<f32>(0.2, 0.3, 0.4, 0.7)"
+    };
+    let source = format!(
+        "{}\n{helper}\n@fragment fn effect_fs({argument}) -> @location(0) vec4<f32> {{
+            let source = {sample};
+            let light = 0.1 + 0.4 * {light};
+            return vec4<f32>(mix(source.rgb * source.rgb, vec3<f32>(source.a), light), source.a);
+        }}",
+        cranpose_ui_graphics::RUNTIME_SHADER_PRELUDE_WGSL,
+    );
     let mut shader = cranpose_ui_graphics::RuntimeShader::new(&source);
-    if !pixel_position {
+    if coordinates == ShaderCoordinates::Uv && declared {
         shader.set_position_independent(true);
     }
     let effect = RenderEffect::runtime_shader(shader);
@@ -804,7 +821,13 @@ fn child_shader_compositing_preserves_coordinates_at_the_display_scale() {
     for density in [1.0, 1.5, 3.0] {
         let width = (180.0 * density) as u32;
         let height = (140.0 * density) as u32;
-        renderer.scene_mut().graph = Some(scaled_shader_graph(1.0, false, false, false));
+        renderer.scene_mut().graph = Some(scaled_shader_graph(
+            1.0,
+            false,
+            ShaderCoordinates::Uv,
+            false,
+            true,
+        ));
         renderer
             .capture_frame_with_scale(width, height, density)
             .expect("translated shader composite");
@@ -812,15 +835,21 @@ fn child_shader_compositing_preserves_coordinates_at_the_display_scale() {
             .last_frame_stats()
             .expect("translated stats")
             .pass_count;
-        for (pixel_position, empty) in [(false, false), (true, false), (true, true)] {
+        for (coordinates, empty) in [
+            (ShaderCoordinates::Uv, false),
+            (ShaderCoordinates::Fragment, false),
+            (ShaderCoordinates::Fragment, true),
+            (ShaderCoordinates::ForwardedFragment, true),
+            (ShaderCoordinates::FragmentArgument, true),
+        ] {
             for scale in [1.0, 0.85, 1.03, 1.25, 2.0] {
                 renderer.scene_mut().graph =
-                    Some(scaled_shader_graph(scale, true, pixel_position, empty));
+                    Some(scaled_shader_graph(scale, true, coordinates, empty, true));
                 let expected = renderer
                     .capture_frame_with_scale(width, height, density)
                     .expect("separate shader pass");
                 renderer.scene_mut().graph =
-                    Some(scaled_shader_graph(scale, false, pixel_position, empty));
+                    Some(scaled_shader_graph(scale, false, coordinates, empty, true));
                 let actual = renderer
                     .capture_frame_with_scale(width, height, density)
                     .expect("shader composite");
@@ -831,13 +860,62 @@ fn child_shader_compositing_preserves_coordinates_at_the_display_scale() {
                     &actual.pixels,
                     1,
                 );
-                if !pixel_position {
+                if coordinates == ShaderCoordinates::Uv {
                     let stats = renderer.last_frame_stats().expect("frame stats");
                     assert_eq!(
                         stats.pass_count, translated_passes,
                         "a position-independent shader already on the display grid needs no extra pass: scale={scale}, density={density}, {stats:?}"
                     );
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn uv_only_child_shaders_need_no_opt_in_to_avoid_extra_surface_passes() {
+    let mut renderer = support::headless_renderer().expect("headless renderer");
+    for density in [1.0, 1.5, 3.0] {
+        let width = (180.0 * density) as u32;
+        let height = (140.0 * density) as u32;
+        for empty in [false, true] {
+            for scale in [1.0, 0.85, 1.25] {
+                renderer.scene_mut().graph = Some(scaled_shader_graph(
+                    scale,
+                    false,
+                    ShaderCoordinates::Uv,
+                    empty,
+                    true,
+                ));
+                renderer
+                    .capture_frame_with_scale(width, height, density)
+                    .expect("prepare transparent shader input");
+                let expected = renderer
+                    .capture_frame_with_scale(width, height, density)
+                    .expect("declared shader");
+                let expected_stats = renderer.last_frame_stats().expect("declared stats");
+                renderer.scene_mut().graph = Some(scaled_shader_graph(
+                    scale,
+                    false,
+                    ShaderCoordinates::Uv,
+                    empty,
+                    false,
+                ));
+                let actual = renderer
+                    .capture_frame_with_scale(width, height, density)
+                    .expect("undeclared shader");
+                let actual_stats = renderer.last_frame_stats().expect("undeclared stats");
+                assert_eq!(
+                    actual_stats.pass_count, expected_stats.pass_count,
+                    "UV-only shaders must fuse without a declaration: empty={empty}, scale={scale}, density={density}, {actual_stats:?}"
+                );
+                support::assert_bytes_within(
+                    "inferred UV shader",
+                    width,
+                    &expected.pixels,
+                    &actual.pixels,
+                    0,
+                );
             }
         }
     }

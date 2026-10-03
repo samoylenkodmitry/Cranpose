@@ -9,6 +9,7 @@ mod alpha_mask_pixels;
 mod animated_layer_transform;
 mod annotated_text_baselines;
 mod arc_tessellation;
+mod arc_trig_fill;
 mod backdrop_atlas_parity;
 mod backdrop_pass_batching;
 mod backdrop_reach;

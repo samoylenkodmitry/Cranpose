@@ -644,12 +644,13 @@ impl RuntimeShader {
     /// The renderer may then apply a layer's effect directly in its parent's
     /// pass when the source and destination raster grids match. UVs and the
     /// source metadata keep their meaning; fragment positions belong to the
-    /// render target and can change when a pass is removed.
+    /// render target and can change when a pass is removed. A backend may also
+    /// infer independence from shader validation when this is not declared.
     pub fn set_position_independent(&mut self, independent: bool) {
         self.position_independent = independent;
     }
 
-    /// Whether the shader's output is independent of fragment positions.
+    /// Whether the caller declares independence from fragment positions.
     pub fn position_independent(&self) -> bool {
         self.position_independent
     }

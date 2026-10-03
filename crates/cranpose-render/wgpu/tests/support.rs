@@ -221,6 +221,23 @@ pub fn headless_renderer_configured(
     Ok(with_app_context(renderer, Some(lock)))
 }
 
+pub fn headless_renderer_without(flags: wgpu::DownlevelFlags) -> Result<LockedRenderer, String> {
+    let lock = lock_gpu_test();
+    let device = device::HeadlessDevice::request(
+        wgpu::Backends::all(),
+        wgpu::Limits::default(),
+        "Downlevel Path Test Device",
+    )?
+    .without(flags);
+    let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
+    device.attach(
+        &mut renderer,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        device::Pipelines::Inline,
+    );
+    Ok(with_app_context(renderer, Some(lock)))
+}
+
 pub fn headless_renderer_unencoded() -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
     let renderer = create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8Unorm)?;

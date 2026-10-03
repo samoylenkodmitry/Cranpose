@@ -12,6 +12,7 @@ use cranpose_render_common::{
     },
     style_shared::DrawPlacement,
 };
+use cranpose_render_wgpu::pipelines_created;
 use cranpose_ui_graphics::{BlendMode, Brush, Color, DrawScope, DrawScopeDefault, Rect, Size};
 use support::SIZE;
 
@@ -68,6 +69,25 @@ fn capture(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u
         .capture_frame_with_scale(SIZE, SIZE, 1.25)
         .expect("capture")
         .pixels
+}
+
+#[test]
+fn changing_shape_storage_does_not_compile_another_fallback_on_the_frame_thread() {
+    let _lock = support::gpu_test_lock();
+    let mut renderer =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("Vulkan renderer");
+    let first = capture(&mut renderer, &graph(false, 0.0));
+    assert!(support::distinct_colors(&first) > 8);
+    let prepared = pipelines_created();
+    for stored in [true, false, true] {
+        let current = capture(&mut renderer, &graph(stored, 0.0));
+        assert_eq!(first, current, "storage changed the rendered picture");
+        assert_eq!(
+            pipelines_created(),
+            prepared,
+            "changing storage must reuse the prepared fallback while specializations build"
+        );
+    }
 }
 
 fn check_transition(limits: wgpu::Limits) {

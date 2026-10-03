@@ -34,6 +34,7 @@ use web_time::Instant;
 use crate::{
     DebugCpuAllocationStats,
     ablation::{Ablation, ShapeAblation},
+    arc_trig_fill::ArcTrigFill,
     collect::LayerScene,
     debug_toggles::DebugToggle,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
@@ -1000,7 +1001,9 @@ pub(crate) fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
 
 /// The shape shader's source for `mode`, built when its module is parsed.
 fn shape_shader_source(mode: RunBufferMode) -> fn() -> Cow<'static, str> {
-    if mode.storage {
+    if mode.trig_fill {
+        || Cow::Owned(shaders::filling_shape_shader())
+    } else if mode.storage {
         || Cow::Owned(shaders::storage_shape_shader())
     } else {
         || Cow::Borrowed(shaders::SHADER)
@@ -1069,8 +1072,12 @@ pub(crate) fn create_render_pipeline_logged<'a>(
     mut descriptor: wgpu::RenderPipelineDescriptor<'a>,
 ) -> wgpu::RenderPipeline {
     descriptor.cache = cache;
+    build_pipeline_logged(tag, || device.create_render_pipeline(&descriptor))
+}
+
+pub(crate) fn build_pipeline_logged<T>(tag: &str, build: impl FnOnce() -> T) -> T {
     let started = Instant::now();
-    let pipeline = device.create_render_pipeline(&descriptor);
+    let pipeline = build();
     log::info!(
         "[pipeline-create] {tag} {:.1}ms on {}",
         instant_ms(started, Instant::now()),
@@ -1118,13 +1125,12 @@ pub fn pipelines_created_off_frame() -> u64 {
     PIPELINES_CREATED_OFF_FRAME.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Which tier's tables a shape pipeline reads: a stored run under the
-/// placement uniform, or the frame arena where each record names its
-/// placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub(crate) enum RunTier {
-    Store,
-    Arena,
+    Store = 0,
+    Arena = 1,
+    Either = 2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1376,9 +1382,6 @@ impl ShapeTurns {
     }
 }
 
-/// A shape pipeline: its blend, tier and variant, the records it draws
-/// turned, and its depth use. Falling back to the general variant keeps the
-/// blend, tier, turns and depth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapePipelineKey {
     pub(crate) blend_mode: BlendMode,
@@ -1437,13 +1440,7 @@ impl ShapePipelineKey {
     pub(crate) fn to_bits(self) -> u64 {
         let mut bits = KeyWriter::default();
         bits.put(self.blend_mode as u64, 5);
-        bits.put(
-            match self.tier {
-                RunTier::Store => 0,
-                RunTier::Arena => 1,
-            },
-            1,
-        );
+        bits.put(self.tier as u64, 2);
         let variant = self.variant;
         bits.put_byte(variant.kind);
         bits.put_byte(variant.brush);
@@ -1484,9 +1481,11 @@ impl ShapePipelineKey {
     pub(crate) fn from_bits(packed: u64) -> Option<Self> {
         let mut bits = KeyReader(packed);
         let blend_mode = *BlendMode::ALL.get(usize::try_from(bits.take(5)).ok()?)?;
-        let tier = match bits.take(1) {
+        let tier = match bits.take(2) {
             0 => RunTier::Store,
-            _ => RunTier::Arena,
+            1 => RunTier::Arena,
+            2 => RunTier::Either,
+            _ => return None,
         };
         let kind = bits.take_byte();
         let brush = bits.take_byte();
@@ -1562,6 +1561,7 @@ impl ShapePipelineKey {
 
     pub(crate) fn general(self) -> Self {
         Self {
+            tier: RunTier::Either,
             variant: self.variant.general(),
             ..self
         }
@@ -1609,8 +1609,9 @@ pub(crate) fn create_shape_pipeline(
         ),
         ("SHAPE_DITHER", f64::from(u8::from(variant.dither))),
         ("SHAPE_TURNS", turns.constant()),
-        ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
+        ("SHAPE_TIER", f64::from(tier as u8)),
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
+        ("SHAPE_TRIG_FILLED", f64::from(u8::from(mode.trig_fill))),
         ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
         ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
     ];
@@ -2052,14 +2053,14 @@ struct Uniforms {
 }
 
 impl Uniforms {
-    fn of(params: ViewportUniformParams, placement: PlacementData) -> Self {
+    fn of(params: ViewportUniformParams, placement: PlacementData, tier: RunTier) -> Self {
         let (transform, translation, inverse) = params.transform.uniform_parts();
         Self {
             viewport: [params.width as f32, params.height as f32],
             viewport_offset: params.offset,
             transform,
             translation,
-            reserved: [params.depth_base, 0.0],
+            reserved: [params.depth_base, f32::from(tier as u8)],
             inverse,
             origin: params.origin,
             origin_reserved: [0.0; 2],
@@ -2668,7 +2669,7 @@ impl ViewportUniforms {
         recorder: &mut impl FrameCommandRecorder,
     ) -> FrameCommandStats {
         self.uploads.stage_pending(|buffer, offset, bytes| {
-            recorder.stage_buffer_copy(device, buffer, offset, bytes)
+            recorder.stage_frame_buffer_copy(device, buffer, offset, bytes)
         })
     }
 }
@@ -2957,7 +2958,7 @@ impl GpuRenderer {
         device.set_device_lost_callback(|reason, message| {
             log::error!("[gpu-device] device lost ({reason:?}): {message}");
         });
-        let run_store = RunStore::new(
+        let mut run_store = RunStore::new(
             &device,
             RunBufferMode::for_device(&device, adapter_downlevel),
         );
@@ -3057,24 +3058,38 @@ impl GpuRenderer {
         let effects_ms = instant_ms(effects_started, Instant::now());
         let mut frame_graph_executor = WgpuFrameGraphExecutor::new();
         frame_graph_executor.init_pass_timing(&device, &queue);
+        let shape_shader = SharedShader::new(
+            &device,
+            adapter_backend,
+            "Shape Shader",
+            shape_shader_source(run_store.mode()),
+            &[Some(&uniform_bind_group_layout), Some(run_store.layout())],
+        );
+        if run_store.mode().trig_fill {
+            let fill = ArcTrigFill::new(
+                &device,
+                adapter_backend,
+                pipeline_cache.clone(),
+                shape_shader.clone(),
+            );
+            if first_screen.contains(&crate::arc_trig_fill::FIRST_SCREEN_KEY) {
+                fill.warm(&pipeline_compiler);
+            }
+            run_store.attach_trig_fill(fill);
+        }
         let shape_pipelines = ShapePipelines::new(
             ShapePipelineFactory {
                 device: Arc::clone(&device),
                 cache: pipeline_cache.clone(),
                 format: composition_format,
-                shader: SharedShader::new(
-                    &device,
-                    adapter_backend,
-                    "Shape Shader",
-                    shape_shader_source(run_store.mode()),
-                    &[Some(&uniform_bind_group_layout), Some(run_store.layout())],
-                ),
+                shader: shape_shader,
                 mode: run_store.mode(),
             },
             adapter_backend,
             &pipeline_compiler,
             first_screen
                 .into_iter()
+                .filter(|&bits| bits != crate::arc_trig_fill::FIRST_SCREEN_KEY)
                 .filter_map(ShapePipelineKey::from_bits),
         );
         let image_layouts = [
@@ -4059,6 +4074,7 @@ impl GpuRenderer {
             );
             recorder.record_pass();
         }
+        self.stage_frame_uploads(recorder);
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
         Ok(())
@@ -4070,11 +4086,12 @@ impl GpuRenderer {
         upload += self
             .text_glyph_run_arena
             .stage_pending(&self.device, recorder);
+        self.run_store.fill_arena_trig(&self.device, recorder);
         self.frame_stats.record_command_stats(upload);
     }
     /// Claims this frame's next viewport uniform slot for `params`.
     pub(crate) fn claim_uniform_slot(&mut self, params: ViewportUniformParams) -> usize {
-        let uniforms = Uniforms::of(params, PlacementData::zeroed());
+        let uniforms = Uniforms::of(params, PlacementData::zeroed(), RunTier::Arena);
         self.viewport_uniforms
             .claim(&self.device, &self.uniform_bind_group_layout, &uniforms)
     }
@@ -4545,6 +4562,7 @@ impl GpuRenderer {
         let uniforms = Uniforms::of(
             viewport,
             PlacementData::of(&run.placement, root_scale, viewport.transform),
+            RunTier::Store,
         );
         let uniform_slot =
             self.viewport_uniforms

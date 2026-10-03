@@ -632,7 +632,7 @@ impl WgpuFrameGraphExecutor {
             let mut encoder =
                 Self::create_command_encoder(device, Some("Pass Timing Resolve Encoder"));
             timer.resolve_completed_queries(&mut encoder);
-            Self::submit(queue, encoder);
+            Self::submit(queue, encoder, None);
             timer.map_resolved_queries();
         }
         timer.finish_frame();
@@ -786,13 +786,16 @@ impl WgpuFrameGraphExecutor {
             release_pending_transients(&mut self.transient_textures, pending_transient_releases);
             return Err(FrameGraphError::NoDeclaredPasses);
         }
+        let uploads = self.upload_allocators.encode_pending(device);
         self.upload_allocators.buffers.finish();
-        let uploads = self.upload_allocators.finish_frame();
+        self.upload_allocators.finish_frame();
+        let mut before_passes = self.upload_allocators.buffers.take_before_passes();
+        let encoder_count = 1 + u32::from(before_passes.is_some());
         if fence_profile::enabled() {
-            fence_profile::end_frame(device, queue, &mut encoder);
+            fence_profile::end_frame(device, queue, &mut encoder, before_passes.take());
         }
         let (submission, upload_writes) =
-            Self::submit_frame(queue, encoder, self.pass_timer.as_ref());
+            Self::submit_frame(queue, encoder, before_passes, self.pass_timer.as_ref());
         self.upload_allocators.buffers.recall();
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
@@ -800,7 +803,7 @@ impl WgpuFrameGraphExecutor {
         Ok(FrameGraphExecution {
             submission,
             stats: FrameCommandStats {
-                encoder_count: 1,
+                encoder_count,
                 submit_count: 1,
                 pass_count,
                 pass_pixels: take_render_pass_pixels(),
@@ -853,22 +856,37 @@ impl WgpuFrameGraphExecutor {
     }
 
     /// Submits the frame and returns how many buffer writes it carried.
-    fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> (wgpu::SubmissionIndex, u32) {
-        let submission = queue.submit(std::iter::once(encoder.finish()));
+    fn submit(
+        queue: &wgpu::Queue,
+        encoder: wgpu::CommandEncoder,
+        before_passes: Option<wgpu::CommandEncoder>,
+    ) -> (wgpu::SubmissionIndex, u32) {
+        let submission = queue.submit(
+            before_passes
+                .map(wgpu::CommandEncoder::finish)
+                .into_iter()
+                .chain(std::iter::once(encoder.finish())),
+        );
         (submission, take_upload_write_calls())
     }
 
     fn submit_with_timing(
         queue: &wgpu::Queue,
         encoder: wgpu::CommandEncoder,
+        before_passes: Option<wgpu::CommandEncoder>,
     ) -> (wgpu::SubmissionIndex, u32) {
         let Some(threshold_ms) = frame_graph_pass_telemetry_threshold_ms() else {
-            return Self::submit(queue, encoder);
+            return Self::submit(queue, encoder, before_passes);
         };
         let finish_start = Instant::now();
+        let before_passes = before_passes.map(wgpu::CommandEncoder::finish);
         let command_buffer = encoder.finish();
         let submit_start = Instant::now();
-        let submission = queue.submit(std::iter::once(command_buffer));
+        let submission = queue.submit(
+            before_passes
+                .into_iter()
+                .chain(std::iter::once(command_buffer)),
+        );
         let submit_end = Instant::now();
 
         let finish_ms = submit_start.duration_since(finish_start).as_secs_f64() * 1000.0;
@@ -893,9 +911,10 @@ impl WgpuFrameGraphExecutor {
     fn submit_frame(
         queue: &wgpu::Queue,
         encoder: wgpu::CommandEncoder,
+        before_passes: Option<wgpu::CommandEncoder>,
         pass_timer: Option<&PassTimer>,
     ) -> (wgpu::SubmissionIndex, u32) {
-        let submitted = Self::submit_with_timing(queue, encoder);
+        let submitted = Self::submit_with_timing(queue, encoder, before_passes);
         if let Some(timer) = pass_timer {
             timer.frame_submitted(queue);
         }
@@ -999,6 +1018,14 @@ fn log_frame_graph_pass_timing(start: Instant, label: Option<&'static str>, pass
 }
 
 pub(crate) trait FrameCommandRecorder {
+    fn stage_frame_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats;
+
     fn stage_buffer_copy(
         &mut self,
         device: &wgpu::Device,
@@ -1011,6 +1038,14 @@ pub(crate) trait FrameCommandRecorder {
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_>;
+
+    fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_>;
+
+    fn begin_frame_compute_pass(
+        &mut self,
+        device: &wgpu::Device,
+        label: &'static str,
+    ) -> wgpu::ComputePass<'_>;
 
     /// A pass with one color attachment that loads with `load_op` and
     /// stores, the shape of every pass this renderer records.
@@ -1102,7 +1137,25 @@ pub(crate) trait FrameCommandRecorder {
     fn recorded_pass_count(&self) -> u32;
 }
 
+fn compute_pass_descriptor(label: &'static str) -> wgpu::ComputePassDescriptor<'static> {
+    wgpu::ComputePassDescriptor {
+        label: Some(label),
+        timestamp_writes: None,
+    }
+}
+
 impl FrameCommandRecorder for PassContext<'_> {
+    fn stage_frame_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats {
+        self.uploads
+            .stage_frame_buffer_copy(device, buffer, offset, bytes)
+    }
+
     fn stage_buffer_copy(
         &mut self,
         device: &wgpu::Device,
@@ -1111,10 +1164,13 @@ impl FrameCommandRecorder for PassContext<'_> {
         bytes: &[u8],
     ) -> FrameCommandStats {
         FrameCommandStats {
-            upload_bytes: self
-                .uploads
-                .buffers
-                .write(device, self.encoder, buffer, offset, bytes),
+            upload_bytes: self.uploads.buffers.write(
+                device,
+                Some(self.encoder),
+                buffer,
+                offset,
+                bytes,
+            ),
             upload_writes: u32::from(!bytes.is_empty()),
             ..FrameCommandStats::default()
         }
@@ -1124,13 +1180,28 @@ impl FrameCommandRecorder for PassContext<'_> {
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_> {
-        self.uploads.encode_pending(self.device, self.encoder);
         if fence_profile::enabled() {
             self.uploads.buffers.finish();
             let bucket = fence_profile::bucket_label(descriptor);
             fence_profile::split(self.device, self.encoder, Some(&bucket));
         }
         crate::pass_timing::begin_timed_render_pass(self.pass_timer, self.encoder, descriptor)
+    }
+
+    fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_> {
+        self.encoder
+            .begin_compute_pass(&compute_pass_descriptor(label))
+    }
+
+    fn begin_frame_compute_pass(
+        &mut self,
+        device: &wgpu::Device,
+        label: &'static str,
+    ) -> wgpu::ComputePass<'_> {
+        self.uploads
+            .buffers
+            .before_passes(device)
+            .begin_compute_pass(&compute_pass_descriptor(label))
     }
 
     fn upload_uniform(
@@ -1213,10 +1284,17 @@ impl WgpuFrameEncoder<'_> {
         let transient_texture_bytes = self.transient_texture_bytes;
         let copies = self.copies;
         let mut transient_releases = self.transient_releases;
+        let uploads = self.uploads.encode_pending(self.device);
         self.uploads.buffers.finish();
-        let uploads = self.uploads.finish_frame();
-        let (submission, upload_writes) =
-            WgpuFrameGraphExecutor::submit_frame(self.queue, self.encoder, self.pass_timer);
+        self.uploads.finish_frame();
+        let before_passes = self.uploads.buffers.take_before_passes();
+        let encoder_count = 1 + u32::from(before_passes.is_some());
+        let (submission, upload_writes) = WgpuFrameGraphExecutor::submit_frame(
+            self.queue,
+            self.encoder,
+            before_passes,
+            self.pass_timer,
+        );
         self.uploads.buffers.recall();
         transient_releases.release_pending();
         let retained_texture_bytes = transient_releases.retained_texture_bytes();
@@ -1224,7 +1302,7 @@ impl WgpuFrameEncoder<'_> {
         FrameGraphExecution {
             submission,
             stats: FrameCommandStats {
-                encoder_count: 1,
+                encoder_count,
                 submit_count: 1,
                 pass_count,
                 pass_pixels: take_render_pass_pixels(),
@@ -1291,6 +1369,17 @@ impl Drop for PendingTransientReleases<'_> {
 
 #[cfg(target_arch = "wasm32")]
 impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
+    fn stage_frame_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats {
+        self.uploads
+            .stage_frame_buffer_copy(device, buffer, offset, bytes)
+    }
+
     fn stage_buffer_copy(
         &mut self,
         device: &wgpu::Device,
@@ -1301,7 +1390,7 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         FrameCommandStats {
             upload_bytes: self.uploads.buffers.write(
                 device,
-                &mut self.encoder,
+                Some(&mut self.encoder),
                 buffer,
                 offset,
                 bytes,
@@ -1315,8 +1404,23 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         &mut self,
         descriptor: &wgpu::RenderPassDescriptor<'_>,
     ) -> wgpu::RenderPass<'_> {
-        self.uploads.encode_pending(self.device, &mut self.encoder);
         crate::pass_timing::begin_timed_render_pass(self.pass_timer, &mut self.encoder, descriptor)
+    }
+
+    fn begin_compute_pass(&mut self, label: &'static str) -> wgpu::ComputePass<'_> {
+        self.encoder
+            .begin_compute_pass(&compute_pass_descriptor(label))
+    }
+
+    fn begin_frame_compute_pass(
+        &mut self,
+        device: &wgpu::Device,
+        label: &'static str,
+    ) -> wgpu::ComputePass<'_> {
+        self.uploads
+            .buffers
+            .before_passes(device)
+            .begin_compute_pass(&compute_pass_descriptor(label))
     }
 
     fn upload_uniform(
@@ -1608,7 +1712,6 @@ struct UploadGeneration {
     buffer: wgpu::Buffer,
     capacity: u64,
     bytes: Vec<u8>,
-    copied: usize,
     bind_groups: [Option<wgpu::BindGroup>; UploadAllocatorId::COUNT],
 }
 
@@ -1655,7 +1758,6 @@ impl UploadRing {
                     }),
                     capacity,
                     bytes: Vec::with_capacity(capacity as usize),
-                    copied: 0,
                     bind_groups: Default::default(),
                 });
                 0
@@ -1676,13 +1778,8 @@ impl UploadRing {
         for generation in &mut self.generations {
             let padded = align_u64_to(generation.bytes.len() as u64, wgpu::COPY_BUFFER_ALIGNMENT);
             generation.bytes.resize(padded as usize, 0);
-            if generation.copied < generation.bytes.len() {
-                stats += write(
-                    &generation.buffer,
-                    generation.copied as u64,
-                    &generation.bytes[generation.copied..],
-                );
-                generation.copied = generation.bytes.len();
+            if !generation.bytes.is_empty() {
+                stats += write(&generation.buffer, 0, &generation.bytes);
             }
         }
         stats
@@ -1703,7 +1800,6 @@ impl UploadRing {
         }
         for generation in &mut self.generations {
             generation.bytes.clear();
-            generation.copied = 0;
         }
     }
 }
@@ -1717,14 +1813,12 @@ fn ring_outlives_frame(capacity: u64, staged: u64) -> bool {
 pub(crate) struct FrameUploadAllocators {
     buffers: BufferUploads,
     rings: [UploadRing; 3],
-    staged_stats: FrameCommandStats,
 }
 
 impl Default for FrameUploadAllocators {
     fn default() -> Self {
         Self {
             buffers: BufferUploads::default(),
-            staged_stats: FrameCommandStats::default(),
             rings: [
                 UploadRing::new(
                     wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
@@ -1819,28 +1913,41 @@ impl FrameUploadAllocators {
         stats
     }
 
-    fn encode_pending(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder) {
-        let buffers = &mut self.buffers;
-        for ring in &mut self.rings {
-            self.staged_stats +=
-                ring.stage_pending(&mut |buffer, offset, bytes| FrameCommandStats {
-                    upload_bytes: buffers.write(device, encoder, buffer, offset, bytes),
-                    upload_writes: u32::from(!bytes.is_empty()),
-                    ..FrameCommandStats::default()
-                });
+    fn stage_frame_buffer_copy(
+        &mut self,
+        device: &wgpu::Device,
+        buffer: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> FrameCommandStats {
+        FrameCommandStats {
+            upload_bytes: self.buffers.write(device, None, buffer, offset, bytes),
+            upload_writes: u32::from(!bytes.is_empty()),
+            ..FrameCommandStats::default()
         }
     }
 
-    pub(crate) fn finish_frame(&mut self) -> FrameCommandStats {
+    fn encode_pending(&mut self, device: &wgpu::Device) -> FrameCommandStats {
+        let buffers = &mut self.buffers;
+        let mut stats = FrameCommandStats::default();
+        for ring in &mut self.rings {
+            stats += ring.stage_pending(&mut |buffer, offset, bytes| FrameCommandStats {
+                upload_bytes: buffers.write(device, None, buffer, offset, bytes),
+                upload_writes: u32::from(!bytes.is_empty()),
+                ..FrameCommandStats::default()
+            });
+        }
+        stats
+    }
+
+    pub(crate) fn finish_frame(&mut self) {
         for ring in &mut self.rings {
             ring.reset();
         }
-        std::mem::take(&mut self.staged_stats)
     }
 
     pub(crate) fn reset(&mut self) {
         self.buffers.reset();
-        self.staged_stats = FrameCommandStats::default();
         for ring in &mut self.rings {
             ring.reset();
         }
@@ -2059,8 +2166,12 @@ pub(crate) mod fence_profile {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
+        before_passes: Option<wgpu::CommandEncoder>,
     ) {
         split(device, encoder, None);
+        if let Some(before_passes) = before_passes {
+            submit_and_wait(device, queue, before_passes.finish());
+        }
         PROFILE.with(|profile| {
             let mut profile = profile.borrow_mut();
             let mut pending = std::mem::take(&mut profile.pending);

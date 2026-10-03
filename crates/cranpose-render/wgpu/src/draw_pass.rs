@@ -525,7 +525,6 @@ impl GpuRenderer {
         load_op: wgpu::LoadOp<wgpu::Color>,
         depth: bool,
     ) -> wgpu::RenderPass<'p> {
-        self.stage_frame_uploads(recorder);
         if depth {
             let depth_view = self.depth_target((target.width, target.height));
             recorder.begin_depth_pass(label, target.view, load_op, &depth_view)

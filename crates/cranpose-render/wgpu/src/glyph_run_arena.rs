@@ -237,7 +237,7 @@ impl GlyphRunArena {
                 next += 1;
             }
             if let Some(chunk) = self.chunks.iter().find(|chunk| chunk.id == first.chunk) {
-                stats += recorder.stage_buffer_copy(
+                stats += recorder.stage_frame_buffer_copy(
                     device,
                     &chunk.buffer,
                     instance_offset(first.first_quad),

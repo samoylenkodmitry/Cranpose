@@ -19,7 +19,7 @@ fn discarded_copies_and_reused_staging_keep_destination_offsets() {
     let mut expected = [0u8; 16];
     for frame in 1..=24u8 {
         let mut abandoned = device.create_command_encoder(&Default::default());
-        uploads.write(&device, &mut abandoned, &destination, 0, &[255; 4]);
+        uploads.write(&device, Some(&mut abandoned), &destination, 0, &[255; 4]);
         drop(abandoned);
         uploads.reset();
 
@@ -28,7 +28,7 @@ fn discarded_copies_and_reused_staging_keep_destination_offsets() {
         expected[offset..offset + 4].fill(frame);
         uploads.write(
             &device,
-            &mut encoder,
+            Some(&mut encoder),
             &destination,
             offset as u64,
             &[frame; 4],

@@ -298,8 +298,8 @@ pub struct ShapeRecord {
     /// band that the tight bounds are derived from on demand.
     pub rect: [f32; 4],
     /// Rects: the corner radii, top-left, top-right, bottom-right,
-    /// bottom-left. Arcs: zero; the vertex stage derives the band's trig
-    /// from [`Self::arc_normalized`], see [`arc_trig`].
+    /// bottom-left. Arcs: zero; the GPU derives the band's trig from
+    /// [`Self::arc_normalized`], see [`arc_trig`].
     pub radii: [f32; 4],
     /// The solid colour, or the first stop of a gradient brush.
     pub color: [f32; 4],
@@ -2195,10 +2195,10 @@ fn band_disc(geometry: &ArcGeometry) -> Rect {
     }
 }
 
-/// The trig the vertex stage derives for a band from its normalized start
-/// and sweep: the mid-angle sine and cosine and the half-sweep sine and
-/// cosine, with the full circle's sentinel. Arc records leave their `radii`
-/// zero; the renderer's CPU mirrors of the band geometry call this.
+/// The trig the GPU derives for a band from its normalized start and sweep:
+/// the mid-angle sine and cosine and the half-sweep sine and cosine, with the
+/// full circle's sentinel. Arc records leave their `radii` zero for the GPU
+/// to fill; the renderer's CPU mirrors of the band geometry call this.
 pub fn arc_trig(start_angle: f32, sweep_angle: f32) -> [f32; 4] {
     if sweep_angle >= TAU && start_angle == 0.0 {
         return [0.0, -1.0, 0.0, -1.0];

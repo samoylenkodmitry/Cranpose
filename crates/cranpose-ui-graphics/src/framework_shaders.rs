@@ -7,6 +7,9 @@
 /// Batched shape shader. The uniform array lengths in the source are the
 /// wasm/downlevel defaults; native pipelines rewrite them per device class.
 pub const SHAPE_WGSL: &str = include_str!("../shaders/shape.wgsl");
+/// The arc trig fill's compute stage, appended to the storage tables' shape
+/// shader on a device with one.
+pub const ARC_TRIG_FILL_WGSL: &str = include_str!("../shaders/arc_trig_fill.wgsl");
 pub const IMAGE_WGSL: &str = include_str!("../shaders/image.wgsl");
 pub const GLYPH_ATLAS_WGSL: &str = include_str!("../shaders/glyph_atlas.wgsl");
 

@@ -26,8 +26,13 @@ pub struct ShapeRecordBody {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
 pub struct ShapeRecordCurve {
-    /// Corner radii for rectangles; zero for bands, whose trig the vertex
-    /// stage derives from `arc_normalized`.
+    /// Corner radii for rectangles; zero for bands, whose trig the GPU
+    /// derives from `arc_normalized` once per uploaded band and writes here.
+    /// No other record's row equals a band's: a band's padded sweep,
+    /// `arc_normalized[3]`, is positive, while a rect's, a line's and an
+    /// unbanded round rect's is zero and a banded ring's radii are positive.
+    /// A record that becomes or stops being a band therefore uploads a row of
+    /// its own, and a band whose row is unchanged keeps its trig.
     pub radii: [f32; 4],
     /// Normalised arc start and sweep, then strip start and padded sweep.
     pub arc_normalized: [f32; 4],
