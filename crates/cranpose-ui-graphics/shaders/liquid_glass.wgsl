@@ -872,7 +872,7 @@ fn normal_cdf(value: f32) -> f32 {
 }
 
 fn inset_shadow(scene: GlassScene, position: vec2<f32>, scale: f32, color: vec3<f32>) -> vec3<f32> {
-    if GLASS_INSET_SHADOW_OFF || get_float(163u) <= 0.0 || get_float(159u) <= 0.0 {
+    if GLASS_INSET_SHADOW_OFF | (get_float(163u) <= 0.0 || get_float(159u) <= 0.0) {
         return color;
     }
     let distance = scene_sdf(scene, position - vec2<f32>(0.0, get_float(161u) * scale))
@@ -927,7 +927,7 @@ fn adaptive_backdrop_tone_curve() -> vec4<f32> {
 override GLASS_FACE_TONE_OFF: bool = false;
 
 fn transmission_tone(color: vec3<f32>, saturation: f32, contrast: f32, lift: f32, curve: vec4<f32>) -> vec3<f32> {
-    if !GLASS_FACE_TONE_OFF && get_float(180u) > 0.5 {
+    if !GLASS_FACE_TONE_OFF & (get_float(180u) > 0.5) {
         let luma = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
         let tone = get_float(176u) + luma * (get_float(177u) - get_float(176u))
             - luma * luma * (1.0 - get_float(179u));
@@ -1041,13 +1041,13 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         glue, wobble_amp, wobble_phase, bulge_amp, bulge_dir, strain_axis, strain_along, strain_across);
     let d = scene_sdf(scene, p);
     let key_fill_height = fixed_or(get_float(135u), 0.0, GLASS_KEY_FILL_OFF) * select(max(get_float(99u), 1.0), optical_scale, get_float(141u) > 0.5);
-    let key_fill = !GLASS_KEY_FILL_OFF && key_fill_height > 0.0;
+    let key_fill = !GLASS_KEY_FILL_OFF & (key_fill_height > 0.0);
     let dome_light = select(1.0, 0.0, key_fill);
 
     // wcKSRD's `smoothstep(0, 1, rb1)` is the material's coverage transition.
     // Premultiplied compositing against the untouched backdrop is equivalent
     // to the reference shader's final `mix(backdrop, lighting, transition)`.
-    if !intermediate_stage && GLASS_RIM_DRAW != 1 && GLASS_SHADOW_OFF && GLASS_RING_SHADOW_OFF && GLASS_CONTOUR_HIGHLIGHT_OFF && d >= max(gradient_extent, 0.0) {
+    if (GLASS_RIM_DRAW != 1) & GLASS_SHADOW_OFF & GLASS_RING_SHADOW_OFF & GLASS_CONTOUR_HIGHLIGHT_OFF & (!intermediate_stage && d >= max(gradient_extent, 0.0)) {
         return vec4<f32>(0.0);
     }
     let inradius = max(min(half_size.x, half_size.y), 1.0);
@@ -1073,13 +1073,13 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         max(select(1.5 * gradient_extent + guard_ramp, 0.0, GLASS_RIM_STYLE_OFF), floored_band_width(gradient_extent)),
         max(max(edge_extent, MIN_LINE_WIDTH_PX) + guard_border_ramp, guard_fold),
     ) + 1.0;
-    if (GLASS_RIM_DRAW == 1 && d >= -rim_reach) {
+    if ((GLASS_RIM_DRAW == 1) & (d >= -rim_reach)) {
         discard;
     }
-    if (GLASS_RIM_DRAW == 2 && d < -rim_reach) {
+    if ((GLASS_RIM_DRAW == 2) & (d < -rim_reach)) {
         discard;
     }
-    let in_rim = GLASS_RIM_DRAW == 2 || (GLASS_RIM_DRAW != 1 && (!GLASS_INTERIOR_GUARD || d >= -rim_reach));
+    let in_rim = (GLASS_RIM_DRAW == 2) | ((GLASS_RIM_DRAW != 1) & (!GLASS_INTERIOR_GUARD | (d >= -rim_reach)));
     let rounded_box = clamp(-d / lens_refraction, 0.0, 1.0);
     // Coverage AA rides the material's refraction band (wcKSRD's rb1·32).
     // A DRAINED lens (material activity 0) is a soft tint pool, not
@@ -1094,7 +1094,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let dome_coverage = select(
         smoothstep(0.0, 1.0, clamp(-d / coverage_ramp, 0.0, 1.0)),
         1.0,
-        (GLASS_RIM_DRAW == 1 || get_float(134u) > 0.5) && material_activity >= 1.0,
+        ((GLASS_RIM_DRAW == 1) | (get_float(134u) > 0.5)) & (material_activity >= 1.0),
     );
     let coverage = select(dome_coverage, clamp(0.5 - d, 0.0, 1.0), key_fill);
     let optical_coverage = smoothstep(
@@ -1111,7 +1111,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // A morphing glass node uses this same scene SDF as the alpha mask for
     // its foreground content. Keeping the mask in this shader guarantees
     // that blurred children and the refracted backdrop share one silhouette.
-    if GLASS_CONTENT_MASK_MODE == 1 || (GLASS_CONTENT_MASK_MODE < 0 && fixed_or(get_float(112u), 0.0, GLASS_CONTENT_MASK_OFF) > 0.5) {
+    if (GLASS_CONTENT_MASK_MODE == 1) | ((GLASS_CONTENT_MASK_MODE < 0) & (fixed_or(get_float(112u), 0.0, GLASS_CONTENT_MASK_OFF) > 0.5)) {
         return textureSample(input_texture, input_sampler, map_uv(map, uv))
             * coverage
             * material_activity;
@@ -1149,7 +1149,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     }
     let ring_color = get_vec4(187u);
     var ring_alpha = 0.0;
-    if fixed_or(get_float(194u), 0.0, GLASS_RING_SHADOW_OFF) > 0.5 && ring_color.a > 0.0 {
+    if !GLASS_RING_SHADOW_OFF & (get_float(194u) > 0.5 && ring_color.a > 0.0) {
         let ring_distance = scene_sdf(scene, p - vec2<f32>(0.0, get_float(192u) * s)) - get_float(195u) * s;
         ring_alpha = ring_color.a * gaussian_stroke(ring_distance, get_float(193u) * s, get_float(191u) * s);
     }
