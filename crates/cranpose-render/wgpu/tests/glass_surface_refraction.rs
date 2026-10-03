@@ -859,3 +859,49 @@ fn cover_glass_touch_coordinates_and_radius_follow_display_density() {
         }
     }
 }
+
+#[test]
+fn changing_glass_modes_keeps_specialized_and_general_pixels_equal() {
+    let mut renderer = support::headless_renderer().expect("glass mode parity requires GPU");
+    let mut graph = striped_surface(false, false);
+    let RenderNode::Layer(layer) = graph.root.children.last().expect("glass layer") else {
+        panic!("expected glass layer");
+    };
+    let Some(RenderEffect::Shader { shader }) = &layer.graphics_layer.backdrop_effect else {
+        panic!("expected glass shader");
+    };
+    let mut specialized = (**shader).clone();
+    for (mode, mask) in [
+        (3.0, false),
+        (3.0, true),
+        (0.0, false),
+        (1.0, false),
+        (2.0, false),
+        (3.25, false),
+        (0.0, true),
+    ] {
+        specialized.set_float(130, mode);
+        specialized.set_float(112, f32::from(mask));
+        cranpose_ui_graphics::specialize_liquid_glass_with_folds(&mut specialized, true);
+        let mut general = specialized.clone();
+        while let Some(&(name, _)) = general.overrides().first() {
+            general.clear_override(name);
+        }
+        general.set_draw_split(None);
+        let captures = [general, specialized.clone()].map(|shader| {
+            let RenderNode::Layer(layer) = graph.root.children.last_mut().expect("glass layer")
+            else {
+                panic!("expected glass layer");
+            };
+            layer.graphics_layer.backdrop_effect = Some(RenderEffect::runtime_shader(shader));
+            support::capture_graph_settled(&mut renderer, graph.clone(), 160, 96)
+        });
+        support::assert_bytes_within(
+            &format!("refraction mode {mode}, content mask {mask}"),
+            160,
+            &captures[0].pixels,
+            &captures[1].pixels,
+            1,
+        );
+    }
+}

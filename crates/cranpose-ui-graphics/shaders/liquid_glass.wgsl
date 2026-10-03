@@ -159,6 +159,8 @@ override GLASS_RIM_DRAW: i32 = 0;
 // The optical stage the material draws (uniform 147), pinned by the
 // renderer so each stage compiles only its own path; -1 reads the uniform.
 override GLASS_OPTICAL_STAGE: i32 = -1;
+override GLASS_REFRACTION_MODE: i32 = -1;
+override GLASS_CONTENT_MASK_MODE: i32 = -1;
 
 fn fixed_or(value: f32, fixed: f32, is_fixed: bool) -> f32 {
     return select(value, fixed, is_fixed);
@@ -166,6 +168,10 @@ fn fixed_or(value: f32, fixed: f32, is_fixed: bool) -> f32 {
 
 fn fixed_or_vec2(value: vec2<f32>, fixed: vec2<f32>, is_fixed: bool) -> vec2<f32> {
     return select(value, fixed, is_fixed);
+}
+
+fn glass_refraction_mode() -> f32 {
+    return select(fixed_or(get_float(130u), 0.0, GLASS_DIRECTIONAL_REFRACTION_OFF), f32(GLASS_REFRACTION_MODE), GLASS_REFRACTION_MODE >= 0);
 }
 
 // SDF for rounded rectangle
@@ -610,7 +616,7 @@ fn channel_lens_displacement(
     let optical_position = sampling_position - zoom_anchor;
     var displacement = optical_position * (lens_scale - 1.0)
         * transmission_refraction;
-    let mode = fixed_or(get_float(130u), 0.0, GLASS_DIRECTIONAL_REFRACTION_OFF);
+    let mode = glass_refraction_mode();
     if mode > 0.5 && mode < 1.5 && loupe_mode <= 0.5 {
         let normal = sampling_position / max(length(sampling_position), 0.001);
         let reach = max(get_float(131u), 0.0) * max(get_float(99u), 1.0);
@@ -1041,11 +1047,11 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // wcKSRD's `smoothstep(0, 1, rb1)` is the material's coverage transition.
     // Premultiplied compositing against the untouched backdrop is equivalent
     // to the reference shader's final `mix(backdrop, lighting, transition)`.
-    if !intermediate_stage && GLASS_RIM_DRAW != 1 && GLASS_SHADOW_OFF && d >= max(gradient_extent, 0.0) {
+    if !intermediate_stage && GLASS_RIM_DRAW != 1 && GLASS_SHADOW_OFF && GLASS_RING_SHADOW_OFF && GLASS_CONTOUR_HIGHLIGHT_OFF && d >= max(gradient_extent, 0.0) {
         return vec4<f32>(0.0);
     }
     let inradius = max(min(half_size.x, half_size.y), 1.0);
-    let refraction_mode = fixed_or(get_float(130u), 0.0, GLASS_DIRECTIONAL_REFRACTION_OFF);
+    let refraction_mode = glass_refraction_mode();
     let surface_refraction = refraction_mode > 0.5 && refraction_mode < 1.5;
     let physical_refraction_scale = select(optical_scale, max(get_float(99u), 1.0), surface_refraction);
     let physical_refraction_depth = max(get_float(98u), 0.0) * physical_refraction_scale;
@@ -1105,7 +1111,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // A morphing glass node uses this same scene SDF as the alpha mask for
     // its foreground content. Keeping the mask in this shader guarantees
     // that blurred children and the refracted backdrop share one silhouette.
-    if fixed_or(get_float(112u), 0.0, GLASS_CONTENT_MASK_OFF) > 0.5 {
+    if GLASS_CONTENT_MASK_MODE == 1 || (GLASS_CONTENT_MASK_MODE < 0 && fixed_or(get_float(112u), 0.0, GLASS_CONTENT_MASK_OFF) > 0.5) {
         return textureSample(input_texture, input_sampler, map_uv(map, uv))
             * coverage
             * material_activity;
