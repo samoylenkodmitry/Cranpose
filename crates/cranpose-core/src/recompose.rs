@@ -1,7 +1,5 @@
 use std::rc::Rc;
 
-use smallvec::SmallVec;
-
 use crate::{
     Command, Composer, ComposerCore, DirtyBubble, NodeId, RecomposeScope,
     debug_scope_invalidation_sources, debug_scope_label,
@@ -17,12 +15,7 @@ impl Composer {
         let first =
             self.with_slot_session_mut(|slots| slots.active_scope_first_root_node_id(scope))?;
         let mut applier = self.borrow_applier();
-        let mut siblings: SmallVec<[NodeId; 8]> = SmallVec::new();
-        applier
-            .get_mut(parent_hint)
-            .ok()?
-            .collect_owned_children_into(&mut siblings);
-        siblings.iter().position(|&sibling| sibling == first)
+        applier.get_mut(parent_hint).ok()?.owned_child_index(first)
     }
 
     pub(crate) fn recompose_group(&self, scope: &RecomposeScope) {

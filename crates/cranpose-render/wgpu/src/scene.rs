@@ -409,6 +409,7 @@ impl CompositorScene {
 
     pub fn clear(&mut self) {
         self.runs.clear();
+        self.loose.recorder.clear();
         self.images.clear();
         self.texts.clear();
         let recorder_limit = self.shadow_draws.capacity().saturating_mul(2);

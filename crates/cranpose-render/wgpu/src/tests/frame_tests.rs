@@ -579,7 +579,7 @@ fn child_layer(transform: ProjectiveTransform, content: LayerScene) -> ChildLaye
 fn scene_of(ops: &[usize], children: Vec<ChildLayer>) -> LayerScene {
     let mut scene = CompositorScene::new();
     scene.draw_ops = ops.iter().map(|&z| op(z)).collect();
-    LayerScene { scene, children }
+    LayerScene::new(scene, children)
 }
 
 fn rounded_child(transform: ProjectiveTransform, surface_scale: f32) -> ChildLayer {

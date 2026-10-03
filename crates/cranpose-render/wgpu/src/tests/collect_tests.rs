@@ -119,6 +119,7 @@ fn deferred_draws_keep_their_order_after_interleaved_children() {
             &mut LayerMotion::default(),
             SceneCapacityHint::default(),
             1.0,
+            &mut LayerSceneRecycler::default(),
         );
         let positions: Vec<_> = collected
             .scene
@@ -205,7 +206,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                 children: vec![node],
                 ..Default::default()
             };
-            let child = isolated_child(
+            let (child, _) = isolated_child(
                 &layer,
                 &mut crate::pipeline::UiTextLayoutResolver,
                 &mut LayerMotion::default(),
@@ -218,6 +219,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     raster_scale: RasterScale::Exact(1.0),
                 },
                 &mut CompositorScene::new(),
+                &mut LayerSceneRecycler::default(),
             );
             assert_eq!(child.snap_anchor.is_some(), expected);
         }
@@ -428,6 +430,7 @@ fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_doe
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     );
     assert!(
         scene.children.is_empty(),
@@ -575,6 +578,7 @@ fn collected(layer: LayerNode) -> ChildLayer {
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     );
     scene.children.pop().expect("a turned layer isolates")
 }
@@ -831,6 +835,7 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     );
     let [backdrop] = collected.scene.backdrop_layers.as_slice() else {
         panic!("the isolated layer's backdrop must be batched");
@@ -864,6 +869,7 @@ fn draw_ops_under_clip(child: LayerNode) -> usize {
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     )
     .scene
     .draw_ops
@@ -938,6 +944,7 @@ fn a_plain_texts_draw_carries_its_nodes_style() {
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     )
     .scene;
     assert_eq!(scene.texts.len(), 1);

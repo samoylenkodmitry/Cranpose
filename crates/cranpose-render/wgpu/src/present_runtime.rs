@@ -527,7 +527,7 @@ pub(crate) struct PresentHandle {
     returns_rx: Receiver<RenderReturns>,
     status: Arc<PresentStatus>,
     thread: Option<std::thread::JoinHandle<()>>,
-    outstanding: u32,
+    outstanding: usize,
     drained: u64,
 }
 
@@ -536,7 +536,8 @@ const PRESENT_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
 impl PresentHandle {
     pub(crate) fn spawn(init: PresentRuntimeInit, waker: PresentWaker) -> Result<Self, String> {
         let (msg_tx, msg_rx) = channel::<PresentMsg>();
-        let (returns_tx, returns_rx) = sync_channel::<RenderReturns>(2);
+        let (returns_tx, returns_rx) =
+            sync_channel::<RenderReturns>(crate::frame_packet::MAX_FRAMES_IN_FLIGHT);
         let status = Arc::new(PresentStatus::default());
         let thread_status = Arc::clone(&status);
         let thread = std::thread::Builder::new()
@@ -565,7 +566,8 @@ impl PresentHandle {
         waker: PresentWaker,
     ) -> (Self, PresentState, Receiver<PresentMsg>) {
         let (msg_tx, msg_rx) = channel::<PresentMsg>();
-        let (returns_tx, returns_rx) = sync_channel::<RenderReturns>(2);
+        let (returns_tx, returns_rx) =
+            sync_channel::<RenderReturns>(crate::frame_packet::MAX_FRAMES_IN_FLIGHT);
         let status = Arc::new(PresentStatus::default());
         let state = PresentState::new(init, returns_tx, Arc::clone(&status), waker);
         (
@@ -587,7 +589,7 @@ impl PresentHandle {
     }
 
     pub(crate) fn has_credit(&self) -> bool {
-        self.outstanding < 2
+        self.outstanding < crate::frame_packet::MAX_FRAMES_IN_FLIGHT
     }
 
     /// Whether the present thread has handed back a frame that

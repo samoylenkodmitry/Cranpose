@@ -1000,6 +1000,22 @@ impl WgpuRenderer {
             .map(HeldFramePacket)
     }
 
+    /// Return a producer-built packet without presenting it. This exercises
+    /// the same bounded scene-storage recycler used by normal present returns
+    /// in offline producer benchmarks.
+    #[doc(hidden)]
+    pub fn return_held_packet_for_tests(&mut self, packet: HeldFramePacket) {
+        let packet = packet.0;
+        self.frontend.apply_returns(RenderReturns {
+            scene: Some(frame_packet::FrameSceneStorage {
+                root: packet.root,
+                overlay: packet.overlay,
+            }),
+            frame_id: packet.frame_id,
+            ..RenderReturns::default()
+        });
+    }
+
     #[doc(hidden)]
     pub fn render_held_packet_for_tests(
         &mut self,

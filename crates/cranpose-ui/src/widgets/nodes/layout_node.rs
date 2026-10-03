@@ -1132,6 +1132,10 @@ impl Node for LayoutNode {
         out.extend_from_slice(&self.children);
     }
 
+    fn owned_child_index(&self, child: NodeId) -> Option<usize> {
+        self.children.iter().position(|&id| id == child)
+    }
+
     fn on_attached_to_parent(&mut self, parent: NodeId) {
         self.set_parent(parent);
     }

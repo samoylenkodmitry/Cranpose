@@ -1694,6 +1694,14 @@ pub trait Node: Any {
     fn collect_owned_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         self.collect_children_into(out);
     }
+    /// Finds a child in the order returned by [`Node::collect_owned_children_into`].
+    /// Nodes with slice-backed child storage should override this to avoid
+    /// materializing the whole list for a single lookup.
+    fn owned_child_index(&self, child: NodeId) -> Option<usize> {
+        let mut children = SmallVec::<[NodeId; 8]>::new();
+        self.collect_owned_children_into(&mut children);
+        children.iter().position(|&id| id == child)
+    }
     /// Called after the node is created to record its own ID.
     /// Useful for nodes that need to store their ID for later operations.
     fn set_node_id(&mut self, _id: NodeId) {}
@@ -2980,7 +2988,7 @@ fn attach_child_at(
 ) {
     if insert_child_with_reparenting(applier, parent_id, child_id) {
         if let Some(target) = insert_index {
-            move_appended_child_to(applier, parent_id, target);
+            move_attached_child_left_to(applier, parent_id, child_id, target);
         }
         bubble.apply(applier, parent_id);
     } else if let Ok(child) = applier.get_mut(child_id) {
@@ -2993,16 +3001,21 @@ fn attach_child_at(
     }
 }
 
-fn move_appended_child_to(applier: &mut dyn Applier, parent_id: NodeId, target: usize) {
+fn move_attached_child_left_to(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    child_id: NodeId,
+    target: usize,
+) {
     let Ok(parent_node) = applier.get_mut(parent_id) else {
         return;
     };
-    let mut owned: SmallVec<[NodeId; 8]> = SmallVec::new();
-    parent_node.collect_owned_children_into(&mut owned);
-    let appended_index = owned.len().saturating_sub(1);
-    if target < appended_index {
-        parent_node.move_child(appended_index, target);
-        note_structural_move(parent_id, appended_index, target);
+    let Some(current_index) = parent_node.owned_child_index(child_id) else {
+        return;
+    };
+    if target < current_index {
+        parent_node.move_child(current_index, target);
+        note_structural_move(parent_id, current_index, target);
     }
 }
 
@@ -3560,22 +3573,14 @@ impl MemoryApplier {
         id: NodeId,
         f: impl FnOnce(&mut N) -> R,
     ) -> Result<R, NodeError> {
-        let physical_id = self
-            .resolve_node_index(id)
-            .ok_or(NodeError::Missing { id })?;
-        let slot = self
-            .nodes
-            .get_mut(physical_id)
-            .ok_or(NodeError::Missing { id })?
-            .as_deref_mut()
-            .ok_or(NodeError::Missing { id })?;
-        let typed =
-            slot.as_any_mut()
-                .downcast_mut::<N>()
-                .ok_or_else(|| NodeError::TypeMismatch {
-                    id,
-                    expected: std::any::type_name::<N>(),
-                })?;
+        let typed = self
+            .get_mut(id)?
+            .as_any_mut()
+            .downcast_mut::<N>()
+            .ok_or_else(|| NodeError::TypeMismatch {
+                id,
+                expected: std::any::type_name::<N>(),
+            })?;
         Ok(f(typed))
     }
 
@@ -3977,23 +3982,23 @@ impl MemoryApplier {
 
     fn dump_node(&self, output: &mut String, id: NodeId, depth: usize) {
         let indent = "  ".repeat(depth);
-        if let Some(physical_id) = self.resolve_node_index(id) {
-            if let Some(node) = self.nodes.get(physical_id).and_then(Option::as_ref) {
-                let type_name = std::any::type_name_of_val(&**node);
-                output.push_str(&format!("{indent}[{id}] {type_name}\n"));
-
-                let mut children = SmallVec::<[NodeId; 8]>::new();
-                node.collect_children_into(&mut children);
-                for child_id in children {
-                    self.dump_node(output, child_id, depth + 1);
-                }
-            } else {
+        let Ok(node) = self.get_ref(id) else {
+            if let Some(physical_id) = self.resolve_node_index(id) {
                 output.push_str(&format!(
                     "{indent}[{id}] (missing physical node {physical_id})\n"
                 ));
+            } else {
+                output.push_str(&format!("{indent}[{id}] (missing)\n"));
             }
-        } else {
-            output.push_str(&format!("{indent}[{id}] (missing)\n"));
+            return;
+        };
+        let type_name = std::any::type_name_of_val(node);
+        output.push_str(&format!("{indent}[{id}] {type_name}\n"));
+
+        let mut children = SmallVec::<[NodeId; 8]>::new();
+        node.collect_children_into(&mut children);
+        for child_id in children {
+            self.dump_node(output, child_id, depth + 1);
         }
     }
 
@@ -4213,7 +4218,10 @@ impl Applier for MemoryApplier {
 
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
         if let Some(physical_id) = self.resolve_node_index(id) {
-            let slot = self.nodes[physical_id]
+            let slot = self
+                .nodes
+                .get_mut(physical_id)
+                .ok_or(NodeError::Missing { id })?
                 .as_deref_mut()
                 .ok_or(NodeError::Missing { id })?;
             return Ok(slot);
