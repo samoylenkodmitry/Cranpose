@@ -383,7 +383,8 @@ struct RecordGeometry {
 
 fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry {
     let kind = record.flags & 3u;
-    let stroked = (record.flags & RECORD_STROKED) != 0u && kind != RECORD_KIND_ARC;
+    let stroked = (DRAWS_STROKES || DRAWS_LINES)
+        && (record.flags & RECORD_STROKED) != 0u && kind != RECORD_KIND_ARC;
     let half_width = select(0.0, record.stroke_width * 0.5, stroked);
     let scale = placement.root_scale;
     let canonicalize = (placement.flags & PLACEMENT_CANONICALIZE) != 0u;
@@ -397,9 +398,9 @@ fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry 
     geometry.rect = vec4<f32>(left, top, right - left, bottom - top);
     geometry.canonicalize = canonicalize;
     geometry.scale = scale;
-    if (kind == RECORD_KIND_ARC) {
+    if (DRAWS_ARCS && kind == RECORD_KIND_ARC) {
         geometry.trig = arc_row(record);
-    } else if ((record.flags & RECORD_ARC_BANDED) != 0u) {
+    } else if (DRAWS_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
         geometry.trig = FULL_TURN_TRIG;
     }
     return geometry;
@@ -528,9 +529,9 @@ fn shape_output(
     output.rect = geometry.rect;
     let scale = geometry.scale;
     let kind = record.flags & 3u;
-    let stroked = (record.flags & RECORD_STROKED) != 0u;
+    let stroked = DRAWS_STROKES && (record.flags & RECORD_STROKED) != 0u;
 
-    if (kind == RECORD_KIND_LINE) {
+    if (DRAWS_LINES && kind == RECORD_KIND_LINE) {
         let line = line_frame(record, placement);
         let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
         output.radii = vec4<f32>(0.0);
@@ -555,7 +556,7 @@ fn shape_output(
         let end = line.center + line.direction * line.half_length;
         let low = min(start, end) - reach;
         output.rect = vec4<f32>(low, max(start, end) + reach - low);
-    } else if (kind == RECORD_KIND_ARC) {
+    } else if (DRAWS_ARCS && kind == RECORD_KIND_ARC) {
         output.radii = geometry.trig;
         let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
         output.stroke_params = vec4<f32>(
@@ -657,12 +658,12 @@ fn collapsed() -> VertexOutput {
 // Vertex stage
 //
 fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
-    if ((record.flags & RECORD_ARC_DEGENERATE) != 0u) {
+    if ((DRAWS_ARCS || DRAWS_LINES) && (record.flags & RECORD_ARC_DEGENERATE) != 0u) {
         return collapsed();
     }
     let placement = record_placement(record);
     let geometry = record_geometry(record, placement);
-    if ((record.flags & 3u) == RECORD_KIND_LINE) {
+    if (DRAWS_LINES && (record.flags & 3u) == RECORD_KIND_LINE) {
         let line = line_frame(record, placement);
         let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
         if (local >= 4u) {
@@ -670,7 +671,7 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
         }
         return shape_output(record, placement, geometry, line_corner(line, cap, local));
     }
-    if (SHAPE_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
+    if (DRAWS_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
         let segments = 1u << ((record.flags >> RECORD_BAND_CLASS_SHIFT) & RECORD_BAND_CLASS_MASK);
         if (local >= segments * 2u + 2u) {
             return pinned(
@@ -1025,6 +1026,15 @@ const SHAPE_KIND_LINE: u32 = 3u;
 // the batch cannot take out of the program; the record data stays the same,
 // so the general program and every specialised one shade one record alike.
 override SHAPE_KIND_FIXED: i32 = -1;
+// The record shapes a batch of the fixed kind can hold, so the vertex stage
+// folds every other shape's geometry out as the fragment stage folds its
+// coverage: fills hold no strokes, lines or arcs; strokes hold no lines or
+// arcs, though a stroked circle may be a band. A specialised pipeline thus
+// compiles no line or band geometry its batch cannot draw.
+override DRAWS_STROKES: bool = SHAPE_KIND_FIXED < 0 || SHAPE_KIND_FIXED == i32(SHAPE_KIND_STROKE);
+override DRAWS_ARCS: bool = SHAPE_KIND_FIXED < 0 || SHAPE_KIND_FIXED == i32(SHAPE_KIND_ARC);
+override DRAWS_LINES: bool = SHAPE_KIND_FIXED < 0 || SHAPE_KIND_FIXED == i32(SHAPE_KIND_LINE);
+override DRAWS_BANDS: bool = SHAPE_BANDS && (DRAWS_ARCS || DRAWS_STROKES);
 override SHAPE_SOLID: bool = false;
 // Whether a fill's interior is shaded apart, off for a solid batch and for
 // one none of whose rounded fills has an interior big enough to repay the
