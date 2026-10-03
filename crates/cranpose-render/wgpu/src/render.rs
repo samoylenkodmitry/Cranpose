@@ -1136,8 +1136,6 @@ pub(crate) enum RunTier {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapeVariant {
-    /// One bit per `FRAGMENT_KIND_*` its records have: the pipeline compiles
-    /// only those kinds' geometry and coverage.
     kinds: u8,
     brush: Option<u8>,
     solid: bool,
@@ -1160,18 +1158,12 @@ const FLAT_FILL_ENTRIES: [[(&str, &str); 2]; 2] = [
     ],
 ];
 
-/// Every shape kind, the set the general variant draws.
 const ALL_SHAPE_KINDS: u8 = (1 << FRAGMENT_KIND_FILL)
     | (1 << FRAGMENT_KIND_STROKE)
     | (1 << FRAGMENT_KIND_ARC)
     | (1 << FRAGMENT_KIND_LINE);
 const LINE_KIND: u8 = 1 << FRAGMENT_KIND_LINE;
 
-/// The kind set a variant compiles for a segment holding `kinds`: one kind
-/// as it is, and a mix as every kind, without lines unless it holds one.
-/// Mixed segments then share one pipeline per key, as the general ladder
-/// did, so specialising them compiles nothing more; only the line paths,
-/// which few mixes hold, stay out of the rest.
 fn variant_kinds(kinds: u8) -> u8 {
     if kinds.count_ones() <= 1 {
         kinds
@@ -1227,7 +1219,6 @@ impl ShapeVariant {
         }
     }
 
-    /// The one kind all its records have, if they agree.
     fn kind(self) -> Option<u8> {
         (self.kinds.count_ones() == 1).then(|| self.kinds.trailing_zeros() as u8)
     }
@@ -1250,8 +1241,6 @@ impl ShapeVariant {
         }
     }
 
-    /// The variant that draws anything this one draws: every kind, without
-    /// the line paths when this variant holds no line.
     fn general(self) -> Self {
         Self {
             kinds: (ALL_SHAPE_KINDS & !LINE_KIND) | (self.kinds & LINE_KIND),
@@ -1465,7 +1454,6 @@ impl KeyReader {
         present.then_some(value)
     }
 
-    /// A shape kind set, `None` for the empty set no variant packs.
     fn take_kinds(&mut self) -> Option<u8> {
         u8::try_from(self.take(4)).ok().filter(|kinds| *kinds != 0)
     }

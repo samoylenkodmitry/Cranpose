@@ -1026,10 +1026,6 @@ const SHAPE_KIND_LINE: u32 = 3u;
 // the batch cannot take out of the program; the record data stays the same,
 // so the general program and every specialised one shade one record alike.
 override SHAPE_KIND_FIXED: i32 = -1;
-// One bit per shape kind (`1 << SHAPE_KIND_*`) the batch's records have,
-// so both stages fold every other kind's path out: a mixed batch of fills
-// and arcs compiles no line or stroke geometry and no line or stroke
-// coverage. A stroked circle may be a band, so strokes keep the bands.
 override SHAPE_KINDS: u32 = 15u;
 override DRAWS_STROKES: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_STROKE)) != 0u;
 override DRAWS_ARCS: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_ARC)) != 0u;
