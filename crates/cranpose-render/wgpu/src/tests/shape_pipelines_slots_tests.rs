@@ -210,3 +210,27 @@ fn a_frames_heaviest_wanted_pipelines_take_the_demand_slots_first() {
     );
     assert_eq!(gate.builds.load(Ordering::SeqCst), 2);
 }
+
+#[test]
+fn a_frame_that_ended_before_queuing_its_wants_leaves_none_for_the_next() {
+    let (builder, gate) = gated();
+    let mut slots = Slots::new(&PipelineCompiler::spawn(), builder);
+    let stale = key(BlendMode::DstOut);
+    let current = key(BlendMode::SrcIn);
+    slots.want(stale, 1_000_000);
+    slots.settle_demanded();
+    slots.want(current, 40);
+    slots.request_wanted();
+    assert_eq!(
+        gate.started.recv_timeout(Duration::from_secs(2)),
+        Ok(current),
+        "the current frame's want is built"
+    );
+    let _ = gate.release.send(());
+    assert!(
+        gate.started
+            .recv_timeout(Duration::from_millis(200))
+            .is_err(),
+        "the unqueued want of the frame that ended is not built"
+    );
+}

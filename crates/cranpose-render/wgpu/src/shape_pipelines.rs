@@ -252,7 +252,8 @@ impl<B: KeyedBuild> Slots<B> {
         }
     }
 
-    /// Forgets the demanded keys whose values are built.
+    /// Forgets the demanded keys whose values are built, and the wants of a
+    /// frame that ended before queuing them.
     pub(crate) fn settle_demanded(&mut self) {
         let entries = &self.entries;
         self.demanded.retain(|key| {
@@ -260,6 +261,7 @@ impl<B: KeyedBuild> Slots<B> {
                 .get(key)
                 .is_none_or(|entry| entry.value.get().is_none())
         });
+        self.wanted.clear();
     }
 
     pub(crate) fn request_wanted(&mut self) {

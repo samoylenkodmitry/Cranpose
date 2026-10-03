@@ -339,3 +339,100 @@ fn a_segment_whose_interiors_a_pre_pass_lays_down_skips_the_interior_fast_path()
         "no occluder, no span"
     );
 }
+
+fn fill_run(solid: usize, gradient: usize) -> RunDraw {
+    use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect, ShapeRecorder};
+    let mut recorder = ShapeRecorder::default();
+    let mut push = |index: usize, brush: Brush| {
+        recorder.push_primitive(DrawPrimitive::Rect {
+            rect: Rect {
+                x: (index % 16) as f32 * 4.0,
+                y: (index / 16) as f32 * 4.0,
+                width: 3.0,
+                height: 3.0,
+            },
+            brush,
+            stroke: None,
+        });
+    };
+    for index in 0..solid {
+        push(index, Brush::solid(Color::WHITE));
+    }
+    for index in solid..solid + gradient {
+        push(
+            index,
+            Brush::linear_gradient(vec![Color::WHITE, Color(0.0, 0.0, 1.0, 1.0)]),
+        );
+    }
+    RunDraw::whole(
+        std::sync::Arc::new(recorder),
+        crate::scene::Placement::at(Point::default(), None, None),
+    )
+    .expect("recorded run")
+}
+
+/// The vertices each pipeline key draws for `window` of `run`, appended
+/// into a fresh arena chunk.
+fn arena_wants(
+    store: &mut RunStore,
+    run: &RunDraw,
+    window: std::ops::Range<u32>,
+) -> (u32, Vec<(crate::render::ShapePipelineKey, u64)>) {
+    let chunk = store.open_arena();
+    let mut wanted = SmallVec::new();
+    let taken = store.append_arena(
+        chunk,
+        run,
+        window,
+        (1.0, crate::geometry::SegmentTransform::IDENTITY),
+        &mut |segment| arena_key(segment),
+        &mut wanted,
+    );
+    (taken, wanted.into_vec())
+}
+
+#[test]
+fn an_arena_append_wants_pipelines_for_the_records_its_window_takes() {
+    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+    let mut store = RunStore::new(
+        &device,
+        RunBufferMode {
+            storage: true,
+            trig_fill: false,
+        },
+    );
+    let run = fill_run(3, 2);
+    let keys: Vec<_> = run.segment_records().map(arena_key).collect();
+    assert_eq!(keys.len(), 2, "solid and gradient fills take two segments");
+    let (taken, wanted) = arena_wants(&mut store, &run, 2..5);
+    assert_eq!(taken, 3);
+    assert_eq!(wanted, [(keys[0], 4), (keys[1], 8)]);
+    let (taken, wanted) = arena_wants(&mut store, &run, 0..2);
+    assert_eq!(taken, 2);
+    assert_eq!(
+        wanted,
+        [(keys[0], 8)],
+        "a window that ends inside the first segment wants nothing of the second"
+    );
+}
+
+#[test]
+fn an_arena_chunk_that_fills_up_wants_only_the_records_it_took() {
+    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+    let mut store = RunStore::new(
+        &device,
+        RunBufferMode {
+            storage: false,
+            trig_fill: false,
+        },
+    );
+    let records = RECORD_CHUNK as u32 + 40;
+    let run = fill_run(records as usize, 0);
+    let key = arena_key(run.segment_records().next().expect("one segment"));
+    let (first, wanted) = arena_wants(&mut store, &run, 0..u32::MAX);
+    assert_eq!(first, RECORD_CHUNK as u32);
+    assert_eq!(wanted, [(key, u64::from(first) * 4)]);
+    let (rest, wanted) = arena_wants(&mut store, &run, first..u32::MAX);
+    assert_eq!(rest, 40);
+    assert_eq!(wanted, [(key, 160)]);
+}

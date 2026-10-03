@@ -1582,13 +1582,6 @@ impl ShapePipelineKey {
     }
 }
 
-fn strip_vertices_of(records: u32, band_class: u8) -> u64 {
-    u64::from(records)
-        * u64::from(cranpose_ui_graphics::strip_vertices(
-            cranpose_ui_graphics::band_class_segments(band_class),
-        ))
-}
-
 pub(crate) fn create_shape_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,
@@ -4585,7 +4578,10 @@ impl GpuRenderer {
         for draw in &draws {
             self.ensure_run_pipelines(
                 draw.key,
-                strip_vertices_of(draw.records.end - draw.records.start, draw.band_class),
+                crate::run_store::draw_vertices(
+                    draw.records.end - draw.records.start,
+                    draw.band_class,
+                ),
             );
         }
         StoreRunBatch {
@@ -4631,25 +4627,24 @@ impl GpuRenderer {
         let turn = viewport.transform;
         let turns = ShapeTurns::of(turn, mixed_turns);
         let mut keys: SmallVec<[(ShapePipelineKey, u64); 4]> = SmallVec::new();
-        let taken =
-            self.run_store
-                .append_arena(chunk, run, window, (root_scale, turn), &mut |segment| {
-                    let key = Self::run_pipeline_key(
-                        segment,
-                        placement,
-                        RunTier::Arena,
-                        ablation,
-                        turns,
-                        (depth, clip),
-                        viewport,
-                    );
-                    let vertices = strip_vertices_of(segment.count, segment.band_class);
-                    match keys.iter_mut().find(|(wanted, _)| *wanted == key) {
-                        Some((_, total)) => *total += vertices,
-                        None => keys.push((key, vertices)),
-                    }
-                    key
-                });
+        let taken = self.run_store.append_arena(
+            chunk,
+            run,
+            window,
+            (root_scale, turn),
+            &mut |segment| {
+                Self::run_pipeline_key(
+                    segment,
+                    placement,
+                    RunTier::Arena,
+                    ablation,
+                    turns,
+                    (depth, clip),
+                    viewport,
+                )
+            },
+            &mut keys,
+        );
         for (key, vertices) in keys {
             self.ensure_run_pipelines(key, vertices);
         }
