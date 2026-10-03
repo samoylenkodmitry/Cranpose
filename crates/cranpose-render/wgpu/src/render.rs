@@ -4029,6 +4029,10 @@ impl GpuRenderer {
             }
             (result, submitted)
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        if submitted {
+            crate::pipeline_disk_cache::note_frame_drawn();
+        }
         if !submitted {
             self.run_store.invalidate_uploads();
             self.text_glyph_gpu_run_cache.clear();

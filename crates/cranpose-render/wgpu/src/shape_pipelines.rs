@@ -101,8 +101,12 @@ impl ShapePipelines {
         }
         #[cfg(not(target_arch = "wasm32"))]
         let compile_started = web_time::Instant::now();
-        if self.asynchronous && key != key.general() {
-            self.slots.build(key.general());
+        let general = key.general();
+        if self.asynchronous
+            && key != general
+            && (!need.queued || self.slots.get(general).is_some())
+        {
+            self.slots.build(general);
             self.slots.request(key);
         } else {
             self.slots.build(key);
@@ -132,12 +136,13 @@ pub(crate) struct Need {
     /// No draw needed the key before.
     #[cfg_attr(target_arch = "wasm32", expect(dead_code))]
     pub(crate) first: bool,
+    pub(crate) queued: bool,
 }
 
 struct Entry<T> {
     value: Arc<OnceLock<T>>,
     needed: bool,
-    queued: bool,
+    queued: Option<CompileLane>,
 }
 
 /// Values by key, each built once by whichever thread asks first: a job on
@@ -172,7 +177,7 @@ impl<B: KeyedBuild> Slots<B> {
         entries.entry(key).or_insert_with(|| Entry {
             value: Arc::new(OnceLock::new()),
             needed: false,
-            queued: false,
+            queued: None,
         })
     }
 
@@ -184,6 +189,7 @@ impl<B: KeyedBuild> Slots<B> {
         Need {
             ready: entry.value.get().is_some(),
             first,
+            queued: entry.queued.is_some(),
         }
     }
 
@@ -198,7 +204,10 @@ impl<B: KeyedBuild> Slots<B> {
     /// it is ready.
     pub(crate) fn request(&mut self, key: ShapePipelineKey) {
         if self.demanded.len() == self.demanded.inline_size()
-            || self.entries.get(&key).is_some_and(|entry| entry.queued)
+            || self
+                .entries
+                .get(&key)
+                .is_some_and(|entry| entry.queued == Some(CompileLane::Demanded))
         {
             return;
         }
@@ -210,7 +219,7 @@ impl<B: KeyedBuild> Slots<B> {
         let builder = Arc::clone(&self.builder);
         let stopped = Arc::clone(&self.stopped);
         let entry = Self::entry(&mut self.entries, key);
-        entry.queued = true;
+        entry.queued = Some(lane);
         let value = Arc::clone(&entry.value);
         self.compiler.enqueue(lane, move || {
             if !stopped.load(Ordering::Acquire) {

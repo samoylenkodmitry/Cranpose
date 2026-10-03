@@ -103,6 +103,35 @@ fn an_inactive_compiler_warms_nothing_and_draws_build_where_they_ask() {
 }
 
 #[test]
+fn a_draw_can_start_its_pipeline_ahead_of_unrelated_warm_ups() {
+    let (builder, gate) = gated();
+    let mut slots = Slots::new(&PipelineCompiler::spawn(), builder);
+    let background = key(BlendMode::DstOut);
+    let drawn = key(BlendMode::SrcOver);
+    slots.warm(background);
+    assert_eq!(
+        gate.started.recv_timeout(Duration::from_secs(2)),
+        Ok(background)
+    );
+    slots.warm(drawn);
+    slots.request(drawn);
+    assert_eq!(
+        gate.started.recv_timeout(Duration::from_secs(2)),
+        Ok(drawn),
+        "a draw must not wait behind an unrelated warm-up"
+    );
+    for _ in 0..2 {
+        assert!(gate.release.send(()).is_ok());
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while slots.get(background).is_none() || slots.get(drawn).is_none() {
+        assert!(Instant::now() < deadline, "pipelines did not finish");
+        std::thread::yield_now();
+    }
+    assert_eq!(gate.builds.load(Ordering::SeqCst), 2, "each compiled once");
+}
+
+#[test]
 fn demanded_work_is_bounded_and_dropping_the_slots_cancels_what_is_queued() {
     let (builder, gate) = gated();
     let shared = PipelineCompiler::spawn();
