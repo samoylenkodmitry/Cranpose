@@ -48,15 +48,102 @@ fn first_visible_chapter(robot: &Robot, height: u32) -> (usize, SemanticRect) {
 }
 
 fn return_to_top(robot: &Robot, width: u32, height: u32) {
-    let (_, y, _, _) = find_button_exact_in_semantics(robot, "Back to top")
-        .expect("reader footer");
-    if y < 80.0 {
-        robot.move_to(width as f32 * 0.9, height as f32 * 0.6).expect("hover reader");
-        robot.mouse_scroll_and_wait_for_frame(0.0, 120.0 - y).expect("reveal footer below the back bar");
-        robot.wait_for_idle().expect("footer settles");
+    robot.move_to(width as f32 * 0.9, height as f32 * 0.6).expect("hover reader");
+    let mut visible = false;
+    for _ in 0..160 {
+        if let Some((_, y, _, button_height)) = find_button_exact_in_semantics(robot, "Back to top") {
+            if y >= 80.0 && y + button_height <= height as f32 - 60.0 {
+                visible = true;
+                break;
+            }
+        }
+        robot.mouse_scroll_and_wait_for_frame(0.0, -240.0).expect("reveal reader footer");
     }
+    assert!(visible, "reader footer appears during scroll");
     click_button(robot, "Back to top");
     robot.validate_content("Build apps with Compose in Rust.").expect("top of guide is visible");
+}
+
+fn check_wheel_fling(robot: &Robot, width: u32, height: u32, compact: bool) {
+    robot.drag_and_wait_for_frames(120.0, 550.0, 120.0, 454.0, 8).expect("flick the wheel");
+    let (released_index, released) = first_visible_chapter(robot, height);
+    robot.pump_frames(30).expect("wheel coast frames");
+    let (coasted_index, coasted) = first_visible_chapter(robot, height);
+    if compact {
+        assert_eq!(coasted_index, released_index, "mobile chapters stay in place");
+        assert!((coasted.y - released.y).abs() < 1.0, "mobile chapter list stays fixed");
+    } else {
+        assert!(coasted_index > released_index || (coasted_index == released_index && coasted.y < released.y - 10.0), "wheel must coast after release");
+    }
+    robot.touch_down(120.0, 550.0).expect("catch the spinning wheel");
+    capture(robot, width, "fling");
+    robot.touch_up(120.0, 550.0).expect("release the stopped wheel");
+ }
+
+fn check_counter_preview(robot: &Robot, width: u32, height: u32) {
+    for _ in 0..30 {
+        if let Some((_, y, _, _)) = find_text_in_semantics(robot, "use cranpose::prelude::*;") {
+            if y >= 0.0 && y < height as f32 * 0.65 {
+        break;
+            }
+        }
+        robot
+            .mouse_scroll_and_wait_for_frame(0.0, -90.0)
+            .expect("scroll to code");
+    }
+    capture(robot, width, "code");
+    let mut preview_visible = false;
+    for _ in 0..80 {
+        if let Some((_, y, _, button_height)) = find_button_exact_in_semantics(robot, "Increment") {
+            if y >= 80.0 && y + button_height <= height as f32 - 80.0 {
+        preview_visible = true;
+        break;
+            }
+        }
+        robot.mouse_scroll_and_wait_for_frame(0.0, -180.0).expect("scroll to interactive example");
+    }
+    assert!(preview_visible, "counter preview must fit in the reader");
+    click_button(robot, "Increment");
+    assert!(find_text_in_semantics_exact(robot, "Count: 1").is_some());
+    capture(robot, width, "interactive-example");
+ }
+
+fn check_mobile_tables_and_controls(robot: &Robot, width: u32, height: u32) {
+    for (chapter, target, stage) in [
+        ("Testing", "Test scope", "table"),
+        ("Liquid components", "Save", "glass-button"),
+    ] {
+        robot.move_to(width as f32 - 40.0, height as f32 * 0.65).expect("hover chapter list");
+        let mut found = false;
+        for _ in 0..30 {
+            if let Some((_, y, _, button_height)) = find_button_exact_in_semantics(robot, chapter) {
+                if y >= 96.0 && y + button_height < height as f32 - 60.0 {
+                    found = true;
+                    break;
+                }
+            }
+            robot.mouse_scroll_and_wait_for_frame(0.0, -120.0).expect("scroll chapter list");
+        }
+        assert!(found, "chapter list reaches {chapter}");
+        click_button(robot, chapter);
+        let mut found = false;
+        for _ in 0..60 {
+            if let Some((_, y, _, label_height)) = find_text_in_semantics_exact(robot, target) {
+                if y >= 80.0 && y + label_height < height as f32 - 100.0 {
+                    found = true;
+                    break;
+                }
+            }
+            robot.mouse_scroll_and_wait_for_frame(0.0, -120.0).expect("scroll to guide example");
+        }
+        assert!(found, "guide displays {target}");
+        if stage == "glass-button" {
+            click_button(robot, "Save");
+            robot.validate_content("Saved").expect("glass button state");
+        }
+        capture(robot, width, stage);
+        click_button(robot, "Back to wheel");
+    }
 }
 
 pub(crate) fn main() {
@@ -89,11 +176,15 @@ pub(crate) fn main() {
             robot.wait_for_idle().expect("wheel settles");
             capture(&robot, width, "wheel-scrolling");
             if !compact {
-                robot.validate_content("Start with the project template").expect("wheel scroll navigates the document");
+                assert!(find_text_in_semantics_exact(&robot, "Build apps with Compose in Rust.").is_none(), "wheel scroll navigates the document");
+            }
+            if !compact {
+                robot.mouse_scroll_and_wait_for_frame(0.0, 750.0).expect("return wheel to first chapter");
+                robot.wait_for_idle().expect("wheel returns to first chapter");
             }
             click_button(&robot, "Get started");
-            robot.validate_content("Start with the project template").expect("selected chapter is readable");
             capture(&robot, width, "get-started");
+            robot.validate_content("Start with the project template").expect("selected chapter is readable");
             if !compact {
                 if let Some((_, y, _, height)) = find_text_in_semantics_exact(&robot, "Counter App") {
                     assert!(y + height <= 0.0, "the tabs must scroll completely out of view: y={y}, height={height}");
@@ -104,35 +195,12 @@ pub(crate) fn main() {
             robot.mouse_scroll_sequence_and_wait_for_frames(0.0, -90.0, 3).expect("scroll reader");
             robot.wait_for_idle().expect("reader settles");
             capture(&robot, width, "scrolling");
-            let (_, scrolled_title_y, _, _) = find_text_in_semantics(&robot, "Start with the project template").expect("scrolled article heading");
-            assert!(title_y - scrolled_title_y > 50.0, "the document must scroll");
+            if let Some((_, scrolled_title_y, _, _)) = find_text_in_semantics(&robot, "Start with the project template") {
+                assert!(title_y - scrolled_title_y > 50.0, "the document must scroll");
+            }
             let github_after = find_text_in_semantics_exact(&robot, "View on GitHub").expect("fixed repository link after scrolling");
             assert!((github_after.1 - github_before.1).abs() < 1.0);
-            for _ in 0..30 {
-                let (_, y, _, _) = find_text_in_semantics(&robot, "use cranpose::prelude::*;")
-                    .expect("code block");
-                if y >= 0.0 && y < height as f32 * 0.65 {
-                    break;
-                }
-                robot
-                    .mouse_scroll_and_wait_for_frame(0.0, -90.0)
-                    .expect("scroll to code");
-            }
-            capture(&robot, width, "code");
-            let mut preview_visible = false;
-            for _ in 0..80 {
-                if let Some((_, y, _, button_height)) = find_button_exact_in_semantics(&robot, "Increment") {
-                    if y >= 80.0 && y + button_height <= height as f32 - 80.0 {
-                        preview_visible = true;
-                        break;
-                    }
-                }
-                robot.mouse_scroll_and_wait_for_frame(0.0, -180.0).expect("scroll to interactive example");
-            }
-            assert!(preview_visible, "counter preview must fit in the reader");
-            click_button(&robot, "Increment");
-            assert!(find_text_in_semantics_exact(&robot, "Count: 1").is_some());
-            capture(&robot, width, "interactive-example");
+            check_counter_preview(&robot, width, height);
             if compact {
                 click_button(&robot, "Back to wheel");
                 capture(&robot, width, "back-to-wheel");
@@ -150,14 +218,10 @@ pub(crate) fn main() {
             } else {
                 click_button(&robot, "Back to wheel");
             }
-            robot.drag_and_wait_for_frames(120.0, 550.0, 120.0, 454.0, 8).expect("flick the wheel");
-            let (released_index, released) = first_visible_chapter(&robot, height);
-            robot.pump_frames(30).expect("wheel coast frames");
-            let (coasted_index, coasted) = first_visible_chapter(&robot, height);
-            assert!(coasted_index > released_index || (coasted_index == released_index && coasted.y < released.y - 10.0), "wheel must continue rotating after release: ({released_index}, {released:?}) -> ({coasted_index}, {coasted:?})");
-            robot.touch_down(120.0, 550.0).expect("catch the spinning wheel");
-            capture(&robot, width, "fling");
-            robot.touch_up(120.0, 550.0).expect("release the stopped wheel");
+            check_wheel_fling(&robot, width, height, compact);
+            if compact {
+                check_mobile_tables_and_controls(&robot, width, height);
+            }
             robot.exit().expect("exit documentation robot");
         })
         .run(app::DesktopApp);

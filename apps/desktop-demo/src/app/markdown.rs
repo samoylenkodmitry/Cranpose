@@ -8,7 +8,7 @@ use cranpose_ui::{
     composable,
     text::{
         AnnotatedString, FontFamily, FontStyle, FontWeight, LinkAnnotation, ParagraphStyle,
-        PlatformParagraphStyle, SpanStyle, TextDecoration, TextShaping, TextUnit,
+        PlatformParagraphStyle, SpanStyle, TextAlign, TextDecoration, TextShaping, TextUnit,
     },
     Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, ContentScale,
     CornerRadii, Image, ImageBitmap, LazyColumn, LazyColumnSpec, LinearArrangement, LinkedText,
@@ -24,14 +24,17 @@ use super::{
     url_resolve::resolve_url,
 };
 
+mod table;
+
 #[derive(Clone, Debug, PartialEq)]
-enum MarkdownBlock {
+pub(super) enum MarkdownBlock {
     Text(Rc<AnnotatedString>),
     Image {
         url: String,
         alt: String,
     },
     Rule,
+    Table(Rc<table::Table>),
     Example {
         code: Rc<AnnotatedString>,
         preview: usize,
@@ -114,6 +117,7 @@ struct BlockBuilder {
     code_fence: String,
     code_preview: Option<usize>,
     pending_image: Option<PendingImage>,
+    table: Option<table::Table>,
     base_url: String,
 }
 
@@ -137,6 +141,7 @@ impl BlockBuilder {
             code_fence: String::new(),
             code_preview: None,
             pending_image: None,
+            table: None,
             base_url: base_url.to_string(),
         }
     }
@@ -266,6 +271,20 @@ impl BlockBuilder {
 
 fn start_tag(b: &mut BlockBuilder, tag: Tag) {
     match tag {
+        Tag::Table(alignments) => {
+            b.flush_block();
+            b.table = Some(table::Table {
+                alignments,
+                rows: Vec::new(),
+            });
+        }
+        Tag::TableHead | Tag::TableRow => {
+            if let Some(table) = &mut b.table {
+                table.rows.push(Vec::with_capacity(table.alignments.len()));
+            }
+            b.style.bold = matches!(tag, Tag::TableHead);
+        }
+        Tag::TableCell => b.push_inline_style(),
         Tag::Heading { level, .. } => {
             b.flush_block();
             b.style.heading = Some(level);
@@ -332,6 +351,23 @@ fn start_tag(b: &mut BlockBuilder, tag: Tag) {
 
 fn end_tag(b: &mut BlockBuilder, tag: TagEnd) {
     match tag {
+        TagEnd::TableCell => {
+            b.pop_style();
+            let cell = b
+                .builder_raw
+                .take()
+                .unwrap_or_else(AnnotatedString::builder)
+                .to_annotated_string();
+            if let Some(row) = b.table.as_mut().and_then(|table| table.rows.last_mut()) {
+                row.push(Rc::new(cell));
+            }
+        }
+        TagEnd::TableHead => b.style.bold = false,
+        TagEnd::Table => {
+            if let Some(table) = b.table.take() {
+                b.blocks.push(MarkdownBlock::Table(Rc::new(table)));
+            }
+        }
         TagEnd::Heading(_) => {
             b.pop_style();
             b.style.heading = None;
@@ -376,8 +412,8 @@ fn end_tag(b: &mut BlockBuilder, tag: TagEnd) {
     }
 }
 
-fn markdown_to_blocks(markdown: &str, base_url: &str) -> Vec<MarkdownBlock> {
-    let options = Options::empty();
+pub(super) fn markdown_to_blocks(markdown: &str, base_url: &str) -> Vec<MarkdownBlock> {
+    let options = Options::ENABLE_TABLES;
     let parser = Parser::new_ext(markdown, options);
 
     let mut b = BlockBuilder::new(base_url);
@@ -418,7 +454,7 @@ fn markdown_to_blocks(markdown: &str, base_url: &str) -> Vec<MarkdownBlock> {
 
 const MAX_MARKDOWN_BLOCK_BYTES: usize = 1200;
 
-fn split_large_markdown_blocks(blocks: Vec<MarkdownBlock>) -> Vec<MarkdownBlock> {
+pub(super) fn split_large_markdown_blocks(blocks: Vec<MarkdownBlock>) -> Vec<MarkdownBlock> {
     let mut normalized = Vec::with_capacity(blocks.len());
     for block in blocks {
         match block {
@@ -486,26 +522,6 @@ pub(super) enum MarkdownAppearance {
     #[default]
     Standard,
     Reader,
-}
-
-#[composable]
-pub(super) fn MarkdownDocument(markdown: &'static str, base_url: &'static str, width: f32) {
-    let blocks = cranpose_core::rememberKeyed((markdown, base_url), |(markdown, base_url)| {
-        Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(
-            markdown, base_url,
-        )))
-    });
-    Column(
-        Modifier::empty().fill_max_width(),
-        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(18.0)),
-        move || {
-            for (index, block) in blocks.iter().enumerate() {
-                cranpose_core::with_key(&index, || {
-                    render_markdown_block(block, MarkdownAppearance::Reader, width);
-                });
-            }
-        },
-    );
 }
 
 #[composable]
@@ -809,11 +825,16 @@ fn MarkdownBlocksList(
     );
 }
 
-fn render_markdown_block(block: &MarkdownBlock, appearance: MarkdownAppearance, width: f32) {
+pub(super) fn render_markdown_block(
+    block: &MarkdownBlock,
+    appearance: MarkdownAppearance,
+    width: f32,
+) {
     match block {
         MarkdownBlock::Text(annotated) => render_text_block(annotated.clone(), appearance),
         MarkdownBlock::Image { url, alt } => MarkdownImage(url.clone(), alt.clone()),
         MarkdownBlock::Rule => render_rule(),
+        MarkdownBlock::Table(table) => table::MarkdownTable(table.clone(), appearance),
         MarkdownBlock::Example { code, preview } => {
             if appearance == MarkdownAppearance::Reader {
                 MarkdownExample(code.clone(), *preview, width);
@@ -894,6 +915,14 @@ fn render_markdown_blocks_with_state(
 
 #[composable]
 fn render_text_block(annotated: Rc<AnnotatedString>, appearance: MarkdownAppearance) {
+    render_text_block_aligned(annotated, appearance, TextAlign::Start);
+}
+
+fn render_text_block_aligned(
+    annotated: Rc<AnnotatedString>,
+    appearance: MarkdownAppearance,
+    alignment: TextAlign,
+) {
     let code_panel = appearance == MarkdownAppearance::Reader
         && annotated.span_styles.iter().any(|span| {
             span.range.start == 0
@@ -919,6 +948,7 @@ fn render_text_block(annotated: Rc<AnnotatedString>, appearance: MarkdownAppeara
             ..Default::default()
         },
         paragraph_style: ParagraphStyle {
+            text_align: alignment,
             line_height: match appearance {
                 MarkdownAppearance::Standard => TextUnit::Unspecified,
                 MarkdownAppearance::Reader if code_panel => TextUnit::Sp(22.0),
@@ -998,13 +1028,6 @@ enum ImageState {
     Error(String),
 }
 
-/// A markdown image, fetched the first time it is composed.
-///
-/// The blocks list is a `LazyColumn` with no beyond-bounds items, so this
-/// composable only runs once its block scrolls into view — that, rather than
-/// any explicit visibility test, is what makes the fetch lazy. The slot keeps
-/// a fixed height whether or not the bitmap has arrived, so a late image
-/// cannot shift the rows the reader is looking at.
 #[composable]
 fn MarkdownImage(url: String, alt: String) {
     let cached = cached_image(&url);
