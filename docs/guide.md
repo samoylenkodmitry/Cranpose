@@ -2780,9 +2780,57 @@ Check `camera_supported()`. Handle errors from `start_camera()`.
 - `CollectEvents(rememberCameraFrames(), key, callback)` receives preview frames.
 - `capture_camera_still().await` returns a photo.
 
-[CranScan's capture screen](https://github.com/samoylenkodmitry/cranscan/blob/main/app/src/ui/capture.rs)
-uses these APIs. Its [service layer](https://github.com/samoylenkodmitry/cranscan/blob/main/app/src/services.rs)
-processes photos off the UI thread.
+Capture a JPEG from a button and retain the bytes in state:
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn CapturePhoto() {
+    let photo = rememberMutableStateOf(|| None::<CameraStill>);
+    let error = rememberMutableStateOf(|| None::<String>);
+    DisposableEffect((), move |_| {
+        if let Err(failure) = start_camera() {
+            error.set(Some(failure.to_string()));
+        }
+        DisposableEffectResult::new(stop_camera)
+    });
+    Column(Modifier::empty(), ColumnSpec::default(), move || {
+        let scope = rememberCoroutineScope();
+        Button(
+            Modifier::empty(),
+            ButtonSpec::default(),
+            move || {
+                scope.launch(async move {
+                    match capture_camera_still().await {
+                        Ok(still) => {
+                            photo.set(Some(still));
+                            error.set(None);
+                        }
+                        Err(failure) => error.set(Some(failure.to_string())),
+                    }
+                });
+            },
+            || {
+                Text("Take photo", Modifier::empty(), TextStyle::default());
+            },
+        );
+        if let Some(bytes) = photo.with(|value| value.as_ref().map(|still| still.jpeg.len())) {
+            Text(
+                format!("JPEG: {bytes} bytes"),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        }
+        if let Some(message) = error.get() {
+            Text(message, Modifier::empty(), TextStyle::default());
+        }
+    });
+}
+```
+
+`CameraStill::jpeg` contains the encoded photo. Decode the JPEG with EXIF orientation support.
+Use `launch_background` for image processing on native targets.
 
 ### Add haptic feedback
 
@@ -2796,8 +2844,32 @@ fn confirm_selection() {
 }
 ```
 
-The arguments are milliseconds and amplitude. `HapticPattern` defines a sequence.
-[Cranorbit](https://github.com/samoylenkodmitry/cranorbit/blob/main/app/src/game/haptics.rs) maps game events to patterns.
+The arguments are milliseconds and amplitude, from `0` to `255`.
+Retain a `HapticPattern` for repeated actions. Each duration has a corresponding amplitude:
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn ConfirmButton() {
+    let pattern = remember(|| HapticPattern::new(&[20, 40, 20], &[120, 0, 180]));
+    Button(
+        Modifier::empty(),
+        ButtonSpec::default(),
+        move || {
+            pattern.with(|result| match result {
+                Ok(pattern) => default_haptics().play_pattern(pattern),
+                Err(error) => eprintln!("Haptic pattern error: {error}"),
+            });
+        },
+        || {
+            Text("Confirm", Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+```
+
+This pattern plays two pulses with a 40-millisecond pause.
 
 ### Find a service
 
