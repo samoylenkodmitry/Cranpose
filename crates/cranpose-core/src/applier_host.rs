@@ -168,9 +168,23 @@ impl<A: Applier + 'static> ConcreteApplierHost<A> {
         }
     }
 
-    pub fn into_inner(self) -> A {
-        drop(self.borrow_typed());
-        self.inner.into_inner()
+    /// Returns the applier after all queued nodes have been disposed.
+    ///
+    /// On failure, returns this host with its pending resources and the error,
+    /// allowing the caller to repair the cause and retry extraction.
+    ///
+    /// ```
+    /// use cranpose_core::{ConcreteApplierHost, MemoryApplier};
+    /// let host = ConcreteApplierHost::new(MemoryApplier::new());
+    /// assert!(host.try_into_inner().is_ok());
+    /// ```
+    pub fn try_into_inner(mut self) -> Result<A, (Self, NodeError)> {
+        if let Err(error) = self.disposals.flush(self.inner.get_mut(), |applier, node| {
+            dispose_detached_node_now(applier, node)
+        }) {
+            return Err((self, error));
+        }
+        Ok(self.inner.into_inner())
     }
 }
 

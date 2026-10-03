@@ -63,7 +63,8 @@ fn teardown_composer(
         .expect("restore subcompose test slots");
     *applier = Rc::try_unwrap(applier_host)
         .unwrap_or_else(|_| panic!("applier host still has outstanding references"))
-        .into_inner();
+        .try_into_inner()
+        .unwrap_or_else(|(_, error)| panic!("applier disposal failed: {error}"));
 }
 
 fn measure_once(

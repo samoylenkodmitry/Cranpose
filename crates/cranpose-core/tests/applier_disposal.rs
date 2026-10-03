@@ -203,8 +203,18 @@ impl Node for UnmountCount {
     }
 }
 
-#[test]
-fn failed_retained_host_reset_keeps_owned_disposal_for_retry() {
+struct RetainedHostFixture {
+    composer: Composer,
+    secondary_slots: Rc<SlotsHost>,
+    host: Rc<ConcreteApplierHost<RetryApplier>>,
+    runtime: Runtime,
+    fail_disposal: Rc<Cell<bool>>,
+    resource_drops: Rc<Cell<usize>>,
+    unmounts: Rc<Cell<usize>>,
+    retained_node: NodeId,
+}
+
+fn retained_host_fixture() -> RetainedHostFixture {
     const BRANCH_KEY: Key = 0x5ec0;
 
     let fail_disposal = Rc::new(Cell::new(false));
@@ -248,6 +258,33 @@ fn failed_retained_host_reset_keeps_owned_disposal_for_retry() {
     subcompose(true);
     let retained_node = emitted_node.get().expect("branch emits a node");
     subcompose(false);
+
+    RetainedHostFixture {
+        composer,
+        secondary_slots,
+        host,
+        runtime,
+        fail_disposal,
+        resource_drops,
+        unmounts,
+        retained_node,
+    }
+}
+
+#[test]
+fn failed_retained_host_reset_keeps_owned_disposal_for_retry() {
+    let fixture = retained_host_fixture();
+    let RetainedHostFixture {
+        composer: _composer,
+        secondary_slots,
+        host,
+        runtime: _runtime,
+        fail_disposal,
+        resource_drops,
+        unmounts,
+        retained_node,
+    } = fixture;
+
     assert_eq!(resource_drops.get(), 0);
     assert_eq!(unmounts.get(), 0);
 
@@ -283,4 +320,54 @@ fn failed_retained_host_reset_keeps_owned_disposal_for_retry() {
     assert_eq!(resource_drops.get(), 1, "remembered state releases once");
     assert_eq!(unmounts.get(), 1, "retained node unmounts once");
     assert!(host.borrow_typed().inner.get_mut(retained_node).is_err());
+}
+
+#[test]
+fn failed_host_extraction_preserves_disposal_ownership_for_retry() {
+    let RetainedHostFixture {
+        composer,
+        secondary_slots,
+        host,
+        runtime: _runtime,
+        fail_disposal,
+        resource_drops,
+        unmounts,
+        retained_node,
+    } = retained_host_fixture();
+    fail_disposal.set(true);
+    assert!(secondary_slots.reset().is_err());
+    drop(composer);
+    drop(secondary_slots);
+
+    let host = Rc::try_unwrap(host)
+        .unwrap_or_else(|_| panic!("fixture left outstanding applier references"));
+    let (host, error) = match host.try_into_inner() {
+        Err(failed) => failed,
+        Ok(_) => panic!("extraction must report the queued disposal failure"),
+    };
+    assert!(matches!(error, NodeError::TypeMismatch { .. }));
+    assert_eq!(
+        resource_drops.get(),
+        0,
+        "failed extraction keeps remembered state"
+    );
+    assert_eq!(
+        unmounts.get(),
+        0,
+        "failed extraction leaves the node mounted"
+    );
+    assert!(host.borrow_typed().inner.get_mut(retained_node).is_ok());
+
+    fail_disposal.set(false);
+    let mut applier = match host.try_into_inner() {
+        Ok(applier) => applier,
+        Err((_, error)) => panic!("disposal retry failed: {error}"),
+    };
+    assert_eq!(
+        resource_drops.get(),
+        1,
+        "successful extraction releases state once"
+    );
+    assert_eq!(unmounts.get(), 1, "successful extraction unmounts once");
+    assert!(applier.inner.get_mut(retained_node).is_err());
 }

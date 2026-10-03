@@ -522,7 +522,8 @@ fn teardown_composer(
     *slots = slots_host.into_table().expect("restore composer slots");
     *applier = Rc::try_unwrap(applier_host)
         .unwrap_or_else(|_| panic!("applier host still has outstanding references"))
-        .into_inner();
+        .try_into_inner()
+        .unwrap_or_else(|(_, error)| panic!("applier disposal failed: {error}"));
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
