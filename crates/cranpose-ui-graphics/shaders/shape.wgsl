@@ -169,7 +169,7 @@ fn gradient_fill_output(full: VertexOutput) -> GradientFillOutput {
     output.clip_rect = full.clip_rect;
     output.gradient_params = full.gradient_params;
     output.brush = full.brush;
-    if (SHAPE_TURNS == TURNS_MIXED && fragment_turned(full)) {
+    if ((SHAPE_TURNS == TURNS_MIXED) & fragment_turned(full)) {
         output.brush.w = output.brush.w | BRUSH_TURNED;
     }
     output.stop_offsets = full.stop_offsets;
@@ -189,7 +189,7 @@ fn full_from_gradient_fill(fill: GradientFillOutput) -> VertexOutput {
     output.radii = fill.radii;
     output.gradient_params = fill.gradient_params;
     output.clip_rect = fill.clip_rect;
-    let turned = SHAPE_TURNS == TURNS_MIXED && (fill.brush.w & BRUSH_TURNED) != 0u;
+    let turned = (SHAPE_TURNS == TURNS_MIXED) & ((fill.brush.w & BRUSH_TURNED) != 0u);
     output.stroke_params = vec4<f32>(0.0, select(0.0, f32(SHAPE_FLAG_TURNED), turned), 0.0, 0.0);
     output.arc_params = select(vec4<f32>(0.0), fill_bands(fill.rect, fill.radii), SHAPE_INTERIOR);
     output.brush = select(fill.brush, vec4<u32>(fill.brush.xyz, fill.brush.w & ~BRUSH_TURNED), SHAPE_TURNS == TURNS_MIXED);
@@ -344,8 +344,8 @@ const TURNS_ALL: u32 = 1u;
 const TURNS_MIXED: u32 = 2u;
 
 fn placement_turned(placement: Placement) -> bool {
-    return SHAPE_TURNS == TURNS_ALL
-        || (SHAPE_TURNS == TURNS_MIXED && (placement.flags & PLACEMENT_TURNED) != 0u);
+    return (SHAPE_TURNS == TURNS_ALL)
+        | ((SHAPE_TURNS == TURNS_MIXED) & ((placement.flags & PLACEMENT_TURNED) != 0u));
 }
 
 // The bit of `stroke_params.y` that tells the fragment stage its record is
@@ -355,8 +355,8 @@ const SHAPE_FLAG_TURNED: u32 = 64u;
 // the top of `brush.w`, above the tile mode.
 const BRUSH_TURNED: u32 = 0x80000000u;
 fn record_placement(record: ShapeRecord) -> Placement {
-    if (SHAPE_TIER == TIER_ARENA
-        || (SHAPE_TIER == TIER_EITHER && uniforms.reserved.y == f32(TIER_ARENA))) {
+    if ((SHAPE_TIER == TIER_ARENA)
+        | ((SHAPE_TIER == TIER_EITHER) & (uniforms.reserved.y == f32(TIER_ARENA)))) {
         return placements[record.placement];
     }
     return uniforms.placement;
@@ -384,8 +384,8 @@ struct RecordGeometry {
 
 fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry {
     let kind = record.flags & 3u;
-    let stroked = (DRAWS_STROKES || DRAWS_LINES)
-        && (record.flags & RECORD_STROKED) != 0u && kind != RECORD_KIND_ARC;
+    let stroked = (DRAWS_STROKES | DRAWS_LINES)
+        & ((record.flags & RECORD_STROKED) != 0u && kind != RECORD_KIND_ARC);
     let half_width = select(0.0, record.stroke_width * 0.5, stroked);
     let scale = placement.root_scale;
     let canonicalize = (placement.flags & PLACEMENT_CANONICALIZE) != 0u;
@@ -399,9 +399,9 @@ fn record_geometry(record: ShapeRecord, placement: Placement) -> RecordGeometry 
     geometry.rect = vec4<f32>(left, top, right - left, bottom - top);
     geometry.canonicalize = canonicalize;
     geometry.scale = scale;
-    if (DRAWS_ARCS && kind == RECORD_KIND_ARC) {
+    if (DRAWS_ARCS & (kind == RECORD_KIND_ARC)) {
         geometry.trig = arc_row(record);
-    } else if (DRAWS_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
+    } else if (DRAWS_BANDS & ((record.flags & RECORD_ARC_BANDED) != 0u)) {
         geometry.trig = FULL_TURN_TRIG;
     }
     return geometry;
@@ -530,9 +530,9 @@ fn shape_output(
     output.rect = geometry.rect;
     let scale = geometry.scale;
     let kind = record.flags & 3u;
-    let stroked = DRAWS_STROKES && (record.flags & RECORD_STROKED) != 0u;
+    let stroked = DRAWS_STROKES & ((record.flags & RECORD_STROKED) != 0u);
 
-    if (DRAWS_LINES && kind == RECORD_KIND_LINE) {
+    if (DRAWS_LINES & (kind == RECORD_KIND_LINE)) {
         let line = line_frame(record, placement);
         let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
         output.radii = vec4<f32>(0.0);
@@ -557,7 +557,7 @@ fn shape_output(
         let end = line.center + line.direction * line.half_length;
         let low = min(start, end) - reach;
         output.rect = vec4<f32>(low, max(start, end) + reach - low);
-    } else if (DRAWS_ARCS && kind == RECORD_KIND_ARC) {
+    } else if (DRAWS_ARCS & (kind == RECORD_KIND_ARC)) {
         output.radii = geometry.trig;
         let cap = (record.flags >> RECORD_BAND_CAP_SHIFT) & 3u;
         output.stroke_params = vec4<f32>(
@@ -590,17 +590,17 @@ fn shape_output(
         } else {
             output.stroke_params = vec4<f32>(0.0);
         }
-        if (SHAPE_INTERIOR && !stroked) {
+        if (SHAPE_INTERIOR & !stroked) {
             output.arc_params = fill_interior(geometry.rect, output.radii);
         } else {
             output.arc_params = vec4<f32>(0.0);
         }
     }
-    if (SHAPE_TURNS == TURNS_MIXED && placement_turned(placement)) {
+    if ((SHAPE_TURNS == TURNS_MIXED) & placement_turned(placement)) {
         output.stroke_params.y = f32(u32(output.stroke_params.y) | SHAPE_FLAG_TURNED);
     }
 
-    if (SHAPE_CLIPPED && (placement.flags & PLACEMENT_CLIPPED) != 0u) {
+    if (SHAPE_CLIPPED & ((placement.flags & PLACEMENT_CLIPPED) != 0u)) {
         output.clip_rect = placement.clip;
         output.clip_radius = select(0.0, placement.clip_radius, SHAPE_ROUNDED_CLIP);
     } else {
@@ -610,7 +610,7 @@ fn shape_output(
 
     output.gradient_params = vec4<f32>(0.0);
     output.brush = vec4<u32>(0u);
-    if (!SHAPE_SOLID && record.brush != 0u) {
+    if (!SHAPE_SOLID & (record.brush != 0u)) {
         let brush = brushes[record.brush - 1u];
         let rect = geometry.rect;
         let canonicalize = geometry.canonicalize;
@@ -659,20 +659,20 @@ fn collapsed() -> VertexOutput {
 // Vertex stage
 //
 fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
-    if ((DRAWS_ARCS || DRAWS_LINES) && (record.flags & RECORD_ARC_DEGENERATE) != 0u) {
+    if ((DRAWS_ARCS | DRAWS_LINES) & ((record.flags & RECORD_ARC_DEGENERATE) != 0u)) {
         return collapsed();
     }
     let placement = record_placement(record);
     let geometry = record_geometry(record, placement);
-    if (DRAWS_LINES && (record.flags & 3u) == RECORD_KIND_LINE) {
+    var position: vec2<f32>;
+    if (DRAWS_LINES & ((record.flags & 3u) == RECORD_KIND_LINE)) {
         let line = line_frame(record, placement);
         let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
         if (local >= 4u) {
             return pinned(line_corner(line, cap, 3u), placement);
         }
-        return shape_output(record, placement, geometry, line_corner(line, cap, local));
-    }
-    if (DRAWS_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
+        position = line_corner(line, cap, local);
+    } else if (DRAWS_BANDS & ((record.flags & RECORD_ARC_BANDED) != 0u)) {
         let segments = 1u << ((record.flags >> RECORD_BAND_CLASS_SHIFT) & RECORD_BAND_CLASS_MASK);
         if (local >= segments * 2u + 2u) {
             return pinned(
@@ -680,20 +680,20 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
                 placement,
             );
         }
-        let position =
+        position =
             band_position(record, placement, geometry.trig, local >> 1u, local & 1u, segments);
-        return shape_output(record, placement, geometry, position);
+    } else {
+        if (local >= 4u) {
+            return pinned(geometry.rect.xy + geometry.rect.zw, placement);
+        }
+        let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
+        if (placement_turned(placement)) {
+            let margin = BAND_MARGIN;
+            position = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
+        } else {
+            position = geometry.rect.xy + uv * geometry.rect.zw;
+        }
     }
-    if (local >= 4u) {
-        return pinned(geometry.rect.xy + geometry.rect.zw, placement);
-    }
-    let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
-    if (placement_turned(placement)) {
-        let margin = BAND_MARGIN;
-        let grown = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
-        return shape_output(record, placement, geometry, grown);
-    }
-    let position = geometry.rect.xy + uv * geometry.rect.zw;
     return shape_output(record, placement, geometry, position);
 }
 
@@ -722,9 +722,9 @@ fn segment_position(fragment_position: vec2<f32>, world_pos: vec2<f32>, turned: 
 
 // Whether the record a fragment belongs to is turned.
 fn fragment_turned(input: VertexOutput) -> bool {
-    return SHAPE_TURNS == TURNS_ALL
-        || (SHAPE_TURNS == TURNS_MIXED
-            && (u32(max(input.stroke_params.y, 0.0)) & SHAPE_FLAG_TURNED) != 0u);
+    return (SHAPE_TURNS == TURNS_ALL)
+        | ((SHAPE_TURNS == TURNS_MIXED)
+            & ((u32(max(input.stroke_params.y, 0.0)) & SHAPE_FLAG_TURNED) != 0u));
 }
 
 // A vertex past the record's own, at the device position of its last
@@ -1356,7 +1356,7 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
 /// it). The pipeline constants fold branches; they never copy code.
 fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     let alpha = shape_record_coverage(input);
-    if (!SHAPE_ROUNDED_CLIP || input.clip_radius <= 0.0) {
+    if (!SHAPE_ROUNDED_CLIP | (input.clip_radius <= 0.0)) {
         return alpha;
     }
     // The same coverage the blit's mask takes of a rounded clip.
@@ -1385,7 +1385,7 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
     // Apply clipping: if clip_rect has non-zero size, clip to it
     let clip_w = input.clip_rect.z;
     let clip_h = input.clip_rect.w;
-    if (SHAPE_CLIPPED && clip_w > 0.0 && clip_h > 0.0) {
+    if (SHAPE_CLIPPED & (clip_w > 0.0 && clip_h > 0.0)) {
         let clip_left = input.clip_rect.x;
         let clip_top = input.clip_rect.y;
         let clip_right = clip_left + clip_w;
@@ -1410,13 +1410,13 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
     let flags = u32(max(input.stroke_params.y, 0.0));
     let shape_kind = select(flags & 3u, u32(max(SHAPE_KIND_FIXED, 0)), SHAPE_KIND_FIXED >= 0);
     let interior = input.arc_params;
-    if (SHAPE_INTERIOR && shape_kind == SHAPE_KIND_FILL &&
+    if (SHAPE_INTERIOR & (shape_kind == SHAPE_KIND_FILL &&
         rect_pos.x >= interior.x && rect_pos.x <= interior.z &&
-        rect_pos.y >= interior.y && rect_pos.y <= interior.w) {
+        rect_pos.y >= interior.y && rect_pos.y <= interior.w)) {
         return 1.0;
     }
 
-    if (SHAPE_BANDS && !fragment_turned(input)) {
+    if (SHAPE_BANDS & !fragment_turned(input)) {
         if (rect_pos.x < input.rect.x || rect_pos.x > input.rect.x + input.rect.z ||
             rect_pos.y < input.rect.y || rect_pos.y > input.rect.y + input.rect.w) {
             discard;
@@ -1433,9 +1433,9 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
     let has_radii = (input.radii[0] > 0.0 || input.radii[1] > 0.0 ||
                      input.radii[2] > 0.0 || input.radii[3] > 0.0);
     var alpha: f32;
-    if (DRAWS_LINES && shape_kind == SHAPE_KIND_LINE) {
+    if (DRAWS_LINES & (shape_kind == SHAPE_KIND_LINE)) {
         alpha = line_coverage(rect_pos, input.arc_params, input.stroke_params, stroke_cap);
-    } else if (DRAWS_ARCS && shape_kind == SHAPE_KIND_ARC) {
+    } else if (DRAWS_ARCS & (shape_kind == SHAPE_KIND_ARC)) {
         // Arcs have no corner radii, so `radii` carries the precomputed
         // (sin, cos) of the mid angle (xy) and of the half sweep (zw).
         let dist = sdf_arc_band(
@@ -1448,7 +1448,7 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
             stroke_cap,
         );
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
-    } else if (DRAWS_STROKES && shape_kind == SHAPE_KIND_STROKE) {
+    } else if (DRAWS_STROKES & (shape_kind == SHAPE_KIND_STROKE)) {
         let dist = sdf_stroked_rounded_rect(
             local_pos,
             half_size,
@@ -1575,7 +1575,7 @@ fn fragment(input: VertexOutput) -> vec4<f32> {
     // Dither the gradient, and only the gradient — a solid brush has no ramp
     // to band, and Skia leaves it alone too, which is why solid fills already
     // land byte-for-byte on the Compose build's.
-    let vertex_gradient = SHAPE_DITHER && input.world_pos.z > UNDITHERED * 0.5;
+    let vertex_gradient = SHAPE_DITHER & (input.world_pos.z > UNDITHERED * 0.5);
     if ((is_gradient || vertex_gradient) && color.a > 0.0) {
         let offset = gradient_dither(input.world_pos.zw) * (1.0 / 255.0);
         color = vec4<f32>(clamp(color.rgb + vec3<f32>(offset), vec3<f32>(0.0), vec3<f32>(1.0)),
