@@ -50,21 +50,11 @@ pub struct StateRecord {
 }
 
 pub(crate) trait RecordValue: Any {
-    fn as_any(&self) -> &dyn Any;
-    fn as_any_mut(&mut self) -> &mut dyn Any;
     fn clone_boxed(&self) -> Box<dyn RecordValue>;
     fn assign_into(&self, target: &mut Option<Box<dyn RecordValue>>);
 }
 
 impl<T: Any + Clone> RecordValue for T {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
     fn clone_boxed(&self) -> Box<dyn RecordValue> {
         Box::new(self.clone())
     }
@@ -72,7 +62,7 @@ impl<T: Any + Clone> RecordValue for T {
     fn assign_into(&self, target: &mut Option<Box<dyn RecordValue>>) {
         match target
             .as_mut()
-            .and_then(|value| (**value).as_any_mut().downcast_mut::<T>())
+            .and_then(|value| (&mut **value as &mut dyn Any).downcast_mut::<T>())
         {
             Some(slot) => slot.clone_from(self),
             None => *target = Some(Box::new(self.clone())),
@@ -172,7 +162,7 @@ impl StateRecord {
         let mut value = self.value.borrow_mut();
         match value
             .as_mut()
-            .and_then(|current| (**current).as_any_mut().downcast_mut::<T>())
+            .and_then(|current| (&mut **current as &mut dyn Any).downcast_mut::<T>())
         {
             Some(slot) => *slot = new_value,
             None => *value = Some(Box::new(new_value)),
@@ -190,7 +180,7 @@ impl StateRecord {
         self.value
             .borrow()
             .as_ref()
-            .filter(|value| (***value).as_any().type_id() == expected)
+            .filter(|value| (&***value as &dyn Any).type_id() == expected)
             .map(|value| (**value).clone_boxed())
     }
 
@@ -207,7 +197,7 @@ impl StateRecord {
         let guard = self.value.borrow();
         let value = guard
             .as_ref()
-            .and_then(|boxed| (**boxed).as_any().downcast_ref::<T>())?;
+            .and_then(|boxed| (&**boxed as &dyn Any).downcast_ref::<T>())?;
         Some(f(value))
     }
 
