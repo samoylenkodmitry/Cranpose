@@ -60,6 +60,63 @@ fn target_view(
     )
 }
 
+fn poison_device(renderer: &support::LockedRenderer) {
+    let device = renderer
+        .try_device()
+        .expect("renderer GPU device was not initialized");
+    let _ = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Deliberate Validation Error (zero width)"),
+        size: wgpu::Extent3d {
+            width: 0,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING,
+        view_formats: &[],
+    });
+    assert!(
+        renderer.device_error_count_for_tests() >= 1,
+        "the uncaptured-error handler must record the validation error"
+    );
+}
+
+#[test]
+fn screenshot_reports_canceled_render_and_recovers() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping screenshot recovery: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    renderer.scene_mut().graph = Some(direct_graph());
+    let before = renderer
+        .capture_frame(WIDTH, HEIGHT)
+        .expect("clean capture");
+    assert!(
+        before
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[1] > pixel[0] && pixel[1] > pixel[2]),
+        "the clean capture must contain the green rectangle"
+    );
+    poison_device(&renderer);
+    assert!(
+        renderer.capture_frame(WIDTH, HEIGHT).is_err(),
+        "a canceled render must fail instead of returning blank pixels"
+    );
+    let after = renderer
+        .capture_frame(WIDTH, HEIGHT)
+        .expect("recovered capture");
+    assert_eq!(before.pixels, after.pixels);
+}
+
 #[test]
 fn uncaptured_device_error_poisons_one_frame_then_recovers() {
     let mut renderer = match support::headless_renderer() {
@@ -85,27 +142,7 @@ fn uncaptured_device_error_poisons_one_frame_then_recovers() {
         "a clean frame must record no device errors"
     );
 
-    let device = renderer
-        .try_device()
-        .expect("renderer GPU device was not initialized");
-    let _ = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("Deliberate Validation Error (zero width)"),
-        size: wgpu::Extent3d {
-            width: 0,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
-    assert!(
-        renderer.device_error_count_for_tests() >= 1,
-        "the uncaptured-error handler must record the validation error"
-    );
+    poison_device(&renderer);
 
     let packet = renderer
         .build_frame_packet_for_tests(WIDTH, HEIGHT)

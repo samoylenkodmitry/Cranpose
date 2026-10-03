@@ -3853,6 +3853,7 @@ impl GpuRenderer {
         if width == 0 || height == 0 {
             return Err("Screenshot size must be non-zero".to_string());
         }
+        let errors_before = self.device_errors.error_count();
 
         let output_texture = crate::offscreen::create_2d_texture(
             &self.device,
@@ -3873,7 +3874,22 @@ impl GpuRenderer {
             Some(&output_view),
             None,
         )?;
+        if returns.outcome != PresentOutcome::Presented {
+            return Err(format!(
+                "Screenshot rendering did not complete: {:?}",
+                returns.outcome
+            ));
+        }
+        self.read_screenshot_pixels(&output_texture, errors_before)
+    }
 
+    fn read_screenshot_pixels(
+        &mut self,
+        output_texture: &wgpu::Texture,
+        errors_before: u64,
+    ) -> Result<Vec<u8>, String> {
+        let width = output_texture.width();
+        let height = output_texture.height();
         let bytes_per_pixel = 4u32;
         let unpadded_bytes_per_row = width
             .checked_mul(bytes_per_pixel)
@@ -3896,7 +3912,7 @@ impl GpuRenderer {
         graph.add_fallible_command_pass(Some("Screenshot Copy Pass"), &[source], &[], |context| {
             context.encoder.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &output_texture,
+                    texture: output_texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
@@ -3932,15 +3948,21 @@ impl GpuRenderer {
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
-        let _ = self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(submission_index),
-            timeout: None,
-        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission_index),
+                timeout: None,
+            })
+            .map_err(|error| format!("Screenshot GPU wait failed: {error}"))?;
 
         match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(Ok(())) => {}
             Ok(Err(err)) => return Err(format!("Screenshot map_async failed: {err:?}")),
             Err(err) => return Err(format!("Screenshot readback timed out: {err}")),
+        }
+        if self.device_errors.error_count() != errors_before {
+            output_buffer.unmap();
+            return Err("GPU errors occurred while capturing the screenshot".to_string());
         }
 
         let mapped = buffer_slice
