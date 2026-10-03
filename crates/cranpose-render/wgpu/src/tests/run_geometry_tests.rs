@@ -76,6 +76,16 @@ fn recorded_arcs(record: impl FnOnce(&mut DrawScopeDefault)) -> Vec<ShapeRecord>
 
 fn assert_strip_covers_shader(record: &ShapeRecord, scale: f32) {
     let strip = BandStrip::of(record, Point::default(), scale, record.band_segments());
+    assert_strip_covers_pixels(&strip, record, scale);
+    let disc = quad_area(record, scale);
+    assert!(
+        strip.area() < disc,
+        "the strip must cost less than the disc: {} vs {disc}",
+        strip.area()
+    );
+}
+
+fn assert_strip_covers_pixels(strip: &BandStrip, record: &ShapeRecord, scale: f32) {
     let rect = record.coverage_rect();
     let left = ((rect.x * scale).floor() as i32) - 2;
     let top = ((rect.y * scale).floor() as i32) - 2;
@@ -88,19 +98,13 @@ fn assert_strip_covers_shader(record: &ShapeRecord, scale: f32) {
             if shader_shades(record, scale, point) {
                 shaded += 1;
                 assert!(
-                    strip_covers(&strip, point),
+                    strip_covers(strip, point),
                     "pixel {point:?} is shaded by the arc SDF but outside the strip of {record:?}"
                 );
             }
         }
     }
     assert!(shaded > 0, "the arc must shade something: {record:?}");
-    let disc = quad_area(record, scale);
-    assert!(
-        strip.area() < disc,
-        "the strip must cost less than the disc: {} vs {disc}",
-        strip.area()
-    );
 }
 
 #[test]
@@ -186,6 +190,33 @@ fn every_pixel_the_arc_shader_shades_lies_inside_its_strip() {
         for scale in [1.0, 2.75] {
             assert_strip_covers_shader(record, scale);
         }
+    }
+}
+
+#[test]
+fn a_strip_whose_padded_sweep_closes_at_a_small_scale_stays_within_its_square() {
+    let records = recorded_arcs(|scope| {
+        scope.draw_arc(
+            Brush::solid(Color::WHITE),
+            Point::new(300.0, 300.0),
+            30.0,
+            0.4,
+            1.5,
+            Stroke::new(2.0),
+        );
+    });
+    let record = &records[0];
+    assert!(record.is_banded());
+    for scale in [0.02, 0.05, 0.1] {
+        let strip = BandStrip::of(record, Point::default(), scale, 2);
+        assert_strip_covers_pixels(&strip, record, scale);
+        let side = 2.0 * (record.arc_band[3] * scale + BAND_MARGIN);
+        assert!(
+            strip.area() <= f64::from(side * side) * 1.0001,
+            "the strip at scale {scale} must stay within its padded square: {} vs {}",
+            strip.area(),
+            side * side
+        );
     }
 }
 

@@ -312,9 +312,9 @@ const PLACEMENT_TURNED: u32 = 16u;
 
 // A band's slack beyond its ring, in device pixels, so every pixel the
 // fragment stage anti-aliases lies inside the strip.
-const BAND_MARGIN: f32 = 1.0;
-const BAND_QUAD_MARGIN: f32 = 0.5 + 1.0 / 16.0;
+const BAND_MARGIN: f32 = 0.5 + 1.0 / 16.0;
 const BAND_ANGULAR_PAD: f32 = 0.001;
+const BAND_MAX_STEP: f32 = 1.5707963267948966;
 const INFINITE_GRADIENT_POINT: f32 = 1.0e30;
 
 // Which tier a pipeline draws from. The store tier draws one recording from
@@ -330,7 +330,7 @@ override SHAPE_TIER: u32 = TIER_STORE;
 override SHAPE_BANDS: bool = true;
 override SHAPE_TRIG_FILLED: bool = false;
 // Which records the pipeline draws turned: a layer drawn in place under a
-// turn grows its quads by `BAND_QUAD_MARGIN`, so the pixels a turned edge
+// turn grows its quads by `BAND_MARGIN`, so the pixels a turned edge
 // crosses outside the rect are shaded too, and its fragments evaluate their
 // distance fields at the position before the turn. 0 draws none turned and
 // 1 draws every record turned, each compiling only its own path; 2 reads
@@ -550,7 +550,7 @@ fn shape_output(
         if (cap == STROKE_CAP_ROUND) {
             reach = vec2<f32>(line.half_width);
         }
-        reach += vec2<f32>(BAND_QUAD_MARGIN);
+        reach += vec2<f32>(BAND_MARGIN);
         let start = line.center - line.direction * line.half_length;
         let end = line.center + line.direction * line.half_length;
         let low = min(start, end) - reach;
@@ -687,7 +687,7 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
     }
     let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
     if (placement_turned(placement)) {
-        let margin = BAND_QUAD_MARGIN;
+        let margin = BAND_MARGIN;
         let grown = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
         return shape_output(record, placement, geometry, grown);
     }
@@ -912,8 +912,8 @@ fn line_frame(record: ShapeRecord, placement: Placement) -> LineFrame {
 // in its high bit and the left side in its low one.
 fn line_corner(line: LineFrame, cap: u32, local: u32) -> vec2<f32> {
     let cap_reach = select(line.half_width, 0.0, cap == STROKE_CAP_BUTT);
-    let reach = line.half_length + cap_reach + BAND_QUAD_MARGIN;
-    let side = line.half_width + BAND_QUAD_MARGIN;
+    let reach = line.half_length + cap_reach + BAND_MARGIN;
+    let side = line.half_width + BAND_MARGIN;
     let along = select(-reach, reach, (local >> 1u) == 1u);
     let across = select(-side, side, (local & 1u) == 1u);
     let normal = vec2<f32>(-line.direction.y, line.direction.x);
@@ -943,6 +943,19 @@ fn line_coverage(p: vec2<f32>, frame: vec4<f32>, params: vec4<f32>, cap: u32) ->
     return across_coverage * clamp(reach + 0.5 - along, 0.0, 1.0);
 }
 
+fn band_padded_range(mid: f32, ring_half: f32, start: f32, sweep: f32) -> vec2<f32> {
+    let inner_padded = mid - ring_half;
+    if (inner_padded <= 0.0) {
+        return vec2<f32>(0.0, TAU);
+    }
+    let pad = ring_half / inner_padded + BAND_ANGULAR_PAD;
+    let padded = sweep + pad + pad;
+    if (padded < TAU) {
+        return vec2<f32>(start - pad, padded);
+    }
+    return vec2<f32>(0.0, TAU);
+}
+
 fn band_position(
     record: ShapeRecord,
     placement: Placement,
@@ -956,7 +969,7 @@ fn band_position(
     let inner = record.arc_geometry.z * scale;
     let outer = record.arc_geometry.w * scale;
     let mid = (outer + inner) * 0.5;
-    let margin = select(BAND_MARGIN, BAND_QUAD_MARGIN, segments == 1u);
+    let margin = BAND_MARGIN;
     let ring_half = max((outer - inner) * 0.5, 0.0) + margin;
     if (segments == 1u) {
         let half_width = mid * trig.z + ring_half;
@@ -974,12 +987,17 @@ fn band_position(
     }
     let outer_padded = mid + ring_half;
     let inner_padded = max(mid - ring_half, 0.0);
-    let range_start = record.arc_normalized.z;
-    let range = record.arc_normalized.w;
-    let step = range / f32(segments);
+    let range = band_padded_range(mid, ring_half, record.arc_normalized.x, record.arc_normalized.y);
+    let step = range.y / f32(segments);
+    if (step > BAND_MAX_STEP) {
+        return center + vec2<f32>(
+            select(-outer_padded, outer_padded, boundary >= 1u),
+            select(-outer_padded, outer_padded, side == 1u),
+        );
+    }
     let outer_vertex = outer_padded / cos(step * 0.5);
     let radius = select(inner_padded, outer_vertex, side == 1u);
-    let angle = range_start + step * f32(boundary);
+    let angle = range.x + step * f32(boundary);
     return center + vec2<f32>(cos(angle), sin(angle)) * radius;
 }
 
