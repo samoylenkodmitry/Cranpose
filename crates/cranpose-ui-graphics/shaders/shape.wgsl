@@ -663,15 +663,15 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
     }
     let placement = record_placement(record);
     let geometry = record_geometry(record, placement);
+    var position: vec2<f32>;
     if (DRAWS_LINES && (record.flags & 3u) == RECORD_KIND_LINE) {
         let line = line_frame(record, placement);
         let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
         if (local >= 4u) {
             return pinned(line_corner(line, cap, 3u), placement);
         }
-        return shape_output(record, placement, geometry, line_corner(line, cap, local));
-    }
-    if (DRAWS_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
+        position = line_corner(line, cap, local);
+    } else if (DRAWS_BANDS && (record.flags & RECORD_ARC_BANDED) != 0u) {
         let segments = 1u << ((record.flags >> RECORD_BAND_CLASS_SHIFT) & RECORD_BAND_CLASS_MASK);
         if (local >= segments * 2u + 2u) {
             return pinned(
@@ -679,20 +679,20 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
                 placement,
             );
         }
-        let position =
+        position =
             band_position(record, placement, geometry.trig, local >> 1u, local & 1u, segments);
-        return shape_output(record, placement, geometry, position);
+    } else {
+        if (local >= 4u) {
+            return pinned(geometry.rect.xy + geometry.rect.zw, placement);
+        }
+        let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
+        if (placement_turned(placement)) {
+            let margin = BAND_MARGIN;
+            position = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
+        } else {
+            position = geometry.rect.xy + uv * geometry.rect.zw;
+        }
     }
-    if (local >= 4u) {
-        return pinned(geometry.rect.xy + geometry.rect.zw, placement);
-    }
-    let uv = vec2<f32>(f32(local >> 1u), f32(local & 1u));
-    if (placement_turned(placement)) {
-        let margin = BAND_MARGIN;
-        let grown = geometry.rect.xy - margin + uv * (geometry.rect.zw + 2.0 * margin);
-        return shape_output(record, placement, geometry, grown);
-    }
-    let position = geometry.rect.xy + uv * geometry.rect.zw;
     return shape_output(record, placement, geometry, position);
 }
 
