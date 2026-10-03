@@ -4089,6 +4089,7 @@ impl GpuRenderer {
             recorder.record_pass();
         }
         self.stage_frame_uploads(recorder);
+        self.shape_pipelines.request_wanted();
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
         Ok(())

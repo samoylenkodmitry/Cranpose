@@ -193,7 +193,7 @@ fn a_frames_heaviest_wanted_pipelines_take_the_demand_slots_first() {
     slots.want(heavy, 30_000);
     slots.want(middle, 300);
     slots.want(heavy, 30_000);
-    slots.settle_demanded();
+    slots.request_wanted();
     for expected in [heavy, middle] {
         assert_eq!(
             gate.started.recv_timeout(Duration::from_secs(2)),

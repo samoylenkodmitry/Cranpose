@@ -84,6 +84,10 @@ impl ShapePipelines {
         self.slots.settle_demanded();
     }
 
+    pub(crate) fn request_wanted(&mut self) {
+        self.slots.request_wanted();
+    }
+
     pub(crate) fn ensure(&mut self, key: ShapePipelineKey, vertices: u64) {
         let need = self.slots.need(key);
         #[cfg(not(target_arch = "wasm32"))]
@@ -248,9 +252,7 @@ impl<B: KeyedBuild> Slots<B> {
         }
     }
 
-    /// Forgets the demanded keys whose values are built, then queues the
-    /// keys the last frame's draws wanted, those drawing the most vertices
-    /// first, while demand slots are free.
+    /// Forgets the demanded keys whose values are built.
     pub(crate) fn settle_demanded(&mut self) {
         let entries = &self.entries;
         self.demanded.retain(|key| {
@@ -258,6 +260,12 @@ impl<B: KeyedBuild> Slots<B> {
                 .get(key)
                 .is_none_or(|entry| entry.value.get().is_none())
         });
+    }
+
+    pub(crate) fn request_wanted(&mut self) {
+        if self.wanted.is_empty() {
+            return;
+        }
         let mut wanted = std::mem::take(&mut self.wanted);
         wanted.sort_unstable_by_key(|&(_, vertices)| std::cmp::Reverse(vertices));
         for (key, _) in wanted.drain(..) {
