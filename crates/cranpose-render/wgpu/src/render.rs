@@ -1250,8 +1250,11 @@ impl ShapeVariant {
         }
     }
 
+    /// The variant that draws anything this one draws: every kind, without
+    /// the line paths when this variant holds no line.
     fn general(self) -> Self {
         Self {
+            kinds: (ALL_SHAPE_KINDS & !LINE_KIND) | (self.kinds & LINE_KIND),
             ablation: self.ablation,
             ..Self::GENERAL
         }
