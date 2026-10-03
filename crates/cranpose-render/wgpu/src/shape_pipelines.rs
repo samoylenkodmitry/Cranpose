@@ -1,6 +1,6 @@
 use std::sync::{
-    Arc, OnceLock,
-    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock, PoisonError,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use cranpose_core::collections::map::HashMap;
@@ -81,7 +81,7 @@ impl ShapePipelines {
     }
 
     pub(crate) fn begin_frame(&mut self) {
-        self.slots.settle_demanded();
+        self.slots.begin_frame();
     }
 
     pub(crate) fn request_wanted(&mut self) {
@@ -146,7 +146,7 @@ pub(crate) struct Need {
 struct Entry<T> {
     value: Arc<OnceLock<T>>,
     needed: bool,
-    queued: Option<CompileLane>,
+    queued: bool,
 }
 
 /// Values by key, each built once by whichever thread asks first: a job on
@@ -157,11 +157,45 @@ pub(crate) struct Slots<B: KeyedBuild> {
     entries: HashMap<ShapePipelineKey, Entry<B::Output>>,
     builder: Arc<B>,
     compiler: PipelineCompiler,
-    /// Keys a frame queued, not yet built: at most two at a time, so a burst
-    /// of new keys queues behind nothing a frame waits for.
-    demanded: SmallVec<[ShapePipelineKey; 2]>,
     wanted: SmallVec<[(ShapePipelineKey, u64); 4]>,
+    demand: Arc<Demand<B::Output>>,
+    published: bool,
     stopped: Arc<AtomicBool>,
+}
+
+const DEMANDED_JOBS: usize = 2;
+
+struct Demand<T> {
+    wanted: Mutex<SmallVec<[Wanted<T>; 4]>>,
+    jobs: AtomicUsize,
+}
+
+struct Wanted<T> {
+    key: ShapePipelineKey,
+    vertices: u64,
+    value: Arc<OnceLock<T>>,
+}
+
+impl<T> Demand<T> {
+    fn take_heaviest(&self) -> Option<(ShapePipelineKey, Arc<OnceLock<T>>)> {
+        let mut wanted = self.wanted.lock().unwrap_or_else(PoisonError::into_inner);
+        let heaviest = wanted
+            .iter()
+            .enumerate()
+            .filter(|(_, wanted)| wanted.value.get().is_none())
+            .max_by_key(|(_, wanted)| wanted.vertices)
+            .map(|(index, _)| index)?;
+        let taken = wanted.swap_remove(heaviest);
+        Some((taken.key, taken.value))
+    }
+}
+
+struct DemandedJob<T>(Arc<Demand<T>>);
+
+impl<T> Drop for DemandedJob<T> {
+    fn drop(&mut self) {
+        self.0.jobs.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 impl<B: KeyedBuild> Slots<B> {
@@ -170,8 +204,12 @@ impl<B: KeyedBuild> Slots<B> {
             entries: HashMap::default(),
             builder: Arc::new(builder),
             compiler: compiler.clone(),
-            demanded: SmallVec::new(),
             wanted: SmallVec::new(),
+            demand: Arc::new(Demand {
+                wanted: Mutex::new(SmallVec::new()),
+                jobs: AtomicUsize::new(0),
+            }),
+            published: false,
             stopped: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -183,7 +221,7 @@ impl<B: KeyedBuild> Slots<B> {
         entries.entry(key).or_insert_with(|| Entry {
             value: Arc::new(OnceLock::new()),
             needed: false,
-            queued: None,
+            queued: false,
         })
     }
 
@@ -195,38 +233,21 @@ impl<B: KeyedBuild> Slots<B> {
         Need {
             ready: entry.value.get().is_some(),
             first,
-            queued: entry.queued.is_some(),
+            queued: entry.queued,
         }
     }
 
     /// Queues `key`'s build on the warm-up lane, ahead of any draw.
     pub(crate) fn warm(&mut self, key: ShapePipelineKey) {
-        if self.compiler.is_active() {
-            self.queue(key, CompileLane::WarmUp);
-        }
-    }
-
-    /// Queues `key`'s build for a draw standing in with another value until
-    /// it is ready.
-    pub(crate) fn request(&mut self, key: ShapePipelineKey) {
-        if self.demanded.len() == self.demanded.inline_size()
-            || self.entries.get(&key).is_some_and(|entry| {
-                entry.queued == Some(CompileLane::Demanded) || entry.value.get().is_some()
-            })
-        {
+        if !self.compiler.is_active() {
             return;
         }
-        self.demanded.push(key);
-        self.queue(key, CompileLane::Demanded);
-    }
-
-    fn queue(&mut self, key: ShapePipelineKey, lane: CompileLane) {
         let builder = Arc::clone(&self.builder);
         let stopped = Arc::clone(&self.stopped);
         let entry = Self::entry(&mut self.entries, key);
-        entry.queued = Some(lane);
+        entry.queued = true;
         let value = Arc::clone(&entry.value);
-        self.compiler.enqueue(lane, move || {
+        self.compiler.enqueue(CompileLane::WarmUp, move || {
             if !stopped.load(Ordering::Acquire) {
                 value.get_or_init(|| builder.build(key));
             }
@@ -252,33 +273,54 @@ impl<B: KeyedBuild> Slots<B> {
         }
     }
 
-    /// Forgets the demanded keys whose values are built, and the wants of a
-    /// frame that ended before queuing them.
-    pub(crate) fn settle_demanded(&mut self) {
-        let entries = &self.entries;
-        self.demanded.retain(|key| {
-            entries
-                .get(key)
-                .is_none_or(|entry| entry.value.get().is_none())
-        });
+    /// Forgets the wants of a frame that ended before queuing them.
+    pub(crate) fn begin_frame(&mut self) {
         self.wanted.clear();
     }
 
     pub(crate) fn request_wanted(&mut self) {
-        if self.wanted.is_empty() {
+        if self.wanted.is_empty() && !self.published {
             return;
         }
-        let mut wanted = std::mem::take(&mut self.wanted);
-        wanted.sort_unstable_by_key(|&(_, vertices)| std::cmp::Reverse(vertices));
-        for (key, _) in wanted.drain(..) {
-            self.request(key);
+        let entries = &mut self.entries;
+        let mut published = self
+            .demand
+            .wanted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        published.clear();
+        for (key, vertices) in self.wanted.drain(..) {
+            let value = &Self::entry(entries, key).value;
+            if value.get().is_none() {
+                published.push(Wanted {
+                    key,
+                    vertices,
+                    value: Arc::clone(value),
+                });
+            }
         }
-        self.wanted = wanted;
+        let count = published.len();
+        drop(published);
+        self.published = count > 0;
+        let queued = self.demand.jobs.load(Ordering::Acquire);
+        for _ in queued..count.min(DEMANDED_JOBS) {
+            self.queue_demanded();
+        }
     }
 
-    #[cfg(test)]
-    fn demanded(&self) -> &[ShapePipelineKey] {
-        &self.demanded
+    fn queue_demanded(&self) {
+        self.demand.jobs.fetch_add(1, Ordering::AcqRel);
+        let job = DemandedJob(Arc::clone(&self.demand));
+        let builder = Arc::clone(&self.builder);
+        let stopped = Arc::clone(&self.stopped);
+        self.compiler.enqueue(CompileLane::Demanded, move || {
+            if stopped.load(Ordering::Acquire) {
+                return;
+            }
+            if let Some((key, value)) = job.0.take_heaviest() {
+                value.get_or_init(|| builder.build(key));
+            }
+        });
     }
 }
 
