@@ -66,6 +66,7 @@ wgpu = { version = "30.0", default-features = false, features = [
     "parking_lot",
     "dx12",
     "wgsl",
+    "static-dxc",
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
