@@ -227,6 +227,8 @@ impl MutableSnapshot {
     }
 
     pub fn apply(&self) -> SnapshotApplyResult {
+        // Values the apply displaces drop once it has landed.
+        let _retiring = crate::state::RetiredValuesScope::enter();
         if self.state.disposed.get() {
             return SnapshotApplyResult::Failure;
         }
@@ -374,8 +376,7 @@ impl MutableSnapshot {
                     if state.promote_record(source_id).is_err() {
                         return SnapshotApplyResult::Failure;
                     }
-                    applied.set_tombstone(true);
-                    applied.clear_value();
+                    applied.tombstone_retiring_value();
                     let new_head_id = state.first_record().snapshot_id();
                     applied_info.push((object_id, state, new_head_id));
                 }
@@ -388,8 +389,7 @@ impl MutableSnapshot {
                     let Ok(new_head_id) = state.commit_merged_record(merged) else {
                         return SnapshotApplyResult::Failure;
                     };
-                    applied.set_tombstone(true);
-                    applied.clear_value();
+                    applied.tombstone_retiring_value();
                     applied_info.push((object_id, state, new_head_id));
                 }
             }

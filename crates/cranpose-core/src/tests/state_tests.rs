@@ -571,7 +571,7 @@ fn test_assign_value_reports_cleared_source() {
     let source = StateRecord::new(10, 42i32, None);
     let target = StateRecord::new(20, 0i32, None);
 
-    source.clear_value();
+    drop(source.clear_value());
 
     assert_eq!(
         target.assign_value(&source),
@@ -680,7 +680,7 @@ fn test_assign_value_with_vec() {
         assert_eq!(val, &vec![1, 2, 3, 4, 5]);
     });
 
-    source.replace_value(vec![10, 20]);
+    drop(source.replace_value(vec![10, 20]));
     target.with_value(|val: &Vec<i32>| {
         assert_eq!(val, &vec![1, 2, 3, 4, 5]);
     });
