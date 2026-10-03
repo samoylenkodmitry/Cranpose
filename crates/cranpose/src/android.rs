@@ -1101,7 +1101,6 @@ fn drain_present_returns_into_loop(
     let mut frame_started_at_ns = 0i64;
     let mut presented_at_ns = 0i64;
     let mut work_ns = None;
-    let mut handoff_wait_ns = None;
     shell
         .renderer()
         .drain_present_returns_with(&mut |frame_id, outcome, timings| {
@@ -1120,7 +1119,6 @@ fn drain_present_returns_into_loop(
                         frame_timings.after_present_ns = timings.after_present_ns;
                         telemetry.record_frame(&frame_timings);
                         work_ns = frame_timings.work_ns();
-                        handoff_wait_ns = frame_timings.handoff_wait_ns();
                     }
                 }
                 PresentOutcome::Cancelled(_) | PresentOutcome::NotRun => {
@@ -1160,21 +1158,8 @@ fn drain_present_returns_into_loop(
             started_at: frame_started_at,
             finished_at: frame_finished_at,
             work_ns,
-            handoff_wait_ns,
         }
     })
-}
-
-/// Tells the pacer that the present thread handed `frame` back, and how
-/// long the frame waited for it once handed off.
-fn pace_returned_frame(pacer: &mut FramePacer, frame: Option<&PresentedFrame>) {
-    let Some(frame) = frame else {
-        return;
-    };
-    if let Some(wait_ns) = frame.handoff_wait_ns {
-        pacer.record_handoff_wait(wait_ns, vsync_period_ns());
-    }
-    pacer.note_frame_returned(crate::android_frame_telemetry::monotonic_nanos());
 }
 
 /// A frame that reached the display: when the loop started it, when its
@@ -1183,9 +1168,6 @@ struct PresentedFrame {
     started_at: web_time::Instant,
     finished_at: web_time::Instant,
     work_ns: Option<i64>,
-    /// How long the frame waited from its hand-off to the present thread
-    /// until its image was acquired.
-    handoff_wait_ns: Option<i64>,
 }
 
 fn record_presented_frame(
@@ -2081,7 +2063,6 @@ pub fn run(
             ),
             None => None,
         };
-        pace_returned_frame(&mut frame_pacer, drained_presented.as_ref());
         android_frame_driver.pace_displayed_frames(&mut frame_pacer, &mut frame_telemetry);
 
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
@@ -2704,8 +2685,7 @@ pub fn run(
             frame_waits_for_vsync = waits_for_vsync;
             if frame_starts {
                 frame_timings.pacing = frame_pacing(frame_pacer.current_level());
-                frame_timings.lead_ns =
-                    frame_pacer.current_lead_ns(vsync_period_ns()) - frame_pacer.current_hold_ns();
+                frame_timings.lead_ns = frame_pacer.current_lead_ns(vsync_period_ns());
                 frame_started_at = Some(web_time::Instant::now());
                 let update_result = android_host_window::with_android_host_window_registry(
                     &host_window_registry,
@@ -2793,7 +2773,6 @@ pub fn run(
                 started_at: frame_started_at.unwrap_or(finished_at),
                 finished_at,
                 work_ns: frame_timings.work_ns(),
-                handoff_wait_ns: None,
             })
         } else {
             drained_presented

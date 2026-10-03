@@ -34,15 +34,16 @@
 //! compositor takes a frame for the earliest refresh only when it is ready
 //! in time, and a frame just too long for that waits a whole refresh more.
 //!
-//! An unpaced frame that is due waits a while after the renderer hands a
-//! frame back when frames only wait for the renderer once built
-//! ([`UnpacedHold`]): a loop the GPU holds back then builds each frame
-//! closer to when the GPU can start it, at the same rate.
+//! An unpaced frame that is due starts as soon as the renderer takes it:
+//! holding it back to build it closer to when the GPU starts it brings it to
+//! the screen sooner, but a frame that then takes longer to build than the
+//! hold left room for keeps the GPU waiting, and an app whose frames vary
+//! loses frame rate to it.
 //!
 //! Until the display has reported a frame, and on a swapchain that never
 //! does, frames start as soon as the renderer takes them.
 
-use crate::{frame_lead::FrameLead, unpaced_hold::UnpacedHold, vsync_period::next_vsync_ns};
+use crate::{frame_lead::FrameLead, vsync_period::next_vsync_ns};
 
 /// Frames whose queue depths are compared before draining a paced queue.
 const HISTORY: usize = 3;
@@ -225,9 +226,8 @@ pub(crate) struct FramePacer {
     holds_ns: [i64; 2],
     failed: [bool; 2],
     lead: FrameLead,
-    hold: UnpacedHold,
-    /// When a held unpaced frame may start.
-    held_until_ns: Option<i64>,
+    /// When an unpaced loop whose last frame changed nothing may start the
+    /// next.
     idle_until_ns: Option<i64>,
 }
 
@@ -244,8 +244,6 @@ impl Default for FramePacer {
             holds_ns: [FIRST_HOLD_NS; 2],
             failed: [false; 2],
             lead: FrameLead::default(),
-            hold: UnpacedHold::default(),
-            held_until_ns: None,
             idle_until_ns: None,
         }
     }
@@ -324,25 +322,7 @@ impl FramePacer {
         });
         self.misses.clear();
         self.lead.reset();
-        self.hold.reset();
-        self.held_until_ns = None;
         self.idle_until_ns = None;
-    }
-
-    /// Records how long an unpaced frame waited from its hand-off to the
-    /// renderer until its image was acquired, on a display refreshing every
-    /// `vsync_period_ns`.
-    pub(crate) fn record_handoff_wait(&mut self, wait_ns: i64, vsync_period_ns: i64) {
-        if self.unpaced() {
-            self.hold.record_wait(wait_ns, vsync_period_ns);
-        }
-    }
-
-    /// Notes that the renderer handed a frame back at `now_ns`: an unpaced
-    /// frame due now waits out the hold from then.
-    pub(crate) fn note_frame_returned(&mut self, now_ns: i64) {
-        let hold_ns = self.hold.hold_ns();
-        self.held_until_ns = (self.unpaced() && hold_ns > 0).then_some(now_ns + hold_ns);
     }
 
     #[cfg(target_os = "android")]
@@ -359,25 +339,10 @@ impl FramePacer {
         self.idle_until_ns = None;
     }
 
-    /// How long an unpaced frame waits after the renderer hands one back.
-    pub(crate) fn current_hold_ns(&self) -> i64 {
-        if self.unpaced() {
-            self.hold.hold_ns()
-        } else {
-            0
-        }
-    }
-
-    fn unpaced(&self) -> bool {
-        self.stage
-            .is_some_and(|stage| stage.level == Level::Unpaced)
-    }
-
-    /// Whether an unpaced frame is still held at `now_ns`.
-    fn held(&self, now_ns: i64) -> bool {
-        self.held_until_ns
-            .max(self.idle_until_ns)
-            .is_some_and(|until| now_ns < until)
+    /// Whether an unpaced loop waits at `now_ns` for the vsync after a frame
+    /// that changed nothing.
+    fn idle(&self, now_ns: i64) -> bool {
+        self.idle_until_ns.is_some_and(|until| now_ns < until)
     }
 
     pub(crate) fn record_present_return_to_display(
@@ -393,8 +358,8 @@ impl FramePacer {
         }
     }
 
-    /// When the loop should wake to start the next frame: when a held
-    /// unpaced frame's hold ends, or for a paced loop that leads its slots,
+    /// When the loop should wake to start the next frame: when an idle
+    /// unpaced loop's wait ends, or for a paced loop that leads its slots,
     /// the next slot's vsync less the lead. `None` without either, when the
     /// vsync callback itself is the wake, or without a vsync.
     pub(crate) fn lead_wake_ns(
@@ -403,8 +368,8 @@ impl FramePacer {
         vsync_ns: i64,
         vsync_period_ns: i64,
     ) -> Option<i64> {
-        if self.held(now_ns) {
-            return self.held_until_ns.max(self.idle_until_ns);
+        if self.idle(now_ns) {
+            return self.idle_until_ns;
         }
         let lead_ns = self.lead.lead_ns(vsync_period_ns);
         if lead_ns == 0 || now_ns < vsync_ns {
@@ -471,10 +436,9 @@ impl FramePacer {
         let depth = self.level(now_ns).and_then(Level::depth);
         let slot_ns = self.open_slot(now_ns, vsync_ns, vsync_period_ns);
         let Some(depth) = depth else {
-            if self.held(now_ns) {
+            if self.idle(now_ns) {
                 return false;
             }
-            self.held_until_ns = None;
             self.idle_until_ns = None;
             self.started_slot_ns = slot_ns.or(self.started_slot_ns);
             return true;
@@ -490,13 +454,13 @@ impl FramePacer {
     }
 
     /// Whether a frame that is due should start now rather than wait for
-    /// the next vsync: while unpaced unless the frame is held, so a loop
+    /// the next vsync: while unpaced unless the loop is idle, so a loop
     /// slower than the display overlaps each frame with the one the
     /// renderer is still drawing, and otherwise while the current slot has
     /// no frame yet.
     pub(crate) fn slot_open(&self, now_ns: i64, vsync_ns: i64, vsync_period_ns: i64) -> bool {
         if self.stage.is_none_or(|stage| stage.level == Level::Unpaced) {
-            return !self.held(now_ns);
+            return !self.idle(now_ns);
         }
         self.open_slot(now_ns, vsync_ns, vsync_period_ns).is_some()
     }

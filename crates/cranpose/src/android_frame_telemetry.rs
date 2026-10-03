@@ -330,8 +330,7 @@ pub(crate) struct FrameTimings {
     pub(crate) after_present_ns: i64,
     /// The pacing level the frame started at.
     pub(crate) pacing: FramePacing,
-    /// How far ahead of its vsync slot the frame was allowed to start, or
-    /// less than zero how long an unpaced frame was held back.
+    /// How far ahead of its vsync slot the frame was allowed to start.
     pub(crate) lead_ns: i64,
 }
 
@@ -344,12 +343,6 @@ impl FrameTimings {
             self.after_acquire_ns,
             self.after_present_ns,
         )
-    }
-
-    /// How long the frame waited from its hand-off to the present thread
-    /// until its image was acquired, once both happened.
-    pub(crate) fn handoff_wait_ns(&self) -> Option<i64> {
-        crate::android_frame_work::handoff_wait_ns(self.handed_off_ns, self.after_acquire_ns)
     }
 }
 
