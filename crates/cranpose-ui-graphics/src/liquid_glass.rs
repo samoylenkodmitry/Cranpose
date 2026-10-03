@@ -277,8 +277,10 @@ static GLASS_MATERIAL_FOLDS: AtomicBool = AtomicBool::new(cfg!(target_os = "andr
 /// raised flag substitutes the value the uniform already holds, and the
 /// interior guard skips only terms whose weight is zero. With folds off the
 /// shader skips zero-weight interior work but draws whole. Layered surfaces
-/// also fold inactive material features. Projection, partial activity, rim
-/// strength and shadows stay dynamic. Other materials share one program.
+/// also fold inactive material features. Known refraction modes and the content
+/// mask predicate are fixed for folded and layered materials. Projection,
+/// partial activity, rim strength and shadows stay dynamic. Other materials
+/// share one program.
 /// Either way an adaptive frost declares the blurred
 /// substrate its neighbourhood reads whatever the activity: the declaration
 /// also sets the member's capture geometry, so a resting material keeps it
@@ -313,27 +315,85 @@ fn specialization_flags(uniforms: &[f32], folds: bool) -> u32 {
         })
 }
 
+#[derive(PartialEq)]
+struct GlassSpecializationKey {
+    flags: u32,
+    substrate_radius: Option<u32>,
+    folds: bool,
+    mean_tone: bool,
+    projected: bool,
+    pane_radius: Option<u32>,
+    stage: u8,
+    backdrop_radius: Option<u32>,
+    refraction_mode: Option<u8>,
+    content_mask: Option<bool>,
+}
+
+impl GlassSpecializationKey {
+    fn apply(&self, shader: &mut RuntimeShader) {
+        let GlassSpecializationKey {
+            flags,
+            substrate_radius: radius,
+            folds,
+            mean_tone,
+            projected,
+            pane_radius,
+            stage,
+            backdrop_radius,
+            refraction_mode,
+            content_mask,
+        } = *self;
+        for (index, specialization) in LIQUID_GLASS_SPECIALIZATIONS.iter().enumerate() {
+            if flags & (1 << index) != 0 {
+                shader.set_override(specialization.flag, 1.0);
+            } else {
+                shader.clear_override(specialization.flag);
+            }
+        }
+        shader.set_override("GLASS_INTERIOR_GUARD", 1.0);
+        shader.set_draw_split((folds && !projected).then_some(GLASS_RIM_DRAW_OVERRIDE));
+        if folds {
+            shader.set_override(GLASS_OPTICAL_STAGE_OVERRIDE, f64::from(stage));
+        } else {
+            shader.clear_override(GLASS_OPTICAL_STAGE_OVERRIDE);
+        }
+        for (name, value) in [
+            ("GLASS_REFRACTION_MODE", refraction_mode.map(f64::from)),
+            (
+                "GLASS_CONTENT_MASK_MODE",
+                content_mask.map(|mask| f64::from(u8::from(mask))),
+            ),
+        ] {
+            if let Some(value) = value {
+                shader.set_override(name, value);
+            } else {
+                shader.clear_override(name);
+            }
+        }
+        shader.set_specialization_exact(true);
+        shader.set_substrates(&glass_substrates(
+            radius,
+            mean_tone,
+            pane_radius,
+            stage,
+            backdrop_radius,
+        ));
+    }
+}
+
 /// [`specialize_liquid_glass`] with folding decided by the caller rather
 /// than the process: a test of the folds asks for them whatever the platform.
 pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: bool) {
     const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u32::BITS as usize);
     const CACHE_CAPACITY: usize = 32;
-    type SpecializationKey = (
-        u32,
-        Option<u32>,
-        bool,
-        bool,
-        bool,
-        Option<u32>,
-        u8,
-        Option<u32>,
-    );
     thread_local! {
-        static CACHE: RefCell<ShaderSpecializationCache<SpecializationKey, CACHE_CAPACITY>> =
+        static CACHE: RefCell<ShaderSpecializationCache<GlassSpecializationKey, CACHE_CAPACITY>> =
             const { RefCell::new(ShaderSpecializationCache::new()) };
     }
     let uniforms = shader.uniforms();
     let flags = specialization_flags(uniforms, folds);
+    let refraction_mode = slot(uniforms, GLASS_REFRACTION_MODE_UNIFORM);
+    let specialize_modes = folds || refraction_mode > 2.5;
     let content_mask = slot(uniforms, 112) > 0.5;
     let substrate_radius = (!content_mask && slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0)
         .then(|| {
@@ -353,39 +413,26 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
     let backdrop_radius =
         (!content_mask && stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
             .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
+    let key = GlassSpecializationKey {
+        flags,
+        substrate_radius,
+        folds,
+        mean_tone,
+        projected,
+        pane_radius,
+        stage,
+        backdrop_radius,
+        refraction_mode: specialize_modes
+            .then_some(refraction_mode)
+            .filter(|mode| matches!(*mode, 0.0 | 1.0 | 2.0 | 3.0))
+            .map(|mode| mode as u8),
+        content_mask: specialize_modes.then_some(content_mask),
+    };
     shader.set_preserves_transparency(content_mask);
     CACHE.with_borrow_mut(|cache| {
-        cache.apply(
-            shader,
-            (
-                flags,
-                substrate_radius,
-                folds,
-                mean_tone,
-                projected,
-                pane_radius,
-                stage,
-                backdrop_radius,
-            ),
-            |shader, &(flags, radius, folds, mean_tone, projected, pane_radius, stage, backdrop_radius)| {
-                for (index, specialization) in LIQUID_GLASS_SPECIALIZATIONS.iter().enumerate() {
-                    if flags & (1 << index) != 0 {
-                        shader.set_override(specialization.flag, 1.0);
-                    } else {
-                        shader.clear_override(specialization.flag);
-                    }
-                }
-                shader.set_override("GLASS_INTERIOR_GUARD", 1.0);
-                shader.set_draw_split((folds && !projected).then_some(GLASS_RIM_DRAW_OVERRIDE));
-                if folds {
-                    shader.set_override(GLASS_OPTICAL_STAGE_OVERRIDE, f64::from(stage));
-                } else {
-                    shader.clear_override(GLASS_OPTICAL_STAGE_OVERRIDE);
-                }
-                shader.set_specialization_exact(true);
-                shader.set_substrates(&glass_substrates(radius, mean_tone, pane_radius, stage, backdrop_radius));
-            },
-        );
+        cache.apply(shader, key, |shader, key| {
+            key.apply(shader);
+        });
     });
 }
 

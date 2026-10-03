@@ -2,7 +2,10 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_liquid::prelude::*;
 use cranpose_macros::composable;
-use cranpose_render_common::Renderer;
+use cranpose_render_common::{
+    Renderer,
+    graph::{LayerNode, RenderNode},
+};
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
     Modifier,
@@ -37,7 +40,7 @@ fn card_glass() -> Glass {
 }
 
 #[composable]
-fn GlassCardScene() {
+fn GlassCardScene(button: bool) {
     LiquidTheme(
         LiquidThemeSpec {
             scheme: SchemeMode::Dark,
@@ -80,8 +83,22 @@ fn GlassCardScene() {
                             .width(300.0)
                             .height(120.0),
                         BoxSpec::default(),
-                        || {
-                            GlassSurface(Modifier::empty().fill_max_size(), card_glass(), || {});
+                        move || {
+                            GlassSurface(
+                                Modifier::empty().fill_max_size(),
+                                card_glass(),
+                                move || {
+                                    if button {
+                                        GlassIconButton(
+                                            Modifier::empty(),
+                                            GlassButtonSpec::glass(),
+                                            40.0,
+                                            || {},
+                                            icons::STAR,
+                                        );
+                                    }
+                                },
+                            );
                         },
                     );
                 },
@@ -116,13 +133,13 @@ fn capture_card_and_stats_under(
     captured
 }
 
-fn card_shell(mut renderer: WgpuRenderer) -> AppShell<WgpuRenderer> {
+fn card_shell(mut renderer: WgpuRenderer, button: bool) -> AppShell<WgpuRenderer> {
     let app_context = cranpose_ui::AppContext::new();
     renderer.attach_app_context_services(&app_context);
     let mut shell = AppShell::new(
         renderer,
         location_key(file!(), line!(), column!()),
-        GlassCardScene,
+        move || GlassCardScene(button),
     );
     shell.renderer().set_root_scale(SCALE);
     shell.set_density(SCALE);
@@ -160,7 +177,7 @@ const SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
 fn render_card_and_stats(
     renderer: WgpuRenderer,
 ) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
-    let mut shell = card_shell(renderer);
+    let mut shell = card_shell(renderer, false);
     let deadline = std::time::Instant::now() + SETTLE;
     loop {
         let (frame, stats) = capture_card_frame(&mut shell)?;
@@ -185,7 +202,7 @@ fn a_glass_draws_with_its_general_pipeline_until_the_specialization_lands() {
         eprintln!("skipping glass pipeline readiness: no headless renderer");
         return;
     };
-    let mut shell = card_shell(renderer);
+    let mut shell = card_shell(renderer, false);
     let (first, first_stats) = capture_card_frame(&mut shell).expect("first capture");
     assert!(
         first_stats.shader_pipeline_fallback_draws > 0,
@@ -347,4 +364,57 @@ fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixe
         &split.pixels,
         &whole.pixels,
     );
+}
+
+#[test]
+fn a_floating_button_keeps_its_picture_when_specialization_arrives() {
+    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+        eprintln!("skipping floating glass parity: no headless renderer");
+        return;
+    };
+    let mut shell = card_shell(renderer, true);
+    let (first, first_stats) = capture_card_frame(&mut shell).expect("first capture");
+    assert!(first_stats.shader_pipeline_fallback_draws > 0);
+    support::wait_for_background_compiler_idle();
+    let (settled, settled_stats) = capture_card_frame(&mut shell).expect("settled capture");
+    assert_eq!(settled_stats.shader_pipeline_fallback_draws, 0);
+    assert!(settled_stats.shader_specialized_draws > 0);
+    support::assert_same_bytes(
+        "the floating button retains its glass, glyph and ring shadow after specialization",
+        FRAME_WIDTH,
+        &first.pixels,
+        &settled.pixels,
+    );
+    let graph = shell
+        .renderer()
+        .scene_mut()
+        .graph
+        .as_mut()
+        .expect("button graph");
+    assert!(expand_content_masks(&mut graph.root) > 0);
+    let (expanded, _) = capture_card_frame(&mut shell).expect("expanded mask capture");
+    support::assert_same_bytes(
+        "the content mask ends at its silhouette even when the material casts a wide shadow",
+        FRAME_WIDTH,
+        &settled.pixels,
+        &expanded.pixels,
+    );
+}
+
+fn expand_content_masks(layer: &mut LayerNode) -> usize {
+    let mut expanded = 0;
+    if let Some(RenderEffect::Shader { shader }) = &mut layer.graphics_layer.render_effect
+        && shader.uniforms().get(112).is_some_and(|mask| *mask > 0.5)
+    {
+        let shader = std::sync::Arc::make_mut(shader);
+        shader.set_output_support(None);
+        shader.set_output_padding(64.0);
+        expanded += 1;
+    }
+    for child in &mut layer.children {
+        if let RenderNode::Layer(child) = child {
+            expanded += expand_content_masks(child);
+        }
+    }
+    expanded
 }

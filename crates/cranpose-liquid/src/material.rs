@@ -1558,8 +1558,11 @@ impl ResolvedGlass {
             cranpose_ui_graphics::GLASS_FOREGROUND_CONTENT_UNIFORM,
             f32::from(separate_content),
         );
-        let (shadow_reach, shadow_offset) =
-            self.set_shadow_uniforms(&mut shader, dynamics, activity);
+        let (shadow_reach, shadow_offset) = if content_mask {
+            (0.0, 0.0)
+        } else {
+            self.set_shadow_uniforms(&mut shader, dynamics, activity)
+        };
         let morph_pad = dynamics.morph.as_ref().map_or(0.0, |morph| {
             let (px, py, pw, ph, _) = morph.primary;
             let (left, top) = (px - pw * 0.5, py - ph * 0.5);
