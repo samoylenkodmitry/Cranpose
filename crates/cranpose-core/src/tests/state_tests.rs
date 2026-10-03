@@ -2,6 +2,19 @@ use std::sync::PoisonError;
 
 use super::*;
 
+fn writable_record(
+    state: &SnapshotMutableState<i32>,
+    snapshot_id: SnapshotId,
+    invalid: &SnapshotIdSet,
+) -> Rc<StateRecord> {
+    WriteTarget {
+        head: &state.head,
+        id: state.id,
+        state,
+    }
+    .writable_record(snapshot_id, invalid)
+}
+
 fn create_record_chain(ids: &[SnapshotId]) -> Rc<StateRecord> {
     let mut head: Option<Rc<StateRecord>> = None;
 
@@ -131,7 +144,7 @@ fn snapshot_mutable_state_recovers_poisoned_apply_observer_lock() {
     state.add_apply_observer(Box::new(move || {
         observed_calls.set(observed_calls.get() + 1);
     }));
-    state.notify_applied();
+    notify_applied(&state.apply_observers);
 
     assert_eq!(calls.get(), 1);
 }
@@ -334,7 +347,7 @@ fn test_writable_record_reuses_invalid_record() {
     head.set_next(Some(invalid.clone()));
 
     let snapshot_id = allocate_record_id();
-    let result = state.writable_record(snapshot_id, &SnapshotIdSet::EMPTY);
+    let result = writable_record(&state, snapshot_id, &SnapshotIdSet::EMPTY);
 
     assert!(
         Rc::ptr_eq(&result, &invalid),
@@ -359,7 +372,7 @@ fn test_writable_record_creates_new_when_reuse_disallowed() {
         .expect("preexisting record should exist for newly created state");
 
     let snapshot_id = allocate_record_id();
-    let result = state.writable_record(snapshot_id, &SnapshotIdSet::EMPTY);
+    let result = writable_record(&state, snapshot_id, &SnapshotIdSet::EMPTY);
 
     assert!(
         !Rc::ptr_eq(&result, &original_head),
