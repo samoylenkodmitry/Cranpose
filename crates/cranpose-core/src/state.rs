@@ -1,5 +1,5 @@
 use std::{
-    any::Any,
+    any::{Any, TypeId},
     cell::{Cell, RefCell},
     fmt,
     hash::Hash,
@@ -46,7 +46,38 @@ pub struct StateRecord {
     snapshot_id: Cell<SnapshotId>,
     tombstone: Cell<bool>,
     next: Cell<Option<Rc<StateRecord>>>,
-    value: RefCell<Option<Box<dyn Any>>>,
+    value: RefCell<Option<Box<dyn RecordValue>>>,
+}
+
+pub(crate) trait RecordValue: Any {
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+    fn clone_boxed(&self) -> Box<dyn RecordValue>;
+    fn assign_into(&self, target: &mut Option<Box<dyn RecordValue>>);
+}
+
+impl<T: Any + Clone> RecordValue for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn clone_boxed(&self) -> Box<dyn RecordValue> {
+        Box::new(self.clone())
+    }
+
+    fn assign_into(&self, target: &mut Option<Box<dyn RecordValue>>) {
+        match target
+            .as_mut()
+            .and_then(|value| (**value).as_any_mut().downcast_mut::<T>())
+        {
+            Some(slot) => slot.clone_from(self),
+            None => *target = Some(Box::new(self.clone())),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -76,20 +107,28 @@ impl std::fmt::Display for StateReadFailure {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum StateRecordValueError {
-    MissingOrWrongType { expected: &'static str },
+    Missing,
 }
 
 impl StateRecord {
-    pub(crate) fn new<T: Any>(
+    pub(crate) fn new<T: Any + Clone>(
         snapshot_id: SnapshotId,
         value: T,
+        next: Option<Rc<StateRecord>>,
+    ) -> Rc<Self> {
+        Self::with_boxed(snapshot_id, Box::new(value), next)
+    }
+
+    fn with_boxed(
+        snapshot_id: SnapshotId,
+        value: Box<dyn RecordValue>,
         next: Option<Rc<StateRecord>>,
     ) -> Rc<Self> {
         Rc::new(Self {
             snapshot_id: Cell::new(snapshot_id),
             tombstone: Cell::new(false),
             next: Cell::new(next),
-            value: RefCell::new(Some(Box::new(value))),
+            value: RefCell::new(Some(value)),
         })
     }
 
@@ -129,8 +168,34 @@ impl StateRecord {
         self.value.borrow_mut().take();
     }
 
-    pub(crate) fn replace_value<T: Any>(&self, new_value: T) {
-        *self.value.borrow_mut() = Some(Box::new(new_value));
+    pub(crate) fn replace_value<T: Any + Clone>(&self, new_value: T) {
+        let mut value = self.value.borrow_mut();
+        match value
+            .as_mut()
+            .and_then(|current| (**current).as_any_mut().downcast_mut::<T>())
+        {
+            Some(slot) => *slot = new_value,
+            None => *value = Some(Box::new(new_value)),
+        }
+    }
+
+    fn cloned_value(&self) -> Option<Box<dyn RecordValue>> {
+        self.value
+            .borrow()
+            .as_ref()
+            .map(|value| (**value).clone_boxed())
+    }
+
+    fn cloned_value_of(&self, expected: TypeId) -> Option<Box<dyn RecordValue>> {
+        self.value
+            .borrow()
+            .as_ref()
+            .filter(|value| (***value).as_any().type_id() == expected)
+            .map(|value| (**value).clone_boxed())
+    }
+
+    fn set_boxed_value(&self, value: Box<dyn RecordValue>) {
+        *self.value.borrow_mut() = Some(value);
     }
 
     pub(crate) fn with_value<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> R {
@@ -140,7 +205,9 @@ impl StateRecord {
 
     pub(crate) fn try_with_value<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> Option<R> {
         let guard = self.value.borrow();
-        let value = guard.as_ref().and_then(|boxed| boxed.downcast_ref::<T>())?;
+        let value = guard
+            .as_ref()
+            .and_then(|boxed| (**boxed).as_any().downcast_ref::<T>())?;
         Some(f(value))
     }
 
@@ -149,16 +216,18 @@ impl StateRecord {
         self.clear_value();
     }
 
-    pub(crate) fn assign_value<T: Any + Clone>(
-        &self,
-        source: &StateRecord,
-    ) -> Result<(), StateRecordValueError> {
-        let cloned_value = source
-            .try_with_value(|value: &T| value.clone())
-            .ok_or_else(|| StateRecordValueError::MissingOrWrongType {
-                expected: std::any::type_name::<T>(),
-            })?;
-        self.replace_value(cloned_value);
+    pub(crate) fn assign_value(&self, source: &StateRecord) -> Result<(), StateRecordValueError> {
+        if std::ptr::eq(self, source) {
+            return match self.value.borrow().is_some() {
+                true => Ok(()),
+                false => Err(StateRecordValueError::Missing),
+            };
+        }
+        let source_value = source.value.borrow();
+        let value = source_value
+            .as_ref()
+            .ok_or(StateRecordValueError::Missing)?;
+        (**value).assign_into(&mut self.value.borrow_mut());
         Ok(())
     }
 }
@@ -371,7 +440,73 @@ pub(crate) fn new_overwritable_record_as_head_locked(state: &dyn StateObject) ->
     new_record
 }
 
-pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateObject) -> bool {
+#[cold]
+fn log_merge_value_missing(which: &str, state: ObjectId, record: &StateRecord) {
+    log::error!(
+        "SnapshotMutableState::merge_records {which} record value missing or wrong type (state {state:?}, {which}_id={})",
+        record.snapshot_id()
+    );
+}
+
+fn install_copy_as_head(
+    state: &dyn StateObject,
+    source: &StateRecord,
+    expected: TypeId,
+) -> Option<SnapshotId> {
+    let value = source.cloned_value_of(expected)?;
+    let new_id = allocate_record_id();
+    let record = new_overwritable_record_as_head_locked(state);
+    record.set_boxed_value(value);
+    record.set_tombstone(false);
+    record.set_snapshot_id(new_id);
+    advance_global_snapshot(new_id);
+    Some(new_id)
+}
+
+fn promote_record_locked(
+    state: &dyn StateObject,
+    child_id: SnapshotId,
+    expected: TypeId,
+) -> Result<(), &'static str> {
+    let mut cursor = Some(state.first_record());
+    while let Some(record) = cursor {
+        if record.snapshot_id() == child_id {
+            if install_copy_as_head(state, &record, expected).is_none() {
+                log::error!(
+                    "SnapshotMutableState::promote_record child record value missing or wrong type (state {:?}, child_id={})",
+                    state.object_id(),
+                    child_id
+                );
+                return Err("child record value missing or wrong type");
+            }
+            return Ok(());
+        }
+        cursor = record.next();
+    }
+    log::error!(
+        "SnapshotMutableState::promote_record missing child record (state {:?}, child_id={})",
+        state.object_id(),
+        child_id
+    );
+    Err("missing child record")
+}
+
+fn commit_merged_record_locked(
+    state: &dyn StateObject,
+    merged: &StateRecord,
+    expected: TypeId,
+) -> Result<SnapshotId, &'static str> {
+    install_copy_as_head(state, merged, expected).ok_or_else(|| {
+        log::error!(
+            "SnapshotMutableState::commit_merged_record merged record value missing or wrong type (state {:?}, merged_id={})",
+            state.object_id(),
+            merged.snapshot_id()
+        );
+        "merged record value missing or wrong type"
+    })
+}
+
+pub(crate) fn overwrite_unused_records_locked(state: &dyn StateObject) -> bool {
     let head = state.first_record();
     let mut current = Some(Rc::clone(&head));
     let mut overwrite_record: Option<Rc<StateRecord>> = None;
@@ -410,7 +545,7 @@ pub(crate) fn overwrite_unused_records_locked<T: Any + Clone>(state: &dyn StateO
                 });
 
                 record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
-                if let Err(error) = record_to_overwrite.assign_value::<T>(source_record) {
+                if let Err(error) = record_to_overwrite.assign_value(source_record) {
                     log::error!(
                         "snapshot cleanup could not copy retained state record value for state {:?}: {:?}",
                         state.object_id(),
@@ -505,37 +640,37 @@ pub(crate) struct SnapshotMutableState<T> {
 
 impl<T> SnapshotMutableState<T> {
     fn assert_chain_integrity(&self, caller: &str, snapshot_context: Option<SnapshotId>) {
-        if !should_check_chain_integrity() {
-            return;
+        if should_check_chain_integrity() {
+            check_chain_integrity(&self.head.clone_head(), self.id, caller, snapshot_context);
         }
-        let head = self.head.clone_head();
-        let mut cursor = Some(head);
-        let mut seen: HashSet<usize> = HashSet::default();
-        let mut ids = Vec::new();
-
-        while let Some(record) = cursor {
-            let addr = Rc::as_ptr(&record) as usize;
-            assert!(
-                seen.insert(addr),
-                "SnapshotMutableState::{} detected duplicate/cycle at record {:p} for state {:?} (snapshot_context={:?}, chain_ids={:?})",
-                caller,
-                Rc::as_ptr(&record),
-                self.id,
-                snapshot_context,
-                ids
-            );
-            ids.push(record.snapshot_id());
-            cursor = record.next();
-        }
-
-        assert!(
-            !ids.is_empty(),
-            "SnapshotMutableState::{} finished integrity scan with empty id list for state {:?} (snapshot_context={:?})",
-            caller,
-            self.id,
-            snapshot_context
-        );
     }
+}
+
+fn check_chain_integrity(
+    head: &Rc<StateRecord>,
+    id: ObjectId,
+    caller: &str,
+    snapshot_context: Option<SnapshotId>,
+) {
+    let mut cursor = Some(Rc::clone(head));
+    let mut seen: HashSet<usize> = HashSet::default();
+    let mut ids = Vec::new();
+
+    while let Some(record) = cursor {
+        let addr = Rc::as_ptr(&record) as usize;
+        assert!(
+            seen.insert(addr),
+            "SnapshotMutableState::{caller} detected duplicate/cycle at record {:p} for state {id:?} (snapshot_context={snapshot_context:?}, chain_ids={ids:?})",
+            Rc::as_ptr(&record),
+        );
+        ids.push(record.snapshot_id());
+        cursor = record.next();
+    }
+
+    assert!(
+        !ids.is_empty(),
+        "SnapshotMutableState::{caller} finished integrity scan with empty id list for state {id:?} (snapshot_context={snapshot_context:?})"
+    );
 }
 
 fn should_check_chain_integrity() -> bool {
@@ -626,8 +761,10 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             let refreshed = readable_record_for(&current_head, snapshot_id, invalid);
             let source = refreshed.unwrap_or_else(|| current_head.clone());
 
-            let cloned_value = source.with_value(|value: &T| value.clone());
-            let new_head = StateRecord::new(snapshot_id, cloned_value, Some(current_head));
+            let cloned_value = source
+                .cloned_value()
+                .unwrap_or_else(|| panic!("StateRecord value missing or wrong type"));
+            let new_head = StateRecord::with_boxed(snapshot_id, cloned_value, Some(current_head));
             self.head.replace(new_head.clone());
             self.assert_chain_integrity("writable_record(recover)", Some(snapshot_id));
             return new_head;
@@ -656,7 +793,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         };
 
         let overwritable = new_overwritable_record_locked(self);
-        if let Err(error) = overwritable.assign_value::<T>(&refreshed) {
+        if let Err(error) = overwritable.assign_value(&refreshed) {
             log::error!(
                 "snapshot writable record could not copy refreshed value for state {:?}: {:?}",
                 self.id,
@@ -1007,19 +1144,11 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         applied: Rc<StateRecord>,
     ) -> Option<Rc<StateRecord>> {
         let Some(current_value) = current.try_with_value(|value: &T| value.clone()) else {
-            log::error!(
-                "SnapshotMutableState::merge_records current record value missing or wrong type (state {:?}, current_id={})",
-                self.id,
-                current.snapshot_id()
-            );
+            log_merge_value_missing("current", self.id, &current);
             return None;
         };
         let Some(applied_value) = applied.try_with_value(|value: &T| value.clone()) else {
-            log::error!(
-                "SnapshotMutableState::merge_records applied record value missing or wrong type (state {:?}, applied_id={})",
-                self.id,
-                applied.snapshot_id()
-            );
+            log_merge_value_missing("applied", self.id, &applied);
             return None;
         };
         if self.policy.equivalent(&current_value, &applied_value) {
@@ -1027,11 +1156,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
         }
 
         let Some(previous_value) = previous.try_with_value(|value: &T| value.clone()) else {
-            log::error!(
-                "SnapshotMutableState::merge_records previous record value missing or wrong type (state {:?}, previous_id={})",
-                self.id,
-                previous.snapshot_id()
-            );
+            log_merge_value_missing("previous", self.id, &previous);
             return None;
         };
         let merged = self
@@ -1042,60 +1167,21 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
     }
 
     fn promote_record(&self, child_id: SnapshotId) -> Result<(), &'static str> {
-        let head = self.first_record();
-        let mut cursor = Some(head);
-        while let Some(record) = cursor {
-            if record.snapshot_id() == child_id {
-                let Some(cloned) = record.try_with_value(|value: &T| value.clone()) else {
-                    log::error!(
-                        "SnapshotMutableState::promote_record child record value missing or wrong type (state {:?}, child_id={})",
-                        self.id,
-                        child_id
-                    );
-                    return Err("child record value missing or wrong type");
-                };
-                let new_id = allocate_record_id();
-                let promoted = new_overwritable_record_as_head_locked(self);
-                promoted.replace_value(cloned);
-                promoted.set_tombstone(false);
-                promoted.set_snapshot_id(new_id);
-                advance_global_snapshot(new_id);
-                self.notify_applied();
-                self.assert_chain_integrity("promote_record", Some(child_id));
-                return Ok(());
-            }
-            cursor = record.next();
-        }
-        log::error!(
-            "SnapshotMutableState::promote_record missing child record (state {:?}, child_id={})",
-            self.id,
-            child_id
-        );
-        Err("missing child record")
+        promote_record_locked(self, child_id, TypeId::of::<T>())?;
+        self.notify_applied();
+        self.assert_chain_integrity("promote_record", Some(child_id));
+        Ok(())
     }
 
     fn commit_merged_record(&self, merged: Rc<StateRecord>) -> Result<SnapshotId, &'static str> {
-        let Some(value) = merged.try_with_value(|value: &T| value.clone()) else {
-            log::error!(
-                "SnapshotMutableState::commit_merged_record merged record value missing or wrong type (state {:?}, merged_id={})",
-                self.id,
-                merged.snapshot_id()
-            );
-            return Err("merged record value missing or wrong type");
-        };
-        let new_id = allocate_record_id();
-        let committed = new_overwritable_record_as_head_locked(self);
-        committed.replace_value(value);
-        committed.set_tombstone(false);
-        committed.set_snapshot_id(new_id);
-        advance_global_snapshot(new_id);
+        let new_id = commit_merged_record_locked(self, &merged, TypeId::of::<T>())?;
         self.notify_applied();
         self.assert_chain_integrity("commit_merged_record", Some(new_id));
         Ok(new_id)
     }
 
     fn overwrite_unused_records(&self) -> bool {
-        overwrite_unused_records_locked::<T>(self)
+        overwrite_unused_records_locked(self)
     }
 
     fn as_any(&self) -> &dyn Any {
