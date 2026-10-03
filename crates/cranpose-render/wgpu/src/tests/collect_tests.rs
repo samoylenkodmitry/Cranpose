@@ -11,11 +11,30 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
     }
 }
 
+fn raster_scale(
+    motion: &mut LayerMotion,
+    node_id: Option<NodeId>,
+    scale: f32,
+    content_hash: u64,
+    cacheable: bool,
+) -> f32 {
+    let raster = if cacheable {
+        motion.retained_scale(node_id, scale, content_hash)
+    } else {
+        scale
+    };
+    motion.record_scale(node_id, raster, content_hash);
+    raster
+}
+
 fn corners(width: f32, height: f32, radius: f32) -> RoundedClipCorners {
-    RoundedClipCorners::of(LayerRoundedClip {
-        rect: rect(0.0, 0.0, width, height),
-        radii: [radius; 4],
-    })
+    RoundedClipCorners::of(
+        LayerRoundedClip {
+            rect: rect(0.0, 0.0, width, height),
+            radii: [radius; 4],
+        },
+        RasterScale::Exact(1.0),
+    )
 }
 
 fn drawn_node(primitive: DrawPrimitive) -> RenderNode {
@@ -99,6 +118,7 @@ fn deferred_draws_keep_their_order_after_interleaved_children() {
             &mut crate::pipeline::UiTextLayoutResolver,
             &mut LayerMotion::default(),
             SceneCapacityHint::default(),
+            1.0,
         );
         let positions: Vec<_> = collected
             .scene
@@ -195,6 +215,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     clip_radius: 0.0,
                     snap_anchor: None,
                     translated,
+                    raster_scale: RasterScale::Exact(1.0),
                 },
                 &mut CompositorScene::new(),
             );
@@ -256,12 +277,12 @@ fn a_rounded_layer_whose_shapes_enter_a_corner_draws_in_place_rounded() {
         shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
     );
     assert!(matches!(
-        child_placement(&full),
+        child_placement(&full, RasterScale::Exact(1.0)),
         Placement::DirectRounded(_, radius) if radius == 20.0
     ));
     let loose = rounded_layer(20.0, drawn_node(white_rect(rect(0.0, 0.0, 120.0, 100.0))));
     assert!(matches!(
-        child_placement(&loose),
+        child_placement(&loose, RasterScale::Exact(1.0)),
         Placement::DirectRounded(..)
     ));
     let inside = rounded_layer(
@@ -269,7 +290,10 @@ fn a_rounded_layer_whose_shapes_enter_a_corner_draws_in_place_rounded() {
         shapes_run(vec![white_rect(rect(14.0, 14.0, 172.0, 72.0))]),
     );
     assert!(
-        matches!(child_placement(&inside), Placement::Direct(_)),
+        matches!(
+            child_placement(&inside, RasterScale::Exact(1.0)),
+            Placement::Direct(_)
+        ),
         "content clear of the corners needs no rounding at all"
     );
 }
@@ -277,13 +301,19 @@ fn a_rounded_layer_whose_shapes_enter_a_corner_draws_in_place_rounded() {
 #[test]
 fn a_rounded_layer_whose_text_or_image_enters_a_corner_isolates() {
     let text = rounded_layer(20.0, drawn_node(snap_test_text()));
-    assert!(matches!(child_placement(&text), Placement::Isolated));
+    assert!(matches!(
+        child_placement(&text, RasterScale::Exact(1.0)),
+        Placement::Isolated
+    ));
     let mut mixed = rounded_layer(
         20.0,
         shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
     );
     mixed.children.push(drawn_node(snap_test_text()));
-    assert!(matches!(child_placement(&mixed), Placement::Isolated));
+    assert!(matches!(
+        child_placement(&mixed, RasterScale::Exact(1.0)),
+        Placement::Isolated
+    ));
 }
 
 #[test]
@@ -293,7 +323,10 @@ fn a_rounded_layer_with_uneven_corners_isolates_shapes_in_a_corner() {
         shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
     );
     layer.graphics_layer.shape = LayerShape::Rounded(RoundedCornerShape::new(20.0, 20.0, 4.0, 4.0));
-    assert!(matches!(child_placement(&layer), Placement::Isolated));
+    assert!(matches!(
+        child_placement(&layer, RasterScale::Exact(1.0)),
+        Placement::Isolated
+    ));
 }
 
 #[test]
@@ -308,6 +341,7 @@ fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() 
         clip_radius,
         snap_anchor: None,
         translated: false,
+        raster_scale: RasterScale::Exact(1.0),
     };
     assert!(matches!(
         placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 0.0)),
@@ -346,6 +380,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         clip_radius: 0.0,
         snap_anchor: None,
         translated: false,
+        raster_scale: RasterScale::Exact(1.0),
     };
     assert!(matches!(
         placement_in(&bar, &panel),
@@ -392,6 +427,7 @@ fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_doe
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
+        1.0,
     );
     assert!(
         scene.children.is_empty(),
@@ -430,35 +466,35 @@ fn an_animated_raster_scale_is_never_smaller_and_at_most_one_step_larger() {
 fn layer_motion_keeps_the_raster_for_unchanged_content_across_small_scale_changes() {
     let mut motion = LayerMotion::default();
     assert_eq!(
-        motion.raster_scale(Some(1), 0.9, 7, true),
+        raster_scale(&mut motion, Some(1), 0.9, 7, true),
         0.9,
         "a layer seen for the first time rasterizes at its own scale"
     );
     motion.end_frame();
-    assert_eq!(motion.raster_scale(Some(1), 0.91, 7, true), 0.9);
+    assert_eq!(raster_scale(&mut motion, Some(1), 0.91, 7, true), 0.9);
     motion.end_frame();
     assert_eq!(
-        motion.raster_scale(Some(1), 0.91, 7, true),
+        raster_scale(&mut motion, Some(1), 0.91, 7, true),
         0.9,
         "a repeated scale must not reposition the content on a different raster grid"
     );
     motion.end_frame();
     assert_eq!(
-        motion.raster_scale(Some(1), 0.92, 8, true),
+        raster_scale(&mut motion, Some(1), 0.92, 8, true),
         0.92,
         "new content is drawn afresh anyway, so it rasterizes at its own scale"
     );
     motion.end_frame();
     assert_eq!(
-        motion.raster_scale(Some(1), 0.93, 8, false),
+        raster_scale(&mut motion, Some(1), 0.93, 8, false),
         0.93,
         "a layer the cache cannot hold gains nothing from a stepped scale"
     );
-    assert_eq!(motion.raster_scale(None, 0.93, 8, true), 0.93);
+    assert_eq!(raster_scale(&mut motion, None, 0.93, 8, true), 0.93);
     motion.end_frame();
     motion.end_frame();
     assert_eq!(
-        motion.raster_scale(Some(1), 0.95, 8, true),
+        raster_scale(&mut motion, Some(1), 0.95, 8, true),
         0.95,
         "a layer missing from the last frame starts over"
     );
@@ -468,7 +504,7 @@ fn layer_motion_keeps_the_raster_for_unchanged_content_across_small_scale_change
 fn a_scaling_layer_keeps_its_raster_within_the_resolution_range() {
     let mut motion = LayerMotion::default();
     let mut frame = |scale: f32| {
-        let raster = motion.raster_scale(Some(1), scale, 7, true);
+        let raster = raster_scale(&mut motion, Some(1), scale, 7, true);
         motion.end_frame();
         raster
     };
@@ -538,6 +574,7 @@ fn collected(layer: LayerNode) -> ChildLayer {
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
+        1.0,
     );
     scene.children.pop().expect("a turned layer isolates")
 }
@@ -793,6 +830,7 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
+        1.0,
     );
     let [backdrop] = collected.scene.backdrop_layers.as_slice() else {
         panic!("the isolated layer's backdrop must be batched");
@@ -825,6 +863,7 @@ fn draw_ops_under_clip(child: LayerNode) -> usize {
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
+        1.0,
     )
     .scene
     .draw_ops
@@ -898,6 +937,7 @@ fn a_plain_texts_draw_carries_its_nodes_style() {
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
+        1.0,
     )
     .scene;
     assert_eq!(scene.texts.len(), 1);

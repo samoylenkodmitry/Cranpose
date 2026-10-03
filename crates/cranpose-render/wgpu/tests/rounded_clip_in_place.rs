@@ -1,5 +1,5 @@
 use cranpose_render_common::graph::{
-    DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    CachePolicy, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
@@ -81,6 +81,15 @@ fn both_ways(children: Vec<RenderNode>) -> Option<([Vec<u8>; 2], [u32; 2])> {
 /// Renders the graph `scene` builds drawn in place, then with its rounded
 /// layer offscreen, and returns the two frames and their isolated counts.
 fn both_graphs(scene: impl Fn(bool) -> RenderGraph) -> Option<([Vec<u8>; 2], [u32; 2])> {
+    both_graphs_with_scale(scene, 1.0, WIDTH, HEIGHT)
+}
+
+fn both_graphs_with_scale(
+    scene: impl Fn(bool) -> RenderGraph,
+    root_scale: f32,
+    width: u32,
+    height: u32,
+) -> Option<([Vec<u8>; 2], [u32; 2])> {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -91,7 +100,9 @@ fn both_graphs(scene: impl Fn(bool) -> RenderGraph) -> Option<([Vec<u8>; 2], [u3
     let mut frames = [Vec::new(), Vec::new()];
     let mut isolated = [0, 0];
     for (index, offscreen) in [false, true].into_iter().enumerate() {
-        let captured = capture_graph_settled(&mut renderer, scene(offscreen), WIDTH, HEIGHT);
+        let captured = support::capture_settled(&mut renderer, |renderer| {
+            support::capture_graph_with_scale(renderer, scene(offscreen), width, height, root_scale)
+        });
         isolated[index] = renderer
             .last_frame_stats()
             .expect("frame statistics")
@@ -99,6 +110,18 @@ fn both_graphs(scene: impl Fn(bool) -> RenderGraph) -> Option<([Vec<u8>; 2], [u3
         frames[index] = captured.pixels;
     }
     Some((frames, isolated))
+}
+
+fn capture_graph_settled_with_scale(
+    renderer: &mut support::LockedRenderer,
+    graph: RenderGraph,
+    width: u32,
+    height: u32,
+    root_scale: f32,
+) -> cranpose_render_wgpu::CapturedFrame {
+    support::capture_settled(renderer, |renderer| {
+        support::capture_graph_with_scale(renderer, graph.clone(), width, height, root_scale)
+    })
 }
 
 /// Whether the pixel at (x, y) lies in one of the clip's corner squares on
@@ -324,6 +347,349 @@ fn shadows_in_recorded_and_loose_content_respect_rounded_clip_pixels() {
                 "{label}: shadow is visible inside the arc"
             );
         }
+    }
+}
+
+fn centered_shadow(inner: bool) -> DrawPrimitive {
+    let fill = Rect {
+        x: 46.0,
+        y: 12.0,
+        width: 28.0,
+        height: 16.0,
+    };
+    let cutout = Rect {
+        x: 51.0,
+        y: 15.0,
+        width: 18.0,
+        height: 10.0,
+    };
+    let primitive = |rect, color| {
+        Box::new(DrawPrimitive::Rect {
+            rect,
+            brush: Brush::solid(color),
+            stroke: None,
+        })
+    };
+    DrawPrimitive::Shadow(if inner {
+        ShadowPrimitive::Inner {
+            fill: primitive(fill, Color::BLACK),
+            cutout: primitive(cutout, Color::WHITE),
+            blur_radius: 4.0,
+            blend_mode: BlendMode::SrcOver,
+            clip_rect: fill,
+        }
+    } else {
+        ShadowPrimitive::Drop {
+            shape: primitive(fill, Color::BLACK),
+            cutout: Some(primitive(cutout, Color::WHITE)),
+            blur_radius: 4.0,
+            blend_mode: BlendMode::SrcOver,
+        }
+    })
+}
+
+fn centered_shadow_children(
+    inner: bool,
+    recorded: bool,
+    blend_depth: usize,
+    full_bleed_fill: bool,
+) -> Vec<RenderNode> {
+    let mut shadow = centered_shadow(inner);
+    for _ in 0..blend_depth {
+        shadow = DrawPrimitive::Blend {
+            primitive: Box::new(shadow),
+            blend_mode: BlendMode::SrcOver,
+        };
+    }
+    let primitives = vec![
+        DrawPrimitive::Rect {
+            rect: if full_bleed_fill {
+                CLIP
+            } else {
+                Rect {
+                    x: 30.0,
+                    y: 8.0,
+                    width: 60.0,
+                    height: 24.0,
+                }
+            },
+            brush: Brush::solid(Color(0.85, 0.15, 0.2, 1.0)),
+            stroke: None,
+        },
+        shadow,
+    ];
+    if recorded {
+        vec![RenderNode::DrawRun(DrawRunNode::new(
+            PrimitivePhase::BeforeChildren,
+            primitives,
+        ))]
+    } else {
+        primitives
+            .into_iter()
+            .map(|primitive| draw_node(primitive, None))
+            .collect()
+    }
+}
+
+#[test]
+fn shadows_clear_of_rounded_corners_draw_in_place_at_fractional_scale() {
+    for root_scale in [1.0, 1.25] {
+        let at = AT;
+        let width = (WIDTH as f32 * root_scale) as u32;
+        let height = (HEIGHT as f32 * root_scale) as u32;
+        for inner in [false, true] {
+            for (recorded, blend_depth) in [(false, 0), (false, 2), (true, 0), (true, 1), (true, 2)]
+            {
+                let children = centered_shadow_children(inner, recorded, blend_depth, true);
+                let label = format!(
+                    "inner={inner}, recorded={recorded}, blend_depth={blend_depth}, root_scale={root_scale}"
+                );
+                let Some((frames, isolated)) = both_graphs_with_scale(
+                    |offscreen| on_page(CLIP, at, rounded(RADIUS, offscreen), children.clone()),
+                    root_scale,
+                    width,
+                    height,
+                ) else {
+                    return;
+                };
+                assert_eq!(
+                    isolated,
+                    [0, 1],
+                    "{label}: direct rounded draw, then isolated reference"
+                );
+                support::assert_bytes_within(
+                    &label,
+                    width,
+                    &frames[0],
+                    &frames[1],
+                    u8::from(root_scale != 1.0),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn non_full_bleed_fill_admits_a_clear_shadow_without_a_rounded_surface() {
+    for root_scale in [1.0, 1.25] {
+        let width = (WIDTH as f32 * root_scale) as u32;
+        let height = (HEIGHT as f32 * root_scale) as u32;
+        for inner in [false, true] {
+            let children = centered_shadow_children(inner, true, 1, false);
+            let label = format!("inner={inner}, root_scale={root_scale}");
+            let Some((frames, isolated)) = both_graphs_with_scale(
+                |offscreen| on_page(CLIP, AT, rounded(RADIUS, offscreen), children.clone()),
+                root_scale,
+                width,
+                height,
+            ) else {
+                return;
+            };
+            assert_eq!(isolated, [0, 1], "{label}: admitted draw, then reference");
+            support::assert_bytes_within(
+                &label,
+                width,
+                &frames[0],
+                &frames[1],
+                u8::from(root_scale != 1.0),
+            );
+        }
+    }
+}
+
+fn blank_page() -> RenderGraph {
+    page_graph(
+        WIDTH,
+        HEIGHT,
+        vec![solid_rect(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: WIDTH as f32,
+                height: HEIGHT as f32,
+            },
+            PAGE,
+        )],
+    )
+}
+
+fn nested_scaled_shadow(scale: f32, offscreen_card: bool) -> RenderGraph {
+    let mut card = shared_test_support::layer_node(
+        CLIP,
+        ProjectiveTransform::identity(),
+        rounded(RADIUS, offscreen_card),
+        centered_shadow_children(false, true, 1, true),
+    );
+    card.node_id = Some(92_001);
+    let mut parent = shared_test_support::layer_node(
+        CLIP,
+        ProjectiveTransform::uniform_scale(scale).then(ProjectiveTransform::translation(
+            AT.x + CLIP.width * (1.0 - scale) * 0.5,
+            AT.y + CLIP.height * (1.0 - scale) * 0.5,
+        )),
+        GraphicsLayer {
+            scale,
+            compositing_strategy: CompositingStrategy::Offscreen,
+            ..GraphicsLayer::default()
+        },
+        vec![RenderNode::Layer(Box::new(card))],
+    );
+    parent.node_id = Some(91_001);
+    parent.motion_context_animated = true;
+    parent.cache_policy = CachePolicy::Auto;
+    page_graph(
+        WIDTH,
+        HEIGHT,
+        vec![
+            solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: WIDTH as f32,
+                    height: HEIGHT as f32,
+                },
+                PAGE,
+            ),
+            RenderNode::Layer(Box::new(parent)),
+        ],
+    )
+}
+
+#[test]
+fn nested_animated_surface_keeps_clear_shadow_out_of_rounded_corners() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping rounded clip in place: {err}");
+            return;
+        }
+    };
+    let mut reference_renderer = match support::LockedRenderer::beside_locked() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping rounded clip in place: {err}");
+            return;
+        }
+    };
+    let page = capture_graph_settled_with_scale(&mut renderer, blank_page(), WIDTH, HEIGHT, 1.0);
+    for scale in [1.0, 0.75, 0.62] {
+        let actual = support::capture_graph_with_scale(
+            &mut renderer,
+            nested_scaled_shadow(scale, false),
+            WIDTH,
+            HEIGHT,
+            1.0,
+        );
+        let actual_isolated = renderer
+            .last_frame_stats()
+            .expect("frame statistics")
+            .isolated_layer_renders;
+        let reference = support::capture_graph_with_scale(
+            &mut reference_renderer,
+            nested_scaled_shadow(scale, true),
+            WIDTH,
+            HEIGHT,
+            1.0,
+        );
+        let reference_isolated = reference_renderer
+            .last_frame_stats()
+            .expect("frame statistics")
+            .isolated_layer_renders;
+        let label = format!("parent_scale={scale}");
+        if scale == 1.0 {
+            assert_eq!(
+                actual_isolated, 1,
+                "{label}: only the animated parent isolates"
+            );
+            assert_eq!(
+                reference_isolated, 2,
+                "{label}: rounded reference adds one surface"
+            );
+        }
+
+        let corner_x = (AT.x + CLIP.width * 0.5 + (1.5 - CLIP.width * 0.5) * scale) as u32;
+        let corner_y = (AT.y + CLIP.height * 0.5 + (1.5 - CLIP.height * 0.5) * scale) as u32;
+        let corner = Rect {
+            x: corner_x as f32,
+            y: corner_y as f32,
+            width: 1.0,
+            height: 1.0,
+        };
+        assert_eq!(
+            support::region_pixels(&actual, corner),
+            support::region_pixels(&page, corner),
+            "{label}: rounded corner stays transparent to the parent surface"
+        );
+        assert_eq!(
+            support::region_pixels(&actual, corner),
+            support::region_pixels(&reference, corner),
+            "{label}: direct clip matches the nested rounded-surface corner"
+        );
+    }
+}
+
+#[test]
+fn a_shadow_at_an_arbitrary_fractional_phase_stays_inside_the_rounded_clip() {
+    let root_scale = 1.25;
+    let width = (WIDTH as f32 * root_scale) as u32;
+    let height = (HEIGHT as f32 * root_scale) as u32;
+    let at = Point::new(20.25, 20.5);
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping rounded clip in place: {err}");
+            return;
+        }
+    };
+    let page =
+        capture_graph_settled_with_scale(&mut renderer, blank_page(), width, height, root_scale);
+    let card = |children| on_page(CLIP, at, rounded(RADIUS, false), children);
+    let fill = capture_graph_settled_with_scale(
+        &mut renderer,
+        card(vec![solid_rect(CLIP, Color(0.85, 0.15, 0.2, 1.0))]),
+        width,
+        height,
+        root_scale,
+    );
+    for inner in [false, true] {
+        let actual = capture_graph_settled_with_scale(
+            &mut renderer,
+            card(centered_shadow_children(inner, true, 1, true)),
+            width,
+            height,
+            root_scale,
+        );
+        let corner_x = ((at.x + 1.0) * root_scale) as u32;
+        let corner_y = ((at.y + 1.0) * root_scale) as u32;
+        let corner = Rect {
+            x: corner_x as f32,
+            y: corner_y as f32,
+            width: 1.0,
+            height: 1.0,
+        };
+        let label = format!("inner={inner}");
+        assert_eq!(
+            support::region_pixels(&actual, corner),
+            support::region_pixels(&fill, corner),
+            "{label}: the shadow does not reach the clipped corner"
+        );
+        assert_eq!(
+            support::region_pixels(&actual, corner),
+            support::region_pixels(&page, corner),
+            "{label}: the rounded clip leaves the page visible in its corner"
+        );
+
+        let differing = support::differing_pixels(width, &fill.pixels, &actual.pixels);
+        let center_left = ((at.x + 35.0) * root_scale) as usize;
+        let center_top = ((at.y + 2.0) * root_scale) as usize;
+        let center_right = ((at.x + 85.0) * root_scale) as usize;
+        let center_bottom = ((at.y + 38.0) * root_scale) as usize;
+        assert!(
+            differing.iter().any(|(x, y, _, _)| {
+                *x >= center_left && *x < center_right && *y >= center_top && *y < center_bottom
+            }),
+            "{label}: the shadow remains visible inside the rounded clip"
+        );
     }
 }
 

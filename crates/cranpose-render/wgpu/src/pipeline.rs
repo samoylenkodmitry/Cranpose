@@ -2062,12 +2062,6 @@ fn push_shadow_primitive(
             blend_mode,
             clip_rect,
         } => {
-            let mut shapes = scene.take_shadow_recorder();
-            if !record_shadow_caster(&mut shapes, fill, layer, *blend_mode)
-                || !record_shadow_caster(&mut shapes, cutout, layer, BlendMode::DstOut)
-            {
-                return;
-            }
             let abs_clip = Rect {
                 x: clip_rect.x + layer_bounds.x,
                 y: clip_rect.y + layer_bounds.y,
@@ -2075,14 +2069,23 @@ fn push_shadow_primitive(
                 height: clip_rect.height,
             };
             let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
+            let Some(shadow_clip) = clip.map_or(Some(transformed_clip), |parent_clip| {
+                parent_clip.intersect(transformed_clip)
+            }) else {
+                return;
+            };
+            let mut shapes = scene.take_shadow_recorder();
+            if !record_shadow_caster(&mut shapes, fill, layer, *blend_mode)
+                || !record_shadow_caster(&mut shapes, cutout, layer, BlendMode::DstOut)
+            {
+                return;
+            }
             scene.push_shadow_draw(ShadowDraw {
                 shapes: RunDraw::whole(shapes, placement),
                 post_blur_cutouts: None,
                 texts: vec![],
                 blur_radius: *blur_radius,
-                clip: clip.map_or(Some(transformed_clip), |parent_clip| {
-                    parent_clip.intersect(transformed_clip)
-                }),
+                clip: Some(shadow_clip),
                 rounded_clip: None,
                 occluder: None,
                 z_index: 0,

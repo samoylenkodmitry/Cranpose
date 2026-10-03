@@ -139,13 +139,14 @@ impl RendererFrontend {
             &mut self.text_state,
             &mut self.layer_motion,
             self.root_scene_capacity,
+            root_scale,
         );
         self.root_scene_capacity = root.scene.capacity_hint();
         let after_root_collect = Instant::now();
         let overlay = self
             .dev_overlay_graph
             .as_ref()
-            .map(|overlay| collect_overlay(&overlay.root, &mut self.text_state));
+            .map(|overlay| collect_overlay(&overlay.root, &mut self.text_state, root_scale));
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
         let packet = FramePacket {
             frame_id: self.frame_sequence,
@@ -168,11 +169,12 @@ impl RendererFrontend {
         Some(packet)
     }
 
-    /// Folds the present stage's returns back into the producer: the
-    /// rendered root scene's capacities seed the next collect.
     pub(crate) fn apply_returns(&mut self, returns: RenderReturns) {
-        if let Some(scene) = returns.scene {
-            self.root_scene_capacity = scene.capacity_hint();
+        if let Some(frame) = returns.scene {
+            self.root_scene_capacity = frame.root.scene.capacity_hint();
+            drop(frame.overlay);
+            drop(frame.root.children);
+            drop(frame.root.scene);
         }
     }
 }

@@ -63,6 +63,49 @@ fn the_logical_reach_follows_the_device_scale() {
 }
 
 #[test]
+fn a_minimum_scale_bound_covers_blur_reach_across_scratch_transitions() {
+    for minimum_scale in [0.125, 1.0, 4.0, 64.0] {
+        for scale in [minimum_scale, minimum_scale * 1.125, minimum_scale * 2.0] {
+            for device_radius in [
+                0.0, 5.999, 6.0, 6.001, 15.999, 16.0, 16.001, 127.999, 128.0, 128.001, 256.0,
+            ] {
+                let radius = device_radius / scale;
+                let bound = blur_reach_for_minimum_scale(radius, minimum_scale);
+                assert!(
+                    bound >= blur_reach(radius, scale),
+                    "bound {bound} must cover radius {radius} at scale {scale} (minimum {minimum_scale})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_minimum_scale_bound_covers_invalid_and_saturated_radii() {
+    for minimum_scale in [0.5, 2.0, 8.0] {
+        for scale in [minimum_scale, minimum_scale * 1.5] {
+            for radius in [f32::NAN, f32::NEG_INFINITY, -5.0, f32::INFINITY] {
+                let bound = blur_reach_for_minimum_scale(radius, minimum_scale);
+                assert!(
+                    bound >= blur_reach(radius, scale),
+                    "bound {bound} must cover radius {radius} at scale {scale} (minimum {minimum_scale})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_minimum_scale_bound_without_a_valid_minimum_is_unbounded() {
+    for minimum_scale in [0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(
+            blur_reach_for_minimum_scale(2.0, minimum_scale),
+            f32::INFINITY
+        );
+    }
+}
+
+#[test]
 fn expand_blurred_rect_applies_margin_and_clip() {
     let expanded = expand_blurred_rect(
         Rect {

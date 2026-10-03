@@ -2,11 +2,14 @@ use cranpose_render_common::{
     Renderer,
     geometry::blur_reach_px,
     graph::{
-        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph, RenderNode,
+        DrawPrimitiveNode, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderGraph, RenderNode,
     },
 };
 use cranpose_render_wgpu::CapturedFrame;
-use cranpose_ui_graphics::{BlendMode, Brush, Color, DrawPrimitive, Rect, ShadowPrimitive};
+use cranpose_ui_graphics::{
+    BlendMode, Brush, Color, DrawPrimitive, GraphicsLayer, Rect, ShadowPrimitive,
+};
 use support::{ReferenceEdge, region_pixels, solid_rect};
 
 use crate::support;
@@ -35,6 +38,94 @@ fn caster() -> DrawPrimitive {
         rect: CASTER,
         brush: Brush::solid(Color::BLACK),
         stroke: None,
+    }
+}
+
+fn disjoint_inner_shadow_graph(recorded: bool, include_shadow: bool) -> RenderGraph {
+    let mut content = Vec::new();
+    if include_shadow {
+        let shape = |bounds, color| {
+            Box::new(DrawPrimitive::Rect {
+                rect: bounds,
+                brush: Brush::solid(color),
+                stroke: None,
+            })
+        };
+        let shadow = DrawPrimitive::Blend {
+            primitive: Box::new(DrawPrimitive::Shadow(ShadowPrimitive::Inner {
+                fill: shape(rect(48.0, 20.0, 32.0, 40.0), Color::BLACK),
+                cutout: shape(rect(54.0, 25.0, 20.0, 30.0), Color::WHITE),
+                blur_radius: 16.0,
+                blend_mode: BlendMode::SrcOver,
+                clip_rect: rect(48.0, 20.0, 32.0, 40.0),
+            })),
+            blend_mode: BlendMode::SrcOver,
+        };
+        if recorded {
+            content.push(RenderNode::DrawRun(DrawRunNode::new(
+                PrimitivePhase::BeforeChildren,
+                vec![shadow],
+            )));
+        } else {
+            content.push(RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(Box::new(DrawPrimitiveNode {
+                    primitive: shadow,
+                    clip: None,
+                })),
+            }));
+        }
+    }
+    let clipped_layer = LayerNode {
+        local_bounds: rect(0.0, 0.0, 40.0, FRAME as f32),
+        transform_to_parent: ProjectiveTransform::identity(),
+        graphics_layer: GraphicsLayer {
+            clip: true,
+            ..GraphicsLayer::default()
+        }
+        .into(),
+        children: content,
+        ..LayerNode::default()
+    };
+    support::page_graph(
+        FRAME,
+        FRAME,
+        vec![
+            solid_rect(rect(0.0, 0.0, FRAME as f32, FRAME as f32), BACKGROUND),
+            RenderNode::Layer(Box::new(clipped_layer)),
+        ],
+    )
+}
+
+#[test]
+fn disjoint_inner_shadow_clip_does_not_turn_unbounded_through_blend_wrappers() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    for recorded in [false, true] {
+        let actual = support::capture_graph(
+            &mut renderer,
+            disjoint_inner_shadow_graph(recorded, true),
+            FRAME,
+            FRAME,
+        );
+        let expected = support::capture_graph(
+            &mut renderer,
+            disjoint_inner_shadow_graph(recorded, false),
+            FRAME,
+            FRAME,
+        );
+        support::assert_same_bytes(
+            if recorded {
+                "recorded inner shadow with disjoint clips"
+            } else {
+                "loose inner shadow with disjoint clips"
+            },
+            FRAME,
+            &actual.pixels,
+            &expected.pixels,
+        );
     }
 }
 

@@ -58,6 +58,11 @@ pub(crate) struct FramePacket {
     pub(crate) clear: wgpu::Color,
 }
 
+pub(crate) struct FrameSceneStorage {
+    pub(crate) root: LayerScene,
+    pub(crate) overlay: Option<LayerScene>,
+}
+
 /// Present-stage timestamps for one consumed packet, in nanoseconds on the
 /// clock the producer injected at runtime start (`0` = stage did not run or
 /// no clock was injected). Carried back in `RenderReturns` so the
@@ -73,7 +78,7 @@ pub struct PresentTimings {
 
 #[derive(Default)]
 pub(crate) struct RenderReturns {
-    pub(crate) scene: Option<CompositorScene>,
+    pub(crate) scene: Option<FrameSceneStorage>,
     pub(crate) frame_id: u64,
     pub(crate) outcome: PresentOutcome,
     #[cfg(not(target_arch = "wasm32"))]
@@ -83,6 +88,7 @@ pub(crate) struct RenderReturns {
 const _: () = {
     const fn assert_send<T: Send>() {}
     assert_send::<FramePacket>();
+    assert_send::<FrameSceneStorage>();
     assert_send::<LayerScene>();
     assert_send::<ChildLayer>();
     assert_send::<CompositorScene>();
