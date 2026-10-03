@@ -32,8 +32,14 @@ rv-nightly:
     @echo '{{nightly}}'
 
 # Install both pinned toolchains and the components the gates need.
+[unix]
 toolchains:
     scripts/ci/install_toolchains.sh
+
+[windows]
+toolchains:
+    rustup toolchain install {{stable}} --profile minimal --component clippy --component rustfmt --component rust-src
+    rustup toolchain install {{nightly}} --profile minimal --component rustfmt --component rust-src
 
 # --- format ----------------------------------------------------------------
 
