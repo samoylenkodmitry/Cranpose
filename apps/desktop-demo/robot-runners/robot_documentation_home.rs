@@ -49,7 +49,7 @@ fn return_to_top(robot: &Robot, width: u32, height: u32) {
         robot.wait_for_idle().expect("footer settles");
     }
     click_button(robot, "Back to top");
-    robot.validate_content("Build native and browser interfaces in Rust.").expect("top of guide is visible");
+    robot.validate_content("Build apps with Compose in Rust.").expect("top of guide is visible");
 }
 
 pub(crate) fn main() {
@@ -70,9 +70,9 @@ pub(crate) fn main() {
             robot.wait_for_idle().expect("documentation startup");
             if compact {
                 robot.validate_content("Welcome").expect("compact wheel opens first");
-                assert!(find_text_in_semantics(&robot, "Build native and browser interfaces in Rust.").is_none());
+                assert!(find_text_in_semantics(&robot, "Build apps with Compose in Rust.").is_none());
             } else {
-                robot.validate_content("Build native and browser interfaces in Rust.").expect("offline reader");
+                robot.validate_content("Build apps with Compose in Rust.").expect("offline reader");
             }
             capture(&robot, width, "home");
             let github_before = find_text_in_semantics_exact(&robot, "View on GitHub").expect("fixed repository link");
@@ -125,7 +125,7 @@ pub(crate) fn main() {
                 click_button(&robot, "Counter App");
                 robot.validate_content("Increment").expect("existing demo remains available");
                 click_button(&robot, "Documentation");
-                robot.validate_content("Build native and browser interfaces in Rust.").expect("return to documentation");
+                robot.validate_content("Build apps with Compose in Rust.").expect("return to documentation");
             } else {
                 click_button(&robot, "Back to wheel");
             }

@@ -111,7 +111,7 @@ fn manual_reader_scroll_interrupts_a_chapter_animation() {
     robot.shell_mut().pointer_scrolled(0.0, 9000.0);
     settle_motion(&mut robot);
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
     assert!(click_control(&mut robot, "Get started"));
     assert!(robot.find_by_text("Create an application").exists());
@@ -124,13 +124,13 @@ fn reading_scroll_moves_the_tab_row_and_document_together() {
     });
     let before = robot.get_all_rects();
     let tabs_before = text_bounds(&before, "Counter App");
-    let title_before = text_bounds(&before, "Build native and browser interfaces in Rust.");
+    let title_before = text_bounds(&before, "Build apps with Compose in Rust.");
     robot.move_to(1040.0, 650.0);
     robot.shell_mut().pointer_scrolled(0.0, -40.0);
     robot.wait_for_idle();
     let after = robot.get_all_rects();
     let tabs_after = text_bounds(&after, "Counter App");
-    let title_after = text_bounds(&after, "Build native and browser interfaces in Rust.");
+    let title_after = text_bounds(&after, "Build apps with Compose in Rust.");
     let displacement = tabs_before.y - tabs_after.y;
     assert!(
         displacement > 20.0,
@@ -201,10 +201,7 @@ fn wide_article_aligns_with_the_wheel_edge() {
     let tree =
         cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("reader semantics");
     let glass = semantic_bounds(&tree, "Documentation glass");
-    let text = text_bounds(
-        &robot.get_all_rects(),
-        "Build native and browser interfaces in Rust.",
-    );
+    let text = text_bounds(&robot.get_all_rects(), "Build apps with Compose in Rust.");
     assert!(
         text.x - glass.x <= 25.0 && text.x <= 325.0,
         "article should align close to the wheel: {text:?}, {glass:?}"
@@ -231,7 +228,7 @@ fn default_desktop_home_reads_offline_and_keeps_counter_navigation() {
         combined_app_with_initial_tab(Some(startup_tab_from_args(std::iter::empty())));
     });
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
     assert!(click_control(&mut robot, "Get started"));
     assert!(robot.find_by_text("Create an application").exists());
@@ -242,7 +239,7 @@ fn default_desktop_home_reads_offline_and_keeps_counter_navigation() {
     assert!(!robot.find_by_text("Cranpose documentation").exists());
     assert!(click_control(&mut robot, "Documentation"));
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
 }
 
@@ -266,7 +263,7 @@ fn wheel_extends_beneath_the_edge_to_edge_reader_without_stealing_clicks() {
     let y = 650.0;
     robot.click_at(x, y);
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
 }
 
@@ -276,7 +273,7 @@ fn documentation_is_usable_in_a_compact_window() {
         combined_app_with_initial_tab(Some(DemoTab::Documentation));
     });
     assert!(!robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
     assert!(robot.find_by_text("Welcome").exists());
     assert!(robot.find_by_text("View on GitHub").exists());
@@ -333,7 +330,7 @@ fn reader_actions_move_between_chapters_without_the_section_wheel() {
     assert!(robot.find_by_text("Create an application").exists());
     assert!(click_control(&mut robot, "Previous section"));
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
 }
 
@@ -474,17 +471,17 @@ fn compact_wheel_reveals_the_current_chapter_after_reading_to_the_end() {
         assert!(click_control(&mut robot, "Next section"));
     }
     assert!(robot
-        .find_by_text("0.9 is the stabilization release line.")
+        .find_by_text("Place a platform control in your Cranpose layout.")
         .exists());
     assert!(click_control(&mut robot, "Back to wheel"));
     let current = semantic_bounds(
         &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("current wheel"),
-        "Road to 1.0",
+        "Native views",
     );
     assert!(current.y >= 0.0 && current.y + current.height <= 780.0);
-    assert!(click_control(&mut robot, "Road to 1.0"));
+    assert!(click_control(&mut robot, "Native views"));
     assert!(robot
-        .find_by_text("0.9 is the stabilization release line.")
+        .find_by_text("Place a platform control in your Cranpose layout.")
         .exists());
 }
 

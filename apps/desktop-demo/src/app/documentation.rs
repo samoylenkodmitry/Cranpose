@@ -102,12 +102,12 @@ fn Brand() {
         move || {
             Text("CRANPOSE", Modifier::empty(), caption_style(ACCENT));
             Text(
-                "The guide.",
+                "Build apps.",
                 Modifier::empty().heading(),
                 text_style(30.0, INK, FontWeight::BOLD),
             );
             Text(
-                "0.9.0 · toward 1.0",
+                "Compose in Rust",
                 Modifier::empty(),
                 text_style(12.0, MUTED, FontWeight::NORMAL),
             );
