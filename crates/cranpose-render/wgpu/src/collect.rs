@@ -1,5 +1,6 @@
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::{
+    geometry::{blur_reach, blur_reach_for_minimum_scale},
     graph::{
         CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
         ProjectiveTransform, RenderNode, quad_bounds,
@@ -10,7 +11,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, RecordLane,
-    Rect, RenderEffect, expand_rect, primitive_coverage_rect,
+    Rect, RenderEffect, ShadowPrimitive, expand_rect, primitive_coverage_rect,
 };
 
 use crate::{
@@ -38,25 +39,17 @@ struct Motion {
 }
 
 impl LayerMotion {
-    pub(crate) fn raster_scale(
-        &mut self,
-        node_id: Option<NodeId>,
-        scale: f32,
-        content_hash: u64,
-        cacheable: bool,
-    ) -> f32 {
+    fn retained_scale(&self, node_id: Option<NodeId>, scale: f32, content_hash: u64) -> f32 {
+        node_id
+            .and_then(|id| self.previous.get(&id))
+            .filter(|previous| previous.content_hash == content_hash)
+            .filter(|_| scale.is_finite() && scale > 0.0)
+            .map_or(scale, |previous| held_raster_scale(previous.raster, scale))
+    }
+
+    fn record_scale(&mut self, node_id: Option<NodeId>, raster: f32, content_hash: u64) {
         let Some(node_id) = node_id else {
-            return scale;
-        };
-        let scaling = self
-            .previous
-            .get(&node_id)
-            .filter(|previous| previous.content_hash == content_hash);
-        let raster = match scaling {
-            Some(previous) if cacheable && scale.is_finite() && scale > 0.0 => {
-                held_raster_scale(previous.raster, scale)
-            }
-            _ => scale,
+            return;
         };
         self.current.insert(
             node_id,
@@ -65,7 +58,6 @@ impl LayerMotion {
                 raster,
             },
         );
-        raster
     }
 
     pub(crate) fn end_frame(&mut self) {
@@ -144,6 +136,45 @@ struct WalkContext {
     clip_radius: f32,
     snap_anchor: Option<SnapAnchor>,
     translated: bool,
+    raster_scale: RasterScale,
+}
+
+#[derive(Clone, Copy)]
+enum RasterScale {
+    Exact(f32),
+    Minimum(f32),
+}
+
+impl RasterScale {
+    fn within(self, nominal: f32, retained: f32) -> Self {
+        if nominal == 1.0 && retained == 1.0 {
+            return self;
+        }
+        if !nominal.is_finite() || nominal <= 0.0 || !retained.is_finite() || retained <= 0.0 {
+            return Self::Minimum(0.0);
+        }
+        let (Self::Exact(parent) | Self::Minimum(parent)) = self;
+        Self::Minimum(parent * nominal.min(retained).min(1.0))
+    }
+
+    fn shadow_reach(self, radius: f32) -> f32 {
+        match self {
+            Self::Exact(scale) => blur_reach(radius, scale),
+            Self::Minimum(scale) => blur_reach_for_minimum_scale(radius, scale),
+        }
+    }
+
+    fn aa_margin(self) -> f32 {
+        let scale = match self {
+            Self::Exact(scale) if !scale.is_finite() || scale <= 0.0 => 1.0,
+            Self::Exact(scale) | Self::Minimum(scale) => scale,
+        };
+        if scale.is_finite() && scale > 0.0 {
+            ROUNDED_CLIP_AA_MARGIN.max(1.0 / scale)
+        } else {
+            f32::INFINITY
+        }
+    }
 }
 
 pub(crate) fn direct_translation(transform: ProjectiveTransform) -> Option<Point> {
@@ -258,13 +289,17 @@ pub(crate) fn rounded_clip_for_layer(layer: &LayerNode) -> Option<LayerRoundedCl
 pub(crate) struct RoundedClipCorners {
     rect: Rect,
     radii: [f32; 4],
+    raster_scale: RasterScale,
+    aa_margin: f32,
 }
 
 impl RoundedClipCorners {
-    pub(crate) fn of(clip: LayerRoundedClip) -> Self {
+    fn of(clip: LayerRoundedClip, raster_scale: RasterScale) -> Self {
         Self {
             rect: clip.rect,
             radii: clip.radii,
+            raster_scale,
+            aa_margin: raster_scale.aa_margin(),
         }
     }
 
@@ -272,6 +307,12 @@ impl RoundedClipCorners {
     /// it enters, its point farthest from that corner's circle centre is still
     /// within the circle.
     pub(crate) fn admits(&self, region: Rect) -> bool {
+        if ![region.x, region.y, region.width, region.height]
+            .into_iter()
+            .all(f32::is_finite)
+        {
+            return false;
+        }
         let Rect {
             x,
             y,
@@ -325,12 +366,12 @@ impl RoundedClipCorners {
     }
 }
 
-/// Whether every op the layer would inline into its parent stays out of its
-/// rounded clip's corner cuts, so the rect clip alone reproduces the rounded
-/// clip exactly. Shadows and isolated child composites carry the rounded
-/// mask themselves and are not counted.
-fn content_admits_rounded_clip(layer: &LayerNode, clip: LayerRoundedClip) -> bool {
-    let corners = RoundedClipCorners::of(clip);
+fn content_admits_rounded_clip(
+    layer: &LayerNode,
+    clip: LayerRoundedClip,
+    raster_scale: RasterScale,
+) -> bool {
+    let corners = RoundedClipCorners::of(clip, raster_scale);
     layer_admits_corners(layer, Point::default(), None, &corners)
 }
 
@@ -356,7 +397,7 @@ fn layer_admits_corners(
             Some(clip) => rect.intersect(clip),
             None => Some(rect),
         };
-        visible.is_none_or(|visible| corners.admits(expand_rect(visible, ROUNDED_CLIP_AA_MARGIN)))
+        visible.is_none_or(|visible| corners.admits(expand_rect(visible, corners.aa_margin)))
     };
     layer
         .children
@@ -374,19 +415,26 @@ fn node_admits_corners(
     match node {
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Draw(draw) => {
-                primitive_stays_clear(&draw.primitive, |rect| check(rect, draw.clip))
+                primitive_stays_clear(&draw.primitive, corners.raster_scale, |rect| {
+                    check(rect, draw.clip)
+                })
             }
-            PrimitiveNode::Text(text) => check(text.rect, text.clip),
+            PrimitiveNode::Text(text) => text.draw_bounds().is_some_and(|rect| check(rect, None)),
         },
         RenderNode::DrawRun(run) => {
-            !run.summary.has_shadow && run.coverage_rects().all(|rect| check(rect, None))
+            run.coverage_rects().all(|rect| check(rect, None))
+                && (!run.summary.has_shadow
+                    || run_others_stay_clear(run, corners.raster_scale, |rect| check(rect, None)))
         }
         RenderNode::Layer(child) => {
+            if child.graphics_layer.shadow_elevation > 0.0 {
+                return false;
+            }
             let Some(translation) = direct_translation(child.transform_to_parent) else {
-                return true;
+                return child_stays_clear(child, offset, corners);
             };
             if child_needs_surface(child) {
-                return true;
+                return child_stays_clear(child, offset, corners);
             }
             let child_offset = Point::new(offset.x + translation.x, offset.y + translation.y);
             layer_admits_corners(child, child_offset, inherited_clip, corners)
@@ -494,7 +542,7 @@ enum Placement {
     Isolated,
 }
 
-fn child_placement(layer: &LayerNode) -> Placement {
+fn child_placement(layer: &LayerNode, raster_scale: RasterScale) -> Placement {
     let Some(translation) = direct_translation(layer.transform_to_parent) else {
         return Placement::Isolated;
     };
@@ -502,10 +550,11 @@ fn child_placement(layer: &LayerNode) -> Placement {
         return Placement::Isolated;
     }
     match rounded_clip_for_layer(layer) {
-        Some(clip) if !content_admits_rounded_clip(layer, clip) => {
-            content_takes_rounded_clip(layer, clip).map_or(Placement::Isolated, |radius| {
-                Placement::DirectRounded(translation, radius)
-            })
+        Some(clip) if !content_admits_rounded_clip(layer, clip, raster_scale) => {
+            content_takes_rounded_clip(layer, clip, raster_scale)
+                .map_or(Placement::Isolated, |radius| {
+                    Placement::DirectRounded(translation, radius)
+                })
         }
         _ => Placement::Direct(translation),
     }
@@ -541,7 +590,7 @@ fn clip_holds(outer: Rect, inner: Rect) -> bool {
 /// where nothing above clips into it, and never inside another rounded
 /// clip, whose radius a placement could not carry beside its own.
 fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
-    match child_placement(child) {
+    match child_placement(child, context.raster_scale) {
         Placement::DirectRounded(translation, radius) => {
             let clip = child.visual_clip_rect().map(|clip| {
                 clip.translate(
@@ -568,7 +617,11 @@ fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
 /// drawn straight under that clip. Text, images, shadows, layers that
 /// composite and anything under a clip of its own stay out of the corners,
 /// which the rect clip alone then leaves whole.
-fn content_takes_rounded_clip(layer: &LayerNode, clip: LayerRoundedClip) -> Option<f32> {
+fn content_takes_rounded_clip(
+    layer: &LayerNode,
+    clip: LayerRoundedClip,
+    raster_scale: RasterScale,
+) -> Option<f32> {
     let radius = clip.radii[0];
     let uniform = clip
         .radii
@@ -576,7 +629,11 @@ fn content_takes_rounded_clip(layer: &LayerNode, clip: LayerRoundedClip) -> Opti
         .all(|corner| (corner - radius).abs() <= AFFINE_TOLERANCE);
     (uniform
         && layer.visual_clip_rect() == Some(clip.rect)
-        && layer_takes_corners(layer, Point::default(), &RoundedClipCorners::of(clip)))
+        && layer_takes_corners(
+            layer,
+            Point::default(),
+            &RoundedClipCorners::of(clip, raster_scale),
+        ))
     .then_some(radius)
 }
 
@@ -585,9 +642,13 @@ fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCo
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Draw(draw) if draw.clip.is_none() && is_shape(&draw.primitive) => true,
             PrimitiveNode::Draw(draw) => {
-                primitive_stays_clear(&draw.primitive, |rect| stays_clear(rect, offset, corners))
+                primitive_stays_clear(&draw.primitive, corners.raster_scale, |rect| {
+                    stays_clear(rect, offset, corners)
+                })
             }
-            PrimitiveNode::Text(text) => stays_clear(text.rect, offset, corners),
+            PrimitiveNode::Text(text) => text
+                .draw_bounds()
+                .is_some_and(|rect| stays_clear(rect, offset, corners)),
         },
         RenderNode::DrawRun(run) => run_takes_corners(run, offset, corners),
         RenderNode::Layer(child) => child_takes_corners(child, offset, corners),
@@ -605,47 +666,89 @@ fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCo
             Point::new(offset.x + translation.x, offset.y + translation.y),
             corners,
         ),
-        _ => {
-            child.draws_within_bounds
-                && child.graphics_layer.shadow_elevation <= 0.0
-                && stays_clear(
-                    quad_bounds(child.transform_to_parent.map_rect(child.local_bounds)),
-                    offset,
-                    corners,
-                )
-        }
+        _ => child_stays_clear(child, offset, corners),
     }
+}
+
+fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+    if !child.draws_within_bounds || child.graphics_layer.shadow_elevation > 0.0 {
+        return false;
+    }
+    let padding = cranpose_render_common::graph::CONTAINED_DRAW_SLACK
+        + child.effect().map_or(0.0, RenderEffect::output_padding);
+    stays_clear(
+        quad_bounds(
+            child
+                .transform_to_parent
+                .map_rect(expand_rect(child.local_bounds, padding)),
+        ),
+        offset,
+        corners,
+    )
 }
 
 /// Whether a run's shapes may take the corners: its other lanes (text,
 /// images, shadows) stay out of them.
 fn run_takes_corners(run: &DrawRunNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+    run_others_stay_clear(run, corners.raster_scale, |rect| {
+        stays_clear(rect, offset, corners)
+    })
+}
+
+fn run_others_stay_clear(
+    run: &DrawRunNode,
+    raster_scale: RasterScale,
+    clear: impl Fn(Rect) -> bool,
+) -> bool {
     let recording = &*run.recording;
     recording
         .segments_in(&run.segments)
         .all(|segment| match segment.lane {
             RecordLane::Shapes | RecordLane::Content => true,
-            RecordLane::Others => recording.others()[segment.range()].iter().all(|primitive| {
-                primitive_stays_clear(primitive, |rect| stays_clear(rect, offset, corners))
-            }),
+            RecordLane::Others => recording.others()[segment.range()]
+                .iter()
+                .all(|primitive| primitive_stays_clear(primitive, raster_scale, &clear)),
         })
 }
 
-/// Whether `primitive` stays out of a rounded clip's corner cuts, as
-/// `clear` judges its coverage rect. A shadow has none: its blur reaches
-/// past any rect it holds, and it draws under a rect clip, so it never
-/// counts as clear. Only the content marker, which draws nothing, does.
-fn primitive_stays_clear(primitive: &DrawPrimitive, clear: impl Fn(Rect) -> bool) -> bool {
-    match primitive_coverage_rect(primitive) {
-        Some(rect) => clear(rect),
-        None => matches!(primitive, DrawPrimitive::Content),
+fn primitive_stays_clear(
+    primitive: &DrawPrimitive,
+    raster_scale: RasterScale,
+    clear: impl Fn(Rect) -> bool,
+) -> bool {
+    let mut primitive = primitive;
+    while let DrawPrimitive::Blend {
+        primitive: inner, ..
+    } = primitive
+    {
+        primitive = inner;
+    }
+    let bounds = match primitive {
+        DrawPrimitive::Shadow(ShadowPrimitive::Drop {
+            shape, blur_radius, ..
+        }) => {
+            let reach = raster_scale.shadow_reach(*blur_radius);
+            primitive_coverage_rect(shape).map(|rect| expand_rect(rect, reach))
+        }
+        DrawPrimitive::Shadow(ShadowPrimitive::Inner { clip_rect, .. }) => Some(*clip_rect),
+        DrawPrimitive::Content => return true,
+        _ => primitive_coverage_rect(primitive),
+    };
+    match bounds {
+        Some(rect) => {
+            [rect.x, rect.y, rect.width, rect.height]
+                .into_iter()
+                .all(f32::is_finite)
+                && clear(rect)
+        }
+        None => false,
     }
 }
 
 fn stays_clear(rect: Rect, offset: Point, corners: &RoundedClipCorners) -> bool {
     corners.admits(expand_rect(
         rect.translate(offset.x, offset.y),
-        ROUNDED_CLIP_AA_MARGIN,
+        corners.aa_margin,
     ))
 }
 
@@ -666,6 +769,7 @@ pub(crate) fn collect_root(
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
+    root_scale: f32,
 ) -> LayerScene {
     let mut out = LayerScene {
         scene: CompositorScene::with_capacity(capacity),
@@ -677,6 +781,7 @@ pub(crate) fn collect_root(
         clip_radius: 0.0,
         snap_anchor: None,
         translated: false,
+        raster_scale: RasterScale::Exact(root_scale),
     };
     collect_child(root, text_layout, motion, context, &mut out);
     out.scene.flush_loose();
@@ -687,12 +792,14 @@ pub(crate) fn collect_root(
 pub(crate) fn collect_overlay(
     root: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
+    root_scale: f32,
 ) -> LayerScene {
     collect_root(
         root,
         text_layout,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
+        root_scale,
     )
 }
 
@@ -739,12 +846,25 @@ fn isolated_child(
     parent_scene: &mut CompositorScene,
 ) -> ChildLayer {
     let local_layer = local_content_layer_for(&layer.graphics_layer);
+    let content_hash = layer.target_content_hash();
+    let nominal_scale = layer_uniform_scale(&layer.graphics_layer);
+    let retained_scale = if layer.cache_policy == CachePolicy::Auto {
+        motion.retained_scale(layer.node_id, nominal_scale, content_hash)
+    } else {
+        nominal_scale
+    };
+    let mut raster_scale = context.raster_scale.within(nominal_scale, retained_scale);
+    if layer.backdrop().is_some() && uniform_scale_translation(layer.transform_to_parent).is_none()
+    {
+        raster_scale = raster_scale.within(nominal_scale, retained_scale);
+    }
     let content_context = WalkContext {
         offset: Point::default(),
         visual_clip: None,
         clip_radius: 0.0,
         snap_anchor: None,
         translated: context.translated || layer.translated_content_context,
+        raster_scale,
     };
     let mut content = LayerScene {
         scene: CompositorScene::new(),
@@ -770,14 +890,13 @@ fn isolated_child(
     } else {
         GraphicsLayer::composite_alpha_8bit(layer.graphics_layer.alpha)
     };
-    let content_hash = layer.target_content_hash();
     let cacheable = layer.cache_policy == CachePolicy::Auto && !content.contains_backdrop();
-    let surface_scale = motion.raster_scale(
-        layer.node_id,
-        layer_uniform_scale(&layer.graphics_layer),
-        content_hash,
-        cacheable,
-    );
+    let surface_scale = if cacheable {
+        retained_scale
+    } else {
+        nominal_scale
+    };
+    motion.record_scale(layer.node_id, surface_scale, content_hash);
     let in_place = can_draw_in_place(layer, transform, surface_scale, &content);
     ChildLayer {
         z_index: parent_scene.next_z(),
@@ -932,6 +1051,7 @@ fn collect_into(
                     clip_radius,
                     snap_anchor: translated_anchor,
                     translated,
+                    raster_scale: context.raster_scale,
                 };
                 collect_child(child_layer, text_layout, motion, child_context, out);
             }
@@ -1040,6 +1160,7 @@ fn collect_child(
                 clip_radius,
                 snap_anchor: child_anchor,
                 translated: context.translated,
+                raster_scale: context.raster_scale,
             };
             if child.backdrop().is_some() {
                 push_backdrop_layer(child, child_offset, child_context, &mut out.scene);

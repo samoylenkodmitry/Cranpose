@@ -46,7 +46,7 @@ use crate::{
         FrameUploadAllocators, UniformUpload, UploadAllocatorId, UploadAllocatorSpec,
         WgpuFrameGraph, WgpuFrameGraphExecutor,
     },
-    frame_packet::{CancelReason, FramePacket, PresentOutcome, RenderReturns},
+    frame_packet::{CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, RenderReturns},
     geometry::{
         DevicePixelBounds, SegmentTransform, anchored_device_rect, axis_aligned_quad_rect,
         canonicalize_device_coordinate, canonicalized_scaled_quad, offscreen_byte_size,
@@ -3796,7 +3796,10 @@ impl GpuRenderer {
         reason: CancelReason,
         returns: &mut RenderReturns,
     ) -> Result<(), String> {
-        returns.scene = Some(packet.root.scene);
+        returns.scene = Some(FrameSceneStorage {
+            root: packet.root,
+            overlay: packet.overlay,
+        });
         returns.frame_id = packet.frame_id;
         returns.outcome = PresentOutcome::Cancelled(reason);
         Ok(())
@@ -4068,7 +4071,7 @@ impl GpuRenderer {
             self.text_glyph_gpu_run_cache.clear();
             self.text_glyph_run_arena = GlyphRunArena::default();
         }
-        returns.scene = Some(root.scene);
+        returns.scene = Some(FrameSceneStorage { root, overlay });
         result
     }
 
