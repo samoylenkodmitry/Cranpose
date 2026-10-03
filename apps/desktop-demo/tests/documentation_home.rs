@@ -278,6 +278,22 @@ fn dragging_and_releasing_keeps_the_wheel_moving() {
 }
 
 #[test]
+fn wheel_buttons_keep_click_centers_inside_visible_segments() {
+    for width in [800, 1100, 1200, 1440] {
+        let mut robot = RobotTestRule::new(width, 820, TestRenderer::default(), || {
+            combined_app_with_initial_tab(Some(DemoTab::Guide));
+        });
+        assert!(click_control(&mut robot, "Get started"));
+        assert!(
+            robot
+                .find_by_text("Start with the project template")
+                .exists(),
+            "chapter click at width {width}"
+        );
+    }
+}
+
+#[test]
 fn wide_article_aligns_with_the_wheel_edge() {
     let mut robot = RobotTestRule::new(1800, 1000, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::Guide));

@@ -281,7 +281,15 @@ fn WheelEntries(
             .max(1.0);
     for index in first..end {
         with_key(&index, || {
-            let modifier = geometry.entry_modifier(index as f32 - position, entry_height);
+            let relative = index as f32 - position;
+            let modifier = if interactive {
+                let Some(modifier) = geometry.entry_hit_modifier(relative, entry_height) else {
+                    return;
+                };
+                modifier
+            } else {
+                geometry.entry_modifier(relative, entry_height)
+            };
             let active = state.selected() == index;
             if interactive {
                 Button(

@@ -78,6 +78,24 @@ impl WheelGeometry {
         self.item_modifier(position, height, 270.0, 64.0)
     }
 
+    pub fn entry_hit_modifier(self, position: f32, height: f32) -> Option<Modifier> {
+        let angle = self.focus_angle + position * self.section_angle();
+        let (sin, cos) = angle.sin_cos();
+        if cos <= 0.0 {
+            return None;
+        }
+        let center = self.point(angle, self.radius + 64.0);
+        let inset = sin.abs() * height * 0.5;
+        let start = (-135.0_f32).max((inset - center.x) / cos);
+        let end = 135.0_f32.min((self.reader_left() - inset - center.x) / cos);
+        if end <= start {
+            return None;
+        }
+        let shift = (start + end) * 0.5;
+        let center = Point::new(center.x + shift * cos, center.y - shift * sin);
+        Some(Self::placed_item(center, end - start, height, angle))
+    }
+
     pub fn visible_entries(self, position: f32, count: usize) -> std::ops::Range<usize> {
         let radius = self.radius + 64.0;
         let margin = 150.0;
@@ -98,6 +116,10 @@ impl WheelGeometry {
     fn item_modifier(self, position: f32, height: f32, width: f32, radial_offset: f32) -> Modifier {
         let angle = self.focus_angle + position * self.section_angle();
         let center = self.point(angle, self.radius + radial_offset);
+        Self::placed_item(center, width, height, angle)
+    }
+
+    fn placed_item(center: Point, width: f32, height: f32, angle: f32) -> Modifier {
         Modifier::empty()
             .size_points(width, height)
             .offset(center.x - width * 0.5, center.y - height * 0.5)
