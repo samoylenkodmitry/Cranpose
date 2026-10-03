@@ -350,7 +350,7 @@ jobs:
   ios:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal
       - run: rustup target add aarch64-apple-ios-sim --toolchain stable
       - run: cargo +stable build --bin my-app --target aarch64-apple-ios-sim --no-default-features --features ios,renderer-wgpu
@@ -1522,6 +1522,282 @@ fn DoneButton() {
 Verify custom controls with TalkBack on Android, VoiceOver on Apple platforms,
 and the target desktop or browser screen reader. The [accessibility guide](accessibility.md)
 covers focus groups, canvas controls, announcements and validation tools.
+
+## Testing
+
+### Add a test dependency
+
+Run tests on Windows, Linux or macOS with the app's Rust toolchain and desktop
+build dependencies. The composition and headless input tests below use the CPU.
+
+From the `my-app` package in **Get started**:
+
+```sh
+cargo add cranpose-testing --dev
+```
+
+Cargo runs functions marked `#[test]` in `tests/*.rs`. These files import the app
+library as `my_app`. Keep reusable composables in `src/lib.rs` or library modules;
+keep the platform entry point in `src/main.rs`.
+
+| Test scope | API | Example check |
+| --- | --- | --- |
+| Composition and layout | `ComposeTestRule` | A button has a label and a 48-point touch target |
+| Input and state | `create_headless_robot_test` | A click changes the counter text |
+| Desktop window and renderer | `AppLauncher::with_test_driver` | The app accepts input and produces a screenshot |
+
+### Check layout and semantics
+
+Create `tests/composition.rs`. Reuse `Counter` from **Get started**:
+
+```rust
+use cranpose::prelude::*;
+use cranpose_testing::ComposeTestRule;
+use my_app::Counter;
+
+#[test]
+fn increment_button_has_a_label_and_touch_target() {
+    let mut rule = ComposeTestRule::new();
+    rule.set_content(Counter).expect("Counter composes");
+
+    let screen = rule
+        .placed_semantics(Size::new(360.0, 240.0))
+        .expect("Counter lays out")
+        .expect("Counter has content");
+    let button = screen
+        .controls()
+        .into_iter()
+        .find(|node| node.label.as_deref() == Some("Increment"))
+        .expect("Increment has an accessible label");
+
+    assert!(button.target_bounds().height >= 48.0);
+}
+```
+
+`placed_semantics` settles pending composition work, applies the viewport size,
+and returns accessible labels and bounds. `target_bounds()` includes the control's
+hit area. Run the test by file name:
+
+```sh
+cargo test --test composition
+```
+
+### Check a state update
+
+Add this test to `tests/composition.rs`. `with_runtime` binds the state handle to
+the test composition. The assertion checks the text after a state change:
+
+```rust
+#[test]
+fn state_change_updates_the_label() {
+    let mut rule = ComposeTestRule::new();
+    let count = MutableState::with_runtime(0, rule.runtime_handle());
+    rule.set_content(move || {
+        Text(
+            format!("Count: {}", count.get()),
+            Modifier::empty(),
+            TextStyle::default(),
+        );
+    })
+    .expect("Label composes");
+
+    count.set(3);
+    let screen = rule
+        .placed_semantics(Size::new(360.0, 240.0))
+        .expect("Label lays out")
+        .expect("Label has content");
+
+    assert!(screen
+        .flatten()
+        .iter()
+        .any(|node| node.label.as_deref() == Some("Count: 3")));
+}
+```
+
+### Audit accessibility
+
+Add a screen title around the counter and audit the whole screen:
+
+```rust
+#[test]
+fn counter_passes_the_accessibility_audit() {
+    let mut rule = ComposeTestRule::new();
+    rule.set_content(|| {
+        Box(
+            Modifier::empty().fill_max_size().pane_title("Counter"),
+            BoxSpec::default(),
+            Counter,
+        );
+    })
+    .expect("Screen composes");
+
+    rule.assert_accessible(Size::new(360.0, 240.0))
+        .expect("Screen lays out");
+}
+```
+
+The audit reports unnamed controls, duplicate control names, small targets and
+other semantics issues. Pair the audit with the platform screen-reader checks in
+**Accessibility**.
+
+## Robot tests
+
+### Click a control in a headless test
+
+Create `tests/counter.rs`. The headless robot runs the app shell, layout and input
+code with an in-memory renderer:
+
+```rust
+use cranpose_testing::create_headless_robot_test;
+use my_app::Counter;
+
+#[test]
+fn increment_changes_the_counter() {
+    let mut robot = create_headless_robot_test(360, 240, Counter);
+
+    robot.find_by_text("Count: 0").assert_exists();
+    assert!(robot.find_by_text("Increment").click());
+    assert!(robot.get_all_text().iter().any(|text| text == "Count: 1"));
+}
+
+#[test]
+fn increment_stays_inside_each_viewport() {
+    let mut robot = create_headless_robot_test(360, 640, Counter);
+
+    for (width, height) in [(360, 640), (800, 600)] {
+        robot.set_viewport(width, height);
+        let bounds = robot
+            .find_by_text("Increment")
+            .bounds()
+            .expect("Increment is visible");
+        assert!(bounds.x >= 0.0);
+        assert!(bounds.x + bounds.width <= width as f32);
+        assert!(bounds.y + bounds.height <= height as f32);
+    }
+}
+```
+
+`find_by_text` matches text fragments. `get_all_text` supports exact comparisons.
+The finder settles pending frames before a query. `click` sends pointer input to
+the label's center. The final text assertion checks the button's effect.
+
+```sh
+cargo test --test counter
+cargo test --test composition --test counter
+```
+
+### Run a desktop robot
+
+A desktop robot uses the app's window backend and wgpu renderer. Use the desktop
+build tools and GPU driver from **Get started**. Headless desktop mode creates a
+hidden OS window; Linux still needs an X11 or Wayland display server.
+
+Add `robot` to the app's existing `[features]` table in `Cargo.toml`. Add the test
+target as a separate table:
+
+```toml
+[features]
+robot = ["cranpose/robot"]
+
+[[test]]
+name = "counter_robot"
+path = "tests/robots/counter.rs"
+harness = false
+required-features = ["desktop", "renderer-wgpu", "robot"]
+```
+
+`harness = false` lets Cargo run `main` directly, so the desktop event loop runs
+on the main thread. Create `tests/robots/counter.rs`:
+
+```rust
+use cranpose::{AppLauncher, Robot};
+use my_app::Counter;
+use std::sync::mpsc;
+
+fn check_counter(robot: &Robot) -> Result<(), String> {
+    robot.wait_for_idle()?;
+    let (x, y, width, height) = robot
+        .find_button_bounds_exact("Increment")?
+        .ok_or("Increment button is missing")?;
+    robot.click(x + width / 2.0, y + height / 2.0)?;
+    robot.wait_for_idle()?;
+
+    if robot.find_text_bounds_exact("Count: 1")?.is_none() {
+        return Err("Counter displays the wrong value after a click".into());
+    }
+    Ok(())
+}
+
+fn main() -> anyhow::Result<()> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    AppLauncher::new()
+        .with_title("Counter test")
+        .with_size(360, 240)
+        .with_headless(true)
+        .with_test_driver(move |robot| {
+            let result = check_counter(&robot);
+            let _ = sender.send(result.and(robot.exit()));
+        })
+        .try_run(Counter)?;
+    receiver.recv()?.map_err(anyhow::Error::msg)?;
+    Ok(())
+}
+```
+
+The driver runs on a separate thread. `wait_for_idle` waits for pending app work.
+The driver closes the app after either result and sends failures to `main`, so
+Cargo reports a nonzero exit code for a failed check.
+
+```sh
+cargo test --test counter_robot --features desktop,renderer-wgpu,robot
+```
+
+Set `.with_headless(false)` to watch the test in a desktop window.
+For an Ubuntu or Debian CI machine, install Xvfb and a software Vulkan driver
+alongside the app's desktop build dependencies:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y xvfb mesa-vulkan-drivers libvulkan1
+xvfb-run -a cargo test --test counter_robot --features desktop,renderer-wgpu,robot
+```
+
+### Save a render capture
+
+Add a PNG encoder as a development dependency:
+
+```sh
+cargo add image --dev --no-default-features --features png
+```
+
+Add this function to `tests/robots/counter.rs`. Call `save_capture(robot)?` in
+`check_counter` before `Ok(())`:
+
+```rust
+fn save_capture(robot: &Robot) -> Result<(), String> {
+    let capture = robot.screenshot()?;
+    image::save_buffer(
+        "counter.png",
+        &capture.pixels,
+        capture.width,
+        capture.height,
+        image::ColorType::Rgba8,
+    )
+    .map_err(|error| error.to_string())
+}
+```
+
+`screenshot` captures Cranpose's render target. Keep the viewport, font, scale and
+renderer fixed for image comparisons. For a continuous animation, advance a
+bounded frame count before a capture:
+
+```rust
+robot.pump_frames(3)?;
+save_capture(robot)?;
+```
+
+Use platform tests for native controls and OS dialogs: Android UI Automator or
+Espresso, and Apple XCTest. Keep pointer, layout and state checks in the Rust suite.
 
 ## App windows
 
@@ -3527,12 +3803,11 @@ use cranpose::prelude::*;
 use cranpose_native::NativeView;
 
 #[composable]
-fn NativeVolume() {
-    let volume = rememberMutableStateOf(|| 50_u32);
+fn NativeVolume(volume: MutableState<u32>, modifier: Modifier) {
     NativeView(
         "volume",
         &volume.get().to_string(),
-        Modifier::empty().fill_max_width().height(56.0),
+        modifier,
         move |event| {
             if let Ok(value) = event.parse::<u32>() {
                 volume.set(value.min(100));
@@ -3540,7 +3815,26 @@ fn NativeVolume() {
         },
     );
 }
+
+#[composable]
+fn VolumeScreen() {
+    let volume = rememberMutableStateOf(|| 50_u32);
+    NativeVolume(volume, Modifier::empty().fill_max_width().height(56.0));
+}
 ```
+
+Add a factory to the Rust library from **Compose integration**. Reuse the imports
+for `Arc`, `NativeSession` and `NativeContent`:
+
+```rust
+#[uniffi::export]
+pub fn create_volume() -> Arc<NativeSession> {
+    NativeSession::new(|| NativeContent::new(VolumeScreen))
+}
+```
+
+Generate the bindings after the Rust build. Kotlin and Swift expose the factory
+as `createVolume`.
 
 Register `volume` as a native `SeekBar` factory:
 
@@ -3552,7 +3846,10 @@ import dev.cranpose.NativeViewFactory
 
 class VolumeFactory : NativeViewFactory {
     override fun create(context: Context, emit: (String) -> Unit): NativeViewChild {
-        val slider = SeekBar(context).apply { max = 100 }
+        val slider = SeekBar(context).apply {
+            max = 100
+            contentDescription = "Volume"
+        }
         slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
                 if (fromUser) emit(value.toString())
@@ -3574,24 +3871,152 @@ class VolumeFactory : NativeViewFactory {
 }
 ```
 
-Pass `mapOf("volume" to VolumeFactory())` to `CranposeView`.
-Use `NativeContent::new(NativeVolume)` in the session factory.
+Create the Android component with the generated factory:
+
+```kotlin
+import dev.cranpose.CranposeView
+import uniffi.counter_ui.createVolume
+
+val component = CranposeView(
+    context,
+    createVolume(),
+    mapOf("volume" to VolumeFactory()),
+)
+```
 
 - Configuration changes call `update` on the same child.
 - Slot removal calls `dispose`.
 - A factory-name change replaces the child.
 - Events reach the child's own slot.
 
-On iOS, implement [NativeViewFactory](../platforms/ios/Sources/Cranpose/NativeViewFactory.swift)
-with a `UISlider`. Register the factory as `volume` to reuse this Rust screen.
-Custom Rust hosts use `cranpose::native_view::NativeViewHost` for layout and events.
+### Wrap an iOS control
+
+Use the same `VolumeScreen` and `create_volume` Rust factory. Add `VolumeFactory.swift`
+to the UIKit host from **Compose integration**:
+
+```swift
+import UIKit
+import Cranpose
+
+@MainActor
+struct VolumeFactory: NativeViewFactory {
+    func create(emit: @escaping (String) -> Void) -> any NativeViewChild {
+        VolumeChild(emit: emit)
+    }
+}
+
+@MainActor
+final class VolumeChild: NSObject, NativeViewChild {
+    private let slider = UISlider()
+    private var emit: ((String) -> Void)?
+    var view: UIView { slider }
+
+    init(emit: @escaping (String) -> Void) {
+        self.emit = emit
+        super.init()
+        slider.minimumValue = 0
+        slider.maximumValue = 100
+        slider.accessibilityLabel = "Volume"
+        slider.addTarget(self, action: #selector(changed), for: .valueChanged)
+    }
+
+    @objc private func changed() {
+        emit?(String(Int(slider.value.rounded())))
+    }
+
+    func update(_ value: String) {
+        guard let number = Float(value) else { return }
+        slider.setValue(min(100, max(0, number)), animated: false)
+    }
+
+    func dispose() {
+        slider.removeTarget(self, action: #selector(changed), for: .valueChanged)
+        emit = nil
+    }
+}
+```
+
+Create the component inside the view controller. Use the constraints from
+**Host the component in UIKit** to size the container:
+
+```swift
+import CranposeBindings
+
+let component = CranposeView(
+    session: createVolume(),
+    factories: ["volume": VolumeFactory()]
+)
+component.onError = { message in print(message) }
+view.addSubview(component)
+```
+
+The host owns each child. `update` receives the Rust value. Slider events return
+to the matching `NativeView` callback. Slot removal calls `dispose`.
 
 ### Size and position native children
 
-Give each slot an explicit size. Keep its bounds axis-aligned.
-Native children sit above Cranpose content. The host clips them to its bounds.
-Apply transforms and effects within the native child.
-Hide the native child while a Cranpose popup overlaps the child’s bounds.
+Use layout modifiers for the slot bounds. The host clips native children to the
+component's bounds. Apply rotation, rounded clips and graphics effects inside
+the platform control.
 
-The [native demo](../apps/native-demo/README.md) shows both directions:
-host controls update Rust state; Rust positions a native website view.
+Replace `VolumeScreen` with this layout. The slider fills the padded column and
+occupies a 56-point row. The Rust state survives the dialog; the native child
+leaves composition while the dialog covers the screen:
+
+```rust
+use cranpose::widgets::{Dialog, DialogSpec, PopupHost};
+
+#[composable]
+fn VolumeScreen() {
+    let volume = rememberMutableStateOf(|| 50_u32);
+    let show_help = rememberMutableStateOf(|| false);
+
+    PopupHost(move || {
+        Column(
+            Modifier::empty().fill_max_size().padding(24.0),
+            ColumnSpec::default()
+                .vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
+            move || {
+                Text(
+                    format!("Volume: {}", volume.get()),
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
+                if show_help.get() {
+                    Spacer(Modifier::empty().height(56.0));
+                } else {
+                    NativeVolume(
+                        volume,
+                        Modifier::empty().fill_max_width().height(56.0),
+                    );
+                }
+                Button(
+                    Modifier::empty(),
+                    ButtonSpec::default(),
+                    move || show_help.set(true),
+                    || {
+                        Text("Volume help", Modifier::empty(), TextStyle::default());
+                    },
+                );
+            },
+        );
+        if show_help.get() {
+            Dialog(
+                DialogSpec::default(),
+                move |_| show_help.set(false),
+                || {
+                    Text(
+                        "Move the slider to choose a volume from 0 to 100.",
+                        Modifier::empty().padding(24.0),
+                        TextStyle::default(),
+                    );
+                },
+            );
+        }
+    });
+}
+```
+
+Native children draw above Cranpose content. The conditional slot keeps the native
+slider clear of the Cranpose dialog. Dismiss the dialog through the scrim or back
+action; the factory creates a slider with the saved Rust value.
