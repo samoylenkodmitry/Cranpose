@@ -2,7 +2,9 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use cranpose_core::{
     Composition, MemoryApplier, MutableState,
-    source_trace::{SourceLocation, current_source_trace, set_recomposition_tracking},
+    source_trace::{
+        SourceLocation, current_source_trace, recomposition_snapshot, set_recomposition_tracking,
+    },
 };
 use cranpose_macros::composable;
 
@@ -94,6 +96,27 @@ fn recomposition_inspection_counts_instances_and_keeps_retained_ancestor_counts_
     }
     assert_eq!(counts(&trace(2)), expected(&[Some(1), Some(2), None]));
     assert_eq!(counts(&retained), expected(&[Some(1), Some(1), None]));
+    let snapshot = recomposition_snapshot();
+    if cfg!(debug_assertions) {
+        assert_eq!(snapshot.len(), 3);
+        let children: Vec<_> = snapshot
+            .iter()
+            .filter(|entry| entry.name == "Counted")
+            .collect();
+        assert_eq!(children.len(), 2);
+        assert_ne!(children[0].instance_id, children[1].instance_id);
+        assert_eq!(
+            children
+                .iter()
+                .map(|entry| entry.recompositions)
+                .sum::<u64>(),
+            3
+        );
+    } else {
+        assert!(snapshot.is_empty());
+    }
+    drop(composition);
+    assert!(recomposition_snapshot().is_empty());
 }
 
 #[composable]
@@ -118,6 +141,13 @@ fn recomposition_inspection_starts_a_new_count_when_an_instance_is_recreated() {
     assert_eq!(old[1].recompositions(), expected(&[Some(1)])[0]);
     show.set(false);
     composition.process_invalid_scopes().expect("child removed");
+    let old_id = recomposition_snapshot()
+        .into_iter()
+        .find(|entry| entry.name == "Counted");
+    assert!(
+        old_id.is_none(),
+        "Removed instance must disappear even while its trace is retained"
+    );
     show.set(true);
     composition
         .process_invalid_scopes()
@@ -141,5 +171,6 @@ fn recomposition_inspection_is_disabled_by_default() {
             .iter()
             .all(|source| source.recompositions().is_none())
     );
+    assert!(recomposition_snapshot().is_empty());
     TRACES.with(|traces| traces.borrow_mut().clear());
 }

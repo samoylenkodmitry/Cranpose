@@ -108,6 +108,14 @@ Retained layout nodes read live counters, so inspecting a snapshot does not
 force recomposition or layout. Tracking is disabled by default, and release
 builds compile out its counters and updates even when the variable is set.
 
+The lightweight `cranpose.recompositions.v1.request` channel accepts a decimal
+request ID and replies on `cranpose.recompositions.v1.snapshot`. Its JSON contains
+`schema: 1`, `requestId`, and `instances`, each with a unique `instanceId`, source
+definition, and `recompositions`. It includes composables with no layout nodes
+and omits removed instances. The plugin polls this channel for editor counters
+independently of the layout inspector, groups live instances by definition, and
+places their total above the function. Stopping the preview removes the inlays.
+
 The human-readable `cranpose.inspector.v1.request` /
 `cranpose.inspector.v1.snapshot` report remains available for text diagnostics.
 Use the structured channel for tree navigation and properties.

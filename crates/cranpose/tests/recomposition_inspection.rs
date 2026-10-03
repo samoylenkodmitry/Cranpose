@@ -62,4 +62,20 @@ fn recomposition_inspection_serializes_live_counts_from_a_retained_layout() {
     composition.process_invalid_scopes().expect("recompose");
     assert_eq!(count(2), cfg!(debug_assertions).then_some(1));
     assert_eq!(count(3), cfg!(debug_assertions).then_some(1));
+    let counters = serde_json::to_value(inspection::recompositions(42)).expect("counters encode");
+    assert_eq!(counters["requestId"], 42);
+    assert_eq!(counters["schema"], 1);
+    let screen: Vec<_> = counters["instances"]
+        .as_array()
+        .expect("instances")
+        .iter()
+        .filter(|instance| instance["name"] == "TrackedScreen")
+        .collect();
+    if cfg!(debug_assertions) {
+        assert_eq!(screen.len(), 1);
+        assert_eq!(screen[0]["recompositions"], 1);
+        assert!(screen[0]["instanceId"].as_u64().is_some());
+    } else {
+        assert!(screen.is_empty());
+    }
 }
