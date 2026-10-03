@@ -623,6 +623,18 @@ fn turning_analysis_off_forgets_the_last_block() {
 }
 
 #[test]
+fn a_new_item_and_an_unsupported_analyzer_discard_previous_samples() {
+    let (_guard, _player) = install();
+    publish_media_samples(MediaSamples::new(48_000, 1, 1, vec![0.25; 8]).expect("block"));
+    open_media(MediaItem::new("file:///next.wav")).expect("open");
+    assert_eq!(latest_media_samples(), None);
+    set_platform_media_player(FakePlayer::with(MediaCapabilities::TRANSPORT));
+    publish_media_samples(MediaSamples::new(48_000, 1, 2, vec![0.5; 8]).expect("block"));
+    assert!(!set_media_analysis_enabled(true));
+    assert_eq!(latest_media_samples(), None);
+}
+
+#[test]
 fn observers_stop_being_called_once_they_are_dropped() {
     let (_guard, _player) = install();
     let seen = Arc::new(Mutex::new(0usize));

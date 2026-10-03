@@ -41,9 +41,9 @@
 //!
 //! Off until [`set_media_analysis_enabled`](cranpose_services::set_media_analysis_enabled)
 //! asks for them, and taken from the samples on their way to the device, so a
-//! visualiser draws what is actually being heard. The tap runs inside the
-//! output callback: it allocates nothing, never blocks, and drops a block
-//! rather than making the device wait — see
+//! visualiser follows decoded audio after equalization. The tap runs on the
+//! decoder thread before volume and balance, allocates no per-sample storage,
+//! and drops a block rather than waiting for an observer — see
 //! [`dropped_media_samples`](cranpose_services::dropped_media_samples).
 //!
 //! # Equalizer
@@ -54,36 +54,35 @@
 //! run in the same source chain, and a curve applied mid-item takes effect
 //! without interrupting it.
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod analysis;
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod decode;
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod equalizer;
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod http;
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod player;
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod sink;
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod source;
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod spool;
 
 /// The `file:` URI helpers the media contract owns, re-exported so an
 /// application that installs this backend does not have to name two crates to
 /// build an item from a path.
 pub use cranpose_services::media::{path_from_uri, uri_for_path};
-#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
-pub use player::SoftwareMediaPlayer;
+#[cfg(not(target_arch = "wasm32"))]
+pub use player::{OutputFactory, SoftwareMediaPlayer};
 
 /// Whether this build can decode media in process.
 ///
-/// `false` on the web and on iOS, which have a platform media stack the
-/// `cranpose` crate registers instead.
+/// False on the web, which uses the browser's media stack.
 pub fn is_supported() -> bool {
-    cfg!(not(any(target_arch = "wasm32", target_os = "ios")))
+    cfg!(not(target_arch = "wasm32"))
 }
 
 /// Installs the in-process media player as the platform media player.

@@ -51,12 +51,13 @@ struct Shared {
     paused: AtomicBool,
     volume: AtomicVolume,
     speed: AtomicVolume,
+    balance: AtomicVolume,
     device_rate: AtomicU32,
     device_channels: AtomicU32,
 }
 
 impl Shared {
-    fn new(volume: f32, speed: f32) -> Shared {
+    fn new(volume: f32, speed: f32, balance: f32) -> Shared {
         Shared {
             generation: AtomicU64::new(0),
             frames_written: AtomicU64::new(0),
@@ -67,6 +68,7 @@ impl Shared {
             paused: AtomicBool::new(true),
             volume: AtomicVolume::new(volume),
             speed: AtomicVolume::new(speed),
+            balance: AtomicVolume::new(balance),
             device_rate: AtomicU32::new(0),
             device_channels: AtomicU32::new(0),
         }
@@ -127,13 +129,15 @@ impl Sink {
         cancel: SourceCancel,
         volume: f32,
         speed: f32,
+        balance: f32,
+        output: &crate::player::OutputFactory,
     ) -> Result<Sink, MediaError> {
         let (producer, consumer) = ring::channel::<f32>(ring_capacity());
 
-        let shared = Arc::new(Shared::new(volume, speed));
+        let shared = Arc::new(Shared::new(volume, speed, balance));
         let seekable = Arc::new(AtomicBool::new(true));
 
-        let device = backend::open(Box::new(MediaRenderer {
+        let device = output(Box::new(MediaRenderer {
             consumer,
             shared: Arc::clone(&shared),
             generation: 0,
@@ -171,6 +175,10 @@ impl Sink {
 
     pub(crate) fn set_volume(&self, volume: f32) {
         self.shared.volume.set(volume);
+    }
+
+    pub(crate) fn set_balance(&self, balance: f32) {
+        self.shared.balance.set(balance);
     }
 
     pub(crate) fn set_speed(&self, speed: f32) {
@@ -242,12 +250,20 @@ impl Renderer for MediaRenderer {
         }
 
         let volume = self.shared.volume.get();
+        let balance = self.shared.balance.get();
+        let left = volume * (1.0 - balance.max(0.0));
+        let right = volume * (1.0 + balance.min(0.0));
         let mut taken = 0u64;
-        for slot in out.iter_mut() {
+        for (index, slot) in out.iter_mut().enumerate() {
             match self.consumer.pop() {
                 Some(sample) => {
                     taken += 1;
-                    *slot = sample * volume;
+                    let gain = match index % self.channels {
+                        0 if self.channels > 1 => left,
+                        1 => right,
+                        _ => volume,
+                    };
+                    *slot = sample * gain;
                 }
                 None => *slot = 0.0,
             }

@@ -184,6 +184,10 @@ impl MediaPlayer for AndroidMediaPlayer {
         self.player.set_volume(volume);
     }
 
+    fn set_balance(&self, balance: f32) -> bool {
+        self.player.set_balance(balance)
+    }
+
     fn set_speed(&self, speed: f32) -> bool {
         if !self.player.set_speed(speed) {
             return false;

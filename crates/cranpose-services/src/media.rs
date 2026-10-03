@@ -543,6 +543,13 @@ pub trait MediaPlayer: Send + Sync {
     /// [`set_media_volume`]. `0.0` is silent, `1.0` is the item as recorded.
     fn set_volume(&self, volume: f32);
 
+    /// Sets stereo balance: -1 is left, 0 is centered, and 1 is right.
+    /// The quieter channel is attenuated without mixing channels. Returns
+    /// false when the active backend cannot apply balance.
+    fn set_balance(&self, _balance: f32) -> bool {
+        false
+    }
+
     /// Sets the playback rate, `1.0` being as recorded. Returns `false` where
     /// the backend does not have one.
     fn set_speed(&self, _speed: f32) -> bool {
@@ -992,6 +999,7 @@ pub fn record_dropped_media_samples() {
 /// simply calls it straight away — a backend queues the request against the
 /// item it is opening.
 pub fn open_media(item: MediaItem) -> Result<(), MediaError> {
+    *LATEST_SAMPLES.lock() = None;
     let Some(player) = media_player() else {
         publish_playback_state(PlaybackState::Failed(MediaError::Unsupported));
         return Err(MediaError::Unsupported);
@@ -1096,6 +1104,14 @@ pub fn set_media_volume(volume: f32) {
     apply_volume();
 }
 
+/// Applies stereo balance to the installed player. Values outside -1..=1
+/// are clamped; non-finite values are rejected without changing playback.
+/// Returns false if the player cannot apply balance.
+pub fn set_media_balance(balance: f32) -> bool {
+    balance.is_finite()
+        && media_player().is_some_and(|player| player.set_balance(balance.clamp(-1.0, 1.0)))
+}
+
 fn apply_volume() {
     let Some(player) = media_player() else {
         return;
@@ -1136,7 +1152,10 @@ pub fn set_media_analysis_enabled(enabled: bool) -> bool {
             }
             player.set_analysis_enabled(enabled)
         }
-        _ => false,
+        _ => {
+            *LATEST_SAMPLES.lock() = None;
+            false
+        }
     }
 }
 

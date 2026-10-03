@@ -34,6 +34,8 @@ struct Shared {
     looping: AtomicBool,
     volume: Mutex<f32>,
     speed: Mutex<f32>,
+    balance: Mutex<f32>,
+    output: Arc<OutputFactory>,
     generation: AtomicU64,
 }
 
@@ -45,9 +47,24 @@ pub struct SoftwareMediaPlayer {
     shared: Arc<Shared>,
 }
 
+/// Opens an application's output device for decoded PCM. The factory runs
+/// when preparing an item, outside the real-time callback. Its returned sink
+/// owns the renderer and stops callbacks before it is dropped.
+pub type OutputFactory = dyn Fn(
+        Box<dyn cranpose_audio::backend::Renderer>,
+    ) -> Result<Box<dyn cranpose_audio::backend::AudioSink>, cranpose_services::AudioError>
+    + Send
+    + Sync;
+
 impl SoftwareMediaPlayer {
     /// Creates a player. No device is opened until an item is.
     pub fn new() -> SoftwareMediaPlayer {
+        Self::with_output(Arc::new(cranpose_audio::backend::open))
+    }
+
+    /// Creates a player using the supplied output device factory. This allows
+    /// an application to route decoded, processed PCM to its own device.
+    pub fn with_output(output: Arc<OutputFactory>) -> SoftwareMediaPlayer {
         SoftwareMediaPlayer {
             shared: Arc::new(Shared {
                 active: Mutex::new(None),
@@ -57,6 +74,8 @@ impl SoftwareMediaPlayer {
                 looping: AtomicBool::new(false),
                 volume: Mutex::new(1.0),
                 speed: Mutex::new(1.0),
+                balance: Mutex::new(0.0),
+                output,
                 generation: AtomicU64::new(0),
             }),
         }
@@ -76,7 +95,14 @@ impl Shared {
         let source: Box<dyn SampleSource> =
             Box::new(self.analysis.wrap(self.equalizer.wrap(decoder)));
 
-        let sink = Sink::open(source, cancel, *self.volume.lock(), *self.speed.lock())?;
+        let sink = Sink::open(
+            source,
+            cancel,
+            *self.volume.lock(),
+            *self.speed.lock(),
+            *self.balance.lock(),
+            &*self.output,
+        )?;
 
         *self.active.lock() = Some(Active { sink, duration });
         self.start_progress_thread();
@@ -187,7 +213,7 @@ fn progress_at(position: Duration, duration: Option<Duration>) -> PlaybackProgre
 
 const SOFTWARE_AUDIO_EXTENSIONS: &[&str] = &[
     "aac", "aif", "aiff", "caf", "flac", "m4a", "m4b", "mka", "mkv", "mp1", "mp2", "mp3", "mp4",
-    "oga", "ogg", "opus", "wav", "wave", "webm",
+    "oga", "ogg", "wav", "wave", "webm",
 ];
 
 impl MediaPlayer for SoftwareMediaPlayer {
@@ -261,6 +287,18 @@ impl MediaPlayer for SoftwareMediaPlayer {
         if let Some(active) = self.shared.active.lock().as_ref() {
             active.sink.set_volume(volume);
         }
+    }
+
+    fn set_balance(&self, balance: f32) -> bool {
+        if !balance.is_finite() {
+            return false;
+        }
+        let balance = balance.clamp(-1.0, 1.0);
+        *self.shared.balance.lock() = balance;
+        if let Some(active) = self.shared.active.lock().as_ref() {
+            active.sink.set_balance(balance);
+        }
+        true
     }
 
     fn set_speed(&self, speed: f32) -> bool {

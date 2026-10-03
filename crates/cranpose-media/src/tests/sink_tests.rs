@@ -2,7 +2,7 @@ use super::*;
 use crate::source::SamplesBuffer;
 
 fn playing_at(device_rate: u32) -> Shared {
-    let shared = Shared::new(1.0, 1.0);
+    let shared = Shared::new(1.0, 1.0, 0.0);
     shared.paused.store(false, Ordering::Release);
     shared
         .device_channels
@@ -23,7 +23,7 @@ fn a_ring_holds_a_fifth_of_a_second_at_the_highest_rate_it_is_sized_for() {
 
 #[test]
 fn the_format_is_unknown_until_the_callback_publishes_it() {
-    let shared = Shared::new(1.0, 1.0);
+    let shared = Shared::new(1.0, 1.0, 0.0);
     assert_eq!(shared.device_format(), None);
     shared.frames_written.store(24_000, Ordering::Relaxed);
     assert_eq!(shared.position(), Duration::ZERO);
