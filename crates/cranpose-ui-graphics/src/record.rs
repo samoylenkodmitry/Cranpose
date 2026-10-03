@@ -519,7 +519,7 @@ pub const OCCLUDER_MIN_AREA: f32 = 1024.0;
 
 /// Whether `body` is a solid, opaque fill whose interior, where its
 /// coverage is 1, spans at least [`OCCLUDER_MIN_AREA`].
-fn interior_occludes(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
+pub(crate) fn interior_occludes(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     if fragment_kind(body.flags) != FRAGMENT_KIND_FILL || body.brush != 0 || body.color[3] < 1.0 {
         return false;
     }
