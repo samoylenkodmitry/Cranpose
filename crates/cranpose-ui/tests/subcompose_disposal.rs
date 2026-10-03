@@ -175,6 +175,7 @@ fn compose_retained_pair(
                     _resource: Resource::new(Rc::clone(&dropped)),
                     parent: None,
                     retained_lifecycle: Some(Rc::clone(&lifecycle)),
+                    ordinary_slot_lifecycle: None,
                 });
                 probe_node_ids.borrow_mut().push(id);
             });
