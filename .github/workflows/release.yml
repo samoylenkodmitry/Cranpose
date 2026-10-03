@@ -47,7 +47,7 @@ jobs:
             exit 1
           fi
       - name: Create release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
           generate_release_notes: true
@@ -71,7 +71,7 @@ jobs:
             artifact_name: cranpose-demo-macos-aarch64
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.create-release.outputs.tag }}
 
@@ -88,10 +88,10 @@ jobs:
           # resolves to on the runner today -- release artifacts have to be
           # reproducible from the tag alone.
           nightly="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain-nightly.toml)"
+          scripts/ci/install_toolchains.sh
           rustc --version
-          rustup target add '${{ matrix.target }}'
-          rustup toolchain install "$nightly" --profile minimal --component rust-src
-          rustup target add --toolchain "$nightly" '${{ matrix.target }}'
+          scripts/ci/rustup_locked.sh target add '${{ matrix.target }}'
+          scripts/ci/rustup_locked.sh target add --toolchain "$nightly" '${{ matrix.target }}'
 
       - name: Verify provisioned Linux dependencies
         if: runner.os == 'Linux'
@@ -142,7 +142,7 @@ jobs:
       # Release assets do not consume the Actions artifact quota. Upload each
       # platform directly instead of retaining a second copy for 90 days.
       - name: Attach to release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
           files: ${{ matrix.artifact_name }}.tar.gz
@@ -153,7 +153,7 @@ jobs:
     needs: create-release
     runs-on: [self-hosted, macOS, ARM64]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.create-release.outputs.tag }}
 
@@ -164,14 +164,14 @@ jobs:
           real_home="$(eval echo "~$(id -un)")"
           export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
+          scripts/ci/install_toolchains.sh
           rustc --version
-          rustup target add x86_64-pc-windows-msvc
+          scripts/ci/rustup_locked.sh target add x86_64-pc-windows-msvc
 
       - name: Provision Windows cross-build tooling
         run: |
           command -v zip
-          command -v cargo-xwin >/dev/null \
-            || cargo install cargo-xwin --locked --version 0.23.0
+          cargo install cargo-xwin --locked --version 0.23.1
 
       # Cross-compile the Windows MSVC binary on our macOS runner. cargo-xwin
       # supplies Microsoft's CRT and SDK import libraries without a hosted
@@ -192,7 +192,7 @@ jobs:
           target/x86_64-pc-windows-msvc/release-small/desktop-app.exe
 
       - name: Attach to release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
           files: cranpose-demo-windows-x86_64.zip
@@ -203,7 +203,7 @@ jobs:
     needs: create-release
     runs-on: [self-hosted, macOS, ARM64]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.create-release.outputs.tag }}
 
@@ -214,14 +214,15 @@ jobs:
           real_home="$(eval echo "~$(id -un)")"
           export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
+          scripts/ci/install_toolchains.sh
           rustc --version
-          rustup target add \
+          scripts/ci/rustup_locked.sh target add \
             aarch64-linux-android \
             armv7-linux-androideabi \
             i686-linux-android \
             x86_64-linux-android
 
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: 17
@@ -244,7 +245,7 @@ jobs:
         run: ./gradlew --no-daemon :app:assembleRelease -PcranposeReleaseAbis=arm64-v8a,armeabi-v7a,x86,x86_64
 
       - name: Attach to release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ needs.create-release.outputs.tag }}
           files: apps/android-demo/android/app/build/outputs/apk/release/app-release.apk

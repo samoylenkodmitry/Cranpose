@@ -189,7 +189,7 @@ cranpose-platform-android = { workspace = true, optional = true }
 cranpose-platform-web = { workspace = true, optional = true }
 cranpose-render-pixels = { workspace = true, optional = true }
 cranpose-render-wgpu = { workspace = true, optional = true }
-pollster = { version = "0.4", optional = true }
+pollster = { version = "0.4.0", optional = true }
 winit = { version = "=0.31.0-beta.3", optional = true, default-features = false }
 wasm-bindgen = { version = "0.2", optional = true }
 web-sys = { version = "0.3", optional = true, features = [
@@ -264,7 +264,7 @@ cranpose-capabilities = { workspace = true }
 cranpose-liquid = { workspace = true }
 cranpose-services = { workspace = true, default-features = false }
 cranpose-storekit = { workspace = true, default-features = false, optional = true }
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 web-time = { workspace = true }
 cranpose-render-common.workspace = true
 raw-window-handle = "0.6"
@@ -338,7 +338,7 @@ wgpu = { version = "30.0", optional = true, default-features = false, features =
 # own footprint from, so the Linux/Android path's `/proc/self/statm` has no
 # Apple equivalent short of the same kernel call every Instruments memory
 # gauge uses.
-mach2 = "0.6"
+mach2 = "0.6.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = "0.27.1"
@@ -576,7 +576,7 @@ wgpu = { version = "30.0", optional = true, default-features = false, features =
 wry = { version = "0.57", default-features = false, features = ["os-webview", "x11"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gtk = { version = "0.18", optional = true }
+gtk = { version = "0.18.2", optional = true }
 
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest. Turns on the

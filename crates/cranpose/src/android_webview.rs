@@ -27,6 +27,10 @@ struct Route {
 static ROUTES: LazyLock<Mutex<BTreeMap<i64, Route>>> = LazyLock::new(Mutex::default);
 static NEXT_ROUTE: AtomicI64 = AtomicI64::new(1);
 
+#[expect(
+    deprecated,
+    reason = "jni 0.22.4 generates AtomicBool::fetch_update for its ABI check"
+)]
 const _: jni::NativeMethod = jni::native_method! {
     java_type = "dev.cranpose.android.CranposeWebViews",
     static extern fn native_event(route: jlong, event: JString),

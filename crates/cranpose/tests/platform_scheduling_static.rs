@@ -207,14 +207,14 @@ fn ci_architecture_budget_runs_required_gates() {
     assert!(
         workflow.contains("wasm-build:")
             && workflow.contains("wasm-opt --version")
-            && workflow.contains("cargo install wasm-pack --version 0.13.1 --locked"),
+            && workflow.contains("cargo install wasm-pack --version 0.15.0 --locked"),
         "Rust CI should keep the web release build job provisioned with a pinned wasm-pack"
     );
 
     assert!(
         pages_workflow.contains("Deploy to GitHub Pages")
             && pages_workflow.contains("Install binaryen (wasm-opt) for size optimization")
-            && pages_workflow.contains("cargo install wasm-pack --version 0.13.1")
+            && pages_workflow.contains("cargo install wasm-pack --version 0.15.0 --locked")
             && pages_workflow.contains("./build-web.sh --release")
             && pages_workflow.contains("actions/upload-pages-artifact@"),
         "GitHub Pages deployment must publish the same budgeted optimized WASM produced by build-web.sh --release"

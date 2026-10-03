@@ -32,6 +32,11 @@ rv-nightly:
     @echo '{{nightly}}'
 
 # Install both pinned toolchains and the components the gates need.
+[unix]
+toolchains:
+    scripts/ci/install_toolchains.sh
+
+[windows]
 toolchains:
     rustup toolchain install {{stable}} --profile minimal --component clippy --component rustfmt --component rust-src
     rustup toolchain install {{nightly}} --profile minimal --component rustfmt --component rust-src
@@ -65,7 +70,7 @@ clippy: _disk-guard
 
 # Lint the exact package and feature set the web demo ships.
 clippy-wasm:
-    rustup target add wasm32-unknown-unknown
+    scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
     scripts/ci/with_host_lock.sh --shared \
       cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
 
@@ -317,6 +322,7 @@ _benchmark-python:
 
 # The shell helpers agents run by hand, pinned so they cannot rot.
 test-shell-helpers: _benchmark-python ci-contract-gates
+    python3 scripts/ci/tests/test_rustup_lock.py
     bash scripts/ci/sccache_lifetime_test.sh
     scripts/wait_until_quiet_test.sh
     scripts/dev/target_gc_test.sh

@@ -457,10 +457,6 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
         reason: "Follows the GTK 3 toml_edit 0.19/0.20 split via winnow 0.5",
     },
     DuplicateDebt {
-        family: "base64",
-        reason: "reqwest 0.13.5 moved to ^0.23 while hyper-util 0.1.20 (latest) is still on ^0.22",
-    },
-    DuplicateDebt {
         family: "hashbrown",
         reason: "gpu-allocator 0.28.0 (latest, and on upstream main) holds ^0.16 for wgpu-hal 30 while wgpu, AccessKit and indexmap are on ^0.17",
     },
@@ -486,7 +482,7 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
     DuplicateDebt {
         family: "syn",
-        reason: "serde_derive, thiserror-impl 2, bytemuck_derive and wasm-bindgen-macro moved to syn 3 while async-recursion, jni-macros, num_enum_derive and zerocopy-derive (latest) are still on syn 2",
+        reason: "serde_derive, thiserror-impl 2, bytemuck_derive, wasm-bindgen-macro and async-recursion use syn 3 while jni-macros, num_enum_derive and zerocopy-derive use syn 2",
     },
     DuplicateDebt {
         family: "thiserror",
@@ -498,7 +494,15 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
     DuplicateDebt {
         family: "windows-sys",
-        reason: "arboard 3.6.1 pins ^0.60 while winit-win32 0.31.0-beta.3, tokio and the rest of the graph are on 0.61",
+        reason: "rustls-platform-verifier 0.7.1 and tempfile 3.27 require windows-sys 0.52; arboard 3.6.1 requires 0.60; winit-win32 and tokio require 0.61",
+    },
+    DuplicateDebt {
+        family: "windows-targets",
+        reason: "windows-sys 0.52 and 0.60 require windows-targets 0.52 and 0.53 respectively",
+    },
+    DuplicateDebt {
+        family: "windows_x86_64_msvc",
+        reason: "Follows the windows-targets 0.52/0.53 split on the shipped Windows target",
     },
 ];
 
@@ -2460,7 +2464,7 @@ fn ensure_workspace_package_section(lines: &mut Vec<String>, version: &str) -> R
         "[workspace.package]\n".to_owned(),
         format!("version = \"{version}\"\n"),
         "edition = \"2021\"\n".to_owned(),
-        "license = \"Apache-2.0\"\n".to_owned(),
+        "license = \"Apache-2.0 OR MIT\"\n".to_owned(),
         "repository = \"https://github.com/samoylenkodmitry/cranpose\"\n".to_owned(),
         "homepage = \"https://samoylenkodmitry.github.io/cranpose/\"\n".to_owned(),
         "\n".to_owned(),

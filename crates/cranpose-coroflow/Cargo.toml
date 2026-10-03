@@ -22,4 +22,4 @@ workspace = true
 [dev-dependencies]
 cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-foundation = { workspace = true }
-pollster = "0.4"
+pollster = "0.4.0"

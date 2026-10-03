@@ -70,4 +70,4 @@ Measured on device, simulator and macOS host with Xcode 26.5: all absolute.
 
 ## License
 
-Apache-2.0
+Choose [Apache-2.0](../../LICENSE) or [MIT](../../LICENSE-MIT).

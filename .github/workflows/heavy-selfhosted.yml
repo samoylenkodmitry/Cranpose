@@ -44,7 +44,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -86,8 +86,7 @@ jobs:
       - name: Start sccache
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
-          command -v just >/dev/null || cargo install just --locked
-          scripts/ci/start_sccache.sh
+          scripts/ci/provision_toolchain.sh
 
       - name: Run the robot suite
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
@@ -117,7 +116,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -139,12 +138,8 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           scripts/ci/provision_toolchain.sh
-          # No toolchain action here: rust-toolchain.toml owns the version and
-          # the rustup shim installs it on first use. Adding targets without
-          # `--toolchain` puts them on that pinned toolchain instead of on
-          # whatever the runner currently calls `stable`.
           rustc --version
-          rustup target add \
+          scripts/ci/rustup_locked.sh target add \
             aarch64-apple-ios-sim \
             aarch64-apple-ios
 
@@ -176,14 +171,14 @@ jobs:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Provision toolchain
         run: scripts/ci/provision_toolchain.sh
       - name: Build both targets and launch the simulator
         run: just watchos
       - name: Keep bundles and simulator evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: watchos
           path: |
@@ -205,7 +200,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -234,8 +229,9 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           # rust-toolchain.toml owns the version; the targets land on it.
+          scripts/ci/install_toolchains.sh
           rustc --version
-          rustup target add \
+          scripts/ci/rustup_locked.sh target add \
             aarch64-linux-android \
             armv7-linux-androideabi \
             i686-linux-android \
@@ -295,7 +291,7 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -331,7 +327,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, recent-repo]
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -351,7 +347,7 @@ jobs:
         if: steps.memo.outputs.passed != 'true'
         run: |
           scripts/ci/provision_toolchain.sh
-          rustup target add \
+          scripts/ci/rustup_locked.sh target add \
             aarch64-linux-android \
             armv7-linux-androideabi \
             i686-linux-android \

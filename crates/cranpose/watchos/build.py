@@ -191,7 +191,12 @@ panic = "abort"
     apple_target = f'arm64-apple-watchos{args.deployment_target}' + ('-simulator' if simulator else '')
     env = dict(os.environ, SDKROOT=sdk, WATCHOS_DEPLOYMENT_TARGET=args.deployment_target,
                CARGO_TARGET_DIR=str(root / 'target'))
-    run(['rustup', 'target', 'add', target], cwd=runner, env=env)
+    import fcntl
+    rustup_home = Path(env.get('RUSTUP_HOME', Path.home() / '.rustup'))
+    rustup_home.mkdir(parents=True, exist_ok=True)
+    with (rustup_home / 'cranpose-install.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        run(['rustup', 'target', 'add', target], cwd=runner, env=env)
     run(['cargo', 'build', '--lib', '--release', '--locked', '--target', target], cwd=runner, env=env)
     native_object = root / 'Host.o'
     run(['xcrun', '--sdk', sdk_name, 'clang++', '-target', apple_target,

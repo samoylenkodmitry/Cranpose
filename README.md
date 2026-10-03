@@ -1,262 +1,171 @@
 # Cranpose
 
+Cranpose brings the Jetpack Compose model to Rust. Composable functions describe
+the UI. State changes trigger recomposition. Modifiers control layout, input and
+graphics. Cranpose supplies the platform window and device services.
 
-[Cranpose Studio on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/34594-cranpose) ·
-[IntelliJ IDEA and RustRover guide](docs/intellij.md): live editing, component
-previews, layout inspection and local platform builds.
+Use the same Rust UI on Linux, macOS, Windows, Android, Wear OS, iOS and the web.
+Add Cranpose screens to an existing Android Compose or UIKit app, or place native
+controls inside a Cranpose screen.
 
-<img width="1536" height="1024" alt="Cranpose" src="https://github.com/user-attachments/assets/2ce48dfe-a048-4b9d-8812-a0e4534691f8" />
+[Cranpose Guide](https://samoylenkodmitry.github.io/Cranpose/?tab=guide) ·
+[API reference](https://docs.rs/cranpose/latest/cranpose/) ·
+[Project template](https://github.com/samoylenkodmitry/cranpose-showcase) ·
+[Releases](https://github.com/samoylenkodmitry/Cranpose/releases)
 
-Cranpose is a declarative UI framework for Rust, modelled on Jetpack Compose:
-`#[composable]` functions, a slot-table runtime with fine-grained recomposition,
-snapshot state, and a modifier-chain layout system. One Rust codebase targets
-**desktop** (Linux, macOS, Windows), **Android** (including Wear OS),
-**iOS**, and the **web** through WebAssembly, rendering through wgpu on all of
-them.
+<img width="1536" height="1024" alt="Cranpose app examples" src="https://github.com/user-attachments/assets/2ce48dfe-a048-4b9d-8812-a0e4534691f8" />
 
-**[Read the Cranpose Guide](https://samoylenkodmitry.github.io/Cranpose/?tab=guide)** ·
-[**Explore Showcase Cranpose**](https://samoylenkodmitry.github.io/cranpose-showcase/) ·
-[Releases](https://github.com/samoylenkodmitry/Cranpose/releases) ·
-[crates.io](https://crates.io/crates/cranpose)
+## Start an app
 
+Install Rust with [rustup](https://rustup.rs/). Cargo builds Rust packages and
+resolves dependencies. `Cargo.toml` serves the role of a Gradle build file.
 
-https://github.com/user-attachments/assets/13619b0f-fe49-4d0c-94a9-94a29363c2e6
+The [Cranpose plugin for IntelliJ IDEA and RustRover](https://plugins.jetbrains.com/plugin/34594-cranpose)
+includes the project template. Choose **File → New Project → Cranpose**. The
+plugin provides live previews, reload after source edits, a layout inspector and
+recomposition hints. See the [IDE guide](docs/intellij.md) for controls and shortcuts.
 
+For a terminal workflow, clone the same template:
 
-https://github.com/user-attachments/assets/4cf520b8-e293-4142-8387-cfae42dee87c
-
-
-
-## Showcase Cranpose
-
-
-https://github.com/user-attachments/assets/aa9a47cf-0870-454d-8d91-43fcc7c2897c
-
-
-[Showcase Cranpose](https://github.com/samoylenkodmitry/cranpose-showcase) is a polished,
-cross-platform app built with Cranpose. Its live [web demo](https://samoylenkodmitry.github.io/cranpose-showcase/)
-demonstrates liquid-glass surfaces, adaptive layouts, animation, and native Android and iOS builds.
-
-## Quick start
-
-Start from [Showcase Cranpose](https://github.com/samoylenkodmitry/cranpose-showcase),
-the ready-to-run project template with desktop, Android, iOS, and web shells.
-Create a repository from its GitHub template, or clone it locally and replace
-the demo screens with your app. Install a [plugin](https://plugins.jetbrains.com/plugin/34594-cranpose) in RustRover or IntelliJ IDEA.
-
-```bash
-git clone https://github.com/samoylenkodmitry/cranpose-showcase.git my-cranpose-app
-cd my-cranpose-app
+```sh
+git clone https://github.com/samoylenkodmitry/cranpose-showcase.git my-app
+cd my-app
 cargo run --features desktop,renderer-wgpu
 ```
 
-Or add the framework to an existing project:
+Replace the sample screens in `src/screens`. The template places data access in
+`src/data` and view models in `src/presentation`. Android Gradle files, iOS scripts
+and a web build script share the Rust UI.
 
-```toml
-[dependencies]
-cranpose = { version = "0.9", features = ["desktop", "renderer-wgpu"] }
+[Run the showcase](https://samoylenkodmitry.github.io/cranpose-showcase/) to explore
+the template's navigation, adaptive layout and Liquid components.
+
+## Write a composable
+
+For an app with one source file, create a Cargo package:
+
+```sh
+cargo new counter
+cd counter
+cargo add cranpose --features desktop,renderer-wgpu
+cargo add anyhow
 ```
 
-## Example
-
-For an existing Kotlin or UIKit app, see the [native embedding demos](apps/native-demo/README.md).
-They show a Cranpose component inside native UI and a native WebView inside Cranpose,
-with state and events flowing in both directions.
-
-State, layout, and input, in the shape the framework actually has: composables
-take a `Modifier`, a spec, and their content; state comes from `rememberMutableStateOf` and is
-read with `.get()` or borrowed with `.with(...)`.
+Replace `src/main.rs` with:
 
 ```rust
 use cranpose::prelude::*;
 
-#[derive(Clone, PartialEq)]
-struct Todo {
-    text: String,
-    done: bool,
-}
-
 #[composable]
-fn TodoApp() {
-    let todos = rememberMutableStateOf(|| {
-        vec![
-            Todo { text: "Buy milk".into(), done: false },
-            Todo { text: "Walk the dog".into(), done: true },
-        ]
-    });
+fn Counter() {
+    let count = rememberMutableStateOf(|| 0);
 
     Column(
-        Modifier::empty().fill_max_size().padding(24.0),
+        Modifier::empty().padding(24.0),
         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(12.0)),
         move || {
-            Text("Todo", Modifier::empty(), TextStyle::default());
-
-            for index in 0..todos.with(Vec::len) {
-                Row(
-                    Modifier::empty().fill_max_width().clickable(move |_| {
-                        todos.update(|items| items[index].done = !items[index].done);
-                    }),
-                    RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(8.0)),
-                    move || {
-                        todos.with(|items| {
-                            let todo = &items[index];
-                            Text(
-                                if todo.done { "[x]" } else { "[ ]" },
-                                Modifier::empty(),
-                                TextStyle::default(),
-                            );
-                            Text(todo.text.clone(), Modifier::empty(), TextStyle::default());
-                        });
-                    },
-                );
-            }
-
+            Text(
+                format!("Count: {}", count.get()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
             Button(
-                Modifier::empty().padding(10.0),
+                Modifier::empty().height(48.0),
                 ButtonSpec::default(),
-                move || {
-                    todos.update(|items| {
-                        let position = items.len() + 1;
-                        items.push(Todo { text: format!("Item {position}"), done: false });
-                    });
-                },
+                move || count.update(|value| *value += 1),
                 || {
-                    Text("Add", Modifier::empty(), TextStyle::default());
+                    Text("Increment", Modifier::empty(), TextStyle::default());
                 },
             );
         },
     );
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     AppLauncher::new()
-        .with_title("Todo")
-        .with_size(420, 560)
-        .try_run(TodoApp)
-        .expect("launch the app");
+        .with_title("Counter")
+        .with_size(360, 240)
+        .try_run(Counter)?;
+    Ok(())
 }
 ```
 
-A list that only composes what is on screen uses `LazyColumn` with
-`rememberLazyListState()` from `cranpose_foundation::lazy` instead of the
-`for` loop above.
+Run `cargo run`. `rememberMutableStateOf` preserves the counter across
+recomposition. The button callback updates the value. `count` is a copyable state
+handle, so both closures use the same state.
 
-## What is in the box
+## Apply Compose knowledge
 
-| Crate | What it is |
-|---|---|
-| `cranpose` | The facade apps depend on: platform runtimes, `AppLauncher`, prelude |
-| `cranpose-core` | Slot table, recomposition, snapshot state, effects, coroutines |
-| `cranpose-ui` / `cranpose-ui-layout` / `cranpose-ui-graphics` | Widgets, modifiers, measurement, geometry |
-| `cranpose-foundation` | Gestures, pointer/rotary input, lazy lists, text buffers |
-| `cranpose-animation` | Springs, tweens, transitions, `animate*AsState` |
-| `cranpose-liquid` | Glass component library: iOS-26-style materials, spring motion |
-| `cranpose-services` | HTTP, clipboard, share, notifications, file picker, haptics, purchases, camera, theme |
-| `coroflow` | Kotlin-style coroutines and Flow, independent of any async runtime ([plan](docs/coroflow_plan.md)) |
-| `cranpose-coroflow` | Coroflow inside compositions: view models and their stores, `collectAsState`, lifecycle effects |
-| `cranpose-navigation` | `NavHost`, a typed back stack and a view model store per screen ([plan](docs/navigation_plan.md)) |
-| `cranpose-audio` | Real-time audio (AAudio on Android/Wear OS, cpal on desktop) |
-| `cranpose-media` | In-process media playback backing `cranpose_services::media` (symphonia, on the audio engine's device) |
-| `cranpose-storekit` | StoreKit 2 in-app purchases (iOS/macOS) |
-| `cranpose-testing` | The robot harness that drives real windows in tests |
+| Jetpack Compose | Cranpose |
+| --- | --- |
+| `@Composable fun Screen()` | `#[composable] fn Screen()` |
+| `remember { mutableStateOf(0) }` | `rememberMutableStateOf(|| 0)` |
+| `count.value` | `count.get()`, `count.set(value)`, `count.update(...)` |
+| `Modifier.padding(16.dp)` | `Modifier::empty().padding(16.0)` |
+| `Column { ... }` | `Column(modifier, spec, move || { ... })` |
+| `LaunchedEffect(key)` | `LaunchedEffect` or `LaunchedEffectAsync` |
+| `StateFlow.collectAsStateWithLifecycle()` | `StateFlowCollect::collectAsStateWithLifecycle()` |
+| `CompositionLocalProvider` | `CompositionLocalProvider` |
 
-The composition runtime uses a slot table: active groups live in preorder
-group, payload, and node tables, and inactive retained branches are explicit
-detached subtrees. The invariants it must uphold are documented in
-[`docs/slot_table_invariants.md`](docs/slot_table_invariants.md); the design
-history behind the current architecture is
-[`docs/cranpose_slot_table_v2_design.md`](docs/cranpose_slot_table_v2_design.md)
-(historical).
+Rust closures serve as content lambdas. Specs hold component options. The guide
+covers [ownership](docs/guide.md#ownership), [state](docs/guide.md#state),
+[flows](docs/guide.md#flows), [view models](docs/guide.md#view-models),
+[shared state across threads](docs/guide.md#shared-app-state) and
+[app lifecycle](docs/guide.md#app-lifecycle), with code for each topic.
 
-## Platform support
+## Build for a platform
 
-| Platform | Backend | Status |
-|---|---|---|
-| Linux x86_64 | Vulkan (GLES fallback opt-in) via wgpu | Supported; the GPU end-to-end suite runs here |
-| macOS aarch64 | Metal via wgpu | Supported; builds, tests and `.app` bundles run in CI |
-| Windows x86_64 | DX12/Vulkan via wgpu | Cross-built and released; not continuously exercised |
-| Android / Wear OS | Vulkan/GLES via wgpu | Release APK build is checked in CI |
-| iOS | UIKit/CAMetalLayer via `winit-uikit` | Simulator and device builds are checked in CI |
-| Web (WASM) | WebGL2 (WebGPU opt-in via `?backend=webgpu`) | Demo build and Pages deploy are checked in CI |
-| Inside another program (IntelliJ-platform IDEs) | Off-screen wgpu in a child process, streamed to the host (`embed` feature) | Experimental; [plugin template](https://github.com/samoylenkodmitry/cranpose-intellij-plugin-template) |
+Run these commands from the showcase template root.
 
-Release binaries for the desktop platforms are attached to each
-[release](https://github.com/samoylenkodmitry/Cranpose/releases).
+| Target | Build machine and tools | Test device |
+| --- | --- | --- |
+| Desktop | The target OS, Rust and a Vulkan, Metal or DirectX 12 driver | Linux, Mac or Windows computer |
+| Android / Wear OS | Windows, Linux or macOS; Android SDK, NDK and JDK 17 | Android device, watch or emulator |
+| iOS | Mac with Xcode and an iOS simulator runtime | iPhone, iPad or Mac simulator |
+| Web | Windows, Linux or macOS; Rust and `wasm-pack` | Browser with WebGPU and a compatible GPU driver |
 
-## Building
+### Desktop
 
-The commands below run from the `cranpose-showcase` checkout created in **Quick
-start**. The [Cranpose Guide](docs/guide.md#get-started) also covers a project built
-from an empty Cargo package.
-
-### Desktop (Linux/macOS/Windows)
-
-Use a computer with the target desktop OS and a GPU driver for Vulkan, Metal or
-DirectX 12.
-
-```bash
+```sh
 cargo run --features desktop,renderer-wgpu
 ```
 
-To package the Cranpose demo as a macOS `.app`, run the workspace task from the
-Cranpose repository root:
-
-```bash
-cargo xtask bundle-macos \
-  --package desktop-app \
-  --bin desktop-app \
-  --app-name "Cranpose Demo" \
-  --bundle-id io.cranpose.demo
-```
-
-Pass `--resources <dir>` to copy resources into `Contents/Resources`, and
-`--sign-identity <id>` to run the explicit codesign step.
-
-On Windows, a release build opens no terminal window when `main.rs` starts
-with the attribute the demos carry:
-
-```rust
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
-```
-
-The attribute belongs to the binary, so the framework cannot set it for an
-application; a debug build keeps its terminal for the log. Helper programs the
-framework runs, such as the registry reads for the theme, start without a
-window of their own, and `cranpose_services::windowless_command` starts an
-application's own the same way.
-
 ### Android
 
-Use Windows, Linux or macOS with the Android SDK, NDK and the project's JDK.
-Build an APK for an ARM Android device from the starter checkout:
+Build for an ARM64 device:
 
-```bash
+```sh
 cd android
 ./gradlew :app:assembleDebug -PshowcaseAbi=arm64-v8a
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+On Windows, use `gradlew.bat`. The [Android guide](docs/guide.md#run-on-android)
+covers SDK setup, emulator ABIs and the Gradle host.
 
 ### iOS
 
-Use a Mac with Xcode and an iOS simulator runtime. From the starter checkout, run
-the Apple Silicon simulator build:
+On Apple Silicon:
 
-```bash
+```sh
 rustup target add aarch64-apple-ios-sim aarch64-apple-ios
 ./ios/run-sim.sh
 ```
 
-For Intel Macs, use the `x86_64-apple-ios` target through the manual steps in the
-[iOS guide](docs/guide.md#run-on-ios). Device builds need an iPhone or iPad,
-a development certificate and a provisioning profile. Developers
-on Windows or Linux can use a GitHub macOS runner; the guide includes a
-[workflow example](docs/guide.md#build-apple-targets-with-github-actions).
+For Intel Macs, use `x86_64-apple-ios` through the manual steps in the
+[iOS guide](docs/guide.md#run-on-ios). A physical device also needs a development
+certificate and a provisioning profile.
 
-### Web (WASM)
+GitHub macOS runners supply Xcode for remote builds. Standard hosted runners are
+free for public repositories. The guide provides an
+[iOS workflow](docs/guide.md#build-apple-targets-with-github-actions) for developers
+with Windows or Linux workstations.
 
-Build on Windows, Linux or macOS. Use Git Bash for the shell script on Windows.
-Run the starter in a browser with WebGPU support and a compatible GPU driver:
+### Web
 
-```bash
+Use Git Bash for the shell script on Windows:
+
+```sh
 rustup target add wasm32-unknown-unknown
 cargo install wasm-pack
 ./build-web.sh
@@ -264,101 +173,69 @@ cd dist
 python3 -m http.server 8080
 ```
 
-Open `http://localhost:8080`. Use HTTPS for a public web host.
+Open `http://localhost:8080`. Serve `dist` over HTTPS for a public host.
 
-### Inside an IDE (IntelliJ plugin)
+## Add Cranpose to an existing app
 
-The `embed` feature runs an app inside another program's window: frames are
-drawn off screen and streamed to the host, which sends input, theme and
-messages back. The
-[IntelliJ plugin template](https://github.com/samoylenkodmitry/cranpose-intellij-plugin-template)
-uses it to write tool windows in Rust with Cranpose, shaders included.
+The [Compose integration guide](docs/guide.md#compose-integration) embeds a Rust
+component in an Android Compose screen. Kotlin calls the generated UniFFI API;
+`AndroidView` hosts the Cranpose surface. The [native demos](apps/native-demo/README.md)
+contain Android and UIKit host apps.
 
-## Binary size
+The [native views guide](docs/guide.md#native-views) places Android views and UIKit
+controls inside Cranpose. Examples pass state and events across the boundary.
+The [IntelliJ plugin template](https://github.com/samoylenkodmitry/cranpose-intellij-plugin-template)
+uses `cranpose/embed` for a Rust UI inside an IDE tool window.
 
-Cranpose apps stay small when two things are set up right: the cargo profile and
-the feature set.
+## Choose APIs
 
-**1. Add a tuned release profile to your app's `Cargo.toml`.** Cargo profiles
-come from the top-level package, so the framework cannot set them for you.
-Without this, a plain `cargo build --release` produces a binary several times
-larger than necessary (no LTO, no stripping, unwinding kept):
+Start with the `cranpose` crate and its prelude. Add a crate for each feature the
+app needs.
+
+| Feature | Crate | Guide |
+| --- | --- | --- |
+| State, effects and composition locals | `cranpose-core` | [State](docs/guide.md#state), [effects](docs/guide.md#effects), [locals](docs/guide.md#composition-locals) |
+| Layout, lazy lists and input | `cranpose-ui`, `cranpose-foundation` | [Layout and lists](docs/guide.md#layout-and-lists), [text and input](docs/guide.md#text-and-input) |
+| Animation and custom graphics | `cranpose-animation`, `cranpose-ui-graphics` | [Animation and graphics](docs/guide.md#animation-and-graphics) |
+| Flows and view models | `coroflow`, `cranpose-coroflow` | [Flows](docs/guide.md#flows), [view models](docs/guide.md#view-models) |
+| Screen navigation | `cranpose-navigation` | [Navigation](docs/guide.md#navigation) |
+| HTTP, clipboard, files, camera and device services | `cranpose-services` | [Platform services](docs/guide.md#platform-services) |
+| Desktop windows | `cranpose` | [App windows](docs/guide.md#app-windows) |
+| Accessibility | `cranpose-ui` | [Accessibility](docs/guide.md#accessibility) |
+| Liquid and Wear components | `cranpose-liquid`, `cranpose-ui` | [Liquid](docs/guide.md#liquid-components), [Wear](docs/guide.md#wear-components) |
+| Audio and media playback | `cranpose-audio`, `cranpose-media` | [Audio API](https://docs.rs/cranpose-audio/latest/cranpose_audio/), [media API](https://docs.rs/cranpose-media/latest/cranpose_media/) |
+
+## Set the release profile
+
+Add this profile to the app's root `Cargo.toml`:
 
 ```toml
 [profile.release]
-opt-level = 3         # or "z" to trade some runtime speed for size
+opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
 panic = "abort"
 ```
 
-**2. Pick features deliberately.** The `cranpose` default feature set favours
-out-of-the-box behaviour over size:
+Build with `cargo build --release`. For Linux apps, `desktop-x11` or
+`desktop-wayland` selects one display backend. `desktop` includes both.
+See the [binary size guide](docs/binary_size.md) for feature choices and size builds.
 
-- `embedded-default-font` (default): embeds the ~1.3 MiB NotoSansMerged
-  face that text draws in when the app supplies no fonts. An app that
-  supplies fonts through any `AppLauncher` font method (`with_fonts`,
-  `with_font_family`, system or asset fonts) leaves it out of its binary
-  without touching the feature; the launcher's type becomes
-  `AppLauncher<AppFonts>`.
-- `renderer-wgpu-gles` (off by default): the GL/GLES fallback for desktop
-  machines without a working Vulkan driver. Leaving it off removes the GLES
-  half of wgpu and naga's GLSL writer. Android always compiles the GLES
-  fallback; web always compiles WebGL.
-- `desktop-x11` / `desktop-wayland`: `desktop` compiles both display-server
-  backends; picking one drops the other's window and input stack.
+## Contribute
 
-```toml
-[dependencies]
-cranpose = { version = "0.9", default-features = false, features = [
-    "desktop",        # or just "desktop-wayland" / "desktop-x11"
-    "renderer-wgpu",
-] }
-```
+From the Cranpose repository root:
 
-**3. For the smallest binary**, build with the nightly-only pipeline (build-std
-with a size-tuned std and immediate-abort panics):
-
-```bash
-cargo xtask dist-min --package my-app --bin my-app
-```
-
-Reference ladder for a minimal hello-world on Linux x86_64 with
-`default-features = false`, measured on 0.1.28: ~15 MB with cargo's untuned
-default release profile → 8.7 MB with the profile above → 6.0 MB with the
-`release-small` profile (`opt-level = "z"`, `lto = "fat"`) → **3.4 MB** with a
-single display backend plus `dist-min`. The full breakdown and the roadmap
-toward smaller binaries live in [`docs/binary_size.md`](docs/binary_size.md).
-
-## Testing
-
-Unit and integration tests run with `cargo test`. On top of them the repo drives
-**real windows**: the robot harness in `cranpose-testing` launches an app, finds
-elements through the semantics tree, sends input, and captures presented frames.
-
-```bash
-just robot         # the end-to-end suite
-just cheatsheets   # glass component reference sheets
-just perf-max-fps  # unthrottled frame rate on the heaviest glass scene
-```
-
-See [`docs/ROBOT_TESTING.md`](docs/ROBOT_TESTING.md).
-
-## Verification gates
-
-```bash
+```sh
 just ci
+just robot
 ```
 
-That is formatting, spell check, version alignment, the test suite, clippy,
-rustdoc, and the architecture budgets: featureless and all-features builds, the
-per-backend winit checks, the duplicate-dependency budgets and the desktop
-binary-size ceiling.
-
-Zero warnings is the standard. Contributor conventions live in
-[`AGENTS.md`](AGENTS.md).
+`just ci` checks formatting, spelling, versions, tests, Clippy, API docs and build
+budgets. `just robot` drives the demo through real windows and the semantics tree.
+See the [test guide](docs/ROBOT_TESTING.md) and [contributor rules](AGENTS.md).
 
 ## License
 
-Apache License 2.0. See [`LICENSE`](LICENSE).
+Choose [Apache-2.0](LICENSE) or [MIT](LICENSE-MIT).
+Third-party assets and dependencies retain their own licenses.
