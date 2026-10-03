@@ -88,10 +88,10 @@ jobs:
           # resolves to on the runner today -- release artifacts have to be
           # reproducible from the tag alone.
           nightly="$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain-nightly.toml)"
+          scripts/ci/install_toolchains.sh
           rustc --version
-          rustup target add '${{ matrix.target }}'
-          rustup toolchain install "$nightly" --profile minimal --component rust-src
-          rustup target add --toolchain "$nightly" '${{ matrix.target }}'
+          scripts/ci/rustup_locked.sh target add '${{ matrix.target }}'
+          scripts/ci/rustup_locked.sh target add --toolchain "$nightly" '${{ matrix.target }}'
 
       - name: Verify provisioned Linux dependencies
         if: runner.os == 'Linux'
@@ -164,14 +164,14 @@ jobs:
           real_home="$(eval echo "~$(id -un)")"
           export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
+          scripts/ci/install_toolchains.sh
           rustc --version
-          rustup target add x86_64-pc-windows-msvc
+          scripts/ci/rustup_locked.sh target add x86_64-pc-windows-msvc
 
       - name: Provision Windows cross-build tooling
         run: |
           command -v zip
-          command -v cargo-xwin >/dev/null \
-            || cargo install cargo-xwin --locked --version 0.23.1
+          cargo install cargo-xwin --locked --version 0.23.1
 
       # Cross-compile the Windows MSVC binary on our macOS runner. cargo-xwin
       # supplies Microsoft's CRT and SDK import libraries without a hosted
@@ -214,8 +214,9 @@ jobs:
           real_home="$(eval echo "~$(id -un)")"
           export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
+          scripts/ci/install_toolchains.sh
           rustc --version
-          rustup target add \
+          scripts/ci/rustup_locked.sh target add \
             aarch64-linux-android \
             armv7-linux-androideabi \
             i686-linux-android \

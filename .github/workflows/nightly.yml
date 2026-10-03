@@ -152,7 +152,7 @@ jobs:
         id: provision
         run: |
           scripts/ci/provision_toolchain.sh
-          rustup target add aarch64-linux-android
+          scripts/ci/rustup_locked.sh target add aarch64-linux-android
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
           test -f "$ANDROID_NDK_HOME/source.properties"
 

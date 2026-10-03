@@ -86,8 +86,7 @@ jobs:
       - name: Start sccache
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
-          command -v just >/dev/null || cargo install just --locked
-          scripts/ci/start_sccache.sh
+          scripts/ci/provision_toolchain.sh
 
       - name: Run the robot suite
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
@@ -139,12 +138,8 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           scripts/ci/provision_toolchain.sh
-          # No toolchain action here: rust-toolchain.toml owns the version and
-          # the rustup shim installs it on first use. Adding targets without
-          # `--toolchain` puts them on that pinned toolchain instead of on
-          # whatever the runner currently calls `stable`.
           rustc --version
-          rustup target add \
+          scripts/ci/rustup_locked.sh target add \
             aarch64-apple-ios-sim \
             aarch64-apple-ios
 
@@ -234,8 +229,9 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           # rust-toolchain.toml owns the version; the targets land on it.
+          scripts/ci/install_toolchains.sh
           rustc --version
-          rustup target add \
+          scripts/ci/rustup_locked.sh target add \
             aarch64-linux-android \
             armv7-linux-androideabi \
             i686-linux-android \
@@ -351,7 +347,7 @@ jobs:
         if: steps.memo.outputs.passed != 'true'
         run: |
           scripts/ci/provision_toolchain.sh
-          rustup target add \
+          scripts/ci/rustup_locked.sh target add \
             aarch64-linux-android \
             armv7-linux-androideabi \
             i686-linux-android \

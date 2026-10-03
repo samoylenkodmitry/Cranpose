@@ -67,6 +67,7 @@ jobs:
             echo "cargo not found. HOME=$HOME real_home=$real_home PATH=$PATH" >&2
             exit 1
           }
+          scripts/ci/install_toolchains.sh
           rustc --version
           command -v just >/dev/null || cargo install just --locked
 
@@ -77,8 +78,8 @@ jobs:
       - name: Web
         if: inputs.target == 'wasm'
         run: |
-          rustup target add wasm32-unknown-unknown
-          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.15.0 --locked
+          scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.15.0 --locked
           just web
 
       - name: Android
@@ -88,7 +89,7 @@ jobs:
       - name: iOS
         if: inputs.target == 'ios'
         run: |
-          rustup target add aarch64-apple-ios-sim
+          scripts/ci/rustup_locked.sh target add aarch64-apple-ios-sim
           just ios-sim
 
       - name: watchOS

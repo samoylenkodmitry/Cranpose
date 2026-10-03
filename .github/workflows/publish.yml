@@ -45,6 +45,7 @@ jobs:
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # Named step so the pinned toolchain's first-use download shows up
           # here rather than inside whichever cargo step ran first.
+          scripts/ci/install_toolchains.sh
           rustc --version
 
       - name: Sync Cargo versions with tag
@@ -145,6 +146,7 @@ jobs:
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # Named step so the pinned toolchain's first-use download shows up
           # here rather than inside whichever cargo step ran first.
+          scripts/ci/install_toolchains.sh
           rustc --version
 
       - name: Verify tag and workspace versions
@@ -211,6 +213,7 @@ jobs:
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # Named step so the pinned toolchain's first-use download shows up
           # here rather than inside whichever cargo step ran first.
+          scripts/ci/install_toolchains.sh
           rustc --version
 
       # apps/isolated-demo is the canary that proves a release is consumable
@@ -291,8 +294,8 @@ jobs:
         if: ${{ !cancelled() && steps.point.conclusion == 'success' }}
         run: |
           set -euo pipefail
-          rustup target add wasm32-unknown-unknown
-          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.15.0 --locked
+          scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.15.0 --locked
           apps/isolated-demo/build-web.sh
 
       # The Gradle plugin has no Maven coordinate: apps/isolated-demo/android's

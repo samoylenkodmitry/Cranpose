@@ -268,8 +268,8 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           scripts/ci/provision_toolchain.sh
-          rustup target add wasm32-unknown-unknown
-          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.15.0 --locked
+          scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.15.0 --locked
           # wasm-pack fetches its own binaryen when the host has none, so a
           # missing system wasm-opt is reported rather than treated as fatal.
           wasm-opt --version || echo "no system binaryen; wasm-pack supplies its own"
