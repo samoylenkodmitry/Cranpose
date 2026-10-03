@@ -622,6 +622,9 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
             "Batched text test",
         )?;
+        renderer.stage_frame_uploads(recorder);
+        renderer.viewport_uniforms.uploads.finish_frame();
+        renderer.run_store.finish_frame();
         Ok(())
     });
     WgpuFrameGraphExecutor::new()

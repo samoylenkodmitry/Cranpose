@@ -2668,7 +2668,7 @@ impl ViewportUniforms {
         recorder: &mut impl FrameCommandRecorder,
     ) -> FrameCommandStats {
         self.uploads.stage_pending(|buffer, offset, bytes| {
-            recorder.stage_buffer_copy(device, buffer, offset, bytes)
+            recorder.stage_frame_buffer_copy(device, buffer, offset, bytes)
         })
     }
 }
@@ -4060,6 +4060,7 @@ impl GpuRenderer {
             );
             recorder.record_pass();
         }
+        self.stage_frame_uploads(recorder);
         self.viewport_uniforms.uploads.finish_frame();
         self.run_store.finish_frame();
         Ok(())

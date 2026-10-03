@@ -4,6 +4,7 @@ const SHRINK_FACTOR: u64 = 4;
 #[derive(Default)]
 pub(crate) struct BufferUploads {
     belt: Option<wgpu::util::StagingBelt>,
+    before_passes: Option<wgpu::CommandEncoder>,
     frame_bytes: u64,
     retained_workload: u64,
 }
@@ -12,7 +13,7 @@ impl BufferUploads {
     pub(crate) fn write(
         &mut self,
         device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: Option<&mut wgpu::CommandEncoder>,
         destination: &wgpu::Buffer,
         offset: u64,
         bytes: &[u8],
@@ -20,6 +21,13 @@ impl BufferUploads {
         let Some(size) = wgpu::BufferSize::new(bytes.len() as u64) else {
             return 0;
         };
+        let encoder = encoder.unwrap_or_else(|| {
+            self.before_passes.get_or_insert_with(|| {
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Frame Buffer Uploads"),
+                })
+            })
+        });
         self.belt
             .get_or_insert_with(|| {
                 wgpu::util::StagingBelt::new(device.clone(), STAGING_CHUNK_BYTES)
@@ -28,6 +36,10 @@ impl BufferUploads {
             .copy_from_slice(bytes);
         self.frame_bytes += size.get();
         size.get()
+    }
+
+    pub(crate) fn take_before_passes(&mut self) -> Option<wgpu::CommandEncoder> {
+        self.before_passes.take()
     }
 
     pub(crate) fn finish(&mut self) {
@@ -43,6 +55,7 @@ impl BufferUploads {
     }
 
     pub(crate) fn reset(&mut self) {
+        self.before_passes = None;
         self.finish();
         self.recall();
         if self.frame_bytes.saturating_mul(SHRINK_FACTOR) < self.retained_workload {

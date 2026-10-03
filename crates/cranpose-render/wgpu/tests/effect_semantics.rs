@@ -1025,10 +1025,6 @@ fn shadow_blur_composite_render_submits_one_frame_command_buffer() {
         "drop-shadow frame should encode blur passes: {stats:?}"
     );
     assert_eq!(
-        stats.encoder_count, 1,
-        "drop-shadow frame should use one frame command encoder: {stats:?}"
-    );
-    assert_eq!(
         stats.submit_count, 1,
         "drop-shadow frame should submit exactly once outside explicit readback paths: {stats:?}"
     );
@@ -1593,10 +1589,6 @@ fn nested_backdrop_blur_radius_changes_rendered_pixels() {
     assert!(
         stats.submit_count <= 2,
         "capturing a nested backdrop frame should submit once for rendering plus the explicit readback copy: {stats:?}"
-    );
-    assert!(
-        stats.encoder_count <= 2,
-        "capturing a nested backdrop frame should use one render encoder plus the explicit readback encoder: {stats:?}"
     );
 
     let compare_rect = Rect {

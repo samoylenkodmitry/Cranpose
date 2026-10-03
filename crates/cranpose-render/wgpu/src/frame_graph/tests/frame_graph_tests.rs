@@ -206,7 +206,7 @@ fn frame_uploads_preserve_bytes_across_growth_and_reset() {
     let mut encoder = device.create_command_encoder(&Default::default());
     let mut uploads = super::BufferUploads::default();
     ring.stage_pending(&mut |buffer, offset, bytes| super::FrameCommandStats {
-        upload_bytes: uploads.write(&device, &mut encoder, buffer, offset, bytes),
+        upload_bytes: uploads.write(&device, Some(&mut encoder), buffer, offset, bytes),
         ..Default::default()
     });
     ring.reset();

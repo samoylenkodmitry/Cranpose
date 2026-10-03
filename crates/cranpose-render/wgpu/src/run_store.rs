@@ -635,7 +635,6 @@ struct ArenaGeneration {
     buffers: [wgpu::Buffer; BUFFER_COUNT],
     capacities: [u64; BUFFER_COUNT],
     staged: [Vec<u8>; BUFFER_COUNT],
-    copied: [usize; BUFFER_COUNT],
     bind_group: wgpu::BindGroup,
 }
 
@@ -660,7 +659,6 @@ impl ArenaGeneration {
             buffers,
             capacities,
             staged: Default::default(),
-            copied: [0; BUFFER_COUNT],
             bind_group,
         }
     }
@@ -808,21 +806,14 @@ impl ArenaTables {
     ) -> FrameCommandStats {
         let mut stats = FrameCommandStats::default();
         for generation in &mut self.generations {
-            for ((buffer, staged), copied) in generation
-                .buffers
-                .iter()
-                .zip(&mut generation.staged)
-                .zip(&mut generation.copied)
-            {
-                if staged.len() == *copied {
+            for (buffer, staged) in generation.buffers.iter().zip(&mut generation.staged) {
+                if staged.is_empty() {
                     continue;
                 }
                 let padded = staged.len().div_ceil(wgpu::COPY_BUFFER_ALIGNMENT as usize)
                     * wgpu::COPY_BUFFER_ALIGNMENT as usize;
                 staged.resize(padded, 0);
-                stats +=
-                    recorder.stage_buffer_copy(device, buffer, *copied as u64, &staged[*copied..]);
-                *copied = staged.len();
+                stats += recorder.stage_frame_buffer_copy(device, buffer, 0, staged);
             }
         }
         stats
@@ -835,7 +826,6 @@ impl ArenaTables {
             for staged in &mut generation.staged {
                 staged.clear();
             }
-            generation.copied.fill(0);
         }
     }
 }
