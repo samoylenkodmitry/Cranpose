@@ -1,9 +1,15 @@
 use cranpose_render_common::graph::{
-    CachePolicy, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    CachePolicy, DrawRunNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+    RenderGraph, RenderNode, TextPrimitiveNode,
+};
+use cranpose_ui::{
+    TextLayoutOptions,
+    text::{AnnotatedString, SpanStyle, TextStyle, TextUnit},
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
-    LayerShape, Point, Rect, RenderEffect, RoundedCornerShape, ShadowPrimitive,
+    LayerShape, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RoundedCornerShape,
+    RuntimeShader, ShadowPrimitive,
 };
 use support::{capture_graph_settled, draw_node, page_graph, solid_rect};
 
@@ -20,6 +26,18 @@ const CLIP: Rect = Rect {
 const AT: Point = Point { x: 20.0, y: 20.0 };
 const RADIUS: f32 = 12.0;
 const PAGE: Color = Color(0.95, 0.95, 0.92, 1.0);
+
+fn page_background() -> RenderNode {
+    solid_rect(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: WIDTH as f32,
+            height: HEIGHT as f32,
+        },
+        PAGE,
+    )
+}
 
 /// A layer clipped to a rounded rect of `radius`, drawn in place, or
 /// through a surface of its own and the composite's rounded mask when
@@ -48,15 +66,7 @@ fn on_page(
         WIDTH,
         HEIGHT,
         vec![
-            solid_rect(
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: WIDTH as f32,
-                    height: HEIGHT as f32,
-                },
-                PAGE,
-            ),
+            page_background(),
             RenderNode::Layer(Box::new(shared_test_support::layer_node(
                 bounds,
                 ProjectiveTransform::translation(at.x, at.y),
@@ -498,19 +508,7 @@ fn non_full_bleed_fill_admits_a_clear_shadow_without_a_rounded_surface() {
 }
 
 fn blank_page() -> RenderGraph {
-    page_graph(
-        WIDTH,
-        HEIGHT,
-        vec![solid_rect(
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: WIDTH as f32,
-                height: HEIGHT as f32,
-            },
-            PAGE,
-        )],
-    )
+    page_graph(WIDTH, HEIGHT, vec![page_background()])
 }
 
 fn nested_scaled_shadow(scale: f32, offscreen_card: bool) -> RenderGraph {
@@ -540,18 +538,7 @@ fn nested_scaled_shadow(scale: f32, offscreen_card: bool) -> RenderGraph {
     page_graph(
         WIDTH,
         HEIGHT,
-        vec![
-            solid_rect(
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: WIDTH as f32,
-                    height: HEIGHT as f32,
-                },
-                PAGE,
-            ),
-            RenderNode::Layer(Box::new(parent)),
-        ],
+        vec![page_background(), RenderNode::Layer(Box::new(parent))],
     )
 }
 
@@ -626,6 +613,253 @@ fn nested_animated_surface_keeps_clear_shadow_out_of_rounded_corners() {
             "{label}: direct clip matches the nested rounded-surface corner"
         );
     }
+}
+
+fn shadow_corner_children(descendant: RenderNode) -> Vec<RenderNode> {
+    vec![
+        solid_rect(
+            Rect {
+                x: 20.0,
+                y: 8.0,
+                width: 80.0,
+                height: 24.0,
+            },
+            Color(0.25, 0.45, 0.75, 1.0),
+        ),
+        descendant,
+    ]
+}
+
+fn text_shadow_node() -> RenderNode {
+    let shadow = cranpose_ui::text::Shadow {
+        color: Color::BLACK,
+        offset: Point::new(-28.0, -16.0),
+        blur_radius: 8.0,
+    };
+    let style = SpanStyle {
+        color: Some(Color::BLACK),
+        font_size: TextUnit::Sp(18.0),
+        shadow: Some(shadow),
+        ..SpanStyle::default()
+    };
+    let annotated = AnnotatedString {
+        text: "Shadow".to_owned(),
+        ..AnnotatedString::default()
+    };
+    let render_text = std::sync::Arc::new(annotated.render_string());
+    RenderNode::Primitive(PrimitiveEntry {
+        phase: PrimitivePhase::BeforeChildren,
+        node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
+            node_id: 89_001,
+            rect: Rect {
+                x: 24.0,
+                y: 14.0,
+                width: 56.0,
+                height: 20.0,
+            },
+            text: std::rc::Rc::new(annotated),
+            render_text,
+            text_style: std::sync::Arc::new(TextStyle::from_span_style(style)),
+            font_size: 18.0,
+            layout_options: TextLayoutOptions::default(),
+            clip: None,
+        })),
+    })
+}
+
+fn assert_corner_matches_rounded_surface(descendant: RenderNode, label: &str) {
+    let Some((frames, _)) =
+        both_graphs(|offscreen| clipped(shadow_corner_children(descendant.clone()), offscreen))
+    else {
+        return;
+    };
+    let corner_index = (((AT.y as u32 + 1) * WIDTH + AT.x as u32 + 1) * 4) as usize;
+    assert_eq!(
+        &frames[0][corner_index..corner_index + 4],
+        &frames[1][corner_index..corner_index + 4],
+        "{label}: descendant output stays outside the rounded corner"
+    );
+}
+
+#[test]
+fn descendant_elevation_shadow_respects_rounded_ancestor_corners() {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 10.0,
+        height: 8.0,
+    };
+    let mut shadow_layer = shared_test_support::layer_node(
+        bounds,
+        ProjectiveTransform::translation(24.0, 14.0),
+        GraphicsLayer {
+            shadow_elevation: 40.0,
+            ..GraphicsLayer::default()
+        },
+        vec![solid_rect(bounds, Color::WHITE)],
+    );
+    shadow_layer.node_id = Some(89_002);
+    assert_corner_matches_rounded_surface(
+        RenderNode::Layer(Box::new(shadow_layer)),
+        "elevation shadow",
+    );
+}
+
+#[test]
+fn alpha_isolated_full_clip_child_respects_rounded_ancestor_corners() {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 24.0,
+        height: 24.0,
+    };
+    let mut child = shared_test_support::layer_node(
+        bounds,
+        ProjectiveTransform::identity(),
+        GraphicsLayer {
+            alpha: 0.5,
+            ..GraphicsLayer::default()
+        },
+        vec![solid_rect(bounds, Color(0.1, 0.7, 0.2, 1.0))],
+    );
+    child.draws_within_bounds = true;
+    assert_corner_matches_rounded_surface(
+        RenderNode::Layer(Box::new(child)),
+        "alpha-isolated full-clip child",
+    );
+}
+
+#[test]
+fn effect_output_padding_respects_rounded_ancestor_corners() {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 16.0,
+        height: 12.0,
+    };
+    let source = format!(
+        "{RUNTIME_SHADER_PRELUDE_WGSL}\n@fragment\nfn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{ return vec4<f32>(0.1, 0.8, 0.2, 1.0); }}\n"
+    );
+    let mut shader = RuntimeShader::new(&source);
+    shader.set_output_padding(18.0);
+    let mut child = shared_test_support::layer_node(
+        bounds,
+        ProjectiveTransform::translation(18.0, 12.0),
+        GraphicsLayer {
+            render_effect: Some(RenderEffect::runtime_shader(shader)),
+            ..GraphicsLayer::default()
+        },
+        vec![RenderNode::DrawRun(DrawRunNode::new(
+            PrimitivePhase::BeforeChildren,
+            vec![DrawPrimitive::Rect {
+                rect: bounds,
+                brush: Brush::solid(Color::WHITE),
+                stroke: None,
+            }],
+        ))],
+    );
+    child.node_id = Some(89_003);
+    child.draws_within_bounds = child.content_draws_within_bounds();
+    assert_corner_matches_rounded_surface(
+        RenderNode::Layer(Box::new(child)),
+        "effect output padding",
+    );
+}
+
+#[test]
+fn base_text_shadow_respects_rounded_ancestor_corners() {
+    assert_corner_matches_rounded_surface(text_shadow_node(), "base text shadow");
+}
+
+#[test]
+fn nested_contained_layers_keep_their_cumulative_draw_slack_visible() {
+    let color = Color(0.15, 0.7, 0.35, 1.0);
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 10.0,
+        height: 10.0,
+    };
+    let clip_bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 50.0,
+        height: 20.0,
+    };
+    let make_graph = |nested: bool| {
+        let content = if nested {
+            let mut child = RenderNode::DrawRun(DrawRunNode::new(
+                PrimitivePhase::BeforeChildren,
+                vec![DrawPrimitive::Rect {
+                    rect: bounds,
+                    brush: Brush::solid(color),
+                    stroke: None,
+                }],
+            ));
+            for _ in 0..4 {
+                let mut layer = shared_test_support::layer_node(
+                    bounds,
+                    ProjectiveTransform::translation(-1.0, 0.0),
+                    GraphicsLayer::default(),
+                    vec![child],
+                );
+                layer.draws_within_bounds = layer.content_draws_within_bounds();
+                child = RenderNode::Layer(Box::new(layer));
+            }
+            let mut outer = shared_test_support::layer_node(
+                bounds,
+                ProjectiveTransform::translation(52.0, 4.0),
+                GraphicsLayer::default(),
+                vec![child],
+            );
+            outer.draws_within_bounds = outer.content_draws_within_bounds();
+            RenderNode::Layer(Box::new(outer))
+        } else {
+            RenderNode::DrawRun(DrawRunNode::new(
+                PrimitivePhase::BeforeChildren,
+                vec![DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: 48.0,
+                        y: 4.0,
+                        ..bounds
+                    },
+                    brush: Brush::solid(color),
+                    stroke: None,
+                }],
+            ))
+        };
+        let mut clip = shared_test_support::layer_node(
+            clip_bounds,
+            ProjectiveTransform::identity(),
+            GraphicsLayer {
+                clip: true,
+                ..GraphicsLayer::default()
+            },
+            vec![content],
+        );
+        clip.draws_within_bounds = clip.content_draws_within_bounds();
+        page_graph(
+            WIDTH,
+            HEIGHT,
+            vec![page_background(), RenderNode::Layer(Box::new(clip))],
+        )
+    };
+
+    let Some((frames, _)) = both_graphs(make_graph) else {
+        return;
+    };
+    let visible_pixel = ((8 * WIDTH + 48) * 4) as usize;
+    let clipped_pixel = ((8 * WIDTH + 51) * 4) as usize;
+    assert_eq!(
+        &frames[0][visible_pixel..visible_pixel + 8],
+        &frames[1][visible_pixel..visible_pixel + 8],
+        "nested content matches the same rect drawn directly under the parent clip"
+    );
+    assert_ne!(
+        &frames[0][visible_pixel..visible_pixel + 4],
+        &frames[0][clipped_pixel..clipped_pixel + 4],
+        "the reference rect visibly covers the pixels at the clip edge"
+    );
 }
 
 #[test]

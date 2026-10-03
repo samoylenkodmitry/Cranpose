@@ -8,7 +8,7 @@ use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_ui::{
     GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, RoundedCornerShape,
     TextLayoutOptions, TextOverflow, TextStyle,
-    text::{AnnotatedString, RenderString},
+    text::{AnnotatedString, RenderString, SpanStyle, TextDrawStyle},
 };
 pub use cranpose_ui_graphics::transform::{ProjectiveTransform, quad_bounds};
 use cranpose_ui_graphics::{
@@ -80,17 +80,32 @@ pub struct TextPrimitiveNode {
 }
 
 impl TextPrimitiveNode {
-    /// Whether the text's glyphs stay inside `bounds`: nothing casts a shadow
-    /// past them and the layout does not let the text overflow its rect.
-    fn draws_within(&self, bounds: Rect) -> bool {
-        self.text_style.span_style.shadow.is_none()
+    /// Conservative bounds for the emitted glyphs and paint. Returns `None`
+    /// when an unclipped layout or style can draw beyond its layout rectangle.
+    pub fn draw_bounds(&self) -> Option<Rect> {
+        if let Some(clip) = self.clip {
+            return Some(clip);
+        }
+        let style = &self.text_style.span_style;
+        let stroked =
+            |style: &SpanStyle| matches!(style.draw_style, Some(TextDrawStyle::Stroke { .. }));
+        (!matches!(self.layout_options.overflow, TextOverflow::Visible)
+            && style.shadow.is_none()
+            && style
+                .baseline_shift
+                .is_none_or(|shift| !shift.is_specified() || shift.0 == 0.0)
+            && !stroked(style)
             && self
                 .text
                 .span_styles
                 .iter()
-                .all(|span| span.item.shadow.is_none())
-            && !matches!(self.layout_options.overflow, TextOverflow::Visible)
-            && rect_within(self.rect, bounds)
+                .all(|span| !stroked(&span.item)))
+        .then_some(self.rect)
+    }
+
+    fn draws_within(&self, bounds: Rect) -> bool {
+        self.draw_bounds()
+            .is_some_and(|drawn| rect_within(drawn, bounds))
     }
 }
 
@@ -253,10 +268,13 @@ impl LayerNode {
         }
         let bounds = inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK);
         self.children.iter().all(|child| match child {
-            RenderNode::DrawRun(run) => run
-                .recording
-                .bounds()
-                .is_none_or(|drawn| rect_within(drawn, bounds)),
+            RenderNode::DrawRun(run) => {
+                !run.summary.has_shadow
+                    && run
+                        .recording
+                        .bounds()
+                        .is_none_or(|drawn| rect_within(drawn, bounds))
+            }
             RenderNode::Primitive(entry) => match &entry.node {
                 PrimitiveNode::Text(text) => text.draws_within(bounds),
                 PrimitiveNode::Draw(_) => false,
@@ -283,7 +301,10 @@ impl LayerNode {
             && self.effect().is_none()
             && self.backdrop().is_none()
             && rect_within(
-                quad_bounds(self.transform_to_parent.map_rect(self.local_bounds)),
+                quad_bounds(
+                    self.transform_to_parent
+                        .map_rect(inflate_rect(self.local_bounds, CONTAINED_DRAW_SLACK)),
+                ),
                 bounds,
             )
     }

@@ -419,7 +419,7 @@ fn node_admits_corners(
                     check(rect, draw.clip)
                 })
             }
-            PrimitiveNode::Text(text) => check(text.rect, text.clip),
+            PrimitiveNode::Text(text) => text.draw_bounds().is_some_and(|rect| check(rect, None)),
         },
         RenderNode::DrawRun(run) => {
             run.coverage_rects().all(|rect| check(rect, None))
@@ -427,11 +427,14 @@ fn node_admits_corners(
                     || run_others_stay_clear(run, corners.raster_scale, |rect| check(rect, None)))
         }
         RenderNode::Layer(child) => {
+            if child.graphics_layer.shadow_elevation > 0.0 {
+                return false;
+            }
             let Some(translation) = direct_translation(child.transform_to_parent) else {
-                return true;
+                return child_stays_clear(child, offset, corners);
             };
             if child_needs_surface(child) {
-                return true;
+                return child_stays_clear(child, offset, corners);
             }
             let child_offset = Point::new(offset.x + translation.x, offset.y + translation.y);
             layer_admits_corners(child, child_offset, inherited_clip, corners)
@@ -643,7 +646,9 @@ fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCo
                     stays_clear(rect, offset, corners)
                 })
             }
-            PrimitiveNode::Text(text) => stays_clear(text.rect, offset, corners),
+            PrimitiveNode::Text(text) => text
+                .draw_bounds()
+                .is_some_and(|rect| stays_clear(rect, offset, corners)),
         },
         RenderNode::DrawRun(run) => run_takes_corners(run, offset, corners),
         RenderNode::Layer(child) => child_takes_corners(child, offset, corners),
@@ -661,16 +666,25 @@ fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCo
             Point::new(offset.x + translation.x, offset.y + translation.y),
             corners,
         ),
-        _ => {
-            child.draws_within_bounds
-                && child.graphics_layer.shadow_elevation <= 0.0
-                && stays_clear(
-                    quad_bounds(child.transform_to_parent.map_rect(child.local_bounds)),
-                    offset,
-                    corners,
-                )
-        }
+        _ => child_stays_clear(child, offset, corners),
     }
+}
+
+fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
+    if !child.draws_within_bounds || child.graphics_layer.shadow_elevation > 0.0 {
+        return false;
+    }
+    let padding = cranpose_render_common::graph::CONTAINED_DRAW_SLACK
+        + child.effect().map_or(0.0, RenderEffect::output_padding);
+    stays_clear(
+        quad_bounds(
+            child
+                .transform_to_parent
+                .map_rect(expand_rect(child.local_bounds, padding)),
+        ),
+        offset,
+        corners,
+    )
 }
 
 /// Whether a run's shapes may take the corners: its other lanes (text,
