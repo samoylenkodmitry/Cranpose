@@ -84,7 +84,7 @@ impl ShapePipelines {
         self.slots.settle_demanded();
     }
 
-    pub(crate) fn ensure(&mut self, key: ShapePipelineKey) {
+    pub(crate) fn ensure(&mut self, key: ShapePipelineKey, vertices: u64) {
         let need = self.slots.need(key);
         #[cfg(not(target_arch = "wasm32"))]
         if need.first
@@ -107,7 +107,7 @@ impl ShapePipelines {
             && (!need.queued || self.slots.get(general).is_some())
         {
             self.slots.build(general);
-            self.slots.request(key);
+            self.slots.want(key, vertices);
         } else {
             self.slots.build(key);
         }
@@ -156,6 +156,7 @@ pub(crate) struct Slots<B: KeyedBuild> {
     /// Keys a frame queued, not yet built: at most two at a time, so a burst
     /// of new keys queues behind nothing a frame waits for.
     demanded: SmallVec<[ShapePipelineKey; 2]>,
+    wanted: SmallVec<[(ShapePipelineKey, u64); 4]>,
     stopped: Arc<AtomicBool>,
 }
 
@@ -166,6 +167,7 @@ impl<B: KeyedBuild> Slots<B> {
             builder: Arc::new(builder),
             compiler: compiler.clone(),
             demanded: SmallVec::new(),
+            wanted: SmallVec::new(),
             stopped: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -204,10 +206,9 @@ impl<B: KeyedBuild> Slots<B> {
     /// it is ready.
     pub(crate) fn request(&mut self, key: ShapePipelineKey) {
         if self.demanded.len() == self.demanded.inline_size()
-            || self
-                .entries
-                .get(&key)
-                .is_some_and(|entry| entry.queued == Some(CompileLane::Demanded))
+            || self.entries.get(&key).is_some_and(|entry| {
+                entry.queued == Some(CompileLane::Demanded) || entry.value.get().is_some()
+            })
         {
             return;
         }
@@ -240,7 +241,16 @@ impl<B: KeyedBuild> Slots<B> {
         self.entries.get(&key)?.value.get()
     }
 
-    /// Forgets the demanded keys whose values are built.
+    pub(crate) fn want(&mut self, key: ShapePipelineKey, vertices: u64) {
+        match self.wanted.iter_mut().find(|(wanted, _)| *wanted == key) {
+            Some((_, total)) => *total += vertices,
+            None => self.wanted.push((key, vertices)),
+        }
+    }
+
+    /// Forgets the demanded keys whose values are built, then queues the
+    /// keys the last frame's draws wanted, those drawing the most vertices
+    /// first, while demand slots are free.
     pub(crate) fn settle_demanded(&mut self) {
         let entries = &self.entries;
         self.demanded.retain(|key| {
@@ -248,6 +258,12 @@ impl<B: KeyedBuild> Slots<B> {
                 .get(key)
                 .is_none_or(|entry| entry.value.get().is_none())
         });
+        let mut wanted = std::mem::take(&mut self.wanted);
+        wanted.sort_unstable_by_key(|&(_, vertices)| std::cmp::Reverse(vertices));
+        for (key, _) in wanted.drain(..) {
+            self.request(key);
+        }
+        self.wanted = wanted;
     }
 
     #[cfg(test)]
