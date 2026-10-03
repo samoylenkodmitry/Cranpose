@@ -5,10 +5,14 @@
 
 use cranpose_render_common::{
     Renderer,
-    graph::{ProjectiveTransform, RenderGraph, RenderNode},
+    graph::{
+        DrawCommandId, DrawRunNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    },
+    style_shared::DrawPlacement,
 };
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Rect, Stroke, StrokeCap, StrokeJoin,
+    Brush, Color, CornerRadii, DrawPrimitive, DrawScope, DrawScopeDefault, GraphicsLayer, Point,
+    Rect, Size, Stroke, StrokeCap, StrokeJoin, TileMode,
 };
 
 use crate::{shared_test_support, support};
@@ -114,6 +118,7 @@ fn nested_levels() -> Vec<RenderNode> {
 struct Capture {
     pixels: Vec<u8>,
     interior_draws: u32,
+    depth_passes: u32,
 }
 
 /// Captures `graph` with the pre-pass and then without it.
@@ -134,6 +139,7 @@ fn capture_both_ways(graph: impl Fn() -> RenderGraph) -> Option<(Capture, Captur
         Capture {
             pixels: frame.pixels,
             interior_draws: stats.shape_interior_draws,
+            depth_passes: stats.depth_passes,
         }
     };
     let first = capture(&mut renderer);
@@ -467,4 +473,45 @@ fn turned_cells_among_flat_ones_add_no_draws_and_leave_the_flat_pixels_alone() {
             );
         }
     }
+}
+
+#[test]
+fn a_background_the_pass_clears_to_leaves_the_pass_without_a_depth_buffer() {
+    let graph = || {
+        let size = FRAME as f32;
+        let mut scope = DrawScopeDefault::new(Size::new(size, size));
+        scope.draw_rect(Brush::solid(Color::from_rgb_u8(20, 24, 40)));
+        scope.draw_circle(
+            Brush::radial_gradient_tiled(
+                vec![Color(1.0, 0.8, 0.3, 0.9), Color(0.2, 0.4, 1.0, 0.0)],
+                Point::new(60.0, 60.0),
+                60.0,
+                TileMode::Clamp,
+            ),
+            Point::new(size * 0.5, size * 0.5),
+            60.0,
+        );
+        RenderGraph::new(shared_test_support::layer_node(
+            rect(0.0, 0.0, size, size),
+            ProjectiveTransform::identity(),
+            GraphicsLayer::default(),
+            vec![RenderNode::DrawRun(DrawRunNode::for_command(
+                PrimitivePhase::BeforeChildren,
+                Some(DrawCommandId {
+                    node_id: 7_500,
+                    command_index: 0,
+                    placement: DrawPlacement::Behind,
+                }),
+                scope.into_primitives(),
+            ))],
+        ))
+    };
+    let Some((with, without)) = capture_both_ways(graph) else {
+        return;
+    };
+    assert_eq!(
+        with.depth_passes, 0,
+        "the background is the pass's clear, so nothing is left to lay down"
+    );
+    assert_same_pixels(&with.pixels, &without.pixels);
 }

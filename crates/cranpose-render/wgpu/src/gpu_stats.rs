@@ -137,6 +137,8 @@ pub struct FrameStatsSnapshot {
     pub shape_specialized_draws: u32,
     /// Shape draws laying opaque interiors down in a pass's depth pre-pass.
     pub shape_interior_draws: u32,
+    /// Render passes that took a depth buffer for their opaque interiors.
+    pub depth_passes: u32,
     /// Pipelines this process has built, counted since it started rather than
     /// over the frame. A count that grows while a person is interacting names
     /// a backend shader compile they waited through.
@@ -267,7 +269,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP top={} | \
              layer_cache: hit={} miss={} {:.1}% hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) hit_by_kind={} miss_px_by_kind={} | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP glass_raster_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} interiors={} image={} text={} draws={} | \
+             stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP glass_raster_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} interiors={} depth_passes={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -317,6 +319,7 @@ impl FrameStatsSnapshot {
             self.shape_fill_by_class_text(),
             self.shape_vertices,
             self.shape_interior_draws,
+            self.depth_passes,
             self.image_passes,
             self.text_passes,
             self.draw_calls,
@@ -396,6 +399,7 @@ pub(crate) struct FrameStats {
     pub shape_pipeline_fallback_draws: Cell<u32>,
     pub shape_specialized_draws: Cell<u32>,
     pub shape_interior_draws: Cell<u32>,
+    pub depth_passes: Cell<u32>,
     pub shader_pipeline_fallback_draws: Cell<u32>,
     pub shader_specialized_draws: Cell<u32>,
     pub image_passes: Cell<u32>,
@@ -784,6 +788,7 @@ impl FrameStats {
             shape_pipeline_fallback_draws: self.shape_pipeline_fallback_draws.get(),
             shape_specialized_draws: self.shape_specialized_draws.get(),
             shape_interior_draws: self.shape_interior_draws.get(),
+            depth_passes: self.depth_passes.get(),
             pipelines_created: crate::render::pipelines_created(),
             shader_pipeline_fallback_draws: self.shader_pipeline_fallback_draws.get(),
             shader_specialized_draws: self.shader_specialized_draws.get(),
@@ -860,6 +865,7 @@ impl FrameStats {
         self.shape_pipeline_fallback_draws.set(0);
         self.shape_specialized_draws.set(0);
         self.shape_interior_draws.set(0);
+        self.depth_passes.set(0);
         self.shader_pipeline_fallback_draws.set(0);
         self.shader_specialized_draws.set(0);
         self.image_passes.set(0);

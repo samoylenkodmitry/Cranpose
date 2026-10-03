@@ -526,6 +526,9 @@ impl GpuRenderer {
         depth: bool,
     ) -> wgpu::RenderPass<'p> {
         if depth {
+            self.frame_stats
+                .depth_passes
+                .set(self.frame_stats.depth_passes.get() + 1);
             let depth_view = self.depth_target((target.width, target.height));
             recorder.begin_depth_pass(label, target.view, load_op, &depth_view)
         } else {
@@ -566,12 +569,25 @@ fn takes_depth(segments: &[PassSegment<'_>]) -> bool {
 /// Whether a run `segment` draws holds an opaque fill with an interior worth
 /// laying down ahead of the paint.
 fn segment_has_occluders(segment: &PassSegment<'_>) -> bool {
-    segment.ops.iter().any(|op| match op.kind {
-        DrawOpKind::Run(index) => segment.scene.runs[index]
-            .segment_records()
-            .any(|records| records.occluders),
-        _ => false,
-    })
+    segment
+        .ops
+        .iter()
+        .enumerate()
+        .any(|(op_index, op)| match op.kind {
+            DrawOpKind::Run(index) => {
+                let window = (op_index == 0)
+                    .then(|| segment.first_run_window.clone())
+                    .flatten()
+                    .unwrap_or(0..u32::MAX);
+                let mut first = 0;
+                segment.scene.runs[index].segment_records().any(|records| {
+                    let start = first;
+                    first += records.count;
+                    records.occluders && start < window.end && window.start < first
+                })
+            }
+            _ => false,
+        })
 }
 
 /// The logical rect `op` may draw into: a shape, image or text by its
