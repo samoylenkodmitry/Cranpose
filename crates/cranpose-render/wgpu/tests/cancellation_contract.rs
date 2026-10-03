@@ -41,6 +41,34 @@ fn direct_graph() -> RenderGraph {
     ))
 }
 
+fn nested_isolated_graph() -> RenderGraph {
+    let mut child = support::contract_layer(
+        Some(7_101),
+        CachePolicy::None,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 96.0,
+            height: 72.0,
+        },
+        ProjectiveTransform::identity(),
+        vec![support::solid_rect(
+            Rect {
+                x: 12.0,
+                y: 10.0,
+                width: 64.0,
+                height: 48.0,
+            },
+            Color(0.8, 0.2, 0.2, 1.0),
+        )],
+    );
+    child.graphics_layer.alpha = 0.5;
+    RenderGraph::new(test_layer(
+        Some(7_100),
+        vec![RenderNode::Layer(Box::new(child))],
+    ))
+}
+
 fn target_view(
     renderer: &support::LockedRenderer,
     width: u32,
@@ -132,6 +160,18 @@ fn surface_reconfigure_cancels_waiting_packet() {
     assert_eq!(outcome, PresentOutcome::Presented);
 }
 
+fn cancel_at_different_viewport(renderer: &mut support::LockedRenderer, graph: RenderGraph) {
+    renderer.scene_mut().graph = Some(graph);
+    let packet = renderer
+        .build_frame_packet_for_tests(WIDTH, HEIGHT)
+        .expect("graph must lower into a packet");
+    let (texture, view) = target_view(renderer, WIDTH / 2, HEIGHT / 2);
+    let outcome = renderer
+        .render_held_packet_for_tests(&texture, &view, WIDTH / 2, HEIGHT / 2, packet)
+        .expect("a cancel is a protocol outcome, not a draw error");
+    assert_eq!(outcome, PresentOutcome::Cancelled(CancelReason::Viewport));
+}
+
 #[test]
 fn viewport_mismatch_cancels_packet() {
     let mut renderer = match support::headless_renderer() {
@@ -141,19 +181,30 @@ fn viewport_mismatch_cancels_packet() {
             return;
         }
     };
-    renderer.scene_mut().graph = Some(direct_graph());
+    cancel_at_different_viewport(&mut renderer, direct_graph());
+}
 
-    let packet = renderer
-        .build_frame_packet_for_tests(WIDTH, HEIGHT)
-        .expect("direct graph must lower into a packet");
-    let (texture, view) = target_view(&renderer, WIDTH / 2, HEIGHT / 2);
-    let outcome = renderer
-        .render_held_packet_for_tests(&texture, &view, WIDTH / 2, HEIGHT / 2, packet)
-        .expect("a cancel is a protocol outcome, not a draw error");
-    assert_eq!(
-        outcome,
-        PresentOutcome::Cancelled(CancelReason::Viewport),
-        "a packet lowered for another viewport must cancel, not draw"
+#[test]
+fn cancelled_nested_scene_renders_the_same_on_the_next_frame() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping nested-scene cancel: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    let reference =
+        support::present_and_read(&mut renderer, WIDTH, HEIGHT, nested_isolated_graph());
+
+    cancel_at_different_viewport(&mut renderer, nested_isolated_graph());
+
+    let after_cancel =
+        support::present_and_read(&mut renderer, WIDTH, HEIGHT, nested_isolated_graph());
+    support::assert_same_bytes(
+        "nested isolated scene after a cancelled packet",
+        WIDTH,
+        &after_cancel,
+        &reference,
     );
 }
 
@@ -179,15 +230,7 @@ fn a_cancelled_packet_leaves_the_run_store_at_its_last_upload() {
     let first =
         support::present_and_read(&mut renderer, WIDTH, HEIGHT, stored_run_graph(96, green));
 
-    renderer.scene_mut().graph = Some(stored_run_graph(96, red));
-    let packet = renderer
-        .build_frame_packet_for_tests(WIDTH, HEIGHT)
-        .expect("the red graph must lower into a packet");
-    let (texture, view) = target_view(&renderer, WIDTH / 2, HEIGHT / 2);
-    let outcome = renderer
-        .render_held_packet_for_tests(&texture, &view, WIDTH / 2, HEIGHT / 2, packet)
-        .expect("a cancel is a protocol outcome, not a draw error");
-    assert_eq!(outcome, PresentOutcome::Cancelled(CancelReason::Viewport));
+    cancel_at_different_viewport(&mut renderer, stored_run_graph(96, red));
 
     let after_cancel =
         support::present_and_read(&mut renderer, WIDTH, HEIGHT, stored_run_graph(96, red));

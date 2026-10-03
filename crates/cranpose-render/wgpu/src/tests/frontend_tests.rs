@@ -2,7 +2,7 @@ use cranpose_render_common::graph::ProjectiveTransform;
 use cranpose_ui_graphics::{GraphicsLayer, Rect};
 
 use super::*;
-use crate::{WgpuTextSystem, test_support::layer_node};
+use crate::{WgpuTextSystem, frame_packet::FrameSceneStorage, test_support::layer_node};
 
 fn frontend() -> RendererFrontend {
     let text_system = WgpuTextSystem::from_fonts(&[]);
@@ -75,11 +75,14 @@ fn apply_returns_seeds_the_next_collect_capacity() {
     let packet = frontend
         .build_frame_packet(320, 240, 0, 0)
         .expect("a graph collects into a packet");
-    let mut scene = packet.root.scene;
-    scene.runs.reserve(64);
-    let hint = scene.capacity_hint();
+    let mut root = packet.root;
+    root.scene.runs.reserve(64);
+    let hint = root.scene.capacity_hint();
     frontend.apply_returns(RenderReturns {
-        scene: Some(scene),
+        scene: Some(FrameSceneStorage {
+            root,
+            overlay: packet.overlay,
+        }),
         ..RenderReturns::default()
     });
     assert_eq!(frontend.root_scene_capacity, hint);

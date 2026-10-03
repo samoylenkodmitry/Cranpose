@@ -54,6 +54,27 @@ pub fn blur_reach(blur_radius: f32, scale: f32) -> f32 {
     blur_reach_px(blur_radius.max(0.0) * scale) / scale
 }
 
+/// An upper bound on [`blur_reach`] for every finite scale at least
+/// `minimum_scale`. A nonpositive or nonfinite minimum has no finite bound.
+pub fn blur_reach_for_minimum_scale(blur_radius: f32, minimum_scale: f32) -> f32 {
+    if !minimum_scale.is_finite() || minimum_scale <= 0.0 {
+        return f32::INFINITY;
+    }
+
+    let radius = blur_radius.max(0.0);
+    let minimum = f64::from(minimum_scale);
+    let max_block = f64::from(blur_scratch_block(f32::INFINITY));
+    let additive_bound = f64::from(radius) + (4.0 * max_block + 1.0) / minimum;
+    let saturated_bound = f64::from(blur_reach_px(f32::INFINITY)) / minimum;
+    let bound = additive_bound.min(saturated_bound);
+    let rounded = bound as f32;
+    if rounded.is_finite() && f64::from(rounded) < bound {
+        f32::from_bits(rounded.to_bits() + 1)
+    } else {
+        rounded
+    }
+}
+
 pub fn expand_blurred_rect(
     mut rect: Rect,
     blur_radius: f32,
