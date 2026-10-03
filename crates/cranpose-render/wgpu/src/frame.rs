@@ -481,6 +481,14 @@ fn ensure_sorted_by_key<T, K: Ord>(values: &mut [T], key: impl Fn(&T) -> K) {
     }
 }
 
+fn draw_op_z(op: &DrawOp) -> usize {
+    op.z_index
+}
+
+fn composite_z(composite: &ResolvedComposite) -> usize {
+    composite.z_index
+}
+
 impl LayerPass<'_> {
     fn target_rect(&self) -> DeviceRect {
         self.page.rect()
@@ -542,10 +550,10 @@ impl LayerPass<'_> {
         mut composites: Vec<ResolvedComposite>,
     ) -> (Vec<DrawOp>, Vec<ResolvedComposite>) {
         if self.blockers.is_empty() {
-            ensure_sorted_by_key(&mut ops, |op| op.z_index);
+            ensure_sorted_by_key(&mut ops, draw_op_z);
             composites.retain(|composite| composite_coverage(composite).is_some());
-            ensure_sorted_by_key(&mut composites, |composite| composite.z_index);
-            ensure_sorted_by_key(&mut self.deferred, |op| op.z_index);
+            ensure_sorted_by_key(&mut composites, composite_z);
+            ensure_sorted_by_key(&mut self.deferred, draw_op_z);
             return (ops, composites);
         }
         let scene = &self.layer.scene;
@@ -586,13 +594,13 @@ impl LayerPass<'_> {
             }
         }
         self.blockers.truncate(blocker_count);
-        self.deferred.sort_by_key(|op| op.z_index);
+        self.deferred.sort_by_key(draw_op_z);
         (now_ops, now)
     }
 
     /// The pending composites below `z`, in z order.
     fn pending_below(&mut self, z: usize) -> &[ResolvedComposite] {
-        ensure_sorted_by_key(&mut self.pending, |composite| composite.z_index);
+        ensure_sorted_by_key(&mut self.pending, composite_z);
         let end = self
             .pending
             .partition_point(|composite| composite.z_index < z);
@@ -2406,11 +2414,11 @@ fn renders_flat(child: &ChildLayer) -> bool {
 
 fn z_ordered_ops(ops: &[DrawOp]) -> Cow<'_, [DrawOp]> {
     let ops = filtered_ops(ops, usize::MAX, &[]);
-    if ops.is_sorted_by_key(|op| op.z_index) {
+    if ops.is_sorted_by_key(draw_op_z) {
         return ops;
     }
     let mut ops = ops.into_owned();
-    ensure_sorted_by_key(&mut ops, |op| op.z_index);
+    ensure_sorted_by_key(&mut ops, draw_op_z);
     Cow::Owned(ops)
 }
 
@@ -2726,7 +2734,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let ops = pass.ops_below(z).into_owned();
         let deferred_end = pass.deferred.partition_point(|op| op.z_index < z);
         pass.deferred.drain(..deferred_end);
-        ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
+        ensure_sorted_by_key(&mut pass.pending, composite_z);
         let end = pass
             .pending
             .partition_point(|composite| composite.z_index < z);
@@ -2767,7 +2775,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         };
         self.encode_flush(pass, flush, load_op.unwrap_or(wgpu::LoadOp::Load))?;
         pass.drawn.extend(composites);
-        ensure_sorted_by_key(&mut pass.drawn, |composite| composite.z_index);
+        ensure_sorted_by_key(&mut pass.drawn, composite_z);
         pass.drawn_z = pass.drawn_z.max(z);
         Ok(())
     }
@@ -2853,7 +2861,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 gate.hit(prefix.key);
             }
             composites.push(prefix_blit(&prefix, retained.texture));
-            ensure_sorted_by_key(composites, |composite| composite.z_index);
+            ensure_sorted_by_key(composites, composite_z);
             return Ok(Some(1..u32::MAX));
         }
         self.renderer
@@ -3031,7 +3039,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let window = capture_window(item.capture_rect);
         let ops = filtered_ops(&pass.layer.scene.draw_ops, item.z, &[]);
         hash_capture_ops(&pass.layer.scene, &ops, window, scale, &mut hasher);
-        ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
+        ensure_sorted_by_key(&mut pass.pending, composite_z);
         let pending_end = pass
             .pending
             .partition_point(|composite| composite.z_index < item.z);
@@ -3608,7 +3616,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     .collect()
             })
             .collect();
-        ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
+        ensure_sorted_by_key(&mut pass.pending, composite_z);
         let fixups: Vec<Cow<'_, [DrawOp]>> = regions
             .iter()
             .map(|region| pass.ops_below(region.z))
@@ -4596,7 +4604,7 @@ fn beneath_for_child<'a>(
         placement,
     });
     let shift = shift.unwrap_or_default();
-    ensure_sorted_by_key(&mut pass.pending, |composite| composite.z_index);
+    ensure_sorted_by_key(&mut pass.pending, composite_z);
     let scene = &pass.layer.scene;
     let drawn = &pass.drawn[..pass
         .drawn
@@ -4803,7 +4811,7 @@ fn pending_draw_ops<'a>(
         }
     };
     merged.extend_from_slice(deferred);
-    merged.sort_by_key(|op| op.z_index);
+    merged.sort_by_key(draw_op_z);
     Cow::Owned(merged)
 }
 
