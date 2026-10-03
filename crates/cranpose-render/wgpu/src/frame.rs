@@ -747,6 +747,8 @@ const ABLATION_LOG_PERIOD: u32 = 600;
 static NO_BACKDROP_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_NO_BACKDROP_CACHE");
 static PROBE_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_PASSES");
 static PROBE_DRAW_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_DRAW_PASSES");
+static PROBE_SMALL_PASSES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_SMALL_PASSES");
+static PROBE_COPIES: DebugToggle = DebugToggle::new("CRANPOSE_PROBE_COPIES");
 
 fn declared_support(support: Option<Rect>) -> Option<Rect> {
     if NO_EFFECT_DOMAINS.flag() {
@@ -2494,6 +2496,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             );
         }
         self.probe_draw_passes(&page, root_scale)?;
+        self.probe_small_work(&page, root_scale)?;
         self.release_transients();
         Ok(())
     }
@@ -2533,6 +2536,52 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 std::slice::from_ref(&segment),
                 wgpu::LoadOp::Load,
                 "Probe Draw Pass",
+            )?;
+        }
+        Ok(())
+    }
+
+    fn probe_small_work(&mut self, page: &Page, root_scale: f32) -> Result<(), String> {
+        let passes = PROBE_SMALL_PASSES.parse::<u32>().unwrap_or(0);
+        let copies = PROBE_COPIES.parse::<u32>().unwrap_or(0);
+        if passes == 0 && copies == 0 {
+            return Ok(());
+        }
+        let small = self.acquire_transient("Probe Small", 64, 64);
+        let region = DeviceRect {
+            x: 0.0,
+            y: 0.0,
+            width: 64.0,
+            height: 64.0,
+        };
+        for _ in 0..copies {
+            if let Some(copy) = page.copy(region, &small, [0.0, 0.0]) {
+                self.recorder.copy_texture_region(copy);
+            }
+        }
+        let target = self.acquire_transient("Probe Small Target", 64, 64);
+        let blit = page_blit(&small, [0.0, 0.0], region, region);
+        let segment = PassSegment {
+            scene: &self.empty_scene,
+            ops: &[],
+            composites: std::slice::from_ref(&blit),
+            offset: [0.0, 0.0],
+            scissor: None,
+            first_run_window: None,
+            transform: SegmentTransform::IDENTITY,
+            scale: root_scale,
+        };
+        for _ in 0..passes {
+            self.renderer.encode_pass(
+                self.recorder,
+                PassTarget {
+                    view: &target.view,
+                    width: target.width,
+                    height: target.height,
+                },
+                std::slice::from_ref(&segment),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                "Probe Small Pass",
             )?;
         }
         Ok(())

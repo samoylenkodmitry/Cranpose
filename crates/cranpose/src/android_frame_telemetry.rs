@@ -63,6 +63,8 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
     ("debug.cranpose.encode_delay_ms", "CRANPOSE_ENCODE_DELAY_MS"),
     ("debug.cranpose.shape_variants", "CRANPOSE_SHAPE_VARIANTS"),
     ("debug.cranpose.probe_passes", "CRANPOSE_PROBE_PASSES"),
+    ("debug.cranpose.probe_small_passes", "CRANPOSE_PROBE_SMALL_PASSES"),
+    ("debug.cranpose.probe_copies", "CRANPOSE_PROBE_COPIES"),
     (
         "debug.cranpose.probe_draw_passes",
         "CRANPOSE_PROBE_DRAW_PASSES",
