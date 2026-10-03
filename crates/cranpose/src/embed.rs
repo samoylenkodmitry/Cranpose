@@ -974,6 +974,11 @@ pub(crate) fn try_run(
         return Ok(());
     };
 
+    #[cfg(all(feature = "preview", debug_assertions))]
+    cranpose_core::source_trace::set_recomposition_tracking(
+        std::env::var("CRANPOSE_PREVIEW_RECOMPOSITIONS").is_ok_and(|value| value == "1"),
+    );
+
     let outbox = sender.clone();
     install_host_outbox(move |message| {
         let _ = outbox.send(LoopEvent::Outgoing(message));

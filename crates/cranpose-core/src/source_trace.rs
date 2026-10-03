@@ -4,7 +4,7 @@
 use std::cell::RefCell;
 
 /// A composable definition active when a layout node was emitted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceLocation {
     /// Composable function name.
     pub name: &'static str,
@@ -14,6 +14,68 @@ pub struct SourceLocation {
     pub line: u32,
     /// Package directory reported by the compiler.
     pub manifest_dir: &'static str,
+    #[cfg(all(feature = "inspection", debug_assertions))]
+    recompositions: Option<RecompositionCounter>,
+}
+
+impl SourceLocation {
+    /// Body executions after the initial composition for this composable instance.
+    /// Returns `None` unless a debug preview enabled recomposition tracking.
+    pub fn recompositions(&self) -> Option<u64> {
+        #[cfg(all(feature = "inspection", debug_assertions))]
+        return self
+            .recompositions
+            .as_ref()
+            .map(|counter| counter.0.get().saturating_sub(1));
+        #[cfg(not(all(feature = "inspection", debug_assertions)))]
+        None
+    }
+}
+
+#[cfg(all(feature = "inspection", debug_assertions))]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RecompositionCounter(std::rc::Rc<std::cell::Cell<u64>>);
+
+#[cfg(all(feature = "inspection", debug_assertions))]
+impl PartialEq for RecompositionCounter {
+    fn eq(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[cfg(all(feature = "inspection", debug_assertions))]
+impl Eq for RecompositionCounter {}
+
+#[cfg(all(feature = "inspection", debug_assertions))]
+thread_local! {
+    static TRACK_RECOMPOSITIONS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Enables counters for composable instances on this preview's composition thread.
+/// Tracking defaults to disabled and is compiled out of release builds and builds
+/// without `inspection`. Skipped bodies and source call-site markers are not counted.
+pub fn set_recomposition_tracking(enabled: bool) {
+    #[cfg(all(feature = "inspection", debug_assertions))]
+    TRACK_RECOMPOSITIONS.with(|tracking| tracking.set(enabled));
+    #[cfg(not(all(feature = "inspection", debug_assertions)))]
+    let _ = enabled;
+}
+
+#[cfg(all(feature = "inspection", debug_assertions))]
+fn record_composition(name: &str) -> Option<RecompositionCounter> {
+    if !TRACK_RECOMPOSITIONS.with(std::cell::Cell::get) || name.starts_with("__cranpose_call:") {
+        return None;
+    }
+    crate::with_current_composer_opt(|composer| {
+        let scope = composer.current_recompose_scope()?;
+        let counter = scope
+            .inner
+            .recompositions
+            .get_or_init(RecompositionCounter::default);
+        counter.0.set(counter.0.get().saturating_add(1));
+        Some(counter.clone())
+    })
+    .flatten()
 }
 
 #[cfg(feature = "inspection")]
@@ -54,6 +116,8 @@ pub fn __source_scope(
             file,
             line,
             manifest_dir,
+            #[cfg(debug_assertions)]
+            recompositions: record_composition(name),
         });
         depth
     });

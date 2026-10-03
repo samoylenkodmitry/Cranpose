@@ -40,6 +40,9 @@ pub struct Source {
     pub line: u32,
     /// Compiler-reported package directory.
     pub manifest_dir: String,
+    /// Executions after the initial composition of this instance, when tracking is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recompositions: Option<u64>,
 }
 
 /// A layout node in preorder, with surface-local logical bounds.
@@ -141,12 +144,13 @@ fn capture(layout: &LayoutBox, parent: Option<String>) -> Node {
                 file: source.file.to_owned(),
                 line: source.line,
                 manifest_dir: source.manifest_dir.to_owned(),
+                recompositions: source.recompositions(),
             })
             .collect();
         if text.is_empty()
             && let Some(source) = sources.iter().rev().find(|source| source.name != "Layout")
         {
-            kind = source.name.clone();
+            kind.clone_from(&source.name);
         }
         (kind, sources)
     };

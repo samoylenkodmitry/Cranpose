@@ -278,11 +278,12 @@ test: _disk-guard
 # build turns on the desktop features of `cranpose`, so `cranpose` on its own
 # default features is one of them.
 test-ide:
-    cargo test --profile ci -p cranpose-core --features inspection source_trace::
-    cargo test --profile ci -p cranpose-core --features inspection source_origins_survive_independent_child_recomposition
+    cargo test --profile ci -p cranpose-core --features inspection
+    cargo test --release -p cranpose-core --features inspection --test integration recomposition_inspection
     cargo test --profile ci -p cranpose-macros preview_tests::
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview embed::tests::
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview inspection::tests::
+    cargo test --profile ci -p cranpose --no-default-features --features desktop,preview --test integration recomposition_inspection
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview preview::tests::
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview desktop_launcher_uses_embed_endpoint_before_event_loop
 

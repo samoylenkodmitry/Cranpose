@@ -99,6 +99,15 @@ The `preview` feature retains modifier metadata and composition origins;
 ordinary builds do not retain that data. Origins describe composable definitions,
 including during partial recomposition. Custom nodes may have no origin.
 
+The plugin sets `CRANPOSE_PREVIEW_RECOMPOSITIONS=1` for its debug preview process.
+Each composable source origin then includes an optional `recompositions` count:
+body executions after that instance's initial composition. Skipped bodies and
+call-site markers do not increment it. Instances of the same function have
+independent counts; removing and recreating an instance starts a new count.
+Retained layout nodes read live counters, so inspecting a snapshot does not
+force recomposition or layout. Tracking is disabled by default, and release
+builds compile out its counters and updates even when the variable is set.
+
 The human-readable `cranpose.inspector.v1.request` /
 `cranpose.inspector.v1.snapshot` report remains available for text diagnostics.
 Use the structured channel for tree navigation and properties.
