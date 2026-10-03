@@ -721,6 +721,8 @@ pub(crate) struct RecomposeScopeInner {
     local_stack: RefCell<LocalStackSnapshot>,
     #[cfg(feature = "inspection")]
     source_trace: RefCell<Rc<[source_trace::SourceLocation]>>,
+    #[cfg(all(feature = "inspection", debug_assertions))]
+    recompositions: std::cell::OnceCell<source_trace::RecompositionCounter>,
     slots_storage_key: Cell<usize>,
     slots_runtime_state: RefCell<Option<std::rc::Weak<crate::composer::ComposerRuntimeState>>>,
     state_subscriptions: RefCell<StateIds>,
@@ -796,6 +798,8 @@ impl RecomposeScopeInner {
             local_stack: RefCell::new(None),
             #[cfg(feature = "inspection")]
             source_trace: RefCell::new(Rc::from([])),
+            #[cfg(all(feature = "inspection", debug_assertions))]
+            recompositions: std::cell::OnceCell::new(),
             slots_storage_key: Cell::new(0),
             slots_runtime_state: RefCell::new(None),
             state_subscriptions: RefCell::new(StateIds::new()),

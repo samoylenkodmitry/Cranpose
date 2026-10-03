@@ -819,6 +819,21 @@ fn apply_batch(
                     },
                 )?;
             }
+            LoopEvent::Host(HostEvent::Message { channel, payload })
+                if channel == crate::inspection::RECOMPOSITIONS_REQUEST_CHANNEL =>
+            {
+                let snapshot =
+                    crate::inspection::recompositions(payload.parse().unwrap_or_default());
+                let payload = serde_json::to_string(&snapshot)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                write_app_event(
+                    writer,
+                    &AppEvent::Message {
+                        channel: crate::inspection::RECOMPOSITIONS_SNAPSHOT_CHANNEL,
+                        payload: &payload,
+                    },
+                )?;
+            }
             LoopEvent::Host(event) => host.handle(event),
             LoopEvent::Outgoing(message) => write_app_event(
                 writer,
@@ -973,6 +988,11 @@ pub(crate) fn try_run(
     let Some(size) = await_first_size(&events, &platform_env) else {
         return Ok(());
     };
+
+    #[cfg(all(feature = "preview", debug_assertions))]
+    cranpose_core::source_trace::set_recomposition_tracking(
+        std::env::var("CRANPOSE_PREVIEW_RECOMPOSITIONS").is_ok_and(|value| value == "1"),
+    );
 
     let outbox = sender.clone();
     install_host_outbox(move |message| {

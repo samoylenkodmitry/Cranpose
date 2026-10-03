@@ -867,7 +867,7 @@ fn source_origins_survive_independent_child_recomposition() {
                     .iter()
                     .map(|origin| origin.name)
                     .collect(),
-            )
+            );
         });
     }
     #[composable]

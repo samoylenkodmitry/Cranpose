@@ -9,6 +9,54 @@ pub const SCHEMA_VERSION: u32 = 2;
 pub const REQUEST_CHANNEL: &str = "cranpose.inspector.v2.request";
 /// Application response channel containing a JSON [Snapshot].
 pub const SNAPSHOT_CHANNEL: &str = "cranpose.inspector.v2.snapshot";
+/// Lightweight counter request; payload is an optional unsigned request identifier.
+pub const RECOMPOSITIONS_REQUEST_CHANNEL: &str = "cranpose.recompositions.v1.request";
+/// Application response containing a JSON [Recompositions].
+pub const RECOMPOSITIONS_SNAPSHOT_CHANNEL: &str = "cranpose.recompositions.v1.snapshot";
+
+/// Counters for one live composable instance.
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Recomposition {
+    /// Instance identity within the preview process.
+    pub instance_id: u64,
+    /// Definition and current counter.
+    #[serde(flatten)]
+    pub source: Source,
+}
+
+/// Live counters independent of the layout tree or inspector node budget.
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Recompositions {
+    /// Counter protocol version.
+    pub schema: u32,
+    /// Request identity used to reject stale responses.
+    pub request_id: u64,
+    /// One entry per live composable instance.
+    pub instances: Vec<Recomposition>,
+}
+
+/// Captures opt-in debug preview counters; other builds return no instances.
+pub fn recompositions(request_id: u64) -> Recompositions {
+    Recompositions {
+        schema: 1,
+        request_id,
+        instances: cranpose_core::source_trace::recomposition_snapshot()
+            .into_iter()
+            .map(|instance| Recomposition {
+                instance_id: instance.instance_id,
+                source: Source {
+                    name: instance.name.to_owned(),
+                    file: instance.file.to_owned(),
+                    line: instance.line,
+                    manifest_dir: instance.manifest_dir.to_owned(),
+                    recompositions: Some(instance.recompositions),
+                },
+            })
+            .collect(),
+    }
+}
 
 /// A property reported by a framework modifier or layout node.
 #[derive(Debug, Serialize, PartialEq)]
@@ -40,6 +88,9 @@ pub struct Source {
     pub line: u32,
     /// Compiler-reported package directory.
     pub manifest_dir: String,
+    /// Executions after the initial composition of this instance, when tracking is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recompositions: Option<u64>,
 }
 
 /// A layout node in preorder, with surface-local logical bounds.
@@ -141,12 +192,13 @@ fn capture(layout: &LayoutBox, parent: Option<String>) -> Node {
                 file: source.file.to_owned(),
                 line: source.line,
                 manifest_dir: source.manifest_dir.to_owned(),
+                recompositions: source.recompositions(),
             })
             .collect();
         if text.is_empty()
             && let Some(source) = sources.iter().rev().find(|source| source.name != "Layout")
         {
-            kind = source.name.clone();
+            kind.clone_from(&source.name);
         }
         (kind, sources)
     };
