@@ -180,10 +180,11 @@ pub(crate) fn main() {
             }
             if !compact {
                 robot.mouse_scroll_and_wait_for_frame(0.0, 750.0).expect("return wheel to first chapter");
+                robot.wait_for_idle().expect("wheel returns to first chapter");
             }
             click_button(&robot, "Get started");
-            robot.validate_content("Start with the project template").expect("selected chapter is readable");
             capture(&robot, width, "get-started");
+            robot.validate_content("Start with the project template").expect("selected chapter is readable");
             if !compact {
                 if let Some((_, y, _, height)) = find_text_in_semantics_exact(&robot, "Counter App") {
                     assert!(y + height <= 0.0, "the tabs must scroll completely out of view: y={y}, height={height}");
