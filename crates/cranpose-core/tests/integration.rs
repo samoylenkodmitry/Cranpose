@@ -1,3 +1,4 @@
+mod applier_disposal;
 mod effects_and_frames;
 mod lifetime_cancellation;
 #[cfg(feature = "inspection")]

@@ -439,9 +439,22 @@ fn retained_slot_activation_checks_child_identity_order_and_length() {
     let observed_for_policy = Rc::clone(&observed);
     let policy: Rc<MeasurePolicy> = Rc::new(move |scope, _constraints| {
         let (children, matches) = match expected_for_policy.borrow().as_ref() {
-            Some(expected) => scope
+            Some(expected) => match scope
                 .activate_exact_retained_slot_with_known_children(SlotId::new(99), expected)
-                .expect("retained slot activates"),
+                .expect("retained slot activates")
+            {
+                RetainedSlotChildren::Clean => (
+                    expected
+                        .iter()
+                        .map(|&id| SubcomposeChild::new(NodeId::try_from(id).expect("node id")))
+                        .collect(),
+                    true,
+                ),
+                RetainedSlotChildren::Remeasure {
+                    children,
+                    children_match,
+                } => (children, children_match),
+            },
             None => (
                 scope.subcompose(SlotId::new(99), (), || {
                     cranpose_core::with_current_composer(|composer| {

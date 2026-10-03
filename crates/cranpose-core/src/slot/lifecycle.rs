@@ -32,8 +32,12 @@ impl SlotLifecycleCoordinator {
         }
     }
 
+    pub(crate) fn pop_pending_drop(&mut self) -> Option<DeferredDrop> {
+        self.pending_drops.pop()
+    }
+
     pub(crate) fn flush_pending_drops(&mut self) {
-        while let Some(drop) = self.pending_drops.pop() {
+        while let Some(drop) = self.pop_pending_drop() {
             drop.dispose();
         }
     }

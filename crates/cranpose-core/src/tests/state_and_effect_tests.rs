@@ -84,7 +84,10 @@ fn event_handler_scope_restores_flag_after_panic() {
 }
 
 type CapturedSubcomposeSlot = (SlotId, Owned<i32>, NodeId);
-type SubcomposePassResult = (Vec<CapturedSubcomposeSlot>, Vec<NodeId>);
+type SubcomposePassResult = (
+    Vec<CapturedSubcomposeSlot>,
+    crate::subcompose::SubcomposeDisposal,
+);
 
 fn run_subcompose_pass(
     slots: &mut SlotTable,
@@ -184,7 +187,7 @@ fn subcompose_keeps_per_slot_compositions_with_v2_slot_tables() {
         &handle,
         &[(slot_one, 10), (slot_two, 20)],
     );
-    assert!(disposed.is_empty());
+    assert!(disposed.nodes().is_empty());
 
     let first_slot_one = first_pass
         .iter()
@@ -206,7 +209,7 @@ fn subcompose_keeps_per_slot_compositions_with_v2_slot_tables() {
         &handle,
         &[(slot_two, 20)],
     );
-    assert!(disposed.is_empty());
+    assert!(disposed.nodes().is_empty());
     let second_slot_two = second_pass
         .iter()
         .find(|(slot_id, _, _)| *slot_id == slot_two)
@@ -239,7 +242,7 @@ fn subcompose_keeps_per_slot_compositions_with_v2_slot_tables() {
         &handle,
         &[(slot_two, 20), (slot_one, 10)],
     );
-    assert!(disposed.is_empty());
+    assert!(disposed.nodes().is_empty());
     let third_slot_one = third_pass
         .iter()
         .find(|(slot_id, _, _)| *slot_id == slot_one)
