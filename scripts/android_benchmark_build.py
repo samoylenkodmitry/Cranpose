@@ -7,7 +7,7 @@ import shutil
 import tomllib
 
 from android_benchmark_artifacts import build_cache, extract_source, snapshot_source, source_inventory
-from android_benchmark_support import checked_command, digest, interrupted, run_reported
+from android_benchmark_support import checked_command, digest, interrupted, run_reported, write_report
 
 
 def framework_packages(root):
@@ -19,15 +19,19 @@ def framework_packages(root):
     return packages
 
 
+def native_name(package):
+    names = {target['name'] for target in package['targets'] if 'cdylib' in target['crate_types']}
+    if len(names) != 1:
+        raise ValueError('Expected one native library target in Cargo metadata')
+    return 'lib' + names.pop() + '.so'
+
+
 def native_artifact(exported, package, abi, build_output):
     warnings = [line for line in build_output.decode(errors='replace').splitlines()
                 if line.startswith('warning:')]
     if warnings:
         raise ValueError('Build emitted warnings: ' + '\n'.join(warnings))
-    names = {target['name'] for target in package['targets'] if 'cdylib' in target['crate_types']}
-    if len(names) != 1:
-        raise ValueError('Expected one native library target in Cargo metadata')
-    artifact = exported / abi / ('lib' + names.pop() + '.so')
+    artifact = exported / abi / native_name(package)
     if not artifact.is_file():
         raise ValueError('cargo-ndk did not export the selected library: ' + str(artifact))
     return artifact
@@ -57,6 +61,8 @@ def write_framework_overrides(destination, packages, selected):
 def build(args, report):
     cache = build_cache(args.cache)
     report['cache'] = str(cache)
+    report['phase'] = 'snapshot'
+    write_report(args.output / 'build.json', report)
     sources = {}
     for name, original in [('framework', args.framework), ('app', args.app)]:
         archive = (args.output if name == 'framework' else cache) / f'{name}.tar.gz'
@@ -64,6 +70,8 @@ def build(args, report):
         inventory = extract_source(archive, cache / name)
         sources[name] = {'archive': archive.name, 'sha256': source_hash, 'inventory': inventory}
     report['sources'] = sources
+    report['phase'] = 'resolve'
+    write_report(args.output / 'build.json', report)
     app = cache / 'app'
     environment = dict(os.environ, CARGO_TARGET_DIR=str(args.target_dir.resolve()))
     common = ['--locked', '--no-default-features', '--features', args.features]
@@ -104,11 +112,13 @@ def build(args, report):
                '--output-dir', str(exported),
                'build', *common, '--release', '-p', args.package, '--lib',
                '--config', str(overrides)]
-    report.update(command=command, resolved=resolved,
+    report.update(command=command, resolved=resolved, native=native_name(package),
                   toolchain=checked_command(['rustc', '-Vv'], cwd=app, env=environment).decode(),
                   cargo=checked_command(['cargo', '-V'], cwd=app, env=environment).decode(),
                   settings=build_settings(args, environment),
                   ndk=environment['ANDROID_NDK_HOME'], features=args.features, abi=args.abi)
+    report['phase'] = 'compile'
+    write_report(args.output / 'build.json', report)
     log = args.output / 'build.log'
     checked_command(command, cwd=app, env=environment, timeout=args.timeout, output=log)
     artifact = native_artifact(exported, package, args.abi, log.read_bytes())
@@ -119,6 +129,7 @@ def build(args, report):
     shutil.copyfile(artifact, native)
     report.update(native=artifact.name, native_sha256=digest(native),
                   lock_sha256=digest(app / 'Cargo.lock'))
+    report['phase'] = 'complete'
 
 
 def main():
