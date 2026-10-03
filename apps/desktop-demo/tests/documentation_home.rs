@@ -66,6 +66,81 @@ fn click_control(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
 }
 
 #[test]
+fn guide_tables_place_headers_and_values_in_columns() {
+    let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
+    });
+    robot.move_to(120.0, 500.0);
+    robot.shell_mut().pointer_scrolled(0.0, -13.0 * 120.0);
+    robot.wait_for_idle();
+    assert!(click_control(&mut robot, "Testing"));
+    robot.move_to(320.0, 600.0);
+    robot.shell_mut().pointer_scrolled(0.0, -420.0);
+    robot.wait_for_idle();
+    let rects = robot.get_all_rects();
+    let scope = text_bounds(&rects, "Test scope");
+    let api = text_bounds(&rects, "API");
+    let value = text_bounds(&rects, "Composition and layout");
+    assert!(api.x > scope.x + 40.0, "table columns: {scope:?}, {api:?}");
+    assert!((api.y - scope.y).abs() < 2.0, "one header row");
+    assert!(value.y > scope.y + scope.height, "data follows the header");
+    assert!(robot
+        .get_all_text()
+        .iter()
+        .all(|text| !text.contains("| --- |")));
+}
+
+#[test]
+fn mobile_chapter_list_stays_visible_beside_the_wheel() {
+    let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
+    });
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    let tree = cranpose_testing::placed_semantics_from_shell(robot.shell_mut())
+        .expect("mobile guide navigation");
+    let list = semantic_bounds(&tree, "Guide chapters");
+    assert!(list.x > 150.0 && list.x + list.width <= 390.0);
+    let initial = text_bounds(&robot.get_all_rects(), "Get started");
+    robot.move_to(80.0, 500.0);
+    robot.shell_mut().pointer_scrolled(0.0, -120.0);
+    robot.wait_for_idle();
+    let after = text_bounds(&robot.get_all_rects(), "Get started");
+    assert!(
+        (initial.y - after.y).abs() < 1.0,
+        "chapter list stays in place"
+    );
+    assert!(click_control(&mut robot, "Get started"));
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
+}
+
+#[test]
+#[ignore = "CPU scroll measurement; run before and after a guide layout change"]
+fn guide_scroll_cpu_profile() {
+    let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
+    });
+    assert!(click_control(&mut robot, "Get started"));
+    robot.shell_mut().set_semantics_enabled(false);
+    robot.move_to(320.0, 620.0);
+    let mut samples = Vec::with_capacity(120);
+    for frame in 0..140 {
+        let start = std::time::Instant::now();
+        robot.shell_mut().pointer_scrolled(0.0, -18.0);
+        robot.advance_time(16_666_667);
+        robot.wait_for_idle();
+        if frame >= 20 {
+            samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    let mean = samples.iter().sum::<f64>() / samples.len() as f64;
+    eprintln!("guide_scroll_cpu_ms mean={mean:.3} p95={:.3}", samples[114]);
+}
+
+#[test]
 fn selecting_a_chapter_animates_the_wheel_and_reader_together() {
     let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::Guide));
@@ -352,19 +427,10 @@ fn reader_actions_move_between_chapters_without_the_section_wheel() {
 
 #[test]
 fn resized_guide_draws_beyond_its_original_window_edges() {
-    let Some(renderer) = crate::liquid_page_support::headless_renderer("Guide resize regression")
-    else {
+    let Some(mut shell) = guide_pixel_shell(800, 600) else {
         eprintln!("skipping guide resize pixels: no headless GPU");
         return;
     };
-    let mut shell = cranpose_app_shell::AppShell::new_with_size_and_density(
-        renderer,
-        cranpose_core::location_key(file!(), line!(), column!()),
-        || combined_app_with_initial_tab(Some(DemoTab::Guide)),
-        (800, 600),
-        (800.0, 600.0),
-        1.0,
-    );
     for (width, height) in [(800, 600), (1440, 1100), (900, 700), (1700, 1200)] {
         shell.set_buffer_size(width, height);
         shell.set_viewport(width as f32, height as f32);
@@ -429,6 +495,67 @@ fn resized_guide_draws_beyond_its_original_window_edges() {
             wheel_has_ink,
             "rotated chapter labels must stay visible after resizing to {width}×{height}"
         );
+    }
+}
+
+fn guide_pixel_shell(
+    width: u32,
+    height: u32,
+) -> Option<cranpose_app_shell::AppShell<cranpose_render_wgpu::WgpuRenderer>> {
+    let renderer = crate::liquid_page_support::headless_renderer("Guide visual regression")?;
+    Some(cranpose_app_shell::AppShell::new_with_size_and_density(
+        renderer,
+        cranpose_core::location_key(file!(), line!(), column!()),
+        || combined_app_with_initial_tab(Some(DemoTab::Guide)),
+        (width, height),
+        (width as f32, height as f32),
+        1.0,
+    ))
+}
+
+#[test]
+fn mobile_wheel_ring_remains_visible_after_rotation() {
+    let Some(mut shell) = guide_pixel_shell(390, 780) else {
+        eprintln!("skipping wheel pixels: no headless GPU");
+        return;
+    };
+    let mut initial_rows = 0;
+    for (step, delta) in [0.0, -480.0, -480.0].into_iter().enumerate() {
+        shell.set_cursor(80.0, 500.0);
+        shell.pointer_scrolled(0.0, delta);
+        for _ in 0..8 {
+            shell.update();
+            shell
+                .renderer()
+                .capture_frame(390, 780)
+                .expect("warm wheel");
+        }
+        let frame = shell
+            .renderer()
+            .capture_frame(390, 780)
+            .expect("wheel pixels");
+        let rows = (130..480)
+            .filter(|y| {
+                (150..390).any(|x| {
+                    let index = (y * 390 + x) * 4;
+                    let pixel = &frame.pixels[index..index + 4];
+                    pixel[0] < 150
+                        && pixel[1] > 110
+                        && pixel[2] > 110
+                        && u16::from(pixel[1]) > u16::from(pixel[0]) * 3 / 2
+                })
+            })
+            .count();
+        eprintln!("wheel ring rows step={step} count={rows}");
+        if step == 0 {
+            initial_rows = rows;
+            assert!(initial_rows > 250, "ring covers the visible arc");
+        } else {
+            assert!(
+                rows * 10 >= initial_rows * 9,
+                "wheel rotation preserves its ring: {initial_rows} -> {rows}"
+            );
+        }
     }
 }
 
