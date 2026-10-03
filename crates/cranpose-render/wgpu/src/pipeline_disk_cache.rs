@@ -77,7 +77,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     }
     let data = contents
         .as_ref()
-        .map(|contents| contents.blob)
+        .and_then(|contents| contents.blob)
         .filter(|blob| !blob.is_empty());
     // SAFETY: `data` is this build's own `get_data` output, and `fallback:
     // true` has wgpu validate the header and fall back to an empty cache.
@@ -91,10 +91,16 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     };
     match (data, &file) {
         (Some(data), _) => log::info!("[pipeline-cache] loaded {} B from disk", data.len()),
-        (None, Some(file)) if contents.is_none() => log::info!(
-            "[pipeline-cache] cold: dropped {} B compiled from other shaders",
-            file.len()
-        ),
+        (None, Some(file))
+            if contents
+                .as_ref()
+                .is_none_or(|contents| contents.blob.is_none()) =>
+        {
+            log::info!(
+                "[pipeline-cache] cold: dropped {} B compiled from other shaders",
+                file.len()
+            );
+        }
         (None, _) => log::info!("[pipeline-cache] cold (no blob on disk)"),
     }
     Loaded {
@@ -103,10 +109,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     }
 }
 
-/// The layout of a cache file: its key, the first screen's pipeline keys
-/// behind their count, then the driver's blob. A file in another layout
-/// carries another key, so it loads cold instead of being misread.
-const FILE_LAYOUT: u32 = 2;
+const FILE_LAYOUT: u32 = 3;
 
 /// Names what fills a file: its layout, the framework's WGSL sources, and
 /// this crate's version, which changes with each release of the shader
@@ -124,11 +127,9 @@ fn blob_key() -> [u8; 8] {
     hasher.finish().to_le_bytes()
 }
 
-/// A cache file this build wrote: its key, the first screen's pipeline
-/// keys behind their count, then the driver's blob.
 struct Contents<'a> {
     first_screen: FirstScreenKeys<'a>,
-    blob: &'a [u8],
+    blob: Option<&'a [u8]>,
 }
 
 #[derive(Clone)]
@@ -142,11 +143,21 @@ impl Iterator for FirstScreenKeys<'_> {
         self.0 = rest;
         Some(u64::from_le_bytes(*key))
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len(), Some(self.len()))
+    }
 }
 
-/// The file's contents, if this build's key leads it and it is whole.
+impl ExactSizeIterator for FirstScreenKeys<'_> {
+    fn len(&self) -> usize {
+        self.0.len() / 8
+    }
+}
+
 fn current_contents(file: &[u8]) -> Option<Contents<'_>> {
-    let rest = file.strip_prefix(blob_key().as_slice())?;
+    let (build, rest) = file.split_first_chunk::<8>()?;
+    let rest = rest.strip_prefix(crate::render::ShapePipelineKey::DISK_LAYOUT.as_slice())?;
     let (count, rest) = rest.split_first_chunk::<4>()?;
     let keys_len = usize::try_from(u32::from_le_bytes(*count))
         .ok()?
@@ -154,14 +165,15 @@ fn current_contents(file: &[u8]) -> Option<Contents<'_>> {
     let (keys, blob) = rest.split_at_checked(keys_len)?;
     Some(Contents {
         first_screen: FirstScreenKeys(keys),
-        blob,
+        blob: (*build == blob_key()).then_some(blob),
     })
 }
 
-fn file_bytes(first_screen: &[u64], blob: &[u8]) -> Option<Vec<u8>> {
+fn file_bytes(first_screen: impl ExactSizeIterator<Item = u64>, blob: &[u8]) -> Option<Vec<u8>> {
     let count = u32::try_from(first_screen.len()).ok()?;
-    let mut bytes = Vec::with_capacity(12 + first_screen.len() * 8 + blob.len());
+    let mut bytes = Vec::with_capacity(20 + first_screen.len() * 8 + blob.len());
     bytes.extend_from_slice(&blob_key());
+    bytes.extend_from_slice(&crate::render::ShapePipelineKey::DISK_LAYOUT);
     bytes.extend_from_slice(&count.to_le_bytes());
     for key in first_screen {
         bytes.extend_from_slice(&key.to_le_bytes());
@@ -180,11 +192,26 @@ pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
     let blob = cache
         .and_then(wgpu::PipelineCache::get_data)
         .unwrap_or_default();
+    let existing = std::fs::read(path).ok();
+    let previous = existing.as_deref().and_then(current_contents);
     let first_screen = first_screen_keys();
-    let Some(bytes) = file_bytes(&first_screen, &blob) else {
+    let key_count = first_screen.as_ref().map_or_else(
+        || {
+            previous
+                .as_ref()
+                .map_or(0, |contents| contents.first_screen.len())
+        },
+        Vec::len,
+    );
+    let bytes = match (first_screen.as_ref(), previous) {
+        (Some(keys), _) => file_bytes(keys.iter().copied(), &blob),
+        (None, Some(previous)) => file_bytes(previous.first_screen, &blob),
+        (None, None) => file_bytes(std::iter::empty(), &blob),
+    };
+    let Some(bytes) = bytes else {
         return;
     };
-    if std::fs::read(path).is_ok_and(|existing| existing == bytes) {
+    if existing.is_some_and(|existing| existing == bytes) {
         return;
     }
     if let Some(parent) = path.parent()
@@ -199,7 +226,7 @@ pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
         Ok(()) => log::info!(
             "[pipeline-cache] persisted {} B and {} first-screen pipelines in {:.1} ms",
             blob.len(),
-            first_screen.len(),
+            key_count,
             crate::render::instant_ms(started, Instant::now()),
         ),
         Err(error) => log::warn!("[pipeline-cache] write {path:?}: {error}"),
@@ -211,6 +238,7 @@ pub(crate) const FIRST_SCREEN_SPAN: Duration = Duration::from_secs(2);
 /// The shape pipelines, by their keys' bits, that this process's renderers
 /// drew their first screens with, in the order first drawn.
 static FIRST_SCREEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+static FIRST_FRAME_DRAWN: AtomicBool = AtomicBool::new(false);
 
 /// Notes a shape pipeline a renderer drew its first screen with. The notes
 /// are written with the cache, for the next launch to build ahead of its
@@ -219,14 +247,24 @@ pub(crate) fn note_first_screen_pipeline(key: u64) {
     let mut keys = FIRST_SCREEN.lock().unwrap_or_else(PoisonError::into_inner);
     if !keys.contains(&key) {
         keys.push(key);
+        CHANGES.note_change();
     }
 }
 
-fn first_screen_keys() -> Vec<u64> {
-    FIRST_SCREEN
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clone()
+pub(crate) fn note_frame_drawn() {
+    if !FIRST_FRAME_DRAWN.load(Ordering::Acquire) {
+        FIRST_FRAME_DRAWN.store(true, Ordering::Release);
+        CHANGES.note_change();
+    }
+}
+
+fn first_screen_keys() -> Option<Vec<u64>> {
+    FIRST_FRAME_DRAWN.load(Ordering::Acquire).then(|| {
+        FIRST_SCREEN
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    })
 }
 
 /// How long pipeline builds must pause before the cache is written. A burst
@@ -235,17 +273,15 @@ fn first_screen_keys() -> Vec<u64> {
 /// launch compiled, so the next launch skips those compiles.
 const PERSIST_QUIET: Duration = Duration::from_millis(500);
 
-/// Pipelines this process has built, for the watchers that write them back.
-static BUILDS: BuildSignal = BuildSignal::new();
+static CHANGES: PersistSignal = PersistSignal::new();
 
 /// Counts a pipeline build and wakes the watchers waiting to write it back.
 pub(crate) fn note_pipeline_built() {
-    BUILDS.note_built();
+    CHANGES.note_change();
 }
 
-/// A count of pipeline builds that watchers can wait on.
-struct BuildSignal {
-    built: Mutex<u64>,
+struct PersistSignal {
+    revision: Mutex<u64>,
     changed: Condvar,
 }
 
@@ -258,19 +294,19 @@ enum Wake {
     Stopped(u64),
 }
 
-impl BuildSignal {
+impl PersistSignal {
     const fn new() -> Self {
         Self {
-            built: Mutex::new(0),
+            revision: Mutex::new(0),
             changed: Condvar::new(),
         }
     }
 
     fn lock(&self) -> MutexGuard<'_, u64> {
-        self.built.lock().unwrap_or_else(PoisonError::into_inner)
+        self.revision.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn note_built(&self) {
+    fn note_change(&self) {
         *self.lock() += 1;
         self.changed.notify_all();
     }
@@ -283,26 +319,28 @@ impl BuildSignal {
         self.changed.notify_all();
     }
 
-    /// Sleeps until builds past `written` pause for `quiet`, or until the
-    /// watcher is stopped. Nothing wakes it while no pipeline is built.
     fn wait_for_quiet(&self, written: u64, quiet: Duration, stopped: &AtomicBool) -> Wake {
         let is_stopped = || stopped.load(Ordering::Acquire);
-        let mut built = self
+        let mut revision = self
             .changed
-            .wait_while(self.lock(), |built| *built == written && !is_stopped())
+            .wait_while(self.lock(), |revision| {
+                *revision == written && !is_stopped()
+            })
             .unwrap_or_else(PoisonError::into_inner);
         loop {
             if is_stopped() {
-                return Wake::Stopped(*built);
+                return Wake::Stopped(*revision);
             }
-            let seen = *built;
+            let seen = *revision;
             let (next, waited) = self
                 .changed
-                .wait_timeout_while(built, quiet, |built| *built == seen && !is_stopped())
+                .wait_timeout_while(revision, quiet, |revision| {
+                    *revision == seen && !is_stopped()
+                })
                 .unwrap_or_else(PoisonError::into_inner);
-            built = next;
+            revision = next;
             if waited.timed_out() {
-                return Wake::Quiet(*built);
+                return Wake::Quiet(*revision);
             }
         }
     }
@@ -312,11 +350,17 @@ impl BuildSignal {
 /// writes what is still unwritten and ends the watcher.
 pub(crate) struct PersistWatcher {
     stopped: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for PersistWatcher {
     fn drop(&mut self) {
-        BUILDS.stop(&self.stopped);
+        CHANGES.stop(&self.stopped);
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            log::warn!("[pipeline-cache] persist thread panicked during shutdown");
+        }
     }
 }
 
@@ -324,18 +368,18 @@ pub(crate) fn spawn_persist_watcher(cache: Option<wgpu::PipelineCache>) -> Optio
     let path = file_path()?;
     let stopped = Arc::new(AtomicBool::new(false));
     let watcher_stopped = Arc::clone(&stopped);
-    let mut written = *BUILDS.lock();
+    let mut written = *CHANGES.lock();
     let spawned = std::thread::Builder::new()
         .name("cranpose-pl-cache".into())
         .spawn(move || {
             loop {
-                match BUILDS.wait_for_quiet(written, PERSIST_QUIET, &watcher_stopped) {
-                    Wake::Quiet(built) => {
+                match CHANGES.wait_for_quiet(written, PERSIST_QUIET, &watcher_stopped) {
+                    Wake::Quiet(revision) => {
                         persist(cache.as_ref(), &path);
-                        written = built;
+                        written = revision;
                     }
-                    Wake::Stopped(built) => {
-                        if built != written {
+                    Wake::Stopped(revision) => {
+                        if revision != written {
                             persist(cache.as_ref(), &path);
                         }
                         return;
@@ -344,7 +388,10 @@ pub(crate) fn spawn_persist_watcher(cache: Option<wgpu::PipelineCache>) -> Optio
             }
         });
     match spawned {
-        Ok(_) => Some(PersistWatcher { stopped }),
+        Ok(thread) => Some(PersistWatcher {
+            stopped,
+            thread: Some(thread),
+        }),
         Err(error) => {
             log::warn!("[pipeline-cache] persist thread failed to spawn: {error}");
             None

@@ -1434,6 +1434,9 @@ impl KeyReader {
 }
 
 impl ShapePipelineKey {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY001";
+
     /// The key as a number a later launch reads back with
     /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
     #[cfg(not(target_arch = "wasm32"))]
@@ -4029,6 +4032,10 @@ impl GpuRenderer {
             }
             (result, submitted)
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        if submitted {
+            crate::pipeline_disk_cache::note_frame_drawn();
+        }
         if !submitted {
             self.run_store.invalidate_uploads();
             self.text_glyph_gpu_run_cache.clear();

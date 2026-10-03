@@ -165,3 +165,26 @@ fn an_unregistered_shader_still_compiles_inside_its_first_frame() {
         "the counter must see an in-frame compile, or the warmed case proves nothing"
     );
 }
+
+#[test]
+fn a_requested_specialization_draws_without_a_general_stand_in() {
+    let mut renderer = support::headless_renderer().expect("GPU required for shader warm-up");
+    prime(&mut renderer);
+    let reference = probe("requested exact specialization");
+    let mut shader = RuntimeShader::new(&format!(
+        "{}\noverride UNUSED: bool = false;",
+        reference.source()
+    ));
+    let reference = support::capture_graph(&mut renderer, page_draw(reference), WIDTH, HEIGHT);
+    shader.set_override("UNUSED", 1.0);
+    shader.set_specialization_exact(true);
+    request_shader_warm_ups([ShaderWarmUp {
+        shader: shader.clone(),
+        target: ShaderTarget::Page,
+    }]);
+    let pixels = support::capture_graph(&mut renderer, page_draw(shader), WIDTH, HEIGHT);
+    let stats = renderer.last_frame_stats().expect("frame statistics");
+    assert!(stats.shader_pixels > 0, "the shader must draw");
+    assert_eq!(stats.shader_pipeline_fallback_draws, 0);
+    assert_eq!(pixels.pixels, reference.pixels);
+}

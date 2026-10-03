@@ -82,7 +82,6 @@ impl ShapeRecords {
         &self.curves
     }
 
-    /// Reconstructs one complete record, including the original arc arguments.
     /// Whether the record at `index` is an opaque fill whose interior is worth
     /// laying down ahead of later paint: the test that marks a segment's
     /// [`occluders`](crate::RecordSegment::occluders). `false` past the end.
@@ -93,6 +92,7 @@ impl ShapeRecords {
             .is_some_and(|(body, curve)| crate::record::interior_occludes(body, curve))
     }
 
+    /// Reconstructs one complete record, including the original arc arguments.
     pub fn get(&self, index: usize) -> Option<ShapeRecord> {
         self.bodies
             .get(index)

@@ -131,6 +131,22 @@ fn a_cache_file_another_build_left_is_replaced_with_this_renderers_pipelines() {
 }
 
 #[test]
+fn dropping_a_renderer_finishes_its_pending_cache_write() {
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("pending-at-shutdown.bin");
+    let Some(mut renderer) = caching_renderer() else {
+        return;
+    };
+    renderer.capture_frame(16, 16).expect("first frame");
+    drop(renderer);
+    assert!(
+        fs::read(&cache).is_ok_and(|bytes| !bytes.is_empty()),
+        "dropping the renderer must finish its pending cache write"
+    );
+}
+
+#[test]
 fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
     let _lock = support::gpu_test_lock();
     let files = CacheFiles::new();
@@ -144,7 +160,6 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
 
     let graph = renderer.scene_mut().graph.take();
     drop(renderer);
-    std::thread::sleep(Duration::from_secs(3));
     fs::remove_file(&previous_cache).expect("remove retired renderer's cache file");
     let replacement_cache = files.select("replacement.bin");
     let mut renderer = support::LockedRenderer::beside_locked().expect("replacement GPU required");
@@ -152,7 +167,6 @@ fn dropping_a_renderer_stops_writing_its_previous_pipeline_cache() {
     let replacement = renderer.capture_frame(16, 16).expect("replacement frame");
     assert_eq!(replacement.pixels, original.pixels);
     wait_for_cache(&replacement_cache);
-    std::thread::sleep(Duration::from_secs(3));
     assert!(
         !previous_cache.exists(),
         "a retired renderer rewrote its obsolete cache: {}",
@@ -244,4 +258,153 @@ fn a_relaunch_prepares_the_first_screen_even_when_startup_was_slow() {
         "the relaunch built {relaunch_builds} pipelines in its first frame, \
          the first launch {first_launch_builds}"
     );
+}
+
+fn relaunch_after_cache_change(
+    change: impl FnOnce(&mut [u8]),
+    check: impl FnOnce(&mut support::LockedRenderer),
+) {
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("updated-build.bin");
+    let mut previous =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    let cold_builds = first_frame_builds(&mut previous);
+    assert!(
+        cold_builds > 0,
+        "a fresh first screen must compile pipelines"
+    );
+    drop(previous);
+    wait_for_cache(&cache);
+
+    let mut old_build = fs::read(&cache).expect("previous build's cache");
+    change(&mut old_build);
+    fs::write(&cache, old_build).expect("replace the previous cache");
+
+    let mut updated =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    check(&mut updated);
+}
+
+#[test]
+fn an_updated_build_prepares_the_previous_first_screen_with_fresh_pipelines() {
+    relaunch_after_cache_change(
+        |bytes| bytes[0] ^= 0xff,
+        |renderer| {
+            wait_for_warm_ups();
+            assert_eq!(
+                first_frame_builds(renderer),
+                0,
+                "an update must retain which pipelines to prepare before the first screen"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_first_frame_uses_its_requested_warm_up_instead_of_compiling_a_stand_in() {
+    relaunch_after_cache_change(
+        |bytes| bytes[0] ^= 0xff,
+        |renderer| {
+            first_frame_builds(renderer);
+            assert_eq!(
+                renderer
+                    .last_frame_stats()
+                    .expect("first-frame statistics")
+                    .shape_pipeline_fallback_draws,
+                0,
+                "the first frame must use the pipelines already scheduled for it"
+            );
+        },
+    );
+}
+
+#[test]
+fn an_incompatible_first_screen_key_layout_is_ignored() {
+    relaunch_after_cache_change(
+        |bytes| bytes[8] ^= 0xff,
+        |renderer| {
+            wait_for_warm_ups();
+            assert!(
+                first_frame_builds(renderer) > 0,
+                "unknown key layouts must not queue pipelines"
+            );
+        },
+    );
+}
+
+#[test]
+fn warm_up_lists_follow_presented_frames_across_process_restarts() {
+    const PHASE: &str = "CRANPOSE_CACHE_LIFECYCLE_PHASE";
+    if let Ok(phase) = std::env::var(PHASE) {
+        let _lock = support::gpu_test_lock();
+        let mut renderer =
+            support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+        let cache = PathBuf::from(std::env::var_os(CACHE_FILE).expect("cache file"));
+        match phase.as_str() {
+            "first" => {
+                first_frame_builds(&mut renderer);
+                wait_for_cache(&cache);
+            }
+            "closed" => {
+                wait_for_warm_ups();
+            }
+            "reopened" => {
+                wait_for_warm_ups();
+                assert_eq!(
+                    first_frame_builds(&mut renderer),
+                    0,
+                    "warm-up completion must not replace the known first screen with an empty list"
+                );
+            }
+            "empty-screen" => {
+                renderer.scene_mut().graph = Some(RenderGraph::new(support::layer_node(
+                    None,
+                    16.0,
+                    16.0,
+                    Vec::new(),
+                )));
+                renderer.capture_frame(16, 16).expect("empty screen");
+                wait_for_warm_ups();
+            }
+            "changed-screen" => {
+                wait_for_warm_ups();
+                assert!(
+                    first_frame_builds(&mut renderer) > 0,
+                    "an empty screen must retire the earlier screen's warm-up list"
+                );
+            }
+            _ => panic!("unknown lifecycle phase"),
+        }
+        return;
+    }
+
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("closed-before-first-frame.bin");
+    for phase in [
+        "first",
+        "closed",
+        "reopened",
+        "empty-screen",
+        "changed-screen",
+    ] {
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "pipeline_cache_lifecycle::warm_up_lists_follow_presented_frames_across_process_restarts",
+                "--nocapture",
+            ])
+            .env(PHASE, phase)
+            .env(CACHE_FILE, &cache)
+            .env(CACHE_ENABLED, "1")
+            .output()
+            .expect("launch cache lifecycle process");
+        assert!(
+            output.status.success(),
+            "{phase} failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
