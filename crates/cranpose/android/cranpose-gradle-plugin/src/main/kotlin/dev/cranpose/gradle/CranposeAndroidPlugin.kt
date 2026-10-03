@@ -383,6 +383,13 @@ class CranposeAndroidPlugin : Plugin<Project> {
                 }
                 stagedDeclarations.mkdirs()
                 val api = cranpose.androidApiLevel.orNull
+                val linkArguments = if (debug) {
+                    emptyList()
+                } else {
+                    val unwindTableDiscard = File(temporaryDir, "discard-unwind-tables.ld")
+                    unwindTableDiscard.writeText(DISCARD_UNWIND_TABLES)
+                    releaseLinkArguments(api, unwindTableDiscard)
+                }
                 val defaultFeatures = cranpose.defaultFeatures.get()
                 val environment = cranpose.environment.get().filterKeys { it != CAPABILITIES_DIR_VARIABLE }
                 for (pass in groups) {
@@ -411,9 +418,9 @@ class CranposeAndroidPlugin : Plugin<Project> {
                         if (pass.features.isNotEmpty()) {
                             arguments += listOf("--features", pass.features.joinToString(","))
                         }
-                        if (!debug) {
+                        if (linkArguments.isNotEmpty()) {
                             arguments += "--"
-                            arguments += releaseLinkArguments(api).flatMap { listOf("-C", "link-arg=$it") }
+                            arguments += linkArguments.flatMap { listOf("-C", "link-arg=$it") }
                         }
                         logger.lifecycle(
                             "cranpose: building $cargoPackage for $abi " +
@@ -473,15 +480,29 @@ class CranposeAndroidPlugin : Plugin<Project> {
     /**
      * What a release library is linked with, passed to the final crate alone
      * so an application's own rustflags still apply: identical functions
-     * folded into one (Rust promises no function a unique address), and, on
+     * folded into one (Rust promises no function a unique address), no unwind
+     * tables (release builds abort on panic, so nothing unwinds), and, on
      * Android 6.0 and later, which read them, relocations in Android's packed
      * format.
      */
-    private fun releaseLinkArguments(api: Int?): List<String> =
-        listOf("-Wl,--icf=all") +
+    private fun releaseLinkArguments(api: Int?, unwindTableDiscard: File): List<String> =
+        listOf("-Wl,--icf=all", "-Wl,--no-eh-frame-hdr", "-T${unwindTableDiscard.absolutePath}") +
             listOfNotNull("-Wl,--pack-dyn-relocs=android".takeIf { api != null && api >= PACKED_RELOCATIONS_MIN_API })
 
     private companion object {
+        /**
+         * Linker script dropping every unwind table, the prebuilt standard
+         * library's included, which a codegen flag on the final crate cannot
+         * reach. `INSERT` keeps the default layout.
+         */
+        const val DISCARD_UNWIND_TABLES = """SECTIONS {
+  /DISCARD/ : {
+    *(.eh_frame) *(.gcc_except_table .gcc_except_table.*)
+    *(.ARM.exidx .ARM.exidx.*) *(.ARM.extab .ARM.extab.*)
+  }
+} INSERT AFTER .text;
+"""
+
         /** The first Android release whose loader reads packed relocations. */
         const val PACKED_RELOCATIONS_MIN_API = 23
 
