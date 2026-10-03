@@ -127,6 +127,22 @@ library from 9.28 MB to 9.09 MB (−182 KB). Cold start to the first frame on
 the Mate 20 X was unchanged: a median of ~178 ms with it, ~185 ms without, 8
 runs each. The bench's release profile carries it.
 
+## Release link arguments (Android, 2026-10-03)
+
+The Cranpose Gradle plugin links every release library with lld's
+`--icf=all`, which folds identical functions into one (Rust promises no
+function a unique address), and, when the application's `minSdk` is 23 or
+later, `--pack-dyn-relocs=android`, Android's packed relocation format,
+which Android 6.0 and later read. It passes them to the final crate through
+`cargo rustc` (via `cargo ndk`), so an application's own rustflags still
+apply.
+
+On the compose-vs-cranpose bench (arm64, fat LTO, stripped), the library went
+from 10,646 KB to 9,913 KB (−733 KB, −6.9%): packed relocations took
+the dynamic relocations from 475 KB to 62 KB, and folding took 238 KB off `.text`.
+`--icf=safe` folds nothing under fat LTO, which keeps no address-significance
+tables.
+
 ## The Android library by crate, nightly
 
 The nightly board's `android-size` job builds the demo's arm64 library as

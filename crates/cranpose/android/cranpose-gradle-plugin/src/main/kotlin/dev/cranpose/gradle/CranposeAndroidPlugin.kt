@@ -401,7 +401,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
                         declarations.mkdirs()
                         val arguments = mutableListOf("ndk")
                         api?.let { level -> arguments += listOf("--platform", level.toString()) }
-                        arguments += listOf("-t", abi, "-o", nativeOutput.absolutePath, "build", "-p", cargoPackage, "--lib")
+                        arguments += listOf("-t", abi, "-o", nativeOutput.absolutePath, "rustc", "-p", cargoPackage, "--lib")
                         if (profile != "dev") {
                             arguments += listOf("--profile", profile)
                         }
@@ -410,6 +410,10 @@ class CranposeAndroidPlugin : Plugin<Project> {
                         }
                         if (pass.features.isNotEmpty()) {
                             arguments += listOf("--features", pass.features.joinToString(","))
+                        }
+                        if (!debug) {
+                            arguments += "--"
+                            arguments += releaseLinkArguments(api).flatMap { listOf("-C", "link-arg=$it") }
                         }
                         logger.lifecycle(
                             "cranpose: building $cargoPackage for $abi " +
@@ -466,7 +470,21 @@ class CranposeAndroidPlugin : Plugin<Project> {
         }
     }
 
+    /**
+     * What a release library is linked with, passed to the final crate alone
+     * so an application's own rustflags still apply: identical functions
+     * folded into one (Rust promises no function a unique address), and, on
+     * Android 6.0 and later, which read them, relocations in Android's packed
+     * format.
+     */
+    private fun releaseLinkArguments(api: Int?): List<String> =
+        listOf("-Wl,--icf=all") +
+            listOfNotNull("-Wl,--pack-dyn-relocs=android".takeIf { api != null && api >= PACKED_RELOCATIONS_MIN_API })
+
     private companion object {
+        /** The first Android release whose loader reads packed relocations. */
+        const val PACKED_RELOCATIONS_MIN_API = 23
+
         /**
          * Gradle property naming the architectures a release build produces,
          * comma separated.
