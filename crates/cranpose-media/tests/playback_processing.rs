@@ -145,7 +145,8 @@ fn output_peak(path: &std::path::Path, balance: f32, gain_db: f32) -> [f32; 2] {
 
 #[test]
 fn playback_outputs_real_balance_equalizer_and_analysis_samples() {
-    let path = std::env::temp_dir().join(format!("cranpose-processing-{}.wav", std::process::id()));
+    let directory = cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), "media-processing");
+    let path = directory.join("tone.wav");
     fs::write(&path, wave()).expect("write generated test tone");
     let center = output_peak(&path, 0.0, 0.0);
     let left = output_peak(&path, -1.0, 0.0);
