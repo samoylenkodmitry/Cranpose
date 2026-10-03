@@ -1,6 +1,6 @@
 use cranpose_ui_graphics::{
-    BAND_MARGIN, FRAGMENT_KIND_ARC, Point, QUAD_VERTICES, RecordTables, ShapeRecord, StrokeCap,
-    arc_trig, band_padded_range, strip_vertices,
+    BAND_MARGIN, BAND_MAX_STEP, FRAGMENT_KIND_ARC, Point, QUAD_VERTICES, RecordTables, ShapeRecord,
+    StrokeCap, arc_trig, band_padded_range, strip_vertices,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -33,7 +33,7 @@ impl BandStrip {
             record.arc_normalized[1],
         );
         let step = range / segments as f32;
-        let quad = (segments == 1).then(|| {
+        let quad = if segments == 1 {
             let [sin_mid, cos_mid, sin_half, cos_half] =
                 arc_trig(record.arc_normalized[0], record.arc_normalized[1]);
             let half_width = mid * sin_half + ring_half;
@@ -42,7 +42,7 @@ impl BandStrip {
             } else {
                 half_width
             };
-            std::array::from_fn(|index| {
+            Some(std::array::from_fn(|index| {
                 let x = if index / 2 == 1 {
                     half_width
                 } else {
@@ -57,8 +57,24 @@ impl BandStrip {
                     center[0] + (-sin_mid * x + cos_mid * y),
                     center[1] + (cos_mid * x + sin_mid * y),
                 ]
-            })
-        });
+            }))
+        } else if step > BAND_MAX_STEP {
+            Some(std::array::from_fn(|index| {
+                let x = if index / 2 == 1 {
+                    outer_padded
+                } else {
+                    -outer_padded
+                };
+                let y = if index % 2 == 1 {
+                    outer_padded
+                } else {
+                    -outer_padded
+                };
+                [center[0] + x, center[1] + y]
+            }))
+        } else {
+            None
+        };
         Self {
             center,
             inner: inner_padded,
@@ -79,7 +95,7 @@ impl BandStrip {
     #[cfg(test)]
     fn vertex(&self, index: u32) -> [f32; 2] {
         if let Some(quad) = self.quad {
-            return quad[index as usize];
+            return quad[((index / 2).min(1) * 2 + index % 2) as usize];
         }
         let radius = if index % 2 == 1 {
             self.outer_vertex

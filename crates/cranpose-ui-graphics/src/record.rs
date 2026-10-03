@@ -75,6 +75,12 @@ pub const ARC_BAND_MIN_INNER_RADIUS: f32 = 1.0;
 /// plus a sixteenth pixel for rasterization rounding. `band_position` in
 /// `shape.wgsl` pads by the same amount.
 pub const BAND_MARGIN: f32 = 0.5 + 1.0 / 16.0;
+/// The widest angle one segment of a band's strip spans. Past a quarter
+/// turn a strip's outer polygon is larger than the square around the band's
+/// padded disc, so a band whose padded sweep needs wider segments than its
+/// class has, which only a render scale below the recording's can make,
+/// draws that square instead.
+pub const BAND_MAX_STEP: f32 = std::f32::consts::FRAC_PI_2;
 /// The radians a band's strip extends past each end of its sweep beyond
 /// the angle the ring's padded half-width subtends at its padded inner
 /// radius, which covers every cap and the margin; float slack only.

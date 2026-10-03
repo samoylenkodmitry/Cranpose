@@ -314,6 +314,7 @@ const PLACEMENT_TURNED: u32 = 16u;
 // fragment stage anti-aliases lies inside the strip.
 const BAND_MARGIN: f32 = 0.5 + 1.0 / 16.0;
 const BAND_ANGULAR_PAD: f32 = 0.001;
+const BAND_MAX_STEP: f32 = 1.5707963267948966;
 const INFINITE_GRADIENT_POINT: f32 = 1.0e30;
 
 // Which tier a pipeline draws from. The store tier draws one recording from
@@ -988,6 +989,12 @@ fn band_position(
     let inner_padded = max(mid - ring_half, 0.0);
     let range = band_padded_range(mid, ring_half, record.arc_normalized.x, record.arc_normalized.y);
     let step = range.y / f32(segments);
+    if (step > BAND_MAX_STEP) {
+        return center + vec2<f32>(
+            select(-outer_padded, outer_padded, boundary >= 1u),
+            select(-outer_padded, outer_padded, side == 1u),
+        );
+    }
     let outer_vertex = outer_padded / cos(step * 0.5);
     let radius = select(inner_padded, outer_vertex, side == 1u);
     let angle = range.x + step * f32(boundary);
