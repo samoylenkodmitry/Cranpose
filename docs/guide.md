@@ -4,55 +4,36 @@
 
 **Build apps with Compose in Rust.**
 
-Cranpose brings the Jetpack Compose model to Rust. Describe a screen with
-composable functions, keep changing values in state, and handle actions in
-callbacks. Cranpose updates the affected UI and handles the platform window,
-rendering, input and device services.
+Cranpose uses the Jetpack Compose model. Composable functions describe the UI.
+State changes update it. Callbacks handle user actions.
+Cranpose handles the platform window, input, graphics and device services.
 
-If you know Compose, you can use the same ideas: state flows down, events flow
-up, modifiers describe layout and appearance, and effects own work with a
-lifetime. You write Rust functions and closures in place of Kotlin functions
-and lambdas. You can share those functions across desktop, Android, iOS and web.
+### Map Compose APIs to Rust
 
-If you are new to Compose, start with the counter in **Get started**. It shows
-the whole cycle: read a value, draw it, change it on a click. The following
-chapters build on that pattern.
+- `@Composable fun Screen()` → `#[composable] fn Screen()`.
+- `remember { mutableStateOf(0) }` → `rememberMutableStateOf(|| 0)`.
+- `count.value` → `count.get()` and `count.set(value)`.
+- `Column { ... }` → `Column(modifier, spec, move || { ... })`.
+- `Modifier.padding(16.dp)` → `Modifier::empty().padding(16.0)`.
+- `LazyColumn { items(...) }` → `LazyColumn(modifier, state, spec, move |scope| { ... })`.
+- `LaunchedEffect(key)` → `LaunchedEffect` or `LaunchedEffectAsync`.
+- `DisposableEffect(key)` → `DisposableEffect` with `DisposableEffectResult`.
+- `CompositionLocalProvider` → `CompositionLocalProvider`.
+- `NavHost` → `NavHost` with `rememberNavController`.
+- `collectAsStateWithLifecycle()` → `StateFlowCollect::collectAsStateWithLifecycle()`.
 
-### Bring your Compose knowledge
+Rust closures replace Kotlin lambdas. Specs hold container options.
+State flows down. Events flow up. Effects own tasks and resources.
 
-- **Composable functions:** replace `@Composable fun Screen()` with
-  `#[composable] fn Screen()`.
-- **State:** replace `remember { mutableStateOf(0) }` with
-  `rememberMutableStateOf(|| 0)`. Read with `count.get()`; write with `count.set(value)`.
-- **Layout:** replace `Column { ... }` with
-  `Column(modifier, spec, move || { ... })`.
-- **Modifiers:** replace `Modifier.padding(16.dp)` with
-  `Modifier::empty().padding(16.0)`.
-- **Lazy lists:** use `LazyColumn(modifier, state, spec, move |scope| { ... })`.
-- **Effects:** use `LaunchedEffect` or `LaunchedEffectAsync` for tasks and
-  `DisposableEffect` with `DisposableEffectResult` for cleanup.
-- **Scoped values:** use `CompositionLocalProvider`.
-- **Navigation:** use `NavHost` and `rememberNavController`.
-- **Flows:** use `StateFlowCollect::collectAsStateWithLifecycle()`.
-
-These are corresponding concepts, not a promise that Kotlin signatures translate
-word for word. Rust uses explicit types and ownership. Container options live in
-`ColumnSpec`, `RowSpec` and other spec values. The examples show those differences.
-
-### Choose a starting point
-
-Read **Get started** to make a new app. Use **Compose integration** to add a Rust
-screen to an existing Android Compose app. Use **Native views** to place a
-platform control inside a Cranpose screen.
-
-The guide is available offline in this tab. Source and API links open in a
-browser. The other demo tabs let you try the controls as you read.
+Start with **Get started** for a new app. **Compose integration** adds Rust UI
+to an Android Compose app. **Native views** adds platform controls to Rust UI.
+The guide works offline. Source links open in a browser.
 
 ## Get started
 
 ### Create an application
 
-Install Rust, then make a desktop project:
+Install Rust. Create a desktop app:
 
 ```sh
 cargo new my-app
@@ -61,11 +42,10 @@ cargo add cranpose --features desktop,renderer-wgpu
 cargo add anyhow
 ```
 
-Cargo writes the dependency versions into your manifest. For a project with
-Android, iOS and web entry points already wired up, use the
+For Android, iOS and web hosts, use the
 [showcase template](https://github.com/samoylenkodmitry/cranpose-showcase).
 
-Replace `src/main.rs` with this program:
+Replace `src/main.rs`:
 
 ```rust
 use cranpose::prelude::*;
@@ -103,17 +83,13 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-Run `cargo run`. Each click changes `count`; the text updates to match.
+Run `cargo run`.
 
-`#[composable]` lets Cranpose track the function's state reads.
-`rememberMutableStateOf` keeps the value between calls. The `move` closures
-capture the state handle so the column content and the button can use it later.
-A state handle is `Copy`: passing it into both closures does not copy the value
-it stores.
+`rememberMutableStateOf` keeps state between calls. A state handle is `Copy`.
+Each `move` closure receives a handle to the same value.
 
-Use `cargo run --release` when judging animation or scrolling. Put release
-settings in your application's `Cargo.toml`; a dependency's profile does not
-configure your binary:
+Use `cargo run --release` to measure performance.
+Set the release profile in your app's `Cargo.toml`:
 
 ```toml
 [profile.release]
@@ -122,32 +98,26 @@ lto = true
 codegen-units = 1
 ```
 
-### Keep one UI and give each platform an entry point
+### Share the UI across platforms
 
-Move `Counter` into your library as a public composable when adding another
-platform. Each entry point starts that same UI through the platform launcher.
-The showcase has working [entry points and build settings](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/Cargo.toml)
-for this arrangement.
-
-Enable `renderer-wgpu` together with the feature for your target:
+Put public composables in your library. Each platform entry point starts the
+same UI. Enable `renderer-wgpu` plus the target feature:
 
 - **`desktop`:** call `AppLauncher::try_run` from `main`.
-- **`android`:** build a native library and package it with the Android Gradle host.
-- **`ios`:** start the UIKit host from the iOS entry point; package and sign through Xcode tools.
-- **`web`:** build for `wasm32-unknown-unknown` and load it from the HTML shell.
+- **`android`:** package the Rust library with the Android Gradle host.
+- **`ios`:** start the UIKit host. Package and sign the app with Xcode tools.
+- **`web`:** build for `wasm32-unknown-unknown`. Load the module from HTML.
 
-Follow the template's [Android project](https://github.com/samoylenkodmitry/cranpose-showcase/tree/main/android),
+The template supplies [Cargo features](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/Cargo.toml),
+[Android setup](https://github.com/samoylenkodmitry/cranpose-showcase/tree/main/android),
 [iOS scripts](https://github.com/samoylenkodmitry/cranpose-showcase/tree/main/ios)
-and [web build](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/build-web.sh)
-when packaging. Keep platform entry points small; put screens and application
-logic in the shared library.
+and a [web build](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/build-web.sh).
 
 ## State and effects
 
 ### Give state an owner
 
-Keep state in the lowest common parent that needs to read or change it. Pass
-values and callbacks to children. This is state hoisting, just as in Compose:
+Put state in the parent that needs it. Pass values and callbacks to children:
 
 ```rust
 use cranpose::prelude::*;
@@ -175,41 +145,51 @@ fn StepperScreen() {
 }
 ```
 
-`Stepper` can now work with local state, a view model or data supplied by a native
-host. It does not choose where the value lives.
+Change state in callbacks and effects.
 
-Read a small `Copy` value with `.get()`. For a larger state value, use
-`.with(|value| ...)` to borrow it rather than cloning a collection just to inspect
-it. Change state in a callback or effect, not unconditionally while describing
-the screen.
+### Borrow a state value
 
-`remember(|| value)` keeps an ordinary value and returns an `Owned<T>` handle.
-Use `.with(...)` to borrow it. Unlike observable state, mutating a remembered
-ordinary value does not itself request recomposition. `rememberKeyed` recreates
-a remembered result when its key changes. Use `key` for a group whose identity
-must follow an item when it moves.
+Use `.get()` for small values. Use `.with(...)` to borrow a collection:
 
-Remembered state lasts while its composition position exists. Save a document
-in your data layer or preferences when it must survive closing the app.
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn DraftCount(drafts: MutableState<Vec<String>>) {
+    let count = drafts.with(Vec::len);
+    Text(
+        format!("Drafts: {count}"),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+```
+
+- `remember(|| value)` retains an ordinary value. `.with(...)` borrows it.
+- `rememberMutableStateOf` retains observable state. Writes update its readers.
+- `rememberKeyed` recreates a value when its key changes.
+- `key` gives a group a stable identity across moves.
+
+Remembered state lasts while its composition position exists.
+Use a data store or preferences for state that survives app exit.
 
 ### Load data when an input changes
 
-Use `LaunchedEffectAsync` for asynchronous work owned by a composable. This
-example loads a text response whenever the URL changes:
+`LaunchedEffectAsync` owns an async task. Its key controls when it restarts:
 
 ```rust
 use cranpose::prelude::*;
 
 #[composable]
 fn RemoteText(url: String) {
-    let result = rememberMutableStateOf(|| String::from("Loading…"));
+    let result = rememberMutableStateOf(|| String::from("Please wait"));
     let client = local_http_client().current();
     LaunchedEffectAsync(url.clone(), move |_| {
         Box::pin(async move {
-            result.set(String::from("Loading…"));
+            result.set(String::from("Please wait"));
             result.set(match client.get_text(&url).await {
                 Ok(text) => text,
-                Err(error) => format!("Could not load: {error}"),
+                Err(error) => format!("Request error: {error}"),
             });
         })
     });
@@ -217,26 +197,73 @@ fn RemoteText(url: String) {
 }
 ```
 
-Add `cranpose-services` with `http-native` on desktop, Android or iOS; use
-`web-http` for the browser. Choose those features in target-specific dependency
-sections when building both. Android also needs the manifest's `INTERNET`
-permission; browser requests must satisfy the server's CORS policy.
+Use `cranpose-services/http-native` on desktop, Android and iOS.
+Use `cranpose-services/web-http` in browsers.
+Android needs `INTERNET` in the manifest. Browser requests follow the server's CORS policy.
 
-The URL is both the effect's key and input, so this example owns a copy for each
-role. The old task is cancelled when the key changes or the composable leaves.
-The async body runs on the UI runtime: awaiting I/O is fine, but decoding a large
-image there would block input.
+The URL supplies the key and request input. Each role owns a copy.
+A key change or composition exit cancels the task.
+The async body runs on the UI runtime. Use it for I/O.
 
-Use `LaunchedEffect(key, |scope| ...)` with `scope.launch_background(work, on_ui)`
-for work that belongs on a worker. Return the result to `on_ui`; keep UI state
-handles out of the worker closure. For work started by a button,
-`rememberCoroutineScope()` supplies a scope that is cancelled when its owner
-leaves the composition.
+### Move computation to a worker
+
+`launch_background` computes on a native worker. Its result callback runs on the UI thread:
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn WordCount(text: std::sync::Arc<str>) {
+    let words = rememberMutableStateOf(|| 0_usize);
+    LaunchedEffect(std::sync::Arc::clone(&text), move |scope| {
+        scope.launch_background(
+            move |_| async move { text.split_whitespace().count() },
+            move |count| words.set(count),
+        );
+    });
+    Text(
+        format!("Words: {}", words.get()),
+        Modifier::empty(),
+        TextStyle::default(),
+    );
+}
+```
+
+`Arc<str>` shares the input with the key and worker.
+On web, this API runs on the browser event loop. Use a Web Worker for large computations.
+
+### Start a task from a button
+
+`rememberCoroutineScope` ties button tasks to the screen's lifetime:
+
+```rust
+use cranpose::prelude::*;
+use std::time::Duration;
+
+#[composable]
+fn DelayedMessage() {
+    let message = rememberMutableStateOf(|| "Ready");
+    let scope = rememberCoroutineScope();
+    Button(
+        Modifier::empty(),
+        ButtonSpec::default(),
+        move || {
+            message.set("Please wait");
+            scope.launch(async move {
+                delay(Duration::from_secs(1)).await;
+                message.set("Done");
+            });
+        },
+        move || {
+            Text(message.get(), Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+```
 
 ### Release a resource when its screen closes
 
-Acquire a resource in `DisposableEffect` and return its cleanup. A camera screen
-can start and stop its session this way:
+`DisposableEffect` acquires a resource. Its result supplies cleanup:
 
 ```rust
 use cranpose::prelude::*;
@@ -256,22 +283,43 @@ fn CameraSession() {
 }
 ```
 
-Mount `CameraSession` only while the capture screen needs the camera. Its cleanup
-runs when it leaves composition. Camera setup and frames are covered in
-**Platform services**.
+Mount this composable while the screen needs the camera. Its removal stops the camera.
+Use `rememberUpdatedState` to pass fresh values into an effect with a stable key.
+Use `SideEffect` to publish values after composition commits.
 
-Use `rememberUpdatedState` when a long-lived effect needs the latest callback
-without restarting. Use `SideEffect` to publish a value after composition
-commits. Use composition locals for values that apply to a subtree, such as a
-theme or service; ordinary screen inputs are easier to follow as parameters.
+### Provide a value to child composables
+
+A composition local supplies a value to descendants:
+
+```rust
+use cranpose::prelude::*;
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
+
+thread_local! {
+    static LOCAL_USER: CompositionLocal<&'static str> = compositionLocalOf(|| "Guest");
+}
+
+#[composable]
+fn UserLabel() {
+    let user = LOCAL_USER.with(CompositionLocal::current);
+    Text(user, Modifier::empty(), TextStyle::default());
+}
+
+#[composable]
+fn AccountScreen() {
+    LOCAL_USER.with(|user| {
+        CompositionLocalProvider([user.provides("Ada")], UserLabel);
+    });
+}
+```
+
+Outside this provider, `UserLabel` reads the default: `Guest`.
 
 ## Layout and lists
 
 ### Arrange controls
 
-Use `Column` for a vertical stack, `Row` for a horizontal stack, and `Box` for
-content that overlaps. A container takes a modifier, a spec, and a content
-closure. `weight` divides the remaining space along its parent's main axis:
+`Column` stacks children vertically. `Row` places them side by side. `Box` places children in layers:
 
 ```rust
 use cranpose::prelude::*;
@@ -291,13 +339,12 @@ fn AccountRow() {
 }
 ```
 
-The name takes the remaining width; the status keeps the width it needs.
-Dimensions such as `16.0` are logical points. The platform host applies display
-density. Text sizes use `TextUnit::Sp` so text scaling can be applied separately.
+`weight(1.0)` gives the name the spare width. The status keeps its content width.
+Sizes use logical points. The host applies display density. Text uses `TextUnit::Sp` for font scale.
 
-### Put modifiers in the order you mean
+### Order modifiers
 
-Each modifier wraps the modifiers after it:
+Each modifier wraps the next:
 
 ```rust
 use cranpose::prelude::*;
@@ -310,15 +357,14 @@ fn card_modifiers() -> (Modifier, Modifier) {
 }
 ```
 
-`outer_space` leaves space outside the blue area. `inner_space` paints the padded
-area blue too. The same ordering rule affects clipping and clickable bounds.
-Use `width_in` or `height_in` for limits, `fill_max_width` to fill a parent, and
-`align` to position a child in a `Box`. See the [modifier reference](MODIFIERS.md)
-for the complete set.
+`outer_space` leaves space outside the background. `inner_space` includes the space in the background.
+
+Use `width_in` and `height_in` for size limits. Use `align` for a child in a `Box`.
+See the [modifier reference](MODIFIERS.md).
 
 ### Show a long collection
 
-Use a lazy list when the collection can be larger than the screen:
+`LazyColumn` composes rows for its viewport:
 
 ```rust
 use cranpose::prelude::*;
@@ -343,8 +389,7 @@ fn Messages() {
 }
 ```
 
-This fixed collection uses positions as identities. For rows that can be inserted,
-removed or reordered, supply keys from your data:
+This fixed list uses positions as identities. Use data IDs when rows move:
 
 ```rust
 use cranpose::prelude::*;
@@ -368,30 +413,46 @@ fn SavedArticles() {
 }
 ```
 
-For large collections, `LazyItems::new(count).key(...)` defines keys without
-registering every row individually. Its `content_type(...)` groups rows with
-the same structure for reuse. Keep large data in its owner and pass a shared
-handle into retained row closures. Give the list a bounded height; do not put a
-vertical lazy list in a vertically unbounded scroll container.
+For large lists, use `LazyItems::new(count).key(...)`. Use `content_type(...)` to group rows with the same structure.
+Give lists a bounded height. Share large datasets with retained row callbacks.
+See the [lazy-list guide](lazy_list_doc.md).
 
-### Adapt to the available space
+### Adapt to screen size
 
-Read a container's size with `Modifier::report_size_state` and choose a one-pane
-or two-pane layout from that size. Keep screen state above this choice so a
-resize does not reset it. Apply `local_safe_area_insets().current()` as padding
-where controls meet system bars or cutouts.
+`report_size_state` reports the container size. Choose the layout from its width.
+Keep shared state in the parent of both layouts.
+
+Use safe-area insets to clear system bars:
+
+```rust
+use cranpose::prelude::*;
+
+#[composable]
+fn ScreenContent() {
+    let insets = local_safe_area_insets().current();
+    Column(
+        Modifier::empty().fill_max_size().padding_each(
+            insets.left,
+            insets.top,
+            insets.right,
+            insets.bottom,
+        ),
+        ColumnSpec::default(),
+        || {
+            Text("Library", Modifier::empty(), TextStyle::default());
+        },
+    );
+}
+```
 
 The showcase's [RootShell and SplitShell](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/src/app.rs)
-implement this pattern: one route on a phone, a list beside a detail pane on a
-wide window. The [lazy-list guide](lazy_list_doc.md) covers scroll control and
-item reuse in more detail.
+show one pane on phones and two panes in wide windows.
 
 ## Text and input
 
 ### Style a label
 
-`TextStyle` separates character styling (`SpanStyle`) from paragraph layout
-(`ParagraphStyle`):
+`SpanStyle` sets character style. `ParagraphStyle` sets paragraph layout:
 
 ```rust
 use cranpose::prelude::*;
@@ -415,15 +476,13 @@ fn PageTitle() {
 }
 ```
 
-Use `AnnotatedString` for multiple styles within a paragraph. `LinkedText`
-handles link annotations and passes activated links to your callback. Use
-`AppFonts` when your app bundles a font; include fonts covering the scripts your
-users will enter. The **Text** demo has examples of spans, links and paragraphs.
+Use `AnnotatedString` for mixed styles. `LinkedText` sends link actions to a callback.
+Use `AppFonts` for fonts in your app. Include fonts for each script your app displays.
+See the **Text** demo for examples.
 
 ### Edit text
 
-Remember a `TextFieldState` and give it to `BasicTextField`. It owns the editable
-text, selection and IME composition:
+`TextFieldState` owns text, selection and IME composition:
 
 ```rust
 use cranpose::prelude::*;
@@ -452,33 +511,30 @@ fn NameForm() {
 }
 ```
 
-Use `BasicTextFieldWithOptions` to configure keyboard and editing behavior, or
-`BasicTextFieldDecorated` to supply a surrounding label and border. Test your
-form with the target platform's keyboard, including composing text through an
-IME and moving the selection.
+`BasicTextFieldWithOptions` sets keyboard options.
+`BasicTextFieldDecorated` adds your label and border.
+Test the form with the platform keyboard, IME, selection and clipboard.
 
-### Make actions available beyond touch
+### Support touch, keyboard and screen readers
 
-Use `Button` for an ordinary action. It supplies button behavior and semantics.
-`Modifier::clickable` is useful for a custom clickable surface; its callback
-receives a pointer position, so an unused position is written `move |_| ...`.
-Use `pointer_input` for gestures that need the pointer stream.
+Use `Button` for actions. Use `clickable` for custom surfaces.
+Its callback receives a pointer position. Use `pointer_input` for custom gestures.
 
-Give custom controls a useful `content_description`, mark headings with
-`heading()`, and name screens with `pane_title(...)`. Expose selected, disabled
-and adjustable state rather than encoding it only in color. Mark decorative
-images so readers do not announce them.
+Add semantics to custom controls:
 
-Try keyboard focus and activation as well as clicking. The
-[accessibility guide](accessibility.md) shows focus, semantic actions, canvas
-children and range controls. The **Text Input** demo provides controls to exercise on each platform.
+- `content_description(...)` names a control.
+- `heading()` marks a section title.
+- `pane_title(...)` names a screen.
 
-## Animation and drawing
+Expose selected, disabled and adjustable state. Mark decorative images.
+Test focus and activation through touch, keyboard and screen readers.
+See the [accessibility guide](accessibility.md) and **Text Input** demo.
 
-### Animate a value when state changes
+## Animation and graphics
 
-Add `cranpose-animation` to use tweens and springs. Read an animation in the
-phase that needs it. An opacity change belongs in the graphics layer:
+### Animate a value
+
+Add `cranpose-animation`. This tween changes opacity over 180 milliseconds:
 
 ```rust
 use cranpose::prelude::*;
@@ -502,16 +558,13 @@ fn FadingLabel(visible: bool) {
 }
 ```
 
-The graphics-layer closure reads the changing value without rebuilding the
-surrounding layout on each frame. The label still occupies space when transparent;
-use `AnimatedVisibility` when entering or leaving content should be animated.
-Use `Crossfade` to change between two pieces of content. `spring(...)` gives a
-value spring motion instead of a fixed-duration tween.
+The layer reads `alpha` each frame. The label keeps its layout space.
+Use `AnimatedVisibility` for content entry and exit. Use `Crossfade` to switch content.
+Use `spring(...)` for spring motion.
 
 ### Draw custom content
 
-`Canvas` gives you a draw scope in local coordinates. This composable draws a
-circle in a fixed-size area:
+`Canvas` uses local coordinates:
 
 ```rust
 use cranpose::prelude::*;
@@ -528,15 +581,12 @@ fn StatusDot() {
 }
 ```
 
-Use `draw_behind` to draw behind a widget, `Image` with an `ImageBitmap` for
-pixels, and `graphics_layer` for transforms and opacity. Keep decoded images and
-static geometry outside work repeated every frame. Custom drawing needs its own
-semantics when it conveys information or exposes controls.
+Use `draw_behind` for a widget background. Use `Image` and `ImageBitmap` for pixels.
+Retain decoded images and static geometry between frames. Add semantics to custom canvas controls.
 
-### Use a component theme
+### Apply a theme
 
-The `cranpose::liquid` module provides a theme, typography, colors and glass
-controls. Put the theme around the screen:
+`cranpose::liquid` supplies colors, typography and glass controls:
 
 ```rust
 use cranpose::liquid::prelude::*;
@@ -554,18 +604,15 @@ fn ThemedScreen() {
 }
 ```
 
-Use `GlassSurface` for a material-backed container, `GlassButton` and
-`GlassIconButton` for actions, and `LiquidTabBar` for tabs. Their specs control
-appearance; the content remains normal composables. The showcase's
-[widgets](https://github.com/samoylenkodmitry/cranpose-showcase/tree/main/src/widgets)
-show these controls over a drawn star field. Try the **Liquid UI** demo to see
-the available components together.
+Use `GlassSurface` for containers, `GlassButton` for actions, and `LiquidTabBar` for tabs.
+Specs set their appearance. See the [showcase widgets](https://github.com/samoylenkodmitry/cranpose-showcase/tree/main/src/widgets)
+and **Liquid UI** demo.
 
 ## Navigation and data
 
-### Describe destinations as Rust data
+### Define destinations
 
-Add `cranpose-navigation`. A route enum keeps navigation arguments typed:
+Add `cranpose-navigation`. Use an enum for routes and their arguments:
 
 ```rust
 use cranpose::prelude::*;
@@ -611,16 +658,13 @@ fn App() {
 }
 ```
 
-`NavHost` supplies a view-model store per entry and handles back navigation.
-Use `navigate_with` and `NavOptions` when opening a destination should replace
-part of the stack. Use `NavHostWith` to choose the transition. Keep business
-operations in your data layer; a route should describe where to go.
+`NavHost` handles back navigation and owns a view-model store per entry.
+Use `navigate_with` and `NavOptions` to replace part of the stack.
+Use `NavHostWith` to set the transition.
 
-### Collect a flow in a screen
+### Collect a flow
 
-Add `coroflow` and `cranpose-coroflow` when your data layer exposes flows.
-`StateFlow` holds a current value; collecting it makes that value observable by
-composition:
+Add `coroflow` and `cranpose-coroflow`. A collector exposes the flow's value as UI state:
 
 ```rust
 use coroflow::StateFlow;
@@ -631,46 +675,63 @@ use cranpose_coroflow::{Handle, StateFlowCollect};
 fn DownloadStatus(progress: Handle<StateFlow<u32>>) {
     let percent = progress.get().collectAsStateWithLifecycle();
     Text(
-        format!("Downloaded {}%", percent.get()),
+        format!("Download: {}%", percent.get()),
         Modifier::empty(),
         TextStyle::default(),
     );
 }
 ```
 
-The parent can create the handle with `rememberHandle(|| repository.progress())`,
-where `repository.progress()` returns its flow. `Handle` provides a stable,
-copyable composable input for objects such as `StateFlow` that do not implement
-value equality.
+Create the handle in the parent with `rememberHandle(|| repository.progress())`.
+`repository.progress()` returns a `StateFlow<u32>`. `Handle` gives it stable identity as a composable input.
 
-Lifecycle-aware collection pauses while the host is inactive. Use
-`collectAsState` when collection should continue for the composition's whole
-lifetime. Keep each collector near the UI that displays its result.
+`collectAsStateWithLifecycle` pauses while the host is inactive.
+`collectAsState` collects for the composition's lifetime.
 
-### Keep business logic across screen recomposition
+### Keep state in a view model
 
-`cranpose_coroflow::viewModel(key, |scope| ...)` returns a `Handle<VM>` from the
-current view-model store. The supplied `MainScope` owns the model's coroutines.
-A screen under `NavHost` already has a store. Wrap a standalone screen in
-`ViewModelStoreOwner` when it needs one.
+Call this screen from `NavHost`. Its entry owns the model:
+
+```rust
+use coroflow::MutableStateFlow;
+use cranpose::prelude::*;
+use cranpose_coroflow::{StateFlowCollect, viewModel};
+
+#[composable]
+fn CounterRoute() {
+    let model = viewModel((), |_| MutableStateFlow::new(0_u32));
+    let count = model.get().as_state_flow().collectAsStateWithLifecycle();
+    Button(
+        Modifier::empty(),
+        ButtonSpec::default(),
+        move || {
+            let model = model.get();
+            model.set(model.value() + 1);
+        },
+        move || {
+            Text(
+                format!("Count: {}", count.get()),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+        },
+    );
+}
+```
+
+Use an item ID as the key for multiple models. The factory receives a `MainScope` for model tasks.
+Wrap a standalone screen in `ViewModelStoreOwner` to supply a store.
+Use `SavedStateHandle` for state restore and a data store for documents.
 
 The showcase's [BodyCard](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/src/screens/list_screen.rs)
-asks for a view model keyed by the body's ID. The
-[view model](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/src/presentation/body_card_view_model.rs)
-exposes saved state and a fetched fact as flows, and handles the save action.
-Scrolling the card offscreen does not lose its fetched result because the
-screen's store still owns the model.
-
-Use `rememberHandle` for a shared object that only needs a composition lifetime.
-Use `SavedStateHandle` for model values that need the store's save/restore
-support, and durable storage for user documents.
+uses one model per body ID. Its [model](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/src/presentation/body_card_view_model.rs)
+retains a fact and saved status as flows.
 
 ## Platform services
 
 ### Open a link
 
-Cranpose services hide the platform-specific call. Read a service from its
-composition local, then invoke it in an event handler:
+The launcher installs platform services. Read a service, then call it from an action:
 
 ```rust
 use cranpose::prelude::*;
@@ -702,15 +763,11 @@ fn HelpButton() {
 }
 ```
 
-The service handle is shared with a callback retained by the button. The
-platform launcher installs the backend; the screen does not need Android
-intents, UIKit calls or browser APIs. The showcase uses this in its
-[source link](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/src/widgets/source_link.rs).
+See the showcase's [source link](https://github.com/samoylenkodmitry/cranpose-showcase/blob/main/src/widgets/source_link.rs).
 
-### Let the user choose a file
+### Choose a file
 
-Use a remembered launcher with a unique, stable request key. Cranpose uses the
-key to deliver a recovered Android picker result after activity recreation:
+Give each launcher a unique request key. Android uses it to restore results after activity recreation:
 
 ```rust
 use cranpose::prelude::*;
@@ -721,8 +778,8 @@ fn ImportFile() {
     let picker = rememberOpenFileLauncher("library.import", move |result| {
         status.set(match result {
             Ok(Some(content)) => format!("Selected {}", content.metadata().name),
-            Ok(None) => String::from("No file selected"),
-            Err(error) => format!("Could not open: {error}"),
+            Ok(None) => String::from("Choose a document"),
+            Err(error) => format!("File error: {error}"),
         });
     });
     Column(Modifier::empty(), ColumnSpec::default(), move || {
@@ -740,19 +797,25 @@ fn ImportFile() {
 }
 ```
 
-The result is a `ContentHandle`, not necessarily a filesystem path. Read through
-its content API so the same code can handle a desktop file, an Android document
-provider or a browser selection. Use `rememberSaveDocumentLauncher` to choose an
-output document, or `rememberOpenFilesLauncher` for multiple selections.
+`ContentHandle` supports files, Android document providers and browser selections.
+For a small UTF-8 document:
 
-[Cranamp's import code](https://github.com/samoylenkodmitry/cranamp/blob/main/src/audio.rs)
-walks selected content, prepares audio tracks and supplies them to the media
-service. It is an example of keeping provider-specific access outside widgets.
+```rust
+use cranpose::prelude::*;
+
+async fn read_document(content: ContentHandle) -> anyhow::Result<String> {
+    let bytes = content.read_all().await?;
+    Ok(String::from_utf8(bytes)?)
+}
+```
+
+For large files, call `open()` and read chunks with `read_chunk()`.
+Use `rememberSaveDocumentLauncher` for output documents and `rememberOpenFilesLauncher` for multiple files.
+[Cranamp's import code](https://github.com/samoylenkodmitry/cranamp/blob/main/src/audio.rs) loads audio through these content APIs.
 
 ### Play media
 
-Enable `cranpose/media` for the in-process desktop/Android media backend.
-iOS and web use their platform players through the same service API:
+Enable `cranpose/media` for desktop and Android. iOS and web use platform players:
 
 ```rust
 use cranpose::prelude::*;
@@ -764,32 +827,28 @@ fn play_track(uri: String) -> Result<(), MediaError> {
 }
 ```
 
-Call this from an action with a URI your source can supply. Use `pause_media`,
-`seek_media_fraction`, and `set_media_volume` for controls. For low-latency game
-sounds, use the separate audio API and enable `audio` (`audio-desktop` for the
-desktop output backend). [Cranamp](https://github.com/samoylenkodmitry/cranamp)
-provides a complete player built around these APIs.
+Call this from a user action. Use `pause_media`, `seek_media_fraction` and `set_media_volume` for controls.
+For game sounds, enable `audio`; use `audio-desktop` on desktop.
+See [Cranamp](https://github.com/samoylenkodmitry/cranamp) for a player app.
 
-### Capture a photo and react to device events
+### Use the camera
 
-Android and iOS include their camera integration with the platform host. On
-macOS, enable `cranpose/camera-desktop` and run a signed app bundle. Declare the
-platform's camera permission or usage description in your app package. Check
-`camera_supported()` before offering capture. A supported camera can still fail
-to start, for example when permission is denied.
+Android and iOS supply camera backends. macOS needs `cranpose/camera-desktop` and a signed app bundle.
+Declare the camera permission or usage description in the app package.
+Check `camera_supported()`. Handle errors from `start_camera()`.
 
-Pair `start_camera` and `stop_camera` with the screen's lifetime as shown in
-**State and effects**. Use `rememberCameraState()` for starting, active and error
-state. Subscribe to `rememberCameraFrames()` through `cranpose_core::CollectEvents`
-for preview frames, and call `capture_camera_still().await` for a full photo.
-Keep image processing off the UI thread.
+- `DisposableEffect` starts and stops the camera with the screen.
+- `rememberCameraState()` exposes camera status.
+- `CollectEvents(rememberCameraFrames(), key, callback)` receives preview frames.
+- `capture_camera_still().await` returns a photo.
 
 [CranScan's capture screen](https://github.com/samoylenkodmitry/cranscan/blob/main/app/src/ui/capture.rs)
-combines a disposable camera session, frame events and asynchronous processing.
-Its [service layer](https://github.com/samoylenkodmitry/cranscan/blob/main/app/src/services.rs)
-keeps image decoding and document processing separate from composables.
+uses these APIs. Its [service layer](https://github.com/samoylenkodmitry/cranscan/blob/main/app/src/services.rs)
+processes photos off the UI thread.
 
-For tactile feedback, call a haptics service from the action that needs it:
+### Add haptic feedback
+
+Call haptics from a user action:
 
 ```rust
 use cranpose::prelude::*;
@@ -799,50 +858,40 @@ fn confirm_selection() {
 }
 ```
 
-The arguments are duration in milliseconds and amplitude. Use `HapticPattern`
-for a sequence. [Cranorbit's haptic director](https://github.com/samoylenkodmitry/cranorbit/blob/main/app/src/game/haptics.rs)
-selects patterns for game events and applies the user's intensity setting.
+The arguments are milliseconds and amplitude. `HapticPattern` defines a sequence.
+[Cranorbit](https://github.com/samoylenkodmitry/cranorbit/blob/main/app/src/game/haptics.rs) maps game events to patterns.
 
-### Find the service for your task
+### Find a service
 
-The facade re-exports `cranpose-services`; most app code can keep using
-`cranpose::prelude::*`.
+`cranpose::prelude::*` includes the service APIs:
 
-- **HTTP requests:** `local_http_client`, `HttpClient`, `HttpRequest`.
-- **Open URLs:** `local_uri_handler`.
-- **Choose or save documents:** `rememberOpenFileLauncher`, `rememberSaveDocumentLauncher`, `ContentHandle`.
-- **Share content:** `local_share_sheet`, `ShareContent`.
+- **HTTP:** `local_http_client`, `HttpClient`, `HttpRequest`.
+- **URLs:** `local_uri_handler`.
+- **Documents:** `rememberOpenFileLauncher`, `rememberSaveDocumentLauncher`, `ContentHandle`.
+- **Share:** `local_share_sheet`, `ShareContent`.
 - **Receive shared content:** `rememberIncomingContent`.
-- **Preferences and app directories:** `preferences`, `application_directories`.
+- **Preferences and directories:** `preferences`, `application_directories`.
 - **Notifications:** `local_notifier`.
 - **Camera:** `rememberCameraState`, `rememberCameraFrames`, `capture_camera_still`.
-- **Media and game audio:** `open_media`, `play_media`, `audio`.
+- **Media and audio:** `open_media`, `play_media`, `audio`.
 - **Haptics:** `default_haptics`, `HapticPattern`.
-- **App lifecycle:** `rememberLifecycleState`, `cranpose::LifecycleEffect`.
-- **Keep the display awake:** `cranpose::KeepScreenOn`.
+- **Lifecycle:** `rememberLifecycleState`, `cranpose::LifecycleEffect`.
+- **Display power:** `cranpose::KeepScreenOn`.
 - **Purchases:** `purchases`, `rememberStoreState`, `rememberPurchaseEvents`.
 
-Use the [services API](https://docs.rs/cranpose-services/latest/cranpose_services/)
-for signatures and the [capability guide](capability_parity.md) for target support.
-Check the relevant support result and handle errors at the action boundary. A
-shared API does not mean that every device has a camera, store or share sheet.
+Check [target support](capability_parity.md). Handle support results and operation errors.
+See the [services API](https://docs.rs/cranpose-services/latest/cranpose_services/) for signatures.
 
 ## Compose integration
 
 ### Put a Rust screen inside an Android Compose screen
 
-You can migrate one part of an app at a time. Keep your existing Activity,
-Compose navigation and Kotlin data layer. Host a Cranpose component using
-`AndroidView`, then exchange application events with Rust.
+`AndroidView` hosts `CranposeView` inside Compose. Keep the Activity, navigation and data layer in Kotlin.
+Exchange values and actions with Rust through events.
 
-There are three pieces: a Rust factory returning `NativeSession`, the generated
-UniFFI bindings, and the Android `CranposeView`. Cranpose owns the component's
-rendering and input scheduling.
-
-Start from the [native demo](../apps/native-demo/README.md) for the library and
-binding setup. In your Rust library, add `cranpose`, `cranpose-native` and
-`uniffi`, enable `renderer-wgpu` on Cranpose, and build a `cdylib`. Define a
-factory like this:
+Use the [native demo](../apps/native-demo/README.md) as the project template.
+Add `cranpose`, `cranpose-native` and `uniffi` to your Rust library.
+Enable `cranpose/renderer-wgpu`. Build a `cdylib`. Export a session factory:
 
 ```rust
 use cranpose::prelude::*;
@@ -891,23 +940,19 @@ pub fn create_counter() -> Arc<NativeSession> {
 }
 ```
 
-Create remembered state inside the content closure, where a composition is
-active. The shared cell lets the session's command handler reach that state on
-the same worker thread. `SendToHost` publishes after composition commits. The event
-names and string payloads are your application's protocol; use structured
-serialization for richer data.
+The content closure creates state during composition.
+The shared cell gives the command handler access on the same worker.
+`SendToHost` emits an event after composition commits.
 
-Generate bindings using the native demo's
+Generate the UniFFI code with the demo's
 [bindgen entry point](../apps/native-demo/src/bin/bindgen.rs) and
-[Android build script](../scripts/native_demo.sh).
-Set the generated bindings' `cdylib_name` to your Rust library's name and package
-that library for each Android ABI you support. The build script shows both the
-runtime and application bindings; your app needs both.
+[build script](../scripts/native_demo.sh).
+Set `cdylib_name` to your library name. Package the library for each target ABI.
+Include both runtime and application bindings.
 
-Include the framework's `platforms/android` library as a Gradle module, as in
-the demo's [settings](../apps/native-demo/android/settings.gradle.kts), set
-`cranposeBindingsDir` to the generated runtime Kotlin sources, and add the
-module to your app's dependencies:
+Add `platforms/android` as a Gradle module. Follow the demo's
+[settings](../apps/native-demo/android/settings.gradle.kts).
+Point `cranposeBindingsDir` at the generated runtime Kotlin sources. Add the module dependency:
 
 ```kotlin
 dependencies {
@@ -915,9 +960,7 @@ dependencies {
 }
 ```
 
-Assuming the Rust library is named `counter_ui`, UniFFI exposes its factory as
-`uniffi.counter_ui.createCounter`. This Compose screen sends button actions to
-Rust and displays the resulting count in Kotlin:
+For a library named `counter_ui`, the factory is `uniffi.counter_ui.createCounter`:
 
 ```kotlin
 import androidx.compose.foundation.layout.Column
@@ -965,33 +1008,28 @@ fun CounterScreen() {
 }
 ```
 
-Both buttons update the Rust-owned count. Kotlin observes the result through
-`onEvent`. Keeping one owner avoids a loop where each side writes the other's
-state back. For Kotlin-owned data, use the reverse arrangement: send values to
-Rust and have Rust emit actions for Kotlin to handle.
+Rust owns the count. Both buttons send actions to Rust. Kotlin displays the result.
+For Kotlin-owned state, send values to Rust and actions back to Kotlin.
 
-Create the view in `factory`; `update` refreshes its inputs and callbacks.
-`onRelease` closes the session when Compose discards the view. Temporary
-attachment changes preserve its state. This follows Android's
-[View-in-Compose lifecycle](https://developer.android.com/develop/ui/compose/migrate/interoperability-apis/views-in-compose).
+- `factory` creates the view.
+- `update` sets its callbacks and inputs.
+- `onRelease` closes the session. Temporary detachment preserves state.
 
-### Choose the boundary deliberately
+See Android's [View-in-Compose lifecycle](https://developer.android.com/develop/ui/compose/migrate/interoperability-apis/views-in-compose).
 
-Kotlin and Rust have separate compositions and state stores. Exchange values
-and actions; do not pass composable functions across the boundary. A Kotlin
-navigation destination can own the Rust component, or a Rust screen can send an
-`open-details` event for Kotlin navigation to handle.
+### Choose the host boundary
 
-The native component adapters currently forward one touch pointer and do not
-bridge Rust text input or accessibility. Keep editable or reader-accessible
-controls in the native host when using this embedding path. Standalone Cranpose
-applications use the regular platform input and accessibility bridges.
+Each language owns its composition. Exchange data and events across the boundary.
+For example, Rust sends `open-details`; Kotlin changes the navigation destination.
 
-### Host the same component in UIKit
+Embedded touch support covers one pointer.
+Use native host controls for text input and accessibility in embedded components.
+Standalone Cranpose apps use the platform input and accessibility bridges.
 
-Generate Swift bindings for the same Rust library and import the runtime host
-module. The iOS [native demo](../apps/native-demo/ios/App.swift) shows module
-linking and view-controller ownership. Inside a view controller:
+### Host the component in UIKit
+
+Generate Swift bindings for the same library. Follow the [iOS native demo](../apps/native-demo/ios/App.swift).
+Add these imports at file scope. Create the view inside your view controller:
 
 ```swift
 import UIKit
@@ -1016,21 +1054,18 @@ NSLayoutConstraint.activate([
 counter.sendEvent("increment")
 ```
 
-Keep the component in a controller property and call `close()` when permanently
-discarding it. A SwiftUI app can wrap this UIKit view in `UIViewRepresentable`
-and close it from `dismantleUIView`.
+Keep the component in a controller property. Call `close()` when the controller discards it.
+For SwiftUI, use `UIViewRepresentable` and call `close()` from `dismantleUIView`.
 
 ## Native views
 
 **Place a platform control in your Cranpose layout.**
 
-Use a native child when you need a platform SDK's view, such as a browser or map.
-Cranpose allocates its layout bounds; the native view keeps its own rendering
-and input.
+Cranpose sets the child's bounds. The native view draws itself and handles input.
 
 ### Show a website
 
-For a standalone app, enable the `cranpose/webview` feature and use `WebView`:
+Enable `cranpose/webview` in a standalone app:
 
 ```rust
 use cranpose::prelude::*;
@@ -1054,8 +1089,8 @@ fn HelpPage() {
 }
 ```
 
-When the screen runs inside `NativeSession`, register `WebViewFactory` with its
-native host instead. Android uses an Android WebView; iOS uses WKWebView:
+For a `NativeSession`, register `WebViewFactory` with the host.
+Android uses WebView. iOS uses WKWebView:
 
 ```kotlin
 val component = CranposeView(
@@ -1065,15 +1100,13 @@ val component = CranposeView(
 )
 ```
 
-`createHelpComponent` is your generated factory, built like `createCounter` in
-the preceding chapter with `HelpPage` as its content. Import `CranposeView` and
-`WebViewFactory` from `dev.cranpose`. Add Android's `INTERNET` permission. The
-native demo includes both Android and iOS factory registration.
+Use the `createCounter` factory pattern with `HelpPage` as its content.
+Import `CranposeView` and `WebViewFactory` from `dev.cranpose`.
+Add Android's `INTERNET` permission.
 
-### Wrap your own Android control
+### Wrap an Android control
 
-In an embedded Rust screen, call `cranpose_native::NativeView` with a factory
-name, configuration and callback:
+Call `NativeView` inside a `NativeSession`. Pass a factory name, configuration and callback:
 
 ```rust
 use cranpose::prelude::*;
@@ -1095,8 +1128,7 @@ fn NativeVolume() {
 }
 ```
 
-On Android, register a factory named `volume`. This adapter uses a real `SeekBar`
-and emits changes made by the user:
+Register `volume` as a native `SeekBar` factory:
 
 ```kotlin
 import android.content.Context
@@ -1128,25 +1160,24 @@ class VolumeFactory : NativeViewFactory {
 }
 ```
 
-Pass `mapOf("volume" to VolumeFactory())` as the third argument to `CranposeView`.
-Use a factory returning `NativeContent::new(NativeVolume)` for this screen.
-Configuration changes call `update` on the existing child. Removing the
-composable calls `dispose`; changing its factory name replaces the child.
-The callback reaches only the slot that created it.
+Pass `mapOf("volume" to VolumeFactory())` to `CranposeView`.
+Use `NativeContent::new(NativeVolume)` in the session factory.
 
-The iOS [NativeViewFactory protocol](../platforms/ios/Sources/Cranpose/NativeViewFactory.swift)
-provides the same create, update, visibility and disposal contract. Implement it
-with a `UISlider` and register it under the same `volume` name to reuse the Rust
-screen. For a custom Rust host, `cranpose::native_view::NativeViewHost` exposes
-the lower-level layout and event contract.
+- Configuration changes call `update` on the same child.
+- Slot removal calls `dispose`.
+- A factory-name change replaces the child.
+- Events reach the child's own slot.
 
-### Lay out native children within their limits
+On iOS, implement [NativeViewFactory](../platforms/ios/Sources/Cranpose/NativeViewFactory.swift)
+with a `UISlider`. Register it as `volume` to reuse this Rust screen.
+Custom Rust hosts use `cranpose::native_view::NativeViewHost` for layout and events.
 
-Give every native slot an explicit size. Native children sit above Cranpose's
-drawing and are clipped to the host container. Keep them axis-aligned; arbitrary
-transforms, rounded ancestor clips and Cranpose effects over a native child are
-not supported. Hide the child while an overlapping Cranpose popup is open.
+### Size and position native children
 
-The [native demo](../apps/native-demo/README.md) is the runnable example for both
-directions: host controls update Rust state, and Rust positions a native website
-view. Use it as the starting project when an existing app owns the window.
+Give each slot an explicit size. Keep its bounds axis-aligned.
+Native children sit above Cranpose content. The host clips them to its bounds.
+Apply transforms and effects within the native child.
+Hide the child while a Cranpose popup overlaps it.
+
+The [native demo](../apps/native-demo/README.md) shows both directions:
+host controls update Rust state; Rust positions a native website view.
