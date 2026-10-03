@@ -1,5 +1,8 @@
 use std::cell::{Cell, RefCell};
 
+static PROBE_SKIP_DOWNSAMPLE: crate::debug_toggles::DebugToggle =
+    crate::debug_toggles::DebugToggle::new("CRANPOSE_PROBE_SKIP_DOWNSAMPLE");
+
 use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block};
 use cranpose_ui_graphics::{
@@ -2056,7 +2059,7 @@ impl EffectRenderer {
             .map(|region| blur_block(region.source, region.scratch))
             .collect();
         let downsample = self.downsample_draws(atlas, regions, &blocks, substrates, riding_means);
-        if !downsample.is_empty() {
+        if !downsample.is_empty() && !PROBE_SKIP_DOWNSAMPLE.flag() {
             self.encode_blur_pass(
                 recorder,
                 device,
