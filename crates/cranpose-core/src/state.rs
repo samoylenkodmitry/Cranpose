@@ -730,16 +730,10 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         readable_record_for(&head, snapshot_id, invalid)
     }
 
-    fn is_equivalent_to_readable(
-        &self,
-        snapshot_id: SnapshotId,
-        invalid: &SnapshotIdSet,
-        new_value: &T,
-    ) -> bool {
-        self.readable_for(snapshot_id, invalid)
-            .is_some_and(|record| {
-                record.with_value(|current: &T| self.policy.equivalent(current, new_value))
-            })
+    fn is_equivalent_to(&self, readable: Option<Rc<StateRecord>>, new_value: &T) -> bool {
+        readable.is_some_and(|record| {
+            record.with_value(|current: &T| self.policy.equivalent(current, new_value))
+        })
     }
 
     fn writable_record(&self, snapshot_id: SnapshotId, invalid: &SnapshotIdSet) -> Rc<StateRecord> {
@@ -945,8 +939,9 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 
         match &snapshot {
             AnySnapshot::Global(global) => {
-                let invalid = snapshot.invalid();
-                if self.is_equivalent_to_readable(snapshot_id, &invalid, &new_value) {
+                let readable =
+                    snapshot.with_invalid(|invalid| self.readable_for(snapshot_id, invalid));
+                if self.is_equivalent_to(readable, &new_value) {
                     return false;
                 }
 
@@ -997,7 +992,7 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             | AnySnapshot::NestedMutable(_)
             | AnySnapshot::TransparentMutable(_) => {
                 let invalid = snapshot.invalid();
-                if self.is_equivalent_to_readable(snapshot_id, &invalid, &new_value) {
+                if self.is_equivalent_to(self.readable_for(snapshot_id, &invalid), &new_value) {
                     return false;
                 }
 
