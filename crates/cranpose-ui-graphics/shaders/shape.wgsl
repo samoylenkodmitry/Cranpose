@@ -1026,14 +1026,14 @@ const SHAPE_KIND_LINE: u32 = 3u;
 // the batch cannot take out of the program; the record data stays the same,
 // so the general program and every specialised one shade one record alike.
 override SHAPE_KIND_FIXED: i32 = -1;
-// The record shapes a batch of the fixed kind can hold, so the vertex stage
-// folds every other shape's geometry out as the fragment stage folds its
-// coverage: fills hold no strokes, lines or arcs; strokes hold no lines or
-// arcs, though a stroked circle may be a band. A specialised pipeline thus
-// compiles no line or band geometry its batch cannot draw.
-override DRAWS_STROKES: bool = SHAPE_KIND_FIXED < 0 || SHAPE_KIND_FIXED == i32(SHAPE_KIND_STROKE);
-override DRAWS_ARCS: bool = SHAPE_KIND_FIXED < 0 || SHAPE_KIND_FIXED == i32(SHAPE_KIND_ARC);
-override DRAWS_LINES: bool = SHAPE_KIND_FIXED < 0 || SHAPE_KIND_FIXED == i32(SHAPE_KIND_LINE);
+// One bit per shape kind (`1 << SHAPE_KIND_*`) the batch's records have,
+// so both stages fold every other kind's path out: a mixed batch of fills
+// and arcs compiles no line or stroke geometry and no line or stroke
+// coverage. A stroked circle may be a band, so strokes keep the bands.
+override SHAPE_KINDS: u32 = 15u;
+override DRAWS_STROKES: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_STROKE)) != 0u;
+override DRAWS_ARCS: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_ARC)) != 0u;
+override DRAWS_LINES: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_LINE)) != 0u;
 override DRAWS_BANDS: bool = SHAPE_BANDS && (DRAWS_ARCS || DRAWS_STROKES);
 override SHAPE_SOLID: bool = false;
 // Whether a fill's interior is shaded apart, off for a solid batch and for
@@ -1434,9 +1434,9 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
     let has_radii = (input.radii[0] > 0.0 || input.radii[1] > 0.0 ||
                      input.radii[2] > 0.0 || input.radii[3] > 0.0);
     var alpha: f32;
-    if (shape_kind == SHAPE_KIND_LINE) {
+    if (DRAWS_LINES && shape_kind == SHAPE_KIND_LINE) {
         alpha = line_coverage(rect_pos, input.arc_params, input.stroke_params, stroke_cap);
-    } else if (shape_kind == SHAPE_KIND_ARC) {
+    } else if (DRAWS_ARCS && shape_kind == SHAPE_KIND_ARC) {
         // Arcs have no corner radii, so `radii` carries the precomputed
         // (sin, cos) of the mid angle (xy) and of the half sweep (zw).
         let dist = sdf_arc_band(
@@ -1449,7 +1449,7 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
             stroke_cap,
         );
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
-    } else if (shape_kind == SHAPE_KIND_STROKE) {
+    } else if (DRAWS_STROKES && shape_kind == SHAPE_KIND_STROKE) {
         let dist = sdf_stroked_rounded_rect(
             local_pos,
             half_size,
