@@ -1118,13 +1118,12 @@ pub fn pipelines_created_off_frame() -> u64 {
     PIPELINES_CREATED_OFF_FRAME.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Which tier's tables a shape pipeline reads: a stored run under the
-/// placement uniform, or the frame arena where each record names its
-/// placement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub(crate) enum RunTier {
-    Store,
-    Arena,
+    Store = 0,
+    Arena = 1,
+    Either = 2,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1376,9 +1375,6 @@ impl ShapeTurns {
     }
 }
 
-/// A shape pipeline: its blend, tier and variant, the records it draws
-/// turned, and its depth use. Falling back to the general variant keeps the
-/// blend, tier, turns and depth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapePipelineKey {
     pub(crate) blend_mode: BlendMode,
@@ -1437,13 +1433,7 @@ impl ShapePipelineKey {
     pub(crate) fn to_bits(self) -> u64 {
         let mut bits = KeyWriter::default();
         bits.put(self.blend_mode as u64, 5);
-        bits.put(
-            match self.tier {
-                RunTier::Store => 0,
-                RunTier::Arena => 1,
-            },
-            1,
-        );
+        bits.put(self.tier as u64, 2);
         let variant = self.variant;
         bits.put_byte(variant.kind);
         bits.put_byte(variant.brush);
@@ -1484,9 +1474,11 @@ impl ShapePipelineKey {
     pub(crate) fn from_bits(packed: u64) -> Option<Self> {
         let mut bits = KeyReader(packed);
         let blend_mode = *BlendMode::ALL.get(usize::try_from(bits.take(5)).ok()?)?;
-        let tier = match bits.take(1) {
+        let tier = match bits.take(2) {
             0 => RunTier::Store,
-            _ => RunTier::Arena,
+            1 => RunTier::Arena,
+            2 => RunTier::Either,
+            _ => return None,
         };
         let kind = bits.take_byte();
         let brush = bits.take_byte();
@@ -1562,6 +1554,7 @@ impl ShapePipelineKey {
 
     pub(crate) fn general(self) -> Self {
         Self {
+            tier: RunTier::Either,
             variant: self.variant.general(),
             ..self
         }
@@ -1609,7 +1602,7 @@ pub(crate) fn create_shape_pipeline(
         ),
         ("SHAPE_DITHER", f64::from(u8::from(variant.dither))),
         ("SHAPE_TURNS", turns.constant()),
-        ("TIER_ARENA", f64::from(u8::from(tier == RunTier::Arena))),
+        ("SHAPE_TIER", f64::from(tier as u8)),
         ("SHAPE_BANDS", f64::from(u8::from(mode.storage))),
         ("SHAPE_FLAT", f64::from(u8::from(variant.ablation.material))),
         ("SHAPE_DISCARD", f64::from(u8::from(variant.ablation.fill))),
@@ -2052,14 +2045,14 @@ struct Uniforms {
 }
 
 impl Uniforms {
-    fn of(params: ViewportUniformParams, placement: PlacementData) -> Self {
+    fn of(params: ViewportUniformParams, placement: PlacementData, tier: RunTier) -> Self {
         let (transform, translation, inverse) = params.transform.uniform_parts();
         Self {
             viewport: [params.width as f32, params.height as f32],
             viewport_offset: params.offset,
             transform,
             translation,
-            reserved: [params.depth_base, 0.0],
+            reserved: [params.depth_base, f32::from(tier as u8)],
             inverse,
             origin: params.origin,
             origin_reserved: [0.0; 2],
@@ -3740,7 +3733,6 @@ impl GpuRenderer {
             );
         }
         if result.is_ok() {
-            self.shape_pipelines.finish_frame();
             returns.outcome = PresentOutcome::Presented;
         }
         result
@@ -4076,7 +4068,7 @@ impl GpuRenderer {
     }
     /// Claims this frame's next viewport uniform slot for `params`.
     pub(crate) fn claim_uniform_slot(&mut self, params: ViewportUniformParams) -> usize {
-        let uniforms = Uniforms::of(params, PlacementData::zeroed());
+        let uniforms = Uniforms::of(params, PlacementData::zeroed(), RunTier::Arena);
         self.viewport_uniforms
             .claim(&self.device, &self.uniform_bind_group_layout, &uniforms)
     }
@@ -4547,6 +4539,7 @@ impl GpuRenderer {
         let uniforms = Uniforms::of(
             viewport,
             PlacementData::of(&run.placement, root_scale, viewport.transform),
+            RunTier::Store,
         );
         let uniform_slot =
             self.viewport_uniforms

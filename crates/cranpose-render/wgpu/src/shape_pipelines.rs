@@ -49,9 +49,8 @@ pub(crate) struct ShapePipelines {
     /// Whether a draw takes the general pipeline while its specialized one
     /// builds on the background compiler.
     asynchronous: bool,
-    first_frame: bool,
     #[cfg(not(target_arch = "wasm32"))]
-    created: web_time::Instant,
+    first_use: Option<web_time::Instant>,
 }
 
 impl ShapePipelines {
@@ -76,9 +75,8 @@ impl ShapePipelines {
         Self {
             slots,
             asynchronous,
-            first_frame: true,
             #[cfg(not(target_arch = "wasm32"))]
-            created: web_time::Instant::now(),
+            first_use: None,
         }
     }
 
@@ -86,27 +84,32 @@ impl ShapePipelines {
         self.slots.settle_demanded();
     }
 
-    pub(crate) fn finish_frame(&mut self) {
-        self.first_frame = false;
-    }
-
     pub(crate) fn ensure(&mut self, key: ShapePipelineKey) {
         let need = self.slots.need(key);
         #[cfg(not(target_arch = "wasm32"))]
         if need.first
-            && (self.first_frame
-                || self.created.elapsed() <= crate::pipeline_disk_cache::FIRST_SCREEN_SPAN)
+            && self
+                .first_use
+                .get_or_insert_with(web_time::Instant::now)
+                .elapsed()
+                <= crate::pipeline_disk_cache::FIRST_SCREEN_SPAN
         {
             crate::pipeline_disk_cache::note_first_screen_pipeline(key.to_bits());
         }
         if need.ready {
             return;
         }
-        if self.asynchronous && !self.first_frame && !key.is_general() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let compile_started = web_time::Instant::now();
+        if self.asynchronous && key != key.general() {
             self.slots.build(key.general());
             self.slots.request(key);
         } else {
             self.slots.build(key);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(first_use) = &mut self.first_use {
+            *first_use += compile_started.elapsed();
         }
     }
 

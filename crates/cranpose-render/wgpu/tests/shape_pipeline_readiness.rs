@@ -12,6 +12,7 @@ use cranpose_render_common::{
     },
     style_shared::DrawPlacement,
 };
+use cranpose_render_wgpu::pipelines_created;
 use cranpose_ui_graphics::{BlendMode, Brush, Color, DrawScope, DrawScopeDefault, Rect, Size};
 use support::SIZE;
 
@@ -71,35 +72,21 @@ fn capture(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Vec<u
 }
 
 #[test]
-fn the_first_scene_is_specialized_before_gameplay_starts() {
+fn changing_shape_storage_does_not_compile_another_fallback_on_the_frame_thread() {
     let _lock = support::gpu_test_lock();
-    for stored in [false, true] {
-        let mut renderer = support::LockedRenderer::compiling_in_background_beside_locked()
-            .expect("Vulkan renderer");
-        let scene = graph(stored, 0.0);
-        let first = capture(&mut renderer, &scene);
-        let stats = renderer.last_frame_stats().expect("first frame statistics");
-        assert!(support::distinct_colors(&first) > 8);
+    let mut renderer =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("Vulkan renderer");
+    let first = capture(&mut renderer, &graph(false, 0.0));
+    assert!(support::distinct_colors(&first) > 8);
+    let prepared = pipelines_created();
+    for stored in [true, false, true] {
+        let current = capture(&mut renderer, &graph(stored, 0.0));
+        assert_eq!(first, current, "storage changed the rendered picture");
         assert_eq!(
-            stats.shape_pipeline_fallback_draws, 0,
-            "the first presentation must not leave its shape shaders compiling during gameplay"
+            pipelines_created(),
+            prepared,
+            "changing storage must reuse the prepared fallback while specializations build"
         );
-        assert!(stats.shape_specialized_draws > 0);
-        for phase in [3.75, 7.5, 0.0] {
-            let animated = capture(&mut renderer, &graph(stored, phase));
-            assert_eq!(
-                renderer
-                    .last_frame_stats()
-                    .expect("animated frame statistics")
-                    .shape_pipeline_fallback_draws,
-                0
-            );
-            if phase == 0.0 {
-                assert_eq!(first, animated);
-            } else {
-                assert_ne!(first, animated);
-            }
-        }
     }
 }
 
@@ -108,7 +95,6 @@ fn check_transition(limits: wgpu::Limits) {
         let mut renderer =
             support::headless_renderer_configured(limits.clone(), wgpu::Backends::VULKAN)
                 .expect("Vulkan renderer");
-        capture(&mut renderer, &RenderGraph::new(LayerNode::default()));
         let scene = graph(stored, 0.0);
         let first = capture(&mut renderer, &scene);
         let first_stats = renderer.last_frame_stats().expect("first frame statistics");

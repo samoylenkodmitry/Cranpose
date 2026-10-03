@@ -296,10 +296,15 @@ fn the_viewport_uniform_lays_out_as_the_shaders_declare_it() {
     let identity = Uniforms::of(
         viewport(SegmentTransform::IDENTITY),
         PlacementData::zeroed(),
+        super::RunTier::Arena,
     );
     assert_eq!(identity.transform, [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(identity.translation, [0.0, 0.0]);
-    let turned = Uniforms::of(viewport(quarter_turn()), PlacementData::zeroed());
+    let turned = Uniforms::of(
+        viewport(quarter_turn()),
+        PlacementData::zeroed(),
+        super::RunTier::Arena,
+    );
     assert_eq!(turned.transform, [0.0, -1.0, 1.0, 0.0]);
     assert_eq!(turned.translation, [100.0, 0.0]);
     assert_eq!(turned.inverse, [0.0, 1.0, -1.0, 0.0]);

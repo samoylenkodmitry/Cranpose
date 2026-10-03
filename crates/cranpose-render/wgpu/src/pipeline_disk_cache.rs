@@ -206,8 +206,6 @@ pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
     }
 }
 
-/// How long after its creation a renderer names the shape pipelines it
-/// draws with, for the next launch to build ahead of its first frame.
 pub(crate) const FIRST_SCREEN_SPAN: Duration = Duration::from_secs(2);
 
 /// The shape pipelines, by their keys' bits, that this process's renderers

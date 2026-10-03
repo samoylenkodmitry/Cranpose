@@ -223,13 +223,14 @@ fn wait_for_warm_ups() {
 }
 
 #[test]
-fn a_relaunch_builds_its_first_screens_shapes_before_its_first_frame() {
+fn a_relaunch_prepares_the_first_screen_even_when_startup_was_slow() {
     let _lock = support::gpu_test_lock();
     let files = CacheFiles::new();
     let cache = files.select("first-screen.bin");
 
     let mut first_launch =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    std::thread::sleep(Duration::from_millis(2100));
     let first_launch_builds = first_frame_builds(&mut first_launch);
     drop(first_launch);
     wait_for_cache(&cache);

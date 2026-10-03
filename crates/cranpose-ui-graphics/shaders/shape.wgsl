@@ -321,7 +321,10 @@ const INFINITE_GRADIENT_POINT: f32 = 1.0e30;
 // its retained buffers under the placement in `uniforms`; the arena tier
 // draws many small recordings copied into one buffer, each record naming
 // its placement.
-override TIER_ARENA: bool = false;
+const TIER_STORE: u32 = 0u;
+const TIER_ARENA: u32 = 1u;
+const TIER_EITHER: u32 = 2u;
+override SHAPE_TIER: u32 = TIER_STORE;
 // Whether banded arcs draw as strips on this tier; false on the uniform
 // floor, which draws every record as its quad.
 override SHAPE_BANDS: bool = true;
@@ -350,7 +353,8 @@ const SHAPE_FLAG_TURNED: u32 = 64u;
 // the top of `brush.w`, above the tile mode.
 const BRUSH_TURNED: u32 = 0x80000000u;
 fn record_placement(record: ShapeRecord) -> Placement {
-    if (TIER_ARENA) {
+    if (SHAPE_TIER == TIER_ARENA
+        || (SHAPE_TIER == TIER_EITHER && uniforms.reserved.y == f32(TIER_ARENA))) {
         return placements[record.placement];
     }
     return uniforms.placement;

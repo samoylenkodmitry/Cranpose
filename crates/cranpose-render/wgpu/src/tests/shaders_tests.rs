@@ -362,7 +362,7 @@ fn shape_shader_declares_the_record_layout_the_recorder_writes() {
         "fn vs_record_gradient_fill(",
         "fn fs_gradient_fill(",
         "override BRUSH_KIND_FIXED: i32",
-        "override TIER_ARENA: bool",
+        "override SHAPE_TIER: u32",
     ] {
         assert!(
             super::SHADER.contains(needle),
