@@ -84,7 +84,7 @@ enum ApplyOperation {
 /// are stored in thread-local storage and never shared across threads. The `Arc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct MutableSnapshot {
-    state: SnapshotState,
+    pub(super) state: SnapshotState,
     base_parent_id: SnapshotId,
     nested_count: Cell<usize>,
     applied: Cell<bool>,

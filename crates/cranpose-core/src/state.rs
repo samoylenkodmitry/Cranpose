@@ -291,15 +291,14 @@ pub(crate) fn readable_record_for(
     let mut cursor = Some(Rc::clone(head));
 
     while let Some(record) = cursor {
-        if record_is_valid_for(&record, snapshot_id, invalid) {
-            let replace = best
-                .as_ref()
-                .is_none_or(|current| current.snapshot_id() < record.snapshot_id());
-            if replace {
-                best = Some(Rc::clone(&record));
-            }
-        }
         cursor = record.next();
+        if record_is_valid_for(&record, snapshot_id, invalid)
+            && best
+                .as_ref()
+                .is_none_or(|current| current.snapshot_id() < record.snapshot_id())
+        {
+            best = Some(record);
+        }
     }
 
     best
@@ -688,14 +687,12 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 
     fn readable_record_for_active_snapshot(&self) -> Result<Rc<StateRecord>, StateReadFailure> {
         let snapshot = active_snapshot();
-        if let Some(state) = self.upgrade_self() {
-            snapshot.record_read(&*state);
-        }
+        snapshot.record_read(self);
 
         let snapshot_id = snapshot.snapshot_id();
-        let invalid = snapshot.invalid();
-
-        if let Some(record) = self.readable_for(snapshot_id, &invalid) {
+        if let Some(record) =
+            snapshot.with_invalid(|invalid| self.readable_for(snapshot_id, invalid))
+        {
             return Ok(record);
         }
 
@@ -1364,13 +1361,24 @@ trait StateArenaHandle<T: Clone + 'static> {
     }
 
     fn with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
-        self.runtime_handle()
-            .with_state_arena(|arena| arena.with_typed::<T, R>(self.state_id(), f))
+        runtime::with_state_arena_by_id(self.runtime_id(), |arena| {
+            arena.with_typed::<T, R>(self.state_id(), f)
+        })
+        .unwrap_or_else(|| panic!("runtime {:?} dropped", self.runtime_id()))
     }
 
     fn try_with_inner<R>(&self, f: impl FnOnce(&MutableStateInner<T>) -> R) -> Option<R> {
-        self.runtime_handle_opt()?
-            .try_with_state_arena(|arena| arena.with_typed_opt::<T, R>(self.state_id(), f))?
+        runtime::with_state_arena_by_id(self.runtime_id(), |arena| {
+            arena.with_typed_opt::<T, R>(self.state_id(), f)
+        })?
+    }
+
+    fn read_subscribed<R>(&self, read: impl FnOnce(&MutableStateInner<T>) -> R) -> R {
+        self.with_inner(|inner| {
+            let result = read(inner);
+            register_current_state_scope(inner);
+            result
+        })
     }
 }
 
@@ -1443,10 +1451,6 @@ impl<T: Clone + 'static> StateArenaHandle<T> for State<T> {
 }
 
 impl<T: Clone + 'static> State<T> {
-    fn subscribe_current_scope(&self) {
-        self.with_inner(register_current_state_scope::<T>);
-    }
-
     pub fn is_alive(&self) -> bool {
         self.try_with_inner(|_| ()).is_some()
     }
@@ -1463,8 +1467,7 @@ impl<T: Clone + 'static> State<T> {
     /// scope. `f` may write this state; see [`Self::read`] for a read that
     /// borrows instead of copying.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        let value = self.with_inner(|inner| inner.state.get());
-        self.subscribe_current_scope();
+        let value = self.read_subscribed(|inner| inner.state.get());
         f(&value)
     }
 
@@ -1473,15 +1476,11 @@ impl<T: Clone + 'static> State<T> {
     /// beyond `f`; in return `f` borrows the stored value and must not write
     /// this state.
     pub fn read<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        let result = self.with_inner(|inner| inner.state.with_value(f));
-        self.subscribe_current_scope();
-        result
+        self.read_subscribed(|inner| inner.state.with_value(f))
     }
 
     pub fn value(&self) -> T {
-        let value = self.with_inner(|inner| inner.state.get());
-        self.subscribe_current_scope();
-        value
+        self.read_subscribed(|inner| inner.state.get())
     }
 
     pub fn get(&self) -> T {
@@ -1599,8 +1598,7 @@ impl<T: Clone + 'static> MutableState<T> {
     /// scope. `f` may write this state; see [`Self::read`] for a read that
     /// borrows instead of copying.
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        let value = self.with_inner(|inner| inner.state.get());
-        self.subscribe_current_scope();
+        let value = self.read_subscribed(|inner| inner.state.get());
         f(&value)
     }
 
@@ -1609,9 +1607,7 @@ impl<T: Clone + 'static> MutableState<T> {
     /// beyond `f`; in return `f` borrows the stored value and must not write
     /// this state.
     pub fn read<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        let result = self.with_inner(|inner| inner.state.with_value(f));
-        self.subscribe_current_scope();
-        result
+        self.read_subscribed(|inner| inner.state.with_value(f))
     }
 
     pub fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
@@ -1667,9 +1663,7 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     pub fn value(&self) -> T {
-        let value = self.with_inner(|inner| inner.state.get());
-        self.subscribe_current_scope();
-        value
+        self.read_subscribed(|inner| inner.state.get())
     }
 
     pub fn get(&self) -> T {

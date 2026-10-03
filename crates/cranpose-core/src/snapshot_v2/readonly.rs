@@ -10,7 +10,7 @@ use super::*;
 /// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct ReadonlySnapshot {
-    state: SnapshotState,
+    pub(super) state: SnapshotState,
 }
 
 impl ReadonlySnapshot {
