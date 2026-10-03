@@ -579,11 +579,20 @@ fn segment_has_occluders(segment: &PassSegment<'_>) -> bool {
                     .then(|| segment.first_run_window.clone())
                     .flatten()
                     .unwrap_or(0..u32::MAX);
+                let run = &segment.scene.runs[index];
+                let shapes = &run.tables().shapes;
                 let mut first = 0;
-                segment.scene.runs[index].segment_records().any(|records| {
+                run.segment_records().any(|records| {
                     let start = first;
                     first += records.count;
-                    records.occluders && start < window.end && window.start < first
+                    let mut drawn = start.max(window.start)..first.min(window.end);
+                    if !records.occluders || drawn.is_empty() {
+                        return false;
+                    }
+                    drawn == (start..first)
+                        || drawn.any(|ordinal| {
+                            shapes.occludes((records.start + ordinal - start) as usize)
+                        })
                 })
             }
             _ => false,

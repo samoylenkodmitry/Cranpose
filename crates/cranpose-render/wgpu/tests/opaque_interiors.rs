@@ -475,37 +475,28 @@ fn turned_cells_among_flat_ones_add_no_draws_and_leave_the_flat_pixels_alone() {
     }
 }
 
-#[test]
-fn a_background_the_pass_clears_to_leaves_the_pass_without_a_depth_buffer() {
-    let graph = || {
-        let size = FRAME as f32;
-        let mut scope = DrawScopeDefault::new(Size::new(size, size));
-        scope.draw_rect(Brush::solid(Color::from_rgb_u8(20, 24, 40)));
-        scope.draw_circle(
-            Brush::radial_gradient_tiled(
-                vec![Color(1.0, 0.8, 0.3, 0.9), Color(0.2, 0.4, 1.0, 0.0)],
-                Point::new(60.0, 60.0),
-                60.0,
-                TileMode::Clamp,
-            ),
-            Point::new(size * 0.5, size * 0.5),
-            60.0,
-        );
-        RenderGraph::new(shared_test_support::layer_node(
-            rect(0.0, 0.0, size, size),
-            ProjectiveTransform::identity(),
-            GraphicsLayer::default(),
-            vec![RenderNode::DrawRun(DrawRunNode::for_command(
-                PrimitivePhase::BeforeChildren,
-                Some(DrawCommandId {
-                    node_id: 7_500,
-                    command_index: 0,
-                    placement: DrawPlacement::Behind,
-                }),
-                scope.into_primitives(),
-            ))],
-        ))
-    };
+fn cleared_page(draw: impl Fn(&mut DrawScopeDefault, f32)) -> RenderGraph {
+    let size = FRAME as f32;
+    let mut scope = DrawScopeDefault::new(Size::new(size, size));
+    scope.draw_rect(Brush::solid(Color::from_rgb_u8(20, 24, 40)));
+    draw(&mut scope, size);
+    RenderGraph::new(shared_test_support::layer_node(
+        rect(0.0, 0.0, size, size),
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![RenderNode::DrawRun(DrawRunNode::for_command(
+            PrimitivePhase::BeforeChildren,
+            Some(DrawCommandId {
+                node_id: 7_500,
+                command_index: 0,
+                placement: DrawPlacement::Behind,
+            }),
+            scope.into_primitives(),
+        ))],
+    ))
+}
+
+fn assert_cleared_without_depth(graph: impl Fn() -> RenderGraph) {
     let Some((with, without)) = capture_both_ways(graph) else {
         return;
     };
@@ -513,5 +504,57 @@ fn a_background_the_pass_clears_to_leaves_the_pass_without_a_depth_buffer() {
         with.depth_passes, 0,
         "the background is the pass's clear, so nothing is left to lay down"
     );
+    assert_same_pixels(&with.pixels, &without.pixels);
+}
+
+#[test]
+fn a_background_the_pass_clears_to_leaves_the_pass_without_a_depth_buffer() {
+    assert_cleared_without_depth(|| {
+        cleared_page(|scope, size| {
+            scope.draw_circle(
+                Brush::radial_gradient_tiled(
+                    vec![Color(1.0, 0.8, 0.3, 0.9), Color(0.2, 0.4, 1.0, 0.0)],
+                    Point::new(60.0, 60.0),
+                    60.0,
+                    TileMode::Clamp,
+                ),
+                Point::new(size * 0.5, size * 0.5),
+                60.0,
+            );
+        })
+    });
+}
+
+#[test]
+fn a_cleared_background_sharing_its_segment_with_translucent_fills_takes_no_depth_buffer() {
+    assert_cleared_without_depth(|| {
+        cleared_page(|scope, size| {
+            scope.draw_rect_at(
+                rect(size * 0.25, size * 0.25, size * 0.5, size * 0.5),
+                Brush::solid(Color(0.9, 0.5, 0.2, 0.6)),
+            );
+        })
+    });
+}
+
+#[test]
+fn an_opaque_card_after_a_cleared_background_in_its_segment_still_lays_its_interior_down() {
+    let Some((with, without)) = capture_both_ways(|| {
+        cleared_page(|scope, size| {
+            scope.draw_rect_at(
+                rect(size * 0.1, size * 0.1, size * 0.3, size * 0.3),
+                Brush::solid(Color(0.9, 0.5, 0.2, 0.6)),
+            );
+            scope.draw_round_rect_at(
+                rect(size * 0.2, size * 0.2, size * 0.6, size * 0.6),
+                Brush::solid(Color::from_rgb_u8(200, 210, 230)),
+                CornerRadii::uniform(12.0),
+            );
+        })
+    }) else {
+        return;
+    };
+    assert_eq!(with.depth_passes, 1, "the card occludes what it covers");
+    assert!(with.interior_draws > 0);
     assert_same_pixels(&with.pixels, &without.pixels);
 }
