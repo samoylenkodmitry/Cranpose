@@ -428,7 +428,7 @@ fn test_overwrite_unused_records_basic_cleanup() {
 
     let _pin = crate::snapshot_pinning::track_pinning(1000, &SnapshotIdSet::EMPTY);
 
-    let result = overwrite_unused_records_locked::<i32>(&test_state);
+    let result = overwrite_unused_records_locked(&test_state);
 
     assert_eq!(rec3.snapshot_id(), 300);
     assert_eq!(rec2.snapshot_id(), INVALID_SNAPSHOT_ID);
@@ -478,7 +478,7 @@ fn test_overwrite_unused_records_clears_values() {
     });
 
     let _pin = crate::snapshot_pinning::track_pinning(100, &SnapshotIdSet::EMPTY);
-    overwrite_unused_records_locked::<i32>(&state);
+    overwrite_unused_records_locked(&state);
 
     assert_eq!(old_rec1.snapshot_id(), INVALID_SNAPSHOT_ID);
 }
@@ -496,7 +496,7 @@ fn test_overwrite_unused_records_mixed_old_and_new() {
 
     let _pin = crate::snapshot_pinning::track_pinning(40, &SnapshotIdSet::EMPTY);
 
-    let should_retain = overwrite_unused_records_locked::<i32>(&state);
+    let should_retain = overwrite_unused_records_locked(&state);
     assert!(should_retain);
 
     assert_eq!(rec50.snapshot_id(), 50);
@@ -523,7 +523,7 @@ fn test_assign_value_copies_int() {
     let source = StateRecord::new(10, 42i32, None);
     let target = StateRecord::new(20, 0i32, None);
 
-    target.assign_value::<i32>(&source).expect("copy int value");
+    target.assign_value(&source).expect("copy int value");
 
     target.with_value(|val: &i32| {
         assert_eq!(*val, 42);
@@ -542,9 +542,7 @@ fn test_assign_value_copies_string() {
     let source = StateRecord::new(10, "hello".to_string(), None);
     let target = StateRecord::new(20, "world".to_string(), None);
 
-    target
-        .assign_value::<String>(&source)
-        .expect("copy string value");
+    target.assign_value(&source).expect("copy string value");
 
     target.with_value(|val: &String| {
         assert_eq!(val, "hello");
@@ -563,10 +561,8 @@ fn test_assign_value_reports_cleared_source() {
     source.clear_value();
 
     assert_eq!(
-        target.assign_value::<i32>(&source),
-        Err(StateRecordValueError::MissingOrWrongType {
-            expected: std::any::type_name::<i32>(),
-        })
+        target.assign_value(&source),
+        Err(StateRecordValueError::Missing)
     );
     assert_eq!(target.with_value(|val: &i32| *val), 0);
 }
@@ -580,9 +576,7 @@ fn test_assign_value_overwrites_existing_value() {
         assert_eq!(*val, 999);
     });
 
-    target
-        .assign_value::<i32>(&source)
-        .expect("overwrite int value");
+    target.assign_value(&source).expect("overwrite int value");
 
     target.with_value(|val: &i32| {
         assert_eq!(*val, 100);
@@ -600,9 +594,7 @@ fn test_assign_value_with_custom_type() {
     let source = StateRecord::new(10, Point { x: 1.5, y: 2.5 }, None);
     let target = StateRecord::new(20, Point { x: 0.0, y: 0.0 }, None);
 
-    target
-        .assign_value::<Point>(&source)
-        .expect("copy point value");
+    target.assign_value(&source).expect("copy point value");
 
     target.with_value(|val: &Point| {
         assert_eq!(val, &Point { x: 1.5, y: 2.5 });
@@ -613,9 +605,7 @@ fn test_assign_value_with_custom_type() {
 fn test_assign_value_self_assignment() {
     let record = StateRecord::new(10, 42i32, None);
 
-    record
-        .assign_value::<i32>(&record)
-        .expect("self-assign int value");
+    record.assign_value(&record).expect("self-assign int value");
 
     record.with_value(|val: &i32| {
         assert_eq!(*val, 42);
@@ -671,9 +661,7 @@ fn test_assign_value_with_vec() {
     let source = StateRecord::new(10, vec![1, 2, 3, 4, 5], None);
     let target = StateRecord::new(20, Vec::<i32>::new(), None);
 
-    target
-        .assign_value::<Vec<i32>>(&source)
-        .expect("copy vec value");
+    target.assign_value(&source).expect("copy vec value");
 
     target.with_value(|val: &Vec<i32>| {
         assert_eq!(val, &vec![1, 2, 3, 4, 5]);
