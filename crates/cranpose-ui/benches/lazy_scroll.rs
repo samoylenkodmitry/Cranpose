@@ -86,7 +86,7 @@ impl Fixture {
 
 fn frame_delta(phase: &str, frame: usize) -> f32 {
     let magnitude = delta_magnitude(phase);
-    if frame % 2 == 0 {
+    if frame.is_multiple_of(2) {
         -magnitude
     } else {
         magnitude

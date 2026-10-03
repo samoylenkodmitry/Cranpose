@@ -183,16 +183,25 @@ fn compose_retained_pair(
     }
 }
 
-fn compose_nested_movable_layout(
-    context: &Rc<AppContext>,
-    composition: &mut Composition<MemoryApplier>,
-    slot_count: usize,
+struct NestedMovableState {
     show_movable: MutableState<bool>,
     nested_node_id: Rc<Cell<Option<NodeId>>>,
     probe_node_ids: Rc<RefCell<Vec<NodeId>>>,
     dropped: Rc<Cell<usize>>,
     retained_lifecycle: Rc<RetainedMovableLifecycle>,
+}
+
+fn compose_nested_movable_layout(
+    context: &Rc<AppContext>,
+    composition: &mut Composition<MemoryApplier>,
+    slot_count: usize,
+    state: &NestedMovableState,
 ) {
+    let show_movable = state.show_movable;
+    let nested_node_id = Rc::clone(&state.nested_node_id);
+    let probe_node_ids = Rc::clone(&state.probe_node_ids);
+    let dropped = Rc::clone(&state.dropped);
+    let retained_lifecycle = Rc::clone(&state.retained_lifecycle);
     context
         .enter(|| {
             composition.render(nested_layout_key(), move || {
@@ -316,38 +325,39 @@ fn assert_nested_host_disposal_releases_retained_movable(remove_outer_layout: bo
     let mut composition = Composition::new(MemoryApplier::new());
     let show_movable =
         context.enter(|| MutableState::with_runtime(true, composition.runtime_handle()));
-    let nested_node_id = Rc::new(Cell::new(None));
-    let probe_node_ids = Rc::new(RefCell::new(Vec::new()));
-    let dropped = Rc::new(Cell::new(0));
-    let retained_lifecycle = Rc::new(RetainedMovableLifecycle::default());
-
-    compose_nested_movable_layout(
-        &context,
-        &mut composition,
-        INITIAL_SLOTS,
+    let state = NestedMovableState {
         show_movable,
-        Rc::clone(&nested_node_id),
-        Rc::clone(&probe_node_ids),
-        Rc::clone(&dropped),
-        Rc::clone(&retained_lifecycle),
-    );
-    let probe_ids = probe_node_ids.borrow().clone();
+        nested_node_id: Rc::new(Cell::new(None)),
+        probe_node_ids: Rc::new(RefCell::new(Vec::new())),
+        dropped: Rc::new(Cell::new(0)),
+        retained_lifecycle: Rc::new(RetainedMovableLifecycle::default()),
+    };
+
+    compose_nested_movable_layout(&context, &mut composition, INITIAL_SLOTS, &state);
+    let probe_ids = state.probe_node_ids.borrow().clone();
     assert_eq!(
         probe_ids.len(),
         RETAINED_MOVABLES,
         "both movable nodes compose"
     );
-    assert!(nested_node_id.get().is_some(), "nested subcompose node");
+    assert!(
+        state.nested_node_id.get().is_some(),
+        "nested subcompose node"
+    );
 
-    context.enter(|| show_movable.set(false));
+    context.enter(|| state.show_movable.set(false));
     while context
         .enter(|| composition.process_invalid_scopes())
         .expect("recompose the nested slot")
     {}
     measure_layout(&context, &mut composition);
-    assert_eq!(dropped.get(), 0, "the inner slot must retain the movable");
     assert_eq!(
-        retained_lifecycle.remembered_drops.get(),
+        state.dropped.get(),
+        0,
+        "the inner slot must retain the movable"
+    );
+    assert_eq!(
+        state.retained_lifecycle.remembered_drops.get(),
         0,
         "the retained movable must keep its remembered state alive"
     );
@@ -367,35 +377,26 @@ fn assert_nested_host_disposal_releases_retained_movable(remove_outer_layout: bo
             .enter(|| composition.render(nested_layout_key(), || {}))
             .expect("remove outer subcompose layout");
     } else {
-        compose_nested_movable_layout(
-            &context,
-            &mut composition,
-            0,
-            show_movable,
-            nested_node_id,
-            probe_node_ids,
-            Rc::clone(&dropped),
-            Rc::clone(&retained_lifecycle),
-        );
+        compose_nested_movable_layout(&context, &mut composition, 0, &state);
     }
 
     assert_eq!(
-        dropped.get(),
+        state.dropped.get(),
         RETAINED_MOVABLES,
         "disposing the outer subcomposition must release its retained movable"
     );
     assert_eq!(
-        retained_lifecycle.remembered_drops.get(),
+        state.retained_lifecycle.remembered_drops.get(),
         RETAINED_MOVABLES,
         "disposing the retained movable must release its remembered state"
     );
     assert_eq!(
-        retained_lifecycle.unmounts_saw_state_alive.get(),
+        state.retained_lifecycle.unmounts_saw_state_alive.get(),
         RETAINED_MOVABLES,
         "both retained nodes must unmount while their remembered states are alive"
     );
     assert_eq!(
-        retained_lifecycle.unmounts_saw_state_dropped.get(),
+        state.retained_lifecycle.unmounts_saw_state_dropped.get(),
         0,
         "neither retained node may unmount after its remembered state was dropped"
     );

@@ -36,9 +36,13 @@ impl Drop for CascadeOnDrop {
     }
 }
 
-fn cascading_nodes(
-    host: &Rc<ConcreteApplierHost<MemoryApplier>>,
-) -> ((NodeId, u32), Rc<Cell<usize>>, Rc<Cell<usize>>) {
+struct CascadingNodes {
+    trigger: (NodeId, u32),
+    trigger_drops: Rc<Cell<usize>>,
+    child_drops: Rc<Cell<usize>>,
+}
+
+fn cascading_nodes(host: &Rc<ConcreteApplierHost<MemoryApplier>>) -> CascadingNodes {
     let child_drops = Rc::new(Cell::new(0));
     let trigger_drops = Rc::new(Cell::new(0));
     let mut applier = host.borrow_typed();
@@ -49,81 +53,69 @@ fn cascading_nodes(
         child: (child, child_generation),
         drops: Rc::clone(&trigger_drops),
     }));
-    (
-        (trigger, applier.node_generation(trigger)),
+    CascadingNodes {
+        trigger: (trigger, applier.node_generation(trigger)),
         trigger_drops,
         child_drops,
-    )
+    }
 }
 
-fn assert_cascade_released(trigger_drops: &Cell<usize>, child_drops: &Cell<usize>) {
-    assert_eq!(trigger_drops.get(), 1, "trigger resource drops once");
-    assert_eq!(child_drops.get(), 1, "cascaded resource drops once");
+fn assert_cascade_released(nodes: &CascadingNodes) {
+    assert_eq!(nodes.trigger_drops.get(), 1, "trigger resource drops once");
+    assert_eq!(nodes.child_drops.get(), 1, "cascaded resource drops once");
 }
 
 fn assert_deferred_disposal<G>(
     host: &ConcreteApplierHost<MemoryApplier>,
-    trigger: (NodeId, u32),
+    nodes: &CascadingNodes,
     guard: G,
-    drops: (&Cell<usize>, &Cell<usize>),
 ) {
-    host.dispose_nodes(NodeDisposal::new(vec![trigger]))
+    host.dispose_nodes(NodeDisposal::new(vec![nodes.trigger]))
         .expect("queue trigger disposal");
-    assert_eq!(drops.0.get(), 0);
-    assert_eq!(drops.1.get(), 0);
+    assert_eq!(nodes.trigger_drops.get(), 0);
+    assert_eq!(nodes.child_drops.get(), 0);
     drop(guard);
-    assert_cascade_released(drops.0, drops.1);
+    assert_cascade_released(nodes);
 }
 
 #[test]
 fn nested_disposal_waits_for_dynamic_applier_borrow_to_end() {
     let host = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
-    let (trigger, trigger_drops, child_drops) = cascading_nodes(&host);
+    let nodes = cascading_nodes(&host);
 
-    assert_deferred_disposal(
-        &host,
-        trigger,
-        host.borrow_dyn(),
-        (&trigger_drops, &child_drops),
-    );
+    assert_deferred_disposal(&host, &nodes, host.borrow_dyn());
 }
 
 #[test]
 fn nested_disposal_waits_for_typed_applier_borrow_to_end() {
     let host = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
-    let (trigger, trigger_drops, child_drops) = cascading_nodes(&host);
+    let nodes = cascading_nodes(&host);
 
-    assert_deferred_disposal(
-        &host,
-        trigger,
-        host.borrow_typed(),
-        (&trigger_drops, &child_drops),
-    );
+    assert_deferred_disposal(&host, &nodes, host.borrow_typed());
 }
 
 #[test]
 fn nested_disposal_waits_for_try_borrowed_applier_to_end() {
     let host = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
-    let (trigger, trigger_drops, child_drops) = cascading_nodes(&host);
+    let nodes = cascading_nodes(&host);
 
     assert_deferred_disposal(
         &host,
-        trigger,
+        &nodes,
         host.try_borrow_typed()
             .expect("acquire typed applier borrow"),
-        (&trigger_drops, &child_drops),
     );
 }
 
 #[test]
 fn direct_disposal_without_an_outstanding_borrow_releases_resources() {
     let host = Rc::new(ConcreteApplierHost::new(MemoryApplier::new()));
-    let (trigger, trigger_drops, child_drops) = cascading_nodes(&host);
+    let nodes = cascading_nodes(&host);
 
-    host.dispose_nodes(NodeDisposal::new(vec![trigger]))
+    host.dispose_nodes(NodeDisposal::new(vec![nodes.trigger]))
         .expect("dispose node without an outstanding borrow");
 
-    assert_cascade_released(&trigger_drops, &child_drops);
+    assert_cascade_released(&nodes);
 }
 
 #[test]
@@ -341,9 +333,8 @@ fn failed_host_extraction_preserves_disposal_ownership_for_retry() {
 
     let host = Rc::try_unwrap(host)
         .unwrap_or_else(|_| panic!("fixture left outstanding applier references"));
-    let (host, error) = match host.try_into_inner() {
-        Err(failed) => failed,
-        Ok(_) => panic!("extraction must report the queued disposal failure"),
+    let Err((host, error)) = host.try_into_inner() else {
+        panic!("extraction must report the queued disposal failure");
     };
     assert!(matches!(error, NodeError::TypeMismatch { .. }));
     assert_eq!(

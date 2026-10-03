@@ -553,7 +553,7 @@ impl SubcomposeScrollFixture {
         }
 
         let disposed = self.state.finish_pass();
-        black_box(disposed.len());
+        black_box(disposed.nodes().len());
 
         self.offset = (self.offset + SUBCOMPOSE_SCROLL_STEP) % SUBCOMPOSE_TOTAL_SLOTS;
     }
