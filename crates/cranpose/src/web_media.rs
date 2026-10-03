@@ -39,6 +39,8 @@ struct AudioGraph {
     _source: MediaElementAudioSourceNode,
     context: AudioContext,
     preamp: GainNode,
+    balance_left: GainNode,
+    balance_right: GainNode,
     filters: Vec<BiquadFilterNode>,
     _analyser: AnalyserNode,
     timer: Option<i32>,
@@ -286,6 +288,8 @@ fn ensure_graph(browser: &mut Browser) -> Option<&mut AudioGraph> {
         analyser.set_fft_size(ANALYSIS_FFT_SIZE);
 
         let preamp = context.create_gain().ok()?;
+        preamp.set_channel_count(2);
+        preamp.set_channel_count_mode(web_sys::ChannelCountMode::Explicit);
         preamp.gain().set_value(1.0);
         source.connect_with_audio_node(&preamp).ok()?;
 
@@ -303,7 +307,7 @@ fn ensure_graph(browser: &mut Browser) -> Option<&mut AudioGraph> {
             tail.connect_with_audio_node(filter).ok()?;
             tail = filter.as_ref();
         }
-        tail.connect_with_audio_node(&analyser).ok()?;
+        let (balance_left, balance_right) = connect_balance(&context, tail, &analyser)?;
         analyser
             .connect_with_audio_node(&context.destination())
             .ok()?;
@@ -327,6 +331,8 @@ fn ensure_graph(browser: &mut Browser) -> Option<&mut AudioGraph> {
             _source: source,
             context,
             preamp,
+            balance_left,
+            balance_right,
             filters,
             timer: None,
             _analyser: analyser,
@@ -334,6 +340,31 @@ fn ensure_graph(browser: &mut Browser) -> Option<&mut AudioGraph> {
         });
     }
     browser.graph.as_mut()
+}
+
+fn connect_balance(
+    context: &AudioContext,
+    input: &web_sys::AudioNode,
+    output: &web_sys::AudioNode,
+) -> Option<(GainNode, GainNode)> {
+    let split = context
+        .create_channel_splitter_with_number_of_outputs(2)
+        .ok()?;
+    let merge = context
+        .create_channel_merger_with_number_of_inputs(2)
+        .ok()?;
+    let left = context.create_gain().ok()?;
+    let right = context.create_gain().ok()?;
+    input.connect_with_audio_node(&split).ok()?;
+    split.connect_with_audio_node_and_output(&left, 0).ok()?;
+    split.connect_with_audio_node_and_output(&right, 1).ok()?;
+    left.connect_with_audio_node_and_output_and_input(&merge, 0, 0)
+        .ok()?;
+    right
+        .connect_with_audio_node_and_output_and_input(&merge, 0, 1)
+        .ok()?;
+    merge.connect_with_audio_node(output).ok()?;
+    Some((left, right))
 }
 
 fn set_equalizer_curve(browser: &mut Browser, settings: &EqualizerSettings) {
@@ -489,6 +520,21 @@ impl MediaPlayer for WebMediaPlayer {
 
     fn set_volume(&self, volume: f32) {
         with_browser(|browser| browser.element.set_volume(volume.clamp(0.0, 1.0) as f64));
+    }
+
+    fn set_balance(&self, balance: f32) -> bool {
+        if !balance.is_finite() {
+            return false;
+        }
+        let balance = balance.clamp(-1.0, 1.0);
+        with_browser(|browser| {
+            let graph = ensure_graph(browser)?;
+            graph.balance_left.gain().set_value(1.0 - balance.max(0.0));
+            graph.balance_right.gain().set_value(1.0 + balance.min(0.0));
+            Some(())
+        })
+        .flatten()
+        .is_some()
     }
 
     fn set_speed(&self, speed: f32) -> bool {

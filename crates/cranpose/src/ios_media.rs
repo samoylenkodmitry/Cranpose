@@ -10,9 +10,10 @@ use std::{
 
 use block2::RcBlock;
 use cranpose_services::{
-    AudioFocus, MediaCapabilities, MediaCommand, MediaError, MediaItem, MediaMetadata, MediaPlayer,
-    PlaybackProgress, PlaybackState, publish_audio_focus, publish_media_command,
-    publish_playback_progress, publish_playback_state, set_platform_media_player,
+    AudioFocus, EqualizerBand, EqualizerSettings, MediaCapabilities, MediaCommand, MediaError,
+    MediaItem, MediaMetadata, MediaObserver, MediaPlayer, PlaybackProgress, PlaybackState,
+    publish_audio_focus, publish_media_command, publish_playback_progress, publish_playback_state,
+    set_platform_media_player,
 };
 use dispatch2::DispatchQueue;
 use objc2::{
@@ -68,10 +69,66 @@ pub(crate) fn register() {
     configure_audio_session();
     install_interruption_observer();
     install_remote_commands();
-    set_platform_media_player(Arc::new(IosMediaPlayer));
+    let player = Arc::new(IosMediaPlayer {
+        software: cranpose_media::SoftwareMediaPlayer::new(),
+        native_stream: AtomicBool::new(false),
+        observers: Mutex::new(Vec::new()),
+    });
+    let weak = Arc::downgrade(&player);
+    let progress = cranpose_services::observe_playback_progress(move |_| {
+        if let Some(player) = weak.upgrade() {
+            player.update_software_session();
+        }
+    });
+    let weak = Arc::downgrade(&player);
+    let state = cranpose_services::observe_playback_state(move |_| {
+        if let Some(player) = weak.upgrade() {
+            player.update_software_session();
+        }
+    });
+    *player
+        .observers
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner) = vec![progress, state];
+    set_platform_media_player(player);
 }
 
-struct IosMediaPlayer;
+struct IosMediaPlayer {
+    software: cranpose_media::SoftwareMediaPlayer,
+    native_stream: AtomicBool,
+    observers: Mutex<Vec<MediaObserver>>,
+}
+
+impl IosMediaPlayer {
+    fn is_native(&self) -> bool {
+        self.native_stream.load(Ordering::Acquire)
+    }
+
+    fn update_software_session(&self) {
+        if self.is_native() {
+            return;
+        }
+        static PENDING: AtomicBool = AtomicBool::new(false);
+        if PENDING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        DispatchQueue::main().exec_async(|| {
+            PENDING.store(false, Ordering::Release);
+            let Some(item) = cranpose_services::current_media_item() else {
+                return;
+            };
+            let progress = cranpose_services::playback_progress();
+            let mut metadata = item.metadata;
+            metadata.duration = progress.duration.or(metadata.duration);
+            let rate = if cranpose_services::playback_state().is_playing() {
+                speed()
+            } else {
+                0.0
+            };
+            publish_now_playing(&metadata, progress.position, rate);
+        });
+    }
+}
 
 fn on_main<R: Send>(action: impl FnOnce(MainThreadMarker) -> R + Send) -> R {
     if let Some(mtm) = MainThreadMarker::new() {
@@ -498,12 +555,14 @@ fn close_item() {
     });
 }
 
-const IOS_AUDIO_EXTENSIONS: &[&str] = &[
-    "3gp", "aac", "aif", "aiff", "caf", "flac", "m4a", "m4b", "m4v", "mov", "mp3", "mp4", "wav",
-];
-
 impl MediaPlayer for IosMediaPlayer {
     fn capabilities(&self) -> MediaCapabilities {
+        if !self.is_native() {
+            return MediaCapabilities {
+                session: true,
+                ..self.software.capabilities()
+            };
+        }
         MediaCapabilities {
             seeking: true,
             speed: true,
@@ -516,16 +575,28 @@ impl MediaPlayer for IosMediaPlayer {
     }
 
     fn probe_duration(&self, item: &MediaItem) -> Option<Duration> {
+        if !is_hls(&item.uri) {
+            return self.software.probe_duration(item);
+        }
         let url = url_for(&item.uri)?;
         let asset = unsafe { AVURLAsset::URLAssetWithURL_options(&url, None) };
         positive_seconds(unsafe { asset.duration() }).map(Duration::from_secs_f64)
     }
 
     fn audio_extensions(&self) -> Vec<&'static str> {
-        IOS_AUDIO_EXTENSIONS.to_vec()
+        self.software.audio_extensions()
     }
     fn prepare(&self, item: &MediaItem) -> Result<(), MediaError> {
         self.stop();
+        let native = is_hls(&item.uri);
+        self.native_stream.store(native, Ordering::Release);
+        if !native {
+            activate_audio_session(true);
+            return self
+                .software
+                .prepare(item)
+                .inspect_err(|_| activate_audio_session(false));
+        }
         let uri = item.uri.clone();
         let stated = item.metadata.duration;
         let duration = on_main(move |mtm| open_item(&uri, stated, mtm))?;
@@ -537,6 +608,9 @@ impl MediaPlayer for IosMediaPlayer {
 
     fn play(&self) -> Result<(), MediaError> {
         activate_audio_session(true);
+        if !self.is_native() {
+            return self.software.play();
+        }
         let failure = with_holder(|holder| {
             let failure = item_failure(holder);
             if failure.is_none() {
@@ -554,18 +628,26 @@ impl MediaPlayer for IosMediaPlayer {
     }
 
     fn pause(&self) {
+        if !self.is_native() {
+            self.software.pause();
+            return;
+        }
         with_holder(|holder| unsafe { holder.player.pause() });
         GENERATION.fetch_add(1, Ordering::AcqRel);
         publish_playback_state(PlaybackState::Paused);
     }
 
     fn stop(&self) {
+        self.software.stop();
         GENERATION.fetch_add(1, Ordering::AcqRel);
         close_item();
         activate_audio_session(false);
     }
 
     fn seek_to(&self, position: Duration) -> Result<(), MediaError> {
+        if !self.is_native() {
+            return self.software.seek_to(position);
+        }
         let duration = with_holder(|holder| {
             unsafe { holder.player.seekToTime(cm_time(position)) };
             duration_of(holder)
@@ -577,12 +659,14 @@ impl MediaPlayer for IosMediaPlayer {
 
     fn set_volume(&self, volume: f32) {
         let volume = volume.clamp(0.0, 1.0);
+        self.software.set_volume(volume);
         *VOLUME.lock().unwrap_or_else(PoisonError::into_inner) = volume;
         with_holder(|holder| unsafe { holder.player.setVolume(volume) });
     }
 
     fn set_speed(&self, speed: f32) -> bool {
         let speed = speed.clamp(0.25, 4.0);
+        self.software.set_speed(speed);
         *SPEED.lock().unwrap_or_else(PoisonError::into_inner) = speed;
         with_holder(|holder| unsafe {
             if holder.player.rate() != 0.0 {
@@ -593,10 +677,15 @@ impl MediaPlayer for IosMediaPlayer {
     }
 
     fn set_looping(&self, looping: bool) {
+        self.software.set_looping(looping);
         LOOPING.store(looping, Ordering::Release);
     }
 
     fn set_session_metadata(&self, metadata: &MediaMetadata) {
+        if !self.is_native() {
+            self.update_software_session();
+            return;
+        }
         let observed = with_holder(|holder| {
             let rate = unsafe { holder.player.rate() };
             (position_of(holder), rate, duration_of(holder))
@@ -608,4 +697,30 @@ impl MediaPlayer for IosMediaPlayer {
         }
         publish_now_playing(&metadata, position, rate);
     }
+
+    fn set_balance(&self, balance: f32) -> bool {
+        self.software.set_balance(balance) && !self.is_native()
+    }
+
+    fn equalizer_bands(&self) -> Vec<EqualizerBand> {
+        if self.is_native() {
+            Vec::new()
+        } else {
+            self.software.equalizer_bands()
+        }
+    }
+
+    fn set_equalizer(&self, settings: &EqualizerSettings) {
+        self.software.set_equalizer(settings);
+    }
+
+    fn set_analysis_enabled(&self, enabled: bool) -> bool {
+        self.software.set_analysis_enabled(enabled) && !self.is_native()
+    }
+}
+
+fn is_hls(uri: &str) -> bool {
+    uri.split(['?', '#'])
+        .next()
+        .is_some_and(|path| path.to_ascii_lowercase().ends_with(".m3u8"))
 }

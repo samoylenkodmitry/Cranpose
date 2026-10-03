@@ -183,8 +183,8 @@ pub use media::{
     publish_audio_focus, publish_media_command, publish_media_samples, publish_playback_progress,
     publish_playback_state, record_dropped_media_samples, rememberAudioFocus,
     rememberMediaCommands, rememberMediaSamples, rememberPlaybackProgress, rememberPlaybackState,
-    seek_media, seek_media_fraction, set_media_analysis_enabled, set_media_equalizer,
-    set_media_looping, set_media_metadata, set_media_speed, set_media_volume,
+    seek_media, seek_media_fraction, set_media_analysis_enabled, set_media_balance,
+    set_media_equalizer, set_media_looping, set_media_metadata, set_media_speed, set_media_volume,
     set_platform_media_player, set_platform_media_source_opener, stop_media, toggle_media,
     uri_for_path,
 };

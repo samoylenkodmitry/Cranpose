@@ -29,13 +29,13 @@ parking_lot = "0.12.5"
 [target.'cfg(target_os = "android")'.dependencies]
 cranpose-audio = { workspace = true, features = ["aaudio"] }
 
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))'.dependencies]
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
 cranpose-audio = { workspace = true, features = ["cpal-backend"] }
 
 # A remote item is read over HTTP byte ranges rather than downloaded first, so
 # the decoder needs the platform's HTTP transfer and a way to block the decode
 # thread on it. Both are excluded from the targets whose modules compile away.
-[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios")))'.dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cranpose-services = { workspace = true, features = ["http-native"] }
 pollster = "0.4.0"
 symphonia = { version = "0.6.1", default-features = false, features = ["all", "opt-simd"] }

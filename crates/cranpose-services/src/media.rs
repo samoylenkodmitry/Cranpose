@@ -543,6 +543,13 @@ pub trait MediaPlayer: Send + Sync {
     /// [`set_media_volume`]. `0.0` is silent, `1.0` is the item as recorded.
     fn set_volume(&self, volume: f32);
 
+    /// Sets stereo balance: -1 is left, 0 is centered, and 1 is right.
+    /// The quieter channel is attenuated without mixing channels. Returns
+    /// false when the active backend cannot apply balance.
+    fn set_balance(&self, _balance: f32) -> bool {
+        false
+    }
+
     /// Sets the playback rate, `1.0` being as recorded. Returns `false` where
     /// the backend does not have one.
     fn set_speed(&self, _speed: f32) -> bool {
@@ -1094,6 +1101,14 @@ pub fn seek_media_fraction(fraction: f32) -> Result<(), MediaError> {
 pub fn set_media_volume(volume: f32) {
     *VOLUME.lock() = volume.clamp(0.0, 1.0);
     apply_volume();
+}
+
+/// Applies stereo balance to the installed player. Values outside -1..=1
+/// are clamped; non-finite values are rejected without changing playback.
+/// Returns false if the player cannot apply balance.
+pub fn set_media_balance(balance: f32) -> bool {
+    balance.is_finite()
+        && media_player().is_some_and(|player| player.set_balance(balance.clamp(-1.0, 1.0)))
 }
 
 fn apply_volume() {
