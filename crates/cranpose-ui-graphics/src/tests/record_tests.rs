@@ -342,13 +342,12 @@ fn the_arc_record_carries_the_normalised_band_the_fragment_stage_reads() {
         record.arc_normalized[..2],
         [expected.start_angle, expected.sweep_angle]
     );
-    let ring = BandRing::of_geometry(&expected);
     assert_eq!(
         record.arc_normalized[2..],
-        [ring.range_start, ring.range],
-        "the strip's padded sweep the vertex stage reads is computed once, when recorded"
+        [0.0, 0.0],
+        "the vertex stage pads the strip's sweep in device pixels"
     );
-    assert!(ring.range_start < expected.start_angle && ring.range > 2.0);
+    assert!(BandRing::of_geometry(&expected).range > 2.0);
     assert!(!record.is_degenerate_arc());
     assert!(!record.has_loose_rect());
     assert_eq!(record.rect_value(), rect(0.0, 0.0, 1.0, 1.0));

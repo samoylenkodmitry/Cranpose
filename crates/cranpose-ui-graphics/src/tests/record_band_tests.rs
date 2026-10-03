@@ -91,7 +91,6 @@ fn minimum_band_keeps_segment_boundaries_exact() {
         let ring = BandRing {
             mid: 0.0,
             ring_half: 0.0,
-            range_start: 0.0,
             range,
             segments_per_radian: 1.0,
         };
