@@ -4,7 +4,6 @@ use std::{path::Path, time::Duration};
 
 use cranpose::AppLauncher;
 use cranpose_testing::{crop_screenshot_logical, find_text_in_semantics};
-use desktop_app::app;
 use image::RgbaImage;
 use text_showcase_external_helpers::{
     capture_x11_window_screenshot, find_window_id, open_text_tab, scroll_text_into_view,
@@ -129,7 +128,7 @@ pub(crate) fn main() {
             println!("PASS: underline stayed continuous and stable across external X11 scroll captures");
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn assert_underline_quality(robot: &cranpose::Robot, step: usize, metrics: UnderlineMetrics) {

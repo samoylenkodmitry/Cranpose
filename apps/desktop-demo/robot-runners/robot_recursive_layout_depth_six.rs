@@ -2,7 +2,6 @@ use crate::{regression_robot_support, robot_launch};
 
 use std::time::Duration;
 
-use desktop_app::app;
 use regression_robot_support::{
     click_button, semantics_dump, spawn_timeout, wait_for_text, wait_for_text_prefix,
 };
@@ -59,5 +58,5 @@ pub(crate) fn main() {
             println!("✓ Recursive Layout reached depth 6 without crashing");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use cranpose::SemanticElement;
 use cranpose_testing::find_button_in_semantics;
-use desktop_app::app;
 
 fn count_text_occurrences(elements: &[SemanticElement], text: &str) -> usize {
     let mut count = 0;
@@ -139,7 +138,7 @@ pub(crate) fn main() {
             }
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn find_element_with_text<'a>(

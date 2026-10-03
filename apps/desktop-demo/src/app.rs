@@ -31,6 +31,7 @@ mod floating_input;
 mod floating_windows;
 mod glass_feed;
 mod glass_tiles;
+mod guide_previews;
 mod hacker_news;
 mod highlight;
 mod highlight_theme;
@@ -118,7 +119,7 @@ thread_local! {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum DemoTab {
-    Documentation,
+    Guide,
     Counter,
     CompositionLocal,
     Async,
@@ -150,7 +151,7 @@ pub enum DemoTab {
     Wear,
 }
 
-pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::Documentation;
+pub const DEFAULT_INITIAL_TAB: DemoTab = DemoTab::Guide;
 
 pub struct DemoTabInfo {
     pub tab: DemoTab,
@@ -162,11 +163,11 @@ pub struct DemoTabInfo {
 
 pub const DEMO_TAB_INFO: [DemoTabInfo; 30] = [
     DemoTabInfo {
-        tab: DemoTab::Documentation,
-        label: "Documentation",
-        slug: "documentation",
+        tab: DemoTab::Guide,
+        label: "Cranpose Guide",
+        slug: "guide",
         source_path: "apps/desktop-demo/src/app/documentation.rs",
-        startup_aliases: &["documentation", "docs", "guide"],
+        startup_aliases: &["guide", "cranposeguide"],
     },
     DemoTabInfo {
         tab: DemoTab::Counter,
@@ -414,11 +415,11 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
     args.into_iter()
         .next()
         .and_then(|name| DemoTab::from_startup_name(&name))
-        .unwrap_or(DESKTOP_INITIAL_TAB)
+        .unwrap_or(DEFAULT_INITIAL_TAB)
 }
 
 pub const DEMO_TABS: [DemoTab; 30] = [
-    DemoTab::Documentation,
+    DemoTab::Guide,
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -623,7 +624,7 @@ pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
 #[composable]
 fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, padding: f32) {
     let is_active = active_tab.get() == tab;
-    let documentation = active_tab.get() == DemoTab::Documentation;
+    let documentation = active_tab.get() == DemoTab::Guide;
     Button(
         Modifier::empty()
             .rounded_corners(if documentation { 0.0 } else { 12.0 })
@@ -669,7 +670,7 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
 
 #[composable]
 fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
-    let documentation = active_tab.get() == DemoTab::Documentation;
+    let documentation = active_tab.get() == DemoTab::Guide;
     let tabs_scroll_state =
         cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
     Row(
@@ -876,7 +877,7 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                 .string("tab")
                 .and_then(DemoTab::from_startup_name)
         })
-        .unwrap_or(DemoTab::Counter);
+        .unwrap_or(DEFAULT_INITIAL_TAB);
     let active_tab = cranpose_core::rememberMutableStateOf(move || initial_tab);
     let winamp_tab_state = remember_winamp_tab_state();
     TEST_ACTIVE_TAB_STATE.with(|cell| {
@@ -893,11 +894,8 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
         BoxSpec::default(),
         move || {
             let is_compact = window_size.get().width < COMPACT_WINDOW_SIZE_CLASS_MAX_WIDTH;
-            if active_tab.get() == DemoTab::Documentation
-                && !showing_source.get()
-                && !picker_open.get()
-            {
-                documentation::DocumentationTab(Some(AppHeaderState {
+            if active_tab.get() == DemoTab::Guide && !showing_source.get() && !picker_open.get() {
+                documentation::GuideTab(Some(AppHeaderState {
                     active_tab,
                     picker_open,
                     showing_source,
@@ -958,7 +956,7 @@ fn AppHeader(
                 Modifier::empty()
                     .align(cranpose_ui::Alignment::TOP_START)
                     .offset(
-                        if active_tab.get() == DemoTab::Documentation {
+                        if active_tab.get() == DemoTab::Guide {
                             12.0
                         } else {
                             DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING
@@ -1020,7 +1018,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
         tab,
         DemoTab::HackerNews
             | DemoTab::WebView
-            | DemoTab::Documentation
+            | DemoTab::Guide
             | DemoTab::LazyList
             | DemoTab::Winamp
             | DemoTab::MarkdownViewer
@@ -1033,7 +1031,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
 #[composable]
 fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_state: WinampTabState) {
     match active {
-        DemoTab::Documentation => documentation::DocumentationTab(None),
+        DemoTab::Guide => documentation::GuideTab(None),
         DemoTab::Counter => counter_app(),
         DemoTab::CompositionLocal => composition_local_example(),
         DemoTab::Async => async_runtime_example(),
@@ -1085,7 +1083,7 @@ fn render_showcase_tab(
         DemoTab::Liquid => LiquidUiTab(),
         DemoTab::GlassFeed => GlassFeedTab(),
         DemoTab::GlassTiles => GlassTilesTab(),
-        DemoTab::Documentation
+        DemoTab::Guide
         | DemoTab::Counter
         | DemoTab::CompositionLocal
         | DemoTab::Async

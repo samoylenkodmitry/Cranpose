@@ -123,7 +123,7 @@ pub(crate) fn main() {
                 let local = local_http_client();
                 let client = client.clone();
                 CompositionLocalProvider([local.provides(client)], || {
-                    app::combined_app();
+                    app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
                 });
             }
         });

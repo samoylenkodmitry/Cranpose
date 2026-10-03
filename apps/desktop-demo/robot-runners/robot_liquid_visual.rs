@@ -338,7 +338,7 @@ pub(crate) fn main() {
             );
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {

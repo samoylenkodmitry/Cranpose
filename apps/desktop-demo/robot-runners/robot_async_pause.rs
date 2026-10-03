@@ -3,7 +3,6 @@ use crate::{robot_exit, robot_launch};
 use std::time::Duration;
 
 use cranpose_testing::find_text_center;
-use desktop_app::app;
 
 pub(crate) fn main() {
     env_logger::init();
@@ -109,7 +108,7 @@ pub(crate) fn main() {
                 let _ = robot.exit();
             }
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn print_all_texts(element: &cranpose::SemanticElement, depth: usize) {

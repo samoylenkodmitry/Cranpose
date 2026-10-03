@@ -4,7 +4,7 @@ use std::{path::PathBuf, process::ExitCode, time::Duration};
 
 use cranpose::{AppLauncher, Robot, RobotScreenshot};
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use desktop_app::app::{self, LIQUID_SCROLL_VIEWPORT_TAG};
+use desktop_app::app::{LIQUID_SCROLL_VIEWPORT_TAG};
 
 const WINDOW_WIDTH: u32 = 784;
 const WINDOW_HEIGHT: u32 = 620;
@@ -102,7 +102,7 @@ pub(crate) fn main() -> ExitCode {
             println!("✓ PASS: the nav bar's backdrop follows the content beneath it");
             robot.exit().expect("exit");
         })
-        .try_run(app::combined_app)
+        .try_run(crate::robot_launch::counter_demo)
         .expect("launch nav bar backdrop runner");
     ExitCode::SUCCESS
 }

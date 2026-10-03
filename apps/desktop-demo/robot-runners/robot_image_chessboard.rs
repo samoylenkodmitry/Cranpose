@@ -5,7 +5,6 @@ use std::time::Duration;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text, sample_screenshot_pixel_logical,
 };
-use desktop_app::app;
 
 const EXPECTED_LIGHT: [u8; 3] = [240, 240, 240];
 const EXPECTED_DARK: [u8; 3] = [36, 54, 72];
@@ -92,5 +91,5 @@ pub(crate) fn main() {
             println!("PASS: screenshot pixel checks match chessboard pattern");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

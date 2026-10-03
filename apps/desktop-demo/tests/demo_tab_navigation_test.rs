@@ -1,9 +1,18 @@
-use desktop_app::app::{DemoTab, DEMO_TABS, DESKTOP_INITIAL_TAB};
+use cranpose_testing::robot::{RobotTestRule, TestRenderer};
+use desktop_app::app::{combined_app, DemoTab, DEFAULT_INITIAL_TAB, DEMO_TABS};
 
 #[test]
-fn desktop_demo_opens_on_documentation() {
-    assert_eq!(DESKTOP_INITIAL_TAB, DemoTab::Documentation);
-    assert_eq!(DEMO_TABS.first(), Some(&DemoTab::Documentation));
+fn shared_platform_entry_opens_the_guide() {
+    let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), combined_app);
+    assert!(robot
+        .find_by_text("Build apps with Compose in Rust.")
+        .exists());
+}
+
+#[test]
+fn default_tab_is_first_in_navigation() {
+    assert_eq!(DEFAULT_INITIAL_TAB, DemoTab::Guide);
+    assert_eq!(DEMO_TABS.first(), Some(&DemoTab::Guide));
 }
 
 #[test]

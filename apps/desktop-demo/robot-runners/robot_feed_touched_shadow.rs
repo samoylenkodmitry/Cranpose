@@ -2,7 +2,6 @@ use std::{path::PathBuf, process::ExitCode, time::Duration};
 
 use cranpose::{AppLauncher, RobotScreenshot, SemanticElement};
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use desktop_app::app;
 
 use crate::{liquid_page, robot_exit, robot_shot};
 
@@ -101,7 +100,7 @@ pub(crate) fn main() -> ExitCode {
             println!("✓ PASS: holding the star keeps its shadow fading into the card");
             robot.exit().expect("exit");
         })
-        .try_run(app::combined_app)
+        .try_run(crate::robot_launch::counter_demo)
         .expect("launch feed touched shadow runner");
     ExitCode::SUCCESS
 }

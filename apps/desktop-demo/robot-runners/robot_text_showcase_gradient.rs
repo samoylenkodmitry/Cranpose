@@ -7,7 +7,6 @@ use cranpose_testing::{
     crop_screenshot_logical, find_button_exact_in_semantics, find_button_in_semantics,
     find_in_semantics, find_text,
 };
-use desktop_app::app;
 
 pub(crate) fn main() {
     env_logger::init();
@@ -141,5 +140,5 @@ pub(crate) fn main() {
             );
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

@@ -6,7 +6,7 @@ use std::{
 
 use cranpose::AppLauncher;
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
+use desktop_app::app::{DemoTab, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
 
 const WINDOW_WIDTH: u32 = 1083;
@@ -94,7 +94,7 @@ pub(crate) fn main() {
             println!("PASS: Text tab presented pixels survived tab walk");
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn capture_only() -> bool {

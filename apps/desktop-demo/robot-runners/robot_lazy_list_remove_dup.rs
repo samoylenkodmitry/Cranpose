@@ -6,7 +6,6 @@ use cranpose_testing::{
     collect_by_text_exact, collect_text_prefix_counts, find_button_in_semantics,
     find_text_in_semantics, print_semantics_with_bounds,
 };
-use desktop_app::app;
 
 pub(crate) fn main() {
     env_logger::init();
@@ -112,5 +111,5 @@ pub(crate) fn main() {
             println!("✓ No duplicate LazyList layout detected");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

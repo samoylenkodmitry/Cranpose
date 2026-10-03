@@ -206,7 +206,7 @@ fn run_shader_scrollbar() {
             println!("PASS: plain shader scroll container draws no implicit scrollbar chrome");
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn run_shadow_showcases() {

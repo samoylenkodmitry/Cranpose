@@ -3,7 +3,6 @@ use crate::{robot_exit, robot_launch};
 use std::time::Duration;
 
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
-use desktop_app::app;
 
 fn wait_for_text(robot: &cranpose::Robot, text: &str, attempts: usize, delay: Duration) -> bool {
     for _ in 0..attempts {
@@ -57,5 +56,5 @@ pub(crate) fn main() {
             println!("✓ ALL TESTS PASSED");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

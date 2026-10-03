@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use cranpose_testing::{find_button_exact_in_semantics, find_text_by_prefix_in_semantics};
-use desktop_app::app;
 
 use crate::robot_launch;
 
@@ -567,5 +566,5 @@ pub(crate) fn main() {
             println!("=== ALL TESTS PASSED (0 bytes growth) ===");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

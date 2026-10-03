@@ -68,13 +68,13 @@ fn click_control(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
 #[test]
 fn selecting_a_chapter_animates_the_wheel_and_reader_together() {
     let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();
     let before = semantic_bounds(
         &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("wheel semantics"),
-        "State and effects",
+        "Ownership",
     );
     assert!(click_control_unsettled(&mut robot, "Get started"));
     for _ in 0..20 {
@@ -82,26 +82,28 @@ fn selecting_a_chapter_animates_the_wheel_and_reader_together() {
     }
     let during = semantic_bounds(
         &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("moving wheel"),
-        "State and effects",
+        "Ownership",
     );
     for _ in 0..60 {
         robot.advance_time(16_666_667);
     }
     let after = semantic_bounds(
         &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("settled wheel"),
-        "State and effects",
+        "Ownership",
     );
     assert!(
         before.y > during.y + 5.0 && during.y > after.y + 5.0,
         "selection needs intermediate positions: {before:?} -> {during:?} -> {after:?}"
     );
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
 }
 
 #[test]
 fn manual_reader_scroll_interrupts_a_chapter_animation() {
     let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     assert!(click_control_unsettled(&mut robot, "Get started"));
     for _ in 0..18 {
@@ -111,26 +113,28 @@ fn manual_reader_scroll_interrupts_a_chapter_animation() {
     robot.shell_mut().pointer_scrolled(0.0, 9000.0);
     settle_motion(&mut robot);
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
     assert!(click_control(&mut robot, "Get started"));
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
 }
 
 #[test]
 fn reading_scroll_moves_the_tab_row_and_document_together() {
     let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     let before = robot.get_all_rects();
     let tabs_before = text_bounds(&before, "Counter App");
-    let title_before = text_bounds(&before, "Build native and browser interfaces in Rust.");
+    let title_before = text_bounds(&before, "Build apps with Compose in Rust.");
     robot.move_to(1040.0, 650.0);
     robot.shell_mut().pointer_scrolled(0.0, -40.0);
     robot.wait_for_idle();
     let after = robot.get_all_rects();
     let tabs_after = text_bounds(&after, "Counter App");
-    let title_after = text_bounds(&after, "Build native and browser interfaces in Rust.");
+    let title_after = text_bounds(&after, "Build apps with Compose in Rust.");
     let displacement = tabs_before.y - tabs_after.y;
     assert!(
         displacement > 20.0,
@@ -152,13 +156,13 @@ fn reading_scroll_moves_the_tab_row_and_document_together() {
 #[test]
 fn dragging_and_releasing_keeps_the_wheel_moving() {
     let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();
     let initial = semantic_bounds(
         &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("wheel semantics"),
-        "State and effects",
+        "Ownership",
     );
     robot.shell_mut().set_cursor(120.0, 550.0);
     robot.shell_mut().pointer_pressed_at_time(Some(0));
@@ -170,7 +174,7 @@ fn dragging_and_releasing_keeps_the_wheel_moving() {
     }
     let tree =
         cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("rotating wheel");
-    let held = semantic_bounds(&tree, "State and effects");
+    let held = semantic_bounds(&tree, "Ownership");
     assert!(
         held.y < initial.y - 30.0,
         "dragging must rotate the wheel: {initial:?} -> {held:?}"
@@ -183,7 +187,7 @@ fn dragging_and_releasing_keeps_the_wheel_moving() {
     }
     let released = semantic_bounds(
         &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("coasting wheel"),
-        "State and effects",
+        "Ownership",
     );
     assert!(
         released.y < held.y - 30.0,
@@ -194,17 +198,14 @@ fn dragging_and_releasing_keeps_the_wheel_moving() {
 #[test]
 fn wide_article_aligns_with_the_wheel_edge() {
     let mut robot = RobotTestRule::new(1800, 1000, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();
     let tree =
         cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("reader semantics");
-    let glass = semantic_bounds(&tree, "Documentation glass");
-    let text = text_bounds(
-        &robot.get_all_rects(),
-        "Build native and browser interfaces in Rust.",
-    );
+    let glass = semantic_bounds(&tree, "Guide glass");
+    let text = text_bounds(&robot.get_all_rects(), "Build apps with Compose in Rust.");
     assert!(
         text.x - glass.x <= 25.0 && text.x <= 325.0,
         "article should align close to the wheel: {text:?}, {glass:?}"
@@ -214,7 +215,7 @@ fn wide_article_aligns_with_the_wheel_edge() {
 #[test]
 fn wheel_brand_clears_the_tabs_in_a_short_window() {
     let mut robot = RobotTestRule::new(800, 600, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     let rects = robot.get_all_rects();
     let brand = text_bounds(&rects, "CRANPOSE");
@@ -231,33 +232,35 @@ fn default_desktop_home_reads_offline_and_keeps_counter_navigation() {
         combined_app_with_initial_tab(Some(startup_tab_from_args(std::iter::empty())));
     });
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
     assert!(click_control(&mut robot, "Get started"));
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
     robot.move_to(1040.0, 650.0);
     robot.shell_mut().pointer_scrolled(0.0, 9000.0);
     robot.wait_for_idle();
     assert!(click_control(&mut robot, "Counter App"));
-    assert!(!robot.find_by_text("Cranpose documentation").exists());
-    assert!(click_control(&mut robot, "Documentation"));
+    assert!(!robot.find_by_text("Cranpose guide").exists());
+    assert!(click_control(&mut robot, "Cranpose Guide"));
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
 }
 
 #[test]
 fn wheel_extends_beneath_the_edge_to_edge_reader_without_stealing_clicks() {
     let mut robot = RobotTestRule::new(1200, 1400, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();
     let tree =
         cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("placed semantics");
-    let page = semantic_bounds(&tree, "Cranpose documentation");
-    let glass = semantic_bounds(&tree, "Documentation glass");
-    let wheel = semantic_bounds(&tree, "Documentation wheel");
+    let page = semantic_bounds(&tree, "Cranpose guide");
+    let glass = semantic_bounds(&tree, "Guide glass");
+    let wheel = semantic_bounds(&tree, "Guide wheel");
     assert_eq!(page.x, 0.0);
     assert_eq!(page.width, 1200.0);
     assert_eq!(glass.x + glass.width, 1200.0);
@@ -266,36 +269,44 @@ fn wheel_extends_beneath_the_edge_to_edge_reader_without_stealing_clicks() {
     let y = 650.0;
     robot.click_at(x, y);
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
 }
 
 #[test]
 fn documentation_is_usable_in_a_compact_window() {
     let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     assert!(!robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
     assert!(robot.find_by_text("Welcome").exists());
     assert!(robot.find_by_text("View on GitHub").exists());
     robot.move_to(150.0, 620.0);
     robot.shell_mut().pointer_scrolled(0.0, -150.0);
     robot.wait_for_idle();
-    assert!(!robot.find_by_text("Create an application").exists());
+    assert!(!robot
+        .find_by_text("Start with the project template")
+        .exists());
     assert!(click_control(&mut robot, "Get started"));
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
     assert!(click_control(&mut robot, "Back to wheel"));
-    assert!(!robot.find_by_text("Create an application").exists());
+    assert!(!robot
+        .find_by_text("Start with the project template")
+        .exists());
     assert!(click_control(&mut robot, "Get started"));
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
 }
 
 #[test]
 fn wheel_scroll_navigates_the_article_and_github_stays_at_the_window_corner() {
     let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     let before = robot.get_all_rects();
     let github = before
@@ -316,7 +327,7 @@ fn wheel_scroll_navigates_the_article_and_github_stays_at_the_window_corner() {
     assert!((github.y - anchored.y).abs() < 1.0);
     assert!(click_control(&mut robot, "Get started"));
     let after = robot.get_all_rects();
-    let article = text_bounds(&after, "Create an application");
+    let article = text_bounds(&after, "Start with the project template");
     assert!(
         article.y >= 0.0 && article.y < 600.0,
         "wheel must bring the next section into view: {article:?}"
@@ -326,14 +337,16 @@ fn wheel_scroll_navigates_the_article_and_github_stays_at_the_window_corner() {
 #[test]
 fn reader_actions_move_between_chapters_without_the_section_wheel() {
     let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     assert!(robot.find_by_text("View on GitHub").exists());
     assert!(click_control(&mut robot, "Next section"));
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
     assert!(click_control(&mut robot, "Previous section"));
     assert!(robot
-        .find_by_text("Build native and browser interfaces in Rust.")
+        .find_by_text("Build apps with Compose in Rust.")
         .exists());
 }
 
@@ -347,7 +360,7 @@ fn resized_guide_draws_beyond_its_original_window_edges() {
     let mut shell = cranpose_app_shell::AppShell::new_with_size_and_density(
         renderer,
         cranpose_core::location_key(file!(), line!(), column!()),
-        || combined_app_with_initial_tab(Some(DemoTab::Documentation)),
+        || combined_app_with_initial_tab(Some(DemoTab::Guide)),
         (800, 600),
         (800.0, 600.0),
         1.0,
@@ -422,7 +435,7 @@ fn resized_guide_draws_beyond_its_original_window_edges() {
 #[test]
 fn growing_the_window_expands_the_guide_and_preserves_the_corner_link() {
     let mut robot = RobotTestRule::new(800, 600, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();
@@ -431,8 +444,8 @@ fn growing_the_window_expands_the_guide_and_preserves_the_corner_link() {
         robot.wait_for_idle();
         let tree = cranpose_testing::placed_semantics_from_shell(robot.shell_mut())
             .expect("resized documentation");
-        let page = semantic_bounds(&tree, "Cranpose documentation");
-        let glass = semantic_bounds(&tree, "Documentation glass");
+        let page = semantic_bounds(&tree, "Cranpose guide");
+        let glass = semantic_bounds(&tree, "Guide glass");
         let github = semantic_bounds(&tree, "View on GitHub");
         assert_eq!(page.width, width as f32);
         assert_eq!(page.height, height as f32);
@@ -443,7 +456,9 @@ fn growing_the_window_expands_the_guide_and_preserves_the_corner_link() {
         );
         assert!(github.x < 20.0);
         assert!(click_control(&mut robot, "Next section"));
-        assert!(robot.find_by_text("Create an application").exists());
+        assert!(robot
+            .find_by_text("Start with the project template")
+            .exists());
         assert!(click_control(&mut robot, "Previous section"));
     }
 }
@@ -451,40 +466,49 @@ fn growing_the_window_expands_the_guide_and_preserves_the_corner_link() {
 #[test]
 fn selected_chapter_survives_resizing_between_reader_layouts() {
     let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     assert!(click_control(&mut robot, "Get started"));
     robot.set_viewport(390, 780);
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
     assert!(click_control(&mut robot, "Back to wheel"));
     assert!(click_control(&mut robot, "Get started"));
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
     robot.set_viewport(1200, 800);
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
     assert!(robot.find_by_text("View on GitHub").exists());
 }
 
 #[test]
 fn compact_wheel_reveals_the_current_chapter_after_reading_to_the_end() {
     let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     assert!(click_control(&mut robot, "Welcome"));
-    for _ in 0..9 {
+    for _ in 1..include_str!("../../../docs/guide.md")
+        .matches("\n## ")
+        .count()
+    {
         assert!(click_control(&mut robot, "Next section"));
     }
     assert!(robot
-        .find_by_text("0.9 is the stabilization release line.")
+        .find_by_text("Place a platform control in your Cranpose layout.")
         .exists());
     assert!(click_control(&mut robot, "Back to wheel"));
     let current = semantic_bounds(
         &cranpose_testing::placed_semantics_from_shell(robot.shell_mut()).expect("current wheel"),
-        "Road to 1.0",
+        "Native views",
     );
     assert!(current.y >= 0.0 && current.y + current.height <= 780.0);
-    assert!(click_control(&mut robot, "Road to 1.0"));
+    assert!(click_control(&mut robot, "Native views"));
     assert!(robot
-        .find_by_text("0.9 is the stabilization release line.")
+        .find_by_text("Place a platform control in your Cranpose layout.")
         .exists());
 }
 
@@ -498,7 +522,7 @@ fn reader_navigation_fits_with_larger_text_and_reduced_effects() {
                 reduce_transparency: true,
                 ..Default::default()
             },
-            || combined_app_with_initial_tab(Some(DemoTab::Documentation)),
+            || combined_app_with_initial_tab(Some(DemoTab::Guide)),
         );
     });
     assert!(click_control(&mut robot, "Welcome"));
@@ -509,16 +533,15 @@ fn reader_navigation_fits_with_larger_text_and_reduced_effects() {
     assert!(action.x >= 0.0 && action.x + action.width <= 390.0);
     assert!(action.y >= 0.0 && action.y + action.height <= 780.0);
     assert!(click_control(&mut robot, "Next section"));
-    assert!(robot.find_by_text("Create an application").exists());
+    assert!(robot
+        .find_by_text("Start with the project template")
+        .exists());
 }
 
 #[test]
 fn documentation_aliases_and_existing_startup_routes_are_available() {
-    for alias in ["docs", "documentation", "guide"] {
-        assert_eq!(
-            DemoTab::from_startup_name(alias),
-            Some(DemoTab::Documentation)
-        );
+    for alias in ["guide", "cranposeguide"] {
+        assert_eq!(DemoTab::from_startup_name(alias), Some(DemoTab::Guide));
     }
     assert_eq!(
         DemoTab::from_startup_name("counter"),
@@ -529,7 +552,7 @@ fn documentation_aliases_and_existing_startup_routes_are_available() {
 #[test]
 fn article_scroll_rotates_the_wheel_to_the_current_section() {
     let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Documentation));
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     robot.shell_mut().set_semantics_enabled(true);
     robot.wait_for_idle();

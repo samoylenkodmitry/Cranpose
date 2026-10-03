@@ -7,7 +7,6 @@ use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text_exact, find_text_in_semantics,
     sample_screenshot_pixel_logical,
 };
-use desktop_app::app;
 
 const SHADER_RECT_SAMPLE_FRAMES: u32 = 24;
 const MIN_SHADER_RECT_WORK_FPS: f32 = 120.0;
@@ -305,5 +304,5 @@ pub(crate) fn main() {
             println!("\n=== Robot Shader Rect Test PASSED ===");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

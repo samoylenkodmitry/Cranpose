@@ -134,7 +134,7 @@ fn observed_app(progress: Arc<Progress>) {
         Modifier::empty().fill_max_size(),
         BoxSpec::default(),
         move || {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
             timer_window(Arc::clone(&progress));
         },
     );

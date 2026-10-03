@@ -27,17 +27,24 @@ fn capture(robot: &Robot, width: u32, stage: &str) {
     .expect("save documentation screenshot");
 }
 
-fn wheel_entry(robot: &Robot, title: &str) -> SemanticRect {
-    fn find(elements: &[SemanticElement], title: &str) -> Option<SemanticRect> {
+fn first_visible_chapter(robot: &Robot, height: u32) -> (usize, SemanticRect) {
+    let titles: Vec<_> = include_str!("../../../docs/guide.md")
+        .split("\n## ")
+        .skip(1)
+        .filter_map(|chapter| chapter.split_once('\n').map(|(title, _)| title))
+        .collect();
+    fn find(elements: &[SemanticElement], titles: &[&str], height: u32) -> Option<(usize, SemanticRect)> {
         elements.iter().find_map(|element| {
-            if element.clickable && element.text.as_deref() == Some(title) {
-                Some(element.bounds)
-            } else {
-                find(&element.children, title)
+            let bounds = element.bounds;
+            if element.clickable && bounds.y >= 80.0 && bounds.y + bounds.height <= height as f32 - 60.0 {
+                if let Some(index) = titles.iter().position(|title| element.text.as_deref() == Some(*title)) {
+                    return Some((index, bounds));
+                }
             }
+            find(&element.children, titles, height)
         })
     }
-    find(&robot.get_semantics().expect("wheel semantics"), title).expect("wheel entry")
+    find(&robot.get_semantics().expect("wheel semantics"), &titles, height).expect("visible wheel entry")
 }
 
 fn return_to_top(robot: &Robot, width: u32, height: u32) {
@@ -49,7 +56,7 @@ fn return_to_top(robot: &Robot, width: u32, height: u32) {
         robot.wait_for_idle().expect("footer settles");
     }
     click_button(robot, "Back to top");
-    robot.validate_content("Build native and browser interfaces in Rust.").expect("top of guide is visible");
+    robot.validate_content("Build apps with Compose in Rust.").expect("top of guide is visible");
 }
 
 pub(crate) fn main() {
@@ -62,7 +69,7 @@ pub(crate) fn main() {
     };
     let compact = width < 780;
     AppLauncher::new()
-        .with_title("Cranpose documentation")
+        .with_title("Cranpose guide")
         .with_size(width, height)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(true)
@@ -70,9 +77,9 @@ pub(crate) fn main() {
             robot.wait_for_idle().expect("documentation startup");
             if compact {
                 robot.validate_content("Welcome").expect("compact wheel opens first");
-                assert!(find_text_in_semantics(&robot, "Build native and browser interfaces in Rust.").is_none());
+                assert!(find_text_in_semantics(&robot, "Build apps with Compose in Rust.").is_none());
             } else {
-                robot.validate_content("Build native and browser interfaces in Rust.").expect("offline reader");
+                robot.validate_content("Build apps with Compose in Rust.").expect("offline reader");
             }
             capture(&robot, width, "home");
             let github_before = find_text_in_semantics_exact(&robot, "View on GitHub").expect("fixed repository link");
@@ -82,22 +89,22 @@ pub(crate) fn main() {
             robot.wait_for_idle().expect("wheel settles");
             capture(&robot, width, "wheel-scrolling");
             if !compact {
-                robot.validate_content("Create an application").expect("wheel scroll navigates the document");
+                robot.validate_content("Start with the project template").expect("wheel scroll navigates the document");
             }
             click_button(&robot, "Get started");
-            robot.validate_content("Create an application").expect("selected chapter is readable");
+            robot.validate_content("Start with the project template").expect("selected chapter is readable");
             capture(&robot, width, "get-started");
             if !compact {
                 if let Some((_, y, _, height)) = find_text_in_semantics_exact(&robot, "Counter App") {
                     assert!(y + height <= 0.0, "the tabs must scroll completely out of view: y={y}, height={height}");
                 }
             }
-            let (_, title_y, _, _) = find_text_in_semantics(&robot, "Create an application").expect("article heading");
+            let (_, title_y, _, _) = find_text_in_semantics(&robot, "Start with the project template").expect("article heading");
             robot.move_to(width as f32 * 0.90, height as f32 * 0.70).expect("hover document");
             robot.mouse_scroll_sequence_and_wait_for_frames(0.0, -90.0, 3).expect("scroll reader");
             robot.wait_for_idle().expect("reader settles");
             capture(&robot, width, "scrolling");
-            let (_, scrolled_title_y, _, _) = find_text_in_semantics(&robot, "Create an application").expect("scrolled article heading");
+            let (_, scrolled_title_y, _, _) = find_text_in_semantics(&robot, "Start with the project template").expect("scrolled article heading");
             assert!(title_y - scrolled_title_y > 50.0, "the document must scroll");
             let github_after = find_text_in_semantics_exact(&robot, "View on GitHub").expect("fixed repository link after scrolling");
             assert!((github_after.1 - github_before.1).abs() < 1.0);
@@ -112,28 +119,42 @@ pub(crate) fn main() {
                     .expect("scroll to code");
             }
             capture(&robot, width, "code");
+            let mut preview_visible = false;
+            for _ in 0..80 {
+                if let Some((_, y, _, button_height)) = find_button_exact_in_semantics(&robot, "Increment") {
+                    if y >= 80.0 && y + button_height <= height as f32 - 80.0 {
+                        preview_visible = true;
+                        break;
+                    }
+                }
+                robot.mouse_scroll_and_wait_for_frame(0.0, -180.0).expect("scroll to interactive example");
+            }
+            assert!(preview_visible, "counter preview must fit in the reader");
+            click_button(&robot, "Increment");
+            assert!(find_text_in_semantics_exact(&robot, "Count: 1").is_some());
+            capture(&robot, width, "interactive-example");
             if compact {
                 click_button(&robot, "Back to wheel");
                 capture(&robot, width, "back-to-wheel");
-                assert!(find_text_in_semantics(&robot, "Create an application").is_none());
+                assert!(find_text_in_semantics(&robot, "Start with the project template").is_none());
                 click_button(&robot, "Get started");
-                robot.validate_content("Create an application").expect("reopen the reader");
+                robot.validate_content("Start with the project template").expect("reopen the reader");
             }
             return_to_top(&robot, width, height);
             capture(&robot, width, "back-to-top");
             if !compact {
                 click_button(&robot, "Counter App");
                 robot.validate_content("Increment").expect("existing demo remains available");
-                click_button(&robot, "Documentation");
-                robot.validate_content("Build native and browser interfaces in Rust.").expect("return to documentation");
+                click_button(&robot, "Cranpose Guide");
+                robot.validate_content("Build apps with Compose in Rust.").expect("return to documentation");
             } else {
                 click_button(&robot, "Back to wheel");
             }
             robot.drag_and_wait_for_frames(120.0, 550.0, 120.0, 454.0, 8).expect("flick the wheel");
-            let released = wheel_entry(&robot, "Get started");
+            let (released_index, released) = first_visible_chapter(&robot, height);
             robot.pump_frames(30).expect("wheel coast frames");
-            let coasted = wheel_entry(&robot, "Get started");
-            assert!(coasted.y < released.y - 10.0, "wheel must continue rotating after release: {released:?} -> {coasted:?}");
+            let (coasted_index, coasted) = first_visible_chapter(&robot, height);
+            assert!(coasted_index > released_index || (coasted_index == released_index && coasted.y < released.y - 10.0), "wheel must continue rotating after release: ({released_index}, {released:?}) -> ({coasted_index}, {coasted:?})");
             robot.touch_down(120.0, 550.0).expect("catch the spinning wheel");
             capture(&robot, width, "fling");
             robot.touch_up(120.0, 550.0).expect("release the stopped wheel");

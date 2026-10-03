@@ -7,7 +7,6 @@ use cranpose_testing::{
     find_button_exact_in_semantics, find_button_in_semantics, find_text_in_semantics,
     normalize_screenshot_region, screenshot_difference_stats,
 };
-use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
 
 const WINDOW_WIDTH: u32 = 1200;
@@ -44,7 +43,7 @@ pub(crate) fn main() {
         println!("PASS: text decoration rendering is scroll-position-invariant");
         robot.exit().expect("exit");
     })
-    .run(app::combined_app);
+    .run(crate::robot_launch::counter_demo);
 }
 
 #[derive(Clone, Copy, Debug)]

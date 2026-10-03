@@ -176,6 +176,6 @@ pub(crate) fn main() {
             println!("Done!");
         })
         .run(|| {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 }

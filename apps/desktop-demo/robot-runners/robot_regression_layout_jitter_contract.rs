@@ -7,7 +7,7 @@ use cranpose_testing::{
     changed_pixel_count_in_region, find_button_in_semantics, find_text_by_prefix_in_semantics,
     find_text_in_semantics, scroll_text_into_view, ScrollConfig,
 };
-use desktop_app::app::{self, DemoTab};
+use desktop_app::app::{DemoTab};
 use text_showcase_external_helpers::{capture_x11_window, find_window_id, focus_x11_window};
 use visual_contract_metrics::feature_stats_rgba;
 
@@ -315,5 +315,5 @@ pub(crate) fn main() {
             println!("PASS: layout jitter contracts passed");
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

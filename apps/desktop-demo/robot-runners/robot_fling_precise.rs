@@ -283,6 +283,6 @@ pub(crate) fn main() {
             exit_with_timeout(&robot, Duration::from_secs(2));
         })
         .run(|| {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 }

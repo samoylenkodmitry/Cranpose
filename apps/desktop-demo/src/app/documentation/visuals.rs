@@ -78,6 +78,19 @@ impl WheelGeometry {
         self.item_modifier(position, height, 270.0, 64.0)
     }
 
+    pub fn visible_entries(self, position: f32, count: usize) -> std::ops::Range<usize> {
+        let radius = self.radius + 64.0;
+        let margin = 150.0;
+        let first_angle = ((-margin - self.center.y) / radius).clamp(-1.0, 1.0).asin();
+        let last_angle = ((self.height + margin - self.center.y) / radius)
+            .clamp(-1.0, 1.0)
+            .asin();
+        let first = (position + (first_angle - self.focus_angle) / self.section_angle()).ceil();
+        let last =
+            (position + (last_angle - self.focus_angle) / self.section_angle()).floor() + 1.0;
+        first.max(0.0) as usize..(last.max(0.0) as usize).min(count)
+    }
+
     pub fn brand_modifier(self, position: f32) -> Modifier {
         self.item_modifier(position, 112.0, 246.0, 24.0)
     }

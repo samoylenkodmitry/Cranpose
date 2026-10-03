@@ -3,7 +3,6 @@ use crate::{regression_robot_support, robot_launch};
 use std::time::Duration;
 
 use cranpose_testing::{capture_screenshot, sample_screenshot_pixel_logical};
-use desktop_app::app;
 use regression_robot_support::{
     click_button, semantics_dump, spawn_timeout, wait_for_text, wait_for_text_prefix,
 };
@@ -160,5 +159,5 @@ pub(crate) fn main() {
             println!("✓ Conditional odd text stayed at the top of Counter App");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

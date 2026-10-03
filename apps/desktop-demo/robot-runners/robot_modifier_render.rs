@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
-use desktop_app::{app::combined_app, fonts::DEMO_FONTS};
+use desktop_app::fonts::DEMO_FONTS;
 
 fn wait_for_condition(
     _robot: &cranpose::Robot,
@@ -154,5 +154,5 @@ pub(crate) fn main() {
 
             robot.exit().expect("exit");
         })
-        .run(combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

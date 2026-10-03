@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use cranpose::SemanticElement;
 use cranpose_testing::{click_button_in_semantics, find_text_in_semantics};
-use desktop_app::app;
 
 const WINDOW_WIDTH: f32 = 1200.0;
 const WINDOW_HEIGHT: f32 = 800.0;
@@ -319,5 +318,5 @@ pub(crate) fn main() {
         println!("\n=== Layout Validation Complete ===");
         robot.exit().ok();
     })
-    .run(app::combined_app);
+    .run(crate::robot_launch::counter_demo);
 }

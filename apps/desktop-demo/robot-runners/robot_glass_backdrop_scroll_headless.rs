@@ -1,7 +1,6 @@
 use crate::{glass_backdrop_scroll_helpers, output_paths, robot_exit, robot_launch};
 
 use cranpose_testing::capture_screenshot;
-use desktop_app::app;
 use glass_backdrop_scroll_helpers::{GlassBackdropScrollRun, WINDOW_HEIGHT, WINDOW_WIDTH};
 
 pub(crate) fn main() {
@@ -24,5 +23,5 @@ pub(crate) fn main() {
             }
             .run();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

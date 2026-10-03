@@ -1,7 +1,6 @@
 use crate::{glass_backdrop_scroll_helpers, output_paths, text_showcase_external_helpers};
 
 use cranpose::AppLauncher;
-use desktop_app::app;
 use glass_backdrop_scroll_helpers::{GlassBackdropScrollRun, WINDOW_HEIGHT, WINDOW_WIDTH};
 use text_showcase_external_helpers::{capture_x11_window_screenshot, find_window_id};
 
@@ -42,5 +41,5 @@ pub(crate) fn main() {
             }
             .run();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

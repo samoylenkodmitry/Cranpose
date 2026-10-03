@@ -5,7 +5,6 @@ use std::time::Duration;
 use cranpose_testing::{
     find_button_in_semantics, find_element_by_text_exact, find_in_semantics, find_text_exact,
 };
-use desktop_app::app;
 
 pub(crate) fn main() {
     env_logger::init();
@@ -92,5 +91,5 @@ pub(crate) fn main() {
             println!("=== LazyList Recursive Composition Test PASSED ===");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

@@ -14,7 +14,7 @@ snapshot state, and a modifier-chain layout system. One Rust codebase targets
 **iOS**, and the **web** through WebAssembly, rendering through wgpu on all of
 them.
 
-**[Try the web demo in your browser](https://samoylenkodmitry.github.io/Cranpose/)** ·
+**[Read the Cranpose Guide](https://samoylenkodmitry.github.io/Cranpose/?tab=guide)** ·
 [**Explore Showcase Cranpose**](https://samoylenkodmitry.github.io/cranpose-showcase/) ·
 [Releases](https://github.com/samoylenkodmitry/Cranpose/releases) ·
 [crates.io](https://crates.io/crates/cranpose)
@@ -42,7 +42,7 @@ demonstrates liquid-glass surfaces, adaptive layouts, animation, and native Andr
 Start from [Showcase Cranpose](https://github.com/samoylenkodmitry/cranpose-showcase),
 the ready-to-run project template with desktop, Android, iOS, and web shells.
 Create a repository from its GitHub template, or clone it locally and replace
-the demo screens with your app. Install a [plugin](https://plugins.jetbrains.com/plugin/34594-cranpose) to RustRover or IntellijIdea.
+the demo screens with your app. Install a [plugin](https://plugins.jetbrains.com/plugin/34594-cranpose) in RustRover or IntelliJ IDEA.
 
 ```bash
 git clone https://github.com/samoylenkodmitry/cranpose-showcase.git my-cranpose-app
@@ -65,7 +65,7 @@ with state and events flowing in both directions.
 
 State, layout, and input, in the shape the framework actually has: composables
 take a `Modifier`, a spec, and their content; state comes from `rememberMutableStateOf` and is
-read with `.value()`.
+read with `.get()` or borrowed with `.with(...)`.
 
 ```rust
 use cranpose::prelude::*;
@@ -91,21 +91,22 @@ fn TodoApp() {
         move || {
             Text("Todo", Modifier::empty(), TextStyle::default());
 
-            for (index, todo) in todos.value().into_iter().enumerate() {
+            for index in 0..todos.with(Vec::len) {
                 Row(
                     Modifier::empty().fill_max_width().clickable(move |_| {
-                        let mut next = todos.value();
-                        next[index].done = !next[index].done;
-                        todos.set(next);
+                        todos.update(|items| items[index].done = !items[index].done);
                     }),
                     RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(8.0)),
                     move || {
-                        Text(
-                            if todo.done { "[x]" } else { "[ ]" },
-                            Modifier::empty(),
-                            TextStyle::default(),
-                        );
-                        Text(todo.text.clone(), Modifier::empty(), TextStyle::default());
+                        todos.with(|items| {
+                            let todo = &items[index];
+                            Text(
+                                if todo.done { "[x]" } else { "[ ]" },
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                            Text(todo.text.clone(), Modifier::empty(), TextStyle::default());
+                        });
                     },
                 );
             }
@@ -114,10 +115,10 @@ fn TodoApp() {
                 Modifier::empty().padding(10.0),
                 ButtonSpec::default(),
                 move || {
-                    let mut next = todos.value();
-                    let position = next.len() + 1;
-                    next.push(Todo { text: format!("Item {position}"), done: false });
-                    todos.set(next);
+                    todos.update(|items| {
+                        let position = items.len() + 1;
+                        items.push(Todo { text: format!("Item {position}"), done: false });
+                    });
                 },
                 || {
                     Text("Add", Modifier::empty(), TextStyle::default());
@@ -182,19 +183,23 @@ history behind the current architecture is
 Release binaries for the desktop platforms are attached to each
 [release](https://github.com/samoylenkodmitry/Cranpose/releases).
 
-The iOS implementation is built from `apps/desktop-demo`; the standalone
-`apps/isolated-demo` template does not include an iOS target.
-
 ## Building
+
+The commands below run from the `cranpose-showcase` checkout created in **Quick
+start**. The [Cranpose Guide](docs/guide.md#get-started) also covers a project built
+from an empty Cargo package.
 
 ### Desktop (Linux/macOS/Windows)
 
+Use a computer with the target desktop OS and a GPU driver for Vulkan, Metal or
+DirectX 12.
+
 ```bash
-cd apps/isolated-demo
 cargo run --features desktop,renderer-wgpu
 ```
 
-macOS `.app` bundles come from the workspace task runner:
+To package the Cranpose demo as a macOS `.app`, run the workspace task from the
+Cranpose repository root:
 
 ```bash
 cargo xtask bundle-macos \
@@ -222,35 +227,44 @@ application's own the same way.
 
 ### Android
 
+Use Windows, Linux or macOS with the Android SDK, NDK and the project's JDK.
+Build an APK for an ARM Android device from the starter checkout:
+
 ```bash
-# Prerequisites: cargo install cargo-ndk
-cd apps/isolated-demo/android
-./gradlew :app:assembleRelease
+cd android
+./gradlew :app:assembleDebug -PshowcaseAbi=arm64-v8a
 ```
 
 ### iOS
 
-The app is a pure-Rust binary — winit starts `UIApplicationMain`, so there is no
-Objective-C entry point and no Xcode project. See
-[`apps/ios-demo/README.md`](apps/ios-demo/README.md).
+Use a Mac with Xcode and an iOS simulator runtime. From the starter checkout, run
+the Apple Silicon simulator build:
 
 ```bash
 rustup target add aarch64-apple-ios-sim aarch64-apple-ios
-cd apps/ios-demo
 ./ios/run-sim.sh
 ```
 
+For Intel Macs, use the `x86_64-apple-ios` target through the manual steps in the
+[iOS guide](docs/guide.md#run-on-ios). Device builds need an iPhone or iPad,
+a development certificate and a provisioning profile. Developers
+on Windows or Linux can use a GitHub macOS runner; the guide includes a
+[workflow example](docs/guide.md#build-apple-targets-with-github-actions).
+
 ### Web (WASM)
 
+Build on Windows, Linux or macOS. Use Git Bash for the shell script on Windows.
+Run the starter in a browser with WebGPU support and a compatible GPU driver:
+
 ```bash
-# Prerequisites: rustup target add wasm32-unknown-unknown && cargo install wasm-pack
-cd apps/isolated-demo
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
 ./build-web.sh
+cd dist
 python3 -m http.server 8080
 ```
 
-Open `http://localhost:8080`. WebGL2 is the default backend; append
-`?backend=webgpu` to the URL to force WebGPU when the browser supports it.
+Open `http://localhost:8080`. Use HTTPS for a public web host.
 
 ### Inside an IDE (IntelliJ plugin)
 

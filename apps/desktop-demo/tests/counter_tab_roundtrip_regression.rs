@@ -16,8 +16,8 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::Rect;
 use desktop_app::app::{
-    combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COUNTER_APP_COUNTER_STATE,
-    TEST_LAZY_LIST_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
+    combined_app, combined_app_with_initial_tab, DemoTab, TEST_ACTIVE_TAB_STATE,
+    TEST_COUNTER_APP_COUNTER_STATE, TEST_LAZY_LIST_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
 };
 use tab_switch_regression_support::{active_tab_state, pump_shell_until_stable};
 
@@ -348,7 +348,9 @@ fn counter_increment_survives_combined_app_tab_roundtrip_robot_path() {
     TEST_COUNTER_APP_COUNTER_STATE.with(|cell| cell.borrow_mut().take());
 
     let root_key = location_key(file!(), line!(), column!());
-    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, combined_app);
+    let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, || {
+        combined_app_with_initial_tab(Some(DemoTab::Counter));
+    });
     shell.set_buffer_size(800, 600);
     shell.set_viewport(800.0, 600.0);
     shell.set_semantics_enabled(true);
