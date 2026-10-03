@@ -159,6 +159,29 @@ fn measure_layout(context: &Rc<AppContext>, composition: &mut Composition<Memory
     });
 }
 
+fn compose_retained_pair(
+    probe_node_ids: &Rc<RefCell<Vec<NodeId>>>,
+    dropped: &Rc<Cell<usize>>,
+    lifecycle: &Rc<RetainedMovableLifecycle>,
+) {
+    for index in 0..RETAINED_MOVABLES {
+        let probe_node_ids = Rc::clone(probe_node_ids);
+        let dropped = Rc::clone(dropped);
+        let lifecycle = Rc::clone(lifecycle);
+        movable(("nested-retained-probe", index), move || {
+            cranpose_core::remember(|| Resource::new(Rc::clone(&lifecycle.remembered_drops)));
+            with_current_composer(|composer| {
+                let id = composer.emit_node(|| DropProbe {
+                    _resource: Resource::new(Rc::clone(&dropped)),
+                    parent: None,
+                    retained_lifecycle: Some(Rc::clone(&lifecycle)),
+                });
+                probe_node_ids.borrow_mut().push(id);
+            });
+        });
+    }
+}
+
 fn compose_nested_movable_layout(
     context: &Rc<AppContext>,
     composition: &mut Composition<MemoryApplier>,
@@ -195,53 +218,15 @@ fn compose_nested_movable_layout(
                                         let probe_node_ids = Rc::clone(&probe_node_ids);
                                         let dropped = Rc::clone(&dropped);
                                         let retained_lifecycle = Rc::clone(&retained_lifecycle);
-                                        for movable_index in 0..RETAINED_MOVABLES {
-                                            let probe_node_ids = Rc::clone(&probe_node_ids);
-                                            let dropped = Rc::clone(&dropped);
-                                            let retained_lifecycle =
-                                                Rc::clone(&retained_lifecycle);
-                                            inner_scope.subcompose(
-                                                SlotId::new(movable_index as u64),
-                                                show,
-                                                move || {
-                                                    if show {
-                                                        let probe_node_ids =
-                                                            Rc::clone(&probe_node_ids);
-                                                        let dropped = Rc::clone(&dropped);
-                                                        let retained_lifecycle =
-                                                            Rc::clone(&retained_lifecycle);
-                                                        movable(
-                                                            ("nested-retained-probe", movable_index),
-                                                            move || {
-                                                                cranpose_core::remember(|| {
-                                                                    Resource::new(Rc::clone(
-                                                                        &retained_lifecycle
-                                                                            .remembered_drops,
-                                                                    ))
-                                                                });
-                                                                with_current_composer(|composer| {
-                                                                    let id = composer.emit_node(
-                                                                        || DropProbe {
-                                                                            _resource: Resource::new(
-                                                                                Rc::clone(&dropped),
-                                                                            ),
-                                                                            parent: None,
-                                                                            retained_lifecycle: Some(
-                                                                                Rc::clone(
-                                                                                    &retained_lifecycle,
-                                                                                ),
-                                                                            ),
-                                                                            ordinary_slot_lifecycle: None,
-                                                                        },
-                                                                    );
-                                                                    probe_node_ids.borrow_mut().push(id);
-                                                                });
-                                                            },
-                                                        );
-                                                    }
-                                                },
-                                            );
-                                        }
+                                        inner_scope.subcompose(SlotId::new(0), show, move || {
+                                            if show {
+                                                compose_retained_pair(
+                                                    &probe_node_ids,
+                                                    &dropped,
+                                                    &retained_lifecycle,
+                                                );
+                                            }
+                                        });
                                         let (width, height) = inner_constraints.constrain(0.0, 0.0);
                                         MeasureResult::new(Size::new(width, height), Vec::new())
                                     },
