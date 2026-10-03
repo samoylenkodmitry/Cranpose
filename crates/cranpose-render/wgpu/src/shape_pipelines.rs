@@ -266,8 +266,6 @@ impl<B: KeyedBuild> Slots<B> {
         self.entries.get(&key)?.value.get()
     }
 
-    /// Records that a draw of `vertices` stands in for `key` until it is
-    /// built.
     pub(crate) fn want(&mut self, key: ShapePipelineKey, vertices: u64) {
         match self.wanted.iter_mut().find(|(wanted, _)| *wanted == key) {
             Some((_, total)) => *total += vertices,
@@ -280,10 +278,6 @@ impl<B: KeyedBuild> Slots<B> {
         self.wanted.clear();
     }
 
-    /// Hands the frame's wants to the demanded lane, replacing the last
-    /// frame's. Each build there takes the most wanted key not yet built
-    /// when it starts, so a heavy key wanted late goes before lighter ones
-    /// wanted earlier, and a key no frame wants any more is not built.
     pub(crate) fn request_wanted(&mut self) {
         if self.wanted.is_empty() && !self.published {
             return;
