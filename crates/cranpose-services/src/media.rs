@@ -999,6 +999,7 @@ pub fn record_dropped_media_samples() {
 /// simply calls it straight away — a backend queues the request against the
 /// item it is opening.
 pub fn open_media(item: MediaItem) -> Result<(), MediaError> {
+    *LATEST_SAMPLES.lock() = None;
     let Some(player) = media_player() else {
         publish_playback_state(PlaybackState::Failed(MediaError::Unsupported));
         return Err(MediaError::Unsupported);
@@ -1151,7 +1152,10 @@ pub fn set_media_analysis_enabled(enabled: bool) -> bool {
             }
             player.set_analysis_enabled(enabled)
         }
-        _ => false,
+        _ => {
+            *LATEST_SAMPLES.lock() = None;
+            false
+        }
     }
 }
 
