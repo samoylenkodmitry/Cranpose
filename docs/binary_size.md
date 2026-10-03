@@ -143,6 +143,17 @@ the dynamic relocations from 475 KB to 62 KB, and folding took 238 KB off `.text
 `--icf=safe` folds nothing under fat LTO, which keeps no address-significance
 tables.
 
+Release libraries also carry no unwind tables: release builds abort on panic,
+so nothing unwinds. The panic hook still logs the panic's location and
+message, then aborts; its backtrace reads `unsupported backtrace`, and a
+crash tombstone loses the frames inside the library. The prebuilt standard
+library and every dependency ship tables that a codegen flag on the final
+crate cannot remove, so the plugin links with `--no-eh-frame-hdr` and a
+linker script that discards `.eh_frame`, `.gcc_except_table`, `.ARM.exidx`
+and `.ARM.extab` (`INSERT` keeps the default layout). On the bench, arm64
+went from 9,922 KB to 8,974 KB (−948 KB, −9.6%) and armv7 from 7,224 KB to
+7,111 KB (−113 KB); everything else in the layout is unchanged.
+
 ## The Android library by crate, nightly
 
 The nightly board's `android-size` job builds the demo's arm64 library as
