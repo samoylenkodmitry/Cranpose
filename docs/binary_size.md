@@ -154,6 +154,13 @@ and `.ARM.extab` (`INSERT` keeps the default layout). On the bench, arm64
 went from 9,922 KB to 8,974 KB (−948 KB, −9.6%) and armv7 from 7,224 KB to
 7,111 KB (−113 KB); everything else in the layout is unchanged.
 
+Android release builds also compile out every crate's debug and trace log
+calls: the logger `cranpose` installs on Android passes Info and above
+(Warn for wgpu and naga), so those calls could never print. `cranpose`
+enables `log`'s `release_max_level_info` for Android targets only. On the
+bench this took 8,874 KB to 8,724 KB (−150 KB), most of it wgpu's and
+naga's logging.
+
 ## The Android library by crate, nightly
 
 The nightly board's `android-size` job builds the demo's arm64 library as
