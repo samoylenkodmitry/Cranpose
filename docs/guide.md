@@ -994,6 +994,7 @@ module. The iOS [native demo](../apps/native-demo/ios/App.swift) shows module
 linking and view-controller ownership. Inside a view controller:
 
 ```swift
+import UIKit
 import Cranpose
 import CranposeBindings
 
