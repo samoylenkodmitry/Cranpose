@@ -25,8 +25,9 @@ use cranpose_render_common::{
     text_mask_gamma::TextLuminance,
 };
 use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, FRAGMENT_KIND_FILL, FxHasher, ImageBitmap, ImageSampling, Point,
-    RecordSegment, Rect, RenderHash, TileMode,
+    BlendMode, Color, ColorFilter, FRAGMENT_KIND_ARC, FRAGMENT_KIND_FILL, FRAGMENT_KIND_LINE,
+    FRAGMENT_KIND_STROKE, FxHasher, ImageBitmap, ImageSampling, Point, RecordSegment, Rect,
+    RenderHash, TileMode,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -1135,7 +1136,7 @@ pub(crate) enum RunTier {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapeVariant {
-    kind: Option<u8>,
+    kinds: u8,
     brush: Option<u8>,
     solid: bool,
     /// How its records meet their placements' clips. A rounded clip gives
@@ -1157,9 +1158,25 @@ const FLAT_FILL_ENTRIES: [[(&str, &str); 2]; 2] = [
     ],
 ];
 
+const ALL_SHAPE_KINDS: u8 = (1 << FRAGMENT_KIND_FILL)
+    | (1 << FRAGMENT_KIND_STROKE)
+    | (1 << FRAGMENT_KIND_ARC)
+    | (1 << FRAGMENT_KIND_LINE);
+const LINE_KIND: u8 = 1 << FRAGMENT_KIND_LINE;
+
+fn variant_kinds(kinds: u8) -> u8 {
+    if kinds.count_ones() <= 1 {
+        kinds
+    } else if kinds & LINE_KIND != 0 {
+        ALL_SHAPE_KINDS
+    } else {
+        ALL_SHAPE_KINDS & !LINE_KIND
+    }
+}
+
 impl ShapeVariant {
     const GENERAL: Self = Self {
-        kind: None,
+        kinds: ALL_SHAPE_KINDS,
         brush: None,
         solid: false,
         clip: SegmentClip::Tested,
@@ -1187,7 +1204,7 @@ impl ShapeVariant {
         }
         let gradient = segment.gradient || (segment.vertex_gradient && !vertex_gradients);
         Self {
-            kind: segment.uniform_kind().map(|kind| kind as u8),
+            kinds: variant_kinds(segment.kinds),
             brush: gradient
                 .then(|| segment.uniform_brush())
                 .flatten()
@@ -1202,10 +1219,14 @@ impl ShapeVariant {
         }
     }
 
+    fn kind(self) -> Option<u8> {
+        (self.kinds.count_ones() == 1).then(|| self.kinds.trailing_zeros() as u8)
+    }
+
     /// The vertex and fragment entry points of this variant, for records
     /// drawn `flat` (none of them turned).
     fn entries(self, flat: bool) -> (&'static str, &'static str) {
-        let fill = self.kind == Some(FRAGMENT_KIND_FILL as u8);
+        let fill = self.kind() == Some(FRAGMENT_KIND_FILL as u8);
         if self.rounded() {
             ("vs_record", "fs_main")
         } else if self.solid && fill && flat {
@@ -1222,6 +1243,7 @@ impl ShapeVariant {
 
     fn general(self) -> Self {
         Self {
+            kinds: (ALL_SHAPE_KINDS & !LINE_KIND) | (self.kinds & LINE_KIND),
             ablation: self.ablation,
             ..Self::GENERAL
         }
@@ -1431,11 +1453,15 @@ impl KeyReader {
         let value = u8::try_from(self.take(8)).ok()?;
         present.then_some(value)
     }
+
+    fn take_kinds(&mut self) -> Option<u8> {
+        u8::try_from(self.take(4)).ok().filter(|kinds| *kinds != 0)
+    }
 }
 
 impl ShapePipelineKey {
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY001";
+    pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY002";
 
     /// The key as a number a later launch reads back with
     /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
@@ -1445,7 +1471,7 @@ impl ShapePipelineKey {
         bits.put(self.blend_mode as u64, 5);
         bits.put(self.tier as u64, 2);
         let variant = self.variant;
-        bits.put_byte(variant.kind);
+        bits.put(u64::from(variant.kinds), 4);
         bits.put_byte(variant.brush);
         bits.put(u64::from(variant.solid), 1);
         bits.put(
@@ -1490,7 +1516,7 @@ impl ShapePipelineKey {
             2 => RunTier::Either,
             _ => return None,
         };
-        let kind = bits.take_byte();
+        let kinds = bits.take_kinds()?;
         let brush = bits.take_byte();
         let solid = bits.take_flag();
         let clip = match bits.take(2) {
@@ -1521,7 +1547,7 @@ impl ShapePipelineKey {
             blend_mode,
             tier,
             variant: ShapeVariant {
-                kind,
+                kinds,
                 brush,
                 solid,
                 clip,
@@ -1598,7 +1624,8 @@ pub(crate) fn create_shape_pipeline(
         depth,
     } = key;
     let constants = [
-        ("SHAPE_KIND_FIXED", variant.kind.map_or(-1.0, f64::from)),
+        ("SHAPE_KIND_FIXED", variant.kind().map_or(-1.0, f64::from)),
+        ("SHAPE_KINDS", f64::from(variant.kinds)),
         ("BRUSH_KIND_FIXED", variant.brush.map_or(-1.0, f64::from)),
         ("SHAPE_SOLID", f64::from(u8::from(variant.solid))),
         (
