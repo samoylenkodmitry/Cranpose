@@ -325,7 +325,7 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     pub fn applier_mut(&mut self) -> ApplierGuard<'_, A> {
-        ApplierGuard::new(self.applier.borrow_typed())
+        self.applier.borrow_typed()
     }
 
     pub fn root(&self) -> Option<NodeId> {

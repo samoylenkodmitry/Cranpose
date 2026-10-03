@@ -9,12 +9,12 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
-    AnchorId, Applier, ApplierHost, COMMAND_FLUSH_THRESHOLD, ChildList, Command, CommandQueue,
-    CompositionLocal, DirtyBubble, Key, LocalKey, LocalStackSnapshot, LocalStateEntry,
-    MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions, RecomposeScope,
-    RecomposeScopeInner, RecycledNode, RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId,
-    SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
-    StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
+    AnchorId, Applier, ApplierGuard, ApplierHost, COMMAND_FLUSH_THRESHOLD, ChildList, Command,
+    CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey, LocalStackSnapshot,
+    LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions,
+    RecomposeScope, RecomposeScopeInner, RecycledNode, RetentionMode, RetentionPolicy,
+    RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList,
+    SnapshotStateMap, StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
     collections::map::{HashMap, HashSet},
     composer_context, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
@@ -464,25 +464,25 @@ impl ComposerRuntimeState {
         table: &mut SlotTable,
         lifecycle: &mut crate::slot::SlotLifecycleCoordinator,
     ) -> Result<(), NodeError> {
+        let retention = self.retention_by_host.borrow_mut().remove(&host_key);
         let applier_host = self
             .applier_host
             .borrow()
             .as_ref()
             .and_then(std::rc::Weak::upgrade);
-        if let Some(applier_host) = applier_host.as_ref() {
-            let retention_by_host = self.retention_by_host.borrow();
-            let Some(retention) = retention_by_host.get(&host_key) else {
-                return Ok(());
-            };
-            let mut applier = applier_host.borrow_dyn();
-            for subtree in retention.subtrees() {
-                crate::slot::dispose_detached_subtree_now(&mut *applier, subtree)?;
+        if let Some(applier_host) = applier_host {
+            let mut disposal = crate::NodeDisposal::default();
+            if let Some(retention) = retention {
+                for subtree in retention.into_subtrees() {
+                    subtree.scopes().for_each(RecomposeScope::deactivate);
+                    table.invalidate_detached_subtree_anchors(&subtree);
+                    disposal.retain_subtree(subtree);
+                }
             }
+            applier_host.dispose_nodes(disposal)?;
+        } else if let Some(retention) = retention {
+            self.deactivate_and_queue_subtrees(retention, table, lifecycle);
         }
-        let Some(retention) = self.retention_by_host.borrow_mut().remove(&host_key) else {
-            return Ok(());
-        };
-        self.deactivate_and_queue_subtrees(retention, table, lifecycle);
         Ok(())
     }
 
@@ -1011,7 +1011,7 @@ impl Composer {
         self.core.pending_scope_options.borrow_mut()
     }
 
-    pub(crate) fn borrow_applier(&self) -> RefMut<'_, dyn Applier> {
+    pub(crate) fn borrow_applier(&self) -> ApplierGuard<'_, dyn Applier> {
         self.core.applier.borrow_dyn()
     }
 
@@ -1034,17 +1034,40 @@ impl Composer {
 
     /// Registers a virtual node in the Applier.
     ///
-    /// This is used by SubcomposeLayoutNode to register virtual container nodes
-    /// so that subsequent insert_child commands can find them and attach children.
-    /// Without this, virtual nodes would only exist in SubcomposeLayoutNodeInner.virtual_nodes
-    /// and applier.get_mut(virtual_node_id) would fail, breaking child attachment.
+    /// Assigns the node's ID so its layout registry and invalidation metadata
+    /// belong to the node stored in the applier.
     pub fn register_virtual_node(
         &self,
         node_id: NodeId,
         node: Box<dyn Node>,
     ) -> Result<(), NodeError> {
         let mut applier = self.borrow_applier();
-        applier.insert_with_id(node_id, node)
+        applier.insert_with_id(node_id, node)?;
+        applier.get_mut(node_id)?.set_node_id(node_id);
+        Ok(())
+    }
+
+    /// Detaches and disposes subcomposition roots evicted from their reuse pool.
+    /// Applies pending composition commands before releasing the roots and their descendants.
+    ///
+    /// ```no_run
+    /// # use cranpose_core::{Composer, NodeError, SubcomposeState};
+    /// # fn finish(composer: &Composer, state: &mut SubcomposeState) -> Result<(), NodeError> {
+    /// let evicted = state.finish_pass();
+    /// composer.dispose_subcomposed_nodes(evicted)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn dispose_subcomposed_nodes(
+        &self,
+        disposal: crate::subcompose::SubcomposeDisposal,
+    ) -> Result<(), NodeError> {
+        if disposal.nodes.is_empty() && disposal.slot_hosts.is_empty() {
+            return Ok(());
+        }
+        self.apply_pending_commands()?;
+        let disposal = crate::NodeDisposal::from_subcomposed(disposal, &*self.borrow_applier());
+        self.core.applier.dispose_nodes(disposal)
     }
 
     /// Checks if a node has no parent (is a root node).
@@ -1082,28 +1105,20 @@ impl Composer {
         }
     }
 
-    pub fn nodes_need_measure(&self, node_ids: &[NodeId]) -> bool {
-        let mut applier = self.borrow_applier();
-        node_ids.iter().any(|node_id| {
-            applier
-                .get_mut(*node_id)
-                .is_ok_and(|node| node.needs_measure())
-        })
-    }
-
-    /// Whether any of `node_ids` carries a pending *layout* (placement) repass.
+    /// Whether any node needs measurement or placement before its cached layout can be reused.
     ///
-    /// Layout-only dirtiness is not a subset of measure dirtiness: a scroll
-    /// offset change keeps every measured size intact and therefore bubbles
-    /// `needs_layout` alone. Callers that gate cache reuse on
-    /// [`Self::nodes_need_measure`] must also consult this, or a node whose
-    /// *position* changed will replay its stale cached placement forever.
-    pub fn nodes_need_layout(&self, node_ids: &[NodeId]) -> bool {
+    /// ```no_run
+    /// # use cranpose_core::{Composer, NodeId};
+    /// # fn cache_is_current(composer: &Composer, children: &[NodeId]) -> bool {
+    /// !composer.nodes_need_relayout(children.iter().copied())
+    /// # }
+    /// ```
+    pub fn nodes_need_relayout(&self, node_ids: impl IntoIterator<Item = NodeId>) -> bool {
         let mut applier = self.borrow_applier();
-        node_ids.iter().any(|node_id| {
+        node_ids.into_iter().any(|node_id| {
             applier
-                .get_mut(*node_id)
-                .is_ok_and(|node| node.needs_layout())
+                .get_mut(node_id)
+                .is_ok_and(|node| node.needs_measure() || node.needs_layout())
         })
     }
 

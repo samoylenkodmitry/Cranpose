@@ -346,6 +346,7 @@ impl DetachedSubtree {
         self.groups.first().and_then(|group| group.scope.as_ref())
     }
 
+    #[cfg(test)]
     pub(crate) fn node_ids_iter(&self) -> impl Iterator<Item = NodeId> + '_ {
         self.nodes.iter().map(|node| node.id)
     }
@@ -376,29 +377,28 @@ impl DetachedSubtree {
         root_nodes: &mut Vec<NodeId>,
         context: &'static str,
     ) {
-        let original_len = root_nodes.len();
-        self.collect_root_nodes_into(root_nodes);
-        if self.node_count() == 0 {
-            return;
-        }
-        let node_ids = self.node_ids_iter().collect::<HashSet<_>>();
-        let collected_roots = &root_nodes[original_len..];
-        if collected_roots.is_empty() {
+        root_nodes.clear();
+        self.append_checked_roots(root_nodes, |node| node.id, context);
+    }
+
+    pub(crate) fn append_disposal_roots(&self, roots: &mut Vec<(NodeId, u32)>) {
+        self.append_checked_roots(roots, |node| (node.id, node.generation), "host disposal");
+    }
+
+    fn append_checked_roots<T>(
+        &self,
+        roots: &mut Vec<T>,
+        map: impl Fn(&NodeRecord) -> T,
+        context: &'static str,
+    ) {
+        let original_len = roots.len();
+        roots.extend(root_node_records(&self.nodes).map(&map));
+        if roots.len() == original_len && !self.nodes.is_empty() {
             log::error!(
                 "detached subtree nodes did not expose root metadata during {context}; falling back to every detached node"
             );
-            root_nodes.extend(self.node_ids_iter());
-            return;
+            roots.extend(self.nodes.iter().map(map));
         }
-        if collected_roots.iter().all(|id| node_ids.contains(id)) {
-            return;
-        }
-
-        log::error!(
-            "detached subtree root ids included nodes outside the detached subtree during {context}; falling back to every detached node"
-        );
-        root_nodes.truncate(original_len);
-        root_nodes.extend(self.node_ids_iter());
     }
 
     pub(crate) fn group_count(&self) -> usize {
@@ -503,14 +503,17 @@ const ROOT_SCAN_LIMIT: usize = 16;
 /// The ids of the records in `nodes` whose parent is not among them, in
 /// order.
 pub(in crate::slot) fn root_node_ids(nodes: &[NodeRecord]) -> impl Iterator<Item = NodeId> + '_ {
+    root_node_records(nodes).map(|node| node.id)
+}
+
+fn root_node_records(nodes: &[NodeRecord]) -> impl Iterator<Item = &NodeRecord> {
     let hashed: Option<HashSet<NodeId>> =
         (nodes.len() > ROOT_SCAN_LIMIT).then(|| nodes.iter().map(|node| node.id).collect());
-    nodes.iter().filter_map(move |node| {
-        let parent_outside = node.parent_id.is_none_or(|parent_id| match &hashed {
+    nodes.iter().filter(move |node| {
+        node.parent_id.is_none_or(|parent_id| match &hashed {
             Some(ids) => !ids.contains(&parent_id),
             None => nodes.iter().all(|other| other.id != parent_id),
-        });
-        parent_outside.then_some(node.id)
+        })
     })
 }
 

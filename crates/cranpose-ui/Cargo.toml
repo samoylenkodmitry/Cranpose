@@ -59,6 +59,10 @@ harness = false
 name = "slot_table_v2"
 harness = false
 
+[[bench]]
+name = "lazy_scroll"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"

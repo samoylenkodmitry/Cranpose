@@ -639,11 +639,15 @@ impl TextService {
         style: &TextStyle,
     ) -> TextMetrics {
         let key = text_base_cache_key(text, style);
-        if let Some(metrics) = self.metrics_cache.borrow_mut().get(&key).copied() {
+        if let Some(key) = key
+            && let Some(metrics) = self.metrics_cache.borrow_mut().get(&key).copied()
+        {
             return metrics;
         }
         let metrics = self.with_measurer(|m| m.measure_for_node(node_id, text, style));
-        self.metrics_cache.borrow_mut().push(key, metrics);
+        if let Some(key) = key {
+            self.metrics_cache.borrow_mut().push(key, metrics);
+        }
         metrics
     }
 
@@ -656,21 +660,24 @@ impl TextService {
         max_width: Option<f32>,
     ) -> TextMetrics {
         let key = text_options_cache_key(text, style, options.normalized(), max_width);
-        if let Some(metrics) = self.options_metrics_cache.borrow_mut().get(&key).copied() {
-            return metrics;
-        }
-        // A text laid out at these options holds its metrics already.
-        let prepared_key = TextPreparedCacheKey {
-            base: key,
-            visual_hash: style.render_hash(),
-        };
-        if let Some(prepared) = self.prepared_cache.borrow_mut().get(&prepared_key) {
-            return prepared.metrics;
+        if let Some(key) = key {
+            if let Some(metrics) = self.options_metrics_cache.borrow_mut().get(&key).copied() {
+                return metrics;
+            }
+            let prepared_key = TextPreparedCacheKey {
+                base: key,
+                visual_hash: style.render_hash(),
+            };
+            if let Some(prepared) = self.prepared_cache.borrow_mut().get(&prepared_key) {
+                return prepared.metrics;
+            }
         }
         let metrics = self.with_measurer(|m| {
             m.measure_with_options_for_node(node_id, text, style, options.normalized(), max_width)
         });
-        self.options_metrics_cache.borrow_mut().push(key, metrics);
+        if let Some(key) = key {
+            self.options_metrics_cache.borrow_mut().push(key, metrics);
+        }
         metrics
     }
 
@@ -685,19 +692,26 @@ impl TextService {
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> Rc<PreparedTextLayout> {
-        let key = TextPreparedCacheKey {
-            base: text_options_cache_key(text, style, options.normalized(), max_width),
-            visual_hash: style.render_hash(),
-        };
-        if let Some(prepared) = self.prepared_cache.borrow_mut().get(&key).map(Rc::clone) {
+        let key =
+            text_options_cache_key(text, style, options.normalized(), max_width).map(|base| {
+                TextPreparedCacheKey {
+                    base,
+                    visual_hash: style.render_hash(),
+                }
+            });
+        if let Some(key) = key
+            && let Some(prepared) = self.prepared_cache.borrow_mut().get(&key).map(Rc::clone)
+        {
             return prepared;
         }
         let prepared = Rc::new(self.with_measurer(|m| {
             m.prepare_with_options_for_node(node_id, text, style, options.normalized(), max_width)
         }));
-        self.prepared_cache
-            .borrow_mut()
-            .push(key, Rc::clone(&prepared));
+        if let Some(key) = key {
+            self.prepared_cache
+                .borrow_mut()
+                .push(key, Rc::clone(&prepared));
+        }
         prepared
     }
 
@@ -707,11 +721,15 @@ impl TextService {
         style: &TextStyle,
     ) -> TextLayoutResult {
         let key = text_base_cache_key(text, style);
-        if let Some(layout) = self.layout_cache.borrow_mut().get(&key).cloned() {
+        if let Some(key) = key
+            && let Some(layout) = self.layout_cache.borrow_mut().get(&key).cloned()
+        {
             return layout;
         }
         let layout = self.with_measurer(|m| m.layout(text, style));
-        self.layout_cache.borrow_mut().push(key, layout.clone());
+        if let Some(key) = key {
+            self.layout_cache.borrow_mut().push(key, layout.clone());
+        }
         layout
     }
 
@@ -735,11 +753,16 @@ impl TextService {
     }
 }
 
-fn text_base_cache_key(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextBaseCacheKey {
-    TextBaseCacheKey {
-        text_hash: text.render_hash(),
-        style_hash: style.measurement_hash(),
-    }
+fn text_base_cache_key(
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+) -> Option<TextBaseCacheKey> {
+    (text.string_annotations.is_empty() && text.link_annotations.is_empty()).then(|| {
+        TextBaseCacheKey {
+            text_hash: text.render_hash(),
+            style_hash: style.measurement_hash(),
+        }
+    })
 }
 
 fn text_options_cache_key(
@@ -747,12 +770,12 @@ fn text_options_cache_key(
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
-) -> TextOptionsCacheKey {
-    TextOptionsCacheKey {
-        base: text_base_cache_key(text, style),
+) -> Option<TextOptionsCacheKey> {
+    Some(TextOptionsCacheKey {
+        base: text_base_cache_key(text, style)?,
         options: options.normalized(),
         max_width_bits: normalize_max_width(max_width).map(f32::to_bits),
-    }
+    })
 }
 
 pub fn set_text_measurer<M: TextMeasurer>(measurer: M) {

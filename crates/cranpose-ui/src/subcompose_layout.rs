@@ -18,14 +18,19 @@ use web_time::Instant;
 use crate::{
     layout::MeasuredNode,
     modifier::{Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size},
-    widgets::nodes::{
-        LayoutNode, LayoutNodeCacheHandles, LayoutState, allocate_virtual_node_id, is_virtual_node,
-        register_layout_node,
-    },
+    widgets::nodes::{LayoutNode, LayoutNodeCacheHandles, LayoutState, allocate_virtual_node_id},
 };
 
 fn subcompose_telemetry_enabled() -> bool {
     cranpose_core::env_flag!("CRANPOSE_SUBCOMPOSE_TELEMETRY")
+}
+
+pub(crate) enum RetainedSlotChildren {
+    Clean,
+    Remeasure {
+        children: Vec<SubcomposeChild>,
+        children_match: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -300,24 +305,14 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             } else {
                 let id = allocate_virtual_node_id();
                 let node = LayoutNode::new_virtual();
-                if let Err(e) = self
-                    .composer
-                    .register_virtual_node(id, Box::new(node.clone()))
-                {
+                if let Err(e) = self.composer.register_virtual_node(id, Box::new(node)) {
                     eprintln!("[Subcompose] Failed to register virtual node {id}: {e:?}");
                 }
-                register_layout_node(id, &node);
-
-                inner.virtual_nodes.insert(id, Rc::new(node));
                 inner.children.push(id);
                 (id, false)
             };
 
         self.composer.record_subcompose_child(virtual_node_id);
-
-        if let Some(v_node) = inner.virtual_nodes.get(&virtual_node_id) {
-            v_node.set_parent(self.root_id);
-        }
 
         drop(inner);
 
@@ -389,32 +384,24 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         }
         let virtual_node_ids = self.state.activate_current_active_slot(slot_id)?;
 
-        {
-            let inner = self.parent_handle.inner.borrow();
-            for virtual_node_id in &virtual_node_ids {
-                self.composer.record_subcompose_child(*virtual_node_id);
-                if let Some(v_node) = inner.virtual_nodes.get(virtual_node_id) {
-                    v_node.set_parent(self.root_id);
-                }
-            }
-        }
-        for virtual_node_id in &virtual_node_ids {
+        for &virtual_node_id in virtual_node_ids {
+            self.composer.record_subcompose_child(virtual_node_id);
             let _ = self
                 .composer
-                .with_node_mut::<LayoutNode, _>(*virtual_node_id, |node| {
+                .with_node_mut::<LayoutNode, _>(virtual_node_id, |node| {
                     node.set_parent(self.root_id);
                 });
         }
 
         let mut children = Vec::new();
-        for virtual_node_id in &virtual_node_ids {
+        for virtual_node_id in virtual_node_ids {
             children.extend(self.composer.get_node_children(*virtual_node_id));
         }
         record_clean_slot_skip();
 
         #[cfg(debug_assertions)]
         {
-            self.shadow_stash = Some((virtual_node_ids, children.clone()));
+            self.shadow_stash = Some((virtual_node_ids.to_vec(), children.clone()));
         }
 
         Some(children)
@@ -446,83 +433,54 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         &mut self,
         slot_id: SlotId,
         known_children: &[u64],
-    ) -> Option<(Vec<SubcomposeChild>, bool)> {
+    ) -> Option<RetainedSlotChildren> {
         for &node_id in known_children {
             NodeId::try_from(node_id).ok()?;
         }
-
-        let virtual_node_ids = match self.activate_current_active_slot_roots(slot_id) {
-            Some(virtual_node_ids) => {
-                for virtual_node_id in &virtual_node_ids {
-                    self.composer.record_subcompose_child(*virtual_node_id);
-                }
-                virtual_node_ids
-            }
-            None => self.activate_recycled_exact_retained_slot_roots(slot_id)?,
-        };
-
         if !self.ensure_pending_commands_applied() {
             return None;
         }
 
-        let mut activated_children = Vec::with_capacity(known_children.len());
-        for virtual_node_id in virtual_node_ids {
-            activated_children.extend(
-                self.composer
-                    .get_node_children(virtual_node_id)
-                    .iter()
-                    .copied()
-                    .map(SubcomposeChild::new),
-            );
-        }
-        let children_match = activated_children
-            .iter()
-            .map(|child| child.node_id() as u64)
-            .eq(known_children.iter().copied());
-        Some((activated_children, children_match))
-    }
-
-    fn activate_current_active_slot_roots(&mut self, slot_id: SlotId) -> Option<Vec<NodeId>> {
-        self.state.activate_current_active_slot(slot_id)
-    }
-
-    fn activate_recycled_exact_retained_slot_roots(
-        &mut self,
-        slot_id: SlotId,
-    ) -> Option<Vec<NodeId>> {
-        let activation = self.state.take_exact_slot_activation(slot_id)?;
-        let virtual_node_ids = activation.nodes;
-        let scopes = activation.scopes;
-        let reactivate_scopes = activation.reactivate_scopes;
-
-        if reactivate_scopes {
-            let inner = self.parent_handle.inner.borrow();
-            for virtual_node_id in &virtual_node_ids {
-                self.composer.record_subcompose_child(*virtual_node_id);
-                if let Some(v_node) = inner.virtual_nodes.get(virtual_node_id) {
-                    v_node.set_parent(self.root_id);
-                }
-            }
-            for virtual_node_id in &virtual_node_ids {
+        let activation = self.state.activate_exact_slot(slot_id)?;
+        for &virtual_node_id in activation.nodes {
+            self.composer.record_subcompose_child(virtual_node_id);
+            if activation.was_recycled {
                 let _ = self
                     .composer
-                    .with_node_mut::<LayoutNode, _>(*virtual_node_id, |node| {
+                    .with_node_mut::<LayoutNode, _>(virtual_node_id, |node| {
                         node.set_parent(self.root_id);
                     });
             }
-        } else {
-            for virtual_node_id in &virtual_node_ids {
-                self.composer.record_subcompose_child(*virtual_node_id);
-            }
         }
 
-        self.state.register_active_with_scope_reactivation(
-            slot_id,
-            &virtual_node_ids,
-            &scopes,
-            reactivate_scopes,
-        );
-        Some(virtual_node_ids)
+        let mut expected = known_children.iter().copied();
+        let mut children_match = true;
+        let mut needs_relayout = false;
+        for &virtual_node_id in activation.nodes {
+            let children = self.composer.get_node_children(virtual_node_id);
+            for &child in &children {
+                children_match &= expected.next() == Some(child as u64);
+            }
+            needs_relayout |= self.composer.nodes_need_relayout(children.iter().copied());
+        }
+        children_match &= expected.next().is_none();
+        if children_match && !needs_relayout {
+            return Some(RetainedSlotChildren::Clean);
+        }
+
+        let mut children = Vec::with_capacity(known_children.len());
+        for &virtual_node_id in activation.nodes {
+            children.extend(
+                self.composer
+                    .get_node_children(virtual_node_id)
+                    .into_iter()
+                    .map(SubcomposeChild::new),
+            );
+        }
+        Some(RetainedSlotChildren::Remeasure {
+            children,
+            children_match,
+        })
     }
 }
 
@@ -658,10 +616,9 @@ impl SubcomposeMeasureScopeImpl<'_> {
 
     pub(crate) fn recycle_active_slots_where(&mut self, predicate: impl FnMut(SlotId) -> bool) {
         let disposed = self.state.recycle_active_slots_where(predicate);
-        debug_assert!(
-            disposed.is_empty(),
-            "lazy subcompose reusable pool limits must retain recycled active slots"
-        );
+        if let Err(error) = self.composer.dispose_subcomposed_nodes(disposed) {
+            self.record_error(error);
+        }
     }
 
     /// Returns whether the last subcomposed slot was reused.
@@ -701,9 +658,8 @@ impl SubcomposeMeasureScopeImpl<'_> {
             return true;
         }
 
-        let mut root_ids = smallvec::SmallVec::<[NodeId; 8]>::new();
-        root_ids.extend(children.iter().map(SubcomposeChild::node_id));
-        self.composer.nodes_need_measure(&root_ids) || self.composer.nodes_need_layout(&root_ids)
+        self.composer
+            .nodes_need_relayout(children.iter().map(SubcomposeChild::node_id))
     }
 
     pub(crate) fn ensure_cached_measurement_node_ids<I>(
@@ -785,7 +741,6 @@ pub struct SubcomposeLayoutNode {
     needs_redraw: Cell<bool>,
     needs_pointer_pass: Cell<bool>,
     needs_focus_sync: Cell<bool>,
-    virtual_children_count: Cell<usize>,
     layout_state: RefCell<LayoutState>,
     cache_handles: LayoutNodeCacheHandles,
     modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
@@ -809,7 +764,6 @@ impl SubcomposeLayoutNode {
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
-            virtual_children_count: Cell::new(0),
             layout_state: RefCell::new(LayoutState::default()),
             cache_handles: LayoutNodeCacheHandles::default(),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
@@ -848,7 +802,6 @@ impl SubcomposeLayoutNode {
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
-            virtual_children_count: Cell::new(0),
             layout_state: RefCell::new(LayoutState::default()),
             cache_handles: LayoutNodeCacheHandles::default(),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
@@ -1251,10 +1204,6 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         if inner.children.contains(&child) {
             return false;
         }
-        if is_virtual_node(child) {
-            let count = self.virtual_children_count.get();
-            self.virtual_children_count.set(count + 1);
-        }
         inner.children.push(child);
         true
     }
@@ -1263,14 +1212,7 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         let mut inner = self.inner.borrow_mut();
         let before = inner.children.len();
         inner.children.retain(|&id| id != child);
-        let removed = inner.children.len() < before;
-        if removed && is_virtual_node(child) {
-            let count = self.virtual_children_count.get();
-            if count > 0 {
-                self.virtual_children_count.set(count - 1);
-            }
-        }
-        removed
+        inner.children.len() < before
     }
 
     fn move_child(&mut self, from: usize, to: usize) {
@@ -1540,7 +1482,8 @@ impl SubcomposeLayoutNodeHandle {
             },
         )?;
 
-        state.finish_pass();
+        let disposed = state.finish_pass();
+        let disposal = composer.dispose_subcomposed_nodes(disposed);
 
         if previous != composer.phase() {
             composer.enter_phase(previous);
@@ -1556,6 +1499,7 @@ impl SubcomposeLayoutNodeHandle {
             );
         }
 
+        disposal?;
         Ok(result)
     }
 
@@ -1585,7 +1529,6 @@ struct SubcomposeLayoutNodeInner {
     children: Vec<NodeId>,
     slots: Rc<SlotsHost>,
     debug_modifiers: bool,
-    virtual_nodes: HashMap<NodeId, Rc<LayoutNode>>,
     node_id: Option<NodeId>,
     last_placements: Rc<Vec<NodeId>>,
     placement_scratch: Vec<Placement>,
@@ -1645,7 +1588,6 @@ impl SubcomposeLayoutNodeInner {
             children: Vec::new(),
             slots: Rc::new(SlotsHost::new(SlotTable::default())),
             debug_modifiers: false,
-            virtual_nodes: HashMap::new(),
             node_id: None,
             last_placements: Rc::new(Vec::new()),
             placement_scratch: Vec::new(),

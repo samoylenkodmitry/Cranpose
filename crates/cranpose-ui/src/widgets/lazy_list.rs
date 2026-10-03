@@ -28,8 +28,8 @@ use crate::{
     modifier::{Modifier, Size},
     scroll::{OverscrollEffect, ScrollMotionContextKey, scroll_motion_context_for_key},
     subcompose_layout::{
-        MeasurePolicy, Placement, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
-        SubcomposeMeasureScopeImpl,
+        MeasurePolicy, Placement, RetainedSlotChildren, SubcomposeChild, SubcomposeLayoutNode,
+        SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
     },
 };
 
@@ -201,33 +201,37 @@ fn measure_lazy_list_item(
             .measured_item_cache
             .borrow_mut()
             .record_candidate_hit();
-        if let Some((root_children, children_match)) =
-            scope.activate_exact_retained_slot_with_known_children(slot_id, &cached.item.node_ids)
+        match scope.activate_exact_retained_slot_with_known_children(slot_id, &cached.item.node_ids)
         {
-            let children_are_clean = !scope.children_need_relayout(&root_children);
-            if children_match && children_are_clean {
+            Some(RetainedSlotChildren::Clean) => {
                 retained_measurement_batch.extend(cached.retained_children.iter().cloned());
                 inputs.measured_item_cache.borrow_mut().record_exact_reuse();
                 return cached.item;
             }
-            inputs.measured_item_cache.borrow_mut().remove(index);
-            if children_match {
-                inputs
-                    .measured_item_cache
-                    .borrow_mut()
-                    .record_dirty_children();
-            } else {
-                inputs.measured_item_cache.borrow_mut().record_exact_miss();
+            Some(RetainedSlotChildren::Remeasure {
+                children,
+                children_match,
+            }) => {
+                let mut cache = inputs.measured_item_cache.borrow_mut();
+                cache.remove(index);
+                if children_match {
+                    cache.record_dirty_children();
+                } else {
+                    cache.record_exact_miss();
+                }
+                drop(cache);
+                return measure_lazy_list_children(
+                    scope,
+                    children,
+                    inputs.measured_item_cache,
+                    item_context,
+                );
             }
-            return measure_lazy_list_children(
-                scope,
-                root_children,
-                inputs.measured_item_cache,
-                item_context,
-            );
-        } else {
-            inputs.measured_item_cache.borrow_mut().record_exact_miss();
-            inputs.measured_item_cache.borrow_mut().remove(index);
+            None => {
+                let mut cache = inputs.measured_item_cache.borrow_mut();
+                cache.record_exact_miss();
+                cache.remove(index);
+            }
         }
     } else {
         inputs

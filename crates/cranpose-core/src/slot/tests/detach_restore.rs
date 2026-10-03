@@ -60,7 +60,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
     let mut applier = RemoveFailingApplier;
 
     assert_eq!(
-        crate::slot::dispose_detached_subtree_now(&mut applier, &subtree),
+        crate::slot::detach::dispose_detached_subtree_now(&mut applier, &subtree),
         Err(NodeError::MissingContext {
             id: NODE_ID,
             reason: "forced remove failure",

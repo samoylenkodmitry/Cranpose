@@ -3,6 +3,7 @@
 
 pub extern crate self as cranpose_core;
 
+mod applier_host;
 mod callbacks;
 mod composer;
 pub mod composer_context;
@@ -41,6 +42,7 @@ pub mod subcompose;
 pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
+pub use applier_host::{ApplierGuard, ApplierHost, ConcreteApplierHost, NodeDisposal};
 pub use callbacks::{
     CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot, SharedParam, refresh_param,
     refresh_shared_param,
@@ -222,7 +224,6 @@ use std::{
     cmp::Reverse,
     collections::BinaryHeap,
     hash::{Hash, Hasher},
-    ops::{Deref, DerefMut},
     rc::{Rc, Weak},
     sync::OnceLock,
 };
@@ -4372,72 +4373,6 @@ impl Applier for MemoryApplier {
     }
 }
 
-pub trait ApplierHost {
-    fn borrow_dyn(&self) -> RefMut<'_, dyn Applier>;
-    /// Compact internal storage after commands have been applied.
-    fn compact(&self) {}
-}
-
-pub struct ConcreteApplierHost<A: Applier + 'static> {
-    inner: RefCell<A>,
-}
-
-impl<A: Applier + 'static> ConcreteApplierHost<A> {
-    pub fn new(applier: A) -> Self {
-        Self {
-            inner: RefCell::new(applier),
-        }
-    }
-
-    pub fn borrow_typed(&self) -> RefMut<'_, A> {
-        self.inner.borrow_mut()
-    }
-
-    pub fn try_borrow_typed(&self) -> Result<RefMut<'_, A>, std::cell::BorrowMutError> {
-        self.inner.try_borrow_mut()
-    }
-
-    pub fn into_inner(self) -> A {
-        self.inner.into_inner()
-    }
-}
-
-impl<A: Applier + 'static> ApplierHost for ConcreteApplierHost<A> {
-    fn borrow_dyn(&self) -> RefMut<'_, dyn Applier> {
-        RefMut::map(self.inner.borrow_mut(), |applier| {
-            applier as &mut dyn Applier
-        })
-    }
-
-    fn compact(&self) {
-        self.inner.borrow_mut().compact();
-    }
-}
-
-pub struct ApplierGuard<'a, A: Applier + 'static> {
-    inner: RefMut<'a, A>,
-}
-
-impl<'a, A: Applier + 'static> ApplierGuard<'a, A> {
-    fn new(inner: RefMut<'a, A>) -> Self {
-        Self { inner }
-    }
-}
-
-impl<A: Applier + 'static> Deref for ApplierGuard<'_, A> {
-    type Target = A;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-
-impl<A: Applier + 'static> DerefMut for ApplierGuard<'_, A> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
-}
-
 pub struct SlotsHost {
     storage_key: Cell<usize>,
     inner: RefCell<SlotsHostInner>,
@@ -4660,7 +4595,12 @@ impl SlotsHost {
         lifecycle.flush_pending_drops();
         if let Some(state) = inner.runtime_state.clone() {
             let host_key = self.storage_key();
-            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)?;
+            if let Err(error) =
+                state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
+            {
+                inner.lifecycle = lifecycle;
+                return Err(error);
+            }
             state.clear_host(self, &mut inner.table);
             lifecycle.flush_pending_drops();
         }
@@ -4685,7 +4625,12 @@ impl SlotsHost {
         let mut lifecycle = std::mem::take(&mut inner.lifecycle);
         if let Some(state) = runtime_state {
             let host_key = self.storage_key();
-            state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)?;
+            if let Err(error) =
+                state.dispose_retained_subtrees_for_host(host_key, &mut inner.table, &mut lifecycle)
+            {
+                inner.lifecycle = lifecycle;
+                return Err(error);
+            }
             state.clear_host(self, &mut inner.table);
         }
         lifecycle.dispose_slot_table(&mut inner.table);

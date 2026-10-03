@@ -576,7 +576,7 @@ fn text_service_reuses_prepared_layout_cache_across_node_ids() {
 }
 
 #[test]
-fn prepared_text_sharing_preserves_width_variants_and_owned_edits() {
+fn prepared_text_preserves_width_variants_and_owned_edits() {
     let _app_context = crate::render_state::app_context_test_scope();
     let service = TextService::from_measurer(Rc::new(MonospacedTextMeasurer));
     let text = crate::text::AnnotatedString::builder()
@@ -601,9 +601,8 @@ fn prepared_text_sharing_preserves_width_variants_and_owned_edits() {
     assert_ne!(wide.text.text, narrow.text.text);
     assert!(narrow.text.text.ends_with(ELLIPSIS));
     assert!(!narrow.text.string_annotations.is_empty());
-    assert!(Rc::ptr_eq(&narrow.text, &retained.text));
-    assert!(Rc::ptr_eq(&narrow.text, &cached.text));
-    assert!(!Rc::ptr_eq(&wide.text, &narrow.text));
+    assert_eq!(narrow.text, retained.text);
+    assert_eq!(narrow.text, cached.text);
 
     let edited = Rc::make_mut(&mut narrow.text);
     edited.text = "edited".to_owned();
