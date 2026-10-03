@@ -134,7 +134,7 @@ fn list_items_do_not_emit_bullet_only_blocks() {
                 code: annotated, ..
             } => Some(annotated),
             MarkdownBlock::Image { .. } => None,
-            MarkdownBlock::Rule => None,
+            MarkdownBlock::Rule | MarkdownBlock::Table(_) => None,
         })
         .collect();
     assert_eq!(text_blocks.len(), 2, "expected one block per list item");
@@ -318,7 +318,7 @@ fn split_large_markdown_blocks_preserves_links() {
                 code: annotated, ..
             } => Some(annotated.link_annotations.len()),
             MarkdownBlock::Image { .. } => None,
-            MarkdownBlock::Rule => None,
+            MarkdownBlock::Rule | MarkdownBlock::Table(_) => None,
         })
         .sum::<usize>();
     assert_eq!(
@@ -345,7 +345,7 @@ fn markdown_scroll_stress_fixture_exercises_many_rendered_blocks() {
                 code: annotated, ..
             } => !annotated.link_annotations.is_empty(),
             MarkdownBlock::Image { .. } => false,
-            MarkdownBlock::Rule => false,
+            MarkdownBlock::Rule | MarkdownBlock::Table(_) => false,
         }),
         "stress fixture must include linked text"
     );
@@ -365,7 +365,7 @@ fn markdown_code_blocks_drop_fence_terminator_newlines() {
                 code: annotated, ..
             } => Some(annotated.text.as_str()),
             MarkdownBlock::Image { .. } => None,
-            MarkdownBlock::Rule => None,
+            MarkdownBlock::Rule | MarkdownBlock::Table(_) => None,
         })
         .collect::<Vec<_>>();
 

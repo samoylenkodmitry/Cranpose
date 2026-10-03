@@ -2273,7 +2273,9 @@ Column(
 
 Place children from start to end. `weight` divides the available width.
 
-```rust
+```rust preview=row
+use cranpose::widgets::*;
+
 Row(
     Modifier::empty().fill_max_width(),
     RowSpec::default(),
@@ -2292,7 +2294,9 @@ Row(
 
 Place children in layers. Later children appear above earlier children.
 
-```rust
+```rust preview=layers
+use cranpose::widgets::*;
+
 Box(
     Modifier::empty().size_points(120.0, 80.0),
     BoxSpec::default(),
@@ -2311,7 +2315,9 @@ Box(
 
 Reserve space between controls. A weighted spacer absorbs spare space in a row or column.
 
-```rust
+```rust preview=spacer
+use cranpose::widgets::*;
+
 Row(
     Modifier::empty().fill_max_width(),
     RowSpec::default(),
@@ -2327,7 +2333,9 @@ Row(
 
 Wrap children to the next row when the available width fills.
 
-```rust
+```rust preview=flow_row
+use cranpose::widgets::*;
+
 FlowRow(
     Modifier::empty().fill_max_width(),
     FlowRowSpec::default(),
@@ -2374,7 +2382,9 @@ for (id, title) in [(1_u64, "Inbox"), (2, "Inbox")] {
 
 Compose visible items in a vertical viewport. Retain the scroll state in composition.
 
-```rust
+```rust preview=lazy_column
+use cranpose::widgets::*;
+
 let state = rememberLazyListState();
 LazyColumn(
     Modifier::empty().height(240.0),
@@ -2398,7 +2408,9 @@ LazyColumn(
 
 Choose content from the available width during layout.
 
-```rust
+```rust preview=constraints
+use cranpose::widgets::*;
+
 BoxWithConstraints(Modifier::empty().fill_max_width(), |scope| {
     let title = if scope.max_width() >= Dp(600.0) {
         "Library and details"
@@ -2413,7 +2425,9 @@ BoxWithConstraints(Modifier::empty().fill_max_width(), |scope| {
 
 Reserve space for top and bottom bars. Apply the supplied insets to the content.
 
-```rust
+```rust preview=scaffold
+use cranpose::widgets::*;
+
 Scaffold(
     Modifier::empty().fill_max_size(),
     || {
@@ -2474,7 +2488,9 @@ Use `HorizontalScrollbar` for a horizontal track. `Scrollbar` accepts an explici
 Supply a measure policy for a custom container. This example reuses the box policy.
 Implement `cranpose_ui_layout::MeasurePolicy` for custom child sizes and positions.
 
-```rust
+```rust preview=layout
+use cranpose::widgets::*;
+
 use cranpose::layout::policies::BoxMeasurePolicy;
 
 Layout(
@@ -2589,7 +2605,9 @@ Each example below goes inside a `#[composable]` function.
 
 Show plain text or an `AnnotatedString` with a `TextStyle`.
 
-```rust
+```rust preview=text
+use cranpose::widgets::*;
+
 Text("Your library", Modifier::empty(), TextStyle::default());
 ```
 
@@ -2641,11 +2659,13 @@ if let Some(message) = error.get() {
 
 Keep editable text in a remembered `TextFieldState`.
 
-```rust
+```rust preview=text_field
+use cranpose::widgets::*;
+
 let name = remember(|| TextFieldState::new("Ada")).with(|state| *state);
 BasicTextField(
     name,
-    Modifier::empty().width(240.0).content_description("Name"),
+    Modifier::empty().fill_max_width().content_description("Name"),
     TextStyle::default(),
 );
 ```
@@ -2656,7 +2676,9 @@ BasicTextField(
 
 Allow selection across several text children.
 
-```rust
+```rust preview=selection
+use cranpose::widgets::*;
+
 SelectionContainer(Modifier::empty(), || {
     Column(Modifier::empty(), ColumnSpec::default(), || {
         Text("First paragraph.", Modifier::empty(), TextStyle::default());
@@ -2734,11 +2756,13 @@ IconButton(
 
 Use a value from `0.0` to `1.0`. Supply the track and thumb in the content slot.
 
-```rust
+```rust preview=slider
+use cranpose::widgets::*;
+
 let volume = rememberMutableStateOf(|| 0.5_f32);
 Slider(
     Modifier::empty()
-        .width(240.0)
+        .fill_max_width()
         .height(32.0)
         .content_description("Volume"),
     volume.get(),
@@ -2767,7 +2791,9 @@ Slider(
 
 Remove a row after the dismiss gesture completes. `SwipeToDismissSpec` controls the gesture.
 
-```rust
+```rust preview=dismiss
+use cranpose::widgets::*;
+
 let visible = rememberMutableStateOf(|| true);
 if visible.get() {
     SwipeToDismiss(
@@ -2865,7 +2891,9 @@ Import `cranpose::prelude::*` and `cranpose::widgets::*`. Place these examples i
 
 Show indeterminate progress in a bounded circle.
 
-```rust
+```rust preview=circular_progress
+use cranpose::widgets::*;
+
 CircularProgressIndicator(
     Modifier::empty()
         .size_points(32.0, 32.0)
@@ -2879,7 +2907,9 @@ CircularProgressIndicator(
 
 Show indeterminate progress across a horizontal track.
 
-```rust
+```rust preview=linear_progress
+use cranpose::widgets::*;
+
 LinearProgressIndicator(
     Modifier::empty()
         .fill_max_width()
@@ -3031,14 +3061,16 @@ LiquidTheme(LiquidThemeSpec::default(), || {
 
 Use a glass or prominent button. Use the same button style for the label.
 
-```rust
+```rust preview=glass_button
+use cranpose::liquid::prelude::*;
+
 let saved = rememberMutableStateOf(|| false);
 GlassButton(
     Modifier::empty(),
     GlassButtonSpec::prominent(),
     move || saved.set(true),
-    || {
-        GlassButtonLabel("Save", GlassButtonSpec::prominent());
+    move || {
+        GlassButtonLabel(if saved.get() { "Saved" } else { "Save" }, GlassButtonSpec::prominent());
     },
 );
 ```
@@ -3049,7 +3081,9 @@ GlassButton(
 
 Create a circular action from an icon path.
 
-```rust
+```rust preview=glass_icon
+use cranpose::liquid::prelude::*;
+
 let saved = rememberMutableStateOf(|| false);
 GlassIconButton(
     Modifier::empty().content_description("Save"),
@@ -3064,7 +3098,9 @@ GlassIconButton(
 
 Group adjacent circular actions in a shared glass surface.
 
-```rust
+```rust preview=glass_group
+use cranpose::liquid::prelude::*;
+
 let action = rememberMutableStateOf(|| "Ready");
 GlassIconButtonGroup(
     Modifier::empty(),
@@ -3080,7 +3116,9 @@ GlassIconButtonGroup(
 
 Use the theme’s background surface.
 
-```rust
+```rust preview=surface
+use cranpose::liquid::prelude::*;
+
 Surface(Modifier::empty().padding(16.0), || {
     Text("Account", Modifier::empty(), liquid_typography().body);
 });
@@ -3090,7 +3128,9 @@ Surface(Modifier::empty().padding(16.0), || {
 
 Group content in a rounded card.
 
-```rust
+```rust preview=card
+use cranpose::liquid::prelude::*;
+
 Card(Modifier::empty().padding(16.0), || {
     Text("Account", Modifier::empty(), liquid_typography().body);
 });
@@ -3102,7 +3142,9 @@ Card(Modifier::empty().padding(16.0), || {
 
 Group related rows under a section title.
 
-```rust
+```rust preview=list_section
+use cranpose::liquid::prelude::*;
+
 LiquidListSection(Modifier::empty(), "Account", || {
     Text("Ada", Modifier::empty(), liquid_typography().body);
 });
@@ -3112,7 +3154,9 @@ LiquidListSection(Modifier::empty(), "Account", || {
 
 Add an action row with a Liquid row spec.
 
-```rust
+```rust preview=list_row
+use cranpose::liquid::prelude::*;
+
 let selected = rememberMutableStateOf(|| false);
 LiquidListRow(
     Modifier::empty(),
@@ -3128,7 +3172,9 @@ LiquidListRow(
 
 Show a selectable filter.
 
-```rust
+```rust preview=chip
+use cranpose::liquid::prelude::*;
+
 let selected = rememberMutableStateOf(|| false);
 LiquidChip(
     Modifier::empty(),
@@ -3142,7 +3188,9 @@ LiquidChip(
 
 Show a compact action. The second argument selects the prominent style.
 
-```rust
+```rust preview=action_chip
+use cranpose::liquid::prelude::*;
+
 let count = rememberMutableStateOf(|| 0);
 LiquidActionChip(
     Modifier::empty(),
@@ -3156,7 +3204,9 @@ LiquidActionChip(
 
 Show a switch with caller-owned checked state.
 
-```rust
+```rust preview=toggle
+use cranpose::liquid::prelude::*;
+
 let enabled = rememberMutableStateOf(|| true);
 LiquidToggle(
     Modifier::empty().content_description("Notifications"),
@@ -3169,10 +3219,12 @@ LiquidToggle(
 
 Show a styled slider with a value in `0.0..=1.0`.
 
-```rust
+```rust preview=liquid_slider
+use cranpose::liquid::prelude::*;
+
 let volume = rememberMutableStateOf(|| 0.5_f32);
 LiquidSlider(
-    Modifier::empty().width(240.0).content_description("Volume"),
+    Modifier::empty().fill_max_width().content_description("Volume"),
     volume.get(),
     move |value| volume.set(value),
 );
@@ -3182,10 +3234,12 @@ LiquidSlider(
 
 Select one segment by index.
 
-```rust
+```rust preview=segments
+use cranpose::liquid::prelude::*;
+
 let selected = rememberMutableStateOf(|| 0_usize);
 LiquidSegmentedControl(
-    Modifier::empty().width(280.0),
+    Modifier::empty().fill_max_width(),
     selected.get(),
     move |index| selected.set(index),
     |segments| {
@@ -3199,7 +3253,9 @@ LiquidSegmentedControl(
 
 Edit a query in a themed search field.
 
-```rust
+```rust preview=search
+use cranpose::liquid::prelude::*;
+
 let query = remember(|| TextFieldState::new("")).with(|state| *state);
 SearchField(Modifier::empty().fill_max_width(), query, "Search books");
 ```
@@ -3210,7 +3266,9 @@ SearchField(Modifier::empty().fill_max_width(), query, "Search books");
 
 Collapse the title as the content scrolls. Share the `ScrollState` with the content.
 
-```rust
+```rust preview=nav_bar
+use cranpose::liquid::prelude::*;
+
 let scroll = remember(|| ScrollState::new(0.0)).with(|state| *state);
 Column(
     Modifier::empty().fill_max_size(),
@@ -3244,7 +3302,9 @@ Column(
 
 Select a destination by index. Render the selected screen from the same state.
 
-```rust
+```rust preview=tab_bar
+use cranpose::liquid::prelude::*;
+
 let selected = rememberMutableStateOf(|| 0_usize);
 LiquidTabBar(
     Modifier::empty(),
@@ -3264,7 +3324,10 @@ LiquidTabBar(
 
 Anchor a menu to a composable. Place the menu under `PopupHost`.
 
-```rust
+```rust preview=dropdown
+use cranpose::liquid::prelude::*;
+use cranpose::widgets::PopupHost;
+
 let expanded = rememberMutableStateOf(|| false);
 let saved = rememberMutableStateOf(|| false);
 PopupHost(move || {
@@ -3355,7 +3418,10 @@ Also import `cranpose::widgets::wear::*` and `cranpose::round_scaling_list::Cent
 
 Provide a watch screen with a curved scroll indicator. Share the list state with the scaffold.
 
-```rust
+```rust preview=watch_screen
+use cranpose::widgets::wear::*;
+use cranpose::round_scaling_list::CentreAnchor;
+
 let state = rememberWearScalingListState(CentreAnchor::default());
 ScreenScaffold(
     Modifier::empty().fill_max_size(),
@@ -3384,7 +3450,10 @@ ScreenScaffold(
 
 Scale and fade rows near a round screen’s edge. Use stable keys for rows with state.
 
-```rust
+```rust preview=watch_list
+use cranpose::widgets::wear::*;
+use cranpose::round_scaling_list::CentreAnchor;
+
 let state = rememberWearScalingListState(CentreAnchor::default());
 WearScalingLazyColumn(
     Modifier::empty().fill_max_size(),
@@ -3439,7 +3508,9 @@ fn WatchIndicator(state: WearScalingListState) {
 
 Add a section label with watch typography and spacing.
 
-```rust
+```rust preview=watch_header
+use cranpose::widgets::wear::*;
+
 ListHeader(
     Modifier::empty().fill_max_width(),
     ListHeaderSpec::default(),
@@ -3451,7 +3522,9 @@ ListHeader(
 
 Show a capsule button with primary and secondary labels.
 
-```rust
+```rust preview=watch_button
+use cranpose::widgets::wear::*;
+
 let plays = rememberMutableStateOf(|| 0);
 WearButton(
     Modifier::empty().fill_max_width(),
@@ -3466,7 +3539,9 @@ WearButton(
 
 Show a labeled toggle. Store the new checked value in the callback.
 
-```rust
+```rust preview=watch_switch
+use cranpose::widgets::wear::*;
+
 let enabled = rememberMutableStateOf(|| true);
 let spec = SwitchButtonSpec::default().progress(if enabled.get() { 1.0 } else { 0.0 });
 SwitchButton(

@@ -4,7 +4,8 @@ use cranpose_core::{
 };
 use cranpose_testing::ComposeTestRule;
 use desktop_app::app::{
-    combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
+    combined_app_with_initial_tab, DemoTab, TEST_ACTIVE_TAB_STATE,
+    TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
 };
 use tab_switch_regression_support::{
     set_active_tab, set_recursive_depth, wait_for_recursive_depth_registration,
@@ -67,7 +68,7 @@ fn switching_away_from_deep_recursive_layout_releases_actual_app_tree() {
     TEST_RECURSIVE_LAYOUT_DEPTH_STATE.with(|cell| cell.borrow_mut().take());
 
     let mut rule = ComposeTestRule::new();
-    rule.set_content(combined_app)
+    rule.set_content(|| combined_app_with_initial_tab(Some(DemoTab::Counter)))
         .expect("install combined app content");
     rule.pump_until_idle().expect("initial idle");
 

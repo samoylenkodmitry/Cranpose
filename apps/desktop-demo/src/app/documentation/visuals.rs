@@ -4,7 +4,7 @@ use cranpose_ui::{
     text::{FontWeight, SpanStyle, TextUnit},
     Box, BoxSpec, Brush, Color, GraphicsLayer, Modifier, Point, TextStyle,
 };
-use cranpose_ui_graphics::{Stroke, TransformOrigin, VectorPath};
+use cranpose_ui_graphics::{Stroke, VectorPath};
 
 pub(super) const INK: Color = Color(0.91, 0.95, 0.98, 1.0);
 pub(super) const MUTED: Color = Color(0.58, 0.67, 0.75, 1.0);
@@ -106,17 +106,6 @@ impl WheelGeometry {
                 ..Default::default()
             })
     }
-
-    pub fn rotation_layer(self, position: f32) -> GraphicsLayer {
-        GraphicsLayer {
-            rotation_z: (position * self.section_angle()).to_degrees(),
-            transform_origin: TransformOrigin::new(
-                self.center.x / self.width,
-                self.center.y / self.height,
-            ),
-            ..Default::default()
-        }
-    }
 }
 
 #[composable]
@@ -139,68 +128,57 @@ pub(super) fn Backdrop(geometry: WheelGeometry) {
 }
 
 #[composable]
-pub(super) fn WheelSurface(geometry: WheelGeometry) {
+pub(super) fn WheelSurface(geometry: WheelGeometry, position: impl Fn() -> f32 + 'static) {
     Box(
         Modifier::empty()
             .size_points(geometry.width, geometry.height())
-            .draw_with_cache(move |cache| {
-                let start = geometry.focus_angle - 0.8;
-                let sweep = 3.4;
-                let ticks: Vec<_> = (0..136)
-                    .map(|index| {
-                        let angle = start + sweep * index as f32 / 136.0;
-                        (
-                            geometry.point(angle, geometry.radius - 26.0),
-                            geometry.point(
-                                angle,
-                                geometry.radius - if index % 5 == 0 { 65.0 } else { 38.0 },
-                            ),
-                        )
-                    })
-                    .collect();
-                let spokes: Vec<_> = (-2..super::chapters().len() as i32)
-                    .map(|index| {
-                        let angle =
-                            geometry.focus_angle + (index as f32 + 0.5) * geometry.section_angle();
-                        (
-                            geometry.point(angle, geometry.radius + 280.0),
-                            geometry.point(angle, geometry.radius - 210.0),
-                        )
-                    })
-                    .collect();
-                cache.on_draw_behind(move |scope| {
-                    for inset in [0.0, -22.0, -112.0] {
-                        let color = if inset == 0.0 {
-                            Color(0.35, 0.86, 0.89, 0.7)
-                        } else {
-                            Color(0.31, 0.66, 0.77, 0.28)
-                        };
-                        scope.draw_arc(
-                            Brush::solid(color),
-                            geometry.center,
-                            geometry.radius + inset,
-                            std::f32::consts::PI - start,
-                            -sweep,
-                            Stroke::new(if inset == 0.0 { 2.0 } else { 1.0 }),
-                        );
-                    }
-                    for &(from, to) in &ticks {
-                        scope.draw_line(
-                            Brush::solid(Color(0.50, 0.82, 0.89, 0.45)),
-                            from,
-                            to,
-                            Stroke::new(1.0),
-                        );
-                    }
-                    for &(from, to) in &spokes {
-                        scope.draw_line(
-                            Brush::solid(Color(0.31, 0.67, 0.76, 0.25)),
-                            from,
-                            to,
-                            Stroke::new(1.0),
-                        );
-                    }
-                });
+            .draw_behind(move |scope| {
+                let rotation = position() * geometry.section_angle();
+                for inset in [0.0, -22.0, -112.0] {
+                    let color = if inset == 0.0 {
+                        Color(0.35, 0.86, 0.89, 0.7)
+                    } else {
+                        Color(0.31, 0.66, 0.77, 0.28)
+                    };
+                    scope.draw_arc(
+                        Brush::solid(color),
+                        geometry.center,
+                        geometry.radius + inset,
+                        0.0,
+                        std::f32::consts::TAU,
+                        Stroke::new(if inset == 0.0 { 2.0 } else { 1.0 }),
+                    );
+                }
+                let tick_step = geometry.section_angle() / 8.0;
+                let first = ((rotation - std::f32::consts::FRAC_PI_2) / tick_step).floor() as i32;
+                let count = (std::f32::consts::PI / tick_step).ceil() as i32;
+                for index in first..=first + count {
+                    let angle = index as f32 * tick_step - rotation;
+                    scope.draw_line(
+                        Brush::solid(Color(0.50, 0.82, 0.89, 0.45)),
+                        geometry.point(angle, geometry.radius - 26.0),
+                        geometry.point(
+                            angle,
+                            geometry.radius - if index % 5 == 0 { 65.0 } else { 38.0 },
+                        ),
+                        Stroke::new(1.0),
+                    );
+                }
+                let first = ((rotation - geometry.focus_angle - std::f32::consts::FRAC_PI_2)
+                    / geometry.section_angle())
+                .floor() as i32;
+                let count = (std::f32::consts::PI / geometry.section_angle()).ceil() as i32;
+                for index in first..=first + count {
+                    let angle = geometry.focus_angle
+                        + (index as f32 + 0.5) * geometry.section_angle()
+                        - rotation;
+                    scope.draw_line(
+                        Brush::solid(Color(0.31, 0.67, 0.76, 0.25)),
+                        geometry.point(angle, geometry.radius + 280.0),
+                        geometry.point(angle, geometry.radius - 210.0),
+                        Stroke::new(1.0),
+                    );
+                }
             }),
         BoxSpec::default(),
         || {},

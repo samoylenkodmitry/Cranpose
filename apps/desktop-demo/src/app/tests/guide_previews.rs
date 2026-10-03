@@ -1,7 +1,27 @@
 use cranpose_testing::robot::{RobotTestRule, TestRenderer};
 use cranpose_ui::{Box, BoxSpec, Modifier, Size};
 
-use super::MarkdownDocument;
+use super::*;
+
+#[composable]
+fn MarkdownDocument(markdown: &'static str, base_url: &'static str, width: f32) {
+    let blocks = cranpose_core::rememberKeyed((markdown, base_url), |(markdown, base_url)| {
+        Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(
+            markdown, base_url,
+        )))
+    });
+    Column(
+        Modifier::empty().fill_max_width(),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(18.0)),
+        move || {
+            for (index, block) in blocks.iter().enumerate() {
+                cranpose_core::with_key(&index, || {
+                    render_markdown_block(block, MarkdownAppearance::Reader, width);
+                });
+            }
+        },
+    );
+}
 
 fn example(id: &str) -> &'static str {
     let guide = include_str!("../../../../../docs/guide.md");
@@ -83,4 +103,48 @@ fn previews_move_below_code_on_a_phone() {
             );
         }
     }
+}
+
+#[test]
+fn glass_button_preview_updates_its_label() {
+    let mut robot = RobotTestRule::new(390, 1600, TestRenderer::default(), || {
+        cranpose::liquid::LiquidTheme(cranpose::liquid::LiquidThemeSpec::default(), || {
+            MarkdownDocument(example("glass_button"), "", 390.0);
+        });
+    });
+    let button = robot
+        .get_all_rects()
+        .into_iter()
+        .find(|(_, text)| text.as_deref() == Some("Save"))
+        .expect("glass button label")
+        .0;
+    assert!(robot.click_at(
+        button.x + button.width * 0.5,
+        button.y + button.height * 0.5
+    ));
+    assert!(robot.find_by_text("Saved").exists());
+}
+
+#[test]
+fn markdown_table_keeps_columns_and_scrolls_horizontally() {
+    let mut robot = RobotTestRule::new(320, 500, TestRenderer::default(), || {
+        MarkdownDocument(
+            "| Scope | API | Example |\n| :--- | :---: | ---: |\n| **Layout** | `Rule` | Label |\n| Input | Robot | Click |",
+            "", 320.0,
+        );
+    });
+    let before = robot.find_by_text("Example").bounds().expect("last column");
+    robot.move_to(220.0, 65.0);
+    robot.shell_mut().pointer_scrolled(-180.0, 0.0);
+    robot.wait_for_idle();
+    let after = robot
+        .find_by_text("Example")
+        .bounds()
+        .expect("last column after pan");
+    assert!(
+        after.x < before.x - 80.0,
+        "table pans: {before:?} -> {after:?}"
+    );
+    assert!(after.x + after.width <= 320.0);
+    assert!(robot.find_by_text("Click").exists());
 }

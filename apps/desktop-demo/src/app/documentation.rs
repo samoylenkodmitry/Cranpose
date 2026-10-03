@@ -14,7 +14,9 @@ use cranpose_ui::{
 };
 use cranpose_ui_layout::Axis;
 
-use super::markdown::MarkdownDocument;
+use super::markdown::{render_markdown_block, MarkdownAppearance};
+mod document;
+use document::{ReaderItem, DOCUMENT};
 mod visuals;
 use visuals::{caption_style, text_style, WheelGeometry, ACCENT, BORDER, INK, MUTED};
 
@@ -132,10 +134,7 @@ struct DocumentationState {
 
 impl DocumentationState {
     fn selected(self) -> usize {
-        self.page
-            .first_visible_item_index()
-            .saturating_sub(1)
-            .min(chapters().len() - 1)
+        DOCUMENT.with(|document| document.chapter(self.page.first_visible_item_index()))
     }
 
     fn position(self, wheel_only: bool) -> f32 {
@@ -150,19 +149,17 @@ impl DocumentationState {
         let item = self.page.first_visible_item_index();
         let offset = self.page.first_visible_item_scroll_offset();
         if item == 0 {
-            return self.header_position()
-                + offset / self.page.get_cached_size(1).unwrap_or(1.0).max(1.0);
+            return -1.0 + offset / self.page.get_cached_size(0).unwrap_or(1.0).max(1.0);
         }
         let fraction = self
             .page
             .get_cached_size(item)
             .map_or(0.0, |height| offset / height.max(1.0));
-        item as f32 - 1.0 + fraction
+        DOCUMENT.with(|document| document.position(item, fraction))
     }
 
     fn header_position(self) -> f32 {
-        -self.page.get_cached_size(0).unwrap_or(0.0)
-            / self.page.get_cached_size(1).unwrap_or(1.0).max(1.0)
+        -1.0
     }
 
     fn select(self, index: usize, wheel_only: bool) {
@@ -187,17 +184,12 @@ impl DocumentationState {
 
     fn scroll_to_position(self, position: f32) {
         if position < 0.0 {
-            let offset = self.page.get_cached_size(0).unwrap_or(0.0)
-                + position * self.page.get_cached_size(1).unwrap_or(1.0).max(1.0);
+            let offset = (position + 1.0) * self.page.get_cached_size(0).unwrap_or(0.0);
             self.page.scroll_to_item(0, offset.max(0.0));
             return;
         }
-        let coordinate = position + 1.0;
-        let item = coordinate.floor() as usize;
-        let offset = self
-            .page
-            .get_cached_size(item)
-            .map_or(0.0, |height| coordinate.fract() * height);
+        let (item, fraction) = DOCUMENT.with(|document| document.item(position));
+        let offset = self.page.get_cached_size(item).unwrap_or(0.0) * fraction;
         self.page.scroll_to_item(item, offset);
     }
 
@@ -281,11 +273,7 @@ fn WheelEntries(
     first: usize,
     end: usize,
 ) {
-    let position = if interactive {
-        state.position(wheel_only)
-    } else {
-        0.0
-    };
+    let position = state.position(wheel_only);
     let entry_height = 58.0
         * cranpose_services::local_accessibility_options()
             .current()
@@ -316,33 +304,70 @@ fn WheelEntries(
 
 #[composable]
 fn WheelVisuals(state: DocumentationState, geometry: WheelGeometry, wheel_only: bool) {
-    let visible = geometry.visible_entries(state.position(wheel_only), chapters().len());
-    Box(
+    visuals::WheelSurface(geometry, move || state.position(wheel_only));
+    if geometry.width < COMPACT_BREAKPOINT {
+        Box(
+            Modifier::empty().offset(12.0, 130.0).width(154.0),
+            BoxSpec::default(),
+            Brand,
+        );
+    } else {
+        let position = state.position(wheel_only);
+        let visible = geometry.visible_entries(position, chapters().len());
+        Box(
+            geometry.brand_modifier(-1.35 - position).padding(12.0),
+            BoxSpec::default(),
+            Brand,
+        );
+        Box(
+            Modifier::empty().fill_max_size().hide_from_accessibility(),
+            BoxSpec::default(),
+            move || {
+                WheelEntries(
+                    state,
+                    geometry,
+                    wheel_only,
+                    false,
+                    visible.start,
+                    visible.end,
+                );
+            },
+        );
+    }
+}
+
+#[composable]
+fn MobileChapters(state: DocumentationState, width: f32, height: f32) {
+    let list = remember(|| LazyListState::new(state.position(true).floor() as usize, 0.0))
+        .with(|list| *list);
+    let left = (width * 0.45).max(152.0).ceil();
+    let mut spec = LazyColumnSpec::default();
+    spec.beyond_bounds_item_count = 0;
+    LazyColumn(
         Modifier::empty()
-            .fill_max_size()
-            .graphics_layer_value(geometry.rotation_layer(state.position(wheel_only))),
-        BoxSpec::default(),
-        move || {
-            visuals::WheelSurface(geometry);
-            Box(
-                geometry.brand_modifier(-1.35).padding(12.0),
-                BoxSpec::default(),
-                Brand,
-            );
-            Box(
-                Modifier::empty().fill_max_size().hide_from_accessibility(),
-                BoxSpec::default(),
-                move || {
-                    WheelEntries(
-                        state,
-                        geometry,
-                        wheel_only,
-                        false,
-                        visible.start,
-                        visible.end,
-                    );
-                },
-            );
+            .offset(left, 96.0)
+            .width(width - left)
+            .height((height - 156.0).max(44.0))
+            .clip_to_bounds()
+            .content_description("Guide chapters"),
+        list,
+        spec,
+        move |scope| {
+            scope.items(chapters().len(), move |index| {
+                let active = state.position(true).round() as usize == index;
+                Button(
+                    Modifier::empty()
+                        .fill_max_width()
+                        .height_in(52.0, f32::INFINITY)
+                        .semantics(move |config| {
+                            config.selected = Some(active);
+                            config.content_description = Some(chapters()[index].title.to_owned());
+                        }),
+                    ButtonSpec::default(),
+                    move || state.select(index, true),
+                    move || ChapterLabel(index, active),
+                );
+            });
         },
     );
 }
@@ -363,7 +388,11 @@ fn SectionWheel(state: DocumentationState, geometry: WheelGeometry, height: f32,
             .content_description("Guide wheel")
             .scrollable(Axis::Vertical, scroll),
         BoxSpec::default(),
-        move || WheelEntries(state, geometry, compact, true, visible.start, visible.end),
+        move || {
+            if !compact {
+                WheelEntries(state, geometry, compact, true, visible.start, visible.end);
+            }
+        },
     );
 }
 
@@ -377,12 +406,6 @@ fn ChapterNavigation(state: DocumentationState, index: usize) {
                 DocAction("Previous section", Modifier::empty(), move || {
                     state.select(index - 1, false);
                 });
-            } else {
-                Text(
-                    "Works offline",
-                    Modifier::empty().padding(12.0),
-                    text_style(11.0, MUTED, FontWeight::NORMAL),
-                );
             }
             Spacer(Modifier::empty().weight(1.0));
             if index + 1 < chapters().len() {
@@ -395,48 +418,53 @@ fn ChapterNavigation(state: DocumentationState, index: usize) {
 }
 
 #[composable]
-fn ReaderChapter(state: DocumentationState, index: usize, width: f32, height: f32, compact: bool) {
+fn ChapterHeading(state: DocumentationState, index: usize, compact: bool) {
     let chapter = &chapters()[index];
-    let inset = if compact { 20.0 } else { 24.0 };
-    Box(
-        visuals::reader_surface(
-            Modifier::empty()
-                .width(width)
-                .height_in(height, f32::INFINITY),
-        )
-        .content_description("Guide glass"),
-        BoxSpec::new().content_alignment(Alignment::TOP_START),
+    Column(
+        Modifier::empty()
+            .fill_max_width()
+            .padding_each(0.0, 34.0, 0.0, 0.0),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(24.0)),
         move || {
-            Column(
-                Modifier::empty()
-                    .width(width.min(840.0))
-                    .padding_each(inset, 34.0, inset, 76.0),
-                ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(24.0)),
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
                 move || {
-                    Row(
-                        Modifier::empty().fill_max_width(),
-                        RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
-                        move || {
-                            Text(
-                                if compact { "GUIDE" } else { "CRANPOSE GUIDE" },
-                                Modifier::empty().weight(1.0),
-                                caption_style(MUTED),
-                            );
-                            Text(
-                                format!("{} / {:02}", chapter.number, chapters().len()),
-                                Modifier::empty(),
-                                caption_style(ACCENT),
-                            );
-                        },
+                    Text(
+                        if compact { "GUIDE" } else { "CRANPOSE GUIDE" },
+                        Modifier::empty().weight(1.0),
+                        caption_style(MUTED),
                     );
                     Text(
-                        chapter.title,
-                        Modifier::empty().heading(),
-                        text_style(if compact { 34.0 } else { 46.0 }, INK, FontWeight::BOLD),
+                        format!("{} / {:02}", chapter.number, chapters().len()),
+                        Modifier::empty(),
+                        caption_style(ACCENT),
                     );
-                    Spacer(Modifier::empty().width(44.0).height(3.0).background(ACCENT));
-                    ChapterNavigation(state, index);
-                    MarkdownDocument(chapter.body, GUIDE_URL, width.min(840.0) - inset * 2.0);
+                },
+            );
+            Text(
+                chapter.title,
+                Modifier::empty().heading(),
+                text_style(if compact { 34.0 } else { 46.0 }, INK, FontWeight::BOLD),
+            );
+            Spacer(Modifier::empty().width(44.0).height(3.0).background(ACCENT));
+            ChapterNavigation(state, index);
+        },
+    );
+}
+
+#[composable]
+fn ReaderBlock(state: DocumentationState, index: usize, width: f32, compact: bool) {
+    DOCUMENT.with(|document| match &document.items[index] {
+        ReaderItem::Heading(chapter) => ChapterHeading(state, *chapter, compact),
+        ReaderItem::Block(block) => render_markdown_block(block, MarkdownAppearance::Reader, width),
+        ReaderItem::Footer => {
+            Column(
+                Modifier::empty()
+                    .fill_max_width()
+                    .padding_each(0.0, 12.0, 0.0, 58.0),
+                ColumnSpec::default(),
+                move || {
                     Spacer(
                         Modifier::empty()
                             .fill_max_width()
@@ -448,8 +476,8 @@ fn ReaderChapter(state: DocumentationState, index: usize, width: f32, height: f3
                     });
                 },
             );
-        },
-    );
+        }
+    });
 }
 
 #[composable]
@@ -496,6 +524,19 @@ fn Reader(state: DocumentationState, width: f32, height: f32, compact: bool, hea
     } else {
         WheelGeometry::new(width, height).reader_left()
     };
+    let inset = if compact { 20.0 } else { 24.0 };
+    let content_width = (width - reader_left).min(840.0) - inset * 2.0;
+    Box(
+        visuals::reader_surface(
+            Modifier::empty()
+                .offset(reader_left, 0.0)
+                .width(width - reader_left)
+                .height(height),
+        )
+        .content_description("Guide glass"),
+        BoxSpec::default(),
+        || {},
+    );
     let mut spec = LazyColumnSpec::new();
     spec.beyond_bounds_item_count = 0;
     LazyColumn(
@@ -523,16 +564,29 @@ fn Reader(state: DocumentationState, width: f32, height: f32, compact: bool, hea
             scope.item_keyed(Some(0), Some(0), move || {
                 Spacer(Modifier::empty().height(header_height));
             });
-            scope.items(chapters().len(), move |index| {
-                Row(
-                    Modifier::empty().fill_max_width(),
-                    RowSpec::default(),
-                    move || {
-                        Spacer(Modifier::empty().width(reader_left));
-                        ReaderChapter(state, index, width - reader_left, height, compact);
-                    },
-                );
-            });
+            scope.items(
+                DOCUMENT.with(|document| document.items.len()),
+                move |index| {
+                    Box(
+                        Modifier::empty().fill_max_width().padding_each(
+                            reader_left + inset,
+                            0.0,
+                            inset,
+                            18.0,
+                        ),
+                        BoxSpec::default(),
+                        move || {
+                            Box(
+                                Modifier::empty().width(content_width),
+                                BoxSpec::default(),
+                                move || {
+                                    ReaderBlock(state, index, content_width, compact);
+                                },
+                            );
+                        },
+                    );
+                },
+            );
         },
     );
 }
@@ -566,6 +620,9 @@ pub(super) fn GuideTab(header: Option<super::AppHeaderState>) {
                 move || {
                     AnimateSelection(state);
                     let size = viewport.get();
+                    if size.width <= 0.0 || size.height <= 0.0 {
+                        return;
+                    }
                     let width = size.width.max(1.0);
                     let compact = width < COMPACT_BREAKPOINT;
                     let geometry = WheelGeometry::new(width, size.height);
@@ -578,6 +635,9 @@ pub(super) fn GuideTab(header: Option<super::AppHeaderState>) {
                     }
                     if !compact || !reader_visible {
                         SectionWheel(state, geometry, size.height, compact);
+                        if compact {
+                            MobileChapters(state, width, size.height);
+                        }
                     }
                     ScrollingHeader(header, state, header_size, reader_visible);
                     if compact && reader_visible {

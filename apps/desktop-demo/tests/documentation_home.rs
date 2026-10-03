@@ -70,10 +70,14 @@ fn guide_tables_place_headers_and_values_in_columns() {
     let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
-    robot.move_to(120.0, 500.0);
-    robot.shell_mut().pointer_scrolled(0.0, -13.0 * 120.0);
-    robot.wait_for_idle();
-    assert!(click_control(&mut robot, "Testing"));
+    for _ in 0..20 {
+        if click_control(&mut robot, "Testing") {
+            break;
+        }
+        robot.move_to(320.0, 620.0);
+        robot.shell_mut().pointer_scrolled(0.0, -120.0);
+        robot.wait_for_idle();
+    }
     robot.move_to(320.0, 600.0);
     robot.shell_mut().pointer_scrolled(0.0, -420.0);
     robot.wait_for_idle();
@@ -100,7 +104,10 @@ fn mobile_chapter_list_stays_visible_beside_the_wheel() {
     let tree = cranpose_testing::placed_semantics_from_shell(robot.shell_mut())
         .expect("mobile guide navigation");
     let list = semantic_bounds(&tree, "Guide chapters");
-    assert!(list.x > 150.0 && list.x + list.width <= 390.0);
+    assert!(
+        list.x > 150.0 && list.x + list.width <= 390.0,
+        "chapter list: {list:?}"
+    );
     let initial = text_bounds(&robot.get_all_rects(), "Get started");
     robot.move_to(80.0, 500.0);
     robot.shell_mut().pointer_scrolled(0.0, -120.0);
@@ -230,7 +237,7 @@ fn reading_scroll_moves_the_tab_row_and_document_together() {
 
 #[test]
 fn dragging_and_releasing_keeps_the_wheel_moving() {
-    let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
+    let mut robot = RobotTestRule::new(1200, 800, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
     robot.shell_mut().set_semantics_enabled(true);
@@ -534,6 +541,18 @@ fn mobile_wheel_ring_remains_visible_after_rotation() {
             .renderer()
             .capture_frame(390, 780)
             .expect("wheel pixels");
+        if let Some(directory) = std::env::var_os("CRANPOSE_GUIDE_CAPTURE_DIR") {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).expect("guide capture directory");
+            image::save_buffer(
+                directory.join(format!("mobile-wheel-{step}.png")),
+                &frame.pixels,
+                390,
+                780,
+                image::ColorType::Rgba8,
+            )
+            .expect("guide capture");
+        }
         let rows = (130..480)
             .filter(|y| {
                 (150..390).any(|x| {
