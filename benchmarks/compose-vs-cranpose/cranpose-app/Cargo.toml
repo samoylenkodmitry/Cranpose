@@ -20,7 +20,7 @@ required-features = ["desktop"]
 default = ["renderer-wgpu", "desktop"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = ["cranpose/desktop"]
-android = ["cranpose/android"]
+android = ["cranpose/android", "cranpose/release-log-info"]
 
 [dependencies]
 cranpose = { path = "../../../crates/cranpose" }

@@ -43,6 +43,7 @@ ios = [
 ]
 android = [
     "cranpose/android",
+    "cranpose/release-log-info",
     "cranpose-services/http-native",
 ]
 web = [

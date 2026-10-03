@@ -154,12 +154,16 @@ and `.ARM.extab` (`INSERT` keeps the default layout). On the bench, arm64
 went from 9,922 KB to 8,974 KB (−948 KB, −9.6%) and armv7 from 7,224 KB to
 7,111 KB (−113 KB); everything else in the layout is unchanged.
 
-Android release builds also compile out every crate's debug and trace log
+An Android app can also compile out every crate's debug and trace log
 calls: the logger `cranpose` installs on Android passes Info and above
-(Warn for wgpu and naga), so those calls could never print. `cranpose`
-enables `log`'s `release_max_level_info` for Android targets only. On the
-bench this took 8,874 KB to 8,724 KB (−150 KB), most of it wgpu's and
-naga's logging.
+(Warn for wgpu and naga), so those calls could never print. `cranpose`'s
+opt-in `release-log-info` feature enables `log`'s `release_max_level_info`;
+the bench and the Android demo turn it on from their `android` features. On
+the bench this took 8,874 KB to 8,724 KB (−150 KB), most of it wgpu's and
+naga's logging. It stays an app's choice because `log` refuses two
+`release_max_level_*` features and Cargo features cannot be turned off
+downstream, which would break an app that sets its own level or installs
+its own logger.
 
 ## The Android library by crate, nightly
 
