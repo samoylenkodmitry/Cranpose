@@ -122,6 +122,6 @@ pub(crate) fn main() {
             }
         })
         .run(|| {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 }

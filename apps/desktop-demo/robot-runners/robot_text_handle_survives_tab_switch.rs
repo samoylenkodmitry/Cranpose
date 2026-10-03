@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use cranpose::{RobotScreenshot, SemanticElement};
 use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
-use desktop_app::app;
 
 type SelectedEditable = ((f32, f32, f32, f32), (usize, usize));
 
@@ -36,7 +35,7 @@ pub(crate) fn main() {
             println!("\nPASS: no stuck handle survived a tab round trip");
             let _ = robot.exit();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn drag_selection_survives_tab_switch(robot: &cranpose::Robot) {

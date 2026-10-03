@@ -251,5 +251,5 @@ pub(crate) fn main() {
             println!("PASS: tab row keeps Y position and retained scroll offset");
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

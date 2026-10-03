@@ -65,6 +65,6 @@ pub(crate) fn main() {
             robot.exit().expect("Failed to exit");
         })
         .run(|| {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 }

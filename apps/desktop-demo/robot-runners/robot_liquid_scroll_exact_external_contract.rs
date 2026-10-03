@@ -4,7 +4,7 @@ use std::{path::Path, time::Duration};
 
 use cranpose::AppLauncher;
 use desktop_app::app::{
-    self, DemoTab, LIQUID_SCROLL_VIEWPORT_TAG, TEST_ACTIVE_TAB_STATE, TEST_LIQUID_SCROLL_STATE,
+    DemoTab, LIQUID_SCROLL_VIEWPORT_TAG, TEST_ACTIVE_TAB_STATE, TEST_LIQUID_SCROLL_STATE,
 };
 use scroll_stability_external_helpers::{
     advance_scroll_with_app_hook, run_presented_scroll_probe_with_app_hook,
@@ -227,7 +227,7 @@ pub(crate) fn main() {
             println!("PASS: every Liquid UI scene stayed stable across exact 1px scrolls");
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn settle(robot: &cranpose::Robot) {

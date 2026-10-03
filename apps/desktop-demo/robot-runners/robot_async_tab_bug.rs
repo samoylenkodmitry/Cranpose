@@ -3,7 +3,6 @@ use crate::{robot_exit, robot_launch};
 use std::time::Duration;
 
 use cranpose_testing::find_text_center;
-use desktop_app::app;
 
 pub(crate) fn main() {
     println!("=== Robot Async Tab Bug Test ===");
@@ -93,5 +92,5 @@ pub(crate) fn main() {
                 let _ = robot.exit();
             }
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

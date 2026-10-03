@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use cranpose::AppLauncher;
 use cranpose_testing::find_button_exact_in_semantics;
-use desktop_app::app;
 
 const WINDOW_TITLE: &str = "Robot Idle FPS After Tab Walk";
 
@@ -67,7 +66,7 @@ pub(crate) fn main() {
             }
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn assert_idle_runtime_queues_empty(robot: &cranpose::Robot) {

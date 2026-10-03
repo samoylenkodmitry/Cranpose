@@ -7,7 +7,6 @@ use cranpose_testing::{
     find_text_exact, normalize_screenshot_region, root_bounds, screenshot_difference_stats,
     scroll_down, scroll_up, y_is_visible,
 };
-use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
 
 const WINDOW_WIDTH: u32 = 1200;
@@ -49,7 +48,7 @@ pub(crate) fn main() {
         println!("✓ rigid subtree motion preserved in desktop demo surfaces");
         robot.exit().expect("exit");
     })
-    .run(app::combined_app);
+    .run(crate::robot_launch::counter_demo);
 }
 
 fn verify_text_drag_release_contract(robot: &cranpose::Robot) {

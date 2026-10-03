@@ -7,7 +7,6 @@ use std::{
 };
 
 use cranpose::{AppLauncher, Robot, RobotScreenshot};
-use desktop_app::app;
 use image::RgbaImage;
 
 const WINDOW_WIDTH: u32 = 900;
@@ -73,7 +72,7 @@ pub(crate) fn main() -> ExitCode {
             println!("PASS: resting bubbles center on their cells");
             let _ = robot.exit();
         })
-        .try_run(app::combined_app)
+        .try_run(crate::robot_launch::counter_demo)
         .expect("launch bar alignment runner");
     ExitCode::SUCCESS
 }

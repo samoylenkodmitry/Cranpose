@@ -129,7 +129,10 @@ fn list_items_do_not_emit_bullet_only_blocks() {
     let text_blocks: Vec<_> = blocks
         .iter()
         .filter_map(|block| match block {
-            MarkdownBlock::Text(annotated) => Some(annotated),
+            MarkdownBlock::Text(annotated)
+            | MarkdownBlock::Example {
+                code: annotated, ..
+            } => Some(annotated),
             MarkdownBlock::Image { .. } => None,
             MarkdownBlock::Rule => None,
         })
@@ -310,7 +313,10 @@ fn split_large_markdown_blocks_preserves_links() {
     let link_count = split
         .iter()
         .filter_map(|block| match block {
-            MarkdownBlock::Text(annotated) => Some(annotated.link_annotations.len()),
+            MarkdownBlock::Text(annotated)
+            | MarkdownBlock::Example {
+                code: annotated, ..
+            } => Some(annotated.link_annotations.len()),
             MarkdownBlock::Image { .. } => None,
             MarkdownBlock::Rule => None,
         })
@@ -334,7 +340,10 @@ fn markdown_scroll_stress_fixture_exercises_many_rendered_blocks() {
     assert!(text_blocks >= 420);
     assert!(
         blocks.iter().any(|block| match block {
-            MarkdownBlock::Text(annotated) => !annotated.link_annotations.is_empty(),
+            MarkdownBlock::Text(annotated)
+            | MarkdownBlock::Example {
+                code: annotated, ..
+            } => !annotated.link_annotations.is_empty(),
             MarkdownBlock::Image { .. } => false,
             MarkdownBlock::Rule => false,
         }),
@@ -351,7 +360,10 @@ fn markdown_code_blocks_drop_fence_terminator_newlines() {
     let texts = blocks
         .iter()
         .filter_map(|block| match block {
-            MarkdownBlock::Text(annotated) => Some(annotated.text.as_str()),
+            MarkdownBlock::Text(annotated)
+            | MarkdownBlock::Example {
+                code: annotated, ..
+            } => Some(annotated.text.as_str()),
             MarkdownBlock::Image { .. } => None,
             MarkdownBlock::Rule => None,
         })
@@ -456,7 +468,7 @@ fn a_root_relative_link_resolves_against_the_document_url() {
         "https://raw.githubusercontent.com/owner/repo/refs/heads/master/notes/post.md",
     );
     let has_absolute_link = blocks.iter().any(|block| match block {
-        MarkdownBlock::Text(annotated) => annotated.link_annotations.iter().any(|span| {
+        MarkdownBlock::Text(annotated) | MarkdownBlock::Example { code: annotated, .. } => annotated.link_annotations.iter().any(|span| {
             matches!(&span.item, LinkAnnotation::Url(url)
                 if url == "https://raw.githubusercontent.com/owner/repo/refs/heads/master/leetcode/")
         }),

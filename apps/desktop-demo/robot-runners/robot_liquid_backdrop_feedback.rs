@@ -87,7 +87,7 @@ pub(crate) fn main() -> ExitCode {
             println!("PASS: liquid backdrop feedback contract");
             let _ = robot.exit();
         })
-        .try_run(app::combined_app)
+        .try_run(crate::robot_launch::counter_demo)
         .expect("launch backdrop feedback runner");
     robot_exit::exit_code(&FAILED)
 }

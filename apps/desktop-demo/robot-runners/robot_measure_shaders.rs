@@ -408,7 +408,7 @@ pub(crate) fn main() {
             MeasureMode::VisualCompare => run_visual_compare(&robot),
         })
         .run(|| {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 }
 

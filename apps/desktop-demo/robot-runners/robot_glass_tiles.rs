@@ -4,7 +4,7 @@ use std::{path::PathBuf, process::ExitCode, time::Duration};
 
 use cranpose::{AppLauncher, Color, Robot, RobotScreenshot};
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use desktop_app::app::{self, glass_tile_description, GLASS_TILES};
+use desktop_app::app::{glass_tile_description, GLASS_TILES};
 
 const WINDOW_WIDTH: u32 = 1100;
 const WINDOW_HEIGHT: u32 = 800;
@@ -105,7 +105,7 @@ pub(crate) fn main() -> ExitCode {
             );
             robot.exit().expect("exit");
         })
-        .try_run(app::combined_app)
+        .try_run(crate::robot_launch::counter_demo)
         .expect("launch glass tiles runner");
     ExitCode::SUCCESS
 }

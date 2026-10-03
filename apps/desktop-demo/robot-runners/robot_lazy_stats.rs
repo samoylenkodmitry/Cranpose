@@ -3,7 +3,6 @@ use crate::robot_launch;
 use std::time::Duration;
 
 use cranpose_testing::{find_button_in_semantics, find_text_by_prefix_in_semantics};
-use desktop_app::app;
 
 pub(crate) fn main() {
     env_logger::init();
@@ -67,5 +66,5 @@ pub(crate) fn main() {
             println!("\n=== Test Complete ===");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

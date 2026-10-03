@@ -634,6 +634,8 @@ fn main() {
             let _ = robot.exit();
         })
         .run(|| {
-            desktop_app::app::combined_app();
+            desktop_app::app::combined_app_with_initial_tab(Some(
+                desktop_app::app::DemoTab::Counter,
+            ));
         });
 }

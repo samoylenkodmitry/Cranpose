@@ -587,12 +587,12 @@ fn the_first_argument_opens_the_tab_it_names() {
     assert_eq!(named("pet"), DemoTab::FloatingWindows);
     assert_eq!(
         named("no-such-tab"),
-        DESKTOP_INITIAL_TAB,
+        DEFAULT_INITIAL_TAB,
         "a name that fits no tab leaves the desktop on its own"
     );
     assert_eq!(
         startup_tab_from_args([]),
-        DESKTOP_INITIAL_TAB,
+        DEFAULT_INITIAL_TAB,
         "no argument leaves the desktop on its own"
     );
 }

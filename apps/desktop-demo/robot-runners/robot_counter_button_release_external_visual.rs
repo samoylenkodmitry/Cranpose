@@ -4,7 +4,6 @@ use std::{path::PathBuf, time::Duration};
 
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_button_exact_in_semantics, find_text_by_prefix_in_semantics};
-use desktop_app::app;
 use image::RgbaImage;
 use text_showcase_external_helpers::{
     capture_x11_window, find_window_id, focus_x11_window, mouse_down_x11_button,
@@ -111,7 +110,7 @@ pub(crate) fn main() {
 
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn wait_for_counter_text(robot: &Robot) -> Option<String> {

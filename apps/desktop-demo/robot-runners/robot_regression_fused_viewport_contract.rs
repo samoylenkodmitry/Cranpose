@@ -156,7 +156,7 @@ pub(crate) fn main() {
             println!("PASS: fused-pass viewport contract");
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn count_ink(shot: &cranpose::RobotScreenshot, x: f32, y: f32, w: f32, h: f32) -> usize {

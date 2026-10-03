@@ -7,7 +7,7 @@ mod robot_tests {
     #[test]
     fn test_counter_app_increment() {
         let mut robot = create_headless_robot_test(800, 600, || {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 
         robot.wait_for_idle();
@@ -24,7 +24,7 @@ mod robot_tests {
     #[test]
     fn test_app_interactions() {
         let mut robot = create_headless_robot_test(800, 600, || {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 
         robot.wait_for_idle();
@@ -42,7 +42,7 @@ mod robot_tests {
     #[test]
     fn test_app_drag() {
         let mut robot = create_headless_robot_test(800, 600, || {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 
         robot.wait_for_idle();
@@ -57,7 +57,7 @@ mod robot_tests {
     #[test]
     fn test_app_resize() {
         let mut robot = create_headless_robot_test(800, 600, || {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 
         robot.wait_for_idle();
@@ -76,7 +76,7 @@ mod robot_tests {
     #[test]
     fn test_app_complex_flow() {
         let mut robot = create_headless_robot_test(800, 600, || {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 
         robot.wait_for_idle();
@@ -97,7 +97,7 @@ mod robot_tests {
     #[test]
     fn test_app_get_bounds() {
         let mut robot = create_headless_robot_test(800, 600, || {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 
         robot.wait_for_idle();
@@ -116,7 +116,7 @@ mod robot_tests {
     #[test]
     fn test_find_by_position() {
         let mut robot = create_headless_robot_test(800, 600, || {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 
         robot.wait_for_idle();
@@ -139,7 +139,7 @@ mod robot_tests {
     #[test]
     fn test_app_long_press() {
         let mut robot = create_headless_robot_test(800, 600, || {
-            app::combined_app();
+            app::combined_app_with_initial_tab(Some(app::DemoTab::Counter));
         });
 
         robot.wait_for_idle();

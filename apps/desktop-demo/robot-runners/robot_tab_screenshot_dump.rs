@@ -6,7 +6,7 @@ use std::{
 };
 
 use cranpose::AppLauncher;
-use desktop_app::app::{self, DemoTab, DEMO_TABS, TEST_ACTIVE_TAB_STATE};
+use desktop_app::app::{DemoTab, DEMO_TABS, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
 
 const WINDOW_WIDTH: u32 = 1200;
@@ -53,7 +53,7 @@ pub(crate) fn main() {
             );
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn dump_tab(robot: &cranpose::Robot, tab: DemoTab, shot_dir: &Path) {

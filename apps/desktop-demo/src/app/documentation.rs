@@ -278,6 +278,8 @@ fn WheelEntries(
     geometry: WheelGeometry,
     wheel_only: bool,
     interactive: bool,
+    first: usize,
+    end: usize,
 ) {
     let position = if interactive {
         state.position(wheel_only)
@@ -289,7 +291,7 @@ fn WheelEntries(
             .current()
             .font_scale
             .max(1.0);
-    for index in 0..chapters().len() {
+    for index in first..end {
         with_key(&index, || {
             let modifier = geometry.entry_modifier(index as f32 - position, entry_height);
             let active = state.selected() == index;
@@ -314,6 +316,7 @@ fn WheelEntries(
 
 #[composable]
 fn WheelVisuals(state: DocumentationState, geometry: WheelGeometry, wheel_only: bool) {
+    let visible = geometry.visible_entries(state.position(wheel_only), chapters().len());
     Box(
         Modifier::empty()
             .fill_max_size()
@@ -329,7 +332,16 @@ fn WheelVisuals(state: DocumentationState, geometry: WheelGeometry, wheel_only: 
             Box(
                 Modifier::empty().fill_max_size().hide_from_accessibility(),
                 BoxSpec::default(),
-                move || WheelEntries(state, geometry, wheel_only, false),
+                move || {
+                    WheelEntries(
+                        state,
+                        geometry,
+                        wheel_only,
+                        false,
+                        visible.start,
+                        visible.end,
+                    );
+                },
             );
         },
     );
@@ -338,6 +350,7 @@ fn WheelVisuals(state: DocumentationState, geometry: WheelGeometry, wheel_only: 
 #[composable]
 fn SectionWheel(state: DocumentationState, geometry: WheelGeometry, height: f32, compact: bool) {
     let scroll = rememberScrollableState(move |delta| state.rotate(delta, compact));
+    let visible = geometry.visible_entries(state.position(compact), chapters().len());
     Box(
         Modifier::empty()
             .width(if compact {
@@ -347,10 +360,10 @@ fn SectionWheel(state: DocumentationState, geometry: WheelGeometry, height: f32,
             })
             .height((height - 44.0).max(1.0))
             .clip_to_bounds()
-            .content_description("Documentation wheel")
+            .content_description("Guide wheel")
             .scrollable(Axis::Vertical, scroll),
         BoxSpec::default(),
-        move || WheelEntries(state, geometry, compact, true),
+        move || WheelEntries(state, geometry, compact, true, visible.start, visible.end),
     );
 }
 
@@ -391,7 +404,7 @@ fn ReaderChapter(state: DocumentationState, index: usize, width: f32, height: f3
                 .width(width)
                 .height_in(height, f32::INFINITY),
         )
-        .content_description("Documentation glass"),
+        .content_description("Guide glass"),
         BoxSpec::new().content_alignment(Alignment::TOP_START),
         move || {
             Column(
@@ -405,7 +418,7 @@ fn ReaderChapter(state: DocumentationState, index: usize, width: f32, height: f3
                         RowSpec::new().vertical_alignment(VerticalAlignment::CenterVertically),
                         move || {
                             Text(
-                                if compact { "GUIDE" } else { "DOCUMENTATION" },
+                                if compact { "GUIDE" } else { "CRANPOSE GUIDE" },
                                 Modifier::empty().weight(1.0),
                                 caption_style(MUTED),
                             );
@@ -423,7 +436,7 @@ fn ReaderChapter(state: DocumentationState, index: usize, width: f32, height: f3
                     );
                     Spacer(Modifier::empty().width(44.0).height(3.0).background(ACCENT));
                     ChapterNavigation(state, index);
-                    MarkdownDocument(chapter.body, GUIDE_URL);
+                    MarkdownDocument(chapter.body, GUIDE_URL, width.min(840.0) - inset * 2.0);
                     Spacer(
                         Modifier::empty()
                             .fill_max_width()
@@ -525,7 +538,7 @@ fn Reader(state: DocumentationState, width: f32, height: f32, compact: bool, hea
 }
 
 #[composable]
-pub(super) fn DocumentationTab(header: Option<super::AppHeaderState>) {
+pub(super) fn GuideTab(header: Option<super::AppHeaderState>) {
     let viewport = rememberMutableStateOf(cranpose_ui::Size::default);
     let header_size = rememberMutableStateOf(cranpose_ui::Size::default);
     let state = remember(|| DocumentationState {
@@ -547,8 +560,8 @@ pub(super) fn DocumentationTab(header: Option<super::AppHeaderState>) {
                     .fill_max_size()
                     .report_size_state(viewport)
                     .clip_to_bounds()
-                    .pane_title("Documentation")
-                    .content_description("Cranpose documentation"),
+                    .pane_title("Cranpose Guide")
+                    .content_description("Cranpose guide"),
                 BoxSpec::default(),
                 move || {
                     AnimateSelection(state);

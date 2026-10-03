@@ -27,8 +27,15 @@ use super::{
 #[derive(Clone, Debug, PartialEq)]
 enum MarkdownBlock {
     Text(Rc<AnnotatedString>),
-    Image { url: String, alt: String },
+    Image {
+        url: String,
+        alt: String,
+    },
     Rule,
+    Example {
+        code: Rc<AnnotatedString>,
+        preview: usize,
+    },
 }
 
 #[derive(Clone, Default)]
@@ -104,6 +111,8 @@ struct BlockBuilder {
     pending_code_newlines: String,
     code_text: String,
     code_language: Language,
+    code_fence: String,
+    code_preview: Option<usize>,
     pending_image: Option<PendingImage>,
     base_url: String,
 }
@@ -125,6 +134,8 @@ impl BlockBuilder {
             pending_code_newlines: String::new(),
             code_text: String::new(),
             code_language: Language::Plain,
+            code_fence: String::new(),
+            code_preview: None,
             pending_image: None,
             base_url: base_url.to_string(),
         }
@@ -202,6 +213,7 @@ impl BlockBuilder {
         self.pending_code_newlines.clear();
         self.in_code_block = false;
         let code = std::mem::take(&mut self.code_text);
+        self.code_preview = super::guide_previews::find(&self.code_fence, &code);
         if !code.is_empty() {
             let builder = self
                 .builder_raw
@@ -216,7 +228,11 @@ impl BlockBuilder {
         if let Some(b) = self.builder_raw.take() {
             let s = b.to_annotated_string();
             if !s.text.is_empty() {
-                self.blocks.push(MarkdownBlock::Text(Rc::new(s)));
+                let code = Rc::new(s);
+                self.blocks.push(match self.code_preview.take() {
+                    Some(preview) => MarkdownBlock::Example { code, preview },
+                    None => MarkdownBlock::Text(code),
+                });
             }
         }
     }
@@ -273,6 +289,10 @@ fn start_tag(b: &mut BlockBuilder, tag: Tag) {
             b.code_language = match &kind {
                 CodeBlockKind::Fenced(tag) => language_from_fence(tag),
                 CodeBlockKind::Indented => Language::Plain,
+            };
+            b.code_fence = match kind {
+                CodeBlockKind::Fenced(info) => info.into_string(),
+                CodeBlockKind::Indented => String::new(),
             };
             b.push_inline_style();
         }
@@ -469,7 +489,7 @@ pub(super) enum MarkdownAppearance {
 }
 
 #[composable]
-pub(super) fn MarkdownDocument(markdown: &'static str, base_url: &'static str) {
+pub(super) fn MarkdownDocument(markdown: &'static str, base_url: &'static str, width: f32) {
     let blocks = cranpose_core::rememberKeyed((markdown, base_url), |(markdown, base_url)| {
         Rc::<[MarkdownBlock]>::from(split_large_markdown_blocks(markdown_to_blocks(
             markdown, base_url,
@@ -481,7 +501,7 @@ pub(super) fn MarkdownDocument(markdown: &'static str, base_url: &'static str) {
         move || {
             for (index, block) in blocks.iter().enumerate() {
                 cranpose_core::with_key(&index, || {
-                    render_markdown_block(block, MarkdownAppearance::Reader);
+                    render_markdown_block(block, MarkdownAppearance::Reader, width);
                 });
             }
         },
@@ -783,19 +803,62 @@ fn MarkdownBlocksList(
         move |scope| {
             use cranpose_foundation::lazy::LazyListScopeExt;
             scope.items_indexed_rc(blocks, move |_index, block| {
-                render_markdown_block(block, MarkdownAppearance::Standard);
+                render_markdown_block(block, MarkdownAppearance::Standard, 0.0);
             });
         },
     );
 }
 
-fn render_markdown_block(block: &MarkdownBlock, appearance: MarkdownAppearance) {
+fn render_markdown_block(block: &MarkdownBlock, appearance: MarkdownAppearance, width: f32) {
     match block {
         MarkdownBlock::Text(annotated) => render_text_block(annotated.clone(), appearance),
         MarkdownBlock::Image { url, alt } => MarkdownImage(url.clone(), alt.clone()),
         MarkdownBlock::Rule => render_rule(),
+        MarkdownBlock::Example { code, preview } => {
+            if appearance == MarkdownAppearance::Reader {
+                MarkdownExample(code.clone(), *preview, width);
+            } else {
+                render_text_block(code.clone(), appearance);
+            }
+        }
     }
 }
+
+#[composable]
+fn MarkdownExample(code: Rc<AnnotatedString>, preview: usize, width: f32) {
+    let code = cranpose_core::rememberUpdatedState(code);
+    let (code_width, preview_width) = if width >= 720.0 {
+        (width - 256.0, 240.0)
+    } else {
+        (width, width)
+    };
+    cranpose_ui::widgets::FlowRow(
+        Modifier::empty().fill_max_width(),
+        cranpose_ui::widgets::FlowRowSpec::default()
+            .main_axis_spacing(16.0)
+            .cross_axis_spacing(12.0),
+        move || {
+            Box(
+                Modifier::empty().width(code_width),
+                BoxSpec::default(),
+                move || {
+                    render_text_block(code.get(), MarkdownAppearance::Reader);
+                },
+            );
+            Box(
+                Modifier::empty().width(preview_width),
+                BoxSpec::default(),
+                move || {
+                    super::guide_previews::GuidePreview(preview);
+                },
+            );
+        },
+    );
+}
+
+#[cfg(test)]
+#[path = "tests/guide_previews.rs"]
+mod preview_tests;
 
 fn markdown_scrollbar_style() -> LazyScrollbarStyle {
     LazyScrollbarStyle {

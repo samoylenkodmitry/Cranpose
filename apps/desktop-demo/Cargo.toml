@@ -159,3 +159,6 @@ required-features = ["desktop", "robot-app"]
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[build-dependencies]
+pulldown-cmark = { version = "0.13.4", default-features = false }

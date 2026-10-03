@@ -14,7 +14,7 @@ snapshot state, and a modifier-chain layout system. One Rust codebase targets
 **iOS**, and the **web** through WebAssembly, rendering through wgpu on all of
 them.
 
-**[Try the web demo in your browser](https://samoylenkodmitry.github.io/Cranpose/)** ·
+**[Read the Cranpose Guide](https://samoylenkodmitry.github.io/Cranpose/?tab=guide)** ·
 [**Explore Showcase Cranpose**](https://samoylenkodmitry.github.io/cranpose-showcase/) ·
 [Releases](https://github.com/samoylenkodmitry/Cranpose/releases) ·
 [crates.io](https://crates.io/crates/cranpose)
@@ -42,7 +42,7 @@ demonstrates liquid-glass surfaces, adaptive layouts, animation, and native Andr
 Start from [Showcase Cranpose](https://github.com/samoylenkodmitry/cranpose-showcase),
 the ready-to-run project template with desktop, Android, iOS, and web shells.
 Create a repository from its GitHub template, or clone it locally and replace
-the demo screens with your app. Install a [plugin](https://plugins.jetbrains.com/plugin/34594-cranpose) to RustRover or IntellijIdea.
+the demo screens with your app. Install a [plugin](https://plugins.jetbrains.com/plugin/34594-cranpose) in RustRover or IntelliJ IDEA.
 
 ```bash
 git clone https://github.com/samoylenkodmitry/cranpose-showcase.git my-cranpose-app
@@ -65,7 +65,7 @@ with state and events flowing in both directions.
 
 State, layout, and input, in the shape the framework actually has: composables
 take a `Modifier`, a spec, and their content; state comes from `rememberMutableStateOf` and is
-read with `.value()`.
+read with `.get()` or borrowed with `.with(...)`.
 
 ```rust
 use cranpose::prelude::*;
@@ -91,21 +91,22 @@ fn TodoApp() {
         move || {
             Text("Todo", Modifier::empty(), TextStyle::default());
 
-            for (index, todo) in todos.value().into_iter().enumerate() {
+            for index in 0..todos.with(Vec::len) {
                 Row(
                     Modifier::empty().fill_max_width().clickable(move |_| {
-                        let mut next = todos.value();
-                        next[index].done = !next[index].done;
-                        todos.set(next);
+                        todos.update(|items| items[index].done = !items[index].done);
                     }),
                     RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(8.0)),
                     move || {
-                        Text(
-                            if todo.done { "[x]" } else { "[ ]" },
-                            Modifier::empty(),
-                            TextStyle::default(),
-                        );
-                        Text(todo.text.clone(), Modifier::empty(), TextStyle::default());
+                        todos.with(|items| {
+                            let todo = &items[index];
+                            Text(
+                                if todo.done { "[x]" } else { "[ ]" },
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                            Text(todo.text.clone(), Modifier::empty(), TextStyle::default());
+                        });
                     },
                 );
             }
@@ -114,10 +115,10 @@ fn TodoApp() {
                 Modifier::empty().padding(10.0),
                 ButtonSpec::default(),
                 move || {
-                    let mut next = todos.value();
-                    let position = next.len() + 1;
-                    next.push(Todo { text: format!("Item {position}"), done: false });
-                    todos.set(next);
+                    todos.update(|items| {
+                        let position = items.len() + 1;
+                        items.push(Todo { text: format!("Item {position}"), done: false });
+                    });
                 },
                 || {
                     Text("Add", Modifier::empty(), TextStyle::default());
@@ -222,10 +223,13 @@ application's own the same way.
 
 ### Android
 
+Use the [cranpose-showcase starter](https://github.com/samoylenkodmitry/cranpose-showcase)
+on Windows, Linux or macOS with the Android SDK, NDK and the project's JDK.
+From the starter checkout, build an APK for an ARM device:
+
 ```bash
-# Prerequisites: cargo install cargo-ndk
-cd apps/isolated-demo/android
-./gradlew :app:assembleRelease
+cd android
+./gradlew :app:assembleDebug -PshowcaseAbi=arm64-v8a
 ```
 
 ### iOS

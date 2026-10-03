@@ -5,7 +5,6 @@ use std::time::Duration;
 use cranpose_testing::{
     find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
 };
-use desktop_app::app;
 
 fn read_lazy_pulse(robot: &cranpose::Robot) -> Option<String> {
     find_text_by_prefix_in_semantics(robot, "Lazy Pulse:").map(|(_, _, _, _, text)| text)
@@ -86,5 +85,5 @@ pub(crate) fn main() {
             println!("PASS: Lazy Pulse updated from '{first}' to '{second}'");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

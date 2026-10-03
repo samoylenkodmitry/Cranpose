@@ -6,7 +6,6 @@ use cranpose_testing::{
     count_text_in_tree, find_button_in_semantics, find_element_by_text_exact,
     print_semantics_with_bounds,
 };
-use desktop_app::app;
 
 pub(crate) fn main() {
     env_logger::init();
@@ -84,5 +83,5 @@ pub(crate) fn main() {
             println!("\n=== LazyList End/Start Duplication Test Complete ===");
             robot.exit().ok();
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }

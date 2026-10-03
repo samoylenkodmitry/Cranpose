@@ -3,7 +3,7 @@ use crate::{output_paths, scroll_stability_external_helpers, text_showcase_exter
 use std::time::Duration;
 
 use cranpose::AppLauncher;
-use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
+use desktop_app::app::{DemoTab, TEST_ACTIVE_TAB_STATE};
 use scroll_stability_external_helpers::{
     prepare_internal_diagnostic, run_scroll_stability_capture, ScrollStabilityConfig,
 };
@@ -100,7 +100,7 @@ pub(crate) fn main() {
             println!("PASS: text-indent paragraph stayed pixel-stable while scrolling");
             robot.exit().expect("exit");
         })
-        .run(app::combined_app);
+        .run(crate::robot_launch::counter_demo);
 }
 
 fn walk_tabs_to_text(robot: &cranpose::Robot) {
