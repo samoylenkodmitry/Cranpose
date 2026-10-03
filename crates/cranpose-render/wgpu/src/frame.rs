@@ -2953,7 +2953,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 .collect();
             let layout = {
                 let stage_items: Vec<&PendingBackdrop<'_>> = pending[start..end].iter().collect();
-                self.plan_stage(&stage_items)
+                self.plan_stage(&stage_items, pass.target_rect().pixel_size().0)
             };
             let (items, indices) = self.take_uncached(pass, &mut pending[start..end], &layout);
             if !items.is_empty() {
@@ -3261,7 +3261,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .is_some_and(|effect| !effect.substrates().is_empty())
         {
             let items = [&item];
-            let layout = self.plan_stage(&items);
+            let layout = self.plan_stage(&items, pass.target_rect().pixel_size().0);
             if layout.placements[0].is_some() {
                 item.key = self.backdrop_cache_key(pass, &item, layout.signature(0));
                 if let Some(cached) = self.cached_backdrop(&item) {
@@ -3293,16 +3293,22 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     /// capture resizes every frame -- an animating one -- ahead of a still
     /// member walks the still member's slot and costs it its cache entry every
     /// frame. Sorting by height packs tighter and loses exactly that.
+    ///
+    /// Shelves end at `shelf_width`, the page's width, so the atlas grows down
+    /// instead of out to the dimension limit: the capture fixup and blur
+    /// passes load the whole atlas, and a 4096-wide one costs them several
+    /// times what its captures cover.
     fn pack_stage(
         &self,
         items: &[&PendingBackdrop<'_>],
+        shelf_width: u32,
     ) -> (
         AtlasPacker,
         Vec<Option<AtlasPlacement>>,
         Vec<PlannedSubstrates>,
     ) {
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
-        let mut packer = AtlasPacker::new(limit);
+        let mut packer = AtlasPacker::new(limit).with_shelf_width(shelf_width);
         let mut placements: Vec<Option<AtlasPlacement>> = vec![None; items.len()];
         for (index, item) in items.iter().enumerate() {
             if item.batched.is_none() {
@@ -3345,8 +3351,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         (packer, placements, substrates)
     }
 
-    fn plan_stage(&self, items: &[&PendingBackdrop<'_>]) -> StageLayout {
-        let (packer, placements, substrates) = self.pack_stage(items);
+    fn plan_stage(&self, items: &[&PendingBackdrop<'_>], shelf_width: u32) -> StageLayout {
+        let (packer, placements, substrates) = self.pack_stage(items, shelf_width);
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let atlas_sizes: Vec<(u32, u32)> = packer
             .atlases
