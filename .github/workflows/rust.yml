@@ -57,7 +57,7 @@ jobs:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -141,7 +141,7 @@ jobs:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -184,7 +184,7 @@ jobs:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Skip work this exact tree already passed
         id: memo
@@ -246,7 +246,7 @@ jobs:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Both parents of the merge commit, for the diff below.
           fetch-depth: 2
@@ -268,8 +268,8 @@ jobs:
         if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: |
           scripts/ci/provision_toolchain.sh
-          rustup target add wasm32-unknown-unknown
-          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
+          scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.15.0 --locked
           # wasm-pack fetches its own binaryen when the host has none, so a
           # missing system wasm-opt is reported rather than treated as fatal.
           wasm-opt --version || echo "no system binaryen; wasm-pack supplies its own"
@@ -290,7 +290,7 @@ jobs:
         run: apps/desktop-demo/package-web.sh "$RUNNER_TEMP/web-demo"
       - name: Keep the web demo three days
         if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: web-demo
           path: ${{ runner.temp }}/web-demo

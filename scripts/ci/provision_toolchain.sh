@@ -29,6 +29,9 @@ if ! command -v cargo >/dev/null; then
     exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$SCRIPT_DIR/install_toolchains.sh"
+
 # CI runs the same recipes a developer runs, so a gate cannot mean one thing
 # locally and another thing here.
 command -v just >/dev/null || cargo install just --locked
@@ -37,8 +40,7 @@ command -v just >/dev/null || cargo install just --locked
 # every process start end to end: 181 binaries, 205s, of which about half was
 # startup and two binaries. nextest runs them in parallel -- same 5452 tests in
 # 62s. It does not run doctests, so `just test` still runs those with cargo.
-command -v cargo-nextest >/dev/null \
-    || cargo install cargo-nextest --locked --version 0.9.145
+cargo install cargo-nextest --locked --version 0.9.146
 
 # One sccache server serves every job on a host, and it keeps the cache
 # directory of whichever job started it. The robot and Android jobs name the
@@ -51,14 +53,5 @@ if [[ "$(uname -s)" == Linux && -z "${SCCACHE_DIR:-}" && -d "$real_home/ci-cache
         echo "SCCACHE_DIR=$SCCACHE_DIR" >> "$GITHUB_ENV"
     fi
 fi
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# `just fmt` and `just fmt-check` run the pinned nightly's formatter. A host
-# can carry that toolchain without its rustfmt component, and then every
-# formatting check fails with "'cargo-fmt' is not installed".
-nightly_channel="$(sed -n 's/^channel = "\(.*\)"/\1/p' "$SCRIPT_DIR/../../rust-toolchain-nightly.toml")"
-rustup toolchain install --no-self-update "$nightly_channel" --profile minimal >/dev/null
-rustup component add --toolchain "$nightly_channel" rustfmt >/dev/null
 
 "$SCRIPT_DIR/start_sccache.sh"

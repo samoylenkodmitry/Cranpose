@@ -52,7 +52,7 @@ impl RequestConcurrencyTracker {
         let active = self.active_requests.fetch_add(1, Ordering::SeqCst) + 1;
         let _ =
             self.max_active_requests
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
                     (active > current).then_some(active)
                 });
     }

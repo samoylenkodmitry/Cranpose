@@ -68,7 +68,7 @@ jobs:
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Check whether tonight's nightly already ran
@@ -94,7 +94,7 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Configure machine-local knobs
         env:
@@ -140,7 +140,7 @@ jobs:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Configure machine-local SDK and cache paths
         env:
@@ -152,7 +152,7 @@ jobs:
         id: provision
         run: |
           scripts/ci/provision_toolchain.sh
-          rustup target add aarch64-linux-android
+          scripts/ci/rustup_locked.sh target add aarch64-linux-android
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
           test -f "$ANDROID_NDK_HOME/source.properties"
 

@@ -33,7 +33,7 @@ jobs:
     outputs:
       should_publish: ${{ steps.sync.outputs.should_publish }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Provision the pinned Rust toolchain
@@ -45,6 +45,7 @@ jobs:
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # Named step so the pinned toolchain's first-use download shows up
           # here rather than inside whichever cargo step ran first.
+          scripts/ci/install_toolchains.sh
           rustc --version
 
       - name: Sync Cargo versions with tag
@@ -132,7 +133,7 @@ jobs:
       #
       # What this job must publish is the tree the tag names. That is true
       # whatever main does next.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -145,6 +146,7 @@ jobs:
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # Named step so the pinned toolchain's first-use download shows up
           # here rather than inside whichever cargo step ran first.
+          scripts/ci/install_toolchains.sh
           rustc --version
 
       - name: Verify tag and workspace versions
@@ -198,7 +200,7 @@ jobs:
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
@@ -211,6 +213,7 @@ jobs:
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # Named step so the pinned toolchain's first-use download shows up
           # here rather than inside whichever cargo step ran first.
+          scripts/ci/install_toolchains.sh
           rustc --version
 
       # apps/isolated-demo is the canary that proves a release is consumable
@@ -291,8 +294,8 @@ jobs:
         if: ${{ !cancelled() && steps.point.conclusion == 'success' }}
         run: |
           set -euo pipefail
-          rustup target add wasm32-unknown-unknown
-          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
+          scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.15.0 --locked
           apps/isolated-demo/build-web.sh
 
       # The Gradle plugin has no Maven coordinate: apps/isolated-demo/android's

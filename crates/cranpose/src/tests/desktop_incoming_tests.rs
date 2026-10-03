@@ -45,7 +45,7 @@ impl TypedData for StagedFileList {
     fn try_as_file_paths(&self) -> io::Result<Vec<PathBuf>> {
         let still_blocked = self
             .reads_before_ready
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
                 left.checked_sub(1)
             })
             .is_ok();
