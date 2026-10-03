@@ -10,7 +10,7 @@ use super::*;
 /// are stored in thread-local storage and never shared across threads. The `Arc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct GlobalSnapshot {
-    state: SnapshotState,
+    pub(super) state: SnapshotState,
     nested_count: Cell<usize>,
 }
 
@@ -51,7 +51,14 @@ impl GlobalSnapshot {
         let invalid = super::runtime::advance_global_snapshot(new_id);
         self.state.id.set(new_id);
         self.state.invalid.replace(invalid);
-        drop(self.state.modified.take());
+        // Drop the recorded states outside the borrow, then hand the emptied
+        // map back so the next write reuses its capacity.
+        let mut modified = self.state.modified.take();
+        modified.clear();
+        let mut slot = self.state.modified.borrow_mut();
+        if slot.is_empty() {
+            std::mem::swap(&mut *slot, &mut modified);
+        }
     }
 }
 

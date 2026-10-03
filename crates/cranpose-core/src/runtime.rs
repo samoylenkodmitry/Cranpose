@@ -1562,6 +1562,19 @@ pub(crate) fn runtime_handle_by_id(id: RuntimeId) -> Option<RuntimeHandle> {
     REGISTERED_RUNTIMES.with(|registry| registry.borrow().get(&id).cloned())
 }
 
+pub(crate) fn with_state_arena_by_id<R>(
+    id: RuntimeId,
+    f: impl FnOnce(&StateArena) -> R,
+) -> Option<R> {
+    let inner = REGISTERED_RUNTIMES.with(|registry| {
+        registry
+            .borrow()
+            .get(&id)
+            .and_then(|handle| handle.inner.upgrade())
+    })?;
+    Some(f(&inner.state_arena))
+}
+
 pub(crate) fn live_recompose_scope_count() -> usize {
     REGISTERED_RUNTIMES.with(|registry| {
         registry

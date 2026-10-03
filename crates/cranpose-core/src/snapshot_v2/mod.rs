@@ -178,6 +178,22 @@ impl AnySnapshot {
     }
 
     /// Get the set of invalid snapshot IDs.
+    fn state(&self) -> &SnapshotState {
+        match self {
+            AnySnapshot::Readonly(s) => &s.state,
+            AnySnapshot::Mutable(s) => &s.state,
+            AnySnapshot::NestedReadonly(s) => &s.state,
+            AnySnapshot::NestedMutable(s) => &s.state,
+            AnySnapshot::Global(s) => &s.state,
+            AnySnapshot::TransparentMutable(s) => &s.state,
+            AnySnapshot::TransparentReadonly(s) => &s.state,
+        }
+    }
+
+    pub(crate) fn with_invalid<R>(&self, f: impl FnOnce(&SnapshotIdSet) -> R) -> R {
+        f(&self.state().invalid.borrow())
+    }
+
     pub fn invalid(&self) -> SnapshotIdSet {
         match self {
             AnySnapshot::Readonly(s) => s.invalid(),
