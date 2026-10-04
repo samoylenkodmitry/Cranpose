@@ -10,7 +10,7 @@ use cranpose_ui_graphics::{DrawSpecialization, FxBuildHasher, RuntimeShader, Sha
 use naga::ShaderStage;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::shader_records::ShaderPipelineRecord;
+use crate::pipeline_records::ShaderPipelineRecord;
 use crate::{
     debug_toggles::DebugToggle,
     lazy_resource::LazyGpuResource,

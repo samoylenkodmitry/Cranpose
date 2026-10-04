@@ -47,6 +47,11 @@ impl<T> LazyGpuResource<T> {
     pub(crate) fn get(&self) -> Option<&T> {
         self.value.get()
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn label(&self) -> &'static str {
+        self.label
+    }
 }
 
 impl<T: CompilerSend + CompilerSync + 'static> LazyGpuResource<T> {
