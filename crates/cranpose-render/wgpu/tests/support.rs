@@ -989,7 +989,7 @@ pub fn wait_for_background_compiler_idle() {
 }
 
 /// Whether every draw of the last frame used the pipeline it asked for,
-/// rather than a general one standing in while a specialization compiled or
+/// rather than a first screen's stand-in while a specialization compiled or
 /// a placeholder while nothing had.
 pub fn pipelines_settled(stats: &RenderStatsSnapshot) -> bool {
     stats.shape_pipeline_fallback_draws == 0

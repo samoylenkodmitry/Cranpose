@@ -214,8 +214,8 @@ fn spawn_lane(
 /// Where a renderer compiles its pipelines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PipelineCompilation {
-    /// On background threads, a general pipeline standing in until the
-    /// specialized one is ready.
+    /// On background threads; a draw shows its placeholder, or a first
+    /// screen's shared stand-in, until its own pipeline is ready.
     Background,
     /// Where each is first needed, so no draw uses a stand-in.
     Inline,
