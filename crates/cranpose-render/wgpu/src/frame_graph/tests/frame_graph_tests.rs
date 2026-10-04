@@ -22,10 +22,6 @@ fn a_transient_texture_no_frame_reuses_is_dropped_after_the_idle_frames() {
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-fn region(width: u32, height: u32) -> FrameTextureDescriptor {
-    FrameTextureDescriptor::region_attachment("region test", width, height, FORMAT)
-}
-
 fn exact(width: u32, height: u32) -> FrameTextureDescriptor {
     FrameTextureDescriptor::render_attachment("exact test", width, height, FORMAT)
 }
@@ -43,22 +39,21 @@ fn acquire(
 }
 
 #[test]
-fn a_region_request_takes_the_smallest_pooled_texture_that_holds_it() {
+fn exact_requests_reuse_only_matching_dimensions() {
     let (_lock, device, _queue) = super::upload_test_device();
     let mut executor = WgpuFrameGraphExecutor::default();
-    executor.return_cached_transient(
-        region(96, 64),
-        OffscreenTarget::new(&device, FORMAT, 96, 64),
-    );
-    executor.return_cached_transient(
-        region(64, 40),
-        OffscreenTarget::new(&device, FORMAT, 64, 40),
-    );
-    let (target, created) = acquire(&mut executor, &device, region(60, 36));
-    assert!(!created, "a pooled texture holds the request");
+    executor.return_cached_transient(exact(96, 64), OffscreenTarget::new(&device, FORMAT, 96, 64));
+    executor.return_cached_transient(exact(64, 40), OffscreenTarget::new(&device, FORMAT, 64, 40));
+    let (target, created) = acquire(&mut executor, &device, exact(64, 40));
+    assert!(!created, "the matching size is reused");
     assert_eq!((target.width, target.height), (64, 40));
-    let (target, created) = acquire(&mut executor, &device, region(56, 30));
-    assert!(!created, "the 96x64 texture is within four times 56x30");
+    let (_, created) = acquire(&mut executor, &device, exact(60, 36));
+    assert!(
+        created,
+        "a larger pooled texture cannot serve a smaller request"
+    );
+    let (target, created) = acquire(&mut executor, &device, exact(96, 64));
+    assert!(!created, "the remaining matching size is reused");
     assert_eq!((target.width, target.height), (96, 64));
 }
 
@@ -78,36 +73,29 @@ fn an_exact_request_takes_only_its_own_size() {
 }
 
 #[test]
-fn a_region_request_leaves_a_texture_many_times_its_area() {
+fn equal_area_does_not_make_different_dimensions_reusable() {
     let (_lock, device, _queue) = super::upload_test_device();
     let mut executor = WgpuFrameGraphExecutor::default();
     executor.return_cached_transient(
-        region(128, 128),
-        OffscreenTarget::new(&device, FORMAT, 128, 128),
+        exact(128, 64),
+        OffscreenTarget::new(&device, FORMAT, 128, 64),
     );
-    let (_, created) = acquire(&mut executor, &device, region(60, 60));
+    let (_, created) = acquire(&mut executor, &device, exact(64, 128));
     assert!(
         created,
-        "a quarter of 128x128 is 64x64, so 60x60 takes its own texture"
+        "matching total texels do not make dimensions interchangeable"
     );
-    let (_, created) = acquire(&mut executor, &device, region(64, 64));
-    assert!(!created, "64x64 is a quarter of 128x128 and still served");
 }
 
 #[test]
 fn a_texture_goes_back_to_the_pool_at_its_own_size() {
     let (_lock, device, _queue) = super::upload_test_device();
     let mut executor = WgpuFrameGraphExecutor::default();
-    executor.return_cached_transient(
-        region(96, 64),
-        OffscreenTarget::new(&device, FORMAT, 96, 64),
-    );
-    let (target, _) = acquire(&mut executor, &device, region(80, 50));
-    executor.return_cached_transient(region(80, 50), target);
+    executor.return_cached_transient(exact(80, 50), OffscreenTarget::new(&device, FORMAT, 96, 64));
     let (target, created) = acquire(&mut executor, &device, exact(96, 64));
     assert!(
         !created,
-        "the pool records the 96x64 texture, not the 80x50 request"
+        "the pool records the target's 96x64 dimensions, not the stale descriptor"
     );
     assert_eq!((target.width, target.height), (96, 64));
 }

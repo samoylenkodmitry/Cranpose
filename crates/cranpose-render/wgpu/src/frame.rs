@@ -2543,23 +2543,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
-    /// A transient that every pass addresses through texel regions, so the
-    /// pool may hand back any texture at least `width` by `height`.
-    fn acquire_region_transient(
-        &mut self,
-        label: &'static str,
-        width: u32,
-        height: u32,
-    ) -> Rc<OffscreenTarget> {
-        let max = self.renderer.max_texture_dim();
-        self.acquire_described(FrameTextureDescriptor::region_attachment(
-            label,
-            width.min(max),
-            height.min(max),
-            self.renderer.composition_format,
-        ))
-    }
-
     fn acquire_described(&mut self, descriptor: FrameTextureDescriptor) -> Rc<OffscreenTarget> {
         let target = self
             .recorder
@@ -3177,7 +3160,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 continue;
             }
             let (width, height) = view.size();
-            let texture = &self.acquire_region_transient("Backdrop Capture Atlas", width, height);
+            let texture = &self.acquire_transient("Backdrop Capture Atlas", width, height);
             let regions: Vec<CaptureRegion> = view
                 .members
                 .iter()
@@ -3439,8 +3422,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
         let (width, height) = view.side_size();
         let direct = direct_side_slots(&mut regions, &region_slots, &mut averaged, &average_slots);
-        let scratch = self.acquire_region_transient("Backdrop Blur Scratch", width, height);
-        let result = self.acquire_region_transient("Backdrop Blur Result", width, height);
+        let scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
+        let result = self.acquire_transient("Backdrop Blur Result", width, height);
         let device = self.renderer.device.clone();
         self.renderer.effect_renderer.record_substrates(
             members
