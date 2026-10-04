@@ -74,6 +74,12 @@ internal data class RustDeclaration(
     val permissions: List<String>,
     val demands: List<String>,
     val opens: List<String>,
+    /**
+     * Permissions a newer Android release replaced, each with the last API
+     * level that still needs it: written with `android:maxSdkVersion`, so a
+     * newer device is never asked for them.
+     */
+    val permissionsUpTo: List<Pair<String, Int>> = emptyList(),
 )
 
 /**
@@ -93,6 +99,14 @@ internal fun readRustDeclaration(declaration: ConfigurableFileCollection): RustD
         permissions = declarations.flatMap { names(it["permissions"]) }.distinct(),
         demands = declarations.flatMap { names(it["demands"]) }.distinct(),
         opens = declarations.flatMap { names(it["opens"]) }.distinct(),
+        permissionsUpTo = declarations.flatMap { parsed ->
+            (parsed["permissionsUpTo"] as? List<*>).orEmpty().mapNotNull { entry ->
+                val fields = entry as? Map<*, *> ?: return@mapNotNull null
+                val name = fields["name"]?.toString() ?: return@mapNotNull null
+                val level = (fields["maxSdk"] as? Number)?.toInt() ?: return@mapNotNull null
+                name to level
+            }
+        }.distinctBy { it.first },
     )
 }
 
@@ -334,8 +348,21 @@ abstract class CranposeManifestCheck : DefaultTask() {
                     "own declaration"
             )
         }
+        val capped = rust.permissionsUpTo.filterNot { (name, _) -> already.contains(name) }
+        for ((permission, level) in capped) {
+            val element = document.createElement("uses-permission")
+            element.setAttributeNS(ANDROID_NAMESPACE, "android:name", permission)
+            element.setAttributeNS(ANDROID_NAMESPACE, "android:maxSdkVersion", level.toString())
+            manifest.appendChild(element)
+        }
+        if (capped.isNotEmpty()) {
+            logger.lifecycle(
+                "cranpose: ${capped.joinToString(", ") { (name, level) -> "$name up to API $level" }} " +
+                    "written from this application's own declaration"
+            )
+        }
 
-        val permissions = already + added
+        val permissions = already + added + capped.map { it.first }
 
         val featureElements = document.getElementsByTagName("uses-feature")
             .let { nodes -> (0 until nodes.length).mapNotNull { at -> nodes.item(at) as? Element } }

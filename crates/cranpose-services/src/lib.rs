@@ -19,6 +19,7 @@ pub mod file_picker;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod github_release_updater;
 pub mod haptics;
+pub mod heart_rate;
 #[cfg(not(target_arch = "wasm32"))]
 mod helper_process;
 pub mod host;
@@ -119,6 +120,12 @@ pub use github_release_updater::GitHubAppUpdater;
 pub use haptics::{
     HapticEffect, HapticError, HapticFeedback, HapticPattern, Haptics, HapticsRef, ProvideHaptics,
     clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics,
+};
+pub use heart_rate::{
+    HeartRate, HeartRateError, HeartRateMonitor, HeartRateMonitorRef, HeartRatePermission,
+    HeartRateReader, HeartRateStatus, clear_platform_heart_rate, heart_rate, heart_rate_available,
+    heart_rate_permission, observe_heart_rate, publish_heart_rate, publish_heart_rate_permission,
+    rememberHeartRate, request_heart_rate_permission, set_platform_heart_rate,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use helper_process::windowless_command;

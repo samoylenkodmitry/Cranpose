@@ -1,6 +1,6 @@
 # Cranpose services
 
-`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, image pickers, haptics, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
+`cranpose-services` defines platform service contracts for Cranpose applications. The crate groups APIs for HTTP, files and folders, URI handlers, audio and media, camera, image pickers, haptics, heart rate, accessibility, device and power information, app updates, purchases, navigation, preferences, and shared content.
 
 Most applications use these APIs through the `cranpose` facade. Add `cranpose-services` directly when an application provides a custom backend or needs a service contract outside the facade. Platform adapters register implementations through each module's `set_platform_*` function. Composition-local services use `local_*` functions and `Provide*` composables; process-wide services use plain functions.
 
@@ -25,6 +25,34 @@ fn current_store_phase() -> purchases::StorePhase {
 ```
 
 Purchase events arrive asynchronously through `rememberPurchaseEvents` or `take_event`. Store platform setup in the adapter. See the [purchases API](https://docs.rs/cranpose-services/latest/cranpose_services/purchases/index.html).
+
+## Example: read the wearer's heart rate
+
+The heart-rate sensor is in a build only when its build script declares it, and
+the person is asked only when the application asks:
+
+```rust
+// build.rs
+cranpose_capabilities::declare(&[Use::heart_rate(
+    "Plays to your pulse. The reading never leaves this watch.",
+)])
+.emit();
+
+// a screen: the sensor runs while this is composed and `active`
+let heart = rememberHeartRate(active);
+if let Some(bpm) = heart.get().live_bpm() {
+    game.set_pulse(bpm);
+}
+
+// when the person chooses the feature that reads it, never on the app's own
+request_heart_rate_permission();
+```
+
+Observing never prompts: an application that has not asked sees
+`HeartRateStatus::NeedsPermission`, and one that was refused sees `Denied`.
+`live_bpm()` is a reading only while the sensor is on the skin. On Android the
+service is compiled into the app only when declared, and the sensor pauses with
+the activity; other platforms report `Unavailable`.
 
 ## Features and platform adapters
 

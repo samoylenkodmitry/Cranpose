@@ -66,6 +66,8 @@ mod android_frame_work;
 ))]
 mod android_haptics_queue;
 #[cfg(all(feature = "android", target_os = "android"))]
+mod android_heart_rate;
+#[cfg(all(feature = "android", target_os = "android"))]
 mod android_host;
 #[cfg_attr(
     not(all(feature = "android", target_os = "android")),

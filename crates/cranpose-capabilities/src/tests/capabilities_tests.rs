@@ -249,3 +249,42 @@ fn opening_keeps_what_the_declaration_already_used_and_demanded() {
     assert_eq!(declaration.capabilities.demands, &WATCH);
     assert_eq!(declaration.capabilities.opens, &AUDIO);
 }
+
+const PULSE: [Use; 1] = [Use::heart_rate(
+    "Plays to your pulse. Nothing leaves this watch.",
+)];
+
+#[test]
+fn heart_rate_asks_for_the_health_permission_and_body_sensors_only_up_to_api_35() {
+    let pulse = Capabilities {
+        uses: &PULSE,
+        demands: &[],
+        opens: &[],
+    };
+    assert_eq!(
+        android_permissions(&pulse),
+        vec!["android.permission.health.READ_HEART_RATE"]
+    );
+    assert_eq!(
+        android_permissions_up_to(&pulse),
+        vec![("android.permission.BODY_SENSORS", 35)]
+    );
+    let manifest = android_manifest(&pulse);
+    assert!(manifest.contains(
+        "<uses-permission android:name=\"android.permission.BODY_SENSORS\" \
+         android:maxSdkVersion=\"35\" />"
+    ));
+    let text = json(&pulse);
+    assert!(text.contains("\"permissionsUpTo\""));
+    assert!(text.contains("{ \"name\": \"android.permission.BODY_SENSORS\", \"maxSdk\": 35 }"));
+    assert!(apple_usage(&pulse).contains("NSHealthShareUsageDescription"));
+    assert!(rust_source(&pulse).contains("Use::heart_rate(\"Plays to your pulse."));
+}
+
+#[test]
+fn an_application_that_does_not_declare_heart_rate_names_no_body_sensor() {
+    let manifest = android_manifest(&SCANNER);
+    assert!(!manifest.contains("BODY_SENSORS"));
+    assert!(!manifest.contains("READ_HEART_RATE"));
+    assert!(android_permissions_up_to(&SCANNER).is_empty());
+}
