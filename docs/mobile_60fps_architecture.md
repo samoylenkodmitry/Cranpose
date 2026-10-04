@@ -1,41 +1,44 @@
-# Mobile 60 FPS
+# Mobile frame budgets
 
-**Target unmet: 16.67 ms/frame.** Cranpose internals may change; Jetpack Compose
-API, application sources and picture correctness stay fixed.
+The target is 60 FPS, or 16.67 ms per display frame. The reports below contain
+measurements for specific revisions, routes and temperatures. Each candidate
+requires fresh acceptance runs on the slowest shipped device.
 
-- Track the remaining device frame budgets in [#626](https://github.com/samoylenkodmitry/Cranpose/issues/626); renderer correctness fixes do not close this target.
-- [Huawei Showcase frame-budget measurements](huawei_showcase_frame_budget.md): two complete blur-specialization comparisons give +3.29% and −2.53%; retain the pixel guard and reject the added pipelines.
+## Evidence
 
-**Required workloads on Huawei and Pixel Watch:** Cranorbit Megaboss,
-Showcase full scroll, and **Cranscan Settings scroll**.
-
-| Constraint | Evidence | Next action |
+| Workload or cost | Recorded result | Report |
 | --- | --- | --- |
-| Watch CPU | Latest profile: 18.17 ms/frame; main thread 17.22; arc recording + draw scope 5.77 | Remove repeated preparation and memory traffic; keep direct GPU columns |
-| Watch GPU | One game pass: 15.20–19.02 ms after startup; diagnostic, 39.9→41.1°C | Reduce GPU work as well as recording; moving CPU work to the GPU spends an already full budget |
-| Glass construction | Two diagnostic scroll profiles: source comparison 1.24→0.15 ms/frame; paired watch FPS has no reliable gain | Keep the prototype held; CPU savings alone do not prove frame savings |
-| Huawei GPU | Glass removed: 30.79→34.84 FPS. Replacing copies with draws loses all four pairs: 32.19→29.20. All 26,039 sampled batches use whole-recording bounds | Keep copies; selected-run bounds cannot help this workload. Attribute allocation and memory traffic next. GPU timestamps unavailable |
-| Heat | Watch scroll crosses throttling near 41°C; both builds slow down | Keep hot legs. Reject changes that improve a cool sample but worsen paired throughput |
-| Cranscan | Complete Settings routes: watch 37.22→52.67 FPS with presentation overlap; Huawei 53.96→53.88 | Keep four-core overlap; reduce the remaining frame work using the [paired device results](mobile_present_thread.md) |
-| Scheduling | Highest-capacity pair: Huawei scroll 31.51→32.38, mixed; game 58.30→58.25 | Keep wider CPU set; extra affinity restriction has no reliable gain |
-| Allocation | Hot watch scroll, 41.9→42.3°C: 5.27 CPU ms/frame; 2.42 attributed to framework/wgpu, 1.60 to vendor driver. Observer allocation removal: watch 54.77→54.60 FPS, Huawei 31.29→31.25 | Hold prototype. Attribute cache misses, allocation sizes/lifetimes and driver costs; unresolved samples remain unresolved |
-| Instruction cache | Watch diagnostic: sampled miss weight 37.9% Android libc, 24.8% Adreno, 34.0% application library. Executable code is already 3.3–3.7% smaller than main | Inspect allocation and command submission callers. Total code size and sampled PCs do not establish a cache bottleneck |
-| Builds | Megaboss release uses optimization 3, full LTO, one codegen unit; Showcase uses Cargo release defaults | Consumer profiles control library code. Cranpose profile edits cannot change these unchanged apps |
+| Pixel Watch 3, CranScan Settings | 37.22 → 52.67 FPS with presentation overlap | [Presentation worker](mobile_present_thread.md) |
+| Huawei, CranScan Settings | 53.96 → 53.88 FPS in the same worker comparison | [Presentation worker](mobile_present_thread.md) |
+| Huawei, Showcase blur specialization | +3.29% in one complete comparison; −2.53% in the confirmation | [Frame budget](huawei_showcase_frame_budget.md) |
+| Huawei, shader declaration metadata | Sampled hash cost 0.234 → 0.041 CPU ms/frame; acceptance 41.32 → 41.71 FPS | [Shader metadata](huawei_shader_metadata.md) |
+| Huawei, observer allocation changes | 41.90 → 41.82 FPS | [Observer allocations](showcase_observer_allocations.md) |
+| Earlier watch and phone experiments | CPU, GPU, heat, cache and allocation evidence | [Evidence index](mobile_watch_performance.md) |
 
-**Architecture:** prepare immutable data once; record only changing data; resolve
-only required backdrop dependencies; compose in draw order. No new cache or
-thread without a measured saving and a guard against stale pixels.
-Use the [performance coding guide](performance_coding_guide.md).
+The paired blur results support the existing shared kernel. The metadata and
+observer reports identify CPU work reductions; the paired device results leave
+the 60 FPS target open for those workloads. Issue discussions
+[#626](https://github.com/samoylenkodmitry/Cranpose/issues/626) and
+[#627](https://github.com/samoylenkodmitry/Cranpose/issues/627) retain earlier
+follow-up context.
 
-**Acceptance:** game windows are **20 seconds**. Watch uses first presented
-seconds; Huawei includes launch. Scroll must expose the last card. Run ABAB
-BABA, record temperature before/after every leg, retain failures, never wait
-for cooling. Every optimization must fail a correctness guard when deliberately
-broken. [Measurements and captures](mobile_watch_performance.md).
+## Acceptance route
 
-**Cranscan Settings:** measure 20 seconds of continuous scrolling from
-“On-device intelligence” through “Version, licenses, credits, library stats.”
-and back. Verify both endpoints and use the same gesture sequence, app revision,
-features, data and expanded sections for main and SOTA. Preserve each run's FPS,
-temperatures, route completion and paired screenshots. Do not change settings
-or start downloads during the route; record background work already in progress.
+Use unchanged app sources, assets, features and build profiles. Measure CranOrbit
+Megaboss, Showcase full scroll and CranScan Settings on Huawei and Pixel Watch.
+
+- Use 20-second game windows. The watch window starts at the first presented
+  frame; the Huawei window includes launch.
+- Reach the last Showcase card and verify the endpoint.
+- Traverse CranScan Settings from “On-device intelligence” through
+  “Version, licenses, credits, library stats.” and back. Keep the gesture
+  sequence, data and expanded sections equal across arms.
+- Run ABAB then BABA with continuous device use. Record temperatures before
+  and after every leg. Retain failed routes and hot samples.
+- Preserve paired screenshots, per-run FPS, endpoint results and background
+  activity with the source and build hashes.
+
+Prepare shared immutable data once, record changed data, and preserve draw
+order. A cache or thread change requires measured frame savings and a pixel
+guard. Follow the [performance guide](performance_coding_guide.md) and
+[device protocol](device_measurement.md).

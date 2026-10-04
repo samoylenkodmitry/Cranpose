@@ -1,12 +1,11 @@
 ## What this changes
 
-<!-- What the change does, and why the previous shape was wrong. -->
+<!-- Describe the problem, the new behavior and the relevant evidence. -->
 
 ## Checklist
 
-- [ ] `just ci` passes in full.
-- [ ] A bug fix starts with a test that fails without the fix.
-- [ ] New public API carries a `///` doc comment with an example. Internal code
-      does not: good names beat narration.
-- [ ] No half-migrated state, deprecation shim, or "legacy" path left behind.
-- [ ] I used AI assistance (Claude, Copilot, etc.) to write this code.
+- [ ] Applicable checks pass: link, example and format checks for docs; targeted tests and `just ci` for source changes.
+- [ ] Each bug fix has an integration or end-to-end regression with a recorded failure on the baseline.
+- [ ] Each new public API has a `///` comment and an example.
+- [ ] All affected consumers use the current API and behavior.
+- [ ] AI assistance: name the tool when applicable.

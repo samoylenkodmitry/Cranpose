@@ -1,38 +1,13 @@
-# Cranpose Macros
+# Cranpose macros
 
-Procedural macros that power the Cranpose declarative syntax.
+Procedural macros used by Cranpose. Applications normally import them through
+the `cranpose` crate.
 
-## When to Use
+`#[composable]` marks a function for composition. The macro analyzes its
+parameters and body and emits the runtime bookkeeping needed to retain values
+and callbacks across recomposition. Its expansion is an implementation detail;
+the exact generated Rust and runtime strategy can change with the macro.
 
-You will rarely interact with this crate directly; it is re-exported by `cranpose`. Identifying how the `#[composable]` macro transforms your code is useful for debugging and understanding performance characteristics.
-
-## Key Concepts
-
--   **`#[composable]`**: This attribute macro transforms a standard Rust function into a `Composable` function. It injects a hidden `Composer` parameter and wraps the function body in a uniquely identified group.
--   **Skipping**: The macro generates code to compare current arguments with previous arguments. If they haven't changed, the function body execution is skipped during recomposition, significantly improving performance.
--   **Naming**: Composables are CamelCase functions, and the macro allows that name on the function it emits, so a file of composables needs no `#![allow(non_snake_case)]`.
-
-## Transformation Example
-
-Conceptual expansion of what `#[composable]` does:
-
-```rust
-// Source
-#[composable]
-fn MyComponent(name: String) {
-    Text(name);
-}
-
-// Generated (Conceptual)
-fn MyComponent(composer: &mut Composer, changed: usize, name: String) {
-    composer.start_restart_group(12345); // Unique ID based on location
-    
-    if changed == 0 && composer.skipping() {
-        composer.skip_to_group_end();
-    } else {
-        Text(composer, changed, name);
-    }
-    
-    composer.end_restart_group(|composer| MyComponent(composer, changed | 1, name));
-}
-```
+`#[preview]` registers a parameterless composable for IDE previews with the
+`preview` feature. Apply `#[preview]` and `#[composable]` together. Options are
+`name`, `group`, `width`, `height` and `dark`.

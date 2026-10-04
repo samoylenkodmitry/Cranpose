@@ -1,28 +1,22 @@
-# Cranpose Platform Web
+# Cranpose web platform
 
-Web platform integration layer for Cranpose, targeting WebAssembly (WASM).
+This internal platform crate connects Cranpose to browser APIs on
+`wasm32`. The crate binds the renderer to an HTML canvas, requests frames from
+the browser, and translates browser input events for the shared runtime.
+Applications enable `web` and `renderer-wgpu` on `cranpose`.
 
-## When to Use
+Call `AppLauncher::run_web` with the canvas element's ID and root composable:
 
-This crate enables Cranpose applications to run in a web browser. It binds to the DOM to manage the canvas element and uses requestAnimationFrame for the render loop. It is used implicitly when the `web` feature is enabled.
-
-## Key Concepts
-
--   **Canvas Binding**: Attaches the renderer to an HTML `<canvas>` element specified by ID.
--   **Wasm Bindgen**: Uses `wasm-bindgen` and `web-sys` to interact with JavaScript APIs.
--   **Event Bridging**: Listens for DOM events (mousedown, touchstart, keydown) and dispatches them to the Cranpose event system.
-
-## Example
-
-```rust
-use cranpose::prelude::*;
+```rust,ignore
+use cranpose::AppLauncher;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
 pub async fn run_app() -> Result<(), JsValue> {
-    // "canvas-id" must match the id of a canvas element in your index.html
     AppLauncher::new()
-        .run_web("canvas-id", MyApp)
+        .run_web("app-canvas", || {
+            MyApp();
+        })
         .await
 }
 ```

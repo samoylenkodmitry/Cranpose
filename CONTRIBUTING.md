@@ -1,109 +1,83 @@
-# Contributing to Cranpose
+# Contribute to Cranpose
 
-Cranpose is pre-alpha. The API changes without deprecation cycles, and a change
-that improves the architecture is preferred over one that preserves an existing
-shape. Read [`AGENTS.md`](AGENTS.md) before submitting code -- it holds the
-engineering standards this repository is strict about.
+Cranpose is pre-alpha. Public APIs can change between releases. Read
+[AGENTS.md](AGENTS.md) for the repository rules and
+[agent workflows](docs/agent-workflows.md) for task-specific checks.
 
-## Getting started
+## Setup
 
-```bash
-git clone https://github.com/samoylenkodmitry/cranpose.git
-cd cranpose
-just toolchains   # installs both pinned toolchains
-just run          # the workspace demo
+```sh
+git clone https://github.com/samoylenkodmitry/Cranpose.git
+cd Cranpose
+just toolchains
+just hooks
+just run
 ```
 
-### Required tools
-
-| Tool | Why |
+| Tool | Purpose |
 | --- | --- |
-| [`just`](https://github.com/casey/just) | Every gate lives in the [`justfile`](justfile); CI runs the same recipes. |
-| Rust | Pinned by [`rust-toolchain.toml`](rust-toolchain.toml); rustup installs it on first use. |
-| Rust nightly | Pinned by [`rust-toolchain-nightly.toml`](rust-toolchain-nightly.toml). Needed only by `just fmt` and `cargo xtask dist-min`. |
-| Python 3 | The version and coverage check scripts under [`scripts/`](scripts). |
+| Rust | The stable pin lives in `rust-toolchain.toml` |
+| Rust nightly | The pin in `rust-toolchain-nightly.toml` serves `just fmt` and `cargo xtask dist-min` |
+| `just` | Runs repository recipes from the `justfile` |
+| Python 3 | Runs source checks and host tools |
 
-Nothing a downstream user of the `cranpose` crates builds requires nightly, and
-that is a constraint worth keeping.
+Downstream application builds use stable Rust. Platform builds require the
+Android SDK, NDK and JDK for Android; Xcode for iOS and watchOS; or `wasm-pack`
+and Binaryen for web. Linux robot runs also require the X11 tools described in
+the [robot guide](docs/ROBOT_TESTING.md).
 
-Platform work needs more: an Android SDK plus NDK 27 for `just android`, Xcode
-for `just ios-sim`, `wasm-pack` and `binaryen` for `just web`, and an X11 stack
-for the robot suite.
+## Checks
 
-## Commands
-
-`just` on its own lists every recipe. The ones you will use most:
-
-```bash
-just ci        # what a pull request is gated on -- run this before pushing
-just test      # workspace tests
-just clippy    # lint, warnings denied
-just fmt       # format (runs on the pinned nightly)
-just doc       # docs, rustdoc warnings denied
-just robot     # the end-to-end robot suite
+```sh
+just test
+just clippy
+just fmt
+just doc
+just ci
 ```
 
-CI invokes these same recipes rather than spelling commands inline, so a gate
-cannot mean one thing locally and another thing in a pull request. When you
-change a gate, change it in the `justfile`.
+`just ci` runs the portable source gates. `just ci-full` adds platform and robot
+gates. The [justfile](justfile) defines the full recipe lists. Change gate
+commands in the recipe, then let CI call the same recipe.
 
-## Architecture
+Documentation-only changes require link, example and format checks. Source
+changes require the relevant targeted tests and the broad gates before integration.
+`just precommit` runs the repository's fast checks.
 
-Rust crates live in [`crates/`](crates), sorted here roughly by how central they
-are:
+## Code map
 
-| Crate | Purpose |
+| Area | Crates |
 | --- | --- |
-| `cranpose` | The facade users depend on. Re-exports the rest and runs an app with minimal boilerplate. |
-| `cranpose-core` | The runtime: slot table, snapshot state, recomposition, effects. |
-| `cranpose-ui` | UI primitives built on the core runtime. |
-| `cranpose-foundation` | Modifiers, input handling, and the foundation elements. |
-| `cranpose-ui-layout` | Layout contracts and policies. |
-| `cranpose-ui-graphics` | Pure math and data for drawing and units. |
-| `cranpose-macros` | The `#[composable]` procedural macro. |
-| `cranpose-animation` | The animation system. |
-| `cranpose-liquid` | Liquid UI: the first-party glass component library (iOS-26-style materials, spring motion). |
-| `cranpose-app-shell` | Application orchestration shell. |
-| `cranpose-render/common` | Rendering contracts shared by every backend. |
-| `cranpose-render/wgpu` | The GPU renderer, used on every platform. |
-| `cranpose-render/pixels` | Software renderer backend. |
-| `cranpose-platform/desktop-winit` | Desktop platform adapter (X11, Wayland, macOS, Windows). |
-| `cranpose-platform/android` | Android platform adapter. |
-| `cranpose-platform/web` | Web platform adapter. |
-| `cranpose-runtime-std` | Runtime services backed by `std`. |
-| `cranpose-services` | Multiplatform system services: HTTP, URI, OS integrations. |
-| `cranpose-audio` | Real-time audio (AAudio on Android and Wear OS, cpal on desktop). |
-| `cranpose-media` | Desktop media playback (symphonia decoders, cpal output). |
-| `cranpose-storekit` | StoreKit 2 in-app purchases for iOS and macOS. |
-| `cranpose-assets` | Asset loading and management. |
-| `cranpose-testing` | Testing utilities and the headless harness. |
+| Facade and app lifecycle | `cranpose`, `cranpose-app-shell` |
+| Composition and state | `cranpose-core`, `cranpose-macros`, `cranpose-runtime-std` |
+| Layout, input and graphics | `cranpose-ui`, `cranpose-foundation`, `cranpose-ui-layout`, `cranpose-ui-graphics` |
+| Animation and components | `cranpose-animation`, `cranpose-liquid` |
+| Flows, view models and navigation | `coroflow`, `cranpose-coroflow`, `cranpose-navigation` |
+| Platform and render backends | `cranpose-platform/*`, `cranpose-render/*` |
+| Native integration and device services | `cranpose-native`, `cranpose-services`, `cranpose-capabilities` |
+| Assets, audio, media and purchases | `cranpose-assets`, `cranpose-audio`, `cranpose-media`, `cranpose-storekit` |
+| Test harnesses | `cranpose-testing` |
 
-Applications live in [`apps/`](apps):
+Application entry points live in [apps](apps):
 
-- `desktop-demo` -- the comprehensive demo (package `desktop-app`). Also holds
-  the iOS entry point and the `robot_*` end-to-end runners.
-- `isolated-demo` -- the starter template. It is **its own workspace** and
-  depends only on published crates, which is what makes it the canary proving a
-  release is actually consumable. Copy this rather than starting from scratch.
-  Its `Cargo.lock` is tracked and has to keep resolving every Cranpose crate
-  from crates.io -- `just versions` fails if one turns into a path dependency.
-  That is why the size budget measures a staged copy of the package under
-  `target/patched-packages/`: it can patch in the local crates there without
-  rewriting the lockfile that proves the release is consumable.
-- `android-demo`, `ios-demo` -- the platform entry points and their build
-  scripts.
+- `desktop-demo` contains the main demo UI, the iOS entry point and robot runners.
+- `desktop-demo-platform` owns the Android and web wrapper crate.
+- `isolated-demo` has its own workspace and resolves published crates. Its
+  tracked lockfile verifies registry consumption. Size checks use a patched
+  copy under `target/patched-packages`.
+- `android-demo` and `ios-demo` contain platform hosts and scripts.
+- `native-demo` demonstrates Android Compose and UIKit integration.
+- `coroflow-demo` demonstrates flows and view models.
 
-[`xtask/`](xtask) holds the budget tooling: `binary-size`, `dependency-budget`,
-`dist-min`, `bundle-macos`. [`scripts/`](scripts) holds the verification and
-visual-comparison helpers. Design notes live in [`docs/`](docs).
+[xtask](xtask) owns version, dependency and binary budgets. [scripts](scripts)
+contains verification tools. [docs](docs) contains guides and dated measurements.
 
-## Submitting a change
+## Changes
 
-- `just ci` passes. All of it -- a failing gate is never "pre-existing".
-- New public API carries a `///` doc comment with an example. Internal code does
-  not: good names beat narration, and comment bloat is worse than no comment.
-- A bug fix starts with a failing test that catches the bug, so the repository
-  cannot regress to it.
-- No `unsafe` outside a platform FFI boundary that opts in explicitly.
-- No half-migrated states, no deprecation shims, no "legacy" paths. Change the
-  existing code instead.
+- Exercise bug fixes through a public integration or end-to-end regression.
+- Document public APIs with current signatures and examples.
+- Follow the safety and API rules in [AGENTS.md](AGENTS.md).
+- Update all affected consumers when an API or behavior changes.
+- Preserve device evidence and run the applicable performance checks for runtime
+  changes.
+- Check branch and worktree status before and after the work.

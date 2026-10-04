@@ -13,10 +13,10 @@ Each app takes the scenario and its size from intent extras
 per-frame workload, without touch input. Their work per second depends on the
 frame rate. Workspace quote streaming separately targets the same 16 ms cadence.
 
-A scenario that Compose finishes at 60 fps cannot separate the two
-frameworks, so `measure.py` runs every scenario at a **heavy** load. On the
-Huawei Mate 20 X that load keeps Jetpack Compose itself below 60 fps.
-`--load default` runs the apps' own, lighter sizes instead.
+`measure.py` uses a **heavy** load for each scenario so the apps expose more
+of their frame work. The Huawei Mate 20 X baseline kept Compose below 60 fps
+at this load. `--load default` uses each app's lighter sizes. Record the device
+model with every comparison because frame capacity varies by device.
 
 | Scenario | What changes each frame | Heavy load | Stresses |
 | --- | --- | --- | --- |
@@ -126,9 +126,10 @@ preserve the original reference checkout and benchmark executable.
 Check the animation clock before comparing frame-driven workloads:
 
 ```bash
-python3 tests/android_frame_clock.py --serial SERIAL --app cranpose \
+python3 benchmarks/compose-vs-cranpose/tests/android_frame_clock.py --serial SERIAL --app cranpose \
   --apk PATH --sha256 SHA256 --ocr OCR_EXECUTABLE \
-  --viewport X Y WIDTH HEIGHT --output results/FRAME_CLOCK
+  --viewport X Y WIDTH HEIGHT \
+  --output benchmarks/compose-vs-cranpose/results/FRAME_CLOCK
 ```
 
 This device check warms the paused, quote, scroll and hover workspaces, then
@@ -141,8 +142,8 @@ This catches delayed animation delivery without requiring an overloaded app to
 sustain the display rate. A paused workspace only repaints its footer and does
 not need to present at the display rate. The same command supports `--app compose`.
 
-`perf_window.sh` runs on the device for one window, so no adb round trip lands
-inside it. It reads:
+`benchmarks/compose-vs-cranpose/perf_window.sh` runs on the device for one
+window, so adb round trips stay outside the measured interval. The report reads:
 
 - **Presented frames:** `dumpsys SurfaceFlinger --latency <app layer>`, polled
   every `--interval` by a loop of its own and merged. SurfaceFlinger keeps 128
@@ -207,10 +208,10 @@ throttling fall on both apps alike. Each run is a cold launch, a 5 s warm-up
 and a 15 s window. Failed runs are kept in the report.
 
 ```bash
-(cd cranpose-app/android && ./gradlew :app:assembleRelease)
-(cd compose-app && ./gradlew :app:assembleRelease)
-python3 measure.py --serial SERIAL --output results/RUN --install --reps 2 --screenshots
-python3 summarize.py results/RUN/report.json
+(cd benchmarks/compose-vs-cranpose/cranpose-app/android && ./gradlew :app:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/compose-app && ./gradlew :app:assembleRelease)
+python3 benchmarks/compose-vs-cranpose/measure.py --serial SERIAL --output benchmarks/compose-vs-cranpose/results/RUN --install --reps 2 --screenshots
+python3 benchmarks/compose-vs-cranpose/summarize.py benchmarks/compose-vs-cranpose/results/RUN/report.json
 ```
 
 ### At 120 Hz without a phone
@@ -223,13 +224,13 @@ does, gives both apps the same 120 Hz:
 
 ```bash
 adb -s emulator-5680 shell settings put system min_refresh_rate 120.0
-python3 measure.py --serial emulator-5680 --output results/RUN --reps 2 --interval 0.25
+python3 benchmarks/compose-vs-cranpose/measure.py --serial emulator-5680 --output benchmarks/compose-vs-cranpose/results/RUN --reps 2 --interval 0.25
 ```
 
 ## Findings
 
-The first run on a Huawei Mate 20 X (Kirin 980, Android 10) filed these
-issues:
+Historical baseline findings on a Huawei Mate 20 X (Kirin 980, Android 10)
+filed these issues:
 
 - #790: transformed graphics layers render offscreen every frame;
 - #791: nested rotated layers use 1.7 GB and take seconds to reach 60 fps;

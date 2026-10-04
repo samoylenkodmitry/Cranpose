@@ -1,6 +1,6 @@
 # Cranpose Demo
 
-This is a comprehensive demo application showcasing Cranpose running on multiple platforms: **Desktop**, **Android**, and **Web**.
+This demo application showcases Cranpose on **Desktop**, **Android**, **iOS**, and **Web**.
 
 ## Features Demonstrated
 
@@ -10,7 +10,7 @@ This is a comprehensive demo application showcasing Cranpose running on multiple
 - Web data fetching
 - Recursive layouts
 - Modifier showcase
-- Mineswapper game
+- Mineswapper 2 game
 - Animations and state management
 
 ## Building & Running
@@ -20,13 +20,7 @@ This is a comprehensive demo application showcasing Cranpose running on multiple
 Run the desktop demo:
 
 ```bash
-cargo run --bin desktop-app
-```
-
-Or from the repository root:
-
-```bash
-cargo run --bin desktop-app
+cargo run -p desktop-app --bin desktop-app
 ```
 
 #### macOS packaging
@@ -50,11 +44,14 @@ unidentified, so the first launch needs right-click → **Open** (or pass
 
 ### Android
 
-This app is used by the Android demo. See [`apps/android-demo/README.md`](../android-demo/README.md) for build instructions.
+The Android host is under [`apps/android-demo/android`](../android-demo/android/).
+From the repository root, `just android` builds the demo APK; see the Android
+Gradle files and `just android` recipe for the current build configuration.
 
 ### Web
 
-The demo runs in any modern browser using WebGL2 (Chrome, Firefox, Edge, Safari).
+The demo uses WebGL2 by default. Select browser WebGPU with `?backend=webgpu`
+or try WebGPU with WebGL2 fallback through `?backend=auto`.
 
 1. **Prerequisites:**
    ```bash
@@ -64,32 +61,32 @@ The demo runs in any modern browser using WebGL2 (Chrome, Firefox, Edge, Safari)
 
 2. **Build:**
    ```bash
-   ./build-web.sh
-   # Optimized output:
-   ./build-web.sh --release
+   just web
+   # Or build this demo directly:
+   ./apps/desktop-demo/build-web.sh --release
    ```
 
 3. **Run:**
    ```bash
    # Using Python
-   python3 -m http.server 8080
+   cd apps/desktop-demo && python3 -m http.server 8080
 
    # Or using Node.js
-   npx serve .
+   npx serve apps/desktop-demo
 
    # Or using Rust
    cargo install basic-http-server
-   basic-http-server .
+   basic-http-server apps/desktop-demo
    ```
 
-4. **Open** http://localhost:8080 in any modern browser
+4. **Open** http://localhost:8080 in a browser with WebGL2 support
 
 ## Architecture
 
 This application demonstrates the cross-platform nature of Cranpose:
 
 - **Single codebase** for all platforms
-- **Platform-specific entry points** (main.rs for desktop, lib.rs exports for Android/Web)
+- **Platform-specific entry points** (`main.rs` for desktop, `desktop-demo-platform` for Android/Web, `ios_main.rs` for iOS)
 - **Shared UI code** in `app.rs` using composable functions
 - **Platform detection** using conditional compilation
 
@@ -99,7 +96,8 @@ This application demonstrates the cross-platform nature of Cranpose:
 desktop-demo/
 ├── src/
 │   ├── main.rs          # Desktop entry point
-│   ├── lib.rs           # Shared library with Android & Web entry points
+│   ├── lib.rs           # Shared demo UI library
+│   ├── ios_main.rs      # iOS entry point
 │   ├── app.rs           # Main UI composables
 │   ├── fonts.rs         # Embedded fonts
 │   └── tests/           # Tests
@@ -108,13 +106,16 @@ desktop-demo/
 └── Cargo.toml           # Multi-platform dependencies
 ```
 
+The Android and Web platform wrappers live in the sibling
+[`desktop-demo-platform`](../desktop-demo-platform/) package.
+
 ## Troubleshooting
 
 ### Desktop
 
 If you encounter rendering issues:
 - Update your graphics drivers
-- Try the pixels renderer: `cargo run --bin desktop-app --features renderer-pixels --no-default-features`
+- Try the pixels renderer: `cargo run -p desktop-app --bin desktop-app --no-default-features --features desktop,renderer-pixels`
 
 ### Web
 

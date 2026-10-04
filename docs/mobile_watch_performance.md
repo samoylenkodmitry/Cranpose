@@ -1,11 +1,12 @@
 # Mobile performance evidence
 
-[Budget and decisions](mobile_60fps_architecture.md). Root:
-`/tmp/cranpose-mobile-watch-60fps`. Sources, app payloads, binaries, temperatures
-and failed runs are preserved there. Fixtures and profiles are diagnostics,
-not application FPS; startup and first-presentation windows are distinct.
+[Budget and protocol](mobile_60fps_architecture.md). Historical evidence root:
+`/tmp/cranpose-mobile-watch-60fps`. Paths below identify the original capture
+location. Verify archive availability before a rerun. The linked PR archives
+hold published evidence. Fixture and profile results describe diagnostic work;
+application FPS requires a physical display and a defined measurement window.
 
-- Open targets: [mobile frame budgets #626](https://github.com/samoylenkodmitry/Cranpose/issues/626) and [LeetCodeDaily 60 FPS #627](https://github.com/samoylenkodmitry/Cranpose/issues/627); recorded numbers below are tied to their stated revisions.
+- Follow-up discussions: [mobile frame budgets #626](https://github.com/samoylenkodmitry/Cranpose/issues/626) and [LeetCodeDaily 60 FPS #627](https://github.com/samoylenkodmitry/Cranpose/issues/627). Each result below applies to the stated revision.
 
 | Result | Evidence relative to root |
 | --- | --- |

@@ -1,26 +1,22 @@
-# Cranpose Platform Desktop (Winit)
+# Cranpose desktop platform
 
-Desktop platform integration layer for Cranpose, built on top of `winit`.
+This internal platform crate connects the Cranpose application shell to
+`winit` on Linux, macOS and Windows. The crate owns the native event loop,
+window and surface lifecycle, and translates window and input events. Applications
+normally enable `desktop`, `desktop-x11` or `desktop-wayland` on `cranpose`.
 
-## When to Use
+Application code uses `AppLauncher`; the desktop launcher accepts a title,
+logical-pixel size and root composable closure:
 
-This crate provides window management and event handling for Linux, macOS, and Windows. It is the default platform backend for desktop applications.
+```rust,ignore
+use cranpose::AppLauncher;
 
-## Key Concepts
-
--   **Event Loop**: Manages the `winit` event loop, handling window resizing, mouse/keyboard input, and close requests.
--   **Window Creation**: Configures the initial window state (title, size, decorations).
--   **Redraw Scheduling**: Coordinates with the renderer to redraw frames only when necessary (dirty regions or animations).
-
-## Example
-
-Typically usage is handled by the `AppLauncher`:
-
-```rust
 fn main() {
     AppLauncher::new()
         .with_title("Desktop App")
-        .with_inner_size(800.0, 600.0)
-        .run(MyApp);
+        .with_size(800, 600)
+        .run(|| {
+            MyApp();
+        });
 }
 ```

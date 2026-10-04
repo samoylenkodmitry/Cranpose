@@ -12,17 +12,19 @@ If you are developing a custom widget library or a low-level extension, you migh
 
 -   **AppLauncher**: The entry point that initializes the platform-specific window (via `winit`, Android Activity, or HTML Canvas) and starts the composition loop.
 -   **Prelude**: A convenience module that brings `Composer`, `Modifier`, `Element`, and core widgets into scope.
--   **Feature Flags**: Controls which platform backends (`desktop`, `android`, `web`) and renderers (`wgpu`, `pixels`) are compiled.
+-   **Feature Flags**: Select platform hosts, renderers and optional services at compile time.
 
 ## Feature Flags
 
--   `desktop`: Application shell for Linux, macOS, and Windows.
--   `android`: Bindings for Android Activity.
--   `web`: Bindings for WASM/WebGL2.
--   `renderer-wgpu`: Hardware-accelerated rendering using `wgpu`.
--   `renderer-pixels`: Software rendering fallback using `pixels`.
--   `watchos`: Experimental software-rendered Apple Watch host. See the [watchOS prototype guide](watchos/README.md) for simulator packaging and current limits.
--   `webview`: Embedded system browsers in the desktop, Android, iOS and web application hosts.
+-   `desktop`: Linux, macOS and Windows hosts with X11 and Wayland support on Linux. Use `desktop-x11` or `desktop-wayland` to select one Linux backend.
+-   `android`, `ios` and `web`: Android Activity, iOS and browser hosts.
+-   `renderer-wgpu`: GPU draw output through `wgpu`.
+-   `renderer-pixels`: CPU software draw output. The `watchos` feature selects this renderer and the experimental Apple Watch host. See the [watchOS guide](watchos/README.md) for build requirements.
+-   `renderer-wgpu-gles`: GLES fallback support for the WGPU renderer.
+-   `audio`, `audio-desktop`, `media`, `camera-desktop`, `storekit` and `playbilling`: Optional platform services. Desktop audio and media link system audio libraries.
+-   `robot`: Robot support for application tests. `cranpose-testing` also provides `desktop-robot` for its desktop query helpers.
+-   `webview`: Embedded browser views on desktop, Android, iOS and web.
+-   The default feature is `embedded-default-font`. Set `default-features = false` when the app supplies its own fonts.
 
 ## Embedded websites
 
@@ -129,14 +131,11 @@ framework's tree.
 
 ### What the plugin contributes
 
-Every application gets `CranposeActivity` and the rest of the framework's
-Java, the activity declaration with its launcher entry and
-`android.app.lib_name` metadata, the provider that serves shared files, and
-the consumer ProGuard rules that keep the JNI surface. It gets no library
-dependency and no permission: the framework declares none, not even
-`INTERNET`. `cranpose { services.add(...) }` adds the code and components
-a service needs, and the application declares that service's permissions in
-its own manifest:
+The plugin packages `CranposeActivity`, its launcher declaration and native
+library metadata, the provider for shared files, and ProGuard rules for the
+JNI surface. `cranpose { services.add(...) }` adds the code and components
+for supported services; the application declares their permissions in its
+manifest:
 
 | Service | What it adds | Permissions the application declares |
 | --- | --- | --- |
@@ -188,8 +187,7 @@ not declared anything in Rust keeps working: the build then reads
 `cranpose { services }` as before, and refuses a service whose permission the
 application's own manifest does not hold.
 
-Installing an update has no entry in `cranpose { services }`: `Use::update()`
-is its one declaration. From it the Android build writes
+`Use::update()` declares app update support. From the declaration the Android build writes
 `REQUEST_INSTALL_PACKAGES`, compiles `CranposeAppUpdate` from
 `android/java-update`, and declares that class as a receiver with
 `android:exported="false"`; the framework registers the Android updater only
@@ -339,35 +337,9 @@ reconfigures WGPU from the following `SurfaceView` resize callback.
 
 Cranpose is composed of several crates:
 
--   `cranpose-core`: The composition runtime, the slot table, and the state snapshot system; gap-table material is historical rationale only.
+-   `cranpose-core`: The composition runtime, slot table, and state snapshot system.
 -   `cranpose-ui`: UI primitives, layout protocol, and high-level widgets.
--   `cranpose-foundation`: Essential building blocks (Box, Row, Column) and the Modifier system.
+-   `cranpose-foundation`: Modifier-node contracts used by `cranpose-ui`.
 -   `cranpose-animation`: Physics-based animation system.
 
-## Example
-
-```rust
-use cranpose::prelude::*;
-
-#[composable]
-fn CounterApp() {
-    let count = rememberMutableStateOf(|| 0);
-
-    Column(Modifier.fill_max_size().padding(20.0), || {
-        Text(format!("Count: {}", count.value()));
-        
-        Button(
-            Modifier::empty(),
-            ButtonSpec::default(),
-            move || count.set(count.value() + 1),
-            || Text("Increment")
-        );
-    });
-}
-
-fn main() {
-    AppLauncher::new()
-        .with_title("Counter Demo")
-        .run(CounterApp);
-}
-```
+For a runnable counter app, see the [composable example in the project guide](../../README.md#write-a-composable).

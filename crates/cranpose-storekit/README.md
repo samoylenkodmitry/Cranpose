@@ -12,7 +12,7 @@ purchases::configure(&["com.example.app.pro"]);
 
 // Read the snapshot from the frame loop — the store answers asynchronously.
 let state = purchases::store_state();
-// No store that will sell here: free in that case.
+// Treat an unavailable store as a free purchase.
 let unlocked = state.phase.cannot_sell() || state.owns("com.example.app.pro");
 let price = state.display_price("com.example.app.pro").unwrap_or("");
 ```
@@ -64,9 +64,8 @@ cargo build -p cranpose-storekit --example link_check --target aarch64-apple-ios
 otool -L target/aarch64-apple-ios/debug/examples/link_check | grep swift
 ```
 
-Every line must be an absolute `/usr/lib/swift/…` path. A single `@rpath/…`
-entry means the deployment target slipped and the binary will not launch.
-Measured on device, simulator and macOS host with Xcode 26.5: all absolute.
+Every line must be an absolute `/usr/lib/swift/…` path. An `@rpath/…` entry
+means the deployment target or linker configuration needs review.
 
 ## License
 

@@ -47,7 +47,7 @@
 
 ## Releases
 
-- The annotated tag-push workflow writes release versions; read `publish.yml` before releasing instead of bumping them manually.
+- The `v*` tag-push workflow writes release versions; read `publish.yml` before a release.
 - Verify the tag still identifies the required main revision when publishing starts; interrupted publication requires checking tag, main and registry state together.
 - The isolated demo validates published-consumer behavior; unreleased framework changes require its existing workspace-patch build path.
 - The Android Gradle plugin ships inside the Cranpose crate and has no separate plugin publication.

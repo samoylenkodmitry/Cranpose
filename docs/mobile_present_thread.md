@@ -1,5 +1,8 @@
 # Android presentation overlap
 
+This report describes the source revisions and device runs below. Use the
+[device protocol](device_measurement.md) for current candidate acceptance.
+
 - Enable the presentation worker when Android reports at least four available cores; retain explicit overrides and synchronous execution below four cores.
 - The Pixel Watch 3 serialized UI preparation and rendering; enabling the existing worker in the same Main binary raised the complete Settings diagnostic route from 46.05 to 55.34 FPS.
 - The queued-packet guard compares every pixel of twelve changing frames against serial rendering and fails when the consumer reports presentation without drawing.

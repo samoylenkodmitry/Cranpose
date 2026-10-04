@@ -19,7 +19,7 @@ results. It distinguishes source inspection from an executed check.
 | Continuous checks cover multiple build targets | [Rust](../.github/workflows/rust.yml), [heavy](../.github/workflows/heavy-selfhosted.yml), [nightly](../.github/workflows/nightly.yml). | Builds, tests and robots have distinct coverage; a cross-build does not establish native Windows runtime behavior. |
 | Publication validates an outside consumer | [Publish workflow](../.github/workflows/publish.yml) builds the isolated desktop, web and Android app after publishing. | Registry consumption is already checked; it is not a missing release mechanism. |
 
-The latest full Rust and heavy runs inspected before these documentation changes
+The full Rust and heavy runs inspected for the 2026-10-02 audit
 passed at `1ccd5314d`:
 [Rust](https://github.com/samoylenkodmitry/Cranpose/actions/runs/36962892131),
 [heavy](https://github.com/samoylenkodmitry/Cranpose/actions/runs/36962892046).
@@ -42,7 +42,7 @@ not automatic 1.0 requirements. Public statements must match the supported scope
 
 ## Performance evidence
 
-Open follow-ups are tracked in
+Performance discussions and evidence appear in
 [#902](https://github.com/samoylenkodmitry/Cranpose/issues/902),
 [#901](https://github.com/samoylenkodmitry/Cranpose/issues/901),
 [#809](https://github.com/samoylenkodmitry/Cranpose/issues/809),
@@ -57,7 +57,7 @@ number as today's result. The SurfaceFlinger timestamp correction in #792/#902
 also prevents treating the old desired-time deltas as established end-to-end
 latency.
 
-## Fresh checks for the documentation change
+## Checks from the 2026-10-02 documentation change
 
 On 2026-10-02, using the pinned toolchain on macm3:
 

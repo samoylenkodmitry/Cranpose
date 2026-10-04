@@ -5,17 +5,13 @@ use cranpose_ui_layout::{Alignment, Constraints, HorizontalAlignment, VerticalAl
 
 use crate::modifier::Modifier;
 
-/// Marker trait matching Jetpack Compose's `BoxScope` API.
-///
-/// Future API - methods will be enabled as alignment modifiers are implemented.
+/// Child alignment modifiers for a Box.
 pub trait BoxScope {
-    /// Align content within the Box using 2D alignment.
+    /// Align content within the Box on both axes.
     fn align(&self, alignment: Alignment) -> Modifier;
 }
 
-/// Marker trait for Column scope - provides horizontal alignment.
-///
-/// Future API - methods will be enabled as alignment and weight modifiers are implemented.
+/// Horizontal alignment and weight modifiers for Column children.
 pub trait ColumnScope {
     /// Align content horizontally within the Column.
     fn align(&self, alignment: HorizontalAlignment) -> Modifier;
@@ -23,9 +19,7 @@ pub trait ColumnScope {
     fn weight(&self, weight: f32, fill: bool) -> Modifier;
 }
 
-/// Marker trait for Row scope - provides vertical alignment.
-///
-/// Future API - methods will be enabled as alignment and weight modifiers are implemented.
+/// Vertical alignment and weight modifiers for Row children.
 pub trait RowScope {
     /// Align content vertically within the Row.
     fn align(&self, alignment: VerticalAlignment) -> Modifier;
@@ -93,9 +87,7 @@ impl BoxScope for BoxScopeImpl {
     }
 }
 
-/// Concrete implementation of ColumnScope.
-///
-/// Future API - will be used once Column accepts a scoped content parameter.
+/// Creates Column child modifiers through [`ColumnScope`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ColumnScopeImpl;
 
@@ -109,9 +101,7 @@ impl ColumnScope for ColumnScopeImpl {
     }
 }
 
-/// Concrete implementation of RowScope.
-///
-/// Future API - will be used once Row accepts a scoped content parameter.
+/// Creates Row child modifiers through [`RowScope`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RowScopeImpl;
 

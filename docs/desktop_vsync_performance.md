@@ -1,5 +1,8 @@
 # Desktop VSync
 
+This report describes the linked experiment and source hashes. A release
+candidate requires a fresh measurement on the target display.
+
 - Two queued VSync frames allow CPU and GPU work to overlap; a one-frame queue serializes them on Metal.
 
 | App and device | Main FPS | SOTA FPS | Change |

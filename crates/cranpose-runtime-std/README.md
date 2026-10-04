@@ -12,7 +12,7 @@ This crate is used by application shells (like `cranpose-app-shell` or custom em
 
 -   **FrameClock (internal feature)**: Abstraction for synchronizing updates with the display refresh rate (VSync). Exposed only when the `internal` feature is enabled.
 -   **RuntimeScheduler**: Interface for scheduling future tasks. This implementation bridges the core runtime with standard async executors or thread pools.
--   **MonotonicClock**: Provides high-precision , non-decreasing time measurements critical for animations and input event timestamps.
+-   **MonotonicClock**: Provides high-precision, non-decreasing time measurements for animations and input event timestamps.
 
 ## Architecture
 

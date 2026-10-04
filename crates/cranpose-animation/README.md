@@ -1,39 +1,41 @@
 # Cranpose Animation
 
-A physics-based animation library designed for the Cranpose composition model.
+This crate provides animation values for Cranpose compositions.
 
 ## When to Use
 
-Use this crate to create smooth, interruptible animations. Unlike traditional timeline-based animation systems, Cranpose animations are driven by state changes. When a target value changes, the animation system automatically calculates the transition from the current value to the new target, maintaining velocity and continuity.
+Use this crate for animations driven by state. A new target updates the transition from the current value. Springs preserve velocity across target changes.
 
 ## Key Concepts
 
--   **`Animatable<T, V>`**: A low-level value holder that tracks the current value and velocity. It is the primitive used to build higher-level animation APIs.
+-   **`Animatable<T>`**: A low-level holder for the current value and velocity. Higher-level animation APIs build on this type.
 -   **`AnimationSpec`**: Defines the behavior of an animation. Common types include:
     -   **`Spring`**: Physical simulation based on stiffness and damping ratio.
     -   **`Tween`**: Duration-based interpolation with an easing curve.
--   **`animate*AsState`**: Composable functions that subscribe to a target value and return a `State` object representing the current animated value. `animateFloatAsState` and `animateColorAsState` are joined by `animateDpAsState`, `animateOffsetAsState`, `animateSizeAsState` and `animateRectAsState`, all built over the generic `animateValueAsState` and the `SpringScalar` vector-converter core -- any type that decomposes into a fixed-size float vector (see `SpringScalar`/`Lerp`) gets a specialization for free.
--   **`Transition<S>`**: A finite, state-driven animation obtained from `updateTransition`. Multiple child animations (`transition.animateFloat { }`, `.animateDp { }`, `.animateColor { }`, or the generic `.animateValue { }`) each derive their own target from the same state and run in lockstep; `transition.is_running()` is `true` until every child has settled.
+-   **`animate*AsState`**: Composable functions return a `State` with the current animation value. The float, color, dp, offset, size and rect variants use `animateValueAsState`. Custom values implement `SpringScalar` and `Lerp`.
+-   **`Transition<S>`**: `updateTransition` creates a finite transition. Child animations use explicit target values for the same transition state. `transition.is_running()` stays `true` until all children reach their targets.
 
 ## Example: Interruptible Spring Animation
 
 ```rust
+use cranpose_animation::{animateFloatAsState, spring, Spring};
 use cranpose::prelude::*;
 
 #[composable]
 fn AnimatedBox(target_size: f32) {
-    // animateFloatAsState automatically handles interruptions.
-    // If target_size changes while animating, it will seamlessly retarget
-    // preserving current velocity.
     let size = animateFloatAsState(
-        target_size, 
-        Some(spring(Spring::DampingRatioMediumBouncy, Spring::StiffnessLow))
+        target_size,
+        spring(Spring::DampingRatioMediumBouncy, Spring::StiffnessLow),
+        "box_size",
     );
     
     Box(
-        Modifier
-            .size(size.value())
-            .background(Color::Blue)
+        Modifier::empty()
+            .width(size.get())
+            .height(size.get())
+            .background(Color(0.1, 0.3, 0.9, 1.0)),
+        BoxSpec::default(),
+        || {},
     );
 }
 ```
@@ -44,7 +46,7 @@ fn AnimatedBox(target_size: f32) {
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
-use cranpose_ui::*;
+use cranpose::prelude::*;
 
 #[composable]
 fn PulsingDot() {
@@ -64,7 +66,7 @@ fn PulsingDot() {
         Modifier::empty()
             .width(24.0)
             .height(24.0)
-            .background(Color(0.2, 0.5, 0.9, alpha.value())),
+            .background(Color(0.2, 0.5, 0.9, alpha.get())),
         BoxSpec::default(),
         || {},
     );
@@ -74,8 +76,8 @@ fn PulsingDot() {
 ## Example: Finite, State-Driven Transition
 
 ```rust
+use cranpose::prelude::*;
 use cranpose_animation::{updateTransition, AnimationSpec, AnimationType, Easing};
-use cranpose_ui_graphics::Color;
 
 #[composable]
 fn ExpandingCard(expanded: bool) {
@@ -89,11 +91,8 @@ fn ExpandingCard(expanded: bool) {
         "tint",
     );
 
-    // transition.is_running() stays true until both children have settled,
-    // and flipping `expanded` again mid-animation retargets in place rather
-    // than snapping.
     Box(
-        Modifier::empty().height(height.value()).background(tint.value()),
+        Modifier::empty().height(height.get()).background(tint.get()),
         BoxSpec::default(),
         || {},
     );

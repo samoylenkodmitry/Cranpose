@@ -45,9 +45,8 @@ binary that links the library and launches `AppLauncher`.
 
 ## Keep state across hot-patched edits
 
-The IDE's development runner hot-patches edits to function bodies into the
-running preview. When the application's Cranpose offers it (0.1.175 and later),
-the runner also enables the `cranpose/hot-reload` feature in its private debug
+The IDE's development runner applies function-body edits to the live preview.
+The runner enables the `cranpose/hot-reload` feature in its private debug
 build. Composition keys then follow source structure instead of absolute lines:
 
 - Branch groups (statements, `let` bindings, closures, `if`/`match` arms and
@@ -74,8 +73,8 @@ application root. A missing or ambiguous selector is reported as a launch error.
 The IDE uses the full descriptor ID to distinguish variants.
 
 The `embed` feature alone supports application embedding without component
-registration or source instrumentation. These additions follow version 0.1.164;
-use a framework revision containing the preview feature until it is released.
+registration or source instrumentation. Enable `preview` for registered
+component variants and inspection metadata.
 
 ## Inspection protocol
 
