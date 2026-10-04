@@ -3,14 +3,18 @@
 Crates Cranpose ships patched, under its own names, until the fix is in a
 released upstream version. Each is the crates.io source of the upstream
 version, renamed, with Cranpose's patch on top as its own commit. The forks
-keep the upstream version, build as path dependencies outside the workspace,
-and are published by `.github/workflows/publish.yml` ahead of the Cranpose
-crates. The repository's formatting, spelling and diff gates skip them.
+start at the upstream version, build as path dependencies outside the
+workspace, and are published by `.github/workflows/publish.yml` ahead of the
+Cranpose crates. Publishing skips a version crates.io already has, so a change
+to a fork takes that crate's next patch version. Its dependents keep theirs:
+they require a compatible version, which resolves to the newest. The
+repository's formatting, spelling and diff gates skip the forks.
 
 ## wgpu 30.0.1
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
+`cranpose-wgpu-hal` is at 30.0.2 for the catch-up barrier below.
 
 | fork | upstream |
 | --- | --- |
@@ -36,10 +40,22 @@ fragment work is done. Tile-based GPUs run vertex and fragment work in
 separate queues, so on a Mali this drains the GPU at every dependent pass.
 
 The fork's Vulkan device records whether any bind group layout lets a
-vertex shader read a texture. Until one does, a sampled texture's barrier
-waits only in the fragment and compute stages; once one does, the device
-keeps upstream's stages. Cranpose's renderer samples textures in fragment
-shaders only.
+stage other than fragment or compute read a texture. Until one does, a
+sampled texture's barrier waits only in the fragment and compute stages;
+command buffers begun after one does wait in upstream's stages: vertex,
+fragment and compute. Upstream names no task or mesh stage in any barrier,
+so experimental mesh shading stays as unsynchronized as it is upstream.
+Cranpose's renderer samples textures in fragment shaders only.
+
+A texture an earlier buffer left in a read state takes no new barrier, so
+a vertex shader in a later buffer could read it before the earlier
+buffer's writes are visible to it. Where a submission moves from buffers
+begun before the change to buffers begun after it, the queue runs one
+recorded barrier that orders all earlier work and writes before all later
+work. Separate submissions already run one after another, and waits for
+earlier reads need nothing more: a barrier's source stages include every
+logically earlier stage. `just vulkan-sync` checks these cases under the
+Khronos layer's synchronization validation.
 
 On a Huawei Mate 20 X (Mali-G76), Showcase scrolling went from 29.9 ms to
 21.7 ms a frame (4 ABBA legs each). Dawn ships the per-binding version of

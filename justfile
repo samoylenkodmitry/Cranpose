@@ -774,6 +774,11 @@ robot-linux classes="all": (robot-gpu classes) (robot-captures classes)
 # The half of the Linux suite a pull request waits for.
 robot-linux-fast: robot-gpu-fast
 
+# The forked wgpu's Vulkan barriers under the Khronos layer's synchronization
+# validation (Linux x86_64; fetches the pinned layer once).
+vulkan-sync:
+    scripts/ci/vulkan_sync.sh
+
 # Render the liquid-glass cheatsheet montages.
 cheatsheets:
     ./liquid_cheatsheets.sh
@@ -880,7 +885,7 @@ ci: fmt-check typos versions twin-matrix-check test clippy clippy-release clippy
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-ios clippy-android web android watchos robot
+ci-full: ci clippy-ios clippy-android web android watchos robot vulkan-sync
 
 liquid-reference-traces output bundle="io.cranpose.liquid-reference" device="booted":
     python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}'
