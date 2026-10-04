@@ -27,6 +27,7 @@ smallvec = "1.16.2"
 log = "0.4"
 pollster = "0.4.0"
 web-time = { workspace = true }
+thiserror = "2.0.21"
 
 [features]
 default = []
@@ -42,6 +43,7 @@ test-helpers = []
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
+stats_alloc = "0.1.10"
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 # `delay` hands its deadline to GCD's user-interactive queue: a sleeping thread
@@ -55,6 +57,9 @@ wasm-bindgen-futures = "0.4"
 # frame loop, so an idle wait costs nothing.
 web-sys = { version = "0.3", features = ["Window"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+event-listener = "5.4.2"
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
@@ -65,4 +70,12 @@ harness = false
 
 [[bench]]
 name = "recompose_sibling_cursor"
+harness = false
+
+[[bench]]
+name = "blocking"
+harness = false
+
+[[bench]]
+name = "blocking_allocations"
 harness = false

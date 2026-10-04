@@ -4,6 +4,7 @@
 pub extern crate self as cranpose_core;
 
 mod applier_host;
+mod blocking;
 mod callbacks;
 mod composer;
 pub mod composer_context;
@@ -43,6 +44,10 @@ pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
 pub use applier_host::{ApplierGuard, ApplierHost, ConcreteApplierHost, NodeDisposal};
+pub use blocking::{
+    BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, launchBlocking,
+    withBlocking,
+};
 pub use callbacks::{
     CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot, SharedParam, refresh_param,
     refresh_shared_param,
@@ -57,8 +62,8 @@ pub use composition_locals::{
 pub(crate) use composition_locals::{LocalStateEntry, StaticLocalEntry};
 pub use concurrency::{
     CollectEvents, CoroutineScope, Delay, EventChannel, EventSender, EventStream, EventStreamNext,
-    ProduceScope, collectAsState, delay, interval, launchBlocking, produceState,
-    rememberCoroutineScope, rememberEventStream, spawn_ui_task, withBlocking,
+    ProduceScope, collectAsState, delay, interval, produceState, rememberCoroutineScope,
+    rememberEventStream, spawn_ui_task,
 };
 #[doc(hidden)]
 pub use debug_trace::{

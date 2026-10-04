@@ -91,13 +91,13 @@ fn keyed_remember_is_available_from_the_prelude() {
 }
 
 #[test]
-fn blocking_work_starts_from_the_prelude_alone() {
-    let result = std::rc::Rc::new(std::cell::Cell::new(0u32));
+fn blocking_work_requires_a_runtime_without_running_on_the_caller() {
+    let result = std::rc::Rc::new(std::cell::Cell::new(false));
     let sink = std::rc::Rc::clone(&result);
-    launchBlocking(|| 2 + 2, move |sum| sink.set(sum));
-    assert_eq!(
-        result.get(),
-        4,
-        "with no runtime the work runs inline, so the result is already here"
+    let launch = launchBlocking(
+        || panic!("must not run inline"),
+        move |_: Result<(), BlockingError>| sink.set(true),
     );
+    assert!(matches!(launch, Err(BlockingError::NoRuntime)));
+    assert!(!result.get());
 }

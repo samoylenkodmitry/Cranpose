@@ -32,6 +32,33 @@ Composition code uses `remember` for values tied to a composition position and
 `CompositionLocalProvider` for scoped values. `ownedMutableStateOf` gives Rust
 owners an explicit state lifetime.
 
+## Blocking work
+
+`withBlocking` runs synchronous work on a shared native executor and returns
+`Result<T, BlockingError>`. The pool starts threads on demand up to the available
+CPU count, allows four waiting jobs per CPU, and retires idle threads after
+30 seconds. A full queue suspends the future until capacity is available, without
+blocking the UI thread or requiring an application retry loop. `BlockingExecutor`
+provides explicit thread, queue, and idle limits: `submit(work).await` waits for
+capacity, while `try_submit(work)` returns `Saturated` immediately when full.
+Suspended callers still own their captured data; bound concurrent producers when
+creating large batches.
+
+Dropping a work future removes a waiting job and releases its captures. A running
+closure cannot be interrupted. Use `withBlocking` inside a composition's
+`rememberCoroutineScope().launch(...)` to cancel pending work when that scope
+leaves. `launchBlocking` delivers `Result` to a UI callback and returns a
+`Result<TaskHandle, BlockingError>` for runtime ownership; capacity waits and
+execution failures are handled inside that task. Cancel the handle to cancel
+pending work and delivery. It requires a live runtime and never falls back to
+running a closure on the caller thread.
+
+Shutting down an executor, or dropping its last owner, rejects new work and
+resolves waiting tasks with `Shutdown`. Running work may finish. Unwinding
+panics resolve as `Panicked`; a binary built with `panic = "abort"` still aborts.
+Web calls return `Unsupported` without executing the blocking closure. Use
+browser asynchronous APIs or an application-owned Web Worker on that target.
+
 ## Features
 
 The default feature set is empty. `hot-reload` selects source-structure keys for
