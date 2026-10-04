@@ -1436,6 +1436,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tiny-skia",
  "ttf-parser",
+ "unicode-segmentation",
  "web-time",
 ]
 

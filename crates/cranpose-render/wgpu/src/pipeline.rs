@@ -1857,7 +1857,6 @@ pub(crate) fn push_draw_primitive(
         fn push_image(&mut self, params: ImageDrawParams) {
             self.scene.push_image_with_geometry(
                 params.rect,
-                params.local_rect,
                 params.quad,
                 params.image,
                 params.alpha,

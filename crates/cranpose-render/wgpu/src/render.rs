@@ -20,14 +20,13 @@ use cranpose_render_common::{
         SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
         SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
         collect_solid_text_atlas_run, rasterize_annotated_text_region,
-        rasterize_text_to_image_with_glyph_cache,
     },
     text_mask_gamma::TextLuminance,
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, FRAGMENT_KIND_ARC, FRAGMENT_KIND_FILL, FRAGMENT_KIND_LINE,
-    FRAGMENT_KIND_STROKE, FxHasher, ImageBitmap, ImageSampling, Point, RecordSegment, Rect,
-    RenderHash, TileMode,
+    FRAGMENT_KIND_STROKE, FxHasher, ImageBitmap, ImageSampling, Point, RecordLane, RecordSegment,
+    Rect, RenderHash, TileMode,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -50,7 +49,7 @@ use crate::{
     geometry::{
         DevicePixelBounds, SegmentTransform, anchored_device_rect, axis_aligned_quad_rect,
         canonicalize_device_coordinate, canonicalized_scaled_quad, offscreen_byte_size,
-        scaled_quad, snap_delta_for_anchor, translate_quad,
+        scaled_quad, snap_delta_for_anchor, snapped_anchor_device_origin, translate_quad,
         translation_stable_anchored_device_pixel_bounds,
     },
     glyph_run::{RunGlyphScratch, RunGlyphs},
@@ -291,7 +290,7 @@ fn intersect_device_rects(a: DeviceRect4, b: DeviceRect4) -> Option<DeviceRect4>
     (right > left && bottom > top).then_some((left, top, right - left, bottom - top))
 }
 
-fn anchored_rect_to_device(
+pub(crate) fn anchored_rect_to_device(
     rect: Rect,
     snap_anchor: Option<SnapAnchor>,
     root_scale: f32,
@@ -630,6 +629,30 @@ fn hash_text_raster_geometry_for_cache<H: Hasher>(
     }
 }
 
+pub(crate) fn hash_text_gradient_phase_for_cache<H: Hasher>(
+    text_draw: &TextDraw,
+    raster_rect: Rect,
+    state: &mut H,
+) {
+    if std::iter::once(&text_draw.text_style.span_style)
+        .chain(text_draw.text.span_styles().iter().map(|span| &span.item))
+        .any(|span| {
+            span.brush
+                .as_ref()
+                .is_some_and(|brush| !matches!(brush, cranpose_ui_graphics::Brush::Solid(_)))
+        })
+    {
+        for coordinate in [raster_rect.x, raster_rect.y] {
+            let phase = if coordinate >= 0.0 {
+                coordinate.rem_euclid(4.0)
+            } else {
+                coordinate
+            };
+            phase.to_bits().hash(state);
+        }
+    }
+}
+
 fn text_logical_geometry_for_draw(text_draw: &TextDraw, root_scale: f32) -> Option<(Rect, f32)> {
     if text_draw.text.is_empty()
         || text_draw.rect.width <= 0.0
@@ -653,7 +676,7 @@ fn text_logical_geometry_for_draw(text_draw: &TextDraw, root_scale: f32) -> Opti
     Some((logical_rect, text_scale))
 }
 
-fn text_raster_geometry_for_draw(
+pub(crate) fn text_raster_geometry_for_draw(
     text_draw: &TextDraw,
     root_scale: f32,
 ) -> Option<(Rect, Rect, Option<Rect>, f32, bool)> {
@@ -856,57 +879,110 @@ fn cached_text_glyph_quad_is_visible_in_viewport(
         .is_some_and(|rect| draw_rect_is_visible_in_viewport(rect, clip, viewport, root_scale))
 }
 
-const SHADOW_CACHE_DEVICE_QUANT: f32 = 16.0;
-
-pub(crate) fn hash_shadow_device_offset<H: Hasher>(
+pub(crate) fn hash_device_offset<H: Hasher>(
     value: f32,
     origin: f32,
     root_scale: f32,
     state: &mut H,
 ) {
-    let quantized = ((value - origin) * root_scale * SHADOW_CACHE_DEVICE_QUANT).round();
-    (quantized as i64).hash(state);
+    hash_f32_for_cache((value - origin) * root_scale, state);
 }
 
-pub(crate) fn hash_shadow_device_rect<H: Hasher>(
+pub(crate) fn hash_device_rect<H: Hasher>(
     rect: Rect,
     origin_x: f32,
     origin_y: f32,
     root_scale: f32,
     state: &mut H,
 ) {
-    hash_shadow_device_offset(rect.x, origin_x, root_scale, state);
-    hash_shadow_device_offset(rect.y, origin_y, root_scale, state);
-    hash_shadow_device_offset(rect.width, 0.0, root_scale, state);
-    hash_shadow_device_offset(rect.height, 0.0, root_scale, state);
+    hash_device_offset(rect.x, origin_x, root_scale, state);
+    hash_device_offset(rect.y, origin_y, root_scale, state);
+    hash_device_offset(rect.width, 0.0, root_scale, state);
+    hash_device_offset(rect.height, 0.0, root_scale, state);
 }
 
-fn hash_placement<H: Hasher>(
-    placement: &crate::scene::Placement,
+pub(crate) fn hash_run_item_with_clip<H: Hasher>(
+    run: &RunDraw,
     clip: Option<Rect>,
     origin_x: f32,
     origin_y: f32,
     root_scale: f32,
     state: &mut H,
 ) {
-    hash_shadow_device_offset(placement.offset.x, origin_x, root_scale, state);
-    hash_shadow_device_offset(placement.offset.y, origin_y, root_scale, state);
-    match placement.snap_anchor {
-        Some(anchor) => {
+    let tables = run.tables();
+    tables.fingerprint().hash(state);
+    run.segments.start.hash(state);
+    run.segments.end.hash(state);
+    let placement = &run.placement;
+    let snap = placement
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
+    let offset = Point::new(placement.offset.x + snap.x, placement.offset.y + snap.y);
+    let canonicalize = placement.snap_anchor.is_some();
+    canonicalize.hash(state);
+    for segment in &tables.segments[run.segments.start as usize..run.segments.end as usize] {
+        if segment.lane != RecordLane::Shapes {
+            continue;
+        }
+        let exact_placement = !canonicalize
+            || segment.kinds & ((1u8 << FRAGMENT_KIND_ARC) | (1u8 << FRAGMENT_KIND_LINE)) != 0;
+        exact_placement.hash(state);
+        if exact_placement {
+            for value in [offset.x, offset.y, origin_x, origin_y, root_scale] {
+                hash_f32_for_cache(value, state);
+            }
+            continue;
+        }
+        for index in segment.start..segment.start + segment.count {
+            let record = tables
+                .shapes
+                .get(index as usize)
+                .expect("shape segment record");
+            let half_width = if record.is_stroked() {
+                record.stroke_width * 0.5
+            } else {
+                0.0
+            };
+            let [left, top, right, bottom] = crate::run_geometry::device_shape_edges(
+                record.rect,
+                half_width,
+                offset,
+                root_scale,
+                canonicalize,
+            );
+            for value in [left - origin_x, top - origin_y, right - left, bottom - top] {
+                hash_f32_for_cache(value, state);
+            }
+        }
+    }
+    let mut clipped = *placement;
+    clipped.clip = clip;
+    match crate::run_store::device_clip(&clipped, root_scale) {
+        Some([x, y, width, height]) => {
             1u8.hash(state);
-            hash_shadow_device_offset(anchor.origin.x, origin_x, root_scale, state);
-            hash_shadow_device_offset(anchor.origin.y, origin_y, root_scale, state);
-            hash_f32_for_cache(anchor.device_pixel_step, state);
+            for value in [
+                x - origin_x,
+                y - origin_y,
+                width,
+                height,
+                placement.clip_radius * root_scale,
+            ] {
+                hash_f32_for_cache(value, state);
+            }
         }
         None => 0u8.hash(state),
     }
-    match clip {
-        Some(clip) => {
-            1u8.hash(state);
-            hash_shadow_device_rect(clip, origin_x, origin_y, root_scale, state);
-            hash_f32_for_cache(placement.clip_radius * root_scale, state);
-        }
-        None => 0u8.hash(state),
+    if tables.segments[run.segments.start as usize..run.segments.end as usize]
+        .iter()
+        .any(|segment| segment.gradient || segment.vertex_gradient)
+    {
+        let dither = placement
+            .snap_anchor
+            .map(|anchor| snapped_anchor_device_origin(anchor, root_scale))
+            .unwrap_or_default();
+        hash_f32_for_cache(dither.x - origin_x, state);
+        hash_f32_for_cache(dither.y - origin_y, state);
     }
     hash_f32_for_cache(placement.alpha, state);
     match placement.color_filter {
@@ -918,44 +994,6 @@ fn hash_placement<H: Hasher>(
     }
 }
 
-/// Hashes what a run draws relative to `origin`: its records by
-/// fingerprint and segment range, and its placement in device units, so a
-/// run moving rigidly by whole pixels hashes the same.
-pub(crate) fn hash_run_item<H: Hasher>(
-    run: &RunDraw,
-    origin_x: f32,
-    origin_y: f32,
-    root_scale: f32,
-    state: &mut H,
-) {
-    hash_run_item_with_clip(
-        run,
-        run.placement.clip,
-        origin_x,
-        origin_y,
-        root_scale,
-        state,
-    );
-}
-
-pub(crate) fn hash_run_item_with_clip<H: Hasher>(
-    run: &RunDraw,
-    clip: Option<Rect>,
-    origin_x: f32,
-    origin_y: f32,
-    root_scale: f32,
-    state: &mut H,
-) {
-    run.tables().fingerprint().hash(state);
-    run.segments.start.hash(state);
-    run.segments.end.hash(state);
-    hash_shadow_device_rect(run.bounds, origin_x, origin_y, root_scale, state);
-    hash_placement(&run.placement, clip, origin_x, origin_y, root_scale, state);
-}
-
-/// What a shadow's casters draw, independent of where the shadow sits to
-/// the whole device pixel: the recordings, and the placement relative to
-/// the casters' bounds.
 pub(crate) fn shadow_content_hash(shadow: &ShadowDraw, root_scale: f32) -> u64 {
     let mut hasher = FxHasher::default();
     let origin = shape_shadow_bounds(shadow).unwrap_or(Rect {
@@ -964,8 +1002,23 @@ pub(crate) fn shadow_content_hash(shadow: &ShadowDraw, root_scale: f32) -> u64 {
         width: 0.0,
         height: 0.0,
     });
+    let device = anchored_device_rect(
+        origin,
+        shadow
+            .shapes
+            .as_ref()
+            .and_then(|run| run.placement.snap_anchor),
+        root_scale,
+    );
     for run in shadow.shapes.iter().chain(&shadow.post_blur_cutouts) {
-        hash_run_item(run, origin.x, origin.y, root_scale, &mut hasher);
+        hash_run_item_with_clip(
+            run,
+            run.placement.clip,
+            device.x.floor(),
+            device.y.floor(),
+            root_scale,
+            &mut hasher,
+        );
     }
     hasher.finish()
 }
@@ -5016,37 +5069,17 @@ impl GpuRenderer {
             }
         }
 
-        let mut adjusted_image = ImageDraw {
-            rect,
-            local_rect: image_draw.local_rect.translate(snap_delta.x, snap_delta.y),
-            quad: translate_quad(image_draw.quad, snap_delta),
-            snap_anchor: image_draw.snap_anchor,
-            image: image_draw.image.clone(),
-            alpha: image_draw.alpha,
-            color_filter: image_draw.color_filter,
-            sampling: image_draw.sampling,
-            z_index: image_draw.z_index,
-            clip: image_draw.clip,
-            blend_mode: image_draw.blend_mode,
-            src_rect: image_draw.src_rect,
-            motion_context_animated: image_draw.motion_context_animated,
-        };
-        snap_nearest_image_to_device_pixels(&mut adjusted_image, root_scale);
-        let Some(scissor) = scissor_rect_for_image(&adjusted_image, root_scale, viewport) else {
+        let geometry = resolve_image_geometry_with_delta(image_draw, root_scale, snap_delta);
+        let Some(scissor) =
+            scissor_rect_for_layer(geometry.rect, geometry.clip, root_scale, viewport)
+        else {
             return Ok(());
         };
 
         let Some(uv_rect) = image_uv_rect(&image_draw.image, image_draw.src_rect) else {
             return Ok(());
         };
-        let device_quad =
-            nearest_image_device_quad(&adjusted_image, root_scale).unwrap_or_else(|| {
-                if adjusted_image.snap_anchor.is_some() {
-                    canonicalized_scaled_quad(adjusted_image.quad, root_scale)
-                } else {
-                    scaled_quad(adjusted_image.quad, root_scale)
-                }
-            });
+        let device_quad = geometry.device_quad(root_scale);
 
         let base_vertex = image_vertices.len() as u32;
         let index_start = image_indices.len() as u32;
@@ -5089,7 +5122,7 @@ impl GpuRenderer {
             index_start,
             scissor,
             image_id: prepared_image.id(),
-            sampling: adjusted_image.sampling,
+            sampling: geometry.sampling,
         });
         Ok(())
     }
@@ -5899,23 +5932,7 @@ impl GpuRenderer {
         text_draw.text_style.render_hash().hash(&mut state);
         text_draw.color.render_hash().hash(&mut state);
         hash_text_raster_geometry_for_cache(raster_rect, static_text_motion, &mut state);
-        if std::iter::once(&text_draw.text_style.span_style)
-            .chain(text_draw.text.span_styles().iter().map(|span| &span.item))
-            .any(|span| {
-                span.brush
-                    .as_ref()
-                    .is_some_and(|brush| !matches!(brush, cranpose_ui_graphics::Brush::Solid(_)))
-            })
-        {
-            for coordinate in [raster_rect.x, raster_rect.y] {
-                let phase = if coordinate >= 0.0 {
-                    coordinate.rem_euclid(4.0)
-                } else {
-                    coordinate
-                };
-                phase.to_bits().hash(&mut state);
-            }
-        }
+        hash_text_gradient_phase_for_cache(text_draw, raster_rect, &mut state);
         text_draw.font_size.to_bits().hash(&mut state);
         text_scale.to_bits().hash(&mut state);
         text_draw.layout_options.hash(&mut state);
@@ -5940,24 +5957,14 @@ impl GpuRenderer {
         source_origin: Point,
         text_scale: f32,
     ) -> Option<ImageBitmap> {
-        if text_draw.text.span_styles().is_empty() {
-            let font = self.text_fonts.resolve(&text_draw.text_style)?;
-            return rasterize_text_to_image_with_glyph_cache(
-                text_draw.text.text(),
-                raster_rect,
-                &text_draw.text_style,
-                text_draw.color,
-                text_draw.font_size,
-                text_scale,
-                font,
-                &mut self.text_glyph_mask_cache,
-            );
-        }
-
         rasterize_annotated_text_region(
             text_draw.text.as_ref(),
             raster_rect,
-            source_origin,
+            if text_draw.text.span_styles().is_empty() {
+                Point::new(raster_rect.x, raster_rect.y)
+            } else {
+                source_origin
+            },
             &text_draw.text_style,
             text_draw.color,
             text_draw.font_size,
@@ -6203,19 +6210,70 @@ fn glyph_atlas_uv_rect(entry: GlyphAtlasEntry, atlas_size: u32) -> ImageUvRect {
     }
 }
 
-fn snap_nearest_image_to_device_pixels(image: &mut ImageDraw, root_scale: f32) {
-    if image.sampling != ImageSampling::Nearest || !root_scale.is_finite() || root_scale <= 0.0 {
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedImageGeometry {
+    pub(crate) rect: Rect,
+    pub(crate) clip: Option<Rect>,
+    pub(crate) sampling: ImageSampling,
+    quad: [[f32; 2]; 4],
+    snap_anchored: bool,
+}
+
+pub(crate) fn resolve_image_geometry(image: &ImageDraw, root_scale: f32) -> ResolvedImageGeometry {
+    let snap_delta = image
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
+    resolve_image_geometry_with_delta(image, root_scale, snap_delta)
+}
+
+fn resolve_image_geometry_with_delta(
+    image: &ImageDraw,
+    root_scale: f32,
+    snap_delta: Point,
+) -> ResolvedImageGeometry {
+    let mut rect = image.rect.translate(snap_delta.x, snap_delta.y);
+    let mut quad = translate_quad(image.quad, snap_delta);
+    snap_nearest_image_to_device_pixels(image.sampling, &mut rect, &mut quad, root_scale);
+    ResolvedImageGeometry {
+        rect,
+        clip: image.clip,
+        sampling: image.sampling,
+        quad,
+        snap_anchored: image.snap_anchor.is_some(),
+    }
+}
+
+impl ResolvedImageGeometry {
+    pub(crate) fn device_quad(self, root_scale: f32) -> [[f32; 2]; 4] {
+        nearest_image_device_quad(self.sampling, self.quad, root_scale).unwrap_or_else(|| {
+            if self.snap_anchored {
+                canonicalized_scaled_quad(self.quad, root_scale)
+            } else {
+                scaled_quad(self.quad, root_scale)
+            }
+        })
+    }
+}
+
+fn snap_nearest_image_to_device_pixels(
+    sampling: ImageSampling,
+    rect: &mut Rect,
+    quad: &mut [[f32; 2]; 4],
+    root_scale: f32,
+) {
+    if sampling != ImageSampling::Nearest || !root_scale.is_finite() || root_scale <= 0.0 {
         return;
     }
 
-    let Some(rect) = axis_aligned_quad_rect(image.quad) else {
+    let Some(quad_rect) = axis_aligned_quad_rect(*quad) else {
         return;
     };
 
-    let left_px = (rect.x * root_scale).round();
-    let top_px = (rect.y * root_scale).round();
-    let width_px = (rect.width * root_scale).round().max(1.0);
-    let height_px = (rect.height * root_scale).round().max(1.0);
+    let left_px = (quad_rect.x * root_scale).round();
+    let top_px = (quad_rect.y * root_scale).round();
+    let width_px = (quad_rect.width * root_scale).round().max(1.0);
+    let height_px = (quad_rect.height * root_scale).round().max(1.0);
     let snapped = Rect {
         x: left_px / root_scale,
         y: top_px / root_scale,
@@ -6223,22 +6281,20 @@ fn snap_nearest_image_to_device_pixels(image: &mut ImageDraw, root_scale: f32) {
         height: height_px / root_scale,
     };
 
-    image.rect = snapped;
-    image.local_rect = Rect {
-        x: image.local_rect.x + snapped.x - rect.x,
-        y: image.local_rect.y + snapped.y - rect.y,
-        width: snapped.width,
-        height: snapped.height,
-    };
-    image.quad = crate::rect_to_quad(snapped);
+    *rect = snapped;
+    *quad = crate::rect_to_quad(snapped);
 }
 
-fn nearest_image_device_quad(image: &ImageDraw, root_scale: f32) -> Option<[[f32; 2]; 4]> {
-    if image.sampling != ImageSampling::Nearest || !root_scale.is_finite() || root_scale <= 0.0 {
+fn nearest_image_device_quad(
+    sampling: ImageSampling,
+    quad: [[f32; 2]; 4],
+    root_scale: f32,
+) -> Option<[[f32; 2]; 4]> {
+    if sampling != ImageSampling::Nearest || !root_scale.is_finite() || root_scale <= 0.0 {
         return None;
     }
 
-    let rect = axis_aligned_quad_rect(image.quad)?;
+    let rect = axis_aligned_quad_rect(quad)?;
     let left_px = (rect.x * root_scale).round();
     let top_px = (rect.y * root_scale).round();
     let width_px = (rect.width * root_scale).round().max(1.0);
@@ -6319,21 +6375,10 @@ fn sampling_under(sampling: ImageSampling, transform: SegmentTransform) -> Image
     }
 }
 
-fn scissor_rect_for_image(
-    image: &ImageDraw,
-    root_scale: f32,
-    viewport: ViewportUniformParams,
-) -> Option<(u32, u32, u32, u32)> {
-    scissor_rect_for_layer(image.rect, image.clip, root_scale, viewport)
-}
-
-/// The rounded mask a shadow's composite applies, in the target's pixels: an
-/// inner shadow masks itself to its fill shape, and a shadow lowered out of a
-/// clipped layer masks itself to that layer's rounded clip.
 /// The rounded mask a shadow's composite applies, in the scene's device
 /// pixels: an inner shadow masks itself to its fill shape, and a shadow
 /// lowered out of a clipped layer masks itself to that layer's rounded clip.
-fn shadow_composite_mask(
+pub(crate) fn shadow_composite_mask(
     shadow: &ShadowDraw,
     snap_anchor: Option<SnapAnchor>,
     root_scale: f32,

@@ -8,10 +8,11 @@ use crate::{
     effect_renderer::{CompositeSampleMode, RoundedCompositeMask},
     opaque_prefix::capture_solid_rect,
     render::{
-        hash_f32_for_cache, hash_run_item_with_clip, hash_shadow_device_offset,
-        hash_shadow_device_rect, shadow_content_hash, shadow_draw_bounds,
+        hash_device_offset, hash_device_rect, hash_f32_for_cache, hash_run_item_with_clip,
+        hash_text_gradient_phase_for_cache, resolve_image_geometry, shadow_draw_bounds,
+        text_raster_geometry_for_draw,
     },
-    scene::{CompositorScene, DrawOp, DrawOpKind, ImageDraw, ShadowDraw, SnapAnchor, TextDraw},
+    scene::{CompositorScene, DrawOp, DrawOpKind, ImageDraw, ShadowDraw, TextDraw},
 };
 
 /// A device rect a capture reads, in the device space of the scene whose
@@ -77,7 +78,6 @@ pub(crate) fn hash_capture_ops<H: Hasher>(
     scale: f32,
     state: &mut H,
 ) {
-    let origin = window.origin(scale);
     let capture = Rect {
         x: window.x,
         y: window.y,
@@ -105,9 +105,13 @@ pub(crate) fn hash_capture_ops<H: Hasher>(
                     0u8.hash(state);
                     hash_run_item_with_clip(
                         run,
-                        window.clipped_logical(run.placement.clip, scale),
-                        origin.x,
-                        origin.y,
+                        if run.placement.clip_rounded() {
+                            run.placement.clip
+                        } else {
+                            window.clipped_logical(run.placement.clip, scale)
+                        },
+                        window.x,
+                        window.y,
                         scale,
                         state,
                     );
@@ -141,23 +145,52 @@ pub(crate) fn hash_capture_ops<H: Hasher>(
     }
 }
 
-fn hash_anchor<H: Hasher>(anchor: Option<SnapAnchor>, origin: Point, scale: f32, state: &mut H) {
-    match anchor {
-        Some(anchor) => {
-            1u8.hash(state);
-            hash_shadow_device_offset(anchor.origin.x, origin.x, scale, state);
-            hash_shadow_device_offset(anchor.origin.y, origin.y, scale, state);
-            hash_f32_for_cache(anchor.device_pixel_step, state);
-        }
-        None => 0u8.hash(state),
-    }
+fn clipped_device_tuple((x, y, width, height): DeviceTuple, window: CaptureWindow) -> DeviceTuple {
+    let device = Rect {
+        x,
+        y,
+        width,
+        height,
+    };
+    let capture = Rect {
+        x: window.x,
+        y: window.y,
+        width: window.width,
+        height: window.height,
+    };
+    device
+        .intersect(capture)
+        .map_or((window.x, window.y, 0.0, 0.0), |rect| {
+            (rect.x, rect.y, rect.width, rect.height)
+        })
+}
+
+fn hash_scissored_rect<H: Hasher>(
+    rect: Rect,
+    clip: Option<Rect>,
+    window: CaptureWindow,
+    scale: f32,
+    state: &mut H,
+) {
+    let visible = match clip {
+        Some(clip) => rect.intersect(clip),
+        None => Some(rect),
+    };
+    hash_optional_tuple(
+        visible.map(|rect| {
+            let device = crate::geometry::canonicalized_scaled_rect(rect, scale);
+            clipped_device_tuple((device.x, device.y, device.width, device.height), window)
+        }),
+        window,
+        state,
+    );
 }
 
 fn hash_optional_rect<H: Hasher>(rect: Option<Rect>, origin: Point, scale: f32, state: &mut H) {
     match rect {
         Some(rect) => {
             1u8.hash(state);
-            hash_shadow_device_rect(rect, origin.x, origin.y, scale, state);
+            hash_device_rect(rect, origin.x, origin.y, scale, state);
         }
         None => 0u8.hash(state),
     }
@@ -175,74 +208,111 @@ fn hash_optional_render_hash<H: Hasher, T: RenderHash>(value: Option<&T>, state:
 
 fn hash_text<H: Hasher>(text: &TextDraw, window: CaptureWindow, scale: f32, state: &mut H) {
     let origin = window.origin(scale);
-    hash_shadow_device_rect(text.rect, origin.x, origin.y, scale, state);
-    hash_anchor(text.snap_anchor, origin, scale, state);
+    let Some((logical_rect, raster_rect, clip, text_scale, static_text_motion)) =
+        text_raster_geometry_for_draw(text, scale)
+    else {
+        0u8.hash(state);
+        return;
+    };
+    1u8.hash(state);
+    static_text_motion.hash(state);
+    hash_f32_for_cache(raster_rect.width, state);
+    hash_f32_for_cache(raster_rect.height, state);
+    if static_text_motion {
+        hash_f32_for_cache(raster_rect.x - window.x, state);
+        hash_f32_for_cache(raster_rect.y - window.y, state);
+    } else {
+        hash_device_offset(logical_rect.x, origin.x, scale, state);
+        hash_device_offset(logical_rect.y, origin.y, scale, state);
+        hash_f32_for_cache(raster_rect.x.fract(), state);
+        hash_f32_for_cache(raster_rect.y.fract(), state);
+    }
+    hash_f32_for_cache(text_scale, state);
+    let visible = match clip {
+        Some(clip) => logical_rect.intersect(clip),
+        None => Some(logical_rect),
+    }
+    .is_some_and(|rect| window.touches_logical(rect, 0.0, scale));
+    visible.hash(state);
+    hash_text_gradient_phase_for_cache(text, raster_rect, state);
     text.text.render_hash().hash(state);
     text.color.render_hash().hash(state);
     text.text_style.render_hash().hash(state);
     hash_f32_for_cache(text.font_size, state);
-    hash_f32_for_cache(text.scale, state);
     text.layout_options.hash(state);
-    hash_optional_rect(
-        window.clipped_logical(text.clip, scale),
-        origin,
-        scale,
-        state,
-    );
+    if static_text_motion && text.text.text().contains('\n') {
+        hash_optional_rect(window.clipped_logical(clip, scale), origin, scale, state);
+    } else {
+        let draw_rect = Rect {
+            x: if static_text_motion {
+                raster_rect.x / scale
+            } else {
+                logical_rect.x
+            },
+            y: if static_text_motion {
+                raster_rect.y / scale
+            } else {
+                logical_rect.y
+            },
+            width: raster_rect.width / scale,
+            height: raster_rect.height / scale,
+        };
+        hash_scissored_rect(draw_rect, clip, window, scale, state);
+    }
 }
 
 fn hash_image<H: Hasher>(image: &ImageDraw, window: CaptureWindow, scale: f32, state: &mut H) {
-    let origin = window.origin(scale);
-    hash_shadow_device_rect(image.rect, origin.x, origin.y, scale, state);
-    hash_shadow_device_rect(image.local_rect, origin.x, origin.y, scale, state);
-    for point in image.quad {
-        hash_shadow_device_offset(point[0], origin.x, scale, state);
-        hash_shadow_device_offset(point[1], origin.y, scale, state);
+    let geometry = resolve_image_geometry(image, scale);
+    hash_scissored_rect(geometry.rect, geometry.clip, window, scale, state);
+    for point in geometry.device_quad(scale) {
+        hash_f32_for_cache(point[0] - window.x, state);
+        hash_f32_for_cache(point[1] - window.y, state);
     }
-    hash_anchor(image.snap_anchor, origin, scale, state);
     image.image.render_hash().hash(state);
     hash_f32_for_cache(image.alpha, state);
     hash_optional_render_hash(image.color_filter.as_ref(), state);
-    image.sampling.hash(state);
-    hash_optional_rect(
-        window.clipped_logical(image.clip, scale),
-        origin,
-        scale,
-        state,
-    );
+    geometry.sampling.hash(state);
+
     hash_optional_render_hash(image.src_rect.as_ref(), state);
     image.blend_mode.hash(state);
     image.motion_context_animated.hash(state);
 }
 
 fn hash_shadow<H: Hasher>(shadow: &ShadowDraw, window: CaptureWindow, scale: f32, state: &mut H) {
-    let origin = window.origin(scale);
-    shadow_content_hash(shadow, scale).hash(state);
-    hash_optional_rect(shadow_draw_bounds(shadow), origin, scale, state);
-    if let Some(run) = &shadow.shapes {
-        hash_shadow_device_offset(run.placement.offset.x, origin.x, scale, state);
-        hash_shadow_device_offset(run.placement.offset.y, origin.y, scale, state);
-        hash_anchor(run.placement.snap_anchor, origin, scale, state);
+    let anchor = shadow
+        .shapes
+        .as_ref()
+        .and_then(|run| run.placement.snap_anchor);
+    for run in shadow.shapes.iter().chain(&shadow.post_blur_cutouts) {
+        hash_run_item_with_clip(run, run.placement.clip, window.x, window.y, scale, state);
     }
     for text in &shadow.texts {
         hash_text(text, window, scale, state);
     }
     hash_f32_for_cache(shadow.blur_radius, state);
-    hash_optional_rect(
-        window.clipped_logical(shadow.clip, scale),
-        origin,
-        scale,
+    hash_optional_tuple(
+        shadow_draw_bounds(shadow)
+            .map(|bounds| crate::render::anchored_rect_to_device(bounds, anchor, scale)),
+        window,
         state,
     );
-    hash_optional_rect(shadow.occluder, origin, scale, state);
-    match shadow.rounded_clip {
-        Some(clip) => {
-            1u8.hash(state);
-            hash_shadow_device_rect(clip.rect, origin.x, origin.y, scale, state);
-            hash_radii(clip.radii, state);
-        }
-        None => 0u8.hash(state),
+    for rect in [shadow.clip, shadow.occluder] {
+        hash_optional_tuple(
+            rect.map(|rect| {
+                clipped_device_tuple(
+                    crate::render::anchored_rect_to_device(rect, anchor, scale),
+                    window,
+                )
+            }),
+            window,
+            state,
+        );
     }
+    hash_mask(
+        crate::render::shadow_composite_mask(shadow, anchor, scale),
+        window,
+        state,
+    );
 }
 
 fn hash_radii<H: Hasher>(radii: [f32; 4], state: &mut H) {

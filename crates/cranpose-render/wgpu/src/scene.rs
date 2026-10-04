@@ -195,14 +195,12 @@ pub(crate) struct TextDraw {
 #[derive(Clone)]
 pub(crate) struct ImageDraw {
     pub rect: Rect,
-    pub local_rect: Rect,
     pub quad: [[f32; 2]; 4],
     pub snap_anchor: Option<SnapAnchor>,
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
     pub sampling: ImageSampling,
-    pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
     pub src_rect: Option<Rect>,
@@ -487,7 +485,6 @@ impl CompositorScene {
     pub fn push_image_with_geometry(
         &mut self,
         rect: Rect,
-        local_rect: Rect,
         quad: [[f32; 2]; 4],
         image: ImageBitmap,
         alpha: f32,
@@ -504,14 +501,12 @@ impl CompositorScene {
         let index = self.images.len();
         self.images.push(ImageDraw {
             rect,
-            local_rect,
             quad,
             snap_anchor: None,
             image,
             alpha: alpha.clamp(0.0, 1.0),
             color_filter,
             sampling,
-            z_index,
             clip,
             blend_mode,
             src_rect,

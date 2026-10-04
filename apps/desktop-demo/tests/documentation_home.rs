@@ -73,6 +73,16 @@ fn click_control(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
     clicked
 }
 
+fn open_final_guide_section(robot: &mut RobotTestRule<TestRenderer>) {
+    assert!(click_control(robot, "Welcome"));
+    for _ in 1..include_str!("../../../docs/guide.md")
+        .matches("\n## ")
+        .count()
+    {
+        assert!(click_control(robot, "Next section"));
+    }
+}
+
 #[test]
 fn guide_tables_place_headers_and_values_in_columns() {
     let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
@@ -752,17 +762,58 @@ fn selected_chapter_survives_resizing_between_reader_layouts() {
 }
 
 #[test]
+fn compact_reader_can_scroll_the_final_paragraph_above_the_pinned_repository_link() {
+    let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
+        combined_app_with_initial_tab(Some(DemoTab::Guide));
+    });
+    open_final_guide_section(&mut robot);
+    let mut previous_footer_y = None;
+    let mut end_layout = None;
+    let mut visible_labels = Vec::new();
+    for _ in 0..80 {
+        robot.move_to(10.0, 400.0);
+        robot.shell_mut().pointer_scrolled(0.0, -600.0);
+        settle_motion(&mut robot);
+        let rects = robot.get_all_rects();
+        visible_labels = rects
+            .iter()
+            .filter_map(|(_, label)| label.clone())
+            .collect();
+        let final_paragraph = rects.iter().find_map(|(bounds, label)| {
+            label
+                .as_deref()
+                .filter(|label| label.contains("saved Rust value"))
+                .map(|_| *bounds)
+        });
+        let footer = rects
+            .iter()
+            .find(|(_, label)| label.as_deref() == Some("Back to top"))
+            .map(|(bounds, _)| *bounds);
+        if let (Some(final_paragraph), Some(footer)) = (final_paragraph, footer) {
+            if previous_footer_y.is_some_and(|y: f32| (footer.y - y).abs() < 1.0) {
+                end_layout = Some((rects, final_paragraph));
+                break;
+            }
+            previous_footer_y = Some(footer.y);
+        } else {
+            previous_footer_y = None;
+        }
+    }
+    let (rects, final_paragraph) = end_layout
+        .unwrap_or_else(|| panic!("reader did not reach its final item: {visible_labels:?}"));
+    let github = text_bounds(&rects, "View on GitHub");
+    assert!(
+        final_paragraph.y >= 0.0 && final_paragraph.y + final_paragraph.height <= github.y,
+        "the full final paragraph must scroll above the pinned repository action: {final_paragraph:?}, {github:?}"
+    );
+}
+
+#[test]
 fn compact_wheel_reveals_the_current_chapter_after_reading_to_the_end() {
     let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
-    assert!(click_control(&mut robot, "Welcome"));
-    for _ in 1..include_str!("../../../docs/guide.md")
-        .matches("\n## ")
-        .count()
-    {
-        assert!(click_control(&mut robot, "Next section"));
-    }
+    open_final_guide_section(&mut robot);
     assert!(robot
         .find_by_text("Place a platform control in your Cranpose layout.")
         .exists());

@@ -107,6 +107,26 @@ fn glass_page() -> RenderGraph {
     glass_page_over(None)
 }
 
+#[test]
+fn retained_texture_stats_count_the_offscreen_pool_once() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    support::capture_graph(&mut renderer, glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
+    let stats = renderer.last_frame_stats().expect("frame stats");
+
+    assert!(
+        stats.offscreen_pool_bytes > 0,
+        "the glass frame uses pooled textures"
+    );
+    assert_eq!(
+        stats.retained_texture_bytes,
+        stats.offscreen_pool_bytes + stats.layer_cache_bytes,
+        "retained texture totals include pooled textures and retained layer entries once"
+    );
+}
+
 /// The glasses scrolled up by `offset`, so the frame's top edge clips their
 /// captures more the further they go.
 fn scrolled_glass_page(offset: f32) -> RenderGraph {

@@ -14,11 +14,9 @@ use cranpose_ui::{TextMeasurer, TextMetrics, text_layout_result::TextLayoutResul
 
 use crate::{
     software_text_raster::{
-        SoftwareTextFont, SoftwareTextFontSet, annotated_cursor_x_for_offset,
-        annotated_offset_for_position, cursor_x_for_offset_with_font,
-        layout_annotated_text_with_font_set, layout_text_with_font,
-        measure_annotated_text_with_font_set, measure_text_with_font,
-        text_offset_for_position_with_font, visit_annotated_line_boxes,
+        SoftwareTextFontSet, annotated_cursor_x_for_offset, annotated_offset_for_position,
+        layout_annotated_text_with_font_set, measure_annotated_text_with_font_set,
+        visit_annotated_line_boxes,
     },
     text_cache_key::{TextCacheKey, TextProbe},
     text_hyphenation::HyphenationDictionaryStore,
@@ -197,21 +195,8 @@ impl TextMeasurer for CachedFontTextMeasurer {
             style_hash = hasher.finish();
         }
         self.lock_cache()
-            .get_or_measure(text_str, font_size, style_hash, |value, size| {
-                if !text.span_styles.is_empty() {
-                    return measure_annotated_text_with_font_set(
-                        text,
-                        style,
-                        size,
-                        self.text_resources.fonts(),
-                    );
-                }
-                measure_text_impl(
-                    value,
-                    style,
-                    size,
-                    self.text_resources.fonts().resolve(style),
-                )
+            .get_or_measure(text_str, font_size, style_hash, |_, size| {
+                measure_annotated_text_with_font_set(text, style, size, self.text_resources.fonts())
             })
     }
 
@@ -222,25 +207,7 @@ impl TextMeasurer for CachedFontTextMeasurer {
         x: f32,
         y: f32,
     ) -> usize {
-        if !text.span_styles.is_empty() {
-            return annotated_offset_for_position(text, style, x, y, self.text_resources.fonts());
-        }
-        let text = text.text.as_str();
-        if text.is_empty() {
-            return 0;
-        }
-
-        let Some(font) = self.text_resources.fonts().resolve(style) else {
-            let font_size = resolve_font_size(style);
-            return TextLayoutResult::monospaced(
-                text,
-                fallback_char_width(font_size),
-                fallback_line_height(font_size),
-            )
-            .get_offset_for_x(x);
-        };
-
-        text_offset_for_position_with_font(text, style, x, y, font)
+        annotated_offset_for_position(text, style, x, y, self.text_resources.fonts())
     }
 
     fn get_cursor_x_for_offset(
@@ -249,44 +216,15 @@ impl TextMeasurer for CachedFontTextMeasurer {
         style: &cranpose_ui::text::TextStyle,
         offset: usize,
     ) -> f32 {
-        if !text.span_styles.is_empty() {
-            return annotated_cursor_x_for_offset(text, style, offset, self.text_resources.fonts());
-        }
-        let text = text.text.as_str();
-        let clamped_offset = offset.min(text.len());
-        if clamped_offset == 0 {
-            return 0.0;
-        }
-
-        let Some(font) = self.text_resources.fonts().resolve(style) else {
-            return fallback_cursor_x_for_byte_offset(
-                text,
-                clamped_offset,
-                resolve_font_size(style),
-            );
-        };
-
-        cursor_x_for_offset_with_font(text, style, clamped_offset, font)
+        annotated_cursor_x_for_offset(text, style, offset, self.text_resources.fonts())
     }
 
     fn layout(
         &self,
         text: &cranpose_ui::text::AnnotatedString,
         style: &cranpose_ui::text::TextStyle,
-    ) -> cranpose_ui::text_layout_result::TextLayoutResult {
-        if !text.span_styles.is_empty() {
-            return layout_annotated_text_with_font_set(text, style, self.text_resources.fonts());
-        }
-        let font_size = resolve_font_size(style);
-        let Some(font) = self.text_resources.fonts().resolve(style) else {
-            return TextLayoutResult::monospaced(
-                text.text.as_str(),
-                fallback_char_width(font_size),
-                fallback_line_height(font_size),
-            );
-        };
-
-        layout_text_with_font(text.text.as_str(), style, font)
+    ) -> TextLayoutResult {
+        layout_annotated_text_with_font_set(text, style, self.text_resources.fonts())
     }
 
     fn choose_auto_hyphen_break(
@@ -303,19 +241,6 @@ impl TextMeasurer for CachedFontTextMeasurer {
             measured_break_char,
         )
     }
-}
-
-fn measure_text_impl(
-    text: &str,
-    style: &cranpose_ui::text::TextStyle,
-    font_size: f32,
-    font: Option<&SoftwareTextFont>,
-) -> TextMetrics {
-    let Some(font) = font else {
-        return fallback_text_metrics(text, font_size);
-    };
-
-    measure_text_with_font(text, style, font_size, font)
 }
 
 #[cfg(test)]
