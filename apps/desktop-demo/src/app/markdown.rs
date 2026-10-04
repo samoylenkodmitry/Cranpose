@@ -931,9 +931,7 @@ fn render_text_block_aligned(
         });
     let modifier = Modifier::empty().fill_max_width();
     let modifier = if code_panel {
-        modifier
-            .background(Color(0.065, 0.095, 0.13, 1.0))
-            .padding(14.0)
+        super::guide_style::code_surface(modifier).padding(14.0)
     } else {
         modifier.padding(2.0)
     };

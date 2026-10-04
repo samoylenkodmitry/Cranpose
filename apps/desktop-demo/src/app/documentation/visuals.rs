@@ -1,12 +1,11 @@
-use cranpose::liquid::{Glass, LiquidModifierExt, LiquidShape};
 use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle, TextUnit},
-    Box, BoxSpec, Brush, Color, GraphicsLayer, Modifier, Point, TextStyle,
+    Box, BoxSpec, Brush, Color, GraphicsLayer, Modifier, Point, TextStyle, TransformOrigin,
 };
 use cranpose_ui_graphics::{Stroke, VectorPath};
 
-pub(super) const INK: Color = Color(0.91, 0.95, 0.98, 1.0);
+pub(super) use super::super::guide_style::{reader_surface, INK};
 pub(super) const MUTED: Color = Color(0.58, 0.67, 0.75, 1.0);
 pub(super) const ACCENT: Color = Color(0.45, 0.89, 0.91, 1.0);
 pub(super) const BORDER: Color = Color(0.21, 0.33, 0.39, 0.60);
@@ -63,6 +62,30 @@ impl WheelGeometry {
         (self.width * 0.25).clamp(200.0, 300.0)
     }
 
+    pub fn wheel_width(self) -> f32 {
+        if self.width < super::COMPACT_BREAKPOINT {
+            self.width
+        } else {
+            self.reader_left()
+        }
+    }
+
+    pub fn reader_preview_modifier(self, scale_content: bool) -> Modifier {
+        let layout_scale = if scale_content { 1.0 } else { 0.44 };
+        let content_scale = if scale_content { 0.44 } else { 1.0 };
+        Modifier::empty()
+            .size_points(self.width * layout_scale, self.height * layout_scale)
+            .offset(self.center.x - self.radius + 72.0, self.center.y + 40.0)
+            .graphics_layer_value(GraphicsLayer {
+                scale_x: content_scale,
+                scale_y: content_scale,
+                rotation_z: -20.0,
+                transform_origin: TransformOrigin::new(0.0, 0.0),
+                ..Default::default()
+            })
+            .clip_to_bounds()
+    }
+
     pub fn section_angle(self) -> f32 {
         120.0 / (self.radius + 64.0)
     }
@@ -87,7 +110,7 @@ impl WheelGeometry {
         let center = self.point(angle, self.radius + 64.0);
         let inset = sin.abs() * height * 0.5;
         let start = (-135.0_f32).max((inset - center.x) / cos);
-        let end = 135.0_f32.min((self.reader_left() - inset - center.x) / cos);
+        let end = 135.0_f32.min((self.wheel_width() - inset - center.x) / cos);
         if end <= start {
             return None;
         }
@@ -205,26 +228,6 @@ pub(super) fn WheelSurface(geometry: WheelGeometry, position: impl Fn() -> f32 +
         BoxSpec::default(),
         || {},
     );
-}
-
-pub(super) fn reader_surface(modifier: Modifier) -> Modifier {
-    let mut glass = Glass::clear();
-    glass.shape = LiquidShape::RoundedRect(0.0);
-    glass.tint = Some(Color(0.045, 0.085, 0.12, 0.24));
-    glass.blur_radius = Some(0.8);
-    glass.dispersion = 1.0;
-    glass.lift = Some(0.0);
-    glass.contrast = Some(1.0);
-    glass.saturation = Some(1.0);
-    glass.refraction_depth_dp = Some(12.0);
-    glass.transmission_refraction = 0.2;
-    glass.foreground = Some(INK);
-    glass.adaptive_frost = 0.0;
-    glass.highlight = 0.25;
-    glass.rim_reflection = 0.2;
-    glass.face_lighting = false;
-    glass.shadow = false;
-    modifier.glass_effect(glass)
 }
 
 #[composable]

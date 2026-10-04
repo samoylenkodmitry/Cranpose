@@ -313,72 +313,28 @@ fn WheelEntries(
 #[composable]
 fn WheelVisuals(state: DocumentationState, geometry: WheelGeometry, wheel_only: bool) {
     visuals::WheelSurface(geometry, move || state.position(wheel_only));
-    if geometry.width < COMPACT_BREAKPOINT {
-        if !wheel_only {
-            return;
-        }
-        Box(
-            Modifier::empty().offset(12.0, 130.0).width(154.0),
-            BoxSpec::default(),
-            Brand,
-        );
-    } else {
-        let position = state.position(wheel_only);
-        let visible = geometry.visible_entries(position, chapters().len());
-        Box(
-            geometry.brand_modifier(-1.35 - position).padding(12.0),
-            BoxSpec::default(),
-            Brand,
-        );
-        Box(
-            Modifier::empty().fill_max_size().hide_from_accessibility(),
-            BoxSpec::default(),
-            move || {
-                WheelEntries(
-                    state,
-                    geometry,
-                    wheel_only,
-                    false,
-                    visible.start,
-                    visible.end,
-                );
-            },
-        );
+    if geometry.width < COMPACT_BREAKPOINT && !wheel_only {
+        return;
     }
-}
-
-#[composable]
-fn MobileChapters(state: DocumentationState, width: f32, height: f32) {
-    let list = remember(|| LazyListState::new(state.position(true).floor() as usize, 0.0))
-        .with(|list| *list);
-    let left = (width * 0.45).max(152.0).ceil();
-    let mut spec = LazyColumnSpec::default();
-    spec.beyond_bounds_item_count = 0;
-    LazyColumn(
-        Modifier::empty()
-            .offset(left, 96.0)
-            .width(width - left)
-            .height((height - 156.0).max(44.0))
-            .clip_to_bounds()
-            .content_description("Guide chapters"),
-        list,
-        spec,
-        move |scope| {
-            scope.items(chapters().len(), move |index| {
-                let active = state.position(true).round() as usize == index;
-                Button(
-                    Modifier::empty()
-                        .fill_max_width()
-                        .height_in(52.0, f32::INFINITY)
-                        .semantics(move |config| {
-                            config.selected = Some(active);
-                            config.content_description = Some(chapters()[index].title.to_owned());
-                        }),
-                    ButtonSpec::default(),
-                    move || state.select(index, true),
-                    move || ChapterLabel(index, active),
-                );
-            });
+    let position = state.position(wheel_only);
+    let visible = geometry.visible_entries(position, chapters().len());
+    Box(
+        geometry.brand_modifier(-1.35 - position).padding(12.0),
+        BoxSpec::default(),
+        Brand,
+    );
+    Box(
+        Modifier::empty().fill_max_size().hide_from_accessibility(),
+        BoxSpec::default(),
+        move || {
+            WheelEntries(
+                state,
+                geometry,
+                wheel_only,
+                false,
+                visible.start,
+                visible.end,
+            );
         },
     );
 }
@@ -389,20 +345,14 @@ fn SectionWheel(state: DocumentationState, geometry: WheelGeometry, height: f32,
     let visible = geometry.visible_entries(state.position(compact), chapters().len());
     Box(
         Modifier::empty()
-            .width(if compact {
-                geometry.width
-            } else {
-                geometry.reader_left()
-            })
+            .width(geometry.wheel_width())
             .height((height - 44.0).max(1.0))
             .clip_to_bounds()
             .content_description("Guide wheel")
             .scrollable(Axis::Vertical, scroll),
         BoxSpec::default(),
         move || {
-            if !compact {
-                WheelEntries(state, geometry, compact, true, visible.start, visible.end);
-            }
+            WheelEntries(state, geometry, compact, true, visible.start, visible.end);
         },
     );
 }
@@ -603,6 +553,56 @@ fn Reader(state: DocumentationState, width: f32, height: f32, compact: bool, hea
 }
 
 #[composable]
+fn GuideSurfaces(
+    state: DocumentationState,
+    geometry: WheelGeometry,
+    reader_visible: bool,
+    header_height: f32,
+    reader_ready: bool,
+) {
+    let compact = geometry.width < COMPACT_BREAKPOINT;
+    let preview = compact && !reader_visible;
+    WheelVisuals(state, geometry, !reader_visible);
+    if preview {
+        SectionWheel(state, geometry, geometry.height(), compact);
+    }
+    if reader_ready {
+        Box(
+            if preview {
+                geometry
+                    .reader_preview_modifier(true)
+                    .hide_from_accessibility()
+            } else {
+                Modifier::empty().fill_max_size()
+            },
+            BoxSpec::default(),
+            move || {
+                Reader(
+                    state,
+                    geometry.width,
+                    geometry.height(),
+                    compact,
+                    header_height,
+                );
+            },
+        );
+        if preview {
+            Button(
+                geometry
+                    .reader_preview_modifier(false)
+                    .content_description("Open guide"),
+                ButtonSpec::default(),
+                move || state.reader_open.set(true),
+                || {},
+            );
+        }
+    }
+    if !compact {
+        SectionWheel(state, geometry, geometry.height(), compact);
+    }
+}
+
+#[composable]
 pub(super) fn GuideTab(header: Option<super::AppHeaderState>) {
     let viewport = rememberMutableStateOf(cranpose_ui::Size::default);
     let header_size = rememberMutableStateOf(cranpose_ui::Size::default);
@@ -639,17 +639,14 @@ pub(super) fn GuideTab(header: Option<super::AppHeaderState>) {
                     let geometry = WheelGeometry::new(width, size.height);
                     let reader_visible = !compact || state.reader_open.get();
                     visuals::Backdrop(geometry);
-                    WheelVisuals(state, geometry, !reader_visible);
                     let header_height = header_size.get().height;
-                    if reader_visible && (header.is_none() || header_height > 0.0) {
-                        Reader(state, width, size.height, compact, header_height);
-                    }
-                    if !compact || !reader_visible {
-                        SectionWheel(state, geometry, size.height, compact);
-                        if compact {
-                            MobileChapters(state, width, size.height);
-                        }
-                    }
+                    GuideSurfaces(
+                        state,
+                        geometry,
+                        reader_visible,
+                        header_height,
+                        header.is_none() || header_height > 0.0,
+                    );
                     ScrollingHeader(header, state, header_size, reader_visible);
                     if compact && reader_visible {
                         Row(

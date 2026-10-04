@@ -32,6 +32,7 @@ mod floating_windows;
 mod glass_feed;
 mod glass_tiles;
 mod guide_previews;
+mod guide_style;
 mod hacker_news;
 mod highlight;
 mod highlight_theme;
