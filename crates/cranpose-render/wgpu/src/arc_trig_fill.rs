@@ -45,6 +45,8 @@ pub(crate) struct ArcTrigFill {
     window_rows: u64,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code))]
     used: AtomicBool,
+    #[cfg(not(target_arch = "wasm32"))]
+    recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
 #[derive(Clone)]
@@ -82,6 +84,8 @@ impl ArcTrigFill {
         backend: wgpu::Backend,
         cache: Option<wgpu::PipelineCache>,
         shader: SharedShader,
+        #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
+        recorder: crate::pipeline_recorder::PipelineRecorder,
     ) -> Self {
         let table = |binding, read_only| wgpu::BindGroupLayoutEntry {
             binding,
@@ -114,6 +118,8 @@ impl ArcTrigFill {
             bind_group_layout,
             window_rows: window_rows(&device.limits()),
             used: AtomicBool::new(false),
+            #[cfg(not(target_arch = "wasm32"))]
+            recorder,
         }
     }
 
@@ -172,7 +178,8 @@ impl ArcTrigFill {
     ) {
         #[cfg(not(target_arch = "wasm32"))]
         if !self.used.swap(true, Ordering::Relaxed) {
-            crate::pipeline_disk_cache::note_first_screen_pipeline(FIRST_SCREEN_KEY);
+            self.recorder
+                .note_shape(FIRST_SCREEN_KEY, self.recorder.in_first_screen());
         }
         pass.set_pipeline(self.pipeline());
         let mut remaining = u64::from(rows);

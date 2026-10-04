@@ -256,23 +256,15 @@ pub(crate) struct ShaderPipelineCache {
     demanded: HashSet<PipelineKey, FxBuildHasher>,
     forced: Vec<&'static str>,
     forced_hash: u64,
+    /// The pipelines draws asked for, each noted once for the next launches.
     #[cfg(not(target_arch = "wasm32"))]
-    first_screen: FirstScreen,
-}
-
-/// The pipelines draws asked for while the first screen came up, noted for
-/// the next launch to build before its first frame.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Default)]
-struct FirstScreen {
-    /// When the first draw asked, moved later by every pipeline a draw then
-    /// waited to build, so a slow compile does not end the first screen.
-    started: Option<web_time::Instant>,
-    over: bool,
     noted: HashSet<PipelineKey, FxBuildHasher>,
+    #[cfg(not(target_arch = "wasm32"))]
+    recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
 impl ShaderPipelineCache {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         compiler: PipelineCompiler,
@@ -281,6 +273,8 @@ impl ShaderPipelineCache {
         format: wgpu::TextureFormat,
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         uniform_bind_group_layout: &wgpu::BindGroupLayout,
+        #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
+        recorder: crate::pipeline_recorder::PipelineRecorder,
     ) -> Self {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Effect Pipeline Layout"),
@@ -307,7 +301,9 @@ impl ShaderPipelineCache {
             forced: Vec::new(),
             forced_hash: 0,
             #[cfg(not(target_arch = "wasm32"))]
-            first_screen: FirstScreen::default(),
+            noted: HashSet::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            recorder,
         }
     }
 
@@ -480,7 +476,7 @@ impl ShaderPipelineCache {
     ) -> Option<(&wgpu::RenderPipeline, ShaderPipelineFit)> {
         let key = self.key(shader, specialization, mode, variant);
         #[cfg(not(target_arch = "wasm32"))]
-        self.note_first_screen(specialization, key);
+        self.note_drawn(specialization, key);
         let general = key.general();
         let (build, fit) = if self.ready(key)
             || key == general
@@ -505,9 +501,7 @@ impl ShaderPipelineCache {
             let waited = web_time::Instant::now();
             self.slot(build).get_or_init(backend, || job.build());
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(started) = &mut self.first_screen.started {
-                *started += waited.elapsed();
-            }
+            self.recorder.extend_first_screen(waited.elapsed());
         }
         self.pipelines[&build]
             .get()
@@ -515,24 +509,15 @@ impl ShaderPipelineCache {
             .map(|pipeline| (pipeline, fit))
     }
 
-    /// Notes `key` for the next launch while the first screen comes up.
+    /// Notes `key`'s first draw for the next launches, as the first screen's
+    /// while that comes up.
     #[cfg(not(target_arch = "wasm32"))]
-    fn note_first_screen(&mut self, specialization: DrawSpecialization<'_>, key: PipelineKey) {
-        let first_screen = &mut self.first_screen;
-        if first_screen.over || key.forced != 0 {
+    fn note_drawn(&mut self, specialization: DrawSpecialization<'_>, key: PipelineKey) {
+        if key.forced != 0 || !self.noted.insert(key) {
             return;
         }
-        let started = *first_screen
-            .started
-            .get_or_insert_with(web_time::Instant::now);
-        if started.elapsed() > crate::pipeline_disk_cache::FIRST_SCREEN_SPAN {
-            first_screen.over = true;
-            return;
-        }
-        if !first_screen.noted.insert(key) {
-            return;
-        }
-        crate::pipeline_disk_cache::note_first_screen_shader(ShaderPipelineRecord {
+        let first_screen = self.recorder.in_first_screen();
+        let record = ShaderPipelineRecord {
             source: key.source,
             overrides: key.overrides,
             mode: key.mode.disk_byte(),
@@ -550,19 +535,21 @@ impl ShaderPipelineCache {
                     .map(|&(name, value)| (name.to_owned(), value))
                     .collect()
             },
-        });
+        };
+        self.recorder.note_shader(record, first_screen);
     }
 
     /// Queues on the warm-up lane every pipeline `records` names whose shader
     /// source is one of `sources`, built as the draw that recorded it built
     /// it, so a launch's first frame finds the last launch's pipelines ready.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn warm_recorded(
+    pub(crate) fn warm_recorded<'a>(
         &mut self,
-        records: &[ShaderPipelineRecord],
+        records: impl IntoIterator<Item = &'a ShaderPipelineRecord>,
         sources: impl IntoIterator<Item = &'static str>,
     ) {
-        if !self.compiler.is_active() || self.forced_hash != 0 || records.is_empty() {
+        let mut records = records.into_iter().peekable();
+        if !self.compiler.is_active() || self.forced_hash != 0 || records.peek().is_none() {
             return;
         }
         let sources: smallvec::SmallVec<[(u64, &'static str); 8]> = sources

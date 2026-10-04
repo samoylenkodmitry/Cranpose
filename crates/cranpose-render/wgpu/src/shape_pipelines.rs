@@ -50,7 +50,7 @@ pub(crate) struct ShapePipelines {
     /// builds on the background compiler.
     asynchronous: bool,
     #[cfg(not(target_arch = "wasm32"))]
-    first_use: Option<web_time::Instant>,
+    recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
 impl ShapePipelines {
@@ -62,6 +62,8 @@ impl ShapePipelines {
         backend: wgpu::Backend,
         compiler: &PipelineCompiler,
         first_screen: impl IntoIterator<Item = ShapePipelineKey>,
+        #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
+        recorder: crate::pipeline_recorder::PipelineRecorder,
     ) -> Self {
         static ASYNC_SHAPE_PIPELINES: crate::debug_toggles::DebugToggle =
             crate::debug_toggles::DebugToggle::new("CRANPOSE_ASYNC_SHAPE_PIPELINES");
@@ -76,12 +78,19 @@ impl ShapePipelines {
             slots,
             asynchronous,
             #[cfg(not(target_arch = "wasm32"))]
-            first_use: None,
+            recorder,
         }
     }
 
     pub(crate) fn begin_frame(&mut self) {
         self.slots.begin_frame();
+    }
+
+    /// Queues `key`'s build on the warm-up lane unless it is already queued
+    /// or built.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm(&mut self, key: ShapePipelineKey) {
+        self.slots.warm(key);
     }
 
     pub(crate) fn request_wanted(&mut self) {
@@ -91,14 +100,9 @@ impl ShapePipelines {
     pub(crate) fn ensure(&mut self, key: ShapePipelineKey, vertices: u64) {
         let need = self.slots.need(key);
         #[cfg(not(target_arch = "wasm32"))]
-        if need.first
-            && self
-                .first_use
-                .get_or_insert_with(web_time::Instant::now)
-                .elapsed()
-                <= crate::pipeline_disk_cache::FIRST_SCREEN_SPAN
-        {
-            crate::pipeline_disk_cache::note_first_screen_pipeline(key.to_bits());
+        if need.first {
+            self.recorder
+                .note_shape(key.to_bits(), self.recorder.in_first_screen());
         }
         if need.ready {
             return;
@@ -116,9 +120,7 @@ impl ShapePipelines {
             self.slots.build(key);
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(first_use) = &mut self.first_use {
-            *first_use += compile_started.elapsed();
-        }
+        self.recorder.extend_first_screen(compile_started.elapsed());
     }
 
     pub(crate) fn get(&self, key: ShapePipelineKey) -> Option<(&wgpu::RenderPipeline, bool)> {
@@ -237,7 +239,8 @@ impl<B: KeyedBuild> Slots<B> {
         }
     }
 
-    /// Queues `key`'s build on the warm-up lane, ahead of any draw.
+    /// Queues `key`'s build on the warm-up lane, ahead of any draw, unless it
+    /// is already queued or built.
     pub(crate) fn warm(&mut self, key: ShapePipelineKey) {
         if !self.compiler.is_active() {
             return;
@@ -245,6 +248,9 @@ impl<B: KeyedBuild> Slots<B> {
         let builder = Arc::clone(&self.builder);
         let stopped = Arc::clone(&self.stopped);
         let entry = Self::entry(&mut self.entries, key);
+        if entry.queued || entry.value.get().is_some() {
+            return;
+        }
         entry.queued = true;
         let value = Arc::clone(&entry.value);
         self.compiler.enqueue(CompileLane::WarmUp, move || {

@@ -26,6 +26,7 @@ fn cache(device: &wgpu::Device, compiler: PipelineCompiler) -> ShaderPipelineCac
         None,
         FORMAT,
         device.adapter_info().backend,
+        crate::pipeline_recorder::PipelineRecorder::default(),
     );
     ShaderPipelineCache::new(
         device,
@@ -35,6 +36,7 @@ fn cache(device: &wgpu::Device, compiler: PipelineCompiler) -> ShaderPipelineCac
         FORMAT,
         &renderer.effect_texture_bind_group_layout,
         &renderer.effect_uniform_bind_group_layout,
+        crate::pipeline_recorder::PipelineRecorder::default(),
     )
 }
 

@@ -329,7 +329,7 @@ fn a_cache_file_without_pipeline_records_keeps_its_first_screen_shapes() {
             bytes[0] ^= 0xff;
             let section = bytes
                 .windows(4)
-                .position(|window| window == b"RSP2")
+                .position(|window| window == b"RSP3")
                 .expect("the cache file keeps its first screen's records");
             bytes.truncate(section);
         },
@@ -468,6 +468,59 @@ fn an_updated_build_draws_its_first_frosted_pane_with_pipelines_built_before_it(
                 frosted_frame_builds(updated),
                 0,
                 "the first frosted pane after an update must find its pipelines built"
+            );
+        },
+    );
+}
+
+/// A launch that draws squares, then the frosted page once its first screen
+/// is over, and a relaunch over its cache once `change` edited it.
+fn relaunch_after_a_later_screen(
+    change: impl FnOnce(&mut Vec<u8>),
+    check: impl FnOnce(&mut support::LockedRenderer),
+) {
+    relaunch_after_drawing(
+        |previous| {
+            first_frame_builds(previous);
+            std::thread::sleep(Duration::from_millis(2100));
+            frosted_frame_builds(previous);
+        },
+        change,
+        check,
+    );
+}
+
+/// After an update the pipelines the last launch drew past its first screen
+/// are built once the first frame is drawn, before the screen that needs
+/// them.
+#[test]
+fn an_updated_build_prepares_the_later_screens_of_its_last_launch_after_its_first_frame() {
+    relaunch_after_a_later_screen(
+        |bytes| bytes[0] ^= 0xff,
+        |updated| {
+            first_frame_builds(updated);
+            wait_for_warm_ups();
+            assert_eq!(
+                frosted_frame_builds(updated),
+                0,
+                "a later screen after an update must find its pipelines built"
+            );
+        },
+    );
+}
+
+/// The same build finds its compiled pipelines in the driver's cache, so it
+/// builds a later screen's pipelines only when that screen draws.
+#[test]
+fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
+    relaunch_after_a_later_screen(
+        |_| {},
+        |relaunch| {
+            first_frame_builds(relaunch);
+            wait_for_warm_ups();
+            assert!(
+                frosted_frame_builds(relaunch) > 0,
+                "only an update prepares the pipelines of later screens"
             );
         },
     );

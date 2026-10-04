@@ -1,6 +1,6 @@
-//! The runtime shader and fixed pipelines a launch drew its first screen
-//! with, as the pipeline cache file keeps them for the next launch to build
-//! ahead of its first frame.
+//! The pipelines recent launches drew with, as the pipeline cache file keeps
+//! them: the next launch builds the last first screen's ahead of its first
+//! frame, and after an update every recent one once that frame is drawn.
 
 /// One runtime shader pipeline as its draw named it: the shader's source and
 /// override set, its blend mode, the draw variant, and the overrides it
@@ -15,27 +15,61 @@ pub(crate) struct ShaderPipelineRecord {
     pub(crate) constants: Vec<(String, f64)>,
 }
 
-/// The pipelines besides its shapes a first screen drew with.
+/// A recorded pipeline: how many launches since one drew with it, and
+/// whether the last launch drew its first screen with it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Recorded<T> {
+    pub(crate) entry: T,
+    pub(crate) age: u8,
+    pub(crate) first_screen: bool,
+}
+
+impl<T> Recorded<T> {
+    pub(crate) fn as_ref(&self) -> Recorded<&T> {
+        Recorded {
+            entry: &self.entry,
+            age: self.age,
+            first_screen: self.first_screen,
+        }
+    }
+
+    pub(crate) fn map<U>(self, f: impl FnOnce(T) -> U) -> Recorded<U> {
+        Recorded {
+            entry: f(self.entry),
+            age: self.age,
+            first_screen: self.first_screen,
+        }
+    }
+}
+
+/// The recorded pipelines besides the last first screen's shapes, which the
+/// file keeps ahead of this section.
 #[derive(Default)]
-pub(crate) struct FirstScreenRecords {
-    pub(crate) shaders: Vec<ShaderPipelineRecord>,
-    /// The fixed pipelines, by label.
-    pub(crate) fixed: Vec<String>,
+pub(crate) struct PipelineRecords {
+    /// Shape pipelines, by their keys' bits.
+    pub(crate) shapes: Vec<Recorded<u64>>,
+    pub(crate) shaders: Vec<Recorded<ShaderPipelineRecord>>,
+    /// Fixed pipelines, by label.
+    pub(crate) fixed: Vec<Recorded<String>>,
 }
 
 /// Opens the records' section of the cache file.
-const SECTION: &[u8; 4] = b"RSP2";
+const SECTION: &[u8; 4] = b"RSP3";
 
-/// Appends a section holding `shaders` and the `fixed` pipelines' labels to
-/// `bytes`, or `None` when one of them does not fit the layout.
+/// Appends a section holding the records to `bytes`, or `None` when one of
+/// them does not fit the layout.
 pub(crate) fn encode<'a>(
-    shaders: &[ShaderPipelineRecord],
-    fixed: impl ExactSizeIterator<Item = &'a str>,
+    shapes: impl Iterator<Item = Recorded<u64>>,
+    shaders: impl Iterator<Item = Recorded<&'a ShaderPipelineRecord>>,
+    fixed: impl Iterator<Item = Recorded<&'a str>>,
     bytes: &mut Vec<u8>,
 ) -> Option<()> {
     bytes.extend_from_slice(SECTION);
-    bytes.extend_from_slice(&u32::try_from(shaders.len()).ok()?.to_le_bytes());
-    for record in shaders {
+    put_list(bytes, shapes, |bytes, key| {
+        bytes.extend_from_slice(&key.to_le_bytes());
+        Some(())
+    })?;
+    put_list(bytes, shaders, |bytes, record| {
         bytes.extend_from_slice(&record.source.to_le_bytes());
         bytes.extend_from_slice(&record.overrides.to_le_bytes());
         bytes.extend_from_slice(&[record.mode, record.variant]);
@@ -45,11 +79,30 @@ pub(crate) fn encode<'a>(
             put_name(bytes, name)?;
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+        Some(())
+    })?;
+    put_list(bytes, fixed, put_name)
+}
+
+/// Appends the count of `records`, then each entry `put` writes followed by
+/// its age and first-screen flag in one byte.
+fn put_list<T>(
+    bytes: &mut Vec<u8>,
+    records: impl Iterator<Item = Recorded<T>>,
+    mut put: impl FnMut(&mut Vec<u8>, T) -> Option<()>,
+) -> Option<()> {
+    let count_at = bytes.len();
+    bytes.extend_from_slice(&[0; 4]);
+    let mut count = 0_u32;
+    for record in records {
+        put(bytes, record.entry)?;
+        let age = (record.age < 0x80).then_some(record.age)?;
+        bytes.push(age << 1 | u8::from(record.first_screen));
+        count = count.checked_add(1)?;
     }
-    bytes.extend_from_slice(&u16::try_from(fixed.len()).ok()?.to_le_bytes());
-    for label in fixed {
-        put_name(bytes, label)?;
-    }
+    bytes
+        .get_mut(count_at..count_at + 4)?
+        .copy_from_slice(&count.to_le_bytes());
     Some(())
 }
 
@@ -61,11 +114,10 @@ fn put_name(bytes: &mut Vec<u8>, name: &str) -> Option<()> {
 
 /// The records the section at the start of `bytes` holds and the bytes
 /// after it, or `None` when `bytes` opens no section.
-pub(crate) fn decode(bytes: &[u8]) -> Option<(FirstScreenRecords, &[u8])> {
+pub(crate) fn decode(bytes: &[u8]) -> Option<(PipelineRecords, &[u8])> {
     let mut reader = Reader(bytes.strip_prefix(SECTION.as_slice())?);
-    let count = reader.u32()?;
-    let mut shaders = Vec::new();
-    for _ in 0..count {
+    let shapes = reader.list(Reader::u64)?;
+    let shaders = reader.list(|reader| {
         let source = reader.u64()?;
         let overrides = reader.u64()?;
         let [mode, variant] = reader.take()?;
@@ -73,19 +125,24 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<(FirstScreenRecords, &[u8])> {
         let constants = (0..reader.u16()?)
             .map(|_| Some((reader.name()?, f64::from_le_bytes(reader.take()?))))
             .collect::<Option<Vec<_>>>()?;
-        shaders.push(ShaderPipelineRecord {
+        Some(ShaderPipelineRecord {
             source,
             overrides,
             mode,
             variant,
             split,
             constants,
-        });
-    }
-    let fixed = (0..reader.u16()?)
-        .map(|_| reader.name())
-        .collect::<Option<Vec<_>>>()?;
-    Some((FirstScreenRecords { shaders, fixed }, reader.0))
+        })
+    })?;
+    let fixed = reader.list(Reader::name)?;
+    Some((
+        PipelineRecords {
+            shapes,
+            shaders,
+            fixed,
+        },
+        reader.0,
+    ))
 }
 
 struct Reader<'a>(&'a [u8]);
@@ -107,6 +164,24 @@ impl Reader<'_> {
 
     fn u64(&mut self) -> Option<u64> {
         self.take().map(u64::from_le_bytes)
+    }
+
+    /// A count, then that many entries each followed by its mark.
+    fn list<T>(
+        &mut self,
+        mut entry: impl FnMut(&mut Self) -> Option<T>,
+    ) -> Option<Vec<Recorded<T>>> {
+        (0..self.u32()?)
+            .map(|_| {
+                let entry = entry(self)?;
+                let [mark] = self.take()?;
+                Some(Recorded {
+                    entry,
+                    age: mark >> 1,
+                    first_screen: mark & 1 == 1,
+                })
+            })
+            .collect()
     }
 
     fn name(&mut self) -> Option<String> {
