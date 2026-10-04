@@ -28,31 +28,30 @@ Purchase events arrive asynchronously through `rememberPurchaseEvents` or `take_
 
 ## Example: read the wearer's heart rate
 
-The heart-rate sensor is in a build only when its build script declares it, and
-the person is asked only when the application asks:
+The heart-rate sensor is in a build only when its build script declares
+`cranpose_capabilities::Use::heart_rate(reason)`, and the person is asked only
+when the application asks:
 
 ```rust
-// build.rs
-cranpose_capabilities::declare(&[Use::heart_rate(
-    "Plays to your pulse. The reading never leaves this watch.",
-)])
-.emit();
+use cranpose_services::{rememberHeartRate, request_heart_rate_permission};
 
-// a screen: the sensor runs while this is composed and `active`
-let heart = rememberHeartRate(active);
-if let Some(bpm) = heart.get().live_bpm() {
-    game.set_pulse(bpm);
+// On a screen that reads the pulse: the sensor runs while this is composed
+// and `active`, and observing it never prompts.
+fn pulse(active: bool) -> Option<f32> {
+    rememberHeartRate(active).get().live_bpm()
 }
 
-// when the person chooses the feature that reads it, never on the app's own
-request_heart_rate_permission();
+// When the person chooses the feature that reads it, never on the app's own.
+fn on_choose_heart_mode() {
+    request_heart_rate_permission();
+}
 ```
 
-Observing never prompts: an application that has not asked sees
-`HeartRateStatus::NeedsPermission`, and one that was refused sees `Denied`.
-`live_bpm()` is a reading only while the sensor is on the skin. On Android the
-service is compiled into the app only when declared, and the sensor pauses with
-the activity; other platforms report `Unavailable`.
+An application that has not asked sees `HeartRateStatus::NeedsPermission`, and
+one that was refused sees `Denied`. `live_bpm()` is a reading only while the
+sensor is on the skin. On Android the service is compiled into the app only
+when declared, and the sensor pauses with the activity; other platforms report
+`Unavailable`.
 
 ## Features and platform adapters
 
