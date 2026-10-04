@@ -21,6 +21,10 @@ use cranpose_core::{
 
 struct Waiter(std::thread::Thread);
 
+thread_local! {
+    static THREAD_RESOURCE: RefCell<Option<mpsc::Sender<()>>> = const { RefCell::new(None) };
+}
+
 impl Wake for Waiter {
     fn wake(self: Arc<Self>) {
         self.0.unpark();
@@ -201,6 +205,20 @@ fn idle_retirement_and_new_submissions_keep_delivering_results() {
             ..BlockingExecutorConfig::default()
         }
     });
+    let (thread_resource, released) = mpsc::channel();
+    let task = executor
+        .submit(move || {
+            THREAD_RESOURCE.with(|held| {
+                held.borrow_mut().replace(thread_resource);
+            });
+        })
+        .expect("admit resource owner");
+    assert_eq!(finish(task), Ok(()));
+    assert_eq!(
+        released.recv_timeout(Duration::from_secs(5)),
+        Err(mpsc::RecvTimeoutError::Disconnected),
+        "the idle worker retained its thread-local resource"
+    );
     for value in 0..100 {
         let task = executor.submit(move || value).expect("admit work");
         assert_eq!(finish(task), Ok(value));
