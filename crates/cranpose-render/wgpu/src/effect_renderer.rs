@@ -130,7 +130,7 @@ pub(crate) struct EffectRenderer {
     blur_families_queued: Cell<u8>,
     compiler: PipelineCompiler,
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
-    blur_uniform_uploads: Vec<UniformUpload>,
+    blur_prepared_draws: Vec<PreparedBlurDraw>,
     blur_kernels: RefCell<BoundedLruCache<u32, BlurKernel>>,
 
     offset_shader: SharedShader,
@@ -379,11 +379,56 @@ fn blur_uniform_spec(pass: UploadAllocatorId) -> UploadAllocatorSpec {
     )
 }
 
-struct BlurDraw<'a> {
-    source: &'a OffscreenTarget,
-    uniforms: BlurUniforms,
+#[derive(Clone, Copy)]
+struct BlurDraw {
+    source: BlurSource,
+    uniforms: BlurUniformSpec,
     filter: BlurFilter,
     scissor: Option<(u32, u32, u32, u32)>,
+}
+
+#[derive(Clone, Copy)]
+enum BlurSource {
+    Primary,
+    Secondary,
+}
+
+struct BlurSourceSet<'a> {
+    primary: &'a OffscreenTarget,
+    secondary: &'a OffscreenTarget,
+}
+
+impl<'a> BlurSourceSet<'a> {
+    fn single(target: &'a OffscreenTarget) -> Self {
+        BlurSourceSet {
+            primary: target,
+            secondary: target,
+        }
+    }
+
+    fn resolve(&self, source: BlurSource) -> &OffscreenTarget {
+        match source {
+            BlurSource::Primary => self.primary,
+            BlurSource::Secondary => self.secondary,
+        }
+    }
+}
+
+struct PreparedBlurDraw {
+    source: BlurSource,
+    uniform: UniformUpload,
+    pipeline: BlurPipeline,
+    scissor: Option<(u32, u32, u32, u32)>,
+}
+
+#[derive(Clone, Copy)]
+struct BlurUniformSpec {
+    horizontal: bool,
+    sampled: (u32, u32),
+    source: [f32; 4],
+    dest: [f32; 4],
+    radius: (f32, f32),
+    tile_mode: TileMode,
 }
 
 #[derive(Clone, Copy)]
@@ -420,9 +465,21 @@ fn blur_family(tile_mode: usize) -> impl Iterator<Item = BlurPipeline> {
     )
 }
 
-impl BlurDraw<'_> {
+impl BlurDraw {
+    fn uniforms(&self, renderer: &EffectRenderer) -> BlurUniforms {
+        let spec = self.uniforms;
+        renderer.blur_uniforms(
+            spec.horizontal,
+            spec.sampled,
+            spec.source,
+            spec.dest,
+            spec.radius,
+            spec.tile_mode,
+        )
+    }
+
     fn pipeline(&self) -> BlurPipeline {
-        let tile_mode = self.uniforms.texture_size_and_tile_mode[2] as usize;
+        let tile_mode = tile_mode_uniform_value(self.uniforms.tile_mode) as usize;
         match self.filter {
             BlurFilter::Downsample(block) => BlurPipeline::Downsample { block, tile_mode },
             BlurFilter::Kernel => BlurPipeline::Kernel { tile_mode },
@@ -1176,7 +1233,7 @@ impl EffectRenderer {
             blur_families_queued: Cell::new(0),
             compiler,
             blur_uniform_bind_group_layout,
-            blur_uniform_uploads: Vec::new(),
+            blur_prepared_draws: Vec::new(),
             blur_kernels: RefCell::new(BoundedLruCache::with_capacity_at_least_one(
                 MAX_BLUR_KERNEL_CACHE_ITEMS,
             )),
@@ -1646,7 +1703,7 @@ impl EffectRenderer {
     }
 
     #[expect(clippy::too_many_arguments)]
-    fn encode_blur_pass<C: FrameCommandRecorder>(
+    fn encode_blur_pass<C: FrameCommandRecorder, I: Iterator<Item = BlurDraw>>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
@@ -1655,50 +1712,70 @@ impl EffectRenderer {
         dest_view: &wgpu::TextureView,
         dest_size: (u32, u32),
         load_op: wgpu::LoadOp<wgpu::Color>,
-        draws: &[BlurDraw<'_>],
+        sources: BlurSourceSet<'_>,
+        draws: I,
     ) {
-        let written: u64 = draws
-            .iter()
-            .map(|draw| {
-                let (_, _, width, height) =
-                    draw.scissor.unwrap_or((0, 0, dest_size.0, dest_size.1));
-                u64::from(width) * u64::from(height)
-            })
-            .sum();
-        self.debug_blur_pixels
-            .set(self.debug_blur_pixels.get() + written);
-        let mut uniforms = std::mem::take(&mut self.blur_uniform_uploads);
-        uniforms.extend(draws.iter().map(|draw| {
-            recorder.upload_uniform(
+        let mut prepared = std::mem::take(&mut self.blur_prepared_draws);
+        prepared.clear();
+        let mut written = 0u64;
+        for draw in draws {
+            let (_, _, width, height) = draw.scissor.unwrap_or((0, 0, dest_size.0, dest_size.1));
+            written += u64::from(width) * u64::from(height);
+            let values = draw.uniforms(self);
+            let uniform = recorder.upload_uniform(
                 pass_id,
                 blur_uniform_spec(pass_id),
                 device,
                 &self.blur_uniform_bind_group_layout,
-                bytemuck::bytes_of(&draw.uniforms),
-            )
-        }));
+                bytemuck::bytes_of(&values),
+            );
+            prepared.push(PreparedBlurDraw {
+                source: draw.source,
+                uniform,
+                pipeline: draw.pipeline(),
+                scissor: draw.scissor,
+            });
+        }
+        self.debug_blur_pixels
+            .set(self.debug_blur_pixels.get() + written);
+        self.encode_prepared_blur_pass(
+            recorder, device, label, dest_view, load_op, &sources, prepared,
+        );
+    }
+
+    #[expect(clippy::too_many_arguments)]
+    fn encode_prepared_blur_pass<C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &mut C,
+        device: &wgpu::Device,
+        label: &'static str,
+        dest_view: &wgpu::TextureView,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        sources: &BlurSourceSet<'_>,
+        mut prepared: Vec<PreparedBlurDraw>,
+    ) {
         let mut pass = recorder.begin_color_pass(label, dest_view, load_op);
         let mut bound = None;
-        for (draw, uniform) in draws.iter().zip(uniforms.drain(..)) {
-            let pipeline = draw.pipeline();
-            if bound != Some(pipeline) {
-                pass.set_pipeline(self.blur_draw_pipeline(device, pipeline));
-                bound = Some(pipeline);
+        for draw in prepared.drain(..) {
+            if bound != Some(draw.pipeline) {
+                pass.set_pipeline(self.blur_draw_pipeline(device, draw.pipeline));
+                bound = Some(draw.pipeline);
             }
-            let source_bind_group = draw.source.get_or_create_bind_group(
+            let source = sources.resolve(draw.source);
+            let source_bind_group = source.get_or_create_bind_group(
                 device,
                 &self.effect_texture_bind_group_layout,
                 &self.effect_linear_sampler,
             );
             pass.set_bind_group(0, source_bind_group, &[]);
-            pass.set_bind_group(1, &uniform.bind_group, &[uniform.offset]);
+            pass.set_bind_group(1, &draw.uniform.bind_group, &[draw.uniform.offset]);
             if let Some((x, y, width, height)) = draw.scissor {
                 pass.set_scissor_rect(x, y, width, height);
             }
             pass.draw(0..4, 0..1);
         }
         drop(pass);
-        self.blur_uniform_uploads = uniforms;
+        self.blur_prepared_draws = prepared;
     }
 
     /// The uniforms of one blur pass sampling `sampled`, reading its
@@ -1709,8 +1786,8 @@ impl EffectRenderer {
         &self,
         horizontal: bool,
         sampled: (u32, u32),
-        source: (u32, u32, u32, u32),
-        dest: (u32, u32, u32, u32),
+        source: [f32; 4],
+        dest: [f32; 4],
         radius: (f32, f32),
         tile_mode: TileMode,
     ) -> BlurUniforms {
@@ -1735,8 +1812,8 @@ impl EffectRenderer {
                 tile_mode_uniform_value(tile_mode),
                 0.0,
             ],
-            source_region: region_uniform(source),
-            dest_region: region_uniform(dest),
+            source_region: source,
+            dest_region: dest,
             pairs: kernel
                 .pairs
                 .map(|pair| [pair.inner, pair.outer, pair.offset, pair.weight]),
@@ -1807,19 +1884,20 @@ impl EffectRenderer {
                 &small.view,
                 scratch_size,
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                &[BlurDraw {
-                    source,
-                    uniforms: self.blur_uniforms(
-                        true,
-                        (source.width, source.height),
-                        whole_source,
-                        whole_scratch,
-                        (0.0, 0.0),
+                BlurSourceSet::single(source),
+                std::iter::once(BlurDraw {
+                    source: BlurSource::Primary,
+                    uniforms: BlurUniformSpec {
+                        horizontal: true,
+                        sampled: (source.width, source.height),
+                        source: region_uniform(whole_source),
+                        dest: region_uniform(whole_scratch),
+                        radius: (0.0, 0.0),
                         tile_mode,
-                    ),
+                    },
                     filter: BlurFilter::Downsample(block),
                     scissor: downsample_scissor,
-                }],
+                }),
             );
         }
         let (horizontal_source, horizontal_region) = match &small {
@@ -1834,19 +1912,20 @@ impl EffectRenderer {
             &scratch.view,
             scratch_size,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &[BlurDraw {
-                source: horizontal_source,
-                uniforms: self.blur_uniforms(
-                    true,
-                    (horizontal_source.width, horizontal_source.height),
-                    horizontal_region,
-                    whole_scratch,
+            BlurSourceSet::single(horizontal_source),
+            std::iter::once(BlurDraw {
+                source: BlurSource::Primary,
+                uniforms: BlurUniformSpec {
+                    horizontal: true,
+                    sampled: (horizontal_source.width, horizontal_source.height),
+                    source: region_uniform(horizontal_region),
+                    dest: region_uniform(whole_scratch),
                     radius,
                     tile_mode,
-                ),
+                },
                 filter: BlurFilter::Kernel,
                 scissor: horizontal_scissor,
-            }],
+            }),
         );
         self.encode_blur_pass(
             recorder,
@@ -1856,19 +1935,20 @@ impl EffectRenderer {
             dest_view,
             dest_size,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &[BlurDraw {
-                source: scratch,
-                uniforms: self.blur_uniforms(
-                    false,
-                    (scratch.width, scratch.height),
-                    whole_scratch,
-                    dest_region,
+            BlurSourceSet::single(scratch),
+            std::iter::once(BlurDraw {
+                source: BlurSource::Primary,
+                uniforms: BlurUniformSpec {
+                    horizontal: false,
+                    sampled: (scratch.width, scratch.height),
+                    source: region_uniform(whole_scratch),
+                    dest: region_uniform(dest_region),
                     radius,
                     tile_mode,
-                ),
+                },
                 filter: BlurFilter::Kernel,
                 scissor: dest_scissor,
-            }],
+            }),
         );
         match small {
             Some((descriptor, small)) => {
@@ -1881,23 +1961,23 @@ impl EffectRenderer {
 
     /// One draw of the mean pipeline over `source_region` of `source`: the
     /// row means into a column, or the column into one texel, at `dest`.
-    fn mean_draw<'a>(
-        &self,
-        source: &'a OffscreenTarget,
+    fn mean_draw(
+        source: BlurSource,
+        sampled: (u32, u32),
         source_region: (u32, u32, u32, u32),
         dest: (u32, u32, u32, u32),
         horizontal: bool,
-    ) -> BlurDraw<'a> {
+    ) -> BlurDraw {
         BlurDraw {
             source,
-            uniforms: self.blur_uniforms(
+            uniforms: BlurUniformSpec {
                 horizontal,
-                (source.width, source.height),
-                source_region,
-                dest,
-                (0.0, 0.0),
-                TileMode::Clamp,
-            ),
+                sampled,
+                source: region_uniform(source_region),
+                dest: region_uniform(dest),
+                radius: (0.0, 0.0),
+                tile_mode: TileMode::Clamp,
+            },
             filter: BlurFilter::Mean,
             scissor: Some(dest),
         }
@@ -1915,15 +1995,8 @@ impl EffectRenderer {
         scratch: &OffscreenTarget,
         output: &OffscreenTarget,
         output_is_atlas: bool,
-        means: &[&SubstrateRegion],
-    ) -> bool {
-        if means.is_empty() {
-            return false;
-        }
-        let horizontal: Vec<BlurDraw<'_>> = means
-            .iter()
-            .map(|mean| self.mean_draw(atlas, mean.source, mean.scratch, true))
-            .collect();
+        substrates: &[SubstrateRegion],
+    ) {
         self.encode_blur_pass(
             recorder,
             device,
@@ -1932,12 +2005,20 @@ impl EffectRenderer {
             &scratch.view,
             (scratch.width, scratch.height),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &horizontal,
+            BlurSourceSet::single(atlas),
+            substrates
+                .iter()
+                .filter(|substrate| matches!(substrate.average, SubstrateAverage::Mean))
+                .map(|mean| {
+                    Self::mean_draw(
+                        BlurSource::Primary,
+                        (atlas.width, atlas.height),
+                        mean.source,
+                        mean.scratch,
+                        true,
+                    )
+                }),
         );
-        let vertical: Vec<BlurDraw<'_>> = means
-            .iter()
-            .map(|mean| self.mean_draw(scratch, mean.scratch, mean.dest, false))
-            .collect();
         self.encode_blur_pass(
             recorder,
             device,
@@ -1950,151 +2031,185 @@ impl EffectRenderer {
             } else {
                 wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
             },
-            &vertical,
+            BlurSourceSet::single(scratch),
+            substrates
+                .iter()
+                .filter(|substrate| matches!(substrate.average, SubstrateAverage::Mean))
+                .map(|mean| {
+                    Self::mean_draw(
+                        BlurSource::Primary,
+                        (scratch.width, scratch.height),
+                        mean.scratch,
+                        mean.dest,
+                        false,
+                    )
+                }),
         );
-        true
     }
 
     /// The downsample pass's draws: every blur whose scratch is coarser
     /// than its source, the block averages, and each riding mean's row
     /// reduction into its column.
     fn downsample_draws<'a>(
-        &self,
         atlas: &'a OffscreenTarget,
-        regions: &[BlurRegion],
-        blocks: &[u32],
-        substrates: &[SubstrateRegion],
-        riding_means: &[&SubstrateRegion],
-    ) -> Vec<BlurDraw<'a>> {
-        let downsample_draw = |source: (u32, u32, u32, u32),
-                               scratch: (u32, u32, u32, u32),
-                               block: u32,
-                               tile_mode: TileMode| BlurDraw {
-            source: atlas,
-            uniforms: self.blur_uniforms(
-                true,
-                (atlas.width, atlas.height),
-                source,
-                scratch,
-                (0.0, 0.0),
+        regions: &'a [BlurRegion],
+        substrates: &'a [SubstrateRegion],
+        riding_means: bool,
+    ) -> impl Iterator<Item = BlurDraw> + 'a {
+        let sampled = (atlas.width, atlas.height);
+        let downsample_draw = move |source: (u32, u32, u32, u32),
+                                    scratch: (u32, u32, u32, u32),
+                                    block: u32,
+                                    tile_mode: TileMode,
+                                    scissor| BlurDraw {
+            source: BlurSource::Primary,
+            uniforms: BlurUniformSpec {
+                horizontal: true,
+                sampled,
+                source: region_uniform(source),
+                dest: region_uniform(scratch),
+                radius: (0.0, 0.0),
                 tile_mode,
-            ),
+            },
             filter: BlurFilter::Downsample(block),
-            scissor: Some(scratch),
+            scissor,
         };
-        regions
-            .iter()
-            .zip(blocks)
-            .filter(|(_, block)| **block > 1)
-            .map(|(region, block)| {
-                let mut draw =
-                    downsample_draw(region.source, region.scratch, *block, region.tile_mode);
-                draw.scissor = Some(region.pass_scissor((1, 1)));
-                draw
+        let blur_draws = regions.iter().filter_map(move |region| {
+            let block = blur_block(region.source, region.scratch);
+            (block > 1).then(|| {
+                downsample_draw(
+                    region.source,
+                    region.scratch,
+                    block,
+                    region.tile_mode,
+                    Some(region.pass_scissor((1, 1))),
+                )
             })
-            .chain(substrates.iter().filter_map(|substrate| {
-                let SubstrateAverage::Block(block) = substrate.average else {
-                    return None;
-                };
-                let mut draw =
-                    downsample_draw(substrate.source, substrate.scratch, block, TileMode::Clamp);
-                draw.scissor = Some(substrate.pass_scissor());
-                Some(draw)
-            }))
-            .chain(
-                riding_means
-                    .iter()
-                    .map(|mean| self.mean_draw(atlas, mean.source, mean.scratch, true)),
-            )
-            .collect()
+        });
+        let block_draws = substrates.iter().filter_map(move |substrate| {
+            let SubstrateAverage::Block(block) = substrate.average else {
+                return None;
+            };
+            Some(downsample_draw(
+                substrate.source,
+                substrate.scratch,
+                block,
+                TileMode::Clamp,
+                Some(substrate.pass_scissor()),
+            ))
+        });
+        let mean_draws = substrates
+            .iter()
+            .filter(move |substrate| {
+                riding_means && matches!(substrate.average, SubstrateAverage::Mean)
+            })
+            .map(move |mean| {
+                Self::mean_draw(
+                    BlurSource::Primary,
+                    sampled,
+                    mean.source,
+                    mean.scratch,
+                    true,
+                )
+            });
+        blur_draws.chain(block_draws).chain(mean_draws)
     }
 
     /// The horizontal pass's draws: each blur's kernel over its downsample
     /// in `result` or its source in the atlas, and each riding mean's
     /// column reduction into one texel of the scratch.
     fn horizontal_draws<'a>(
-        &self,
         atlas: &'a OffscreenTarget,
         result: &'a OffscreenTarget,
-        regions: &[BlurRegion],
-        blocks: &[u32],
-        riding_means: &[&SubstrateRegion],
-    ) -> Vec<BlurDraw<'a>> {
-        regions
+        regions: &'a [BlurRegion],
+        substrates: &'a [SubstrateRegion],
+        riding_means: bool,
+    ) -> impl Iterator<Item = BlurDraw> + 'a {
+        let atlas_size = (atlas.width, atlas.height);
+        let result_size = (result.width, result.height);
+        let blur_draws = regions.iter().map(move |region| {
+            let block = blur_block(region.source, region.scratch);
+            let (source, sampled, source_region) = if block > 1 {
+                (BlurSource::Secondary, result_size, region.scratch)
+            } else {
+                (BlurSource::Primary, atlas_size, region.source)
+            };
+            BlurDraw {
+                source,
+                uniforms: BlurUniformSpec {
+                    horizontal: true,
+                    sampled,
+                    source: region_uniform(source_region),
+                    dest: region_uniform(region.scratch),
+                    radius: region.scratch_radius(),
+                    tile_mode: region.tile_mode,
+                },
+                filter: BlurFilter::Kernel,
+                scissor: Some(region.pass_scissor((0, 1))),
+            }
+        });
+        let mean_draws = substrates
             .iter()
-            .zip(blocks)
-            .map(|(region, block)| {
-                let (source, source_region) = if *block > 1 {
-                    (result, region.scratch)
-                } else {
-                    (atlas, region.source)
-                };
-                BlurDraw {
-                    source,
-                    uniforms: self.blur_uniforms(
-                        true,
-                        (source.width, source.height),
-                        source_region,
-                        region.scratch,
-                        region.scratch_radius(),
-                        region.tile_mode,
-                    ),
-                    filter: BlurFilter::Kernel,
-                    scissor: Some(region.pass_scissor((0, 1))),
-                }
+            .filter(move |substrate| {
+                riding_means && matches!(substrate.average, SubstrateAverage::Mean)
             })
-            .chain(riding_means.iter().map(|mean| {
-                self.mean_draw(
-                    result,
+            .map(move |mean| {
+                Self::mean_draw(
+                    BlurSource::Secondary,
+                    result_size,
                     mean.scratch,
                     (mean.scratch.0, mean.scratch.1, 1, 1),
                     false,
                 )
-            }))
-            .collect()
+            });
+        blur_draws.chain(mean_draws)
     }
 
     /// The vertical pass's draws: each blur's kernel over the scratch into
     /// its destination, and each riding mean's texel carried from the
     /// scratch to its destination.
     fn vertical_draws<'a>(
-        &self,
         scratch: &'a OffscreenTarget,
-        regions: &[BlurRegion],
-        riding_means: &[&SubstrateRegion],
-    ) -> Vec<BlurDraw<'a>> {
-        regions
+        regions: &'a [BlurRegion],
+        substrates: &'a [SubstrateRegion],
+        riding_means: bool,
+    ) -> impl Iterator<Item = BlurDraw> + 'a {
+        let blur_draws = regions.iter().map(move |region| BlurDraw {
+            source: BlurSource::Primary,
+            uniforms: BlurUniformSpec {
+                horizontal: false,
+                sampled: (scratch.width, scratch.height),
+                source: region_uniform(region.scratch),
+                dest: region_uniform(region.dest),
+                radius: region.scratch_radius(),
+                tile_mode: region.tile_mode,
+            },
+            filter: BlurFilter::Kernel,
+            scissor: Some({
+                let (x, y, width, height) = region.pass_scissor((0, 0));
+                (
+                    region.dest.0 + (x - region.scratch.0),
+                    region.dest.1 + (y - region.scratch.1),
+                    width,
+                    height,
+                )
+            }),
+        });
+        let mean_draws = substrates
             .iter()
-            .map(|region| BlurDraw {
-                source: scratch,
-                uniforms: self.blur_uniforms(
-                    false,
-                    (scratch.width, scratch.height),
-                    region.scratch,
-                    region.dest,
-                    region.scratch_radius(),
-                    region.tile_mode,
-                ),
-                filter: BlurFilter::Kernel,
-                scissor: Some({
-                    let (x, y, width, height) = region.pass_scissor((0, 0));
-                    (
-                        region.dest.0 + (x - region.scratch.0),
-                        region.dest.1 + (y - region.scratch.1),
-                        width,
-                        height,
-                    )
-                }),
+            .filter(move |substrate| {
+                riding_means && matches!(substrate.average, SubstrateAverage::Mean)
             })
-            .chain(riding_means.iter().map(|mean| {
-                self.mean_draw(
-                    scratch,
+            .map(move |mean| {
+                Self::mean_draw(
+                    BlurSource::Primary,
+                    (scratch.width, scratch.height),
                     (mean.scratch.0, mean.scratch.1, 1, 1),
                     mean.dest,
                     false,
                 )
-            }))
-            .collect()
+            });
+        blur_draws.chain(mean_draws)
     }
 
     /// The side passes of a stage's atlas: every blur's downsample,
@@ -2120,28 +2235,30 @@ impl EffectRenderer {
             blur_output,
         } = work;
         let output = blur_output.unwrap_or(result);
-        let means: Vec<&SubstrateRegion> = substrates
+        let has_mean_substrates = substrates
             .iter()
-            .filter(|substrate| matches!(substrate.average, SubstrateAverage::Mean))
-            .collect();
-        let folded = !regions.is_empty() && !means.is_empty();
-        let riding_means: &[&SubstrateRegion] = if folded { &means } else { &[] };
-        let has_means = !folded
-            && self.encode_mean_substrates(
+            .any(|substrate| matches!(substrate.average, SubstrateAverage::Mean));
+        let folded = !regions.is_empty() && has_mean_substrates;
+        let has_means = !folded && has_mean_substrates;
+        if has_means {
+            self.encode_mean_substrates(
                 recorder,
                 device,
                 atlas,
                 scratch,
                 output,
                 blur_output.is_some(),
-                &means,
+                substrates,
             );
-        let blocks: Vec<u32> = regions
+        }
+        let has_downsample = regions
             .iter()
-            .map(|region| blur_block(region.source, region.scratch))
-            .collect();
-        let downsample = self.downsample_draws(atlas, regions, &blocks, substrates, riding_means);
-        if !downsample.is_empty() {
+            .any(|region| blur_block(region.source, region.scratch) > 1)
+            || substrates
+                .iter()
+                .any(|substrate| matches!(substrate.average, SubstrateAverage::Block(_)))
+            || folded;
+        if has_downsample {
             self.encode_blur_pass(
                 recorder,
                 device,
@@ -2154,13 +2271,13 @@ impl EffectRenderer {
                 } else {
                     wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                 },
-                &downsample,
+                BlurSourceSet::single(atlas),
+                Self::downsample_draws(atlas, regions, substrates, folded),
             );
         }
         if regions.is_empty() {
             return;
         }
-        let horizontal = self.horizontal_draws(atlas, result, regions, &blocks, riding_means);
         self.encode_blur_pass(
             recorder,
             device,
@@ -2169,9 +2286,12 @@ impl EffectRenderer {
             &scratch.view,
             (scratch.width, scratch.height),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &horizontal,
+            BlurSourceSet {
+                primary: atlas,
+                secondary: result,
+            },
+            Self::horizontal_draws(atlas, result, regions, substrates, folded),
         );
-        let vertical = self.vertical_draws(scratch, regions, riding_means);
         self.encode_blur_pass(
             recorder,
             device,
@@ -2184,7 +2304,8 @@ impl EffectRenderer {
             } else {
                 wgpu::LoadOp::Load
             },
-            &vertical,
+            BlurSourceSet::single(scratch),
+            Self::vertical_draws(scratch, regions, substrates, folded),
         );
         self.record_blur_pass();
     }
