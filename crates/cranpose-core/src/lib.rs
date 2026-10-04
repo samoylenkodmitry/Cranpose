@@ -1697,6 +1697,14 @@ pub trait Node: Any {
     /// Finds a child in the order returned by [`Node::collect_owned_children_into`].
     /// Nodes with slice-backed child storage should override this to avoid
     /// materializing the whole list for a single lookup.
+    ///
+    /// ```
+    /// use cranpose_core::{Node, NodeId};
+    ///
+    /// fn child_is_first(parent: &dyn Node, child: NodeId) -> bool {
+    ///     parent.owned_child_index(child) == Some(0)
+    /// }
+    /// ```
     fn owned_child_index(&self, child: NodeId) -> Option<usize> {
         let mut children = SmallVec::<[NodeId; 8]>::new();
         self.collect_owned_children_into(&mut children);

@@ -1003,6 +1003,14 @@ impl WgpuRenderer {
     /// Return a producer-built packet without presenting it. This exercises
     /// the same bounded scene-storage recycler used by normal present returns
     /// in offline producer benchmarks.
+    ///
+    /// ```
+    /// use cranpose_render_wgpu::{HeldFramePacket, WgpuRenderer};
+    ///
+    /// fn return_without_presenting(renderer: &mut WgpuRenderer, packet: HeldFramePacket) {
+    ///     renderer.return_held_packet_for_tests(packet);
+    /// }
+    /// ```
     #[doc(hidden)]
     pub fn return_held_packet_for_tests(&mut self, packet: HeldFramePacket) {
         let packet = packet.0;
