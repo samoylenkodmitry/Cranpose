@@ -1340,6 +1340,7 @@ dependencies = [
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-macros",
+ "cranpose-render-common",
  "cranpose-services",
  "cranpose-testing",
  "cranpose-ui",

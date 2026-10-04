@@ -521,6 +521,11 @@ fn TabCells(
                         },
                         paragraph_style: cranpose_ui::text::ParagraphStyle {
                             line_height: cranpose_ui::text::TextUnit::Sp(12.0),
+                            line_height_style: Some(cranpose_ui::text::LineHeightStyle {
+                                alignment: cranpose_ui::text::LineHeightAlignment::Center,
+                                trim: cranpose_ui::text::LineHeightTrim::None,
+                                mode: cranpose_ui::text::LineHeightMode::Fixed,
+                            }),
                             ..typography.caption1.paragraph_style.clone()
                         },
                     };
