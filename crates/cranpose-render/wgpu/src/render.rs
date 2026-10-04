@@ -3158,8 +3158,7 @@ impl GpuRenderer {
 
         let effects_started = Instant::now();
         let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
-        #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
-        let mut effect_renderer = EffectRenderer::new(
+        let effect_renderer = EffectRenderer::new(
             &device,
             pipeline_compiler.clone(),
             pipeline_cache.clone(),
@@ -3208,14 +3207,6 @@ impl GpuRenderer {
                 .filter(|&bits| bits != crate::arc_trig_fill::FIRST_SCREEN_KEY)
                 .filter_map(ShapePipelineKey::from_bits),
             recorder.clone(),
-        );
-        #[cfg(not(target_arch = "wasm32"))]
-        effect_renderer.warm_first_screen_shaders(
-            records
-                .shaders
-                .iter()
-                .filter(|shader| shader.first_screen)
-                .map(|shader| &shader.entry),
         );
         let image_layouts = [
             Some(&uniform_bind_group_layout),
@@ -3340,7 +3331,10 @@ impl GpuRenderer {
             frame_count: 0,
             shader_warm_ups_queued: 0,
         };
-        renderer.warm_requested_shaders();
+        // The first frame waits for its shapes and fixed pipelines, but draws
+        // placeholders for runtime shaders that have not compiled: those
+        // queue behind, since a Mali driver compiles largely one pipeline at
+        // a time.
         #[cfg(not(target_arch = "wasm32"))]
         renderer.warm_fixed_pipelines(&|label| {
             records
@@ -3348,6 +3342,15 @@ impl GpuRenderer {
                 .iter()
                 .any(|fixed| fixed.first_screen && fixed.entry == label)
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        renderer.effect_renderer.warm_first_screen_shaders(
+            records
+                .shaders
+                .iter()
+                .filter(|shader| shader.first_screen)
+                .map(|shader| &shader.entry),
+        );
+        renderer.warm_requested_shaders();
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
             adapter_backend,
@@ -4405,6 +4408,17 @@ impl GpuRenderer {
         });
         if let Some(entry) = key.and_then(|key| self.shadow_surface_cache.get(&key)) {
             return Some((Rc::clone(&entry.target), true, content));
+        }
+        // A shadow whose blur compiles is left out until the blur lands.
+        if !self.effect_renderer.blur_draws_now(
+            &self.device,
+            TileMode::Decal,
+            (source_device.width, source_device.height),
+            pixel_radius,
+            pixel_radius,
+        ) {
+            self.note_placeholder();
+            return None;
         }
         if !shape_only {
             self.frame_stats.record_shadow_text_blur_fallback();

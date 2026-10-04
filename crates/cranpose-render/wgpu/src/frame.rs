@@ -14,7 +14,7 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, MAX_SUBSTRATES, Point, Rect, RenderEffect, RenderHash, RuntimeShader,
-    SubstrateSpec, TileMode,
+    ShaderPlaceholder, SubstrateSpec, TileMode,
 };
 use smallvec::SmallVec;
 
@@ -728,12 +728,12 @@ fn blur_spec(effect: &RenderEffect) -> Option<BlurSpec> {
     }
 }
 
-/// The colour an effect's shape is filled with while its pipelines compile:
-/// the placeholder of the shader that draws last.
-fn placeholder_color(effect: &RenderEffect) -> Option<Color> {
+/// What an effect draws while its pipelines compile: the placeholder of the
+/// shader that draws last.
+fn placeholder(effect: &RenderEffect) -> Option<ShaderPlaceholder> {
     match effect {
         RenderEffect::Shader { shader } => shader.placeholder(),
-        RenderEffect::Chain { second, .. } => placeholder_color(second),
+        RenderEffect::Chain { second, .. } => placeholder(second),
         RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => None,
     }
 }
@@ -2615,12 +2615,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         )
     }
 
-    /// The backdrop's shape filled with its effect's placeholder colour while
-    /// the effect's pipelines compile; nothing for an effect without one.
+    /// The backdrop's placeholder while its effect's pipelines compile;
+    /// nothing for an effect without one.
     fn backdrop_placeholder(&mut self, item: &PendingBackdrop<'_>) -> Option<ResolvedComposite> {
-        let color = placeholder_color(item.effect)?;
+        let placeholder = placeholder(item.effect)?;
         Some(self.placeholder_fill(
-            color,
+            placeholder,
             item.z,
             item.layer_rect,
             item.support.unwrap_or(item.visible),
@@ -2629,17 +2629,30 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
-    /// `dest` filled with `color`, in place of an effect whose pipelines
-    /// compile.
+    /// `placeholder` drawn over a layer at `dest`, in place of an effect
+    /// whose pipelines compile: its shape, or the layer's `rounded_mask`.
     fn placeholder_fill(
         &mut self,
-        Color(r, g, b, a): Color,
+        placeholder: ShaderPlaceholder,
         z: usize,
         dest: DeviceRect,
         visible: DeviceRect,
         alpha: f32,
         rounded_mask: Option<RoundedCompositeMask>,
     ) -> ResolvedComposite {
+        let rounded_mask = match placeholder.shape {
+            Some(shape) => Some(RoundedCompositeMask {
+                rect: [
+                    dest.x + shape.bounds.x * dest.width,
+                    dest.y + shape.bounds.y * dest.height,
+                    shape.bounds.width * dest.width,
+                    shape.bounds.height * dest.height,
+                ],
+                radii: [shape.corner_radius * dest.width; 4],
+            }),
+            None => rounded_mask,
+        };
+        let Color(r, g, b, a) = placeholder.color;
         let source = self.acquire_transient("Placeholder", 1, 1);
         self.renderer.clear_target(
             self.recorder,

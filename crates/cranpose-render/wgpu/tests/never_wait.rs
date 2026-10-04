@@ -9,7 +9,8 @@ use cranpose_render_common::{
 };
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui_graphics::{
-    Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RuntimeShader,
+    Color, GraphicsLayer, PlaceholderShape, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect,
+    RuntimeShader, ShaderPlaceholder,
 };
 
 use crate::{shared_test_support, support};
@@ -21,11 +22,14 @@ const PANE: Rect = Rect {
     width: 16.0,
     height: 16.0,
 };
-const RED: Color = Color(1.0, 0.0, 0.0, 1.0);
+const RED: ShaderPlaceholder = ShaderPlaceholder {
+    color: Color(1.0, 0.0, 0.0, 1.0),
+    shape: None,
+};
 
 /// A shader no other test draws, painting the pane blue, filled with
 /// `placeholder` while it compiles.
-fn shader(tag: &str, placeholder: Option<Color>) -> RuntimeShader {
+fn shader(tag: &str, placeholder: Option<ShaderPlaceholder>) -> RuntimeShader {
     let mut shader = RuntimeShader::new(&format!(
         "{RUNTIME_SHADER_PRELUDE_WGSL}
          // {tag} {}
@@ -79,6 +83,11 @@ fn backdrop_page(shader: RuntimeShader) -> RenderGraph {
 
 /// A green square drawn as the pane's content, through `effect`.
 fn effect_page(effect: Option<RenderEffect>) -> RenderGraph {
+    effect_page_with(GraphicsLayer::default(), effect)
+}
+
+/// [`effect_page`] on a pane `layer` describes.
+fn effect_page_with(layer: GraphicsLayer, effect: Option<RenderEffect>) -> RenderGraph {
     let square = support::solid_rect(
         Rect {
             x: 0.0,
@@ -91,7 +100,7 @@ fn effect_page(effect: Option<RenderEffect>) -> RenderGraph {
     page(
         GraphicsLayer {
             render_effect: effect,
-            ..GraphicsLayer::default()
+            ..layer
         },
         vec![square],
     )
@@ -218,5 +227,72 @@ fn a_layer_drawn_only_by_its_shader_shows_the_placeholder_until_its_pipeline_lan
     );
     let (mut renderer, first) = first_frame(&graph);
     assert_eq!(pane_colors(&first), [[255, 0, 0, 255]]);
+    assert_lands(&mut renderer, graph);
+}
+
+#[test]
+fn a_placeholder_with_a_shape_fills_only_that_rounded_rectangle() {
+    let half = ShaderPlaceholder {
+        shape: Some(PlaceholderShape {
+            bounds: Rect {
+                x: 0.25,
+                y: 0.25,
+                width: 0.5,
+                height: 0.5,
+            },
+            corner_radius: 0.25,
+        }),
+        ..RED
+    };
+    let graph = backdrop_page(shader("shaped placeholder", Some(half)));
+    let (mut renderer, first) = first_frame(&graph);
+    let pixel = |x: f32, y: f32| {
+        let start = (((PANE.y + y) as u32 * SIZE + (PANE.x + x) as u32) * 4) as usize;
+        [0, 1, 2, 3].map(|channel| first.pixels[start + channel])
+    };
+    assert_eq!(
+        pixel(8.0, 8.0),
+        [255, 0, 0, 255],
+        "the shape's middle is filled"
+    );
+    assert_eq!(
+        pixel(2.0, 2.0),
+        [255, 255, 255, 255],
+        "outside the shape is left to what is beneath"
+    );
+    assert_eq!(
+        pixel(4.0, 4.0),
+        [255, 255, 255, 255],
+        "the shape's corner is rounded"
+    );
+    assert_lands(&mut renderer, graph);
+}
+
+#[test]
+fn a_shadow_is_left_out_until_its_blur_lands() {
+    let shadowed = |elevation: f32| {
+        effect_page_with(
+            GraphicsLayer {
+                shadow_elevation: elevation,
+                ..GraphicsLayer::default()
+            },
+            None,
+        )
+    };
+    let graph = shadowed(6.0);
+    let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
+    let first = support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
+    let stats = renderer.last_frame_stats().expect("frame statistics");
+    assert!(
+        stats.placeholder_draws > 0,
+        "the shadow must wait for its blur"
+    );
+    assert!(renderer.needs_frame_warmup());
+    support::assert_same_bytes(
+        "the page without its shadow",
+        SIZE,
+        &first.pixels,
+        &settled(shadowed(0.0)).pixels,
+    );
     assert_lands(&mut renderer, graph);
 }

@@ -1280,18 +1280,7 @@ impl EffectRenderer {
                 radius_x,
                 radius_y,
                 edge_treatment,
-            } => {
-                if *radius_x <= 0.0 && *radius_y <= 0.0 {
-                    return true;
-                }
-                let tile_mode = BLUR_TILE_MODES
-                    .iter()
-                    .position(|mode| mode == edge_treatment)
-                    .unwrap_or(0);
-                let (width, height) = source_size;
-                let scratch = blur_scratch_size(*radius_x, *radius_y, width, height);
-                self.blur_pipelines_ready(device, tile_mode, source_size, scratch)
-            }
+            } => self.blur_draws_now(device, *edge_treatment, source_size, *radius_x, *radius_y),
             RenderEffect::Offset { .. } => {
                 self.offset_pipeline
                     .ready_or_queue(&self.compiler, self.adapter_backend, || {
@@ -1305,6 +1294,28 @@ impl EffectRenderer {
                 first & second
             }
         }
+    }
+
+    /// Whether a blur by `radius_x` and `radius_y` of a `source_size` source
+    /// draws now; what it misses is queued.
+    pub(crate) fn blur_draws_now(
+        &self,
+        device: &wgpu::Device,
+        edge_treatment: TileMode,
+        source_size: (u32, u32),
+        radius_x: f32,
+        radius_y: f32,
+    ) -> bool {
+        if radius_x <= 0.0 && radius_y <= 0.0 {
+            return true;
+        }
+        let tile_mode = BLUR_TILE_MODES
+            .iter()
+            .position(|mode| *mode == edge_treatment)
+            .unwrap_or(0);
+        let (width, height) = source_size;
+        let scratch = blur_scratch_size(radius_x, radius_y, width, height);
+        self.blur_pipelines_ready(device, tile_mode, source_size, scratch)
     }
 
     /// Whether the substrate `spec` of a `source_size` source draws now.

@@ -132,7 +132,27 @@ pub struct RuntimeShader {
     position_independent: bool,
     preserves_transparency: bool,
     domains: Option<Box<ShaderDomains>>,
-    placeholder: Option<Color>,
+    placeholder: Option<ShaderPlaceholder>,
+}
+
+/// What a renderer draws in place of a shader's effect while the shader's
+/// pipelines compile, so no frame waits for them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShaderPlaceholder {
+    /// The premultiplied colour of the fill.
+    pub color: Color,
+    /// The rounded rectangle the fill covers; `None` fills the layer's own
+    /// shape.
+    pub shape: Option<PlaceholderShape>,
+}
+
+/// A rounded rectangle relative to a layer's bounds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaceholderShape {
+    /// The rectangle, in fractions of the layer's width and height.
+    pub bounds: Rect,
+    /// The corner radius, as a fraction of the layer's width.
+    pub corner_radius: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -755,19 +775,17 @@ impl RuntimeShader {
         self.preserves_transparency
     }
 
-    /// Declares the premultiplied colour a renderer fills the effect's
-    /// shape with while the shader's pipelines compile, so no frame waits
-    /// for them: a backdrop's shape, or the layer's when the shader is all
-    /// the layer draws. Without one, such an effect draws nothing until they
-    /// are ready; an effect over a layer's content draws the content without
-    /// the effect.
-    pub fn set_placeholder(&mut self, color: Option<Color>) {
-        self.placeholder = color;
+    /// Declares what a renderer draws in place of a backdrop drawn by this
+    /// shader, or of a layer the shader is all of, while the shader's
+    /// pipelines compile. Without one, such an effect draws nothing until
+    /// they are ready; an effect over a layer's content draws the content
+    /// without the effect.
+    pub fn set_placeholder(&mut self, placeholder: Option<ShaderPlaceholder>) {
+        self.placeholder = placeholder;
     }
 
-    /// The colour the effect's shape is filled with while its pipelines
-    /// compile.
-    pub fn placeholder(&self) -> Option<Color> {
+    /// What the effect draws while its pipelines compile.
+    pub fn placeholder(&self) -> Option<ShaderPlaceholder> {
         self.placeholder
     }
 

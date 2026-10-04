@@ -12,7 +12,8 @@ use std::{
 };
 
 use crate::{
-    Color, RenderEffect, RuntimeShader, SubstrateSpec, render_effect::ShaderSpecializationCache,
+    Color, PlaceholderShape, Rect, RenderEffect, RuntimeShader, ShaderPlaceholder, SubstrateSpec,
+    render_effect::ShaderSpecializationCache,
 };
 
 /// One pipeline-overridable flag of `liquid_glass.wgsl` and the uniform
@@ -557,6 +558,36 @@ pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
 /// frosted glass while the glass's pipelines compile.
 const PLACEHOLDER_FROST: f32 = 0.18;
 
+/// A glass's tint over its rounded shape, which its uniforms place in the
+/// effect's area: its area's size, its centre, its size and its corner
+/// radius.
+fn glass_placeholder(uniforms: &[f32]) -> ShaderPlaceholder {
+    let [r, g, b, a] = [14, 15, 16, 17].map(|index| slot(uniforms, index));
+    let alpha = a.clamp(0.0, 1.0).max(PLACEHOLDER_FROST);
+    let [
+        area_width,
+        area_height,
+        center_x,
+        center_y,
+        width,
+        height,
+        radius,
+    ] = [0, 1, 2, 3, 4, 5, 6].map(|index| slot(uniforms, index));
+    let shape = (area_width > 0.0 && area_height > 0.0).then(|| PlaceholderShape {
+        bounds: Rect {
+            x: (center_x - width * 0.5) / area_width,
+            y: (center_y - height * 0.5) / area_height,
+            width: width / area_width,
+            height: height / area_height,
+        },
+        corner_radius: radius.clamp(0.0, 0.5 * width.min(height)) / area_width,
+    });
+    ShaderPlaceholder {
+        color: Color(r * alpha, g * alpha, b * alpha, alpha),
+        shape,
+    }
+}
+
 fn glass_shader_effect(mut shader: RuntimeShader) -> RenderEffect {
     shader.set_position_independent(true);
     specialize_liquid_glass(&mut shader);
@@ -568,9 +599,8 @@ fn glass_shader_effect(mut shader: RuntimeShader) -> RenderEffect {
     ) {
         shader.set_draw_split(None);
     } else {
-        let [r, g, b, a] = [14, 15, 16, 17].map(|index| slot(shader.uniforms(), index));
-        let alpha = a.clamp(0.0, 1.0).max(PLACEHOLDER_FROST);
-        shader.set_placeholder(Some(Color(r * alpha, g * alpha, b * alpha, alpha)));
+        let placeholder = glass_placeholder(shader.uniforms());
+        shader.set_placeholder(Some(placeholder));
     }
     shader.set_batched_source(true);
     RenderEffect::runtime_shader(shader)
