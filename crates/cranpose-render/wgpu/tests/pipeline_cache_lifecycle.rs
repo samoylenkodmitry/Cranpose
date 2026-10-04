@@ -407,31 +407,37 @@ fn glass_of(spec: &LiquidGlassSpec) -> RenderEffect {
     )
 }
 
-/// Pipelines `renderer` built on the frame thread while drawing `page`.
-fn frame_builds_of(renderer: &mut support::LockedRenderer, page: RenderGraph) -> u64 {
+/// What `renderer` waited for while drawing `page`.
+fn frame_waits_of(renderer: &mut support::LockedRenderer, page: RenderGraph) -> u64 {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
-    let before = pipelines_created();
-    support::capture_graph(renderer, page, FRAME_WIDTH, FRAME_HEIGHT);
-    pipelines_created() - before
+    support::capture_waits(renderer, page, FRAME_WIDTH, FRAME_HEIGHT).1
+}
+
+/// Draws `page` until it draws without a placeholder, so the launch
+/// records the pipelines it draws with.
+fn draw_settled(renderer: &mut support::LockedRenderer, page: RenderGraph) {
+    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
+    support::capture_graph_settled(renderer, page, FRAME_WIDTH, FRAME_HEIGHT);
 }
 
 /// After an update the compiled pipelines are gone, but the glass the last
 /// launch drew its first screen with is built before the first frame from
-/// the framework's own shader source, so that frame compiles nothing.
+/// the framework's own shader source, so that frame waits for nothing.
 #[test]
 fn an_updated_build_draws_its_first_glass_with_pipelines_built_before_it() {
     relaunch_after_drawing(
         |previous| {
             assert!(
-                frame_builds_of(previous, glass_page()) > 0,
-                "a fresh first screen builds its glass inside its frame"
+                frame_waits_of(previous, glass_page()) > 0,
+                "a fresh first screen waits for its glass"
             );
+            draw_settled(previous, glass_page());
         },
         |bytes| bytes[0] ^= 0xff,
         |updated| {
             wait_for_warm_ups();
             assert_eq!(
-                frame_builds_of(updated, glass_page()),
+                frame_waits_of(updated, glass_page()),
                 0,
                 "the first glass after an update must find its pipelines built"
             );
@@ -445,12 +451,17 @@ fn frosted_page() -> RenderGraph {
     panes_page([RenderEffect::blur(8.0)])
 }
 
-/// Pipelines `renderer` built on the frame thread while drawing the frosted
-/// page.
-fn frosted_frame_builds(renderer: &mut support::LockedRenderer) -> u64 {
-    let before = pipelines_created();
-    capture_frosted_page(renderer);
-    pipelines_created() - before
+/// What `renderer` waited for while drawing the frosted page.
+fn frosted_frame_waits(renderer: &mut support::LockedRenderer) -> u64 {
+    let waits = frame_waits_of(renderer, frosted_page());
+    let stats = renderer
+        .last_frame_stats()
+        .expect("frosted frame statistics");
+    assert!(
+        stats.blur_passes > 0 || stats.placeholder_draws > 0,
+        "the pane must blur, or wait for its blur"
+    );
+    waits
 }
 
 fn capture_frosted_page(renderer: &mut support::LockedRenderer) -> CapturedFrame {
@@ -471,15 +482,16 @@ fn an_updated_build_draws_its_first_frosted_pane_with_pipelines_built_before_it(
     relaunch_after_drawing(
         |previous| {
             assert!(
-                frosted_frame_builds(previous) > 0,
-                "a fresh first screen builds its blur inside its frame"
+                frosted_frame_waits(previous) > 0,
+                "a fresh first screen waits for its blur"
             );
+            draw_settled(previous, frosted_page());
         },
         |bytes| bytes[0] ^= 0xff,
         |updated| {
             wait_for_warm_ups();
             assert_eq!(
-                frosted_frame_builds(updated),
+                frosted_frame_waits(updated),
                 0,
                 "the first frosted pane after an update must find its pipelines built"
             );
@@ -497,7 +509,7 @@ fn relaunch_after_a_later_screen(
         |previous| {
             first_frame_builds(previous);
             std::thread::sleep(Duration::from_millis(2100));
-            frosted_frame_builds(previous);
+            draw_settled(previous, frosted_page());
         },
         change,
         check,
@@ -515,7 +527,7 @@ fn an_updated_build_prepares_the_later_screens_of_its_last_launch_after_its_firs
             first_frame_builds(updated);
             wait_for_warm_ups();
             assert_eq!(
-                frosted_frame_builds(updated),
+                frosted_frame_waits(updated),
                 0,
                 "a later screen after an update must find its pipelines built"
             );
@@ -533,7 +545,7 @@ fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
             first_frame_builds(relaunch);
             wait_for_warm_ups();
             assert!(
-                frosted_frame_builds(relaunch) > 0,
+                frosted_frame_waits(relaunch) > 0,
                 "only an update prepares the pipelines of later screens"
             );
         },
@@ -557,14 +569,16 @@ fn an_updated_build_stands_a_new_glass_in_with_a_general_built_after_its_first_f
         |previous| {
             first_frame_builds(previous);
             std::thread::sleep(Duration::from_millis(2100));
-            // Two new materials in one frame: the second stands in.
-            support::capture_graph(
+            // A new material waits for its own pipelines; the general
+            // follows its frame, and the next new material stands in.
+            draw_settled(previous, panes_page([support::glass_page::glass_shader()]));
+            support::wait_for_background_compiler_idle();
+            let (_, stats) = support::capture_drawn(
                 previous,
-                panes_page([support::glass_page::glass_shader(), glass_of(&frosted)]),
+                &panes_page([glass_of(&frosted)]),
                 FRAME_WIDTH,
                 FRAME_HEIGHT,
             );
-            let stats = previous.last_frame_stats().expect("glass frame statistics");
             assert!(
                 stats.shader_pipeline_fallback_draws > 0,
                 "the last launch stands a glass in with the general pipeline"
@@ -577,7 +591,7 @@ fn an_updated_build_stands_a_new_glass_in_with_a_general_built_after_its_first_f
             use support::glass_page::{GLASS_HEIGHT, GLASS_WIDTH};
             let loupe =
                 liquid_loupe_effect((GLASS_WIDTH, GLASS_HEIGHT), &LiquidLoupeSpec::default());
-            let builds = frame_builds_of(updated, panes_page([loupe]));
+            let builds = frame_waits_of(updated, panes_page([loupe]));
             let stats = updated.last_frame_stats().expect("glass frame statistics");
             assert!(
                 stats.shader_pipeline_fallback_draws > 0,

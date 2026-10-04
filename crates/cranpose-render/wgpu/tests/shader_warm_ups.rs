@@ -1,5 +1,4 @@
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
-use cranpose_render_wgpu::pipelines_created;
 use cranpose_ui_graphics::{
     BlendMode, Color, GraphicsLayer, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect,
     RuntimeShader, ShaderTarget, ShaderWarmUp, request_shader_warm_ups,
@@ -97,26 +96,27 @@ fn prime(renderer: &mut support::LockedRenderer) {
     support::wait_for_background_compiler_idle();
 }
 
-/// Pipelines the frame drawing `graph` built on this thread, with the
-/// shader draw itself asserted so a count of zero means a ready pipeline
-/// and not a draw that never happened. Specialized shape pipelines, which
-/// the child rect inside a layer would ask for, compile inside the frame
-/// off Vulkan, so the count is only about the shader's pipeline once shape
-/// variants are off.
-fn frame_thread_compiles_for(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> u64 {
-    let before = pipelines_created();
-    let _ = support::capture_graph(renderer, graph, WIDTH, HEIGHT);
-    let stats = renderer.last_frame_stats().expect("frame statistics");
+/// What the frame drawing `graph` waited for, with the shader draw itself
+/// asserted so no waits means a ready pipeline and not a draw that never
+/// happened. Specialized shape pipelines, which the child rect inside a
+/// layer would ask for, compile inside the frame off Vulkan, so the count
+/// is only about the shader's pipeline once shape variants are off.
+fn frame_waits_for(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> u64 {
+    let (stats, waits) = support::capture_waits(renderer, graph, WIDTH, HEIGHT);
     assert!(
-        stats.shader_pixels > 0 || stats.effect_applies > 0,
-        "the shader must draw"
+        stats.shader_pixels > 0 || stats.effect_applies > 0 || stats.placeholder_draws > 0,
+        "the shader must draw, or wait for its pipeline"
     );
-    pipelines_created() - before
+    waits
+}
+
+fn background_renderer() -> support::LockedRenderer {
+    support::headless_renderer_compiling_in_background().expect("GPU required for shader warm-up")
 }
 
 #[test]
-fn requested_shaders_draw_without_a_frame_thread_compile() {
-    let mut renderer = support::headless_renderer().expect("GPU required for shader warm-up");
+fn requested_shaders_draw_without_waiting() {
+    let mut renderer = background_renderer();
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SHAPE_VARIANTS", Some("0"));
     let page = probe("page target");
     let layer = probe("layer target");
@@ -139,12 +139,12 @@ fn requested_shaders_draw_without_a_frame_thread_compile() {
     }]);
     prime(&mut renderer);
     assert_eq!(
-        frame_thread_compiles_for(&mut renderer, page_draw(page)),
+        frame_waits_for(&mut renderer, page_draw(page)),
         0,
         "a shader warmed for the page must find its composite pipeline ready"
     );
-    let layer_compiles = frame_thread_compiles_for(&mut renderer, layer_draw(layer));
-    let masked_compiles = frame_thread_compiles_for(&mut renderer, page_draw(masked));
+    let layer_compiles = frame_waits_for(&mut renderer, layer_draw(layer));
+    let masked_compiles = frame_waits_for(&mut renderer, page_draw(masked));
     cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SHAPE_VARIANTS", None);
     assert_eq!(
         layer_compiles, 0,
@@ -157,34 +157,40 @@ fn requested_shaders_draw_without_a_frame_thread_compile() {
 }
 
 #[test]
-fn an_unregistered_shader_still_compiles_inside_its_first_frame() {
-    let mut renderer = support::headless_renderer().expect("GPU required for shader warm-up");
+fn an_unregistered_shader_waits_on_its_first_frame() {
+    let mut renderer = background_renderer();
     prime(&mut renderer);
     assert!(
-        frame_thread_compiles_for(&mut renderer, page_draw(probe("cold page"))) >= 1,
-        "the counter must see an in-frame compile, or the warmed case proves nothing"
+        frame_waits_for(&mut renderer, page_draw(probe("cold page"))) >= 1,
+        "the counter must see a wait, or the warmed case proves nothing"
     );
 }
 
 #[test]
 fn a_requested_specialization_draws_without_a_general_stand_in() {
-    let mut renderer = support::headless_renderer().expect("GPU required for shader warm-up");
+    let mut renderer = background_renderer();
     prime(&mut renderer);
     let reference = probe("requested exact specialization");
     let mut shader = RuntimeShader::new(&format!(
         "{}\noverride UNUSED: bool = false;",
         reference.source()
     ));
-    let reference = support::capture_graph(&mut renderer, page_draw(reference), WIDTH, HEIGHT);
+    let reference =
+        support::capture_graph_settled(&mut renderer, page_draw(reference), WIDTH, HEIGHT);
     shader.set_override("UNUSED", 1.0);
     shader.set_specialization_exact(true);
     request_shader_warm_ups([ShaderWarmUp {
         shader: shader.clone(),
         target: ShaderTarget::Page,
     }]);
-    let pixels = support::capture_graph(&mut renderer, page_draw(shader), WIDTH, HEIGHT);
+    let pixels = support::settle(|| {
+        let pixels =
+            support::capture_graph(&mut renderer, page_draw(shader.clone()), WIDTH, HEIGHT);
+        let stats = renderer.last_frame_stats().expect("frame statistics");
+        assert_eq!(stats.shader_pipeline_fallback_draws, 0);
+        (stats, pixels)
+    });
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert!(stats.shader_pixels > 0, "the shader must draw");
-    assert_eq!(stats.shader_pipeline_fallback_draws, 0);
     assert_eq!(pixels.pixels, reference.pixels);
 }

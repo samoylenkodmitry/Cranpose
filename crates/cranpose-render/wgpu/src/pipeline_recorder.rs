@@ -35,7 +35,8 @@ struct RecorderState {
 }
 
 /// When the first screen started: with the first frame, moved later by every
-/// pipeline a draw then waited to build, so a slow compile does not end it.
+/// pipeline a draw then waited to build and by every frame that drew a
+/// placeholder, so a slow compile does not end it.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct FirstScreen {
@@ -80,6 +81,18 @@ impl PipelineRecorder {
     pub(crate) fn begin_frame(&self) {
         #[cfg(not(target_arch = "wasm32"))]
         self.first_screen().started.get_or_insert_with(Instant::now);
+    }
+
+    /// Keeps the first screen open past a frame that drew a placeholder: the
+    /// pipelines it waits for draw the first screen once they land.
+    pub(crate) fn hold_first_screen(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut first_screen = self.first_screen();
+            if !first_screen.over() {
+                first_screen.started = Some(Instant::now());
+            }
+        }
     }
 }
 

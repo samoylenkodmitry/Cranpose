@@ -1,5 +1,4 @@
 use cranpose_render_common::graph::{ProjectiveTransform, RenderGraph, RenderNode};
-use cranpose_render_wgpu::pipelines_created;
 use cranpose_ui_graphics::{Color, GraphicsLayer, Rect, RenderEffect};
 
 use crate::{shared_test_support, support};
@@ -56,26 +55,34 @@ fn blurred_page(radius: f32) -> RenderGraph {
     )
 }
 
-/// Pipelines the frame drawing a blur of `radius` built on this thread,
-/// with the blur asserted so a count of zero means ready pipelines.
-fn frame_thread_compiles_for(renderer: &mut support::LockedRenderer, radius: f32) -> u64 {
-    let before = pipelines_created();
-    let _ = support::capture_graph(renderer, blurred_page(radius), FRAME, FRAME);
-    let stats = renderer.last_frame_stats().expect("frame statistics");
-    assert!(stats.blur_passes > 0, "the backdrop must blur");
-    pipelines_created() - before
+/// What the frame drawing a blur of `radius` waited for, with the blur
+/// asserted so no waits means ready pipelines.
+fn frame_waits_for(renderer: &mut support::LockedRenderer, radius: f32) -> u64 {
+    let (stats, waits) = support::capture_waits(renderer, blurred_page(radius), FRAME, FRAME);
+    assert!(
+        stats.blur_passes > 0 || stats.placeholder_draws > 0,
+        "the backdrop must blur, or wait for its blur"
+    );
+    waits
 }
 
 #[test]
 fn a_blur_finds_its_other_downsample_block_warmed_by_the_first() {
-    let mut renderer = support::headless_renderer().expect("GPU required for blur warm-up");
+    let mut renderer = support::headless_renderer_compiling_in_background()
+        .expect("GPU required for blur warm-up");
     assert!(
-        frame_thread_compiles_for(&mut renderer, HALF_SCALE_RADIUS) >= 1,
-        "the first blur compiles its own pipelines inside its frame"
+        frame_waits_for(&mut renderer, HALF_SCALE_RADIUS) >= 1,
+        "the first blur waits for its own pipelines"
+    );
+    support::capture_drawn(
+        &mut renderer,
+        &blurred_page(HALF_SCALE_RADIUS),
+        FRAME,
+        FRAME,
     );
     support::wait_for_background_compiler_idle();
     assert_eq!(
-        frame_thread_compiles_for(&mut renderer, QUARTER_SCALE_RADIUS),
+        frame_waits_for(&mut renderer, QUARTER_SCALE_RADIUS),
         0,
         "a wider radius's downsample must be ready once its family was first drawn"
     );

@@ -3,7 +3,6 @@
 //! with, and later launches queue those on the warm-up lane before their
 //! frames ask for them.
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::cell::Cell;
 
 use crate::{
@@ -16,6 +15,8 @@ use crate::{
 /// shares.
 pub(crate) struct FixedPipeline {
     resource: LazyGpuResource<wgpu::RenderPipeline>,
+    /// Whether its build is queued, so it is queued once.
+    queued: Cell<bool>,
     #[cfg(not(target_arch = "wasm32"))]
     drawn: Cell<bool>,
 }
@@ -24,6 +25,7 @@ impl FixedPipeline {
     pub(crate) fn new(label: &'static str) -> Self {
         Self {
             resource: LazyGpuResource::new(label),
+            queued: Cell::new(false),
             #[cfg(not(target_arch = "wasm32"))]
             drawn: Cell::new(false),
         }
@@ -48,7 +50,7 @@ impl FixedPipeline {
         self.resource.get()
     }
 
-    /// Queues the build on `lane` unless it is already built.
+    /// Queues the build on `lane` unless it is already built or queued.
     pub(crate) fn queue(
         &self,
         compiler: &PipelineCompiler,
@@ -56,9 +58,30 @@ impl FixedPipeline {
         backend: wgpu::Backend,
         create: impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static,
     ) {
-        if self.resource.get().is_none() {
+        if self.resource.get().is_none() && !self.queued.replace(true) {
             self.resource.queue(compiler, lane, backend, create);
         }
+    }
+
+    /// Whether the pipeline is built; when it is not, its build, which
+    /// `job` makes, is queued on the demand lane.
+    pub(crate) fn ready_or_queue<J>(
+        &self,
+        compiler: &PipelineCompiler,
+        backend: wgpu::Backend,
+        job: impl FnOnce() -> J,
+    ) -> bool
+    where
+        J: FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static,
+    {
+        if self.resource.get().is_some() {
+            return true;
+        }
+        if compiler.is_active() {
+            self.queue(compiler, CompileLane::Demanded, backend, job());
+            return false;
+        }
+        true
     }
 
     #[cfg(not(target_arch = "wasm32"))]

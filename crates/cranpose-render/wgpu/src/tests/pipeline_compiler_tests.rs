@@ -137,3 +137,57 @@ fn the_last_handle_waits_for_the_compile_in_flight() {
         "a dropped compiler must not leave a compile running, which a process exit can crash"
     );
 }
+
+/// Runs a job on the demanded lane and returns once its thread is done with
+/// it, landing included: the lane runs its jobs in order.
+fn build_one(compiler: &PipelineCompiler) {
+    let (done, finished) = mpsc::channel();
+    compiler.enqueue(CompileLane::Demanded, || {});
+    compiler.enqueue(CompileLane::Demanded, move || {
+        done.send(()).expect("test waits");
+    });
+    finished
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the lane runs its jobs");
+}
+
+#[test]
+fn a_pipeline_landing_after_a_placeholder_wakes_the_app_once() {
+    let compiler = PipelineCompiler::spawn();
+    let landing = compiler
+        .landing()
+        .expect("a spawned compiler reports landings");
+    let (woke, wakes) = mpsc::channel();
+    landing.wake_with(Box::new(move || {
+        let _ = woke.send(());
+    }));
+    build_one(&compiler);
+    assert!(
+        wakes.try_recv().is_err(),
+        "a landing nothing waits for wakes nothing"
+    );
+    landing.await_since(landing.built());
+    build_one(&compiler);
+    assert!(
+        wakes.try_recv().is_ok(),
+        "the awaited landing wakes the app"
+    );
+    assert!(wakes.try_recv().is_err(), "once");
+    assert!(landing.take_landed());
+    assert!(!landing.take_landed(), "reading the landing clears it");
+}
+
+#[test]
+fn a_pipeline_landing_before_its_placeholder_is_noted_still_counts() {
+    let compiler = PipelineCompiler::spawn();
+    let landing = compiler
+        .landing()
+        .expect("a spawned compiler reports landings");
+    let frame_start = landing.built();
+    build_one(&compiler);
+    landing.await_since(frame_start);
+    assert!(
+        landing.landed(),
+        "a pipeline built during the frame that drew the placeholder replaces it next frame"
+    );
+}

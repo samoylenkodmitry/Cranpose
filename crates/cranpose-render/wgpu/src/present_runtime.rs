@@ -121,6 +121,14 @@ impl PresentState {
         let device = Arc::clone(&gpu.device);
         let renderer_epoch = gpu.renderer_epoch;
         let gpu_renderer = GpuRenderer::new(gpu);
+        gpu_renderer.wake_on_landing(Box::new({
+            let status = Arc::clone(&status);
+            let waker = Arc::clone(&waker);
+            move || {
+                status.needs_frame_warmup.store(true, Ordering::Relaxed);
+                waker();
+            }
+        }));
         Self {
             gpu_renderer,
             device,

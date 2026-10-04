@@ -48,6 +48,7 @@ mod liquid_control_tone;
 mod liquid_modifier_order;
 mod nested_composite_order;
 mod nested_rotated_relayout;
+mod never_wait;
 mod opaque_interiors;
 mod opaque_prefix_cache;
 mod pass_timing_report;

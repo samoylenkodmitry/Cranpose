@@ -307,6 +307,24 @@ fn a_glass_folded_only_to_what_its_neighbours_share_keeps_its_bytes() {
     }
 }
 
+/// The first frame of the card that draws its glass, not a placeholder
+/// while the glass's blur pipelines compile. A material's own pipeline is
+/// asked for by its first draw, so this frame stands in.
+fn first_drawn_frame(shell: &mut AppShell<WgpuRenderer>) -> (CapturedFrame, RenderStatsSnapshot) {
+    let deadline = std::time::Instant::now() + SETTLE;
+    loop {
+        let (frame, stats) = capture_card_frame(shell).expect("capture");
+        if stats.placeholder_draws == 0 {
+            return (frame, stats);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the glass pipelines never landed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// Asks renderers to build the glass shader's general pipelines on their
 /// background compilers: a new material stands in with them while its own
 /// compile, where without them it waits for its own.
@@ -326,13 +344,13 @@ fn request_glass_general() {
 #[test]
 fn a_glass_draws_with_its_general_pipeline_until_the_specialization_lands() {
     request_glass_general();
-    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+    let Ok((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background() else {
         eprintln!("skipping glass pipeline readiness: no headless renderer");
         return;
     };
     let mut shell = card_shell(renderer, false);
     support::wait_for_background_compiler_idle();
-    let (first, first_stats) = capture_card_frame(&mut shell).expect("first capture");
+    let (first, first_stats) = first_drawn_frame(&mut shell);
     assert!(
         first_stats.shader_pipeline_fallback_draws > 0,
         "the first frame must not wait for the specializations: {first_stats:?}"
@@ -498,13 +516,13 @@ fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixe
 #[test]
 fn a_floating_button_keeps_its_picture_when_specialization_arrives() {
     request_glass_general();
-    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+    let Ok((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background() else {
         eprintln!("skipping floating glass parity: no headless renderer");
         return;
     };
     let mut shell = card_shell(renderer, true);
     support::wait_for_background_compiler_idle();
-    let (first, first_stats) = capture_card_frame(&mut shell).expect("first capture");
+    let (first, first_stats) = first_drawn_frame(&mut shell);
     assert!(first_stats.shader_pipeline_fallback_draws > 0);
     support::wait_for_background_compiler_idle();
     let (settled, settled_stats) = capture_card_frame(&mut shell).expect("settled capture");

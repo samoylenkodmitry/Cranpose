@@ -144,39 +144,104 @@ fn warm_pipeline_lookups_do_not_rebuild_constants() {
     assert_eq!(builds(&cache), (1, 6), "one module, one build per variant");
 }
 
+/// Whether each part of `shader` draws now; a part that does not asks for
+/// its pipeline.
+fn parts_ready(
+    cache: &mut ShaderPipelineCache,
+    shader: &RuntimeShader,
+    mode: RuntimeShaderPipelineMode,
+) -> [bool; 2] {
+    [ShaderDrawVariant::Interior, ShaderDrawVariant::Rim]
+        .map(|variant| cache.ready_to_draw(shader, shader.draw_specialization(0), mode, variant))
+}
+
+/// Starts frames until `ready` holds.
+fn frames_until(
+    cache: &mut ShaderPipelineCache,
+    what: &str,
+    mut ready: impl FnMut(&mut ShaderPipelineCache) -> bool,
+) {
+    let deadline = Instant::now() + SETTLE;
+    loop {
+        cache.begin_frame();
+        if ready(cache) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "{what} never landed");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 #[test]
-fn a_frame_waits_for_its_first_material_and_stands_the_next_in_with_the_general() {
+fn a_new_material_waits_for_its_own_parts_and_the_general_follows_its_frame() {
+    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
+    let mut cache = cache(&device, PipelineCompiler::spawn());
+    let shader = split_shader();
+    let mode = RuntimeShaderPipelineMode::Replace;
+    cache.begin_frame();
+    assert_eq!(
+        parts_ready(&mut cache, &shader, mode),
+        [false; 2],
+        "nothing is built for a new material"
+    );
+    let general = cache
+        .key(
+            &shader,
+            shader.draw_specialization(0),
+            mode,
+            ShaderDrawVariant::Whole,
+        )
+        .general();
+    assert!(
+        !cache.pipelines.contains_key(&general),
+        "the general must not compile beside the frame's own pipelines"
+    );
+    frames_until(&mut cache, "the general and the parts", |cache| {
+        cache.ready(general) && parts_ready(cache, &shader, mode) == [true; 2]
+    });
+    assert_eq!(
+        draw_parts(&mut cache, &shader, mode),
+        [ShaderPipelineFit::Specialized; 2],
+        "the material draws with its own parts"
+    );
+    assert_eq!(builds(&cache), (1, 3), "both parts, then the general");
+}
+
+#[test]
+fn another_material_stands_in_with_the_general_once_it_lands() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
     let compiler = PipelineCompiler::spawn();
     // The general queued behind the held warm-up threads cannot land
-    // during the frame.
+    // before the holds drop.
     let holds = hold_warm_ups(&compiler);
     let mut cache = cache(&device, compiler);
     let shader = split_shader();
     let mode = RuntimeShaderPipelineMode::Replace;
     cache.begin_frame();
-    assert_eq!(
-        draw_parts(&mut cache, &shader, mode),
-        [ShaderPipelineFit::Specialized; 2],
-        "without a built general, the frame's first material waits for its own parts"
-    );
+    assert_eq!(parts_ready(&mut cache, &shader, mode), [false; 2]);
+    let general_key = cache
+        .key(
+            &shader,
+            shader.draw_specialization(0),
+            mode,
+            ShaderDrawVariant::Whole,
+        )
+        .general();
+    cache.begin_frame();
+    drop(holds);
+    frames_until(&mut cache, "the general", |cache| cache.ready(general_key));
     let mut other = split_shader();
     other.set_override("RED", 1.0);
-    let (general, fit) = cache
-        .get_or_create(
-            &other,
-            other.draw_specialization(0),
-            mode,
-            ShaderDrawVariant::Interior,
-        )
-        .expect("valid shader");
-    assert_eq!(
-        fit,
-        ShaderPipelineFit::Fallback,
-        "another material of the frame stands in with the general"
+    let specialization = other.draw_specialization(0);
+    assert!(
+        cache.ready_to_draw(&other, specialization, mode, ShaderDrawVariant::Interior),
+        "another material draws at once with the general"
     );
+    let (general, fit) = cache
+        .get_or_create(&other, specialization, mode, ShaderDrawVariant::Interior)
+        .expect("valid shader");
+    assert_eq!(fit, ShaderPipelineFit::Fallback);
     let general = general.clone();
-    drop(holds);
     settle(&mut cache, &shader);
     cache.begin_frame();
     for variant in [ShaderDrawVariant::Interior, ShaderDrawVariant::Rim] {
@@ -205,42 +270,6 @@ fn a_frame_waits_for_its_first_material_and_stands_the_next_in_with_the_general(
         (1, 5),
         "the general, three variants, and the other material's interior"
     );
-}
-
-#[test]
-fn the_general_a_frame_went_without_builds_once_that_frame_is_over() {
-    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let mut cache = cache(&device, PipelineCompiler::spawn());
-    let shader = split_shader();
-    let mode = RuntimeShaderPipelineMode::Replace;
-    cache.begin_frame();
-    assert_eq!(
-        draw_parts(&mut cache, &shader, mode),
-        [ShaderPipelineFit::Specialized; 2],
-        "without a built general, the frame's first material waits for its own parts"
-    );
-    let general = cache
-        .key(
-            &shader,
-            shader.draw_specialization(0),
-            mode,
-            ShaderDrawVariant::Whole,
-        )
-        .general();
-    assert!(
-        !cache.pipelines.contains_key(&general),
-        "the general must not compile beside the frame's own pipelines"
-    );
-    cache.begin_frame();
-    let deadline = Instant::now() + SETTLE;
-    while !cache.ready(general) {
-        assert!(
-            Instant::now() < deadline,
-            "the next frame queues the general"
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(builds(&cache), (1, 3), "both parts, then the general");
 }
 
 /// A material of a shader declaring two flags, told apart by `green`.

@@ -553,14 +553,24 @@ pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
     }
 }
 
+/// The least opacity of a glass's placeholder: a clear tint still reads as
+/// frosted glass while the glass's pipelines compile.
+const PLACEHOLDER_FROST: f32 = 0.18;
+
 fn glass_shader_effect(mut shader: RuntimeShader) -> RenderEffect {
     shader.set_position_independent(true);
     specialize_liquid_glass(&mut shader);
+    // An edge lens's first stages feed the last, which draws the glass: it
+    // alone has a placeholder, or a split glass would be tinted twice.
     if matches!(
         slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM),
         1.0 | 2.0
     ) {
         shader.set_draw_split(None);
+    } else {
+        let [r, g, b, a] = [14, 15, 16, 17].map(|index| slot(shader.uniforms(), index));
+        let alpha = a.clamp(0.0, 1.0).max(PLACEHOLDER_FROST);
+        shader.set_placeholder(Some(Color(r * alpha, g * alpha, b * alpha, alpha)));
     }
     shader.set_batched_source(true);
     RenderEffect::runtime_shader(shader)

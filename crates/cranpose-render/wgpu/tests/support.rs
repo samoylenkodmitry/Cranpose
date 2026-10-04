@@ -137,18 +137,10 @@ impl LockedRenderer {
     /// A renderer beside the locked one that compiles on the background
     /// compiler, as an app's does.
     pub fn compiling_in_background_beside_locked() -> Result<LockedRenderer, String> {
-        let device = device::HeadlessDevice::request(
-            wgpu::Backends::all(),
-            wgpu::Limits::default(),
-            "Background Compiling Test Device",
-        )?;
-        let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-        device.attach(
-            &mut renderer,
-            wgpu::TextureFormat::Bgra8UnormSrgb,
-            device::Pipelines::Background,
-        );
-        Ok(with_app_context(renderer, None))
+        Ok(with_app_context(
+            create_background_compiling_renderer()?,
+            None,
+        ))
     }
 
     pub fn render_current_scene_to_texture(
@@ -207,6 +199,25 @@ pub fn headless_renderer() -> Result<LockedRenderer, String> {
     headless_renderer_with_limits(wgpu::Limits::default())
 }
 
+/// A renderer that compiles on the background compiler, as an app's does:
+/// its frames draw stand-ins and placeholders while pipelines compile. The
+/// other renderers compile every pipeline where first needed, so their
+/// frames draw what a settled app's do.
+pub fn headless_renderer_compiling_in_background() -> Result<LockedRenderer, String> {
+    let lock = lock_gpu_test();
+    Ok(with_app_context(
+        create_background_compiling_renderer()?,
+        Some(lock),
+    ))
+}
+
+/// [`headless_renderer_compiling_in_background`] without an app context.
+pub fn headless_renderer_parts_compiling_in_background()
+-> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
+    let lock = lock_gpu_test();
+    Ok((lock, create_background_compiling_renderer()?))
+}
+
 pub fn headless_renderer_with_limits(limits: wgpu::Limits) -> Result<LockedRenderer, String> {
     headless_renderer_configured(limits, wgpu::Backends::all())
 }
@@ -258,12 +269,14 @@ pub fn headless_renderer_parts_with_display_format(
     Ok((lock, renderer))
 }
 
+/// A renderer compiling on the background compiler, created once
+/// `configure` ran under the GPU test lock.
 pub fn headless_renderer_parts_configured<T>(
     configure: impl FnOnce() -> T,
 ) -> Result<(MutexGuard<'static, ()>, T, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     let configured = configure();
-    let renderer = create_headless_renderer()?;
+    let renderer = create_background_compiling_renderer()?;
     Ok((lock, configured, renderer))
 }
 
@@ -305,6 +318,21 @@ pub fn headless_renderer_beside_locked() -> Result<WgpuRenderer, String> {
     Ok(renderer)
 }
 
+fn create_background_compiling_renderer() -> Result<WgpuRenderer, String> {
+    let device = device::HeadlessDevice::request(
+        wgpu::Backends::all(),
+        wgpu::Limits::default(),
+        "Background Compiling Test Device",
+    )?;
+    let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
+    device.attach(
+        &mut renderer,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        device::Pipelines::Background,
+    );
+    Ok(renderer)
+}
+
 fn create_headless_renderer() -> Result<WgpuRenderer, String> {
     create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
 }
@@ -330,7 +358,7 @@ fn create_headless_renderer_configured(
     let device =
         device::HeadlessDevice::request(backends, limits, "Shared Render Contract Test Device")?;
     let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
-    device.attach(&mut renderer, surface_format, device::Pipelines::Background);
+    device.attach(&mut renderer, surface_format, device::Pipelines::Inline);
     Ok(renderer)
 }
 
@@ -861,6 +889,45 @@ pub fn capture_graph(
     capture_graph_with_scale(renderer, graph, width, height, 1.0)
 }
 
+/// The statistics of the frame drawing `graph`, and what it waited for:
+/// pipelines built on the frame thread, and effects drawn as placeholders
+/// while theirs compiled. No waits means all it drew was built before it.
+pub fn capture_waits(
+    renderer: &mut LockedRenderer,
+    graph: RenderGraph,
+    width: u32,
+    height: u32,
+) -> (RenderStatsSnapshot, u64) {
+    let before = cranpose_render_wgpu::pipelines_created();
+    capture_graph(renderer, graph, width, height);
+    let stats = renderer.last_frame_stats().expect("frame statistics");
+    let built = cranpose_render_wgpu::pipelines_created() - before;
+    (stats, built + u64::from(stats.placeholder_draws))
+}
+
+/// The first frame of `graph` that draws no placeholder: every effect in it
+/// draws, standing in or with its own pipelines.
+pub fn capture_drawn(
+    renderer: &mut LockedRenderer,
+    graph: &RenderGraph,
+    width: u32,
+    height: u32,
+) -> (CapturedFrame, RenderStatsSnapshot) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let frame = capture_graph(renderer, graph.clone(), width, height);
+        let stats = renderer.last_frame_stats().expect("frame statistics");
+        if stats.placeholder_draws == 0 {
+            return (frame, stats);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the effects' pipelines never landed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
 /// Renders `graph` with its root scaled by `root_scale` and captures a frame
 /// of the given size.
 pub fn capture_graph_with_scale(
@@ -914,9 +981,12 @@ pub fn wait_for_background_compiler_idle() {
 }
 
 /// Whether every draw of the last frame used the pipeline it asked for,
-/// rather than a general one standing in while a specialization compiled.
+/// rather than a general one standing in while a specialization compiled or
+/// a placeholder while nothing had.
 pub fn pipelines_settled(stats: &RenderStatsSnapshot) -> bool {
-    stats.shape_pipeline_fallback_draws == 0 && stats.shader_pipeline_fallback_draws == 0
+    stats.shape_pipeline_fallback_draws == 0
+        && stats.shader_pipeline_fallback_draws == 0
+        && stats.placeholder_draws == 0
 }
 
 /// Captures until the frame's pipelines have settled, so what the frame

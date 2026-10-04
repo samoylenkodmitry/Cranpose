@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use arrayvec::ArrayVec;
 
-use crate::{LayerShape, Rect};
+use crate::{Color, LayerShape, Rect};
 
 const RUNTIME_SHADER_INLINE_UNIFORMS: usize = 16;
 
@@ -132,6 +132,7 @@ pub struct RuntimeShader {
     position_independent: bool,
     preserves_transparency: bool,
     domains: Option<Box<ShaderDomains>>,
+    placeholder: Option<Color>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -456,6 +457,7 @@ impl RuntimeShader {
             position_independent: false,
             preserves_transparency: false,
             domains: None,
+            placeholder: None,
         }
     }
 
@@ -753,6 +755,22 @@ impl RuntimeShader {
         self.preserves_transparency
     }
 
+    /// Declares the premultiplied colour a renderer fills the effect's
+    /// shape with while the shader's pipelines compile, so no frame waits
+    /// for them: a backdrop's shape, or the layer's when the shader is all
+    /// the layer draws. Without one, such an effect draws nothing until they
+    /// are ready; an effect over a layer's content draws the content without
+    /// the effect.
+    pub fn set_placeholder(&mut self, color: Option<Color>) {
+        self.placeholder = color;
+    }
+
+    /// The colour the effect's shape is filled with while its pipelines
+    /// compile.
+    pub fn placeholder(&self) -> Option<Color> {
+        self.placeholder
+    }
+
     /// Declares the low-frequency copies of its source the shader reads
     /// through the reserved substrate region slots, in slot order. Only a
     /// batched shader packed with its stage is handed them; a shader
@@ -906,6 +924,7 @@ impl PartialEq for RuntimeShader {
             && self.substrates() == other.substrates()
             && self.draw_split() == other.draw_split()
             && self.domains == other.domains
+            && self.placeholder == other.placeholder
     }
 }
 

@@ -2921,6 +2921,17 @@ pub struct GpuRenderer {
     recent_after_update: Option<Arc<crate::pipeline_records::PipelineRecords>>,
     /// What this renderer draws with, for the next launches.
     recorder: crate::pipeline_recorder::PipelineRecorder,
+    /// Where the background compiler says a pipeline a placeholder waited
+    /// for landed.
+    #[cfg(not(target_arch = "wasm32"))]
+    landing: Option<Arc<crate::pipeline_compiler::Landing>>,
+    /// The pipelines the background threads had built when this frame
+    /// started.
+    #[cfg(not(target_arch = "wasm32"))]
+    built_at_frame_start: u64,
+    /// Whether this frame drew a placeholder in place of an effect whose
+    /// pipelines were compiling.
+    pub(crate) drew_placeholder: bool,
     shape_pipelines: ShapePipelines,
     /// Image and glyph pipelines for passes without and with a depth buffer.
     image_pipeline: [FixedPipeline; 4],
@@ -3243,6 +3254,11 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             recent_after_update: updated.then(|| Arc::clone(&records)),
             recorder,
+            #[cfg(not(target_arch = "wasm32"))]
+            landing: pipeline_compiler.landing(),
+            #[cfg(not(target_arch = "wasm32"))]
+            built_at_frame_start: 0,
+            drew_placeholder: false,
             shape_pipelines,
             image_pipeline: [
                 FixedPipeline::new("image/src-over"),
@@ -3849,6 +3865,7 @@ impl GpuRenderer {
         self.shape_pipelines.begin_frame();
         self.recorder.begin_frame();
         self.effect_renderer.shader_cache.begin_frame();
+        self.begin_placeholder_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
         self.begin_text_glyph_run_frame();
@@ -3965,7 +3982,54 @@ impl GpuRenderer {
     }
 
     pub fn needs_frame_warmup(&self) -> bool {
-        self.pending_frame_warmup_frames > 0
+        self.pending_frame_warmup_frames > 0 || self.placeholder_awaits_frame()
+    }
+
+    /// Whether a frame must follow to replace a placeholder: a pipeline it
+    /// waited for landed, or, with nothing to wake the app when one does,
+    /// this frame drew one.
+    fn placeholder_awaits_frame(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(landing) = &self.landing {
+            return landing.landed() || (self.drew_placeholder && !landing.has_wake());
+        }
+        self.drew_placeholder
+    }
+
+    /// Starts a frame: once a pipeline a placeholder waited for has landed,
+    /// the retained layers, which may hold that placeholder, are dropped.
+    fn begin_placeholder_frame(&mut self) {
+        self.drew_placeholder = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(landing) = &self.landing {
+            self.built_at_frame_start = landing.built();
+            if landing.take_landed() {
+                self.layer_cache.clear();
+            }
+        }
+    }
+
+    /// Notes an effect drawn as its placeholder, or left out, while its
+    /// pipelines compile, and waits for the next one to land.
+    pub(crate) fn note_placeholder(&mut self) {
+        self.drew_placeholder = true;
+        self.recorder.hold_first_screen();
+        self.frame_stats
+            .placeholder_draws
+            .set(self.frame_stats.placeholder_draws.get() + 1);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(landing) = &self.landing {
+            landing.await_since(self.built_at_frame_start);
+        }
+    }
+
+    /// Calls `wake` from the compiling thread when a pipeline a placeholder
+    /// waited for lands, so an app with nothing else to draw draws again.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wake_on_landing(&self, wake: Box<dyn Fn() + Send + Sync>) {
+        if let Some(landing) = &self.landing {
+            landing.wake_with(wake);
+        }
     }
 
     pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
