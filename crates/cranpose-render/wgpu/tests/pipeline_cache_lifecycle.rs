@@ -592,13 +592,28 @@ fn preparing_an_update_builds_every_recorded_pipeline_before_any_frame() {
         |bytes| bytes[0] ^= 0xff,
         |updated| {
             assert!(
-                updated.prepare_recorded_pipelines(Duration::from_secs(30)),
+                updated.prepare_recorded_pipelines(Duration::from_secs(30), &|| false),
                 "the recorded pipelines must build"
             );
             assert_eq!(
                 frosted_frame_waits(updated),
                 0,
                 "a prepared update draws its last launch's later screen with pipelines built before it"
+            );
+        },
+    );
+}
+
+/// An app that launches while its update is being prepared stops the
+/// preparation: its own frames build what is left.
+#[test]
+fn preparing_an_update_stops_when_told() {
+    relaunch_after_a_later_screen(
+        |bytes| bytes[0] ^= 0xff,
+        |updated| {
+            assert!(
+                !updated.prepare_recorded_pipelines(Duration::from_secs(30), &|| true),
+                "a stopped preparation reports the pipelines unfinished"
             );
         },
     );
@@ -623,7 +638,7 @@ fn a_prepared_update_leaves_this_builds_cache() {
 
     let mut preparing =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
-    assert!(preparing.prepare_recorded_pipelines(Duration::from_secs(30)));
+    assert!(preparing.prepare_recorded_pipelines(Duration::from_secs(30), &|| false));
     drop(preparing);
     let prepared = fs::read(&cache).expect("the prepared cache");
     assert_eq!(

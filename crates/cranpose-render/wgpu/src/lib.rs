@@ -604,19 +604,24 @@ impl WgpuRenderer {
     /// Render the current scene into an RGBA pixel buffer with an explicit scale.
     /// Builds every pipeline the pipeline cache file records on the
     /// background compiler, and returns whether they were all built before
-    /// `timeout`. An app runs it after an update, before its next launch, so
-    /// that launch finds them compiled; the renderer writes the file when it
-    /// is dropped. It draws nothing, and needs a renderer initialized for
+    /// `timeout`, or before `stop` said to stop. An app runs it after an
+    /// update, before its next launch, so that launch finds them compiled;
+    /// the renderer writes the file when it is dropped, and drops the builds
+    /// not started. It draws nothing, and needs a renderer initialized for
     /// synchronous rendering.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn prepare_recorded_pipelines(&mut self, timeout: std::time::Duration) -> bool {
+    pub fn prepare_recorded_pipelines(
+        &mut self,
+        timeout: std::time::Duration,
+        stop: &dyn Fn() -> bool,
+    ) -> bool {
         let PresentBackend::Sync(gpu_renderer) = &mut self.backend else {
             return false;
         };
         let deadline = web_time::Instant::now() + timeout;
         let mut compiling = gpu_renderer.prepare_recorded();
         while compiling {
-            if web_time::Instant::now() >= deadline {
+            if web_time::Instant::now() >= deadline || stop() {
                 return false;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));

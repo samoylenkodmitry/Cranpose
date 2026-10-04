@@ -4,7 +4,14 @@
 //! launches drew are built for this build in the background, so its first
 //! launch after the update finds them in the driver cache.
 
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use cranpose_render_wgpu::WgpuRenderer;
 use jni::{
@@ -16,6 +23,16 @@ use web_time::Instant;
 /// How long the receiver builds pipelines: Android ends a background
 /// broadcast after a minute.
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Whether the app launched in this process: its own first frames then
+/// build what is left, and the receiver's builds would only hold them, since
+/// a Mali driver compiles largely one pipeline at a time.
+static APP_LAUNCHED: AtomicBool = AtomicBool::new(false);
+
+/// Stops the pipelines being prepared after an update: the app launched.
+pub(crate) fn note_app_launched() {
+    APP_LAUNCHED.store(true, Ordering::Release);
+}
 
 #[doc(hidden)]
 #[unsafe(no_mangle)]
@@ -78,7 +95,8 @@ fn prepare_after_update(data_dir: &Path) {
         info.backend,
         adapter.get_downlevel_capabilities().flags,
     );
-    let built = renderer.prepare_recorded_pipelines(PREPARE_TIMEOUT);
+    let built = renderer
+        .prepare_recorded_pipelines(PREPARE_TIMEOUT, &|| APP_LAUNCHED.load(Ordering::Acquire));
     drop(renderer);
     log::info!(
         "[pipeline-cache] prepared the pipelines after an update in {:.0} ms{}",

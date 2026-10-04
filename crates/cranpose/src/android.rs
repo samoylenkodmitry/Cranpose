@@ -1942,6 +1942,7 @@ pub fn run(
     use android_activity::{MainEvent, PollEvent};
 
     init_logging(settings.log_tag.as_deref().unwrap_or(DEFAULT_LOG_TAG));
+    crate::android_pipeline_update::note_app_launched();
 
     crate::android_frame_telemetry::seed_env_from_system_properties();
 
