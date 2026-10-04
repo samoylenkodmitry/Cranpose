@@ -45,7 +45,6 @@ pub(crate) struct ArcTrigFill {
     window_rows: u64,
     #[cfg_attr(target_arch = "wasm32", expect(dead_code))]
     used: AtomicBool,
-    #[cfg(not(target_arch = "wasm32"))]
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
@@ -84,7 +83,6 @@ impl ArcTrigFill {
         backend: wgpu::Backend,
         cache: Option<wgpu::PipelineCache>,
         shader: SharedShader,
-        #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
         recorder: crate::pipeline_recorder::PipelineRecorder,
     ) -> Self {
         let table = |binding, read_only| wgpu::BindGroupLayoutEntry {
@@ -118,7 +116,6 @@ impl ArcTrigFill {
             bind_group_layout,
             window_rows: window_rows(&device.limits()),
             used: AtomicBool::new(false),
-            #[cfg(not(target_arch = "wasm32"))]
             recorder,
         }
     }
@@ -133,7 +130,9 @@ impl ArcTrigFill {
 
     fn pipeline(&self) -> &wgpu::ComputePipeline {
         self.pipeline
-            .get_or_init(self.builder.backend, || self.builder.build())
+            .for_draw(&self.recorder, self.builder.backend, || {
+                self.builder.build()
+            })
     }
 
     pub(crate) fn bind(&self, bodies: &wgpu::Buffer, curves: &wgpu::Buffer) -> TrigBindings {

@@ -1,7 +1,12 @@
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs,
     path::{Path, PathBuf},
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    thread::ThreadId,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -10,7 +15,8 @@ use cranpose_render_common::{
     graph::{ProjectiveTransform, RenderGraph, RenderNode},
 };
 use cranpose_render_wgpu::{
-    debug_toggle_os, pipelines_created, pipelines_created_off_frame, set_debug_toggle_os,
+    CapturedFrame, debug_toggle_os, pipelines_created, pipelines_created_off_frame,
+    set_debug_toggle_os,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect,
@@ -79,6 +85,23 @@ fn wait_for_cache(path: &Path) {
         path,
         |bytes| !bytes.is_empty(),
     );
+}
+
+fn cache_process(test: &str, cache: &Path, environment: &[(&str, &OsStr)]) -> std::process::Output {
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args(["--exact", test, "--nocapture"])
+        .env(CACHE_FILE, cache)
+        .env(CACHE_ENABLED, "1")
+        .envs(environment.iter().copied())
+        .output()
+        .expect("launch cache lifecycle process");
+    assert!(
+        output.status.success(),
+        "{test} {environment:?} failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
 }
 
 /// A renderer drawing a white square, or `None` where its backend keeps no
@@ -439,14 +462,19 @@ fn frosted_page() -> RenderGraph {
 /// Pipelines `renderer` built on the frame thread while drawing the frosted
 /// page.
 fn frosted_frame_builds(renderer: &mut support::LockedRenderer) -> u64 {
-    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
     let before = pipelines_created();
-    support::capture_graph(renderer, frosted_page(), FRAME_WIDTH, FRAME_HEIGHT);
+    capture_frosted_page(renderer);
+    pipelines_created() - before
+}
+
+fn capture_frosted_page(renderer: &mut support::LockedRenderer) -> CapturedFrame {
+    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
+    let frame = support::capture_graph(renderer, frosted_page(), FRAME_WIDTH, FRAME_HEIGHT);
     let stats = renderer
         .last_frame_stats()
         .expect("frosted frame statistics");
     assert!(stats.blur_passes > 0, "the pane must blur");
-    pipelines_created() - before
+    frame
 }
 
 /// The blur and composite pipelines the last launch drew its first screen
@@ -526,6 +554,132 @@ fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
     );
 }
 
+static DRAW_THREAD: OnceLock<ThreadId> = OnceLock::new();
+static DELAYED_ON_DRAW: AtomicBool = AtomicBool::new(false);
+static PIPELINES_AFTER_DELAY: AtomicU64 = AtomicU64::new(0);
+
+struct DemandCompileDelay;
+
+impl log::Log for DemandCompileDelay {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let message = record.args().to_string();
+        let pipeline_log =
+            message.starts_with("[gpu-pipeline]") || message.starts_with("[pipeline-create]");
+        let on_draw_thread = DRAW_THREAD
+            .get()
+            .is_some_and(|draw_thread| *draw_thread == std::thread::current().id());
+        if !pipeline_log || !on_draw_thread {
+            return;
+        }
+        if DELAYED_ON_DRAW.load(Ordering::Acquire) {
+            PIPELINES_AFTER_DELAY.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if !message.starts_with("[gpu-pipeline]")
+            || !message.contains("effect/blur")
+            || DELAYED_ON_DRAW.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(2100));
+    }
+
+    fn flush(&self) {}
+}
+
+static DEMAND_COMPILE_DELAY: DemandCompileDelay = DemandCompileDelay;
+
+#[test]
+fn a_demand_compile_wait_keeps_later_first_screen_pipelines() {
+    const PHASE: &str = "CRANPOSE_CACHE_DEMAND_WAIT_PHASE";
+    const PIXELS: &str = "CRANPOSE_CACHE_DEMAND_WAIT_PIXELS";
+
+    if let Ok(phase) = std::env::var(PHASE) {
+        if phase == "first" {
+            DRAW_THREAD
+                .set(std::thread::current().id())
+                .expect("record the draw thread before installing the logger");
+            log::set_logger(&DEMAND_COMPILE_DELAY).expect("install the demand-delay logger");
+            log::set_max_level(log::LevelFilter::Info);
+        }
+        let _lock = support::gpu_test_lock();
+        let cache = PathBuf::from(std::env::var_os(CACHE_FILE).expect("cache file"));
+        let pixels = PathBuf::from(std::env::var_os(PIXELS).expect("pixel file"));
+        let mut renderer =
+            support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+        if !renderer
+            .try_device()
+            .expect("GPU initialized")
+            .features()
+            .contains(wgpu::Features::PIPELINE_CACHE)
+        {
+            eprintln!("PIPELINE_CACHE_UNSUPPORTED");
+            return;
+        }
+
+        match phase.as_str() {
+            "first" => {
+                let frame = capture_frosted_page(&mut renderer);
+                assert!(
+                    frame.pixels.iter().any(|pixel| *pixel != 0),
+                    "the frosted first screen must produce visible pixels"
+                );
+                assert!(
+                    DELAYED_ON_DRAW.load(Ordering::Acquire),
+                    "the fixed pipeline delay did not run on the draw thread"
+                );
+                assert!(
+                    PIPELINES_AFTER_DELAY.load(Ordering::Acquire) > 0,
+                    "no later pipeline was built after the delay"
+                );
+                fs::write(&pixels, frame.pixels).expect("save the delayed first-screen pixels");
+                drop(renderer);
+                wait_for_cache(&cache);
+            }
+            "reopened" => {
+                wait_for_warm_ups();
+                let before = pipelines_created();
+                let frame = capture_frosted_page(&mut renderer);
+                assert_eq!(
+                    pipelines_created() - before,
+                    0,
+                    "the first scene after a slow compile must build no pipelines"
+                );
+                assert_eq!(
+                    frame.pixels,
+                    fs::read(&pixels).expect("read the first launch pixels"),
+                    "warm-up must preserve the rendered first screen"
+                );
+            }
+            _ => panic!("unknown demand-wait phase"),
+        }
+        return;
+    }
+
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("demand-wait.bin");
+    let pixels = cache.with_extension("first-screen.rgba");
+    for phase in ["first", "reopened"] {
+        let output = cache_process(
+            "pipeline_cache_lifecycle::a_demand_compile_wait_keeps_later_first_screen_pipelines",
+            &cache,
+            &[(PHASE, OsStr::new(phase)), (PIXELS, pixels.as_os_str())],
+        );
+        if String::from_utf8_lossy(&output.stderr).contains("PIPELINE_CACHE_UNSUPPORTED") {
+            eprintln!("pipeline cache lifecycle requires PIPELINE_CACHE support");
+            return;
+        }
+    }
+}
+
 #[test]
 fn an_incompatible_first_screen_key_layout_is_ignored() {
     relaunch_after_cache_change(
@@ -596,22 +750,10 @@ fn warm_up_lists_follow_presented_frames_across_process_restarts() {
         "empty-screen",
         "changed-screen",
     ] {
-        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
-            .args([
-                "--exact",
-                "pipeline_cache_lifecycle::warm_up_lists_follow_presented_frames_across_process_restarts",
-                "--nocapture",
-            ])
-            .env(PHASE, phase)
-            .env(CACHE_FILE, &cache)
-            .env(CACHE_ENABLED, "1")
-            .output()
-            .expect("launch cache lifecycle process");
-        assert!(
-            output.status.success(),
-            "{phase} failed:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+        cache_process(
+            "pipeline_cache_lifecycle::warm_up_lists_follow_presented_frames_across_process_restarts",
+            &cache,
+            &[(PHASE, OsStr::new(phase))],
         );
     }
 }
