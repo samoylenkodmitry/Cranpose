@@ -15,6 +15,10 @@ on:
         description: "Release tag to build assets for, for example v0.1.139"
         required: true
         type: string
+      windows_only:
+        description: "Rebuild only the Windows package"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -55,6 +59,7 @@ jobs:
   build:
     name: Build ${{ matrix.name }}
     needs: create-release
+    if: ${{ !inputs.windows_only }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -174,6 +179,7 @@ jobs:
         run: |
           command -v zip
           cargo install cargo-xwin --locked --version 0.23.1
+          cargo xwin cache xwin --update
 
       # Cross-compile the Windows MSVC binary on our macOS runner. cargo-xwin
       # supplies Microsoft's CRT and SDK import libraries without a hosted
@@ -203,6 +209,7 @@ jobs:
   build-android:
     name: Build Android APK
     needs: create-release
+    if: ${{ !inputs.windows_only }}
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
