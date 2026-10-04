@@ -64,17 +64,12 @@ fn return_to_top(robot: &Robot, width: u32, height: u32) {
     robot.validate_content("Build apps with Compose in Rust.").expect("top of guide is visible");
 }
 
-fn check_wheel_fling(robot: &Robot, width: u32, height: u32, compact: bool) {
+fn check_wheel_fling(robot: &Robot, width: u32, height: u32) {
     robot.drag_and_wait_for_frames(120.0, 550.0, 120.0, 454.0, 8).expect("flick the wheel");
     let (released_index, released) = first_visible_chapter(robot, height);
     robot.pump_frames(30).expect("wheel coast frames");
     let (coasted_index, coasted) = first_visible_chapter(robot, height);
-    if compact {
-        assert_eq!(coasted_index, released_index, "mobile chapters stay in place");
-        assert!((coasted.y - released.y).abs() < 1.0, "mobile chapter list stays fixed");
-    } else {
-        assert!(coasted_index > released_index || (coasted_index == released_index && coasted.y < released.y - 10.0), "wheel must coast after release");
-    }
+    assert!(coasted_index > released_index || (coasted_index == released_index && coasted.y < released.y - 10.0), "wheel must coast after release");
     robot.touch_down(120.0, 550.0).expect("catch the spinning wheel");
     capture(robot, width, "fling");
     robot.touch_up(120.0, 550.0).expect("release the stopped wheel");
@@ -113,7 +108,9 @@ fn check_mobile_tables_and_controls(robot: &Robot, width: u32, height: u32) {
         ("Testing", "Test scope", "table"),
         ("Liquid components", "Save", "glass-button"),
     ] {
-        robot.move_to(width as f32 - 40.0, height as f32 * 0.65).expect("hover chapter list");
+        robot.move_to(80.0, height as f32 * 0.65).expect("hover wheel labels");
+        robot.mouse_scroll_and_wait_for_frame(0.0, 10000.0).expect("return to the first chapter");
+        robot.wait_for_idle().expect("wheel resets");
         let mut found = false;
         for _ in 0..30 {
             if let Some((_, y, _, button_height)) = find_button_exact_in_semantics(robot, chapter) {
@@ -122,9 +119,9 @@ fn check_mobile_tables_and_controls(robot: &Robot, width: u32, height: u32) {
                     break;
                 }
             }
-            robot.mouse_scroll_and_wait_for_frame(0.0, -120.0).expect("scroll chapter list");
+            robot.mouse_scroll_and_wait_for_frame(0.0, -120.0).expect("scroll wheel");
         }
-        assert!(found, "chapter list reaches {chapter}");
+        assert!(found, "wheel reaches {chapter}");
         click_button(robot, chapter);
         let mut found = false;
         for _ in 0..60 {
@@ -164,7 +161,11 @@ pub(crate) fn main() {
             robot.wait_for_idle().expect("documentation startup");
             if compact {
                 robot.validate_content("Welcome").expect("compact wheel opens first");
-                assert!(find_text_in_semantics(&robot, "Build apps with Compose in Rust.").is_none());
+                robot.validate_content("Build apps with Compose in Rust.").expect("live reader preview");
+                robot.click(310.0, 210.0).expect("open the miniature reader");
+                robot.wait_for_idle().expect("reader opens");
+                robot.validate_content("Back to wheel").expect("expanded reader");
+                click_button(&robot, "Back to wheel");
             } else {
                 robot.validate_content("Build apps with Compose in Rust.").expect("offline reader");
             }
@@ -178,10 +179,8 @@ pub(crate) fn main() {
             if !compact {
                 assert!(find_text_in_semantics_exact(&robot, "Build apps with Compose in Rust.").is_none(), "wheel scroll navigates the document");
             }
-            if !compact {
-                robot.mouse_scroll_and_wait_for_frame(0.0, 750.0).expect("return wheel to first chapter");
-                robot.wait_for_idle().expect("wheel returns to first chapter");
-            }
+            robot.mouse_scroll_and_wait_for_frame(0.0, 750.0).expect("return wheel to first chapter");
+            robot.wait_for_idle().expect("wheel returns to first chapter");
             click_button(&robot, "Get started");
             capture(&robot, width, "get-started");
             robot.validate_content("Start with the project template").expect("selected chapter is readable");
@@ -204,7 +203,7 @@ pub(crate) fn main() {
             if compact {
                 click_button(&robot, "Back to wheel");
                 capture(&robot, width, "back-to-wheel");
-                assert!(find_text_in_semantics(&robot, "Start with the project template").is_none());
+                robot.validate_content("Count: 1").expect("preview preserves the counter and scroll position");
                 click_button(&robot, "Get started");
                 robot.validate_content("Start with the project template").expect("reopen the reader");
             }
@@ -218,7 +217,7 @@ pub(crate) fn main() {
             } else {
                 click_button(&robot, "Back to wheel");
             }
-            check_wheel_fling(&robot, width, height, compact);
+            check_wheel_fling(&robot, width, height);
             if compact {
                 check_mobile_tables_and_controls(&robot, width, height);
             }

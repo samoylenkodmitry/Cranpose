@@ -74,7 +74,7 @@ fn guide_tables_place_headers_and_values_in_columns() {
         if click_control(&mut robot, "Testing") {
             break;
         }
-        robot.move_to(320.0, 620.0);
+        robot.move_to(80.0, 500.0);
         robot.shell_mut().pointer_scrolled(0.0, -120.0);
         robot.wait_for_idle();
     }
@@ -95,27 +95,31 @@ fn guide_tables_place_headers_and_values_in_columns() {
 }
 
 #[test]
-fn mobile_chapter_list_stays_visible_beside_the_wheel() {
+fn mobile_wheel_shows_a_live_scaled_reader_and_opens_the_same_content() {
     let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
         combined_app_with_initial_tab(Some(DemoTab::Guide));
     });
-    robot.shell_mut().set_semantics_enabled(true);
-    robot.wait_for_idle();
-    let tree = cranpose_testing::placed_semantics_from_shell(robot.shell_mut())
-        .expect("mobile guide navigation");
-    let list = semantic_bounds(&tree, "Guide chapters");
+    let title = "Build apps with Compose in Rust.";
     assert!(
-        list.x > 150.0 && list.x + list.width <= 390.0,
-        "chapter list: {list:?}"
+        robot.find_by_text(title).exists(),
+        "the wheel includes the real reader"
     );
+    assert!(!robot.find_by_text("Back to wheel").exists());
+    assert!(click_control(&mut robot, "Open guide"));
+    assert!(
+        robot.find_by_text(title).exists(),
+        "the preview opens at the same passage"
+    );
+    assert!(robot.find_by_text("Back to wheel").exists());
+    assert!(click_control(&mut robot, "Back to wheel"));
     let initial = text_bounds(&robot.get_all_rects(), "Get started");
     robot.move_to(80.0, 500.0);
     robot.shell_mut().pointer_scrolled(0.0, -120.0);
     robot.wait_for_idle();
     let after = text_bounds(&robot.get_all_rects(), "Get started");
     assert!(
-        (initial.y - after.y).abs() < 1.0,
-        "chapter list stays in place"
+        initial.y > after.y + 20.0,
+        "wheel labels rotate with the wheel"
     );
     assert!(click_control(&mut robot, "Get started"));
     assert!(robot
@@ -279,7 +283,7 @@ fn dragging_and_releasing_keeps_the_wheel_moving() {
 
 #[test]
 fn wheel_buttons_keep_click_centers_inside_visible_segments() {
-    for width in [800, 1100, 1200, 1440] {
+    for width in [320, 390, 600, 800, 1100, 1200, 1440] {
         let mut robot = RobotTestRule::new(width, 820, TestRenderer::default(), || {
             combined_app_with_initial_tab(Some(DemoTab::Guide));
         });
@@ -368,36 +372,6 @@ fn wheel_extends_beneath_the_edge_to_edge_reader_without_stealing_clicks() {
     robot.click_at(x, y);
     assert!(robot
         .find_by_text("Build apps with Compose in Rust.")
-        .exists());
-}
-
-#[test]
-fn documentation_is_usable_in_a_compact_window() {
-    let mut robot = RobotTestRule::new(390, 780, TestRenderer::default(), || {
-        combined_app_with_initial_tab(Some(DemoTab::Guide));
-    });
-    assert!(!robot
-        .find_by_text("Build apps with Compose in Rust.")
-        .exists());
-    assert!(robot.find_by_text("Welcome").exists());
-    assert!(robot.find_by_text("View on GitHub").exists());
-    robot.move_to(150.0, 620.0);
-    robot.shell_mut().pointer_scrolled(0.0, -150.0);
-    robot.wait_for_idle();
-    assert!(!robot
-        .find_by_text("Start with the project template")
-        .exists());
-    assert!(click_control(&mut robot, "Get started"));
-    assert!(robot
-        .find_by_text("Start with the project template")
-        .exists());
-    assert!(click_control(&mut robot, "Back to wheel"));
-    assert!(!robot
-        .find_by_text("Start with the project template")
-        .exists());
-    assert!(click_control(&mut robot, "Get started"));
-    assert!(robot
-        .find_by_text("Start with the project template")
         .exists());
 }
 
