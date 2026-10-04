@@ -1143,7 +1143,7 @@ pub(crate) fn build_pipeline_logged<T>(tag: &str, build: impl FnOnce() -> T) -> 
         PIPELINES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     #[cfg(not(target_arch = "wasm32"))]
-    crate::pipeline_disk_cache::note_pipeline_built();
+    crate::pipeline_disk_cache::note_change();
     pipeline
 }
 
@@ -2915,6 +2915,12 @@ pub struct GpuRenderer {
     pipeline_cache: Option<wgpu::PipelineCache>,
     #[cfg(not(target_arch = "wasm32"))]
     _pipeline_cache_watcher: Option<crate::pipeline_disk_cache::PersistWatcher>,
+    /// The pipelines recent launches of another build drew with, built once
+    /// this renderer's first frame is drawn.
+    #[cfg(not(target_arch = "wasm32"))]
+    recent_after_update: Option<Arc<crate::pipeline_records::PipelineRecords>>,
+    /// What this renderer draws with, for the next launches.
+    recorder: crate::pipeline_recorder::PipelineRecorder,
     shape_pipelines: ShapePipelines,
     /// Image and glyph pipelines for passes without and with a depth buffer.
     image_pipeline: [FixedPipeline; 4],
@@ -3118,15 +3124,26 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         let crate::pipeline_disk_cache::Loaded {
             cache: pipeline_cache,
-            first_screen,
-            first_screen_records,
+            records,
+            updated,
         } = crate::pipeline_disk_cache::load(&device);
+        #[cfg(not(target_arch = "wasm32"))]
+        let first_screen: Vec<u64> = records
+            .shapes
+            .iter()
+            .filter(|shape| shape.first_screen)
+            .map(|shape| shape.entry)
+            .collect();
         #[cfg(target_arch = "wasm32")]
         let (pipeline_cache, first_screen): (Option<wgpu::PipelineCache>, Vec<u64>) =
             (None, Vec::new());
+        let recorder = crate::pipeline_recorder::PipelineRecorder::default();
         #[cfg(not(target_arch = "wasm32"))]
-        let pipeline_cache_watcher =
-            crate::pipeline_disk_cache::spawn_persist_watcher(pipeline_cache.clone());
+        let pipeline_cache_watcher = crate::pipeline_disk_cache::spawn_persist_watcher(
+            pipeline_cache.clone(),
+            Arc::clone(&records),
+            recorder.clone(),
+        );
 
         let effects_started = Instant::now();
         let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
@@ -3137,6 +3154,7 @@ impl GpuRenderer {
             pipeline_cache.clone(),
             composition_format,
             adapter_backend,
+            recorder.clone(),
         );
         let output_converter = OutputConverter::new(&device, adapter_backend, display_format);
         let screenshot_converter =
@@ -3157,6 +3175,7 @@ impl GpuRenderer {
                 adapter_backend,
                 pipeline_cache.clone(),
                 shape_shader.clone(),
+                recorder.clone(),
             );
             if first_screen.contains(&crate::arc_trig_fill::FIRST_SCREEN_KEY) {
                 fill.warm(&pipeline_compiler);
@@ -3177,9 +3196,16 @@ impl GpuRenderer {
                 .into_iter()
                 .filter(|&bits| bits != crate::arc_trig_fill::FIRST_SCREEN_KEY)
                 .filter_map(ShapePipelineKey::from_bits),
+            recorder.clone(),
         );
         #[cfg(not(target_arch = "wasm32"))]
-        effect_renderer.warm_recorded_shaders(&first_screen_records.shaders);
+        effect_renderer.warm_recorded_shaders(
+            records
+                .shaders
+                .iter()
+                .filter(|shader| shader.first_screen)
+                .map(|shader| &shader.entry),
+        );
         let image_layouts = [
             Some(&uniform_bind_group_layout),
             Some(&image_bind_group_layout),
@@ -3214,6 +3240,9 @@ impl GpuRenderer {
             pipeline_cache,
             #[cfg(not(target_arch = "wasm32"))]
             _pipeline_cache_watcher: pipeline_cache_watcher,
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_after_update: updated.then(|| Arc::clone(&records)),
+            recorder,
             shape_pipelines,
             image_pipeline: [
                 FixedPipeline::new("image/src-over"),
@@ -3297,7 +3326,12 @@ impl GpuRenderer {
         };
         renderer.warm_requested_shaders();
         #[cfg(not(target_arch = "wasm32"))]
-        renderer.warm_fixed_pipelines(&pipeline_compiler, &first_screen_records.fixed);
+        renderer.warm_fixed_pipelines(&|label| {
+            records
+                .fixed
+                .iter()
+                .any(|fixed| fixed.first_screen && fixed.entry == label)
+        });
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
             adapter_backend,
@@ -3322,20 +3356,35 @@ impl GpuRenderer {
         self.effect_renderer.warm_shaders(&requested);
     }
 
-    /// Queues the fixed pipelines the last launch drew its first screen
-    /// with, named by `recorded` labels.
+    /// Queues every pipeline recent launches of another build drew with:
+    /// after an update their compiled pipelines are gone, and each would
+    /// otherwise compile inside the first frame that draws with it.
     #[cfg(not(target_arch = "wasm32"))]
-    fn warm_fixed_pipelines(&self, compiler: &PipelineCompiler, recorded: &[String]) {
-        if recorded.is_empty() {
-            return;
+    fn warm_recent(&mut self, records: &crate::pipeline_records::PipelineRecords) {
+        self.warm_fixed_pipelines(&|label| records.fixed.iter().any(|fixed| fixed.entry == label));
+        let shapes = records
+            .shapes
+            .iter()
+            .map(|shape| shape.entry)
+            .filter(|&bits| bits != crate::arc_trig_fill::FIRST_SCREEN_KEY)
+            .filter_map(ShapePipelineKey::from_bits);
+        for key in shapes {
+            self.shape_pipelines.warm(key);
         }
-        self.effect_renderer.warm_fixed(&self.device, recorded);
+        self.effect_renderer
+            .warm_recorded_shaders(records.shaders.iter().map(|shader| &shader.entry));
+    }
+
+    /// Queues the fixed pipelines whose labels `wanted` accepts.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn warm_fixed_pipelines(&self, wanted: &dyn Fn(&str) -> bool) {
+        self.effect_renderer.warm_fixed(&self.device, wanted);
         let warm =
             |pipeline: &FixedPipeline,
              job: &dyn Fn() -> Box<dyn FnOnce() -> wgpu::RenderPipeline + Send>| {
-                if pipeline.recorded_in(recorded) {
+                if wanted(pipeline.label()) {
                     pipeline.queue(
-                        compiler,
+                        self.effect_renderer.compiler(),
                         crate::pipeline_compiler::CompileLane::WarmUp,
                         self.adapter_backend,
                         job(),
@@ -3400,11 +3449,9 @@ impl GpuRenderer {
         alpha_mask: bool,
     ) -> &wgpu::RenderPipeline {
         self.image_pipeline_resource(blend_mode, depth, alpha_mask)
-            .for_draw(
-                &self.effect_renderer.first_screen,
-                self.adapter_backend,
-                || self.image_pipeline_job(blend_mode, depth, alpha_mask)(),
-            )
+            .for_draw(&self.recorder, self.adapter_backend, || {
+                self.image_pipeline_job(blend_mode, depth, alpha_mask)()
+            })
     }
 
     fn glyph_atlas_pipeline_job(
@@ -3425,7 +3472,7 @@ impl GpuRenderer {
     /// [`TurnedGlyph`]s or plain [`GlyphInstance`]s.
     fn glyph_atlas_pipeline(&self, depth: bool, turned: bool) -> &wgpu::RenderPipeline {
         self.glyph_atlas_pipeline_resource(depth, turned).for_draw(
-            &self.effect_renderer.first_screen,
+            &self.recorder,
             self.adapter_backend,
             || self.glyph_atlas_pipeline_job(depth, turned)(),
         )
@@ -3800,6 +3847,7 @@ impl GpuRenderer {
         let render_start = Instant::now();
         self.warm_requested_shaders();
         self.shape_pipelines.begin_frame();
+        self.recorder.begin_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
         self.begin_text_glyph_run_frame();
@@ -4188,7 +4236,10 @@ impl GpuRenderer {
         };
         #[cfg(not(target_arch = "wasm32"))]
         if submitted {
-            crate::pipeline_disk_cache::note_frame_drawn();
+            self.recorder.note_frame_drawn();
+            if let Some(records) = self.recent_after_update.take() {
+                self.warm_recent(&records);
+            }
         }
         if !submitted {
             self.run_store.invalidate_uploads();
@@ -4232,6 +4283,7 @@ impl GpuRenderer {
                 output_view,
                 bind_group,
                 self.adapter_backend,
+                &self.recorder,
             );
             recorder.record_pass();
         }

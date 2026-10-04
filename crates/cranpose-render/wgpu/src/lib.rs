@@ -36,6 +36,7 @@ mod pipeline;
 mod pipeline_compiler;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pipeline_disk_cache;
+mod pipeline_recorder;
 #[cfg(not(target_arch = "wasm32"))]
 mod pipeline_records;
 #[cfg(not(target_arch = "wasm32"))]

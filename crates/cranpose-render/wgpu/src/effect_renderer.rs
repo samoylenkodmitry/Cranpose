@@ -9,7 +9,7 @@ use cranpose_ui_graphics::{
 use smallvec::SmallVec;
 
 use crate::{
-    fixed_pipeline::{FirstScreenSpan, FixedPipeline},
+    fixed_pipeline::FixedPipeline,
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
         TextureRegionCopy, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, copy_compatible,
@@ -18,6 +18,7 @@ use crate::{
     gpu_stats::FrameStats,
     offscreen::{OffscreenPool, OffscreenTarget},
     pipeline_compiler::{CompileLane, PipelineCompiler},
+    pipeline_recorder::PipelineRecorder,
     shader_cache::{
         RuntimeShaderPipelineMode, ShaderDrawVariant, ShaderPipelineCache, ShaderPipelineFit,
         shader_specialization_enabled,
@@ -124,8 +125,7 @@ pub(crate) struct EffectRenderer {
     blur_downsample_pipelines:
         [[FixedPipeline; BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()],
     blur_mean_pipeline: FixedPipeline,
-    /// The first screen of every fixed pipeline this renderer draws with.
-    pub(crate) first_screen: FirstScreenSpan,
+    recorder: PipelineRecorder,
     /// One bit per tile mode whose blur family is queued for warm-up.
     blur_families_queued: Cell<u8>,
     compiler: PipelineCompiler,
@@ -1024,6 +1024,7 @@ impl EffectRenderer {
         pipeline_cache: Option<wgpu::PipelineCache>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
+        recorder: PipelineRecorder,
     ) -> Self {
         let effect_texture_bind_group_layout = OffscreenPool::texture_bind_group_layout(device);
         let effect_uniform_bind_group_layout = OffscreenPool::uniform_bind_group_layout(device);
@@ -1164,13 +1165,14 @@ impl EffectRenderer {
                 surface_format,
                 &effect_texture_bind_group_layout,
                 &effect_uniform_bind_group_layout,
+                recorder.clone(),
             ),
+            recorder,
             pipeline_cache,
             blur_shader,
             blur_pipelines,
             blur_downsample_pipelines,
             blur_mean_pipeline: FixedPipeline::new("effect/mean"),
-            first_screen: FirstScreenSpan::default(),
             blur_families_queued: Cell::new(0),
             compiler,
             blur_uniform_bind_group_layout,
@@ -1211,9 +1213,9 @@ impl EffectRenderer {
     /// Queues the runtime shader pipelines the last launch drew its first
     /// screen with, those of the framework's own shaders.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn warm_recorded_shaders(
+    pub(crate) fn warm_recorded_shaders<'a>(
         &mut self,
-        records: &[crate::pipeline_records::ShaderPipelineRecord],
+        records: impl IntoIterator<Item = &'a crate::pipeline_records::ShaderPipelineRecord>,
     ) {
         self.shader_cache.warm_recorded(
             records,
@@ -1223,15 +1225,11 @@ impl EffectRenderer {
         );
     }
 
-    /// Queues the fixed pipelines the last launch drew its first screen
-    /// with, named by `recorded` labels.
+    /// Queues the fixed pipelines whose labels `wanted` accepts.
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn warm_fixed(&self, device: &wgpu::Device, recorded: &[String]) {
-        if recorded.is_empty() {
-            return;
-        }
+    pub(crate) fn warm_fixed(&self, device: &wgpu::Device, wanted: &dyn Fn(&str) -> bool) {
         let warm = |pipeline: &FixedPipeline, job: &dyn Fn() -> FixedPipelineJob| {
-            if pipeline.recorded_in(recorded) {
+            if wanted(pipeline.label()) {
                 pipeline.queue(
                     &self.compiler,
                     CompileLane::WarmUp,
@@ -1258,6 +1256,11 @@ impl EffectRenderer {
                 );
             }
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn compiler(&self) -> &PipelineCompiler {
+        &self.compiler
     }
 
     pub(crate) fn warm_shaders(&mut self, warm_ups: &[cranpose_ui_graphics::ShaderWarmUp]) {
@@ -1334,7 +1337,7 @@ impl EffectRenderer {
             }
         }
         self.blur_resource(pipeline)
-            .for_draw(&self.first_screen, self.adapter_backend, || {
+            .for_draw(&self.recorder, self.adapter_backend, || {
                 self.blur_job(device, pipeline)()
             })
     }
@@ -1388,7 +1391,7 @@ impl EffectRenderer {
 
     fn offset_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
         self.offset_pipeline
-            .for_draw(&self.first_screen, self.adapter_backend, || {
+            .for_draw(&self.recorder, self.adapter_backend, || {
                 self.offset_pipeline_job(device)()
             })
     }
@@ -1446,7 +1449,7 @@ impl EffectRenderer {
         unmasked_nearest: bool,
     ) -> &wgpu::RenderPipeline {
         let (resource, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
-        resource.for_draw(&self.first_screen, self.adapter_backend, || {
+        resource.for_draw(&self.recorder, self.adapter_backend, || {
             self.blit_pipeline_job(device, blend_mode, unmasked_nearest)()
         })
     }
@@ -1511,7 +1514,7 @@ impl EffectRenderer {
         texels: bool,
     ) -> &wgpu::RenderPipeline {
         let (resource, _, _) = self.projective_pipeline_target(blend_mode, texels);
-        resource.for_draw(&self.first_screen, self.adapter_backend, || {
+        resource.for_draw(&self.recorder, self.adapter_backend, || {
             self.projective_pipeline_job(device, blend_mode, texels)()
         })
     }

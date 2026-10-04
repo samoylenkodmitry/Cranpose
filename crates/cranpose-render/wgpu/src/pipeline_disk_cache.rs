@@ -13,7 +13,8 @@ use web_time::{Duration, Instant};
 
 use crate::{
     debug_toggles::DebugToggle,
-    pipeline_records::{self, FirstScreenRecords, ShaderPipelineRecord},
+    pipeline_recorder::PipelineRecorder,
+    pipeline_records::{self, PipelineRecords, Recorded, ShaderPipelineRecord},
 };
 
 static DISK_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_PIPELINE_DISK_CACHE");
@@ -45,13 +46,15 @@ pub(crate) fn file_path() -> Option<PathBuf> {
     }
 }
 
-/// What the last launch left for this one: the driver's compiled
-/// pipelines, where the device keeps them, and the shape, runtime shader
-/// and fixed pipelines that launch drew its first screen with.
+/// What the last launches left for this one: the driver's compiled
+/// pipelines, where the device keeps them, and the pipelines those launches
+/// drew with.
 pub(crate) struct Loaded {
     pub(crate) cache: Option<wgpu::PipelineCache>,
-    pub(crate) first_screen: Vec<u64>,
-    pub(crate) first_screen_records: FirstScreenRecords,
+    pub(crate) records: Arc<PipelineRecords>,
+    /// Whether another build wrote the records: an update, whose compiled
+    /// pipelines are gone.
+    pub(crate) updated: bool,
 }
 
 pub(crate) fn load(device: &wgpu::Device) -> Loaded {
@@ -64,30 +67,37 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
             None
         }
     });
-    let mut contents = file.as_deref().and_then(current_contents);
-    let first_screen = contents
+    let contents = file.as_deref().and_then(current_contents);
+    let updated = contents
         .as_ref()
-        .map_or_else(Vec::new, |contents| contents.first_screen.clone().collect());
-    let first_screen_records = contents
-        .as_mut()
-        .map(|contents| std::mem::take(&mut contents.records))
-        .unwrap_or_default();
+        .is_some_and(|contents| !contents.this_build);
+    let data = contents
+        .as_ref()
+        .and_then(|contents| contents.blob)
+        .filter(|blob| !blob.is_empty());
+    Loaded {
+        cache: driver_cache(device, data, file.as_deref(), updated),
+        records: Arc::new(contents.map(Contents::into_records).unwrap_or_default()),
+        updated,
+    }
+}
+
+/// The device's pipeline cache, filled from `data` when the file had this
+/// build's.
+fn driver_cache(
+    device: &wgpu::Device,
+    data: Option<&[u8]>,
+    file: Option<&[u8]>,
+    updated: bool,
+) -> Option<wgpu::PipelineCache> {
     if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
         log::info!(
             "[pipeline-cache] not offered by {:?}; compiled pipelines persist only as far \
              as the driver's own cache does",
             device.adapter_info().backend
         );
-        return Loaded {
-            cache: None,
-            first_screen,
-            first_screen_records,
-        };
+        return None;
     }
-    let data = contents
-        .as_ref()
-        .and_then(|contents| contents.blob)
-        .filter(|blob| !blob.is_empty());
     // SAFETY: `data` is this build's own `get_data` output, and `fallback:
     // true` has wgpu validate the header and fall back to an empty cache.
     #[expect(unsafe_code)]
@@ -98,25 +108,15 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
             fallback: true,
         })
     };
-    match (data, &file) {
+    match (data, file) {
         (Some(data), _) => log::info!("[pipeline-cache] loaded {} B from disk", data.len()),
-        (None, Some(file))
-            if contents
-                .as_ref()
-                .is_none_or(|contents| contents.blob.is_none()) =>
-        {
-            log::info!(
-                "[pipeline-cache] cold: dropped {} B compiled from other shaders",
-                file.len()
-            );
-        }
+        (None, Some(file)) if updated => log::info!(
+            "[pipeline-cache] cold: dropped {} B compiled from other shaders",
+            file.len()
+        ),
         (None, _) => log::info!("[pipeline-cache] cold (no blob on disk)"),
     }
-    Loaded {
-        cache: Some(cache),
-        first_screen,
-        first_screen_records,
-    }
+    Some(cache)
 }
 
 const FILE_LAYOUT: u32 = 4;
@@ -139,8 +139,26 @@ fn blob_key() -> [u8; 8] {
 
 struct Contents<'a> {
     first_screen: FirstScreenKeys<'a>,
-    records: FirstScreenRecords,
+    records: PipelineRecords,
+    /// Whether this build wrote the file.
+    this_build: bool,
     blob: Option<&'a [u8]>,
+}
+
+impl Contents<'_> {
+    /// The records, the last first screen's shapes among them.
+    fn into_records(self) -> PipelineRecords {
+        let mut records = self.records;
+        records.shapes.splice(
+            0..0,
+            self.first_screen.map(|key| Recorded {
+                entry: key,
+                age: 0,
+                first_screen: true,
+            }),
+        );
+        records
+    }
 }
 
 #[derive(Clone)]
@@ -177,31 +195,44 @@ fn current_contents(file: &[u8]) -> Option<Contents<'_>> {
     // The shape keys stand on their own: records that do not decode cost
     // only themselves and the driver blob behind them.
     let (records, blob) = pipeline_records::decode(rest).map_or_else(
-        || (FirstScreenRecords::default(), None),
+        || (PipelineRecords::default(), None),
         |(records, blob)| (records, Some(blob)),
     );
+    let this_build = *build == blob_key();
     Some(Contents {
         first_screen: FirstScreenKeys(keys),
         records,
-        blob: blob.filter(|_| *build == blob_key()),
+        this_build,
+        blob: blob.filter(|_| this_build),
     })
 }
 
+/// The file holding `shapes`, the first screen's ahead of the records, the
+/// other records, and `blob`.
 fn file_bytes<'a>(
-    first_screen: impl ExactSizeIterator<Item = u64>,
-    shaders: &[ShaderPipelineRecord],
-    fixed: impl ExactSizeIterator<Item = &'a str>,
+    shapes: impl Iterator<Item = Recorded<u64>> + Clone,
+    shaders: impl Iterator<Item = Recorded<&'a ShaderPipelineRecord>>,
+    fixed: impl Iterator<Item = Recorded<&'a str>>,
     blob: &[u8],
 ) -> Option<Vec<u8>> {
-    let count = u32::try_from(first_screen.len()).ok()?;
-    let mut bytes = Vec::with_capacity(20 + first_screen.len() * 8 + blob.len());
+    let mut bytes = Vec::with_capacity(4096 + blob.len());
     bytes.extend_from_slice(&blob_key());
     bytes.extend_from_slice(&crate::render::ShapePipelineKey::DISK_LAYOUT);
-    bytes.extend_from_slice(&count.to_le_bytes());
-    for key in first_screen {
-        bytes.extend_from_slice(&key.to_le_bytes());
+    let first_screen = shapes.clone().filter(|shape| shape.first_screen);
+    bytes.extend_from_slice(
+        &u32::try_from(first_screen.clone().count())
+            .ok()?
+            .to_le_bytes(),
+    );
+    for shape in first_screen {
+        bytes.extend_from_slice(&shape.entry.to_le_bytes());
     }
-    pipeline_records::encode(shaders, fixed, &mut bytes)?;
+    pipeline_records::encode(
+        shapes.filter(|shape| !shape.first_screen),
+        shaders,
+        fixed,
+        &mut bytes,
+    )?;
     bytes.extend_from_slice(blob);
     Some(bytes)
 }
@@ -211,41 +242,49 @@ fn write_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.write_all(bytes)
 }
 
-pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
+pub(crate) fn persist(
+    cache: Option<&wgpu::PipelineCache>,
+    path: &Path,
+    previous: &PipelineRecords,
+    recorder: &PipelineRecorder,
+) {
     let started = Instant::now();
     let blob = cache
         .and_then(wgpu::PipelineCache::get_data)
         .unwrap_or_default();
     let existing = std::fs::read(path).ok();
-    let previous = existing.as_deref().and_then(current_contents);
-    // A launch closed before its first frame keeps the previous launch's
-    // first screen.
-    let (bytes, key_count) = if FIRST_FRAME_DRAWN.load(Ordering::Acquire) {
-        let first_screen = first_screen();
-        (
-            file_bytes(
-                first_screen.keys.iter().copied(),
-                &first_screen.shaders,
-                first_screen.fixed.iter().copied(),
-                &blob,
-            ),
-            first_screen.len(),
-        )
-    } else if let Some(previous) = previous {
-        let records = &previous.records;
-        (
-            file_bytes(
-                previous.first_screen.clone(),
-                &records.shaders,
-                records.fixed.iter().map(String::as_str),
-                &blob,
-            ),
-            previous.first_screen.len() + records.shaders.len() + records.fixed.len(),
-        )
+    // A launch closed before its first frame keeps the last launch's records.
+    let (bytes, key_count) = if recorder.frame_drawn() {
+        let drawn = recorder.drawn();
+        let shapes = recent(
+            drawn.shapes.iter().copied(),
+            previous.shapes.iter().copied(),
+        );
+        let shaders = recent(
+            drawn.shaders.iter().map(Recorded::as_ref),
+            previous.shaders.iter().map(Recorded::as_ref),
+        );
+        let fixed = recent(
+            drawn.fixed.iter().copied(),
+            previous
+                .fixed
+                .iter()
+                .map(|label| label.as_ref().map(String::as_str)),
+        );
+        let count = shapes.clone().count() + shaders.clone().count() + fixed.clone().count();
+        (file_bytes(shapes, shaders, fixed, &blob), count)
     } else {
         (
-            file_bytes(std::iter::empty(), &[], std::iter::empty(), &blob),
-            0,
+            file_bytes(
+                previous.shapes.iter().copied(),
+                previous.shaders.iter().map(Recorded::as_ref),
+                previous
+                    .fixed
+                    .iter()
+                    .map(|label| label.as_ref().map(String::as_str)),
+                &blob,
+            ),
+            previous.shapes.len() + previous.shaders.len() + previous.fixed.len(),
         )
     };
     let Some(bytes) = bytes else {
@@ -264,7 +303,7 @@ pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
     let written = write_file(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, path));
     match written {
         Ok(()) => log::info!(
-            "[pipeline-cache] persisted {} B and {} first-screen pipelines in {:.1} ms",
+            "[pipeline-cache] persisted {} B and {} recorded pipelines in {:.1} ms",
             blob.len(),
             key_count,
             crate::render::instant_ms(started, Instant::now()),
@@ -273,71 +312,30 @@ pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
     }
 }
 
-pub(crate) const FIRST_SCREEN_SPAN: Duration = Duration::from_secs(2);
+/// How many launches a pipeline stays recorded after the last that drew
+/// with it.
+const RECORDED_LAUNCHES: u8 = 4;
+/// The most pipelines of each kind the file records.
+const MAX_RECORDS: usize = 128;
 
-/// The pipelines this process's renderers drew their first screens with,
-/// each list in the order first drawn.
-struct FirstScreen {
-    /// The shape pipelines, by their keys' bits.
-    keys: Vec<u64>,
-    shaders: Vec<ShaderPipelineRecord>,
-    /// The fixed pipelines, by label.
-    fixed: Vec<&'static str>,
-}
-
-impl FirstScreen {
-    fn len(&self) -> usize {
-        self.keys.len() + self.shaders.len() + self.fixed.len()
-    }
-}
-
-static FIRST_SCREEN: Mutex<FirstScreen> = Mutex::new(FirstScreen {
-    keys: Vec::new(),
-    shaders: Vec::new(),
-    fixed: Vec::new(),
-});
-static FIRST_FRAME_DRAWN: AtomicBool = AtomicBool::new(false);
-
-fn first_screen() -> MutexGuard<'static, FirstScreen> {
-    FIRST_SCREEN.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// Notes a shape pipeline a renderer drew its first screen with. The notes
-/// are written with the cache, for the next launch to build ahead of its
-/// first frame.
-pub(crate) fn note_first_screen_pipeline(key: u64) {
-    let mut first_screen = first_screen();
-    if !first_screen.keys.contains(&key) {
-        first_screen.keys.push(key);
-        CHANGES.note_change();
-    }
-}
-
-/// Notes a runtime shader pipeline a renderer drew its first screen with,
-/// written with the cache like [`note_first_screen_pipeline`]'s.
-pub(crate) fn note_first_screen_shader(record: ShaderPipelineRecord) {
-    let mut first_screen = first_screen();
-    if !first_screen.shaders.contains(&record) {
-        first_screen.shaders.push(record);
-        CHANGES.note_change();
-    }
-}
-
-/// Notes a fixed pipeline a renderer drew its first screen with, written
-/// with the cache like [`note_first_screen_pipeline`]'s.
-pub(crate) fn note_first_screen_fixed(label: &'static str) {
-    let mut first_screen = first_screen();
-    if !first_screen.fixed.contains(&label) {
-        first_screen.fixed.push(label);
-        CHANGES.note_change();
-    }
-}
-
-pub(crate) fn note_frame_drawn() {
-    if !FIRST_FRAME_DRAWN.load(Ordering::Acquire) {
-        FIRST_FRAME_DRAWN.store(true, Ordering::Release);
-        CHANGES.note_change();
-    }
+/// This launch's pipelines, then those of the previous launches it did not
+/// draw with, a launch older: each while it is younger than
+/// [`RECORDED_LAUNCHES`], at most [`MAX_RECORDS`] of them.
+fn recent<T: Copy + PartialEq>(
+    session: impl Iterator<Item = Recorded<T>> + Clone,
+    previous: impl Iterator<Item = Recorded<T>> + Clone,
+) -> impl Iterator<Item = Recorded<T>> + Clone {
+    let drawn = session.clone();
+    session
+        .chain(previous.filter_map(move |record| {
+            let unseen = !drawn.clone().any(|drawn| drawn.entry == record.entry);
+            (unseen && record.age + 1 < RECORDED_LAUNCHES).then_some(Recorded {
+                age: record.age + 1,
+                first_screen: false,
+                ..record
+            })
+        }))
+        .take(MAX_RECORDS)
 }
 
 /// How long pipeline builds must pause before the cache is written. A burst
@@ -348,8 +346,9 @@ const PERSIST_QUIET: Duration = Duration::from_millis(500);
 
 static CHANGES: PersistSignal = PersistSignal::new();
 
-/// Counts a pipeline build and wakes the watchers waiting to write it back.
-pub(crate) fn note_pipeline_built() {
+/// Counts a change the cache file should keep, such as a pipeline build,
+/// and wakes the watchers waiting to write it.
+pub(crate) fn note_change() {
     CHANGES.note_change();
 }
 
@@ -437,7 +436,11 @@ impl Drop for PersistWatcher {
     }
 }
 
-pub(crate) fn spawn_persist_watcher(cache: Option<wgpu::PipelineCache>) -> Option<PersistWatcher> {
+pub(crate) fn spawn_persist_watcher(
+    cache: Option<wgpu::PipelineCache>,
+    previous: Arc<PipelineRecords>,
+    recorder: PipelineRecorder,
+) -> Option<PersistWatcher> {
     let path = file_path()?;
     let stopped = Arc::new(AtomicBool::new(false));
     let watcher_stopped = Arc::clone(&stopped);
@@ -448,12 +451,12 @@ pub(crate) fn spawn_persist_watcher(cache: Option<wgpu::PipelineCache>) -> Optio
             loop {
                 match CHANGES.wait_for_quiet(written, PERSIST_QUIET, &watcher_stopped) {
                     Wake::Quiet(revision) => {
-                        persist(cache.as_ref(), &path);
+                        persist(cache.as_ref(), &path, &previous, &recorder);
                         written = revision;
                     }
                     Wake::Stopped(revision) => {
                         if revision != written {
-                            persist(cache.as_ref(), &path);
+                            persist(cache.as_ref(), &path, &previous, &recorder);
                         }
                         return;
                     }
