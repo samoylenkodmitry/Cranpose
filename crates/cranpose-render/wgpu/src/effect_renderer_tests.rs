@@ -25,16 +25,23 @@ fn capture_blur_batch(
         .iter()
         .enumerate()
         .map(|(index, mode)| {
-            let dest = (index as u32 * 16, 0, 16, 32);
-            let mut uniforms =
-                renderer.blur_uniforms(true, (32, 32), (5, 7, 13, 17), dest, (8.0, 8.0), *mode);
-            uniforms.source_region[0] += phase;
-            uniforms.dest_region[0] += phase;
+            let dest_rect = (index as u32 * 16, 0, 16, 32);
+            let mut source_region = region_uniform((5, 7, 13, 17));
+            let mut dest_region = region_uniform(dest_rect);
+            source_region[0] += phase;
+            dest_region[0] += phase;
             BlurDraw {
-                source,
-                uniforms,
+                source: BlurSource::Primary,
+                uniforms: BlurUniformSpec {
+                    horizontal: true,
+                    sampled: (32, 32),
+                    source: source_region,
+                    dest: dest_region,
+                    radius: (8.0, 8.0),
+                    tile_mode: *mode,
+                },
                 filter: downsample.map_or(BlurFilter::Kernel, BlurFilter::Downsample),
-                scissor: Some(dest),
+                scissor: Some(dest_rect),
             }
         })
         .collect();
@@ -47,7 +54,8 @@ fn capture_blur_batch(
             &target.view,
             (64, 32),
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            &draws,
+            BlurSourceSet::single(source),
+            draws.iter().copied(),
         );
     })
 }
@@ -327,8 +335,8 @@ fn cached_blur_kernels_preserve_fractional_radii_axes_and_eviction() {
             let uniforms = renderer.blur_uniforms(
                 horizontal,
                 (64, 32),
-                (3, 5, 17, 19),
-                (7, 11, 17, 19),
+                region_uniform((3, 5, 17, 19)),
+                region_uniform((7, 11, 17, 19)),
                 radius,
                 TileMode::Mirror,
             );
