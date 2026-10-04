@@ -14,7 +14,8 @@ use cranpose_render_wgpu::{
 };
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape, LiquidGlassRect,
-    LiquidGlassSpec, Rect, RenderEffect, RoundedCornerShape, liquid_glass_effect,
+    LiquidGlassSpec, LiquidLoupeSpec, Rect, RenderEffect, RoundedCornerShape, liquid_glass_effect,
+    liquid_loupe_effect,
 };
 
 use crate::{shared_test_support, support};
@@ -362,43 +363,48 @@ fn a_first_frame_uses_its_requested_warm_up_instead_of_compiling_a_stand_in() {
     );
 }
 
-/// A striped page under one rounded pane whose backdrop `effect` draws.
-fn paned_page(effect: RenderEffect) -> RenderGraph {
+/// A striped page under a row of rounded panes, one per backdrop effect.
+fn panes_page(effects: impl IntoIterator<Item = RenderEffect>) -> RenderGraph {
     use support::glass_page::{
-        FRAME_HEIGHT, FRAME_WIDTH, GLASS_HEIGHT, GLASS_LEFT, GLASS_RADIUS, GLASS_TOP, GLASS_WIDTH,
+        FRAME_HEIGHT, FRAME_WIDTH, GLASS_HEIGHT, GLASS_LEFT, GLASS_PITCH, GLASS_RADIUS, GLASS_TOP,
+        GLASS_WIDTH,
     };
     let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
-    children.push(RenderNode::Layer(Box::new(
-        shared_test_support::layer_node(
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: GLASS_WIDTH,
-                height: GLASS_HEIGHT,
-            },
-            ProjectiveTransform::translation(GLASS_LEFT, GLASS_TOP),
-            GraphicsLayer {
-                backdrop_effect: Some(effect),
-                clip: true,
-                shape: LayerShape::Rounded(RoundedCornerShape::uniform(GLASS_RADIUS)),
-                ..GraphicsLayer::default()
-            },
-            Vec::new(),
-        ),
-    )));
+    for (index, effect) in effects.into_iter().enumerate() {
+        children.push(RenderNode::Layer(Box::new(
+            shared_test_support::layer_node(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: GLASS_WIDTH,
+                    height: GLASS_HEIGHT,
+                },
+                ProjectiveTransform::translation(
+                    GLASS_LEFT + GLASS_PITCH * index as f32,
+                    GLASS_TOP,
+                ),
+                GraphicsLayer {
+                    backdrop_effect: Some(effect),
+                    clip: true,
+                    shape: LayerShape::Rounded(RoundedCornerShape::uniform(GLASS_RADIUS)),
+                    ..GraphicsLayer::default()
+                },
+                Vec::new(),
+            ),
+        )));
+    }
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
 /// A striped page under one glass pane.
 fn glass_page() -> RenderGraph {
-    paned_page(support::glass_page::glass_shader())
+    panes_page([support::glass_page::glass_shader()])
 }
 
-/// [`glass_page`] with a pane of another material: a specialization of its
-/// own.
-fn other_glass_page() -> RenderGraph {
+/// A glass pane of the material `spec` describes.
+fn glass_of(spec: &LiquidGlassSpec) -> RenderEffect {
     use support::glass_page::{GLASS_HEIGHT, GLASS_WIDTH};
-    paned_page(liquid_glass_effect(
+    liquid_glass_effect(
         &LiquidGlassRect {
             left: 0.0,
             top: 0.0,
@@ -406,44 +412,37 @@ fn other_glass_page() -> RenderGraph {
             height: GLASS_HEIGHT,
             tint_color: Color(1.0, 1.0, 1.0, 0.12),
         },
-        &LiquidGlassSpec {
-            blur_radius: 9.0,
-            ..LiquidGlassSpec::default()
-        },
+        spec,
         GLASS_WIDTH,
         GLASS_HEIGHT,
-    ))
+    )
 }
 
-/// Glass draws in `renderer`'s next frame that took the general pipeline
-/// while their own compiled.
-fn glass_fallback_draws(renderer: &mut support::LockedRenderer) -> u32 {
+/// Pipelines `renderer` built on the frame thread while drawing `page`.
+fn frame_builds_of(renderer: &mut support::LockedRenderer, page: RenderGraph) -> u64 {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
-    support::capture_graph(renderer, glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
-    renderer
-        .last_frame_stats()
-        .expect("glass frame statistics")
-        .shader_pipeline_fallback_draws
+    let before = pipelines_created();
+    support::capture_graph(renderer, page, FRAME_WIDTH, FRAME_HEIGHT);
+    pipelines_created() - before
 }
 
 /// After an update the compiled pipelines are gone, but the glass the last
 /// launch drew its first screen with is built before the first frame from
-/// the framework's own shader source, so that frame draws with it instead
-/// of compiling the general pipeline to stand in.
+/// the framework's own shader source, so that frame compiles nothing.
 #[test]
 fn an_updated_build_draws_its_first_glass_with_pipelines_built_before_it() {
     relaunch_after_drawing(
         |previous| {
             assert!(
-                glass_fallback_draws(previous) > 0,
-                "a fresh first screen's glass stands in with the general pipeline"
+                frame_builds_of(previous, glass_page()) > 0,
+                "a fresh first screen builds its glass inside its frame"
             );
         },
         |bytes| bytes[0] ^= 0xff,
         |updated| {
             wait_for_warm_ups();
             assert_eq!(
-                glass_fallback_draws(updated),
+                frame_builds_of(updated, glass_page()),
                 0,
                 "the first glass after an update must find its pipelines built"
             );
@@ -454,20 +453,18 @@ fn an_updated_build_draws_its_first_glass_with_pipelines_built_before_it() {
 /// A striped page under one frosted pane: its blur and the composite that
 /// places it draw with fixed pipelines.
 fn frosted_page() -> RenderGraph {
-    paned_page(RenderEffect::blur(8.0))
+    panes_page([RenderEffect::blur(8.0)])
 }
 
 /// Pipelines `renderer` built on the frame thread while drawing the frosted
 /// page.
 fn frosted_frame_builds(renderer: &mut support::LockedRenderer) -> u64 {
-    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
-    let before = pipelines_created();
-    support::capture_graph(renderer, frosted_page(), FRAME_WIDTH, FRAME_HEIGHT);
+    let builds = frame_builds_of(renderer, frosted_page());
     let stats = renderer
         .last_frame_stats()
         .expect("frosted frame statistics");
     assert!(stats.blur_passes > 0, "the pane must blur");
-    pipelines_created() - before
+    builds
 }
 
 /// The blur and composite pipelines the last launch drew its first screen
@@ -554,29 +551,44 @@ fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
 #[test]
 fn an_updated_build_stands_a_new_glass_in_with_a_general_built_after_its_first_frame() {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
+    // Folded, each material below is a pipeline of its own.
+    cranpose_ui_graphics::set_glass_material_folds(true);
+    let frosted = LiquidGlassSpec {
+        blur_radius: 4.0,
+        ..LiquidGlassSpec::default()
+    };
     relaunch_after_drawing(
         |previous| {
             first_frame_builds(previous);
             std::thread::sleep(Duration::from_millis(2100));
+            // Two new materials in one frame: the second stands in.
+            support::capture_graph(
+                previous,
+                panes_page([support::glass_page::glass_shader(), glass_of(&frosted)]),
+                FRAME_WIDTH,
+                FRAME_HEIGHT,
+            );
+            let stats = previous.last_frame_stats().expect("glass frame statistics");
             assert!(
-                glass_fallback_draws(previous) > 0,
-                "the last launch stands its glass in with the general pipeline"
+                stats.shader_pipeline_fallback_draws > 0,
+                "the last launch stands a glass in with the general pipeline"
             );
         },
         |bytes| bytes[0] ^= 0xff,
         |updated| {
             first_frame_builds(updated);
             wait_for_warm_ups();
-            let before = pipelines_created();
-            support::capture_graph(updated, other_glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
+            use support::glass_page::{GLASS_HEIGHT, GLASS_WIDTH};
+            let loupe =
+                liquid_loupe_effect((GLASS_WIDTH, GLASS_HEIGHT), &LiquidLoupeSpec::default());
+            let builds = frame_builds_of(updated, panes_page([loupe]));
             let stats = updated.last_frame_stats().expect("glass frame statistics");
             assert!(
                 stats.shader_pipeline_fallback_draws > 0,
                 "a new material stands in while its own pipeline compiles"
             );
             assert_eq!(
-                pipelines_created() - before,
-                0,
+                builds, 0,
                 "the stand-in must be built before the new material needs it"
             );
         },
