@@ -2935,6 +2935,7 @@ impl super::Adapter {
             texture_identity_factory: super::ResourceIdentityFactory::new(),
             texture_view_identity_factory: super::ResourceIdentityFactory::new(),
             empty_descriptor_set_layout,
+            texture_reads_before_fragment: core::sync::atomic::AtomicBool::new(false),
         });
 
         let relay_semaphores = super::RelaySemaphores::new(&shared)?;

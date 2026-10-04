@@ -292,14 +292,14 @@ pub fn map_texture_usage(usage: wgt::TextureUses) -> vk::ImageUsageFlags {
     flags
 }
 
+/// The stages and access of `usage`, with `shader_stages` the stages that
+/// may read or write the texture from a shader.
 pub fn map_texture_usage_to_barrier(
     usage: wgt::TextureUses,
+    shader_stages: vk::PipelineStageFlags,
 ) -> (vk::PipelineStageFlags, vk::AccessFlags) {
     let mut stages = vk::PipelineStageFlags::empty();
     let mut access = vk::AccessFlags::empty();
-    let shader_stages = vk::PipelineStageFlags::VERTEX_SHADER
-        | vk::PipelineStageFlags::FRAGMENT_SHADER
-        | vk::PipelineStageFlags::COMPUTE_SHADER;
 
     if usage.contains(wgt::TextureUses::COPY_SRC) {
         stages |= vk::PipelineStageFlags::TRANSFER;

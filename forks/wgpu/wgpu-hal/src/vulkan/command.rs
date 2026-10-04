@@ -240,6 +240,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         let mut dst_stages = vk::PipelineStageFlags::empty();
         let vk_barriers = &mut self.temp.image_barriers;
         vk_barriers.clear();
+        let shader_stages = self.device.texture_shader_stages();
 
         for bar in barriers {
             let range = conv::map_subresource_range_combined_aspect(
@@ -247,10 +248,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
                 bar.texture.format,
                 &self.device.private_caps,
             );
-            let (src_stage, src_access) = conv::map_texture_usage_to_barrier(bar.usage.from);
+            let (src_stage, src_access) = conv::map_texture_usage_to_barrier(bar.usage.from, shader_stages);
             let src_layout = conv::derive_image_layout(bar.usage.from, bar.texture.format);
             src_stages |= src_stage;
-            let (dst_stage, dst_access) = conv::map_texture_usage_to_barrier(bar.usage.to);
+            let (dst_stage, dst_access) = conv::map_texture_usage_to_barrier(bar.usage.to, shader_stages);
             let dst_layout = conv::derive_image_layout(bar.usage.to, bar.texture.format);
             dst_stages |= dst_stage;
 

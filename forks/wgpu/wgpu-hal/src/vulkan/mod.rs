@@ -531,6 +531,13 @@ struct DeviceShared {
 
     empty_descriptor_set_layout: vk::DescriptorSetLayout,
 
+    /// Whether a bind group layout lets a stage other than fragment or
+    /// compute read a texture. Until one does, a texture read by shaders is
+    /// waited for only in those two stages, so a pass that samples what the
+    /// previous pass drew no longer holds its vertex work behind that pass's
+    /// fragment work. Set once, never cleared.
+    texture_reads_before_fragment: core::sync::atomic::AtomicBool,
+
     // The `drop_guard` field must be the last field of this struct so it is dropped last.
     // Do not add new fields after it.
     drop_guard: Option<crate::DropGuard>,
