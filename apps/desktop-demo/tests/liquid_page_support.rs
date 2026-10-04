@@ -21,7 +21,9 @@ pub fn physical(logical: u32, density: f32) -> u32 {
     (logical as f32 * density).ceil() as u32
 }
 
-/// A renderer on the headless GPU, or none without one.
+/// A renderer on the headless GPU, or none without one. It compiles every
+/// pipeline where first needed, so its captures draw what a settled app
+/// draws rather than placeholders for pipelines still compiling.
 pub fn headless_renderer(label: &'static str) -> Option<WgpuRenderer> {
     let device = gpu_test_device::HeadlessDevice::request(
         wgpu::Backends::all(),
@@ -33,7 +35,7 @@ pub fn headless_renderer(label: &'static str) -> Option<WgpuRenderer> {
     device.attach(
         &mut renderer,
         wgpu::TextureFormat::Bgra8UnormSrgb,
-        crate::gpu_test_device::Pipelines::Background,
+        crate::gpu_test_device::Pipelines::Inline,
     );
     Some(renderer)
 }
