@@ -201,6 +201,6 @@ fn blur_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let axis = blur.direction_and_radius.xy;
     let pair_count = i32(blur.kernel.x);
     var color = kernel_tap(frame, vec2<f32>(0.0, 0.0)) * tap_weight(frame.local, 1.0);
-    // BLUR_KERNEL_PAIRS
+    //@BLUR_KERNEL_PAIRS
     return color / max(blur.kernel.y, 0.00001);
 }

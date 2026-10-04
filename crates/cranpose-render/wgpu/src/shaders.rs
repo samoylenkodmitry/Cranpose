@@ -48,8 +48,9 @@ pub(crate) fn filling_shape_shader() -> String {
     source
 }
 
-/// The line of `blur_fs.wgsl` that the kernel's pair taps replace.
-const BLUR_KERNEL_PAIRS_MARKER: &str = "    // BLUR_KERNEL_PAIRS\n";
+/// The line of `blur_fs.wgsl` that the kernel's pair taps replace: a `//@`
+/// directive, which the embedded text keeps without its indentation.
+const BLUR_KERNEL_PAIRS_MARKER: &str = "//@BLUR_KERNEL_PAIRS\n";
 
 /// The blur shader, its kernel's pairs written out one guarded call per
 /// entry of the uniform pair table: a loop over the table indexes it

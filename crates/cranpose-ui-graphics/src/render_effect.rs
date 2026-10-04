@@ -77,8 +77,8 @@ impl Default for BlurredEdgeTreatment {
 /// sampler at group 0, and the 64 uniform vectors at group 1. A shader
 /// source is this prelude followed by an `effect_fs` fragment stage.
 pub const RUNTIME_SHADER_PRELUDE_WGSL: &str = concat!(
-    include_str!("../shaders/fullscreen_quad_vs.wgsl"),
-    include_str!("../shaders/runtime_shader_bindings.wgsl"),
+    framework_wgsl!("fullscreen_quad_vs.wgsl"),
+    framework_wgsl!("runtime_shader_bindings.wgsl"),
 );
 
 /// A custom WGSL shader effect, analogous to Android's `RuntimeShader`.
