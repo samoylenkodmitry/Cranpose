@@ -118,7 +118,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     }
 }
 
-const FILE_LAYOUT: u32 = 3;
+const FILE_LAYOUT: u32 = 4;
 
 /// Names what fills a file: its layout, the framework's WGSL sources, and
 /// this crate's version, which changes with each release of the shader
