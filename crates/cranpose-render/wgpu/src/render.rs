@@ -4238,6 +4238,7 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         if submitted {
             self.recorder.note_frame_drawn();
+            self.effect_renderer.warm_after_first_frame();
             if let Some(records) = self.recent_after_update.take() {
                 self.warm_recent(&records);
             }

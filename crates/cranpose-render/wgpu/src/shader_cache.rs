@@ -278,6 +278,9 @@ pub(crate) struct ShaderPipelineCache {
     waited_this_frame: Option<PipelineKey>,
     /// The shared stand-ins of the last launch's first screen.
     stand_ins: Vec<StandIn>,
+    /// The recorded pipelines a stand-in covers, queued once the first frame
+    /// is drawn.
+    after_first_frame: Vec<(PipelineKey, Vec<(&'static str, f64)>)>,
     /// The general that material went without, queued when the next frame
     /// starts: compiled beside the frame's own pipelines it would hold them,
     /// since a Mali driver compiles largely one pipeline at a time.
@@ -326,6 +329,7 @@ impl ShaderPipelineCache {
             forced_hash: 0,
             waited_this_frame: None,
             stand_ins: Vec::new(),
+            after_first_frame: Vec::new(),
             general_due: None,
             #[cfg(not(target_arch = "wasm32"))]
             noted: HashSet::default(),
@@ -552,7 +556,12 @@ impl ShaderPipelineCache {
         // A shared stand-in, queued ahead of the recorded pipelines, draws a
         // first screen while its materials' own pipelines compile.
         if let Some(index) = self.stand_in_for(key, specialization) {
-            if !self.pipelines.contains_key(&key) {
+            if !self.pipelines.contains_key(&key)
+                && !self
+                    .after_first_frame
+                    .iter()
+                    .any(|(later, _)| *later == key)
+            {
                 self.request(shader, specialization, key, CompileLane::Demanded);
             }
             return (
@@ -651,11 +660,14 @@ impl ShaderPipelineCache {
     }
 
     /// [`Self::warm_recorded`] for the pipelines the last launch drew its
-    /// first screen with, queued behind a stand-in per shader source, blend
-    /// mode and draw part that several of them share. A stand-in folds only
-    /// the overrides all of those share: folds are exact, so it draws each of
-    /// them with its own pipeline's bytes, and compiles in about the time of
-    /// one of them, so the first frame can draw while theirs compile.
+    /// first screen with, behind a stand-in per shader source, blend mode and
+    /// draw part that several of them share. A stand-in folds only the
+    /// overrides all of those share: folds are exact, so it draws each of them
+    /// with its own pipeline's bytes, and it compiles in about the time of one
+    /// of them. The pipelines a stand-in covers wait for
+    /// [`Self::queue_after_first_frame`]: a Mali driver compiles largely one
+    /// pipeline at a time, so compiled beside the first frame they would hold
+    /// the pipelines it draws with.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_first_screen<'a>(
         &mut self,
@@ -689,6 +701,25 @@ impl ShaderPipelineCache {
             self.stand_ins.push(stand_in);
         }
         for (key, constants) in recorded {
+            let covered = self.stand_ins.iter().any(|stand_in| {
+                stand_in.key.part() == key.part()
+                    && stand_in
+                        .constants
+                        .iter()
+                        .all(|&shared| holds(&constants, shared))
+            });
+            if covered {
+                self.after_first_frame.push((key, constants));
+            } else {
+                self.queue_warm_up(key, constants);
+            }
+        }
+    }
+
+    /// Queues the recorded pipelines a stand-in drew the first frame for.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn queue_after_first_frame(&mut self) {
+        for (key, constants) in std::mem::take(&mut self.after_first_frame) {
             self.queue_warm_up(key, constants);
         }
     }

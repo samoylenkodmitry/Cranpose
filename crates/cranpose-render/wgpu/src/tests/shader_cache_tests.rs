@@ -308,6 +308,19 @@ fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
         (1, 1),
         "one shared pipeline: neither material's own nor the general"
     );
+    for shader in &materials {
+        let own = cache.key(
+            shader,
+            shader.draw_specialization(0),
+            mode,
+            ShaderDrawVariant::Interior,
+        );
+        assert!(
+            !cache.pipelines.contains_key(&own),
+            "a covered material's own pipeline waits for the first frame to be drawn"
+        );
+    }
+    cache.queue_after_first_frame();
     drop(holds);
     let deadline = Instant::now() + SETTLE;
     loop {

@@ -1241,6 +1241,12 @@ impl EffectRenderer {
             .warm_first_screen(records, framework_shader_sources());
     }
 
+    /// Queues the recorded pipelines a stand-in drew the first frame for.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_after_first_frame(&mut self) {
+        self.shader_cache.queue_after_first_frame();
+    }
+
     /// Queues the fixed pipelines whose labels `wanted` accepts.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_fixed(&self, device: &wgpu::Device, wanted: &dyn Fn(&str) -> bool) {
