@@ -67,6 +67,15 @@ pub(crate) struct Drawn {
 }
 
 impl PipelineRecorder {
+    pub(crate) fn during_demand<T>(&self, build: impl FnOnce() -> T) -> T {
+        #[cfg(not(target_arch = "wasm32"))]
+        let started = Instant::now();
+        let value = build();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.extend_first_screen(started.elapsed());
+        value
+    }
+
     /// Starts the first screen with the renderer's first frame.
     pub(crate) fn begin_frame(&self) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -83,9 +92,9 @@ impl PipelineRecorder {
 
     /// Moves the first screen's end later by `waited`, the time a draw spent
     /// building a pipeline.
-    pub(crate) fn extend_first_screen(&self, waited: Duration) {
+    fn extend_first_screen(&self, waited: Duration) {
         let mut first_screen = self.first_screen();
-        if !first_screen.over()
+        if !first_screen.over
             && let Some(started) = &mut first_screen.started
         {
             *started += waited;

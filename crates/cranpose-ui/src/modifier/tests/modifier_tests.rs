@@ -1,4 +1,4 @@
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{cell::Cell, rc::Rc};
 
 use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -507,44 +507,6 @@ fn graphics_layer_reads_latest_value_without_recomposition() {
     read_alpha(0.25);
     alpha.set(0.85);
     read_alpha(0.85);
-}
-
-#[test]
-fn lazy_graphics_layer_state_writes_schedule_attached_node_draw_repass() {
-    let _app_context = crate::render_state::app_context_test_scope();
-    use crate::modifier_nodes::GraphicsLayerNode;
-
-    let runtime =
-        cranpose_core::runtime::Runtime::new(Arc::new(cranpose_core::runtime::DefaultScheduler));
-    let x_state = cranpose_core::MutableState::with_runtime(10.0f32, runtime.handle());
-    let modifier = Modifier::empty().graphics_layer({
-        move || GraphicsLayer {
-            translation_x: x_state.get(),
-            ..Default::default()
-        }
-    });
-
-    let mut handle = ModifierChainHandle::new();
-    handle.set_node_id(Some(41));
-    let _ = handle.update(&modifier);
-
-    let chain = handle.chain();
-    chain.for_each_node_with_capability(
-        cranpose_foundation::NodeCapabilities::DRAW,
-        |_ref, node| {
-            if let Some(layer_node) = node.as_any().downcast_ref::<GraphicsLayerNode>() {
-                assert!((layer_node.layer().translation_x - 10.0).abs() < 1e-6);
-            }
-        },
-    );
-
-    let _ = crate::take_render_invalidation();
-    let _ = crate::take_draw_repass_nodes();
-    x_state.set(42.0);
-    runtime.handle().drain_ui();
-
-    assert!(crate::take_render_invalidation());
-    assert_eq!(crate::take_draw_repass_nodes(), vec![41]);
 }
 
 #[test]

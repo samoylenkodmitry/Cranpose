@@ -141,39 +141,83 @@ pub fn nearest_window_root(applier: &mut MemoryApplier, node: NodeId) -> Option<
     None
 }
 
+/// Reusable ancestry storage for [`nearest_window_roots_into`].
+#[derive(Default)]
+pub struct WindowRootRoutingScratch {
+    owners: HashMap<NodeId, Option<NodeId>>,
+    path: Vec<NodeId>,
+}
+
 /// [`nearest_window_root`] for each of `nodes`, in order, with every
 /// ancestor looked up at most once. In an app context with no window root
 /// attached, every node belongs to the primary root and none is looked up.
 pub fn nearest_window_roots(applier: &mut MemoryApplier, nodes: &[NodeId]) -> Vec<Option<NodeId>> {
-    if current_app_context().is_some_and(|context| context.window_roots().is_empty()) {
-        return vec![None; nodes.len()];
+    let mut output = Vec::new();
+    nearest_window_roots_into(
+        applier,
+        nodes.iter().copied(),
+        &mut output,
+        &mut WindowRootRoutingScratch::default(),
+    );
+    output
+}
+
+/// Fills `output` with [`nearest_window_roots`] results, reusing its storage
+/// and the ancestry cache in `scratch` across batches.
+///
+/// The cache is cleared for every batch, so changes to window-root modifiers
+/// and tree attachment are observed immediately.
+///
+/// ```
+/// use cranpose_core::MemoryApplier;
+/// use cranpose_ui::{WindowRootRoutingScratch, nearest_window_roots_into};
+///
+/// let mut applier = MemoryApplier::new();
+/// let mut scratch = WindowRootRoutingScratch::default();
+/// let mut owners = Vec::new();
+/// nearest_window_roots_into(&mut applier, [], &mut owners, &mut scratch);
+/// assert!(owners.is_empty());
+/// ```
+pub fn nearest_window_roots_into(
+    applier: &mut MemoryApplier,
+    nodes: impl IntoIterator<Item = NodeId>,
+    output: &mut Vec<Option<NodeId>>,
+    scratch: &mut WindowRootRoutingScratch,
+) {
+    let nodes = nodes.into_iter();
+    output.clear();
+    scratch.owners.clear();
+    scratch.path.clear();
+    let (lower_bound, upper_bound) = nodes.size_hint();
+    if lower_bound == 0 && upper_bound == Some(0) {
+        return;
     }
-    let mut owners: HashMap<NodeId, Option<NodeId>> = HashMap::new();
-    let mut path = Vec::new();
-    nodes
-        .iter()
-        .map(|&node| {
-            let mut current = node;
-            path.clear();
-            let owner = loop {
-                if let Some(known) = owners.get(&current) {
-                    break *known;
-                }
-                path.push(current);
-                if is_window_root(applier, current) {
-                    break Some(current);
-                }
-                match applier.get_mut(current).ok().and_then(|node| node.parent()) {
-                    Some(parent) if path.len() < 100_000 => current = parent,
-                    _ => break None,
-                }
-            };
-            for visited in path.drain(..) {
-                owners.insert(visited, owner);
+    output.reserve(lower_bound);
+    if current_app_context().is_some_and(|context| context.window_roots().is_empty()) {
+        output.extend(nodes.map(|_| None));
+        return;
+    }
+    for node in nodes {
+        let mut current = node;
+        scratch.path.clear();
+        let owner = loop {
+            if let Some(known) = scratch.owners.get(&current) {
+                break *known;
             }
-            owner
-        })
-        .collect()
+            scratch.path.push(current);
+            if is_window_root(applier, current) {
+                break Some(current);
+            }
+            match applier.get_mut(current).ok().and_then(|node| node.parent()) {
+                Some(parent) if scratch.path.len() < 100_000 => current = parent,
+                _ => break None,
+            }
+        };
+        for visited in scratch.path.drain(..) {
+            scratch.owners.insert(visited, owner);
+        }
+        output.push(owner);
+    }
 }
 
 /// Node that lays its content out into the window's size. That size is the

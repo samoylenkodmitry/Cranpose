@@ -5,8 +5,8 @@ use web_time::Instant;
 
 use crate::{
     TextSystemState,
-    collect::{LayerMotion, collect_overlay, collect_root},
-    frame_packet::{FramePacket, RenderReturns},
+    collect::{LayerMotion, LayerSceneRecycler, collect_overlay, collect_root},
+    frame_packet::{FramePacket, MAX_FRAMES_IN_FLIGHT, RenderReturns},
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
 };
@@ -31,9 +31,10 @@ pub(crate) struct RendererFrontend {
     pub(crate) fps_overlay_graph: Option<RenderGraph>,
     pub(crate) inspector_overlay_graph: Option<RenderGraph>,
     pub(crate) root_scene_capacity: SceneCapacityHint,
+    scene_recyclers: [LayerSceneRecycler; MAX_FRAMES_IN_FLIGHT],
+    returned_scenes: usize,
     pub(crate) layer_motion: LayerMotion,
     pub(crate) frame_sequence: u64,
-    pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
     pub(crate) transparent_background: bool,
 }
 
@@ -71,9 +72,10 @@ impl RendererFrontend {
             fps_overlay_graph: None,
             inspector_overlay_graph: None,
             root_scene_capacity: SceneCapacityHint::default(),
+            scene_recyclers: std::array::from_fn(|_| LayerSceneRecycler::default()),
+            returned_scenes: 0,
             layer_motion: LayerMotion::default(),
             frame_sequence: 0,
-            changed_nodes: Vec::new(),
             transparent_background: false,
         }
     }
@@ -134,19 +136,29 @@ impl RendererFrontend {
     ) -> Option<FramePacket> {
         let build_start = Instant::now();
         let graph = self.scene.graph.as_ref()?;
+        self.returned_scenes = self.returned_scenes.saturating_sub(1);
+        let recycler = &mut self.scene_recyclers[self.returned_scenes];
         let root = collect_root(
             &graph.root,
             &mut self.text_state,
             &mut self.layer_motion,
             self.root_scene_capacity,
             root_scale,
+            recycler,
         );
         self.root_scene_capacity = root.scene.capacity_hint();
         let after_root_collect = Instant::now();
-        let overlay = self
-            .dev_overlay_graph
-            .as_ref()
-            .map(|overlay| collect_overlay(&overlay.root, &mut self.text_state, root_scale));
+        let overlay = if let Some(overlay) = &self.dev_overlay_graph {
+            Some(collect_overlay(
+                &overlay.root,
+                &mut self.text_state,
+                root_scale,
+                recycler,
+            ))
+        } else {
+            None
+        };
+        recycler.clear();
         self.frame_sequence = self.frame_sequence.wrapping_add(1);
         let packet = FramePacket {
             frame_id: self.frame_sequence,
@@ -172,9 +184,18 @@ impl RendererFrontend {
     pub(crate) fn apply_returns(&mut self, returns: RenderReturns) {
         if let Some(frame) = returns.scene {
             self.root_scene_capacity = frame.root.scene.capacity_hint();
-            drop(frame.overlay);
-            drop(frame.root.children);
-            drop(frame.root.scene);
+            if self.returned_scenes == MAX_FRAMES_IN_FLIGHT {
+                self.scene_recyclers.rotate_left(1);
+                self.returned_scenes -= 1;
+            }
+            let recycler = &mut self.scene_recyclers[self.returned_scenes];
+            recycler.clear();
+            if let Some(overlay) = frame.overlay {
+                recycler.recycle(overlay);
+            }
+            recycler.recycle(frame.root);
+            recycler.returned_packet();
+            self.returned_scenes += 1;
         }
     }
 }

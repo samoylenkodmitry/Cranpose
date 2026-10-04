@@ -1,6 +1,6 @@
 use crate::{
     frame_graph::FrameCommandRecorder, lazy_resource::LazyGpuResource,
-    pipeline_compiler::CompilerSend, shared_shader::SharedShader,
+    pipeline_recorder::PipelineRecorder, shared_shader::SharedShader,
 };
 
 const OUTPUT_CONVERSION_SHADER: &str = r"
@@ -79,18 +79,17 @@ impl OutputConverter {
         }
     }
 
-    fn pipeline_job(
+    fn pipeline(
         &self,
         device: &wgpu::Device,
-    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
-        let device = device.clone();
-        let shader = self.shader.clone();
-        let format = self.format;
-        move || {
-            let module = shader.module();
+        backend: wgpu::Backend,
+        recorder: &PipelineRecorder,
+    ) -> &wgpu::RenderPipeline {
+        self.pipeline.for_draw(recorder, backend, || {
+            let module = self.shader.module();
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Output Conversion Pipeline"),
-                layout: Some(shader.layout()),
+                layout: Some(self.shader.layout()),
                 vertex: wgpu::VertexState {
                     module,
                     entry_point: Some("vs_main"),
@@ -101,7 +100,7 @@ impl OutputConverter {
                     module,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
-                        format,
+                        format: self.format,
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
@@ -113,12 +112,7 @@ impl OutputConverter {
                 multiview_mask: None,
                 cache: None,
             })
-        }
-    }
-
-    fn pipeline(&self, device: &wgpu::Device, backend: wgpu::Backend) -> &wgpu::RenderPipeline {
-        self.pipeline
-            .get_or_init(backend, || self.pipeline_job(device)())
+        })
     }
 
     pub(crate) fn bind_group(
@@ -143,13 +137,14 @@ impl OutputConverter {
         destination: &wgpu::TextureView,
         bind_group: &wgpu::BindGroup,
         backend: wgpu::Backend,
+        pipeline_recorder: &PipelineRecorder,
     ) {
         let mut pass = recorder.begin_color_pass(
             "Output Conversion Pass",
             destination,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
-        pass.set_pipeline(self.pipeline(device, backend));
+        pass.set_pipeline(self.pipeline(device, backend, pipeline_recorder));
         pass.set_bind_group(0, bind_group, &[]);
         pass.draw(0..3, 0..1);
     }

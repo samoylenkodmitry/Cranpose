@@ -112,6 +112,38 @@ fn large_recordings_preserve_every_primitive_and_retained_snapshot() {
 }
 
 #[test]
+fn reusable_recording_waits_for_retained_readers_and_resets_after_transfer() {
+    let original = primitive(9);
+    let mut recording = CommandRecording::from_primitives([original.clone()]);
+    let retained = Arc::clone(recording.shape_recorder());
+
+    assert!(
+        recording.try_take_reusable().is_none(),
+        "recorded shapes remain owned by retained readers"
+    );
+    assert_eq!(
+        recording.primitives_with_markers().collect::<Vec<_>>(),
+        vec![original]
+    );
+    drop(retained);
+    let Some(storage) = recording.try_take_reusable() else {
+        panic!("unshared shape data can be transferred for reuse");
+    };
+    assert!(
+        recording.is_empty(),
+        "the source becomes empty after transfer"
+    );
+
+    let mut next = CommandRecorder::reusing(storage);
+    next.push_primitive(primitive(21));
+    let next = next.finish();
+    assert_eq!(
+        next.primitives_with_markers().collect::<Vec<_>>(),
+        vec![primitive(21)]
+    );
+}
+
+#[test]
 fn appending_after_a_fingerprint_updates_the_recording_identity() {
     let mutations: [fn(&mut CommandRecorder); 3] = [
         |recording| recording.push_primitive(primitive(2)),

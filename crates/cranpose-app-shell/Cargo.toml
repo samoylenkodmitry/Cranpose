@@ -39,6 +39,11 @@ web-time = { workspace = true }
 cranpose-macros = { path = "../cranpose-macros" }
 cranpose-liquid = { path = "../cranpose-liquid" }
 cranpose-ui-layout = { workspace = true }
+stats_alloc = "0.1.10"
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 arboard = { version = "3.6", default-features = false, optional = true }
+
+[[bench]]
+name = "scroll_frame"
+harness = false

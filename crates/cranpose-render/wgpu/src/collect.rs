@@ -5,7 +5,9 @@ use cranpose_render_common::{
         CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
         ProjectiveTransform, RenderNode, quad_bounds,
     },
-    layer_composition::{layer_requires_isolation, local_content_layer_for},
+    layer_composition::{
+        layer_composite_params, layer_requires_isolation, local_content_layer_for,
+    },
     layer_transform::{apply_layer_affine_to_rect, layer_uniform_scale},
     primitive_emit::{PrimitiveClipSpace, resolve_clip, resolve_primitive_clip},
 };
@@ -86,15 +88,67 @@ pub(crate) fn animated_raster_scale(scale: f32) -> f32 {
 pub(crate) struct LayerScene {
     pub(crate) scene: CompositorScene,
     pub(crate) children: Vec<ChildLayer>,
+    has_backdrop: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct LayerSceneRecycler {
+    scenes: Vec<LayerScene>,
+}
+
+impl LayerSceneRecycler {
+    pub(crate) fn take(&mut self, capacity: SceneCapacityHint) -> LayerScene {
+        match self.scenes.pop() {
+            Some(mut scene) => {
+                scene.has_backdrop = false;
+                scene
+            }
+            None => LayerScene::new(CompositorScene::with_capacity(capacity), Vec::new()),
+        }
+    }
+
+    pub(crate) fn recycle(&mut self, mut scene: LayerScene) {
+        while let Some(child) = scene.children.pop() {
+            self.recycle(child.content);
+        }
+        scene.scene.clear();
+        scene.has_backdrop = false;
+        self.scenes.push(scene);
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.scenes.clear();
+    }
+
+    pub(crate) fn returned_packet(&mut self) {
+        if self.scenes.capacity() > self.scenes.len().saturating_mul(2) {
+            self.scenes.shrink_to_fit();
+        }
+    }
 }
 
 impl LayerScene {
+    pub(crate) fn new(scene: CompositorScene, children: Vec<ChildLayer>) -> Self {
+        let mut layer = Self {
+            scene,
+            children,
+            has_backdrop: false,
+        };
+        layer.refresh_backdrop_summary();
+        layer
+    }
+
     pub(crate) fn contains_backdrop(&self) -> bool {
-        !self.scene.backdrop_layers.is_empty()
-            || self
-                .children
-                .iter()
-                .any(|child| child.backdrop.is_some() || child.content.contains_backdrop())
+        self.has_backdrop
+    }
+
+    fn refresh_backdrop_summary(&mut self) {
+        self.has_backdrop = self
+            .scene
+            .backdrop_layers
+            .iter()
+            .any(|layer| layer.alpha != 0.0)
+            || self.children.iter().any(ChildLayer::reads_backdrop);
     }
 }
 
@@ -114,6 +168,7 @@ pub(crate) struct ChildLayer {
     pub(crate) blend_mode: BlendMode,
     pub(crate) effect: Option<RenderEffect>,
     pub(crate) backdrop: Option<RenderEffect>,
+    pub(crate) backdrop_alpha: f32,
     pub(crate) snap_anchor: Option<SnapAnchor>,
     pub(crate) surface_scale: f32,
     pub(crate) content_hash: u64,
@@ -124,7 +179,7 @@ pub(crate) struct ChildLayer {
 
 impl ChildLayer {
     pub(crate) fn reads_backdrop(&self) -> bool {
-        self.backdrop.is_some() || self.content.contains_backdrop()
+        (self.backdrop.is_some() && self.backdrop_alpha != 0.0) || self.content.contains_backdrop()
     }
 }
 
@@ -229,7 +284,11 @@ fn primitive_is_drawn(primitive: &DrawPrimitive) -> bool {
 }
 
 fn layer_has_pixel_sensitive_subtree(layer: &LayerNode) -> bool {
-    layer.children.iter().any(|child| match child {
+    layer.children.iter().any(node_is_pixel_sensitive)
+}
+
+fn node_is_pixel_sensitive(node: &RenderNode) -> bool {
+    match node {
         RenderNode::Primitive(entry) => match &entry.node {
             PrimitiveNode::Text(_) => true,
             PrimitiveNode::Draw(draw) => primitive_is_pixel_sensitive(&draw.primitive),
@@ -239,7 +298,7 @@ fn layer_has_pixel_sensitive_subtree(layer: &LayerNode) -> bool {
             direct_translation(child.transform_to_parent).is_some()
                 && layer_has_pixel_sensitive_subtree(child)
         }
-    })
+    }
 }
 
 fn layer_needs_rigid_snap(layer: &LayerNode, translated: bool) -> bool {
@@ -770,11 +829,9 @@ pub(crate) fn collect_root(
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
     root_scale: f32,
+    recycler: &mut LayerSceneRecycler,
 ) -> LayerScene {
-    let mut out = LayerScene {
-        scene: CompositorScene::with_capacity(capacity),
-        children: Vec::new(),
-    };
+    let mut out = recycler.take(capacity);
     let context = WalkContext {
         offset: Point::default(),
         visual_clip: None,
@@ -783,8 +840,9 @@ pub(crate) fn collect_root(
         translated: false,
         raster_scale: RasterScale::Exact(root_scale),
     };
-    collect_child(root, text_layout, motion, context, &mut out);
+    collect_child(root, text_layout, motion, context, &mut out, recycler);
     out.scene.flush_loose();
+    out.refresh_backdrop_summary();
     motion.end_frame();
     out
 }
@@ -793,6 +851,7 @@ pub(crate) fn collect_overlay(
     root: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     root_scale: f32,
+    recycler: &mut LayerSceneRecycler,
 ) -> LayerScene {
     collect_root(
         root,
@@ -800,6 +859,7 @@ pub(crate) fn collect_overlay(
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         root_scale,
+        recycler,
     )
 }
 
@@ -812,6 +872,7 @@ fn push_backdrop_layer(
     let Some(effect) = layer.backdrop() else {
         return;
     };
+    let local_layer = local_content_layer_for(&layer.graphics_layer);
     let rect = layer.local_bounds.translate(offset.x, offset.y);
     let clip = resolve_clip(
         context.visual_clip,
@@ -825,9 +886,10 @@ fn push_backdrop_layer(
     });
     let snap_anchor = context
         .snap_anchor
-        .or_else(|| rigid_snap_anchor(rect, &local_content_layer_for(&layer.graphics_layer)));
+        .or_else(|| rigid_snap_anchor(rect, &local_layer));
     scene.push_backdrop_layer(BackdropLayer {
         node_id: layer.node_id,
+        alpha: local_layer.alpha,
         rect,
         clip,
         reach: context.visual_clip,
@@ -844,7 +906,8 @@ fn isolated_child(
     motion: &mut LayerMotion,
     context: WalkContext,
     parent_scene: &mut CompositorScene,
-) -> ChildLayer {
+    recycler: &mut LayerSceneRecycler,
+) -> (ChildLayer, bool) {
     let local_layer = local_content_layer_for(&layer.graphics_layer);
     let content_hash = layer.target_content_hash();
     let nominal_scale = layer_uniform_scale(&layer.graphics_layer);
@@ -866,12 +929,17 @@ fn isolated_child(
         translated: context.translated || layer.translated_content_context,
         raster_scale,
     };
-    let mut content = LayerScene {
-        scene: CompositorScene::new(),
-        children: Vec::new(),
-    };
-    collect_into(layer, text_layout, motion, content_context, &mut content);
+    let mut content = recycler.take(SceneCapacityHint::default());
+    let has_pixel_sensitive_subtree = collect_into(
+        layer,
+        text_layout,
+        motion,
+        content_context,
+        &mut content,
+        recycler,
+    );
     content.scene.flush_loose();
+    content.refresh_backdrop_summary();
     let transform = layer
         .transform_to_parent
         .then(ProjectiveTransform::translation(
@@ -879,7 +947,7 @@ fn isolated_child(
             context.offset.y,
         ));
     let parent_bounds = quad_bounds(transform.map_rect(layer.local_bounds));
-    let rigid = context.translated || layer_has_pixel_sensitive_subtree(layer);
+    let rigid = context.translated || has_pixel_sensitive_subtree;
     let snap_anchor = context.snap_anchor.or_else(|| {
         rigid
             .then(|| rigid_snap_anchor(parent_bounds, &local_layer))
@@ -898,36 +966,39 @@ fn isolated_child(
     };
     motion.record_scale(layer.node_id, surface_scale, content_hash);
     let in_place = can_draw_in_place(layer, transform, surface_scale, &content);
-    ChildLayer {
-        z_index: parent_scene.next_z(),
-        node_id: layer.node_id,
-        local_bounds: layer.local_bounds,
-        transform,
-        clip: context.visual_clip,
-        rounded_clip: rounded_clip_for_layer(layer),
-        alpha,
-        blend_mode: layer.graphics_layer.blend_mode,
-        effect: layer.effect().cloned(),
-        backdrop: layer.backdrop().cloned(),
-        snap_anchor,
-        surface_scale,
-        content_hash,
-        cache_policy: layer.cache_policy,
-        in_place,
-        content,
-    }
+    (
+        ChildLayer {
+            z_index: parent_scene.next_z(),
+            node_id: layer.node_id,
+            local_bounds: layer.local_bounds,
+            transform,
+            clip: context.visual_clip,
+            rounded_clip: rounded_clip_for_layer(layer),
+            alpha,
+            blend_mode: layer.graphics_layer.blend_mode,
+            effect: layer.effect().cloned(),
+            backdrop: layer.backdrop().cloned(),
+            backdrop_alpha: local_layer.alpha,
+            snap_anchor,
+            surface_scale,
+            content_hash,
+            cache_policy: layer.cache_policy,
+            in_place,
+            content,
+        },
+        has_pixel_sensitive_subtree,
+    )
 }
 
-fn with_backdrop_in_own_space(child: ChildLayer) -> ChildLayer {
-    if child.backdrop.is_none() || uniform_scale_translation(child.transform).is_some() {
+fn with_backdrop_in_own_space(child: ChildLayer, recycler: &mut LayerSceneRecycler) -> ChildLayer {
+    if child.backdrop.is_none()
+        || (uniform_scale_translation(child.transform).is_some()
+            && child.alpha == 1.0
+            && child.blend_mode == BlendMode::SrcOver)
+    {
         return child;
     }
-    let mut content = LayerScene {
-        scene: CompositorScene::new(),
-        children: Vec::new(),
-    };
-    let inner_z = content.scene.next_z();
-    content.scene.next_z += 1;
+    let content = recycler.take(SceneCapacityHint::default());
     let mut outer = ChildLayer {
         z_index: child.z_index,
         node_id: child.node_id,
@@ -939,6 +1010,7 @@ fn with_backdrop_in_own_space(child: ChildLayer) -> ChildLayer {
         blend_mode: child.blend_mode,
         effect: None,
         backdrop: None,
+        backdrop_alpha: 1.0,
         snap_anchor: child.snap_anchor,
         surface_scale: child.surface_scale,
         content_hash: child.content_hash,
@@ -946,16 +1018,21 @@ fn with_backdrop_in_own_space(child: ChildLayer) -> ChildLayer {
         in_place: false,
         content,
     };
-    outer.content.children.push(ChildLayer {
-        z_index: inner_z,
+    let mut inner = ChildLayer {
+        z_index: outer.content.scene.next_z(),
         transform: ProjectiveTransform::identity(),
         clip: None,
         alpha: 1.0,
         blend_mode: BlendMode::SrcOver,
         snap_anchor: None,
+        surface_scale: 1.0,
         in_place: false,
         ..child
-    });
+    };
+    detach_flat_backdrop(&mut inner, &mut outer.content.scene);
+    outer.content.scene.next_z += 1;
+    outer.content.children.push(inner);
+    outer.content.refresh_backdrop_summary();
     outer
 }
 
@@ -974,6 +1051,7 @@ fn detach_flat_backdrop(child: &mut ChildLayer, scene: &mut CompositorScene) {
     };
     scene.push_backdrop_layer(BackdropLayer {
         node_id: child.node_id,
+        alpha: child.backdrop_alpha,
         rect: child.local_bounds.translate(offset.x, offset.y),
         clip: child.clip,
         reach: None,
@@ -994,7 +1072,8 @@ fn collect_into(
     motion: &mut LayerMotion,
     context: WalkContext,
     out: &mut LayerScene,
-) {
+    recycler: &mut LayerSceneRecycler,
+) -> bool {
     let local_layer = local_content_layer_for(&layer.graphics_layer);
     let layer_bounds = layer
         .local_bounds
@@ -1004,7 +1083,7 @@ fn collect_into(
         .map(|clip| clip.translate(context.offset.x, context.offset.y));
     let visual_clip = resolve_clip(context.visual_clip, layer_clip);
     if visual_clip.is_some_and(|clip| clip.is_empty()) {
-        return;
+        return layer_has_pixel_sensitive_subtree(layer);
     }
     let clip_radius = radius_within(layer_clip, &context);
     let translated = context.translated || layer.translated_content_context;
@@ -1041,6 +1120,7 @@ fn collect_into(
         motion_context_animated: layer.motion_context_animated || translated,
     };
     let mut first_deferred = layer.children.len();
+    let mut has_pixel_sensitive_subtree = false;
 
     for (index, child) in layer.children.iter().enumerate() {
         match child {
@@ -1053,12 +1133,23 @@ fn collect_into(
                     translated,
                     raster_scale: context.raster_scale,
                 };
-                collect_child(child_layer, text_layout, motion, child_context, out);
+                has_pixel_sensitive_subtree |= collect_child(
+                    child_layer,
+                    text_layout,
+                    motion,
+                    child_context,
+                    out,
+                    recycler,
+                );
             }
-            _ if content_phase(child) == PrimitivePhase::AfterChildren => {
-                first_deferred = first_deferred.min(index);
+            _ => {
+                has_pixel_sensitive_subtree |= node_is_pixel_sensitive(child);
+                if content_phase(child) == PrimitivePhase::AfterChildren {
+                    first_deferred = first_deferred.min(index);
+                } else {
+                    push_content(out, text_layout, child, &content);
+                }
             }
-            _ => push_content(out, text_layout, child, &content),
         }
     }
 
@@ -1067,6 +1158,7 @@ fn collect_into(
             push_content(out, text_layout, child, &content);
         }
     }
+    has_pixel_sensitive_subtree
 }
 
 /// Where a layer's own primitives land: the layer's bounds and local
@@ -1109,7 +1201,12 @@ fn collect_child(
     motion: &mut LayerMotion,
     context: WalkContext,
     out: &mut LayerScene,
-) {
+    recycler: &mut LayerSceneRecycler,
+) -> bool {
+    let composite = layer_composite_params(&child.graphics_layer);
+    if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
+        return layer_has_pixel_sensitive_subtree(child);
+    }
     match placement_in(child, &context) {
         placement @ (Placement::Direct(translation) | Placement::DirectRounded(translation, _)) => {
             let child_offset = Point::new(
@@ -1118,7 +1215,7 @@ fn collect_child(
             );
             let child_bounds = child.local_bounds.translate(child_offset.x, child_offset.y);
             if clipped_away(child, child_bounds, context.visual_clip) {
-                return;
+                return layer_has_pixel_sensitive_subtree(child);
             }
             let child_local_layer = local_content_layer_for(&child.graphics_layer);
             let child_anchor = context.snap_anchor.or_else(|| {
@@ -1165,7 +1262,7 @@ fn collect_child(
             if child.backdrop().is_some() {
                 push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
             }
-            collect_into(child, text_layout, motion, child_context, out);
+            collect_into(child, text_layout, motion, child_context, out, recycler)
         }
         Placement::Isolated => {
             let transform = child
@@ -1189,17 +1286,20 @@ fn collect_child(
                 child_bounds,
                 shadow_clip,
             );
-            let mut isolated = with_backdrop_in_own_space(isolated_child(
+            let (isolated, has_pixel_sensitive_subtree) = isolated_child(
                 child,
                 text_layout,
                 motion,
                 context,
                 &mut out.scene,
-            ));
+                recycler,
+            );
+            let mut isolated = with_backdrop_in_own_space(isolated, recycler);
             assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
             detach_flat_backdrop(&mut isolated, &mut out.scene);
             out.children.push(isolated);
             out.scene.next_z += 1;
+            direct_translation(child.transform_to_parent).is_some() && has_pixel_sensitive_subtree
         }
     }
 }

@@ -95,72 +95,6 @@ fn ensuring_z_order_sorts_changed_keys_and_preserves_ties() {
 }
 
 #[test]
-fn restricting_stage_layout_preserves_substrate_order_and_independent_storage() {
-    let specs = [
-        SubstrateSpec::Average { block: 4 },
-        SubstrateSpec::Blur { radius_px: 7.0 },
-        SubstrateSpec::Average { block: 8 },
-    ];
-    let mut layout = StageLayout {
-        atlas_sizes: vec![(256, 256)],
-        placements: vec![
-            Some(AtlasPlacement {
-                atlas: 0,
-                x: 0,
-                y: 0
-            });
-            3
-        ],
-        substrates: (0..=specs.len() - 1)
-            .map(|member| {
-                specs[..=member]
-                    .iter()
-                    .enumerate()
-                    .map(|(slot, spec)| PlannedSubstrate {
-                        spec: *spec,
-                        size: (16, 8),
-                        work_size: (16, 8),
-                        atlas_slot: Some((slot as u32 * 16, member as u32 * 8, 16, 8)),
-                    })
-                    .collect()
-            })
-            .collect(),
-        side_sizes: vec![(128, 128)],
-        side: (0..specs.len())
-            .map(|member| SideSlots {
-                blur: Some((0, member as u32 * 8, 16, 8)),
-                substrates: (0..=member)
-                    .map(|slot| Some((slot as u32 * 16, member as u32 * 8, 16, 8)))
-                    .collect(),
-            })
-            .collect(),
-    };
-    let selected = [2, 0, 1];
-    let restricted = layout.restrict(&selected);
-    for (index, original) in selected.into_iter().enumerate() {
-        assert_eq!(restricted.signature(index), layout.signature(original));
-        assert_eq!(restricted.substrates[index].len(), original + 1);
-        for (slot, planned) in restricted.substrates[index].iter().enumerate() {
-            assert_eq!(planned.spec, specs[slot]);
-            assert_eq!(planned.size, (16, 8));
-            assert_eq!(
-                planned.atlas_slot,
-                Some((slot as u32 * 16, original as u32 * 8, 16, 8))
-            );
-        }
-        assert_eq!(restricted.side[index].blur, layout.side[original].blur);
-        assert_eq!(
-            restricted.side[index].substrates,
-            layout.side[original].substrates
-        );
-        layout.substrates[original].clear();
-        layout.side[original].substrates.clear();
-        assert_eq!(restricted.substrates[index].len(), original + 1);
-        assert_eq!(restricted.side[index].substrates.len(), original + 1);
-    }
-}
-
-#[test]
 fn a_backdrop_captures_no_further_than_the_clip_it_is_drawn_in() {
     let mut shader = RuntimeShader::new("fn glass_fs() {}");
     shader.set_input_padding(30.0);
@@ -184,6 +118,7 @@ fn a_backdrop_captures_no_further_than_the_clip_it_is_drawn_in() {
     };
     let layer = BackdropLayer {
         node_id: None,
+        alpha: 1.0,
         rect,
         clip: Some(rect),
         reach: Some(list),
@@ -192,7 +127,8 @@ fn a_backdrop_captures_no_further_than_the_clip_it_is_drawn_in() {
         effect: RenderEffect::runtime_shader(shader),
         z_index: 0,
     };
-    let planned = plan_backdrop(&layer, 0, 2.0, target).expect("the backdrop is on the target");
+    let planned =
+        plan_backdrop(&layer, 0, 2.0, target, Some(target)).expect("the backdrop is on the target");
     assert_eq!(
         planned.capture_rect,
         DeviceRect::from_logical(
@@ -229,6 +165,7 @@ fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_ou
     let plan = |shader: RuntimeShader| {
         let layer = BackdropLayer {
             node_id: None,
+            alpha: 1.0,
             rect,
             clip: None,
             reach: None,
@@ -237,7 +174,8 @@ fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_ou
             effect: RenderEffect::runtime_shader(shader),
             z_index: 0,
         };
-        let planned = plan_backdrop(&layer, 0, 2.0, target).expect("the backdrop is on the target");
+        let planned = plan_backdrop(&layer, 0, 2.0, target, Some(target))
+            .expect("the backdrop is on the target");
         (planned.visible, planned.capture_rect, planned.support)
     };
     let (whole_visible, whole_capture, whole_support) = plan(shader.clone());
@@ -567,6 +505,7 @@ fn child_layer(transform: ProjectiveTransform, content: LayerScene) -> ChildLaye
         blend_mode: BlendMode::SrcOver,
         effect: None,
         backdrop: None,
+        backdrop_alpha: 1.0,
         snap_anchor: None,
         surface_scale: 1.0,
         content_hash: 0,
@@ -579,7 +518,7 @@ fn child_layer(transform: ProjectiveTransform, content: LayerScene) -> ChildLaye
 fn scene_of(ops: &[usize], children: Vec<ChildLayer>) -> LayerScene {
     let mut scene = CompositorScene::new();
     scene.draw_ops = ops.iter().map(|&z| op(z)).collect();
-    LayerScene { scene, children }
+    LayerScene::new(scene, children)
 }
 
 fn rounded_child(transform: ProjectiveTransform, surface_scale: f32) -> ChildLayer {

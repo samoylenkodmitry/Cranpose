@@ -1,4 +1,4 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{alloc::System, cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
@@ -8,6 +8,10 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec, LazyColumn, LazyColumnSpec, Text},
 };
 use cranpose_ui_graphics::{LiquidGlassRect, LiquidGlassSpec, TileMode, liquid_glass_effect};
+use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
+
+#[global_allocator]
+static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 const FRAME_WIDTH: u32 = 1080;
 const FRAME_HEIGHT: u32 = 2244;
@@ -217,8 +221,9 @@ fn main() {
             .render(&target, &view, FRAME_WIDTH, FRAME_HEIGHT)
             .expect("frame render");
     }
-    let start = std::time::Instant::now();
     let measured_frames = measured_frames();
+    let region = Region::new(GLOBAL);
+    let start = std::time::Instant::now();
     for _ in 0..measured_frames {
         scroll(&mut shell);
         shell.update();
@@ -228,6 +233,15 @@ fn main() {
             .expect("frame render");
     }
     let elapsed = start.elapsed().as_secs_f64();
+    let allocations = region.change();
+
+    println!(
+        "{{\"frames\":{measured_frames},\"elapsed_ns\":{},\"allocations\":{},\"reallocations\":{},\"bytes_allocated\":{}}}",
+        (elapsed * 1_000_000_000.0) as u128,
+        allocations.allocations,
+        allocations.reallocations,
+        allocations.bytes_allocated,
+    );
 
     let report = shell.renderer().gpu_pass_timings();
     let stats = shell.renderer().last_frame_stats().expect("frame stats");
