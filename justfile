@@ -306,7 +306,7 @@ test-features: test-watchos test-localization
 
 # Localization contracts, embedded catalogs, optional feature, and public UI integration.
 test-localization: check-localization
-    cargo test --profile ci -p cranpose --no-default-features --features localization --test system_languages
+    cargo test --profile ci -p cranpose --no-default-features --features localization --test integration system_languages
     cargo test --profile ci -p cranpose-localization --features tooling
     cargo test --profile ci -p cranpose-ui --features localization
     cargo test --profile ci -p cranpose-liquid --features localization

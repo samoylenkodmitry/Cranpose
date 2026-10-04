@@ -603,11 +603,6 @@ cranpose-runtime-std = { path = "../cranpose-runtime-std" }
 name = "integration"
 path = "tests/integration.rs"
 
-[[test]]
-name = "system_languages"
-path = "tests/system_languages.rs"
-required-features = ["localization"]
-
 [[example]]
 name = "localization"
 path = "examples/localization.rs"
