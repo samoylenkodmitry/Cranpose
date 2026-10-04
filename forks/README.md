@@ -3,14 +3,18 @@
 Crates Cranpose ships patched, under its own names, until the fix is in a
 released upstream version. Each is the crates.io source of the upstream
 version, renamed, with Cranpose's patch on top as its own commit. The forks
-keep the upstream version, build as path dependencies outside the workspace,
-and are published by `.github/workflows/publish.yml` ahead of the Cranpose
-crates. The repository's formatting, spelling and diff gates skip them.
+start at the upstream version, build as path dependencies outside the
+workspace, and are published by `.github/workflows/publish.yml` ahead of the
+Cranpose crates. Publishing skips a version crates.io already has, so a change
+to a fork takes that crate's next patch version. Its dependents keep theirs:
+they require a compatible version, which resolves to the newest. The
+repository's formatting, spelling and diff gates skip the forks.
 
 ## wgpu 30.0.1
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
+`cranpose-wgpu-hal` is at 30.0.2 for the catch-up barrier below.
 
 | fork | upstream |
 | --- | --- |

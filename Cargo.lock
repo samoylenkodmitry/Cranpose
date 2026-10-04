@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-wgpu-hal"
-version = "30.0.1"
+version = "30.0.2"
 dependencies = [
  "android_system_properties",
  "arrayvec",

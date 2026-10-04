@@ -161,9 +161,9 @@ jobs:
           cargo xtask verify-tag "$TAG_NAME"
 
       # The release crates depend on the patched upstream forks
-      # (forks/README.md), which keep the upstream version and change only
-      # when the fork does, so most releases skip every one of them. Each
-      # fork depends on the one before it.
+      # (forks/README.md), which start at the upstream version and take the
+      # next patch version only when the fork changes, so most releases skip
+      # every one of them. Each fork depends on the one before it.
       - name: Publish upstream forks (skip existing versions)
         run: |
           set -euo pipefail
