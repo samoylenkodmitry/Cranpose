@@ -579,15 +579,15 @@ impl ReservedShaderUniforms {
     }
 }
 
-/// Pixels a shader draw shades: its viewport clipped by its scissor.
 /// The device pixels of the layer an effect draws, however much of it the
 /// target clips: it picks the draw's specialization, which must not flip
 /// while the layer scrolls across the target's edge.
 pub(crate) fn layer_pixels(layer_pixel_rect: [f32; 4]) -> u64 {
     let [_, _, width, height] = layer_pixel_rect;
-    (width.max(0.0).round() as u64) * (height.max(0.0).round() as u64)
+    (width.max(0.0).round() as u64).saturating_mul(height.max(0.0).round() as u64)
 }
 
+/// Pixels a shader draw shades: its viewport clipped by its scissor.
 fn shaded_pixels(viewport: (f32, f32, f32, f32), scissor: (u32, u32, u32, u32)) -> u64 {
     let left = viewport.0.max(scissor.0 as f32);
     let top = viewport.1.max(scissor.1 as f32);

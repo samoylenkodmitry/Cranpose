@@ -572,6 +572,14 @@ pub fn warm_app_frame(
         wgpu::TextureFormat::Bgra8UnormSrgb,
         |_| {},
     )?;
+    Some(warm_shell_frame(&mut shell, width, height))
+}
+
+pub(crate) fn warm_shell_frame(
+    shell: &mut AppShell<WgpuRenderer>,
+    width: u32,
+    height: u32,
+) -> (CapturedFrame, RenderStatsSnapshot) {
     shell
         .renderer()
         .capture_frame(width, height)
@@ -585,7 +593,7 @@ pub fn warm_app_frame(
         .renderer()
         .last_frame_stats()
         .expect("the capture recorded frame stats");
-    Some((frame, stats))
+    (frame, stats)
 }
 
 /// Set to write golden fixtures instead of comparing captures with them.

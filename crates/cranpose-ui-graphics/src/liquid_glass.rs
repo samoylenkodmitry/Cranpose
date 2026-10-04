@@ -428,7 +428,10 @@ impl GlassSpecializationKey {
             }
         }
         shader.set_override("GLASS_INTERIOR_GUARD", 1.0);
-        shader.set_draw_split((folds && !projected).then_some(GLASS_RIM_DRAW_OVERRIDE));
+        // An intermediate optical stage draws its whole layer into an
+        // offscreen pass; only the final stage splits interior from rim.
+        let splits = folds && !projected && !matches!(stage, 1 | 2);
+        shader.set_draw_split(splits.then_some(GLASS_RIM_DRAW_OVERRIDE));
         if folds {
             shader.set_override(GLASS_OPTICAL_STAGE_OVERRIDE, f64::from(stage));
         } else {
@@ -593,12 +596,10 @@ fn glass_shader_effect(mut shader: RuntimeShader) -> RenderEffect {
     specialize_liquid_glass(&mut shader);
     // An edge lens's first stages feed the last, which draws the glass: it
     // alone has a placeholder, or a split glass would be tinted twice.
-    if matches!(
+    if !matches!(
         slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM),
         1.0 | 2.0
     ) {
-        shader.set_draw_split(None);
-    } else {
         let placeholder = glass_placeholder(shader.uniforms());
         shader.set_placeholder(Some(placeholder));
     }
