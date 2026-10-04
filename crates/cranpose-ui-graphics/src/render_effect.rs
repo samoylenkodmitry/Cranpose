@@ -471,6 +471,15 @@ impl RuntimeShader {
         Arc::make_mut(self.specialization.get_or_insert_with(Arc::default))
     }
 
+    /// The shader's own specialization, for a change that also drops its
+    /// large-draw specialization: derived from the specialization before the
+    /// change, that one no longer describes the shader.
+    fn own_specialization_mut(&mut self) -> &mut ShaderSpecialization {
+        let specialization = self.specialization_mut();
+        specialization.large_draws = None;
+        specialization
+    }
+
     /// Fixes a pipeline-overridable constant (`override NAME: T = ...;` in
     /// the WGSL) for every pipeline compiled from this shader. The value is
     /// converted to the constant's declared scalar type the way WebGPU does
@@ -491,7 +500,7 @@ impl RuntimeShader {
         if position.is_ok_and(|index| self.overrides()[index].1.to_bits() == value.to_bits()) {
             return;
         }
-        let specialization = self.specialization_mut();
+        let specialization = self.own_specialization_mut();
         specialization.overrides_hash.take();
         let overrides = &mut specialization.overrides;
         match position {
@@ -508,7 +517,7 @@ impl RuntimeShader {
         else {
             return false;
         };
-        let specialization = self.specialization_mut();
+        let specialization = self.own_specialization_mut();
         specialization.overrides_hash.take();
         specialization.overrides.remove(index);
         true
@@ -777,7 +786,7 @@ impl RuntimeShader {
         {
             return;
         }
-        self.specialization_mut().substrates = substrates.iter().copied().collect();
+        self.own_specialization_mut().substrates = substrates.iter().copied().collect();
     }
 
     /// The substrates the shader declared, in slot order.
@@ -805,7 +814,7 @@ impl RuntimeShader {
         if self.draw_split() == override_name {
             return;
         }
-        self.specialization_mut().draw_split = override_name;
+        self.own_specialization_mut().draw_split = override_name;
     }
 
     /// The override selecting the interior or the rim draw, when declared.
@@ -826,7 +835,7 @@ impl RuntimeShader {
         if self.specialization_exact() == exact {
             return;
         }
-        self.specialization_mut().exact = exact;
+        self.own_specialization_mut().exact = exact;
     }
 
     /// Whether the shader declared its specialization exact.
