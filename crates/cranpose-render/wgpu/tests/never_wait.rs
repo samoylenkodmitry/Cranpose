@@ -44,23 +44,34 @@ fn shader(tag: &str, placeholder: Option<ShaderPlaceholder>) -> RuntimeShader {
 
 /// A white page with a pane drawn by `layer` over `content`.
 fn page(layer: GraphicsLayer, content: Vec<RenderNode>) -> RenderGraph {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: PANE.width,
+        height: PANE.height,
+    };
+    page_with(
+        bounds,
+        ProjectiveTransform::translation(PANE.x, PANE.y),
+        layer,
+        content,
+    )
+}
+
+/// A white page with a layer of `bounds` placed by `transform`.
+fn page_with(
+    bounds: Rect,
+    transform: ProjectiveTransform,
+    layer: GraphicsLayer,
+    content: Vec<RenderNode>,
+) -> RenderGraph {
     let full = Rect {
         x: 0.0,
         y: 0.0,
         width: SIZE as f32,
         height: SIZE as f32,
     };
-    let pane = shared_test_support::layer_node(
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: PANE.width,
-            height: PANE.height,
-        },
-        ProjectiveTransform::translation(PANE.x, PANE.y),
-        layer,
-        content,
-    );
+    let pane = shared_test_support::layer_node(bounds, transform, layer, content);
     support::page_graph(
         SIZE,
         SIZE,
@@ -214,20 +225,28 @@ fn a_layer_effect_leaves_the_content_as_it_is_until_its_pipeline_lands() {
     assert_lands(&mut renderer, graph);
 }
 
-#[test]
-fn a_layer_drawn_only_by_its_shader_shows_the_placeholder_until_its_pipeline_lands() {
-    let mut only = shader("shader-only layer", Some(RED));
+/// A layer drawn only by a shader no other test draws, with the red
+/// placeholder.
+fn shader_only(tag: &str) -> GraphicsLayer {
+    let mut only = shader(tag, Some(RED));
     only.set_position_independent(true);
-    let graph = page(
-        GraphicsLayer {
-            render_effect: Some(RenderEffect::runtime_shader(only)),
-            ..GraphicsLayer::default()
-        },
-        Vec::new(),
-    );
+    GraphicsLayer {
+        render_effect: Some(RenderEffect::runtime_shader(only)),
+        ..GraphicsLayer::default()
+    }
+}
+
+/// Asserts `graph`'s first frame shows the red placeholder over the pane,
+/// and that the shader lands.
+fn assert_placeholder_then_lands(graph: RenderGraph) {
     let (mut renderer, first) = first_frame(&graph);
     assert_eq!(pane_colors(&first), [[255, 0, 0, 255]]);
     assert_lands(&mut renderer, graph);
+}
+
+#[test]
+fn a_layer_drawn_only_by_its_shader_shows_the_placeholder_until_its_pipeline_lands() {
+    assert_placeholder_then_lands(page(shader_only("shader-only layer"), Vec::new()));
 }
 
 /// The red placeholder over the middle half of the pane, its corners
@@ -324,4 +343,22 @@ fn a_frame_with_placeholders_awaits_their_pipelines_until_they_land() {
     let stats = renderer.last_frame_stats().expect("frame statistics");
     assert_eq!(stats.placeholder_draws, 0);
     assert!(!renderer.awaits_pipelines());
+}
+
+/// A scaled layer that is all its shader draws through a surface of its own,
+/// and still shows the placeholder while the shader compiles.
+#[test]
+fn a_scaled_layer_drawn_only_by_its_shader_shows_the_placeholder() {
+    assert_placeholder_then_lands(page_with(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: PANE.width * 0.5,
+            height: PANE.height * 0.5,
+        },
+        ProjectiveTransform::uniform_scale(2.0)
+            .then(ProjectiveTransform::translation(PANE.x, PANE.y)),
+        shader_only("scaled shader-only layer"),
+        Vec::new(),
+    ));
 }

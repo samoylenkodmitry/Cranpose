@@ -4,6 +4,7 @@ use std::{
 };
 
 use cranpose_core::NodeId;
+use web_time::Instant;
 
 use crate::render_state::{current_app_context, require_current_app_context};
 
@@ -12,6 +13,8 @@ pub(crate) struct LazyPrefetchState {
     requests: RefCell<Vec<NodeId>>,
     idle_pass: Cell<bool>,
     item_cost_nanos: Cell<u64>,
+    pass_cost_nanos: Cell<u64>,
+    pass_list_count: Cell<u64>,
     /// Root nodes of the items idle prefetch passes composed, whose modifier
     /// slices [`warm_prefetched_slices`] builds.
     prefetched: RefCell<Vec<NodeId>>,
@@ -106,15 +109,31 @@ pub fn has_lazy_prefetch_requests() -> bool {
     with_state(|state| !state.requests.borrow().is_empty())
 }
 
-/// The recent cost of composing and measuring one lazy list item: the time
-/// an idle prefetch pass needs before the next frame starts.
-pub fn lazy_prefetch_item_cost() -> Duration {
-    with_state(|state| Duration::from_nanos(state.item_cost_nanos.get()))
+/// Estimates the time needed for the next complete lazy prefetch pass.
+///
+/// After a pass has run, this uses its full measured duration as a floor and
+/// scales it up if more lists are pending. This avoids assuming that shared
+/// layout work shrinks with the list count. A later pass refreshes the sample
+/// when fewer lists remain. Before the first pass, it falls back to the recent
+/// cost of composing and measuring one item per pending list.
+pub fn lazy_prefetch_pass_cost() -> Duration {
+    with_state(|state| {
+        let list_count = u64::try_from(state.requests.borrow().len().max(1)).unwrap_or(u64::MAX);
+        let pass_cost = state.pass_cost_nanos.get();
+        let measured_list_count = state.pass_list_count.get().max(1);
+        let scaled_pass_cost = pass_cost
+            .div_ceil(measured_list_count)
+            .saturating_mul(list_count);
+        let item_cost = state.item_cost_nanos.get().saturating_mul(list_count);
+        Duration::from_nanos(pass_cost.max(scaled_pass_cost).max(item_cost))
+    })
 }
 
 /// Runs `pass`, a layout pass, as an idle prefetch pass: each lazy list it
 /// measures composes the next item beyond its viewport that a frame left
-/// uncomposed.
+/// uncomposed. Records the elapsed duration and pending-list count so a later
+/// idle window can budget for layout and slice warming as well as item
+/// composition.
 pub fn with_lazy_prefetch_pass<R>(pass: impl FnOnce() -> R) -> R {
     struct Reset;
     impl Drop for Reset {
@@ -124,7 +143,16 @@ pub fn with_lazy_prefetch_pass<R>(pass: impl FnOnce() -> R) -> R {
     }
     with_state(|state| state.idle_pass.set(true));
     let _reset = Reset;
-    pass()
+    let list_count = with_state(|state| state.requests.borrow().len().max(1));
+    let start = Instant::now();
+    let result = pass();
+    let sample = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    let list_count = u64::try_from(list_count).unwrap_or(u64::MAX).max(1);
+    with_state(|state| {
+        state.pass_cost_nanos.set(sample);
+        state.pass_list_count.set(list_count);
+    });
+    result
 }
 
 #[cfg(test)]

@@ -21,14 +21,14 @@ fn a_request_is_drained_once_and_names_each_list_once() {
 }
 
 #[test]
-fn the_item_cost_follows_recent_items() {
+fn the_initial_pass_estimate_uses_the_recent_item_cost() {
     let _scope = app_context_test_scope();
-    assert_eq!(lazy_prefetch_item_cost(), Duration::ZERO);
+    assert_eq!(lazy_prefetch_pass_cost(), Duration::ZERO);
     record_lazy_item_cost(Duration::from_millis(4));
-    assert_eq!(lazy_prefetch_item_cost(), Duration::from_millis(4));
+    assert_eq!(lazy_prefetch_pass_cost(), Duration::from_millis(4));
     record_lazy_item_cost(Duration::ZERO);
     assert_eq!(
-        lazy_prefetch_item_cost(),
+        lazy_prefetch_pass_cost(),
         Duration::from_millis(3),
         "a new item weighs a quarter"
     );
