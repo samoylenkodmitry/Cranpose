@@ -5,7 +5,7 @@
 //!
 //! | Target | Features | Setup |
 //! | --- | --- | --- |
-//! | Linux, macOS, Windows | `desktop`, `renderer-wgpu` | [`AppLauncher::try_run`](crate::AppLauncher::try_run) |
+//! | Linux, macOS, Windows | `desktop`, `renderer-wgpu` | [`AppLauncher::try_run`](https://docs.rs/cranpose/latest/cranpose/struct.AppLauncher.html#method.try_run) |
 //! | Android and Wear OS | `android`, `renderer-wgpu` | [Android plugin](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/android/README.md) |
 //! | iOS | `ios`, `renderer-wgpu` | [iOS template](https://github.com/samoylenkodmitry/cranpose-showcase/tree/main/ios) |
 //! | Web | `web`, `renderer-wgpu` | [Web template](https://github.com/samoylenkodmitry/cranpose-showcase) |

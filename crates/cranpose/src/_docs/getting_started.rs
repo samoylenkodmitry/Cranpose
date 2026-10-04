@@ -22,12 +22,15 @@
 //!     Text("Hello", Modifier::empty(), TextStyle::default());
 //! }
 //!
+//! # #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
 //! fn main() -> Result<(), cranpose::LaunchError> {
 //!     AppLauncher::new()
 //!         .with_title("Hello")
 //!         .with_size(320, 200)
 //!         .try_run(Hello)
 //! }
+//! # #[cfg(not(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android"))))]
+//! # fn main() {}
 //! ```
 //!
 //! `#[composable]` retains the function's state and subscriptions. The launcher

@@ -48,12 +48,15 @@ fn Counter() {
     );
 }
 
+# #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
 fn main() -> Result<(), cranpose::LaunchError> {
     AppLauncher::new()
         .with_title("Counter")
         .with_size(360, 240)
         .try_run(Counter)
 }
+# #[cfg(not(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android"))))]
+# fn main() {}
 ```
 
 `rememberMutableStateOf` retains the count across recomposition. The button
