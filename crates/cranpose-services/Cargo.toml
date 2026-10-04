@@ -102,6 +102,7 @@ pollster = "0.4.0"
 # Parses the GitHub release feed `GitHubAppUpdater` reads. Not built for wasm32:
 # that checker only ever registers on desktop and iOS.
 serde_json = "1.0.151"
+tempfile = "3.27.0"
 
 # Desktop and Android use rustls. iOS uses native-tls (Security.framework): the
 # rustls default crypto provider (aws-lc-sys) does not link for the device

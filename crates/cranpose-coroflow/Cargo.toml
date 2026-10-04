@@ -16,6 +16,7 @@ coroflow = { workspace = true }
 cranpose-core = { workspace = true }
 cranpose-services = { workspace = true }
 log = "0.4"
+thiserror = "2.0.21"
 
 [lints]
 workspace = true
@@ -24,3 +25,7 @@ workspace = true
 cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-foundation = { workspace = true }
 pollster = "0.4.0"
+
+[[bench]]
+name = "persistence"
+harness = false

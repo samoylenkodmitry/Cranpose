@@ -15,6 +15,7 @@ pub mod camera;
 mod composition_locals;
 pub mod content;
 pub mod device_info;
+mod durable_save;
 pub mod file_picker;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod github_release_updater;
@@ -130,17 +131,16 @@ pub use heart_rate::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use helper_process::windowless_command;
 pub use host::{
-    DEFAULT_DURABLE_SAVE_DEADLINE, DurableSaveEffect, DurableSaveOutcome, DurableSaveRegistration,
-    HostController, HostControllerRef, LifecycleEvent, LifecycleObserver, LifecycleState,
-    PlatformDirectories, PlatformDirectoryError, ProvideLifecycle, advance_lifecycle,
-    application_directories, application_id, background_app, clear_application_id,
-    clear_host_controller, current_lifecycle_state, dispatch_lifecycle, dispatch_lifecycle_state,
-    exit_app, host_controller, local_lifecycle_state, observe_lifecycle, register_durable_save,
-    rememberLifecycleEvents, rememberLifecycleState, set_application_id, set_host_controller,
-    set_keep_screen_on, window_lifecycle_state,
+    DEFAULT_DURABLE_SAVE_DEADLINE, DurableSaveEffect, DurableSaveError, DurableSaveOutcome,
+    DurableSaveRegistration, HostController, HostControllerRef, LifecycleEvent, LifecycleObserver,
+    LifecycleState, PlatformDirectories, PlatformDirectoryError, ProvideLifecycle,
+    advance_lifecycle, application_directories, application_id, background_app,
+    clear_application_id, clear_host_controller, current_lifecycle_state, dispatch_lifecycle,
+    dispatch_lifecycle_state, durable_save_deadline, exit_app, host_controller,
+    local_lifecycle_state, observe_lifecycle, register_durable_save, register_preference_save,
+    rememberLifecycleEvents, rememberLifecycleState, run_durable_saves, set_application_id,
+    set_host_controller, set_keep_screen_on, window_lifecycle_state,
 };
-#[cfg(not(target_arch = "wasm32"))]
-pub use host::{durable_save_deadline, run_durable_saves};
 pub use host_messages::{
     HostMessage, HostMessageObserver, clear_host_messages, clear_host_outbox, install_host_outbox,
     observe_host_messages, publish_host_message, rememberHostMessages, send_to_host,

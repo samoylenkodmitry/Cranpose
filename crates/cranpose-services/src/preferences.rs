@@ -15,7 +15,10 @@ use std::{
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::host::application_directories;
+mod file;
+#[cfg(not(target_arch = "wasm32"))]
+pub use file::FilePreferences;
+
 use crate::registry::ServiceRegistry;
 
 /// Errors produced by a preferences backend.
@@ -39,6 +42,20 @@ pub trait PreferencesStore: Send + Sync {
 
     /// Writes `key`.
     fn set(&self, key: &str, value: &str) -> Result<(), PreferencesError>;
+
+    /// Writes a group of values. File-backed stores replace the file once.
+    /// A failure may leave pending values visible; retry this batch or call `flush`.
+    fn set_many(&self, values: &BTreeMap<String, String>) -> Result<(), PreferencesError> {
+        for (key, value) in values {
+            self.set(key, value)?;
+        }
+        Ok(())
+    }
+
+    /// Retries pending writes. Success means the backend accepted all pending data.
+    fn flush(&self) -> Result<(), PreferencesError> {
+        Ok(())
+    }
 
     /// Removes `key`. Succeeds if it is already absent.
     fn remove(&self, key: &str) -> Result<(), PreferencesError>;
@@ -213,122 +230,13 @@ impl PreferencesStore for MemoryPreferences {
     }
 }
 
-/// The framework's file-backed store: one line per entry, `key=value` with the
-/// value percent-escaped so newlines and equals signs round-trip.
-#[cfg(not(target_arch = "wasm32"))]
-pub struct FilePreferences {
-    entries: Mutex<Option<BTreeMap<String, String>>>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Default for FilePreferences {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl FilePreferences {
-    /// A store that loads lazily from the application's config directory.
-    pub fn new() -> Self {
-        Self {
-            entries: Mutex::new(None),
-        }
-    }
-
-    fn path() -> Result<std::path::PathBuf, PreferencesError> {
-        let directories =
-            application_directories().map_err(|error| PreferencesError::Io(error.to_string()))?;
-        Ok(directories.config.join("preferences"))
-    }
-
-    fn with_entries<T>(
-        &self,
-        body: impl FnOnce(&mut BTreeMap<String, String>) -> T,
-    ) -> Result<T, PreferencesError> {
-        let mut slot = self
-            .entries
-            .lock()
-            .map_err(|_| PreferencesError::Io("preferences lock poisoned".into()))?;
-        if slot.is_none() {
-            *slot = Some(Self::load()?);
-        }
-        let entries = slot
-            .as_mut()
-            .ok_or_else(|| PreferencesError::Io("preferences were not loaded".into()))?;
-        Ok(body(entries))
-    }
-
-    fn load() -> Result<BTreeMap<String, String>, PreferencesError> {
-        let path = Self::path()?;
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(error) => return Err(PreferencesError::Io(error.to_string())),
-        };
-        Ok(parse(&text))
-    }
-
-    fn store(entries: &BTreeMap<String, String>) -> Result<(), PreferencesError> {
-        let path = Self::path()?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| PreferencesError::Io(e.to_string()))?;
-        }
-        let staging = path.with_extension("partial");
-        std::fs::write(&staging, encode(entries))
-            .map_err(|error| PreferencesError::Io(error.to_string()))?;
-        std::fs::rename(&staging, &path).map_err(|error| PreferencesError::Io(error.to_string()))
-    }
-
-    fn mutate(
-        &self,
-        body: impl FnOnce(&mut BTreeMap<String, String>),
-    ) -> Result<(), PreferencesError> {
-        let snapshot = self.with_entries(|entries| {
-            body(entries);
-            entries.clone()
-        })?;
-        Self::store(&snapshot)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl PreferencesStore for FilePreferences {
-    fn get(&self, key: &str) -> Option<String> {
-        self.with_entries(|entries| entries.get(key).cloned())
-            .ok()
-            .flatten()
-    }
-
-    fn set(&self, key: &str, value: &str) -> Result<(), PreferencesError> {
-        self.mutate(|entries| {
-            entries.insert(key.to_string(), value.to_string());
-        })
-    }
-
-    fn remove(&self, key: &str) -> Result<(), PreferencesError> {
-        self.mutate(|entries| {
-            entries.remove(key);
-        })
-    }
-
-    fn keys(&self) -> Vec<String> {
-        self.with_entries(|entries| entries.keys().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    fn clear(&self) -> Result<(), PreferencesError> {
-        self.mutate(std::collections::BTreeMap::clear)
-    }
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn encode(entries: &BTreeMap<String, String>) -> String {
     let mut text = String::new();
     for (key, value) in entries {
-        text.push_str(&escape(key));
+        escape_into(key, &mut text);
         text.push('=');
-        text.push_str(&escape(value));
+        escape_into(value, &mut text);
         text.push('\n');
     }
     text
@@ -345,8 +253,7 @@ fn parse(text: &str) -> BTreeMap<String, String> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn escape(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
+fn escape_into(value: &str, out: &mut String) {
     for character in value.chars() {
         match character {
             '%' => out.push_str("%25"),
@@ -356,7 +263,6 @@ fn escape(value: &str) -> String {
             other => out.push(other),
         }
     }
-    out
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -435,10 +341,12 @@ where
     }
 }
 
-/// State that survives host recreation and process death, stored under `key`.
+/// State restored from preferences on first composition and saved at a flush.
 ///
-/// Reads restore through the saver on first composition; every write is stored
-/// immediately, so nothing is lost to a process the OS kills without warning.
+/// Native hosts flush when leaving the foreground. Call [`crate::run_durable_saves`]
+/// on the composition thread for an explicit durability boundary. Mutations before
+/// that boundary are captured without another frame; abrupt termination before a
+/// successful flush can lose them. Failed flushes can be retried.
 #[expect(non_snake_case)]
 #[track_caller]
 pub fn rememberSaveable<T>(
@@ -449,26 +357,21 @@ pub fn rememberSaveable<T>(
 where
     T: Clone + 'static,
 {
-    let store = preferences();
-    let restored = store
-        .get(key)
-        .and_then(|stored| saver.restore(&stored))
-        .unwrap_or_else(initial);
-    let state =
-        cranpose_core::remember(|| cranpose_core::mutableStateOfNeverEqual(restored)).with(|s| *s);
-
-    let saved = cranpose_core::remember(|| std::cell::RefCell::new(Option::<String>::None));
-    let stored = saver.save(&state.get());
-    saved.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.as_deref() != Some(stored.as_str()) {
-            if let Err(error) = store.set(key, &stored) {
-                log::warn!("cranpose: could not store `{key}`: {error}");
-            }
-            *slot = Some(stored);
-        }
-    });
-    state
+    cranpose_core::remember(move || {
+        let store = preferences();
+        let restored = store
+            .get(key)
+            .and_then(|stored| saver.restore(&stored))
+            .unwrap_or_else(initial);
+        let owner = cranpose_core::mutableStateOfNeverEqual(restored);
+        let state = owner;
+        let registration =
+            crate::durable_save::register_local_preference_save(store, key.to_owned(), move || {
+                state.try_with(|value| saver.save(value))
+            });
+        (owner, registration)
+    })
+    .with(|(state, _)| *state)
 }
 
 #[cfg(test)]
