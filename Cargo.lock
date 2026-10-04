@@ -1280,6 +1280,7 @@ version = "0.9.7"
 dependencies = [
  "cranpose-macros",
  "dispatch2",
+ "event-listener",
  "foldhash",
  "futures-task",
  "hashbrown 0.17.1",

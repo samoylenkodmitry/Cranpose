@@ -57,6 +57,9 @@ wasm-bindgen-futures = "0.4"
 # frame loop, so an idle wait costs nothing.
 web-sys = { version = "0.3", features = ["Window"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+event-listener = "5.4.2"
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"

@@ -15,7 +15,7 @@ mod native;
 /// Failure to admit or complete blocking work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum BlockingError {
-    /// The waiting queue is full. The closure has not run and can be retried.
+    /// An immediate `try_submit` found a full queue. The closure has not run.
     #[error("the blocking executor is at capacity")]
     Saturated,
     /// The executor stopped accepting work and discarded its waiting jobs.
@@ -95,14 +95,39 @@ impl BlockingExecutor {
     ///
     /// The returned future owns the job: dropping it removes waiting work and
     /// releases its captures. A job already taken by a worker may finish.
-    pub fn submit<T, F>(&self, work: F) -> Result<BlockingTask<T>, BlockingError>
+    pub fn try_submit<T, F>(&self, work: F) -> Result<BlockingTask<T>, BlockingError>
     where
         T: Send + 'static,
         F: FnOnce() -> T + Send + 'static,
     {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            self.inner.submit(work).map(|inner| BlockingTask { inner })
+            self.inner
+                .try_submit(work)
+                .map(|inner| BlockingTask { inner })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = work;
+            Err(BlockingError::Unsupported)
+        }
+    }
+
+    /// Waits asynchronously for queue capacity, then runs work and returns its result.
+    ///
+    /// A full queue suspends this future without blocking its polling thread or
+    /// returning `Saturated`. Dropping the future cancels admission or queued work.
+    /// Each suspended caller retains its closure until admission or cancellation;
+    /// applications should bound the number of concurrent producer tasks.
+    pub async fn submit<T, F>(&self, work: F) -> Result<T, BlockingError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let inner = self.inner.submit(work).await?;
+            BlockingTask { inner }.await
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -151,8 +176,11 @@ fn shared_executor() -> &'static BlockingExecutor {
 
 /// Runs synchronous work on the shared bounded executor when first polled.
 ///
-/// Saturation, shutdown and unwinding panics are reported as errors. Dropping
-/// the future cancels waiting work; running closures cannot be interrupted.
+/// A full queue suspends this future until capacity is available, keeping the UI
+/// thread free. Shutdown and unwinding panics are reported as errors. Dropping
+/// the future releases its captures and cancels work not yet started. Running
+/// closures cannot be interrupted. Bound concurrent callers to bound the memory
+/// retained by their suspended futures.
 /// On Web this returns `Unsupported` without running the closure.
 #[expect(non_snake_case)]
 pub async fn withBlocking<T, F>(work: F) -> Result<T, BlockingError>
@@ -160,11 +188,13 @@ where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    shared_executor().submit(work)?.await
+    shared_executor().submit(work).await
 }
 
 /// Starts blocking work and delivers its result on the current runtime's UI
-/// thread. Admission errors are returned immediately without invoking `on_ui`.
+/// thread. A full queue waits asynchronously inside the runtime-owned task.
+/// Execution errors are delivered to `on_ui`; only a missing runtime is returned
+/// immediately without invoking the callback.
 ///
 /// The runtime owns the returned task until completion. Calling its `cancel`
 /// method, or dropping the runtime, cancels waiting work and the callback.
@@ -179,8 +209,7 @@ where
     T: Send + 'static,
 {
     let runtime = current_runtime_handle().ok_or(BlockingError::NoRuntime)?;
-    let task = shared_executor().submit(work)?;
     runtime
-        .spawn_ui(async move { on_ui(task.await) })
+        .spawn_ui(async move { on_ui(withBlocking(work).await) })
         .ok_or(BlockingError::NoRuntime)
 }

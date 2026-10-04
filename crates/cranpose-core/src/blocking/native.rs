@@ -5,6 +5,8 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+use event_listener::{Event, IntoNotification};
+
 use super::{BlockingError, BlockingExecutorConfig};
 
 pub(super) struct Executor {
@@ -18,16 +20,36 @@ impl Executor {
                 config,
                 state: Mutex::new(PoolState::default()),
                 available: Condvar::new(),
+                capacity: Event::new(),
             }),
         }
     }
 
-    pub(super) fn submit<T, F>(&self, work: F) -> Result<Pending<T>, BlockingError>
+    pub(super) fn try_submit<T, F>(&self, work: F) -> Result<Pending<T>, BlockingError>
     where
         T: Send + 'static,
         F: FnOnce() -> T + Send + 'static,
     {
-        self.pool.submit(work)
+        self.pool.try_submit(&mut Some(work))
+    }
+
+    pub(super) async fn submit<T, F>(&self, work: F) -> Result<Pending<T>, BlockingError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        let mut work = Some(work);
+        loop {
+            match self.pool.try_submit(&mut work) {
+                Err(BlockingError::Saturated) => {}
+                result => return result,
+            }
+            let listener = self.pool.capacity.listen();
+            match self.pool.try_submit(&mut work) {
+                Err(BlockingError::Saturated) => listener.await,
+                result => return result,
+            }
+        }
     }
 
     pub(super) fn shutdown(&self) {
@@ -41,6 +63,7 @@ impl Executor {
             std::mem::take(&mut state.queue)
         };
         self.pool.available.notify_all();
+        self.pool.notify_capacity(usize::MAX);
         for job in waiting {
             let _ = catch_unwind(AssertUnwindSafe(|| job.work.fail(BlockingError::Shutdown)));
         }
@@ -57,6 +80,7 @@ struct Pool {
     config: BlockingExecutorConfig,
     state: Mutex<PoolState>,
     available: Condvar,
+    capacity: Event,
 }
 
 #[derive(Default)]
@@ -100,7 +124,7 @@ where
 }
 
 impl Pool {
-    fn submit<T, F>(self: &Arc<Self>, work: F) -> Result<Pending<T>, BlockingError>
+    fn try_submit<T, F>(self: &Arc<Self>, work: &mut Option<F>) -> Result<Pending<T>, BlockingError>
     where
         T: Send + 'static,
         F: FnOnce() -> T + Send + 'static,
@@ -133,7 +157,7 @@ impl Pool {
         state.queue.push_back(QueuedJob {
             completion_key,
             work: Box::new(Work {
-                work,
+                work: work.take().expect("work submitted once"),
                 completion: Arc::clone(&completion),
             }),
         });
@@ -153,6 +177,8 @@ impl Pool {
         loop {
             if let Some(job) = state.queue.pop_front() {
                 state.running += 1;
+                drop(state);
+                self.notify_capacity(1);
                 return Some(job);
             }
             if state.closed {
@@ -177,6 +203,12 @@ impl Pool {
         }
     }
 
+    fn notify_capacity(&self, count: usize) {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            self.capacity.notify(count.additional())
+        }));
+    }
+
     fn cancel(&self, completion_key: usize) {
         let removed = {
             let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -186,6 +218,9 @@ impl Pool {
                 .position(|job| job.completion_key == completion_key)
                 .and_then(|index| state.queue.remove(index))
         };
+        if removed.is_some() {
+            self.notify_capacity(1);
+        }
         drop(removed);
     }
 }
