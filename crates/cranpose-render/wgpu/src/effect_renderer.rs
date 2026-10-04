@@ -9,13 +9,13 @@ use cranpose_ui_graphics::{
 use smallvec::SmallVec;
 
 use crate::{
+    fixed_pipeline::{FirstScreenSpan, FixedPipeline},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
         TextureRegionCopy, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, copy_compatible,
     },
     glass_split::split_scissors,
     gpu_stats::FrameStats,
-    lazy_resource::LazyGpuResource,
     offscreen::{OffscreenPool, OffscreenTarget},
     pipeline_compiler::{CompileLane, PipelineCompiler},
     shader_cache::{
@@ -89,6 +89,30 @@ const BLUR_TILE_MODES: [TileMode; 4] = [
     TileMode::Mirror,
     TileMode::Decal,
 ];
+const BLUR_LABELS: [&str; BLUR_TILE_MODES.len()] = [
+    "effect/blur/clamp",
+    "effect/blur/repeated",
+    "effect/blur/mirror",
+    "effect/blur/decal",
+];
+const BLUR_DOWNSAMPLE_LABELS: [[&str; BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()] = [
+    [
+        "effect/blur-downsample/clamp/2",
+        "effect/blur-downsample/clamp/4",
+    ],
+    [
+        "effect/blur-downsample/repeated/2",
+        "effect/blur-downsample/repeated/4",
+    ],
+    [
+        "effect/blur-downsample/mirror/2",
+        "effect/blur-downsample/mirror/4",
+    ],
+    [
+        "effect/blur-downsample/decal/2",
+        "effect/blur-downsample/decal/4",
+    ],
+];
 
 pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
@@ -96,10 +120,12 @@ pub(crate) struct EffectRenderer {
     pipeline_cache: Option<wgpu::PipelineCache>,
 
     blur_shader: SharedShader,
-    blur_pipelines: [LazyGpuResource<wgpu::RenderPipeline>; BLUR_TILE_MODES.len()],
-    blur_downsample_pipelines: [[LazyGpuResource<wgpu::RenderPipeline>;
-        BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()],
-    blur_mean_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    blur_pipelines: [FixedPipeline; BLUR_TILE_MODES.len()],
+    blur_downsample_pipelines:
+        [[FixedPipeline; BLUR_DOWNSAMPLE_BLOCKS.len()]; BLUR_TILE_MODES.len()],
+    blur_mean_pipeline: FixedPipeline,
+    /// The first screen of every fixed pipeline this renderer draws with.
+    pub(crate) first_screen: FirstScreenSpan,
     /// One bit per tile mode whose blur family is queued for warm-up.
     blur_families_queued: Cell<u8>,
     compiler: PipelineCompiler,
@@ -108,18 +134,18 @@ pub(crate) struct EffectRenderer {
     blur_kernels: RefCell<BoundedLruCache<u32, BlurKernel>>,
 
     offset_shader: SharedShader,
-    offset_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    offset_pipeline: FixedPipeline,
     offset_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
     blit_shader: SharedShader,
-    blit_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
-    blit_pipeline_src: [LazyGpuResource<wgpu::RenderPipeline>; 2],
-    blit_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    blit_pipeline: [FixedPipeline; 2],
+    blit_pipeline_src: [FixedPipeline; 2],
+    blit_pipeline_dst_out: [FixedPipeline; 2],
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
     projective_blit_shader: SharedShader,
-    projective_blit_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 2],
-    projective_blit_pipeline_src: [LazyGpuResource<wgpu::RenderPipeline>; 2],
-    projective_blit_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 2],
+    projective_blit_pipeline: [FixedPipeline; 2],
+    projective_blit_pipeline_src: [FixedPipeline; 2],
+    projective_blit_pipeline_dst_out: [FixedPipeline; 2],
 
     pub effect_texture_bind_group_layout: wgpu::BindGroupLayout,
     pub effect_uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -1058,10 +1084,9 @@ impl EffectRenderer {
             ],
         );
 
-        let blur_pipelines = BLUR_TILE_MODES.map(|_| LazyGpuResource::new("effect/blur"));
-        let blur_downsample_pipelines = BLUR_TILE_MODES.map(|_| {
-            BLUR_DOWNSAMPLE_BLOCKS.map(|_| LazyGpuResource::new("effect/blur-downsample"))
-        });
+        let blur_pipelines = BLUR_LABELS.map(FixedPipeline::new);
+        let blur_downsample_pipelines =
+            BLUR_DOWNSAMPLE_LABELS.map(|labels| labels.map(FixedPipeline::new));
 
         let offset_shader = SharedShader::new(
             device,
@@ -1074,7 +1099,7 @@ impl EffectRenderer {
             ],
         );
 
-        let offset_pipeline = LazyGpuResource::new("effect/offset");
+        let offset_pipeline = FixedPipeline::new("effect/offset");
 
         let blit_layouts = [
             Some(&effect_texture_bind_group_layout),
@@ -1089,16 +1114,16 @@ impl EffectRenderer {
         );
 
         let blit_pipeline = [
-            LazyGpuResource::new("effect/blit-src-over"),
-            LazyGpuResource::new("effect/blit-src-over-nearest-unmasked"),
+            FixedPipeline::new("effect/blit-src-over"),
+            FixedPipeline::new("effect/blit-src-over-nearest-unmasked"),
         ];
         let blit_pipeline_src = [
-            LazyGpuResource::new("effect/blit-src"),
-            LazyGpuResource::new("effect/blit-src-nearest-unmasked"),
+            FixedPipeline::new("effect/blit-src"),
+            FixedPipeline::new("effect/blit-src-nearest-unmasked"),
         ];
         let blit_pipeline_dst_out = [
-            LazyGpuResource::new("effect/blit-dst-out"),
-            LazyGpuResource::new("effect/blit-dst-out-nearest-unmasked"),
+            FixedPipeline::new("effect/blit-dst-out"),
+            FixedPipeline::new("effect/blit-dst-out-nearest-unmasked"),
         ];
 
         let projective_blit_shader = SharedShader::new(
@@ -1109,16 +1134,16 @@ impl EffectRenderer {
             &blit_layouts,
         );
         let projective_blit_pipeline = [
-            LazyGpuResource::new("effect/projective-src-over"),
-            LazyGpuResource::new("effect/projective-src-over-texels"),
+            FixedPipeline::new("effect/projective-src-over"),
+            FixedPipeline::new("effect/projective-src-over-texels"),
         ];
         let projective_blit_pipeline_src = [
-            LazyGpuResource::new("effect/projective-src"),
-            LazyGpuResource::new("effect/projective-src-texels"),
+            FixedPipeline::new("effect/projective-src"),
+            FixedPipeline::new("effect/projective-src-texels"),
         ];
         let projective_blit_pipeline_dst_out = [
-            LazyGpuResource::new("effect/projective-dst-out"),
-            LazyGpuResource::new("effect/projective-dst-out-texels"),
+            FixedPipeline::new("effect/projective-dst-out"),
+            FixedPipeline::new("effect/projective-dst-out-texels"),
         ];
 
         let effect_linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -1144,7 +1169,8 @@ impl EffectRenderer {
             blur_shader,
             blur_pipelines,
             blur_downsample_pipelines,
-            blur_mean_pipeline: LazyGpuResource::new("effect/mean"),
+            blur_mean_pipeline: FixedPipeline::new("effect/mean"),
+            first_screen: FirstScreenSpan::default(),
             blur_families_queued: Cell::new(0),
             compiler,
             blur_uniform_bind_group_layout,
@@ -1182,6 +1208,58 @@ impl EffectRenderer {
         }
     }
 
+    /// Queues the runtime shader pipelines the last launch drew its first
+    /// screen with, those of the framework's own shaders.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_recorded_shaders(
+        &mut self,
+        records: &[crate::pipeline_records::ShaderPipelineRecord],
+    ) {
+        self.shader_cache.warm_recorded(
+            records,
+            cranpose_ui_graphics::BUILTIN_RUNTIME_SHADER_SOURCES
+                .into_iter()
+                .chain([crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER]),
+        );
+    }
+
+    /// Queues the fixed pipelines the last launch drew its first screen
+    /// with, named by `recorded` labels.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_fixed(&self, device: &wgpu::Device, recorded: &[String]) {
+        if recorded.is_empty() {
+            return;
+        }
+        let warm = |pipeline: &FixedPipeline, job: &dyn Fn() -> FixedPipelineJob| {
+            if pipeline.recorded_in(recorded) {
+                pipeline.queue(
+                    &self.compiler,
+                    CompileLane::WarmUp,
+                    self.adapter_backend,
+                    job(),
+                );
+            }
+        };
+        let blurs = (0..BLUR_TILE_MODES.len())
+            .flat_map(blur_family)
+            .chain([BlurPipeline::Mean]);
+        for blur in blurs {
+            warm(self.blur_resource(blur), &|| self.blur_job(device, blur));
+        }
+        warm(&self.offset_pipeline, &|| self.offset_pipeline_job(device));
+        for blend_mode in [BlendMode::SrcOver, BlendMode::Src, BlendMode::DstOut] {
+            for variant in [false, true] {
+                warm(self.blit_pipeline_target(blend_mode, variant).0, &|| {
+                    self.blit_pipeline_job(device, blend_mode, variant)
+                });
+                warm(
+                    self.projective_pipeline_target(blend_mode, variant).0,
+                    &|| self.projective_pipeline_job(device, blend_mode, variant),
+                );
+            }
+        }
+    }
+
     pub(crate) fn warm_shaders(&mut self, warm_ups: &[cranpose_ui_graphics::ShaderWarmUp]) {
         for warm_up in warm_ups {
             self.shader_cache.warm(
@@ -1204,7 +1282,7 @@ impl EffectRenderer {
         )
     }
 
-    fn blur_resource(&self, pipeline: BlurPipeline) -> &LazyGpuResource<wgpu::RenderPipeline> {
+    fn blur_resource(&self, pipeline: BlurPipeline) -> &FixedPipeline {
         match pipeline {
             BlurPipeline::Mean => &self.blur_mean_pipeline,
             BlurPipeline::Kernel { tile_mode } => &self.blur_pipelines[tile_mode],
@@ -1246,20 +1324,19 @@ impl EffectRenderer {
             if queued & bit == 0 {
                 self.blur_families_queued.set(queued | bit);
                 for sibling in blur_family(tile_mode).filter(|sibling| *sibling != pipeline) {
-                    let resource = self.blur_resource(sibling);
-                    if resource.get().is_none() {
-                        resource.queue(
-                            &self.compiler,
-                            CompileLane::WarmUp,
-                            self.adapter_backend,
-                            self.blur_job(device, sibling),
-                        );
-                    }
+                    self.blur_resource(sibling).queue(
+                        &self.compiler,
+                        CompileLane::WarmUp,
+                        self.adapter_backend,
+                        self.blur_job(device, sibling),
+                    );
                 }
             }
         }
         self.blur_resource(pipeline)
-            .get_or_init(self.adapter_backend, || self.blur_job(device, pipeline)())
+            .for_draw(&self.first_screen, self.adapter_backend, || {
+                self.blur_job(device, pipeline)()
+            })
     }
 
     fn mean_pipeline_job(&self, device: &wgpu::Device) -> FixedPipelineJob {
@@ -1311,18 +1388,16 @@ impl EffectRenderer {
 
     fn offset_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
         self.offset_pipeline
-            .get_or_init(self.adapter_backend, || self.offset_pipeline_job(device)())
+            .for_draw(&self.first_screen, self.adapter_backend, || {
+                self.offset_pipeline_job(device)()
+            })
     }
 
     fn blit_pipeline_target(
         &self,
         blend_mode: BlendMode,
         unmasked_nearest: bool,
-    ) -> (
-        &LazyGpuResource<wgpu::RenderPipeline>,
-        &'static str,
-        wgpu::BlendState,
-    ) {
+    ) -> (&FixedPipeline, &'static str, wgpu::BlendState) {
         match blend_mode {
             BlendMode::Src => (
                 &self.blit_pipeline_src[usize::from(unmasked_nearest)],
@@ -1371,7 +1446,7 @@ impl EffectRenderer {
         unmasked_nearest: bool,
     ) -> &wgpu::RenderPipeline {
         let (resource, _, _) = self.blit_pipeline_target(blend_mode, unmasked_nearest);
-        resource.get_or_init(self.adapter_backend, || {
+        resource.for_draw(&self.first_screen, self.adapter_backend, || {
             self.blit_pipeline_job(device, blend_mode, unmasked_nearest)()
         })
     }
@@ -1391,11 +1466,7 @@ impl EffectRenderer {
         &self,
         blend_mode: BlendMode,
         texels: bool,
-    ) -> (
-        &LazyGpuResource<wgpu::RenderPipeline>,
-        &'static str,
-        wgpu::BlendState,
-    ) {
+    ) -> (&FixedPipeline, &'static str, wgpu::BlendState) {
         match blend_mode {
             BlendMode::Src => (
                 &self.projective_blit_pipeline_src[usize::from(texels)],
@@ -1440,7 +1511,7 @@ impl EffectRenderer {
         texels: bool,
     ) -> &wgpu::RenderPipeline {
         let (resource, _, _) = self.projective_pipeline_target(blend_mode, texels);
-        resource.get_or_init(self.adapter_backend, || {
+        resource.for_draw(&self.first_screen, self.adapter_backend, || {
             self.projective_pipeline_job(device, blend_mode, texels)()
         })
     }

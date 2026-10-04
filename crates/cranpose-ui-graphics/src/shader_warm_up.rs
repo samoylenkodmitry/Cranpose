@@ -5,6 +5,17 @@ use std::sync::{
 
 use crate::ShaderWarmUp;
 
+/// The framework's own runtime shader sources. A renderer rebuilds the
+/// pipelines its last launch drew the first screen with from these, matched
+/// by [`crate::runtime_shader_source_hash`], before the app builds them.
+pub const BUILTIN_RUNTIME_SHADER_SOURCES: [&str; 5] = [
+    crate::LIQUID_GLASS_WGSL,
+    crate::GRADIENT_BLUR_WGSL,
+    crate::GRADIENT_CUT_MASK_WGSL,
+    crate::ROUNDED_ALPHA_MASK_WGSL,
+    crate::GRADIENT_FADE_DST_OUT_WGSL,
+];
+
 static REQUESTED: Mutex<Vec<ShaderWarmUp>> = Mutex::new(Vec::new());
 static REQUESTED_COUNT: AtomicUsize = AtomicUsize::new(0);
 

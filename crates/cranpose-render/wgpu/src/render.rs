@@ -40,6 +40,7 @@ use crate::{
     debug_toggles::DebugToggle,
     draw_pass::{PassSegment, PassTarget, ResolvedComposite, ResolvedCompositeKind, SourceContent},
     effect_renderer::{CompositeSampleMode, EffectRenderer, RoundedCompositeMask},
+    fixed_pipeline::FixedPipeline,
     frame::{AdmissionGate, FrameExecutor},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
@@ -57,7 +58,6 @@ use crate::{
     glyph_run_arena::{GlyphRunArena, GlyphRunSpan},
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
-    lazy_resource::LazyGpuResource,
     offscreen::{OffscreenTarget, composition_bytes_per_pixel},
     output_conversion::OutputConverter,
     pipeline_compiler::{CompilerSend, PipelineCompilation, PipelineCompiler},
@@ -2864,10 +2864,10 @@ pub struct GpuRenderer {
     _pipeline_cache_watcher: Option<crate::pipeline_disk_cache::PersistWatcher>,
     shape_pipelines: ShapePipelines,
     /// Image and glyph pipelines for passes without and with a depth buffer.
-    image_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 4],
-    image_pipeline_dst_out: [LazyGpuResource<wgpu::RenderPipeline>; 4],
+    image_pipeline: [FixedPipeline; 4],
+    image_pipeline_dst_out: [FixedPipeline; 4],
     /// Indexed by depth, then turned: see [`GpuRenderer::glyph_atlas_pipeline`].
-    glyph_atlas_pipeline: [LazyGpuResource<wgpu::RenderPipeline>; 4],
+    glyph_atlas_pipeline: [FixedPipeline; 4],
     image_shader: SharedShader,
     glyph_atlas_shader: SharedShader,
     /// Transient depth buffers by target size, for passes that lay opaque
@@ -3066,6 +3066,7 @@ impl GpuRenderer {
         let crate::pipeline_disk_cache::Loaded {
             cache: pipeline_cache,
             first_screen,
+            first_screen_records,
         } = crate::pipeline_disk_cache::load(&device);
         #[cfg(target_arch = "wasm32")]
         let (pipeline_cache, first_screen): (Option<wgpu::PipelineCache>, Vec<u64>) =
@@ -3076,7 +3077,8 @@ impl GpuRenderer {
 
         let effects_started = Instant::now();
         let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
-        let effect_renderer = EffectRenderer::new(
+        #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
+        let mut effect_renderer = EffectRenderer::new(
             &device,
             pipeline_compiler.clone(),
             pipeline_cache.clone(),
@@ -3123,6 +3125,8 @@ impl GpuRenderer {
                 .filter(|&bits| bits != crate::arc_trig_fill::FIRST_SCREEN_KEY)
                 .filter_map(ShapePipelineKey::from_bits),
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        effect_renderer.warm_recorded_shaders(&first_screen_records.shaders);
         let image_layouts = [
             Some(&uniform_bind_group_layout),
             Some(&image_bind_group_layout),
@@ -3159,22 +3163,22 @@ impl GpuRenderer {
             _pipeline_cache_watcher: pipeline_cache_watcher,
             shape_pipelines,
             image_pipeline: [
-                LazyGpuResource::new("image/src-over"),
-                LazyGpuResource::new("image/src-over/depth"),
-                LazyGpuResource::new("image/src-over/alpha-mask"),
-                LazyGpuResource::new("image/src-over/alpha-mask/depth"),
+                FixedPipeline::new("image/src-over"),
+                FixedPipeline::new("image/src-over/depth"),
+                FixedPipeline::new("image/src-over/alpha-mask"),
+                FixedPipeline::new("image/src-over/alpha-mask/depth"),
             ],
             image_pipeline_dst_out: [
-                LazyGpuResource::new("image/dst-out"),
-                LazyGpuResource::new("image/dst-out/depth"),
-                LazyGpuResource::new("image/dst-out/alpha-mask"),
-                LazyGpuResource::new("image/dst-out/alpha-mask/depth"),
+                FixedPipeline::new("image/dst-out"),
+                FixedPipeline::new("image/dst-out/depth"),
+                FixedPipeline::new("image/dst-out/alpha-mask"),
+                FixedPipeline::new("image/dst-out/alpha-mask/depth"),
             ],
             glyph_atlas_pipeline: [
-                LazyGpuResource::new("glyph/atlas"),
-                LazyGpuResource::new("glyph/atlas/depth"),
-                LazyGpuResource::new("glyph/atlas/turned"),
-                LazyGpuResource::new("glyph/atlas/turned/depth"),
+                FixedPipeline::new("glyph/atlas"),
+                FixedPipeline::new("glyph/atlas/depth"),
+                FixedPipeline::new("glyph/atlas/turned"),
+                FixedPipeline::new("glyph/atlas/turned/depth"),
             ],
             image_shader,
             glyph_atlas_shader,
@@ -3239,6 +3243,8 @@ impl GpuRenderer {
             shader_warm_ups_queued: 0,
         };
         renderer.warm_requested_shaders();
+        #[cfg(not(target_arch = "wasm32"))]
+        renderer.warm_fixed_pipelines(&pipeline_compiler, &first_screen_records.fixed);
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
             adapter_backend,
@@ -3263,12 +3269,47 @@ impl GpuRenderer {
         self.effect_renderer.warm_shaders(&requested);
     }
 
+    /// Queues the fixed pipelines the last launch drew its first screen
+    /// with, named by `recorded` labels.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn warm_fixed_pipelines(&self, compiler: &PipelineCompiler, recorded: &[String]) {
+        if recorded.is_empty() {
+            return;
+        }
+        self.effect_renderer.warm_fixed(&self.device, recorded);
+        let warm =
+            |pipeline: &FixedPipeline,
+             job: &dyn Fn() -> Box<dyn FnOnce() -> wgpu::RenderPipeline + Send>| {
+                if pipeline.recorded_in(recorded) {
+                    pipeline.queue(
+                        compiler,
+                        crate::pipeline_compiler::CompileLane::WarmUp,
+                        self.adapter_backend,
+                        job(),
+                    );
+                }
+            };
+        for depth in [false, true] {
+            for variant in [false, true] {
+                for blend_mode in [BlendMode::SrcOver, BlendMode::DstOut] {
+                    warm(
+                        self.image_pipeline_resource(blend_mode, depth, variant),
+                        &|| Box::new(self.image_pipeline_job(blend_mode, depth, variant)),
+                    );
+                }
+                warm(self.glyph_atlas_pipeline_resource(depth, variant), &|| {
+                    Box::new(self.glyph_atlas_pipeline_job(depth, variant))
+                });
+            }
+        }
+    }
+
     fn image_pipeline_resource(
         &self,
         blend_mode: BlendMode,
         depth: bool,
         alpha_mask: bool,
-    ) -> &LazyGpuResource<wgpu::RenderPipeline> {
+    ) -> &FixedPipeline {
         let pipelines = match blend_mode {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
@@ -3306,9 +3347,11 @@ impl GpuRenderer {
         alpha_mask: bool,
     ) -> &wgpu::RenderPipeline {
         self.image_pipeline_resource(blend_mode, depth, alpha_mask)
-            .get_or_init(self.adapter_backend, || {
-                self.image_pipeline_job(blend_mode, depth, alpha_mask)()
-            })
+            .for_draw(
+                &self.effect_renderer.first_screen,
+                self.adapter_backend,
+                || self.image_pipeline_job(blend_mode, depth, alpha_mask)(),
+            )
     }
 
     fn glyph_atlas_pipeline_job(
@@ -3328,10 +3371,15 @@ impl GpuRenderer {
     /// The glyph pipeline for a pass with a depth buffer or not, drawing
     /// [`TurnedGlyph`]s or plain [`GlyphInstance`]s.
     fn glyph_atlas_pipeline(&self, depth: bool, turned: bool) -> &wgpu::RenderPipeline {
-        self.glyph_atlas_pipeline[usize::from(depth) + 2 * usize::from(turned)]
-            .get_or_init(self.adapter_backend, || {
-                self.glyph_atlas_pipeline_job(depth, turned)()
-            })
+        self.glyph_atlas_pipeline_resource(depth, turned).for_draw(
+            &self.effect_renderer.first_screen,
+            self.adapter_backend,
+            || self.glyph_atlas_pipeline_job(depth, turned)(),
+        )
+    }
+
+    fn glyph_atlas_pipeline_resource(&self, depth: bool, turned: bool) -> &FixedPipeline {
+        &self.glyph_atlas_pipeline[usize::from(depth) + 2 * usize::from(turned)]
     }
 
     /// The transient depth buffer for a target of `size`, created on first

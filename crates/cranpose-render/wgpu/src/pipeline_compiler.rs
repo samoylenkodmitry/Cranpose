@@ -13,9 +13,14 @@ use std::sync::{
 #[cfg(not(target_arch = "wasm32"))]
 const LANE_FINISH_WAIT: web_time::Duration = web_time::Duration::from_secs(5);
 
-/// The compiler's threads, one per [`CompileLane`].
+/// The warm-up lane's threads: a launch after an update compiles the last
+/// launch's first screen there, dozens of pipelines of a few hundred
+/// milliseconds each on a slow device's driver, and one thread left its
+/// first frame waiting for them one at a time.
 #[cfg(not(target_arch = "wasm32"))]
-const LANES: usize = 2;
+fn warm_up_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |cores| (cores.get() / 2).clamp(1, 3))
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 type Job = Box<dyn FnOnce() + Send + 'static>;
@@ -55,11 +60,12 @@ pub(crate) enum CompileLane {
 
 /// Runs pipeline creation on background threads, so a draw finds its
 /// pipeline ready instead of paying the driver's compile inside the frame.
-/// Each [`CompileLane`] has its own thread and runs its jobs in the order
-/// they were queued, so a pipeline a frame is waiting for never queues
-/// behind warm-ups, which take seconds each on a slow device's driver. The
-/// threads end with the last handle, which skips the jobs they had not
-/// started and waits, up to [`LANE_FINISH_WAIT`], for the ones they had.
+/// Each [`CompileLane`] has its own threads, one for the demanded lane and
+/// a few for warm-ups, and starts its jobs in the order they were queued, so
+/// a pipeline a frame is waiting for never queues behind warm-ups, which
+/// take seconds each on a slow device's driver. The threads end with the
+/// last handle, which skips the jobs they had not started and waits, up to
+/// [`LANE_FINISH_WAIT`], for the ones they had.
 #[derive(Clone, Default)]
 pub(crate) struct PipelineCompiler {
     #[cfg(not(target_arch = "wasm32"))]
@@ -72,9 +78,10 @@ struct Workers {
     demanded: Option<Sender<Job>>,
     warm_up: Option<Sender<Job>>,
     stopped: Arc<AtomicBool>,
-    /// Each lane's thread says here that it has ended. Behind a mutex only
-    /// so the handle is `Sync`; the last handle reads it without locking.
+    /// Each lane thread says here that it has ended. Behind a mutex only so
+    /// the handle is `Sync`; the last handle reads it without locking.
     finished: Mutex<Receiver<()>>,
+    threads: usize,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -88,7 +95,7 @@ impl Drop for Workers {
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner);
         let deadline = web_time::Instant::now() + LANE_FINISH_WAIT;
-        for _ in 0..LANES {
+        for _ in 0..self.threads {
             let left = deadline.saturating_duration_since(web_time::Instant::now());
             if finished.recv_timeout(left).is_err() {
                 log::warn!(
@@ -100,27 +107,37 @@ impl Drop for Workers {
     }
 }
 
+/// A lane of `threads` threads taking its jobs in the order queued.
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn_lane(
     name: &str,
+    threads: usize,
     stopped: &Arc<AtomicBool>,
     finished: &Sender<()>,
 ) -> std::io::Result<Sender<Job>> {
     let (jobs, queued) = mpsc::channel::<Job>();
-    let stopped = Arc::clone(stopped);
-    let finished = finished.clone();
-    std::thread::Builder::new()
-        .name(name.into())
-        .spawn(move || {
-            crate::render::mark_thread_off_frame();
-            while let Ok(job) = queued.recv() {
-                if stopped.load(Ordering::Acquire) {
-                    break;
+    let queued = Arc::new(Mutex::new(queued));
+    for _ in 0..threads {
+        let queued = Arc::clone(&queued);
+        let stopped = Arc::clone(stopped);
+        let finished = finished.clone();
+        std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                crate::render::mark_thread_off_frame();
+                loop {
+                    let job = queued.lock().unwrap_or_else(PoisonError::into_inner).recv();
+                    let Ok(job) = job else {
+                        break;
+                    };
+                    if stopped.load(Ordering::Acquire) {
+                        break;
+                    }
+                    job();
                 }
-                job();
-            }
-            let _ = finished.send(());
-        })?;
+                let _ = finished.send(());
+            })?;
+    }
     Ok(jobs)
 }
 
@@ -158,9 +175,10 @@ impl PipelineCompiler {
             }
             let stopped = Arc::new(AtomicBool::new(false));
             let (finished_tx, finished) = mpsc::channel();
+            let warm_up_threads = warm_up_threads();
             let lanes =
-                spawn_lane("cranpose-pipelines", &stopped, &finished_tx).and_then(|demanded| {
-                    spawn_lane("cranpose-warm-up", &stopped, &finished_tx)
+                spawn_lane("cranpose-pipelines", 1, &stopped, &finished_tx).and_then(|demanded| {
+                    spawn_lane("cranpose-warm-up", warm_up_threads, &stopped, &finished_tx)
                         .map(|warm_up| (demanded, warm_up))
                 });
             match lanes {
@@ -170,6 +188,7 @@ impl PipelineCompiler {
                         warm_up: Some(warm_up),
                         stopped,
                         finished: Mutex::new(finished),
+                        threads: 1 + warm_up_threads,
                     })),
                 },
                 Err(error) => {

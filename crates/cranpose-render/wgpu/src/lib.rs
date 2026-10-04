@@ -18,6 +18,7 @@ mod geometry;
 mod idle_pool;
 mod layer_cache;
 pub use fast_cores::pin_current_thread_to_fast_cores;
+mod fixed_pipeline;
 mod frame_graph;
 mod frame_packet;
 mod frontend;
@@ -35,6 +36,8 @@ mod pipeline;
 mod pipeline_compiler;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pipeline_disk_cache;
+#[cfg(not(target_arch = "wasm32"))]
+mod pipeline_records;
 #[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
 mod record_columns;

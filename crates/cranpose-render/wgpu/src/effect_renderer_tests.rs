@@ -196,7 +196,7 @@ fn blit_specialization_preserves_sampling_masks_and_blending() {
                         BlendMode::DstOut => &renderer.blit_pipeline_dst_out,
                         _ => &renderer.blit_pipeline,
                     };
-                    resources[1].get_or_init(backend, || dynamic);
+                    resources[1].for_draw(&renderer.first_screen, backend, || dynamic);
                 }
             }
             renderer
