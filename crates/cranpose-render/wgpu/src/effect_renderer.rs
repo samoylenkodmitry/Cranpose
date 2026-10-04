@@ -912,6 +912,15 @@ fn dst_out_blend_state() -> wgpu::BlendState {
 /// it reads so the background compiler can run it as well as the frame.
 #[cfg(not(target_arch = "wasm32"))]
 type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + Send + 'static>;
+
+/// The framework's own runtime shader sources, which recorded pipelines are
+/// rebuilt from.
+#[cfg(not(target_arch = "wasm32"))]
+fn framework_shader_sources() -> impl Iterator<Item = &'static str> {
+    cranpose_ui_graphics::BUILTIN_RUNTIME_SHADER_SOURCES
+        .into_iter()
+        .chain([crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER])
+}
 #[cfg(target_arch = "wasm32")]
 type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + 'static>;
 
@@ -1210,19 +1219,26 @@ impl EffectRenderer {
         }
     }
 
-    /// Queues the runtime shader pipelines the last launch drew its first
-    /// screen with, those of the framework's own shaders.
+    /// Queues the recorded runtime shader pipelines of the framework's own
+    /// shaders.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_recorded_shaders<'a>(
         &mut self,
         records: impl IntoIterator<Item = &'a crate::pipeline_records::ShaderPipelineRecord>,
     ) {
-        self.shader_cache.warm_recorded(
-            records,
-            cranpose_ui_graphics::BUILTIN_RUNTIME_SHADER_SOURCES
-                .into_iter()
-                .chain([crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER]),
-        );
+        self.shader_cache
+            .warm_recorded(records, framework_shader_sources());
+    }
+
+    /// Queues the runtime shader pipelines the last launch drew its first
+    /// screen with, behind the stand-ins they share.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_first_screen_shaders<'a>(
+        &mut self,
+        records: impl IntoIterator<Item = &'a crate::pipeline_records::ShaderPipelineRecord>,
+    ) {
+        self.shader_cache
+            .warm_first_screen(records, framework_shader_sources());
     }
 
     /// Queues the fixed pipelines whose labels `wanted` accepts.

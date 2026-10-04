@@ -3146,7 +3146,7 @@ impl GpuRenderer {
             recorder.clone(),
         );
         #[cfg(not(target_arch = "wasm32"))]
-        effect_renderer.warm_recorded_shaders(
+        effect_renderer.warm_first_screen_shaders(
             records
                 .shaders
                 .iter()

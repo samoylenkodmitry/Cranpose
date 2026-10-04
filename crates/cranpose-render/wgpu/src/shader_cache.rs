@@ -4,9 +4,9 @@ use std::{
     sync::Arc,
 };
 
-#[cfg(not(target_arch = "wasm32"))]
-use cranpose_ui_graphics::runtime_shader_source_hash;
 use cranpose_ui_graphics::{DrawSpecialization, FxBuildHasher, RuntimeShader, ShaderTarget};
+#[cfg(not(target_arch = "wasm32"))]
+use cranpose_ui_graphics::{runtime_shader_overrides_hash, runtime_shader_source_hash};
 use naga::ShaderStage;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -127,6 +127,15 @@ struct PipelineKey {
 }
 
 impl PipelineKey {
+    /// The key of every material's pipeline for this source, blend mode and
+    /// part.
+    fn part(self) -> Self {
+        Self {
+            overrides: 0,
+            ..self
+        }
+    }
+
     /// The key of the material's whole draw, whichever part this one draws.
     fn unsplit(self) -> Self {
         Self {
@@ -267,6 +276,8 @@ pub(crate) struct ShaderPipelineCache {
     /// The material a draw of this frame waited for its own pipelines of,
     /// because the general was not built.
     waited_this_frame: Option<PipelineKey>,
+    /// The shared stand-ins of the last launch's first screen.
+    stand_ins: Vec<StandIn>,
     /// The general that material went without, queued when the next frame
     /// starts: compiled beside the frame's own pipelines it would hold them,
     /// since a Mali driver compiles largely one pipeline at a time.
@@ -316,6 +327,7 @@ impl ShaderPipelineCache {
             forced: Vec::new(),
             forced_hash: 0,
             waited_this_frame: None,
+            stand_ins: Vec::new(),
             general_due: None,
             #[cfg(not(target_arch = "wasm32"))]
             noted: HashSet::default(),
@@ -498,8 +510,7 @@ impl ShaderPipelineCache {
 
     /// The pipeline drawing `shader` as `variant` with `specialization`, or
     /// `None` when the shader failed validation. The fit says whether the
-    /// draw got the specialization it asked for or the general pipeline
-    /// standing in.
+    /// draw got the specialization it asked for or a pipeline standing in.
     pub fn get_or_create(
         &mut self,
         shader: &RuntimeShader,
@@ -510,56 +521,95 @@ impl ShaderPipelineCache {
         let key = self.key(shader, specialization, mode, variant);
         #[cfg(not(target_arch = "wasm32"))]
         self.note_drawn(specialization, key);
-        let general = key.general();
-        let own = self.ready(key)
-            || key == general
-            || !self.compiler.is_active()
-            || !specialization.exact();
-        // Without a built general, the first material a frame cannot serve
-        // waits for its own pipelines: a specialization compiles in a
-        // fraction of the general's time (glass on a Mali: ~0.3 s a part
-        // against ~1.4 s). The general follows on the warm-up lane once the
-        // frame is over, for later materials to stand in with.
-        let wait_for_own = !own
-            && !self.ready(general)
-            && (self.pipelines.contains_key(&key)
-                || self
-                    .waited_this_frame
-                    .is_none_or(|material| material == key.unsplit()));
-        let (build, fit) = if own || wait_for_own {
-            let fit = if key.is_general() {
-                ShaderPipelineFit::General
-            } else {
-                ShaderPipelineFit::Specialized
-            };
-            (key, fit)
-        } else {
-            self.request(shader, specialization, key, CompileLane::Demanded);
-            // The stand-in is drawn with too: a later launch builds it before
-            // another new material needs it.
-            #[cfg(not(target_arch = "wasm32"))]
-            self.note_drawn(specialization, general);
-            (general, ShaderPipelineFit::Fallback)
-        };
-        if wait_for_own {
-            self.waited_this_frame = Some(key.unsplit());
-            if self.general_due.is_none() && !self.pipelines.contains_key(&general) {
-                self.general_due = Some((general, self.job(shader, specialization, general)));
-            }
-        }
+        let (build, fit, stand_in) = self.choose(shader, specialization, key);
         if !self.ready(build) {
-            let job = self.job(shader, specialization, build);
-            let backend = self.factory.backend;
-            #[cfg(not(target_arch = "wasm32"))]
-            let waited = web_time::Instant::now();
-            self.slot(build).get_or_init(backend, || job.build());
-            #[cfg(not(target_arch = "wasm32"))]
-            self.recorder.extend_first_screen(waited.elapsed());
+            self.build_now(shader, specialization, build, stand_in);
         }
         self.pipelines[&build]
             .get()
             .and_then(Option::as_ref)
             .map(|pipeline| (pipeline, fit))
+    }
+
+    /// The pipeline that draws `key` now, how it fits, and the stand-in it
+    /// is when it is one.
+    fn choose(
+        &mut self,
+        shader: &RuntimeShader,
+        specialization: DrawSpecialization<'_>,
+        key: PipelineKey,
+    ) -> (PipelineKey, ShaderPipelineFit, Option<usize>) {
+        let general = key.general();
+        let own_fit = if key.is_general() {
+            ShaderPipelineFit::General
+        } else {
+            ShaderPipelineFit::Specialized
+        };
+        if self.ready(key)
+            || key == general
+            || !self.compiler.is_active()
+            || !specialization.exact()
+        {
+            return (key, own_fit, None);
+        }
+        // A shared stand-in, queued ahead of the recorded pipelines, draws a
+        // first screen while its materials' own pipelines compile.
+        if let Some(index) = self.stand_in_for(key, specialization) {
+            if !self.pipelines.contains_key(&key) {
+                self.request(shader, specialization, key, CompileLane::Demanded);
+            }
+            return (
+                self.stand_ins[index].key,
+                ShaderPipelineFit::Fallback,
+                Some(index),
+            );
+        }
+        // Without a built general, the first material a frame cannot serve
+        // waits for its own pipelines: a specialization compiles in a
+        // fraction of the general's time (glass on a Mali: ~0.3 s a part
+        // against ~1.4 s). The general follows on the warm-up lane once the
+        // frame is over, for later materials to stand in with.
+        if !self.ready(general)
+            && (self.pipelines.contains_key(&key)
+                || self
+                    .waited_this_frame
+                    .is_none_or(|material| material == key.unsplit()))
+        {
+            self.waited_this_frame = Some(key.unsplit());
+            if self.general_due.is_none() && !self.pipelines.contains_key(&general) {
+                self.general_due = Some((general, self.job(shader, specialization, general)));
+            }
+            return (key, own_fit, None);
+        }
+        self.request(shader, specialization, key, CompileLane::Demanded);
+        // The stand-in is drawn with too: a later launch builds it before
+        // another new material needs it.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.note_drawn(specialization, general);
+        (general, ShaderPipelineFit::Fallback, None)
+    }
+
+    /// Builds `build` on this thread, or waits for the job building it.
+    fn build_now(
+        &mut self,
+        shader: &RuntimeShader,
+        specialization: DrawSpecialization<'_>,
+        build: PipelineKey,
+        stand_in: Option<usize>,
+    ) {
+        let job = match stand_in {
+            Some(index) => {
+                let stand_in = &self.stand_ins[index];
+                self.source_job(stand_in.key, stand_in.constants.clone())
+            }
+            None => self.job(shader, specialization, build),
+        };
+        let backend = self.factory.backend;
+        #[cfg(not(target_arch = "wasm32"))]
+        let waited = web_time::Instant::now();
+        self.slot(build).get_or_init(backend, || job.build());
+        #[cfg(not(target_arch = "wasm32"))]
+        self.recorder.extend_first_screen(waited.elapsed());
     }
 
     /// Notes `key`'s first draw for the next launches, as the first screen's
@@ -594,43 +644,136 @@ impl ShaderPipelineCache {
 
     /// Queues on the warm-up lane every pipeline `records` names whose shader
     /// source is one of `sources`, built as the draw that recorded it built
-    /// it, so a launch's first frame finds the last launch's pipelines ready.
+    /// it, so a launch's frames find the last launches' pipelines ready.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_recorded<'a>(
         &mut self,
         records: impl IntoIterator<Item = &'a ShaderPipelineRecord>,
         sources: impl IntoIterator<Item = &'static str>,
     ) {
-        let mut records = records.into_iter().peekable();
-        if !self.compiler.is_active() || self.forced_hash != 0 || records.peek().is_none() {
-            return;
+        for (key, constants) in self.decode_records(records, sources) {
+            self.queue_warm_up(key, constants);
+        }
+    }
+
+    /// [`Self::warm_recorded`] for the pipelines the last launch drew its
+    /// first screen with, queued behind a stand-in per shader source, blend
+    /// mode and draw part that several of them share. A stand-in folds only
+    /// the overrides all of those share: folds are exact, so it draws each of
+    /// them with its own pipeline's bytes, and compiles in about the time of
+    /// one of them, so the first frame can draw while theirs compile.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_first_screen<'a>(
+        &mut self,
+        records: impl IntoIterator<Item = &'a ShaderPipelineRecord>,
+        sources: impl IntoIterator<Item = &'static str>,
+    ) {
+        let recorded = self.decode_records(records, sources);
+        let mut groups: Vec<(StandIn, usize)> = Vec::new();
+        for (key, constants) in &recorded {
+            match groups.iter_mut().find(|(group, _)| group.key == key.part()) {
+                Some((group, members)) => {
+                    group.constants.retain(|&shared| holds(constants, shared));
+                    *members += 1;
+                }
+                None => groups.push((
+                    StandIn {
+                        key: key.part(),
+                        constants: constants.clone(),
+                    },
+                    1,
+                )),
+            }
+        }
+        for (mut stand_in, members) in groups {
+            if members < 2 || stand_in.constants.is_empty() {
+                continue;
+            }
+            stand_in.key.overrides =
+                runtime_shader_overrides_hash(stand_in.constants.iter().copied());
+            self.queue_warm_up(stand_in.key, stand_in.constants.clone());
+            self.stand_ins.push(stand_in);
+        }
+        for (key, constants) in recorded {
+            self.queue_warm_up(key, constants);
+        }
+    }
+
+    /// The pipelines `records` names whose shader source is one of
+    /// `sources`, with the overrides each compiled with.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn decode_records<'a>(
+        &mut self,
+        records: impl IntoIterator<Item = &'a ShaderPipelineRecord>,
+        sources: impl IntoIterator<Item = &'static str>,
+    ) -> Vec<(PipelineKey, Vec<(&'static str, f64)>)> {
+        if !self.compiler.is_active() || self.forced_hash != 0 {
+            return Vec::new();
         }
         let sources: smallvec::SmallVec<[(u64, &'static str); 8]> = sources
             .into_iter()
             .map(|text| (runtime_shader_source_hash(text), text))
             .collect();
+        let mut decoded = Vec::new();
         for record in records {
             let Some(&(_, text)) = sources.iter().find(|(hash, _)| *hash == record.source) else {
                 continue;
             };
-            let Some((key, constants)) = recorded_key(record, text) else {
+            let Some(recorded) = recorded_key(record, text) else {
                 continue;
             };
-            if self.pipelines.contains_key(&key) {
-                continue;
-            }
             self.sources
-                .entry(key.source)
+                .entry(recorded.0.source)
                 .or_insert_with(|| ShaderSource::new(text));
-            let job = self.source_job(key, constants);
-            self.slot(key).queue(
-                &self.compiler,
-                CompileLane::WarmUp,
-                self.factory.backend,
-                || job.build(),
-            );
+            decoded.push(recorded);
         }
+        decoded
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn queue_warm_up(&mut self, key: PipelineKey, constants: Vec<(&'static str, f64)>) {
+        if self.pipelines.contains_key(&key) {
+            return;
+        }
+        let job = self.source_job(key, constants);
+        self.slot(key).queue(
+            &self.compiler,
+            CompileLane::WarmUp,
+            self.factory.backend,
+            || job.build(),
+        );
+    }
+
+    /// The stand-in that draws `key` with the bytes of its own pipeline:
+    /// same source, blend mode and part, its overrides among the draw's.
+    fn stand_in_for(
+        &self,
+        key: PipelineKey,
+        specialization: DrawSpecialization<'_>,
+    ) -> Option<usize> {
+        self.stand_ins.iter().position(|stand_in| {
+            stand_in.key.part() == key.part()
+                && stand_in.key != key
+                && stand_in
+                    .constants
+                    .iter()
+                    .all(|&shared| holds(specialization.overrides(), shared))
+        })
+    }
+}
+
+/// Whether `overrides` fix `name` to the same value.
+fn holds(overrides: &[(&'static str, f64)], (name, value): (&'static str, f64)) -> bool {
+    overrides
+        .iter()
+        .any(|&(own, fixed)| own == name && fixed.to_bits() == value.to_bits())
+}
+
+/// A pipeline several recorded materials share, see
+/// [`ShaderPipelineCache::warm_first_screen`].
+struct StandIn {
+    key: PipelineKey,
+    constants: Vec<(&'static str, f64)>,
 }
 
 /// The key `record` names and the overrides it compiled with, spelled as

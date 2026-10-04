@@ -152,9 +152,7 @@ impl ShaderSpecialization {
         *self.overrides_hash.get_or_init(|| {
             #[cfg(test)]
             OVERRIDE_HASH_COMPUTATIONS.with(|count| count.set(count.get() + 1));
-            hash_shader_bytes(self.overrides.iter().flat_map(|(name, value)| {
-                name.bytes().chain([0]).chain(value.to_bits().to_le_bytes())
-            }))
+            runtime_shader_overrides_hash(self.overrides.iter().copied())
         })
     }
 }
@@ -915,6 +913,18 @@ impl PartialEq for RuntimeShader {
 /// `source`.
 pub fn runtime_shader_source_hash(source: &str) -> u64 {
     hash_shader_bytes(source.bytes())
+}
+
+/// The hash [`DrawSpecialization::overrides_hash`] gives a non-empty
+/// override set, its overrides in name order.
+pub fn runtime_shader_overrides_hash<'a>(
+    overrides: impl IntoIterator<Item = (&'a str, f64)>,
+) -> u64 {
+    hash_shader_bytes(
+        overrides
+            .into_iter()
+            .flat_map(|(name, value)| name.bytes().chain([0]).chain(value.to_bits().to_le_bytes())),
+    )
 }
 
 fn hash_shader_bytes(bytes: impl IntoIterator<Item = u8>) -> u64 {
