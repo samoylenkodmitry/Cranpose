@@ -119,18 +119,17 @@ pub fn clear_platform_heart_rate() {
     publish_heart_rate(HeartRate::default());
 }
 
-fn monitor() -> Option<HeartRateMonitorRef> {
-    PLATFORM_HEART_RATE.get()
-}
-
 /// Whether this device can read a heart rate for this application at all.
 pub fn heart_rate_available() -> bool {
-    monitor().is_some_and(|monitor| monitor.available())
+    PLATFORM_HEART_RATE
+        .get()
+        .is_some_and(|monitor| monitor.available())
 }
 
 /// Whether the application may read the sensor.
 pub fn heart_rate_permission() -> HeartRatePermission {
-    monitor()
+    PLATFORM_HEART_RATE
+        .get()
         .filter(|monitor| monitor.available())
         .map_or(HeartRatePermission::Denied, |monitor| monitor.permission())
 }
@@ -138,7 +137,9 @@ pub fn heart_rate_permission() -> HeartRatePermission {
 /// Asks the person for the sensor. The only call in the framework that does;
 /// a no-op where there is no sensor or the build did not declare it.
 pub fn request_heart_rate_permission() {
-    if let Some(monitor) = monitor().filter(|monitor| monitor.available())
+    if let Some(monitor) = PLATFORM_HEART_RATE
+        .get()
+        .filter(|monitor| monitor.available())
         && monitor.permission() != HeartRatePermission::Granted
     {
         monitor.request_permission();
@@ -147,7 +148,10 @@ pub fn request_heart_rate_permission() {
 
 /// What the sensor is doing when nothing is reading it.
 fn resting_reading() -> HeartRate {
-    let status = match monitor().filter(|monitor| monitor.available()) {
+    let status = match PLATFORM_HEART_RATE
+        .get()
+        .filter(|monitor| monitor.available())
+    {
         None => HeartRateStatus::Unavailable,
         Some(monitor) => match monitor.permission() {
             HeartRatePermission::Granted => HeartRateStatus::Idle,
@@ -211,7 +215,10 @@ pub fn publish_heart_rate_permission(granted: bool) {
 }
 
 fn start_for_readers() {
-    let Some(monitor) = monitor().filter(|monitor| monitor.available()) else {
+    let Some(monitor) = PLATFORM_HEART_RATE
+        .get()
+        .filter(|monitor| monitor.available())
+    else {
         publish_heart_rate(HeartRate::default());
         return;
     };
@@ -241,7 +248,7 @@ impl Drop for HeartRateReader {
             observers.retain(|(id, _)| *id != self.id);
         }
         if self.reading && READERS.fetch_sub(1, Ordering::AcqRel) == 1 {
-            if let Some(monitor) = monitor() {
+            if let Some(monitor) = PLATFORM_HEART_RATE.get() {
                 monitor.stop();
             }
             publish_heart_rate(resting_reading());
