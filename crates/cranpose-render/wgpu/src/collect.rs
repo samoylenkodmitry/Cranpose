@@ -5,7 +5,9 @@ use cranpose_render_common::{
         CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
         ProjectiveTransform, RenderNode, quad_bounds,
     },
-    layer_composition::{layer_requires_isolation, local_content_layer_for},
+    layer_composition::{
+        layer_composite_params, layer_requires_isolation, local_content_layer_for,
+    },
     layer_transform::{apply_layer_affine_to_rect, layer_uniform_scale},
     primitive_emit::{PrimitiveClipSpace, resolve_clip, resolve_primitive_clip},
 };
@@ -141,7 +143,11 @@ impl LayerScene {
     }
 
     fn refresh_backdrop_summary(&mut self) {
-        self.has_backdrop = !self.scene.backdrop_layers.is_empty()
+        self.has_backdrop = self
+            .scene
+            .backdrop_layers
+            .iter()
+            .any(|layer| layer.alpha != 0.0)
             || self.children.iter().any(ChildLayer::reads_backdrop);
     }
 }
@@ -162,6 +168,7 @@ pub(crate) struct ChildLayer {
     pub(crate) blend_mode: BlendMode,
     pub(crate) effect: Option<RenderEffect>,
     pub(crate) backdrop: Option<RenderEffect>,
+    pub(crate) backdrop_alpha: f32,
     pub(crate) snap_anchor: Option<SnapAnchor>,
     pub(crate) surface_scale: f32,
     pub(crate) content_hash: u64,
@@ -172,7 +179,7 @@ pub(crate) struct ChildLayer {
 
 impl ChildLayer {
     pub(crate) fn reads_backdrop(&self) -> bool {
-        self.backdrop.is_some() || self.content.contains_backdrop()
+        (self.backdrop.is_some() && self.backdrop_alpha != 0.0) || self.content.contains_backdrop()
     }
 }
 
@@ -865,6 +872,7 @@ fn push_backdrop_layer(
     let Some(effect) = layer.backdrop() else {
         return;
     };
+    let local_layer = local_content_layer_for(&layer.graphics_layer);
     let rect = layer.local_bounds.translate(offset.x, offset.y);
     let clip = resolve_clip(
         context.visual_clip,
@@ -878,9 +886,10 @@ fn push_backdrop_layer(
     });
     let snap_anchor = context
         .snap_anchor
-        .or_else(|| rigid_snap_anchor(rect, &local_content_layer_for(&layer.graphics_layer)));
+        .or_else(|| rigid_snap_anchor(rect, &local_layer));
     scene.push_backdrop_layer(BackdropLayer {
         node_id: layer.node_id,
+        alpha: local_layer.alpha,
         rect,
         clip,
         reach: context.visual_clip,
@@ -969,6 +978,7 @@ fn isolated_child(
             blend_mode: layer.graphics_layer.blend_mode,
             effect: layer.effect().cloned(),
             backdrop: layer.backdrop().cloned(),
+            backdrop_alpha: local_layer.alpha,
             snap_anchor,
             surface_scale,
             content_hash,
@@ -980,15 +990,15 @@ fn isolated_child(
     )
 }
 
-fn with_backdrop_in_own_space(
-    child: ChildLayer,
-    wrapper_content: Option<LayerScene>,
-) -> ChildLayer {
-    let Some(mut content) = wrapper_content else {
+fn with_backdrop_in_own_space(child: ChildLayer, recycler: &mut LayerSceneRecycler) -> ChildLayer {
+    if child.backdrop.is_none()
+        || (uniform_scale_translation(child.transform).is_some()
+            && child.alpha == 1.0
+            && child.blend_mode == BlendMode::SrcOver)
+    {
         return child;
-    };
-    let inner_z = content.scene.next_z();
-    content.scene.next_z += 1;
+    }
+    let content = recycler.take(SceneCapacityHint::default());
     let mut outer = ChildLayer {
         z_index: child.z_index,
         node_id: child.node_id,
@@ -1000,6 +1010,7 @@ fn with_backdrop_in_own_space(
         blend_mode: child.blend_mode,
         effect: None,
         backdrop: None,
+        backdrop_alpha: 1.0,
         snap_anchor: child.snap_anchor,
         surface_scale: child.surface_scale,
         content_hash: child.content_hash,
@@ -1007,16 +1018,20 @@ fn with_backdrop_in_own_space(
         in_place: false,
         content,
     };
-    outer.content.children.push(ChildLayer {
-        z_index: inner_z,
+    let mut inner = ChildLayer {
+        z_index: outer.content.scene.next_z(),
         transform: ProjectiveTransform::identity(),
         clip: None,
         alpha: 1.0,
         blend_mode: BlendMode::SrcOver,
         snap_anchor: None,
+        surface_scale: 1.0,
         in_place: false,
         ..child
-    });
+    };
+    detach_flat_backdrop(&mut inner, &mut outer.content.scene);
+    outer.content.scene.next_z += 1;
+    outer.content.children.push(inner);
     outer.content.refresh_backdrop_summary();
     outer
 }
@@ -1036,6 +1051,7 @@ fn detach_flat_backdrop(child: &mut ChildLayer, scene: &mut CompositorScene) {
     };
     scene.push_backdrop_layer(BackdropLayer {
         node_id: child.node_id,
+        alpha: child.backdrop_alpha,
         rect: child.local_bounds.translate(offset.x, offset.y),
         clip: child.clip,
         reach: None,
@@ -1187,6 +1203,10 @@ fn collect_child(
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
 ) -> bool {
+    let composite = layer_composite_params(&child.graphics_layer);
+    if composite.is_some_and(|(alpha, blend)| alpha == 0.0 && blend == BlendMode::SrcOver) {
+        return layer_has_pixel_sensitive_subtree(child);
+    }
     match placement_in(child, &context) {
         placement @ (Placement::Direct(translation) | Placement::DirectRounded(translation, _)) => {
             let child_offset = Point::new(
@@ -1251,9 +1271,6 @@ fn collect_child(
                     context.offset.x,
                     context.offset.y,
                 ));
-            let wrapper_content = (child.backdrop().is_some()
-                && uniform_scale_translation(transform).is_none())
-            .then(|| recycler.take(SceneCapacityHint::default()));
             let child_bounds = quad_bounds(transform.map_rect(child.local_bounds));
             let shadow_clip = resolve_clip(
                 context.visual_clip,
@@ -1277,7 +1294,7 @@ fn collect_child(
                 &mut out.scene,
                 recycler,
             );
-            let mut isolated = with_backdrop_in_own_space(isolated, wrapper_content);
+            let mut isolated = with_backdrop_in_own_space(isolated, recycler);
             assign_shadow_anchor(&mut out.scene, shadows_before, isolated.snap_anchor);
             detach_flat_backdrop(&mut isolated, &mut out.scene);
             out.children.push(isolated);

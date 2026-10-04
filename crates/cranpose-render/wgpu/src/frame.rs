@@ -106,6 +106,17 @@ impl DeviceRect {
         }
     }
 
+    fn union(self, other: Self) -> Self {
+        let x = self.x.min(other.x);
+        let y = self.y.min(other.y);
+        Self {
+            x,
+            y,
+            width: (self.x + self.width).max(other.x + other.width) - x,
+            height: (self.y + self.height).max(other.y + other.height) - y,
+        }
+    }
+
     /// Snaps to whole pixels, growing outward.
     fn translated(self, delta: Point) -> Self {
         Self {
@@ -186,12 +197,21 @@ enum PagePlacement {
     /// The parent page's pixels under the child, projected into the child's
     /// device space: `inverse` maps a child device point to a page pixel.
     Projected {
-        dest_quad: [[f32; 2]; 4],
+        bounds: Option<DeviceRect>,
         inverse: [[f32; 3]; 3],
     },
 }
 
 impl PageBase {
+    fn child_rect(&self) -> Option<DeviceRect> {
+        match self.placement {
+            PagePlacement::Translated { shift } => {
+                Some(self.rect().translated(Point::new(-shift[0], -shift[1])))
+            }
+            PagePlacement::Projected { bounds, .. } => bounds,
+        }
+    }
+
     fn rect(&self) -> DeviceRect {
         DeviceRect {
             x: self.origin[0],
@@ -216,14 +236,19 @@ impl PageBase {
                     parent.translated(Point::new(-shift[0], -shift[1])),
                 ))
             }
-            PagePlacement::Projected { dest_quad, inverse } => Some(ResolvedComposite {
+            PagePlacement::Projected { inverse, .. } => Some(ResolvedComposite {
                 z_index: 0,
                 source: Rc::clone(&self.source),
                 content: SourceContent::Transient,
-                dest: quad_device_bounds(dest_quad).tuple(),
+                dest: region.tuple(),
                 scissor: None,
                 kind: ResolvedCompositeKind::Projective {
-                    dest_quad,
+                    dest_quad: [
+                        [region.x, region.y],
+                        [region.x + region.width, region.y],
+                        [region.x, region.y + region.height],
+                        [region.x + region.width, region.y + region.height],
+                    ],
                     inverse,
                     alpha: 1.0,
                     blend_mode: BlendMode::SrcOver,
@@ -494,6 +519,13 @@ impl LayerPass<'_> {
         self.page.rect()
     }
 
+    fn capture_bounds(&self) -> Option<DeviceRect> {
+        let target = self.target_rect();
+        self.beneath.page.as_ref().map_or(Some(target), |base| {
+            base.child_rect().map(|rect| target.union(rect))
+        })
+    }
+
     fn can_draw_in_place(&self, child: &ChildLayer) -> bool {
         self.in_place_allowed && child.in_place
     }
@@ -717,6 +749,7 @@ fn batched_effect(effect: &RenderEffect) -> Option<BatchedEffect<'_>> {
 /// resolves.
 struct PendingBackdrop<'a> {
     z: usize,
+    alpha: f32,
     node_id: Option<NodeId>,
     key: Option<LayerRasterCacheKey>,
     capture_rect: DeviceRect,
@@ -855,7 +888,11 @@ fn plan_backdrop(
     z: usize,
     scale: f32,
     target_rect: DeviceRect,
+    capture_bounds: Option<DeviceRect>,
 ) -> Option<PendingBackdrop<'_>> {
+    if backdrop.alpha == 0.0 {
+        return None;
+    }
     let snap = backdrop
         .snap_anchor
         .map(|anchor| snap_delta_for_anchor(anchor, scale))
@@ -875,18 +912,17 @@ fn plan_backdrop(
         None => None,
     };
     let padding = (backdrop.effect.input_padding() + backdrop.effect.output_padding()) * scale;
+    let expanded = visible.expand(padding.ceil());
+    let capture_bounds = capture_bounds.unwrap_or(expanded);
     let reach = match backdrop.reach {
         Some(reach) => DeviceRect::from_logical(reach.translate(snap.x, snap.y), scale)
-            .intersect(target_rect)?,
-        None => target_rect,
+            .intersect(capture_bounds)?,
+        None => capture_bounds,
     };
-    let capture_rect = visible
-        .expand(padding.ceil())
-        .intersect(reach)
-        .unwrap_or(visible)
-        .snap_out();
+    let capture_rect = expanded.intersect(reach).unwrap_or(visible).snap_out();
     Some(PendingBackdrop {
         z,
+        alpha: backdrop.alpha,
         node_id: backdrop.node_id,
         key: None,
         capture_rect,
@@ -995,7 +1031,12 @@ impl<'a> ResolveStages<'a> {
             .pending
             .iter()
             .filter(|other| {
-                other.z < item.z && other.visible.intersect(item.capture_rect).is_some()
+                other.z < item.z
+                    && other
+                        .support
+                        .unwrap_or(other.visible)
+                        .intersect(item.capture_rect)
+                        .is_some()
             })
             .map(|other| other.stage + 1)
             .max()
@@ -1209,7 +1250,7 @@ fn backdrop_blit(item: &PendingBackdrop<'_>, source: CompositeSource) -> Resolve
         dest: item.capture_rect.tuple(),
         scissor: Some(item.support.unwrap_or(item.visible).tuple()),
         kind: ResolvedCompositeKind::Blit {
-            alpha: 1.0,
+            alpha: item.alpha,
             blend_mode: BlendMode::SrcOver,
             rounded_mask: item.rounded_mask,
             sample_mode: CompositeSampleMode::Nearest,
@@ -1293,13 +1334,12 @@ fn replayed_kind(
 ) -> ResolvedCompositeKind {
     match kind {
         ResolvedCompositeKind::Blit {
-            alpha,
             blend_mode,
             sample_mode,
             source_viewport,
             ..
         } => ResolvedCompositeKind::Blit {
-            alpha: *alpha,
+            alpha: item.alpha,
             blend_mode: *blend_mode,
             rounded_mask: item.rounded_mask,
             sample_mode: *sample_mode,
@@ -1309,7 +1349,6 @@ fn replayed_kind(
             source_region,
             source_logical_size,
             substrate_regions,
-            alpha,
             ..
         } => ResolvedCompositeKind::Shader {
             shader: Arc::clone(
@@ -1322,7 +1361,7 @@ fn replayed_kind(
             source_logical_size: *source_logical_size,
             substrate_regions: *substrate_regions,
             rounded_mask: item.rounded_mask,
-            alpha: *alpha,
+            alpha: item.alpha,
         },
         projective @ ResolvedCompositeKind::Projective { .. } => projective.clone(),
     }
@@ -1362,7 +1401,7 @@ fn stage_composites(
             let substrate_regions =
                 side.map_or([None; MAX_SUBSTRATES], |side| side.substrates[member]);
             let blit = ResolvedCompositeKind::Blit {
-                alpha: 1.0,
+                alpha: item.alpha,
                 blend_mode: BlendMode::SrcOver,
                 rounded_mask: item.rounded_mask,
                 sample_mode: CompositeSampleMode::Nearest,
@@ -1371,7 +1410,7 @@ fn stage_composites(
             let kind = match item.batched.expect("packed items are batched") {
                 _ if glass_as_blit => blit,
                 BatchedEffect::Blur(_) => ResolvedCompositeKind::Blit {
-                    alpha: 1.0,
+                    alpha: item.alpha,
                     blend_mode: BlendMode::SrcOver,
                     rounded_mask: item.rounded_mask,
                     sample_mode: CompositeSampleMode::Linear,
@@ -1385,7 +1424,7 @@ fn stage_composites(
                         source_logical_size: logical_size,
                         substrate_regions,
                         rounded_mask: item.rounded_mask,
-                        alpha: 1.0,
+                        alpha: item.alpha,
                     }
                 }
             };
@@ -2617,6 +2656,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             in_place: Vec::new(),
         };
         let target_rect = pass.target_rect();
+        let capture_bounds = pass.capture_bounds();
         self.resolve_flat_children(&mut pass)?;
 
         for (z, event) in layer_events(layer) {
@@ -2624,7 +2664,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 Event::Backdrop(index) => {
                     let backdrop = &scene.backdrop_layers[index];
                     if !self.renderer.ablation.stages
-                        && let Some(item) = plan_backdrop(backdrop, z, scale, target_rect)
+                        && let Some(item) =
+                            plan_backdrop(backdrop, z, scale, target_rect, capture_bounds)
                     {
                         pass.stages.push(item);
                     }
@@ -3204,13 +3245,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             snap,
         } = placement;
         let padding = ((backdrop.input_padding() + backdrop.output_padding()) * scale).ceil();
-        let capture_rect = visible
-            .expand(padding)
-            .intersect(pass.target_rect())
+        let expanded = visible.expand(padding);
+        let capture_rect = expanded
+            .intersect(pass.capture_bounds().unwrap_or(expanded))
             .unwrap_or(visible)
             .snap_out();
         let mut item = PendingBackdrop {
             z,
+            alpha: child.backdrop_alpha,
             node_id: child.node_id,
             key: None,
             capture_rect,
@@ -3475,7 +3517,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let layer_pixel_rect = item.layer_pixel_rect();
         let scissor = item.support.unwrap_or(item.visible);
         if let Some((pre_shader, shader)) = shader_tail(item.effect)
-            && (item.rounded_mask.is_none() || shader.batched_source())
+            && ((item.rounded_mask.is_none() && item.alpha >= 1.0) || shader.batched_source())
         {
             let source = match pre_shader {
                 Some(effect) => {
@@ -3503,7 +3545,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     source_logical_size: None,
                     substrate_regions: [None; MAX_SUBSTRATES],
                     rounded_mask: item.rounded_mask,
-                    alpha: 1.0,
+                    alpha: item.alpha,
                 },
             });
         }
@@ -3574,22 +3616,23 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let scale = pass.scale;
         let copied = self.copy_regions(pass, regions, texture);
         let beneath = pass.beneath;
-        let page_untouched = pass.page_untouched();
-        let bases: Vec<Vec<ResolvedComposite>> = regions
-            .iter()
-            .map(|region| {
-                if copied {
-                    return Vec::new();
-                }
-                beneath
-                    .page
-                    .as_ref()
-                    .and_then(|base| base.under(region.rect))
-                    .into_iter()
-                    .chain(pass.page.blit(region.rect).filter(|_| !page_untouched))
-                    .collect()
-            })
-            .collect();
+        let bases: Vec<Vec<ResolvedComposite>> = if copied {
+            Vec::new()
+        } else {
+            let page_untouched = pass.page_untouched();
+            regions
+                .iter()
+                .map(|region| {
+                    beneath
+                        .page
+                        .as_ref()
+                        .and_then(|base| base.under(region.rect))
+                        .into_iter()
+                        .chain(pass.page.blit(region.rect).filter(|_| !page_untouched))
+                        .collect()
+                })
+                .collect()
+        };
         ensure_sorted_by_key(&mut pass.pending, composite_z);
         let fixups: Vec<Cow<'_, [DrawOp]>> = regions
             .iter()
@@ -3601,7 +3644,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             height: texture.height,
         };
         let mut segments: Vec<PassSegment<'_>> = Vec::with_capacity(regions.len() * 2);
-        for ((region, base), fixup) in regions.iter().zip(&bases).zip(&fixups) {
+        for (index, (region, fixup)) in regions.iter().zip(&fixups).enumerate() {
             let offset = [
                 region.rect.x - region.origin[0],
                 region.rect.y - region.origin[1],
@@ -3617,7 +3660,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 segments.push(PassSegment {
                     scene: &self.empty_scene,
                     ops: &[],
-                    composites: base,
+                    composites: &bases[index],
                     offset,
                     scissor,
                     first_run_window: None,
@@ -3628,6 +3671,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let own_end = pass
                 .pending
                 .partition_point(|composite| composite.z_index < region.z);
+            let Some(own) = region.rect.intersect(pass.target_rect()) else {
+                continue;
+            };
+            let scissor = Some((
+                (own.x - offset[0]) as u32,
+                (own.y - offset[1]) as u32,
+                own.width as u32,
+                own.height as u32,
+            ));
             let segment = PassSegment {
                 scene: &pass.layer.scene,
                 ops: fixup,
@@ -3671,14 +3723,18 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if pass.beneath.page.is_some() || !copy_compatible(&pass.page.texture, texture) {
             return false;
         }
-        let copies: Option<Vec<TextureRegionCopy<'_>>> = regions
-            .iter()
-            .map(|region| pass.page.copy(region.rect, texture, region.origin))
-            .collect();
-        let Some(copies) = copies else {
+        if !regions.iter().all(|region| {
+            pass.page
+                .copy(region.rect, texture, region.origin)
+                .is_some()
+        }) {
             return false;
-        };
-        for copy in copies {
+        }
+        for region in regions {
+            let copy = pass
+                .page
+                .copy(region.rect, texture, region.origin)
+                .expect("capture regions were validated before recording copies");
             self.recorder.copy_texture_region(copy);
         }
         true
@@ -3849,6 +3905,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         } = ChildFrame::of(child, scale, pass.target_rect());
 
         if !self.renderer.ablation.stages
+            && child.backdrop_alpha != 0.0
             && let Some(backdrop) = &child.backdrop
             && let Some(visible) = visible_device
             && let Some(support) =
@@ -4532,9 +4589,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     }
 }
 
-/// How far, in a layer's logical units, any glass in it reads past the
-/// pixels it shows: the largest input and output padding of its backdrop
-/// effects and of its children's, at the children's surface scale.
 fn backdrop_reach(layer: &LayerScene) -> f32 {
     let padding = |effect: &RenderEffect| effect.input_padding() + effect.output_padding();
     let own = layer
@@ -4543,12 +4597,11 @@ fn backdrop_reach(layer: &LayerScene) -> f32 {
         .iter()
         .map(|backdrop| padding(&backdrop.effect));
     let children = layer.children.iter().map(|child| {
-        child.surface_scale
-            * child
-                .backdrop
-                .as_ref()
-                .map_or(0.0, padding)
-                .max(backdrop_reach(&child.content))
+        child
+            .backdrop
+            .as_ref()
+            .map_or(0.0, padding)
+            .max(child.surface_scale * backdrop_reach(&child.content))
     });
     own.chain(children).fold(0.0, f32::max)
 }
@@ -4624,18 +4677,7 @@ fn projected_placement(
         .snap_anchor
         .map(|anchor| snap_delta_for_anchor(anchor, scale))
         .unwrap_or_default();
-    let dest_bounds =
-        quad_bounds(child.transform.map_rect(child.local_bounds)).translate(snap.x, snap.y);
-    let parent_rect = DeviceRect::from_logical(dest_bounds, scale)
-        .expand(2.0)
-        .snap_out()
-        .intersect(pass.target_rect())
-        .unwrap_or(DeviceRect {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-        });
+    let parent_rect = pass.target_rect();
     let surface_scale = scale * child.surface_scale;
     let child_device_to_parent_device = ProjectiveTransform::uniform_scale(1.0 / surface_scale)
         .then(child.transform)
@@ -4647,14 +4689,21 @@ fn projected_placement(
     let page_to_child_device = child_device_to_page
         .inverse()
         .ok_or_else(|| "child transform is not invertible".to_string())?;
-    let dest_quad = page_to_child_device.map_rect(Rect {
+    let source_rect = Rect {
         x: parent_rect.x - pass.page.offset[0],
         y: parent_rect.y - pass.page.offset[1],
         width: parent_rect.width,
         height: parent_rect.height,
-    });
+    };
+    let row = page_to_child_device.matrix()[2];
+    let denominators = ProjectiveTransform::identity()
+        .map_rect(source_rect)
+        .map(|[x, y]| row[0] * x + row[1] * y + row[2]);
+    let bounded = denominators.iter().all(|&w| w > f32::EPSILON)
+        || denominators.iter().all(|&w| w < -f32::EPSILON);
+    let bounds = bounded.then(|| quad_device_bounds(page_to_child_device.map_rect(source_rect)));
     Ok(PagePlacement::Projected {
-        dest_quad,
+        bounds,
         inverse: child_device_to_page.matrix(),
     })
 }

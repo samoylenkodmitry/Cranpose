@@ -786,39 +786,6 @@ fn glass_layer(transform: ProjectiveTransform) -> LayerNode {
 }
 
 #[test]
-fn a_turned_layer_reads_its_backdrop_in_its_own_space_under_its_turn() {
-    let outer = collected(glass_layer(turn(20.0)));
-
-    assert!(
-        outer.backdrop.is_none(),
-        "the turn carries no backdrop of its own"
-    );
-    assert!(outer.effect.is_none());
-    assert!(outer.rounded_clip.is_none());
-    assert_eq!(outer.alpha, GraphicsLayer::composite_alpha_8bit(0.5));
-    let [inner] = outer.content.children.as_slice() else {
-        panic!("the backdrop runs in one child in the layer's own space");
-    };
-    assert!(inner.backdrop.is_some());
-    assert!(inner.rounded_clip.is_some());
-    assert_eq!(inner.alpha, 1.0);
-    assert_eq!(
-        uniform_scale_translation(inner.transform),
-        Some((1.0, Point::default())),
-        "the inner child sits in the turned layer's own space"
-    );
-}
-
-#[test]
-fn a_moved_layer_resolves_its_backdrop_beside_its_surface() {
-    let child = collected(glass_layer(ProjectiveTransform::translation(10.0, 20.0)));
-
-    assert!(child.backdrop.is_some());
-    assert!(child.rounded_clip.is_some());
-    assert!(child.content.children.is_empty());
-}
-
-#[test]
 fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
     let mut layer = glass_layer(ProjectiveTransform::translation(10.0, 20.0));
     layer.graphics_layer.alpha = 1.0;

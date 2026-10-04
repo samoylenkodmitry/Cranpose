@@ -412,6 +412,9 @@ pub struct GraphicsLayer {
     pub blend_mode: BlendMode,
     pub color_filter: Option<ColorFilter>,
     pub render_effect: Option<crate::render_effect::RenderEffect>,
+    /// Filters the pixels behind this layer. The result shares the layer's
+    /// group opacity and blend mode with its content; `ModulateAlpha` applies
+    /// opacity independently to the backdrop and each content draw.
     pub backdrop_effect: Option<crate::render_effect::RenderEffect>,
 }
 

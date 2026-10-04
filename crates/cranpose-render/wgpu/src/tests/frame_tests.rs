@@ -118,6 +118,7 @@ fn a_backdrop_captures_no_further_than_the_clip_it_is_drawn_in() {
     };
     let layer = BackdropLayer {
         node_id: None,
+        alpha: 1.0,
         rect,
         clip: Some(rect),
         reach: Some(list),
@@ -126,7 +127,8 @@ fn a_backdrop_captures_no_further_than_the_clip_it_is_drawn_in() {
         effect: RenderEffect::runtime_shader(shader),
         z_index: 0,
     };
-    let planned = plan_backdrop(&layer, 0, 2.0, target).expect("the backdrop is on the target");
+    let planned =
+        plan_backdrop(&layer, 0, 2.0, target, Some(target)).expect("the backdrop is on the target");
     assert_eq!(
         planned.capture_rect,
         DeviceRect::from_logical(
@@ -163,6 +165,7 @@ fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_ou
     let plan = |shader: RuntimeShader| {
         let layer = BackdropLayer {
             node_id: None,
+            alpha: 1.0,
             rect,
             clip: None,
             reach: None,
@@ -171,7 +174,8 @@ fn a_backdrop_keeps_its_capture_and_records_the_part_of_it_inside_the_effects_ou
             effect: RenderEffect::runtime_shader(shader),
             z_index: 0,
         };
-        let planned = plan_backdrop(&layer, 0, 2.0, target).expect("the backdrop is on the target");
+        let planned = plan_backdrop(&layer, 0, 2.0, target, Some(target))
+            .expect("the backdrop is on the target");
         (planned.visible, planned.capture_rect, planned.support)
     };
     let (whole_visible, whole_capture, whole_support) = plan(shader.clone());
@@ -501,6 +505,7 @@ fn child_layer(transform: ProjectiveTransform, content: LayerScene) -> ChildLaye
         blend_mode: BlendMode::SrcOver,
         effect: None,
         backdrop: None,
+        backdrop_alpha: 1.0,
         snap_anchor: None,
         surface_scale: 1.0,
         content_hash: 0,
