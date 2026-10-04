@@ -15,7 +15,7 @@ impl MutationPolicy<i32> for SumPolicy {
 #[test]
 fn snapshot_state_global_write_then_read() {
     let _guard = reset_snapshot_runtime();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
+    let state = SnapshotMutableState::new_in_rc(0, Rc::new(SumPolicy));
     assert_eq!(state.get(), 0);
     state.set(1);
     assert_eq!(state.get(), 1);
@@ -24,7 +24,7 @@ fn snapshot_state_global_write_then_read() {
 #[test]
 fn snapshot_state_global_equivalent_write_preserves_mutation_policy() {
     let _guard = reset_snapshot_runtime();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
+    let state = SnapshotMutableState::new_in_rc(0, Rc::new(SumPolicy));
     let notifications = Rc::new(RefCell::new(Vec::new()));
     let notifications_for_observer = Rc::clone(&notifications);
     let _handle =
@@ -47,7 +47,7 @@ fn snapshot_state_global_equivalent_write_preserves_mutation_policy() {
 #[test]
 fn snapshot_state_child_isolation_and_apply() {
     let _guard = reset_snapshot_runtime();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
+    let state = SnapshotMutableState::new_in_rc(0, Rc::new(SumPolicy));
 
     let child = take_mutable_snapshot(None, None);
     child.enter(|| {
@@ -64,7 +64,7 @@ fn snapshot_state_child_isolation_and_apply() {
 #[test]
 fn snapshot_state_concurrent_children_merge() {
     let _guard = reset_snapshot_runtime();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
+    let state = SnapshotMutableState::new_in_rc(0, Rc::new(SumPolicy));
 
     let first = take_mutable_snapshot(None, None);
     let second = take_mutable_snapshot(None, None);
@@ -80,7 +80,7 @@ fn snapshot_state_concurrent_children_merge() {
 #[test]
 fn snapshot_state_child_apply_after_parent_history() {
     let _guard = reset_snapshot_runtime();
-    let state = SnapshotMutableState::new_in_arc(0, Arc::new(SumPolicy));
+    let state = SnapshotMutableState::new_in_rc(0, Rc::new(SumPolicy));
 
     for value in 1..=5 {
         state.set(value);

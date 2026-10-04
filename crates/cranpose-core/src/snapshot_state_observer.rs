@@ -3,7 +3,6 @@ use std::{
     cell::{Cell, RefCell},
     hash::{Hash, Hasher},
     rc::{Rc, Weak},
-    sync::Arc,
 };
 
 use smallvec::SmallVec;
@@ -114,7 +113,7 @@ impl SnapshotStateObserver {
     }
 
     #[cfg(test)]
-    pub fn notify_changes(&self, modified: &[Arc<dyn StateObject>]) {
+    pub fn notify_changes(&self, modified: &[Rc<dyn StateObject>]) {
         self.inner.handle_apply(modified);
     }
 }
@@ -127,7 +126,7 @@ struct SnapshotStateObserverInner {
     pause_count: Rc<Cell<usize>>,
     active_read_targets: Rc<RefCell<ReadObservationStack>>,
     read_dispatcher: ReadObserver,
-    read_snapshot: RefCell<Option<Arc<TransparentObserverMutableSnapshot>>>,
+    read_snapshot: RefCell<Option<Rc<TransparentObserverMutableSnapshot>>>,
     apply_handle: RefCell<Option<crate::snapshot_v2::ObserverHandle>>,
     next_entry_id: Cell<usize>,
     /// One `Rc` per type of callback that captures nothing: see
@@ -166,7 +165,7 @@ impl SnapshotStateObserverInner {
         let active_read_targets = Rc::new(RefCell::new(ReadObservationStack::default()));
         let dispatcher_pause_count = Rc::clone(&pause_count);
         let dispatcher_targets = Rc::clone(&active_read_targets);
-        let read_dispatcher: ReadObserver = Arc::new(move |state| {
+        let read_dispatcher: ReadObserver = Rc::new(move |state| {
             if dispatcher_pause_count.get() > 0 {
                 return;
             }
@@ -446,13 +445,13 @@ impl SnapshotStateObserverInner {
         );
         let result = snapshot.enter(block);
         snapshot.dispose();
-        if Arc::get_mut(&mut snapshot).is_some() && !snapshot.has_pending_changes() {
+        if Rc::get_mut(&mut snapshot).is_some() && !snapshot.has_pending_changes() {
             self.read_snapshot.replace(Some(snapshot));
         }
         result
     }
 
-    fn handle_apply(&self, modified: &[Arc<dyn StateObject>]) {
+    fn handle_apply(&self, modified: &[Rc<dyn StateObject>]) {
         if modified.is_empty() {
             return;
         }

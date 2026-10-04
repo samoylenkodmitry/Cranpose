@@ -3,15 +3,15 @@ use std::sync::Mutex;
 use super::*;
 use crate::collections::map::HashMap;
 
-fn new_state(initial: i32) -> Arc<SnapshotMutableState<i32>> {
-    SnapshotMutableState::new_in_arc(initial, Arc::new(NeverEqual))
+fn new_state(initial: i32) -> Rc<SnapshotMutableState<i32>> {
+    SnapshotMutableState::new_in_rc(initial, Rc::new(NeverEqual))
 }
 
 fn new_state_with_policy(
     initial: i32,
-    policy: Arc<dyn MutationPolicy<i32>>,
-) -> Arc<SnapshotMutableState<i32>> {
-    SnapshotMutableState::new_in_arc(initial, policy)
+    policy: Rc<dyn MutationPolicy<i32>>,
+) -> Rc<SnapshotMutableState<i32>> {
+    SnapshotMutableState::new_in_rc(initial, policy)
 }
 
 struct SummingPolicy;
@@ -143,13 +143,13 @@ fn test_conflict_detection_after_record_reuse() {
 }
 
 type OptimisticMergeAttempt = (
-    Arc<GlobalSnapshot>,
+    Rc<GlobalSnapshot>,
     SnapshotIdSet,
     Option<HashMap<usize, Rc<StateRecord>>>,
 );
 
 fn conflicting_apply_then_optimistic_merge(
-    state: &Arc<SnapshotMutableState<i32>>,
+    state: &Rc<SnapshotMutableState<i32>>,
 ) -> OptimisticMergeAttempt {
     let global = GlobalSnapshot::get_or_create();
     let snapshot = global.take_nested_mutable_snapshot(None, None);
@@ -175,7 +175,7 @@ fn conflicting_apply_then_optimistic_merge(
 #[test]
 fn test_optimistic_merges_success() {
     let _guard = reset_runtime();
-    let state = new_state_with_policy(0, Arc::new(SummingPolicy));
+    let state = new_state_with_policy(0, Rc::new(SummingPolicy));
     let (global, invalid, optimistic) = conflicting_apply_then_optimistic_merge(&state);
     let optimistic = optimistic.expect("expected optimistic merges");
 
@@ -225,7 +225,7 @@ impl MutationPolicy<i32> for LockDetectPolicy {
 #[test]
 fn test_optimistic_merges_runs_outside_runtime_lock() {
     let _guard = reset_runtime();
-    let state = new_state_with_policy(0, Arc::new(LockDetectPolicy));
+    let state = new_state_with_policy(0, Rc::new(LockDetectPolicy));
     let (_global, _invalid, optimistic) = conflicting_apply_then_optimistic_merge(&state);
     let optimistic = optimistic.expect("expected optimistic merge entries");
 
@@ -276,8 +276,8 @@ fn test_nested_snapshot_conflict_with_parent() {
 fn test_observer_notifications_on_apply() {
     let _guard = reset_runtime();
 
-    let called = Arc::new(Mutex::new(false));
-    let received_count = Arc::new(Mutex::new(0));
+    let called = Rc::new(Mutex::new(false));
+    let received_count = Rc::new(Mutex::new(0));
     let called_clone = called.clone();
     let count_clone = received_count.clone();
 
@@ -301,9 +301,9 @@ fn test_observer_notifications_on_apply() {
     assert_eq!(*received_count.lock().unwrap(), 2);
 }
 
-fn warmed_up_summing_state() -> (Arc<GlobalSnapshot>, Arc<SnapshotMutableState<i32>>) {
+fn warmed_up_summing_state() -> (Rc<GlobalSnapshot>, Rc<SnapshotMutableState<i32>>) {
     let global = GlobalSnapshot::get_or_create();
-    let state = new_state_with_policy(0, Arc::new(SummingPolicy));
+    let state = new_state_with_policy(0, Rc::new(SummingPolicy));
 
     let warmup = global.take_nested_mutable_snapshot(None, None);
     warmup.enter(|| state.set(5));

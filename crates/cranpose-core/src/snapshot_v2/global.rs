@@ -7,7 +7,7 @@ use super::*;
 ///
 /// # Thread Safety
 /// Contains `Cell<T>` which is not `Send`/`Sync`. This is safe because snapshots
-/// are stored in thread-local storage and never shared across threads. The `Arc`
+/// are stored in thread-local storage and never shared across threads. The `Rc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct GlobalSnapshot {
     pub(super) state: SnapshotState,
@@ -19,25 +19,25 @@ impl GlobalSnapshot {
     ///
     /// The global snapshot does NOT pin because it always represents the current state
     /// and reads the latest records. Pinning would prevent garbage collection.
-    pub fn new(id: SnapshotId, invalid: SnapshotIdSet) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(id: SnapshotId, invalid: SnapshotIdSet) -> Rc<Self> {
+        Rc::new(Self {
             state: SnapshotState::new_with_pinning(id, invalid, None, None, false, false),
             nested_count: Cell::new(0),
         })
     }
 
     /// Get or create the global snapshot instance.
-    pub fn get_or_create() -> Arc<Self> {
+    pub fn get_or_create() -> Rc<Self> {
         GLOBAL_SNAPSHOT.with(|cell| {
             let mut snapshot = cell.borrow_mut();
             if let Some(global) = snapshot.as_ref() {
-                return Arc::clone(global);
+                return Rc::clone(global);
             }
 
             let id = with_runtime(|runtime| runtime.global_snapshot_id());
             let invalid = super::runtime::open_snapshots();
             let global = GlobalSnapshot::new(id, invalid);
-            *snapshot = Some(Arc::clone(&global));
+            *snapshot = Some(Rc::clone(&global));
             global
         })
     }
@@ -63,7 +63,7 @@ impl GlobalSnapshot {
 }
 
 thread_local! {
-    static GLOBAL_SNAPSHOT: RefCell<Option<Arc<GlobalSnapshot>>> = const { RefCell::new(None) };
+    static GLOBAL_SNAPSHOT: RefCell<Option<Rc<GlobalSnapshot>>> = const { RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -86,7 +86,7 @@ impl GlobalSnapshot {
         false
     }
 
-    pub fn root_global(&self) -> Arc<Self> {
+    pub fn root_global(&self) -> Rc<Self> {
         GlobalSnapshot::get_or_create()
     }
 
@@ -97,7 +97,7 @@ impl GlobalSnapshot {
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
-    ) -> Arc<ReadonlySnapshot> {
+    ) -> Rc<ReadonlySnapshot> {
         ReadonlySnapshot::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
@@ -123,7 +123,7 @@ impl GlobalSnapshot {
         self.state.record_read(state);
     }
 
-    pub fn record_write(&self, state: Arc<dyn StateObject>) {
+    pub fn record_write(&self, state: Rc<dyn StateObject>) {
         self.state.record_write(state, self.state.id.get());
     }
 
@@ -141,7 +141,7 @@ impl GlobalSnapshot {
         &self,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-    ) -> Arc<MutableSnapshot> {
+    ) -> Rc<MutableSnapshot> {
         let base_parent_id = self.state.id.get();
 
         let (new_id, child_invalid, new_global_invalid) = super::runtime::with_runtime(

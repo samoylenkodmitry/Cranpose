@@ -53,7 +53,7 @@ impl StateObject for TestObj {
 fn test_nested_readonly_snapshot() {
     let _guard = reset_runtime_for_tests();
     let parent = NestedReadonlySnapshot::new(1, SnapshotIdSet::new(), None, Weak::new());
-    let parent_weak = Arc::downgrade(&parent);
+    let parent_weak = Rc::downgrade(&parent);
 
     let nested = NestedReadonlySnapshot::new(1, SnapshotIdSet::new(), None, parent_weak);
 
@@ -66,7 +66,7 @@ fn test_nested_readonly_snapshot() {
 fn test_nested_readonly_snapshot_root() {
     let _guard = reset_runtime_for_tests();
     let parent = NestedReadonlySnapshot::new(1, SnapshotIdSet::new(), None, Weak::new());
-    let parent_weak = Arc::downgrade(&parent);
+    let parent_weak = Rc::downgrade(&parent);
 
     let nested = NestedReadonlySnapshot::new(1, SnapshotIdSet::new(), None, parent_weak);
 
@@ -78,7 +78,7 @@ fn test_nested_readonly_snapshot_root() {
 fn test_nested_readonly_dispose() {
     let _guard = reset_runtime_for_tests();
     let parent = NestedReadonlySnapshot::new(1, SnapshotIdSet::new(), None, Weak::new());
-    let parent_weak = Arc::downgrade(&parent);
+    let parent_weak = Rc::downgrade(&parent);
 
     let nested = NestedReadonlySnapshot::new(1, SnapshotIdSet::new(), None, parent_weak);
 
@@ -90,7 +90,7 @@ fn test_nested_readonly_dispose() {
 fn test_nested_mutable_snapshot() {
     let _guard = reset_runtime_for_tests();
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
-    let parent_weak = Arc::downgrade(&parent);
+    let parent_weak = Rc::downgrade(&parent);
 
     let nested =
         NestedMutableSnapshot::new(2, SnapshotIdSet::new().set(1), None, None, parent_weak, 1);
@@ -104,7 +104,7 @@ fn test_nested_mutable_snapshot() {
 fn test_nested_mutable_apply() {
     let _guard = reset_runtime_for_tests();
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
-    let parent_weak = Arc::downgrade(&parent);
+    let parent_weak = Rc::downgrade(&parent);
 
     let nested =
         NestedMutableSnapshot::new(2, SnapshotIdSet::new().set(1), None, None, parent_weak, 1);
@@ -120,7 +120,7 @@ fn test_nested_merge_sets_parent_pending_changes() {
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let child = parent.take_nested_mutable_snapshot(None, None);
 
-    let obj = Arc::new(TestObj {
+    let obj = Rc::new(TestObj {
         id: crate::state::ObjectId(100),
     });
     child.record_write(obj);
@@ -135,7 +135,7 @@ fn test_nested_conflict_with_parent_same_object() {
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     let child = parent.take_nested_mutable_snapshot(None, None);
 
-    let obj = Arc::new(TestObj {
+    let obj = Rc::new(TestObj {
         id: crate::state::ObjectId(200),
     });
     parent.record_write(obj.clone());
@@ -149,7 +149,7 @@ fn test_nested_conflict_with_parent_same_object() {
 fn test_nested_mutable_apply_twice_fails() {
     let _guard = reset_runtime_for_tests();
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
-    let parent_weak = Arc::downgrade(&parent);
+    let parent_weak = Rc::downgrade(&parent);
 
     let nested =
         NestedMutableSnapshot::new(2, SnapshotIdSet::new().set(1), None, None, parent_weak, 1);
@@ -163,7 +163,7 @@ fn test_nested_mutable_apply_twice_fails() {
 fn test_nested_mutable_dispose() {
     let _guard = reset_runtime_for_tests();
     let parent = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
-    let parent_weak = Arc::downgrade(&parent);
+    let parent_weak = Rc::downgrade(&parent);
 
     let nested =
         NestedMutableSnapshot::new(2, SnapshotIdSet::new().set(1), None, None, parent_weak, 1);

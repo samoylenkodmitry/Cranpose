@@ -1,12 +1,11 @@
 use std::{
     any::{Any, TypeId},
-    cell::{Cell, RefCell},
+    cell::{Cell, OnceCell, RefCell},
     fmt,
     hash::Hash,
     marker::PhantomData,
     ops::Deref,
-    rc::{Rc, Weak as RcWeak},
-    sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
+    rc::{Rc, Weak},
 };
 
 use smallvec::SmallVec;
@@ -34,8 +33,9 @@ const SNAPSHOT_ID_MAX: SnapshotId = usize::MAX;
 pub struct ObjectId(pub(crate) usize);
 
 impl ObjectId {
-    pub(crate) fn new<T: ?Sized + 'static>(object: &Arc<T>) -> Self {
-        Self(Arc::as_ptr(object) as *const () as usize)
+    #[cfg(test)]
+    pub(crate) fn new<T: ?Sized + 'static>(object: &Rc<T>) -> Self {
+        Self(Rc::as_ptr(object) as *const () as usize)
     }
 
     #[inline]
@@ -655,10 +655,10 @@ pub trait StateObject: Any {
 
 pub(crate) struct SnapshotMutableState<T> {
     head: CurrentRecord,
-    policy: Arc<dyn MutationPolicy<T>>,
+    policy: Rc<dyn MutationPolicy<T>>,
     id: ObjectId,
-    weak_self: Mutex<Option<Weak<Self>>>,
-    apply_observers: ApplyObservers,
+    weak_self: Weak<Self>,
+    apply_observer: ApplyObserver,
     read_observation_lease: Rc<()>,
     scope_observation_count: Cell<usize>,
     subscriber_callbacks: RefCell<Vec<Rc<dyn Fn()>>>,
@@ -682,28 +682,22 @@ enum Merge<'a, T> {
     Missing(&'static str, &'a Rc<StateRecord>),
 }
 
-type ApplyObservers = Mutex<Vec<Box<dyn Fn() + 'static>>>;
+type ApplyObserver = OnceCell<Box<dyn Fn() + 'static>>;
 
-fn lock_apply_observers(
-    observers: &ApplyObservers,
-) -> MutexGuard<'_, Vec<Box<dyn Fn() + 'static>>> {
-    observers.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn notify_applied(observers: &ApplyObservers) {
-    for observer in lock_apply_observers(observers).iter() {
+fn notify_applied(observer: &ApplyObserver) {
+    if let Some(observer) = observer.get() {
         observer();
     }
 }
 
 fn finish_apply(
-    observers: &ApplyObservers,
+    observer: &ApplyObserver,
     head: &CurrentRecord,
     id: ObjectId,
     caller: &str,
     snapshot_id: SnapshotId,
 ) {
-    notify_applied(observers);
+    notify_applied(observer);
     assert_record_chain(head, id, caller, Some(snapshot_id));
 }
 
@@ -718,7 +712,7 @@ struct WriteTarget<'a> {
 struct GlobalWrite {
     record: Rc<StateRecord>,
     new_id: SnapshotId,
-    written: Option<Arc<dyn StateObject>>,
+    written: Option<Rc<dyn StateObject>>,
 }
 
 impl WriteTarget<'_> {
@@ -731,7 +725,7 @@ impl WriteTarget<'_> {
         snapshot: &AnySnapshot,
         global: &GlobalSnapshot,
         snapshot_id: SnapshotId,
-        written: Option<Arc<dyn StateObject>>,
+        written: Option<Rc<dyn StateObject>>,
     ) -> GlobalWrite {
         assert!(
             !global.has_pending_children(),
@@ -741,7 +735,7 @@ impl WriteTarget<'_> {
             snapshot_id
         );
         if let Some(state) = &written {
-            snapshot.record_write(Arc::clone(state));
+            snapshot.record_write(Rc::clone(state));
         }
         mark_update_write(self.id);
         let new_id = allocate_record_id();
@@ -793,7 +787,7 @@ impl WriteTarget<'_> {
         snapshot: &AnySnapshot,
         snapshot_id: SnapshotId,
         invalid: &SnapshotIdSet,
-        written: Option<Arc<dyn StateObject>>,
+        written: Option<Rc<dyn StateObject>>,
     ) -> Rc<StateRecord> {
         if let Some(state) = written {
             snapshot.record_write(state);
@@ -958,36 +952,30 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         })
     }
 
-    pub(crate) fn new_in_arc(initial: T, policy: Arc<dyn MutationPolicy<T>>) -> Arc<Self> {
+    pub(crate) fn new_in_rc(initial: T, policy: Rc<dyn MutationPolicy<T>>) -> Rc<Self> {
         let snapshot = active_snapshot();
         let snapshot_id = snapshot.snapshot_id();
 
         let tail = StateRecord::new(PREEXISTING_SNAPSHOT_ID, initial.clone(), None);
         let head = StateRecord::new(snapshot_id, initial, Some(tail));
 
-        let mut state = Arc::new(Self {
+        Rc::new_cyclic(|weak_self| Self {
             head: CurrentRecord::new(head),
             policy,
-            id: ObjectId::default(),
-            weak_self: Mutex::new(None),
-            apply_observers: Mutex::new(Vec::new()),
+            id: ObjectId(weak_self.as_ptr() as usize),
+            weak_self: weak_self.clone(),
+            apply_observer: OnceCell::new(),
             read_observation_lease: Rc::new(()),
             scope_observation_count: Cell::new(0),
             subscriber_callbacks: RefCell::new(Vec::new()),
-        });
-
-        let id = ObjectId::new(&state);
-        if let Some(state_inner) = Arc::get_mut(&mut state) {
-            state_inner.id = id;
-        }
-
-        *state.lock_weak_self() = Some(Arc::downgrade(&state));
-
-        state
+        })
     }
 
-    pub(crate) fn add_apply_observer(&self, observer: Box<dyn Fn() + 'static>) {
-        self.lock_apply_observers().push(observer);
+    pub(crate) fn set_apply_observer(&self, observer: Box<dyn Fn() + 'static>) {
+        assert!(
+            self.apply_observer.set(observer).is_ok(),
+            "state observer already installed"
+        );
     }
 
     fn acquire_observation_lease(&self) -> Option<Rc<dyn Any>> {
@@ -1039,19 +1027,9 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         notify_subscriber_callbacks(&self.subscriber_callbacks);
     }
 
-    fn lock_weak_self(&self) -> MutexGuard<'_, Option<Weak<Self>>> {
-        self.weak_self
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn lock_apply_observers(&self) -> MutexGuard<'_, Vec<Box<dyn Fn() + 'static>>> {
-        lock_apply_observers(&self.apply_observers)
-    }
-
     fn finish_apply(&self, caller: &str, snapshot_id: SnapshotId) {
         finish_apply(
-            &self.apply_observers,
+            &self.apply_observer,
             &self.head,
             self.id,
             caller,
@@ -1059,13 +1037,13 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
         );
     }
 
-    fn upgrade_self(&self) -> Option<Arc<Self>> {
-        self.lock_weak_self().as_ref().and_then(Weak::upgrade)
+    fn upgrade_self(&self) -> Option<Rc<Self>> {
+        self.weak_self.upgrade()
     }
 
-    fn written_state(&self) -> Option<Arc<dyn StateObject>> {
+    fn written_state(&self) -> Option<Rc<dyn StateObject>> {
         self.upgrade_self()
-            .map(|state| -> Arc<dyn StateObject> { state })
+            .map(|state| -> Rc<dyn StateObject> { state })
     }
 
     #[inline]
@@ -1320,8 +1298,8 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
 }
 
 pub(crate) struct MutableStateInner<T: Clone + 'static> {
-    pub(crate) state: Arc<SnapshotMutableState<T>>,
-    pub(crate) watchers: RefCell<HashMap<ScopeId, RcWeak<RecomposeScopeInner>>>,
+    pub(crate) state: Rc<SnapshotMutableState<T>>,
+    pub(crate) watchers: RefCell<HashMap<ScopeId, Weak<RecomposeScopeInner>>>,
     runtime: RuntimeHandle,
     state_id: Cell<Option<StateId>>,
 }
@@ -1336,7 +1314,7 @@ fn notify_subscriber_callbacks(callbacks: &RefCell<Vec<Rc<dyn Fn()>>>) {
     }
 }
 
-fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, RcWeak<RecomposeScopeInner>>) {
+fn shrink_watchers_if_sparse(watchers: &mut HashMap<ScopeId, Weak<RecomposeScopeInner>>) {
     let len = watchers.len();
     let capacity = watchers.capacity();
     if capacity > len.saturating_mul(4).max(32) {
@@ -1348,10 +1326,10 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     pub(crate) fn new_with_policy(
         value: T,
         runtime: RuntimeHandle,
-        policy: Arc<dyn MutationPolicy<T>>,
+        policy: Rc<dyn MutationPolicy<T>>,
     ) -> Self {
         Self {
-            state: SnapshotMutableState::new_in_arc(value, policy),
+            state: SnapshotMutableState::new_in_rc(value, policy),
             watchers: RefCell::new(HashMap::default()),
             runtime,
             state_id: Cell::new(None),
@@ -1361,7 +1339,7 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     pub(crate) fn install_snapshot_observer(&self, state_id: StateId) {
         self.state_id.set(Some(state_id));
         let runtime_handle = self.runtime.clone();
-        self.state.add_apply_observer(Box::new(move || {
+        self.state.set_apply_observer(Box::new(move || {
             let runtime = runtime_handle.clone();
             runtime_handle.enqueue_ui_task(Box::new(move || {
                 runtime.with_state_arena(|arena| {
@@ -1866,13 +1844,13 @@ impl<T: Clone + 'static> OwnedMutableState<T> {
     where
         T: PartialEq,
     {
-        Self::with_runtime_and_policy(value, runtime, Arc::new(StructuralEqual))
+        Self::with_runtime_and_policy(value, runtime, Rc::new(StructuralEqual))
     }
 
     pub(crate) fn with_runtime_and_policy(
         value: T,
         runtime: RuntimeHandle,
-        policy: Arc<dyn MutationPolicy<T>>,
+        policy: Rc<dyn MutationPolicy<T>>,
     ) -> Self {
         let lease = runtime.alloc_state_with_policy(value, policy);
         Self {

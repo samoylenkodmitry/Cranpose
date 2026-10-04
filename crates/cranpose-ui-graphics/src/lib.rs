@@ -1,5 +1,8 @@
 #![doc = include_str!("../README.md")]
 
+/// Host-provided accessibility preferences shared by animation and rendering.
+pub mod accessibility;
+
 // A framework shader as the build script wrote it: `shaders/NAME` without
 // its comments.
 macro_rules! framework_wgsl {

@@ -7,7 +7,7 @@ use super::*;
 ///
 /// # Thread Safety
 /// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
-/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// snapshots are stored in thread-local storage and never shared across threads. The `Rc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct NestedReadonlySnapshot {
     pub(super) state: SnapshotState,
@@ -20,8 +20,8 @@ impl NestedReadonlySnapshot {
         invalid: SnapshotIdSet,
         read_observer: Option<ReadObserver>,
         parent: Weak<NestedReadonlySnapshot>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Rc<Self> {
+        Rc::new(Self {
             state: SnapshotState::new(id, invalid, read_observer, None, false),
             parent,
         })
@@ -39,7 +39,7 @@ impl NestedReadonlySnapshot {
         true
     }
 
-    pub fn root_nested_readonly(&self) -> Arc<NestedReadonlySnapshot> {
+    pub fn root_nested_readonly(&self) -> Rc<NestedReadonlySnapshot> {
         if let Some(parent) = self.parent.upgrade() {
             parent.root_nested_readonly()
         } else {
@@ -52,14 +52,14 @@ impl NestedReadonlySnapshot {
         }
     }
 
-    pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
+    pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
         enter_snapshot_scope(AnySnapshot::NestedReadonly(self.clone()), f)
     }
 
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
-    ) -> Arc<NestedReadonlySnapshot> {
+    ) -> Rc<NestedReadonlySnapshot> {
         let merged_observer =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
 
@@ -85,7 +85,7 @@ impl NestedReadonlySnapshot {
         self.state.record_read(state);
     }
 
-    pub fn record_write(&self, _state: Arc<dyn StateObject>) {
+    pub fn record_write(&self, _state: Rc<dyn StateObject>) {
         panic!("Cannot write to a read-only snapshot");
     }
 
@@ -106,7 +106,7 @@ impl NestedReadonlySnapshot {
 ///
 /// # Thread Safety
 /// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
-/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// snapshots are stored in thread-local storage and never shared across threads. The `Rc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct NestedMutableSnapshot {
     pub(super) state: SnapshotState,
@@ -124,8 +124,8 @@ impl NestedMutableSnapshot {
         write_observer: Option<WriteObserver>,
         parent: Weak<MutableSnapshot>,
         base_parent_id: SnapshotId,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Rc<Self> {
+        Rc::new(Self {
             state: SnapshotState::new(id, invalid, read_observer, write_observer, true),
             parent,
             nested_count: Cell::new(0),
@@ -153,7 +153,7 @@ impl NestedMutableSnapshot {
         self.state.set_on_dispose(f);
     }
 
-    pub fn root_mutable(&self) -> Arc<MutableSnapshot> {
+    pub fn root_mutable(&self) -> Rc<MutableSnapshot> {
         if let Some(parent) = self.parent.upgrade() {
             parent.root_mutable()
         } else {
@@ -167,14 +167,14 @@ impl NestedMutableSnapshot {
         }
     }
 
-    pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
+    pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
         enter_snapshot_scope(AnySnapshot::NestedMutable(self.clone()), f)
     }
 
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
-    ) -> Arc<ReadonlySnapshot> {
+    ) -> Rc<ReadonlySnapshot> {
         let merged_observer =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
 
@@ -207,7 +207,7 @@ impl NestedMutableSnapshot {
         self.state.record_read(state);
     }
 
-    pub fn record_write(&self, state: Arc<dyn StateObject>) {
+    pub fn record_write(&self, state: Rc<dyn StateObject>) {
         assert!(!self.applied.get(), "Cannot write to an applied snapshot");
         assert!(
             !self.state.disposed.get(),
@@ -253,11 +253,11 @@ impl NestedMutableSnapshot {
     }
 
     pub fn take_nested_mutable_snapshot(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-    ) -> Arc<NestedMutableSnapshot> {
-        let root = Arc::downgrade(&self.root_mutable());
+    ) -> Rc<NestedMutableSnapshot> {
+        let root = Rc::downgrade(&self.root_mutable());
         allocate_nested_mutable_snapshot(self, root, read_observer, write_observer)
     }
 }

@@ -65,7 +65,7 @@ impl<T: Clone + 'static> LocalStateEntry<T> {
             state: OwnedMutableState::with_runtime_and_policy(
                 initial,
                 runtime,
-                Arc::new(LocalValuePolicy { equivalent }),
+                Rc::new(LocalValuePolicy { equivalent }),
             ),
         }
     }

@@ -1233,7 +1233,6 @@ name = "cranpose-animation"
 version = "0.9.7"
 dependencies = [
  "cranpose-core",
- "cranpose-services",
  "cranpose-ui-graphics",
 ]
 
@@ -1489,6 +1488,7 @@ version = "0.9.7"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
+ "cranpose-ui-graphics",
  "directories",
  "futures-util",
  "js-sys",

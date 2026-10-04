@@ -3,55 +3,49 @@ use std::{cell::RefCell, rc::Rc};
 use crate::{Composer, ComposerCore};
 
 thread_local! {
-    static COMPOSER_STACK: RefCell<Vec<Rc<ComposerCore>>> = const { RefCell::new(Vec::new()) };
+    static CURRENT_COMPOSER: RefCell<Option<Rc<ComposerCore>>> = const { RefCell::new(None) };
 }
 
-/// Guard that pops the composer stack on drop.
-#[must_use = "ComposerScopeGuard pops the composer stack on drop"]
-pub struct ComposerScopeGuard;
+/// Restores the previous composer when its scope ends.
+#[must_use = "ComposerScopeGuard restores the previous composer on drop"]
+pub struct ComposerScopeGuard {
+    previous: Option<Rc<ComposerCore>>,
+}
 
 impl Drop for ComposerScopeGuard {
     fn drop(&mut self) {
-        COMPOSER_STACK.with(|stack| {
-            let mut stack = stack.borrow_mut();
-            stack.pop();
-        });
+        replace_current(self.previous.take());
     }
 }
 
-/// Pushes the composer onto the thread-local stack for the duration of the scope.
-/// Returns a guard that will pop it on drop.
+/// Sets the current thread's composer for the duration of the scope.
+/// Returns a guard that restores the previous composer on drop.
 pub fn enter(composer: &Composer) -> ComposerScopeGuard {
-    COMPOSER_STACK.with(|stack| {
-        stack.borrow_mut().push(composer.clone_core());
-    });
-    ComposerScopeGuard
+    ComposerScopeGuard {
+        previous: replace_current(Some(composer.clone_core())),
+    }
 }
 
-struct SuspendedComposers(Vec<Rc<ComposerCore>>);
-
-impl Drop for SuspendedComposers {
-    fn drop(&mut self) {
-        let suspended = std::mem::take(&mut self.0);
-        COMPOSER_STACK.with(|stack| *stack.borrow_mut() = suspended);
-    }
+fn replace_current(composer: Option<Rc<ComposerCore>>) -> Option<Rc<ComposerCore>> {
+    CURRENT_COMPOSER.with(|current| current.replace(composer))
 }
 
 pub(crate) fn without_composer<R>(f: impl FnOnce() -> R) -> R {
-    let _suspended =
-        SuspendedComposers(COMPOSER_STACK.with(|stack| std::mem::take(&mut *stack.borrow_mut())));
+    let _suspended = ComposerScopeGuard {
+        previous: replace_current(None),
+    };
     f()
 }
 
-/// Access the current composer from the thread-local stack.
+/// Access the current thread's composer.
 ///
 /// # Panics
 /// Panics if there is no active composer.
 pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
-    COMPOSER_STACK.with(|stack| {
-        let core = stack
+    CURRENT_COMPOSER.with(|current| {
+        let core = current
             .borrow()
-            .last()
+            .as_ref()
             .expect("with_composer: no active composer")
             .clone();
         let composer = Composer::from_core(core);
@@ -60,13 +54,13 @@ pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
 }
 
 pub(crate) fn with_current_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option<R> {
-    COMPOSER_STACK.with(|stack| stack.borrow().last().map(|core| f(core)))
+    CURRENT_COMPOSER.with(|current| current.borrow().as_deref().map(f))
 }
 
-/// Return the current composer from the thread-local stack.
+/// Return the current thread's composer.
 pub fn current_composer() -> Option<Composer> {
-    COMPOSER_STACK.with(|stack| {
-        let core = stack.borrow().last()?.clone();
+    CURRENT_COMPOSER.with(|current| {
+        let core = current.borrow().as_ref()?.clone();
         Some(Composer::from_core(core))
     })
 }
@@ -82,7 +76,7 @@ pub fn note_nested_slots_host(host: &std::rc::Rc<crate::SlotsHost>) {
     holder.note_nested_host(host);
 }
 
-/// Try to access the current composer from the thread-local stack.
+/// Try to access the current thread's composer.
 /// Returns None if there is no active composer.
 pub fn try_with_composer<R>(f: impl FnOnce(&Composer) -> R) -> Option<R> {
     current_composer().map(|composer| f(&composer))
