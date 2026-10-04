@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "WGPU renderer backend for Cranpose"
+description = "GPU renderer for Cranpose scenes through wgpu"
 autotests = false
 
 [package.metadata.docs.rs]

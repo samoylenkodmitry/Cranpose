@@ -5,23 +5,18 @@ workspace and depends only on published crates.io releases of `cranpose` and
 its sibling crates, so it can be copied out of this repository without path
 dependencies and still build.
 
-Three screens, reachable through a bottom navigation bar, cover the concerns
-a real app needs and a bare counter does not: **Home** is state and layout (a
-counter, a toggled card); **Tasks** is a text field and a `LazyColumn` backed
-by app-owned list state (add, remove, and check off tasks); **Settings** is
-the one flag that switches the whole app's [`Palette`](src/theme.rs) between
-its light and dark constants. `dark_mode` and the task list both live in
-[`IsolatedDemoApp`](src/app.rs), the composable at the top of the tree, and
-are passed down into whichever screen is showing — hoisted there because both
-must survive switching screens, which state remembered inside a screen would
-not. Its supported targets are desktop, Android, and web. iOS is
-intentionally not part of this template; the repository's iOS reference is
-[`../ios-demo`](../ios-demo/README.md).
+Three screens, reached through a bottom navigation bar, cover common app
+patterns: **Home** has a counter and toggled card; **Tasks** has a text field
+and a `LazyColumn` where users add, remove and complete tasks; **Settings**
+switches the app's [`Palette`](src/theme.rs) between light and dark colors.
+`IsolatedDemoApp` owns the theme flag and task repository. `TasksScreen` uses a
+route-scoped `TasksViewModel`, and the navigation host preserves its store
+across tab switches. The supported targets are desktop, Android, and web. The
+iOS demo lives in [`../ios-demo`](../ios-demo/README.md).
 
-Cranpose ships no theme system of its own (see the doc comment on
-[`WearColors`](../../crates/cranpose-ui/src/widgets/wear/theme.rs) for why):
-a `Palette` is an app-level struct a caller passes down explicitly, the same
-way this template does.
+The core UI uses caller-provided colors, while `cranpose-liquid` provides a
+scoped `LiquidTheme` API. This template defines an app-level [`Palette`](src/theme.rs)
+and passes the palette to each screen.
 
 ## Requirements
 
@@ -32,14 +27,11 @@ way this template does.
 
 ## Dependencies beyond `cranpose`
 
-`Cargo.toml` also depends directly on published `cranpose-ui` (for
-`Scaffold`, the window-inset-aware app shell used for the top and bottom
-bars) and `cranpose-foundation` (for `TextFieldState`, which `BasicTextField`
-needs). Neither is re-exported by `cranpose::prelude`, so an app that wants a
-system-inset-aware shell or a text field reaches for the crate that defines
-it directly, the same way this one does. `scripts/sync_isolated_demo.py`
-bumps every `cranpose*` dependency in this manifest together, so adding one
-does not create a version to track by hand.
+`Cargo.toml` declares the published UI, foundation, core, flow and navigation
+crates used by the app. The UI crate supplies `Scaffold`; the foundation crate
+supplies `TextFieldState`. Flow and navigation crates support the route-scoped
+view models. The release workflow runs `cargo xtask sync-isolated-demo` after
+publication to update the framework dependencies together.
 
 ## Desktop
 
@@ -59,12 +51,10 @@ runs the native build, chooses the ABIs and Cargo profiles, packages the `.so`,
 and adds the framework's activity and manifest contributions. The application's
 own build file states only its namespace, its Cargo package and its label.
 
-The plugin has no Maven coordinate. `android/settings.gradle.kts` locates the
-`cranpose` crate source Cargo already resolved — the crates.io registry cache,
-here — and includes the plugin straight from it, so there is nothing to
-publish or pre-seed first; see [the crate's
-README](../../crates/cranpose/README.md#android-gradle-plugin) for what that
-`settings.gradle.kts` block does and how to copy it into a new application.
+`android/settings.gradle.kts` locates the `cranpose` package in Cargo's registry
+cache and includes the Gradle plugin from the package directory. The
+[Android plugin guide](../../crates/cranpose/android/README.md) describes this
+setup for a custom application.
 
 Install the native build bridge once:
 
@@ -129,9 +119,7 @@ apps/isolated-demo/
 ```
 
 To start a new app from this template, copy this directory, change the
-package metadata and the `cranpose*` dependency versions in `Cargo.toml` as
-needed, then replace the screens under `src/screens/` with your own —
-`rememberTasksState` in `src/screens/tasks.rs` is a worked example of a
-`#[cfg(test)]` module exercising a composable's state through
-`cranpose_ui::run_test_composition`, which is the pattern to follow for any
-new state you add.
+package metadata and the `cranpose*` dependency versions in `Cargo.toml`, then
+replace the screens under `src/screens/`. [`TasksScreen`](src/screens/tasks.rs)
+shows a route-scoped view model, lifecycle-aware state collection, text input,
+and a lazy list.

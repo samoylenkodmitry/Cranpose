@@ -1,27 +1,18 @@
 #!/usr/bin/env python3
-"""Which public framework functions are never named by a test.
+"""Report public function names missing from the test source corpus.
 
-The plan asks for a unit test behind every public function and method. This
-reports what is left: for each framework crate, the public functions whose name
-appears nowhere in a `#[cfg(test)]` module or a `tests/` file.
+For each framework crate, this compares public function identifiers with names
+in `#[cfg(test)]` modules, `tests/` files, and the desktop robot suite. The
+report groups missing names by crate and gives a total name-reference ratio.
+This source-text heuristic counts identifiers in comments; calls through a
+caller count only when test source also names the public function.
 
-Naming is a coarse proxy for coverage — a name mentioned in a doc comment
-inside a test module counts, and a function tested only through a caller does
-not. It is deliberately coarse: it is cheap to run, it never goes stale, and it
-points at the functions nobody has thought about, which is what the gap is.
+The corpus includes every `#[cfg(test)] mod` body and `tests/` file under
+`crates/`, plus the desktop robot examples and runners executed by
+`./run_robot_test.sh`.
 
-The test corpus is every `#[cfg(test)] mod` body and `tests/` file under
-`crates/`, plus the headless robot suite under `apps/desktop-demo`. The robot
-examples and runners are test code that happens not to live in `crates/`: they
-are what `./run_robot_test.sh` executes, and they are the only exercise a good
-part of the robot driver API ever gets. Leaving them out reported that API as
-untested when it is the most heavily executed code in the repository.
-
-The corpus is the braces of each test module, not the tail of the file from the
-first `#[cfg(test)]` onwards. That attribute also introduces test-only imports,
-and 138 files in this workspace carry one near the top: taking the tail counted
-their entire production body as test code, so every function in them read as
-covered by virtue of defining itself.
+The corpus uses each test module's brace-delimited body. The scan excludes
+adjacent production functions and test-only imports.
 
     python3 scripts/public_api_test_coverage.py            # the summary
     python3 scripts/public_api_test_coverage.py --list      # every name

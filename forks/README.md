@@ -64,7 +64,14 @@ On a Huawei Mate 20 X (Mali-G76), Showcase scrolling went from 29.9 ms to
 21.7 ms a frame (4 ABBA legs each). Dawn ships the per-binding version of
 the same fix ("Improve Vulkan synchronization").
 
-### Updating
+### Compact Vulkan diagnostics
+
+The fork also defines compact `Debug` output for Vulkan samplers and texture
+views. These implementations omit the Vulkan create-info and raw format fields.
+The smaller output lets the linker remove ash's large enum-name formatters.
+Commit `aea67c5d8` records an ARM64 benchmark-library reduction of 85,872 bytes.
+
+### Update the fork
 
 1. Copy the new upstream versions' crates.io sources over the crate
    directories (`src`, `build.rs`, `Cargo.toml`, licences, readme), as one

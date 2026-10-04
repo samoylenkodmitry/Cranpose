@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "What a Cranpose application asks of a device, declared once in Rust and written into every platform's manifest"
+description = "Declare platform services, permissions and hardware for Cranpose apps"
 
 [package.metadata.docs.rs]
 all-features = true

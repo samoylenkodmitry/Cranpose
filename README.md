@@ -122,7 +122,7 @@ Run these commands from the showcase template root.
 | Desktop | The target OS, Rust and a Vulkan, Metal or DirectX 12 driver | Linux, Mac or Windows computer |
 | Android / Wear OS | Windows, Linux or macOS; Android SDK, NDK and JDK 17 | Android device, watch or emulator |
 | iOS | Mac with Xcode and an iOS simulator runtime | iPhone, iPad or Mac simulator |
-| Web | Windows, Linux or macOS; Rust and `wasm-pack` | Browser with WebGPU and a compatible GPU driver |
+| Web | Windows, Linux or macOS; Rust and `wasm-pack` | Browser with WebGL2 or WebGPU and a compatible GPU driver |
 
 ### Desktop
 

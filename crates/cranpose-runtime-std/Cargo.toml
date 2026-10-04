@@ -8,7 +8,7 @@ keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 license.workspace = true
-description = "Standard library backed runtime services for Cranpose"
+description = "Standard library clock and scheduler for Cranpose"
 
 [package.metadata.docs.rs]
 all-features = true

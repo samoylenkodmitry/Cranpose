@@ -1,4 +1,4 @@
-//! High level UI primitives built on top of the Compose core runtime.
+#![doc = include_str!("../README.md")]
 
 use std::{
     ops::{Deref, DerefMut},

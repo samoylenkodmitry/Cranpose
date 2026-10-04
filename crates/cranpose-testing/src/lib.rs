@@ -1,4 +1,4 @@
-//! Testing utilities and harness for Cranpose
+#![doc = include_str!("../README.md")]
 
 pub use cranpose_app_shell::{accessibility_audit, placed_semantics};
 pub mod robot;

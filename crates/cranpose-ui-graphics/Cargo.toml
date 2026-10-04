@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Pure math/data for drawing & units in Cranpose"
+description = "Geometry, units, paths and render data for Cranpose UI"
 autotests = false
 
 [package.metadata.docs.rs]

@@ -1,73 +1,46 @@
-# cranpose-storekit
+# Cranpose StoreKit
 
-StoreKit 2 in-app purchases for [Cranpose](https://github.com/samoylenkodmitry/cranpose),
-implementing the cross-platform [`cranpose_services::purchases`] API on iOS and
-macOS.
+`cranpose-storekit` connects Apple's StoreKit 2 purchase service to [`cranpose-services::purchases`](https://docs.rs/cranpose-services/latest/cranpose_services/purchases/index.html). The adapter reads products and transactions, verifies signed transactions on device, and publishes store state and purchase events to Cranpose.
+
+## Setup
+
+Enable `cranpose/storekit` in an iOS or macOS app. The iOS launcher registers the adapter; a macOS app calls `register` before product configuration. Direct users add `cranpose-storekit` and call `register` before product configuration. The build uses Xcode's `swiftc` to compile the StoreKit 2 shim.
 
 ```rust,no_run
 use cranpose_services::purchases;
 
-cranpose_storekit::register();
-purchases::configure(&["com.example.app.pro"]);
+fn configure_purchases() {
+    cranpose_storekit::register();
+    purchases::configure(&["com.example.pro"]);
+}
 
-// Read the snapshot from the frame loop — the store answers asynchronously.
-let state = purchases::store_state();
-// No store that will sell here: free in that case.
-let unlocked = state.phase.cannot_sell() || state.owns("com.example.app.pro");
-let price = state.display_price("com.example.app.pro").unwrap_or("");
+fn purchase_pro() {
+    purchases::purchase("com.example.pro");
+}
 ```
 
-On non-Apple targets `register()` is a no-op, the build script does nothing,
-and the crate compiles away — so it can sit in an Android, desktop or web
-dependency graph unchanged.
+Read `purchases::store_state()` for product prices and owned entitlements. Use `rememberStoreState` and `rememberPurchaseEvents` inside composables to observe updates. Product IDs must match App Store Connect products; store replies arrive asynchronously.
 
-## How it works
+## Apple build requirements
 
-StoreKit 2 is Swift-only: `Product`, `Transaction`, `Transaction.updates` and
-the on-device JWS verification have no Objective-C surface. The build script
-compiles `swift/storekit.swift` with `swiftc -emit-library -static` and links
-the archive with `+whole-archive` so Swift's autolink records survive.
+Build Apple targets with active Xcode from `xcode-select`. iOS 15 and macOS 12 are minimum targets and include Swift concurrency. The build script warns and assumes the minimum when `IPHONEOS_DEPLOYMENT_TARGET` or `MACOSX_DEPLOYMENT_TARGET` is absent. Set the same variable in the app build environment so `rustc` and `swiftc` use the same target version. The build script requires those minimum versions.
 
-Two things about that link are worth knowing before changing it:
+The build script compiles the Swift shim into a static archive and links the archive into the Rust app with Cargo link directives. Swift callbacks can arrive on any thread; the adapter protects shared state with a mutex before app code reads store snapshots. StoreKit 2 requires products configured in App Store Connect and a signed app for device purchase tests. Other target families compile the public `register` function as an empty adapter.
 
-- **`cargo:rustc-link-arg` does not propagate from a dependency's build
-  script.** An rlib is never linked, so a link-arg emitted here silently
-  vanishes and the build stays green with the symbol missing. Only
-  `rustc-link-lib` and `rustc-link-search` reach the final binary; the build
-  script uses those exclusively.
-- **Swift autolinking needs the toolchain path as well as the SDK path.**
-  `libswiftCompatibility56.a` and `libswiftCompatibilityPacks.a` live in the
-  Xcode toolchain, not the SDK. Without that search path the link fails in a
-  way that reads as "autolinking is broken".
+## Link check
 
-There is no `Frameworks/` copy step and no `@rpath`: the Swift runtime has
-shipped in the OS since iOS 12.2, so the SDK's `.tbd` stubs are all the linker
-needs.
+The crate includes `examples/link_check.rs`. On a Mac with Xcode, build the example for a simulator or device target:
 
-## Requirements
-
-- **`IPHONEOS_DEPLOYMENT_TARGET=15.0` (or `MACOSX_DEPLOYMENT_TARGET=12.0`) must
-  be exported.** The build script refuses to run without it, on purpose.
-  Swift's *concurrency* runtime has been in the OS only since iOS 15 / macOS
-  12; link below that and `libswift_Concurrency` resolves against Xcode's
-  Swift 5.5 back-deployment copy, whose install name is `@rpath/…`. The build
-  stays green and the app dies at launch with "Library not loaded". rustc
-  reads the same variable when it links the final binary, which is why the
-  build script insists rather than defaulting.
-- Xcode installed and selected (`xcode-select -p`), for `swiftc` and `xcrun`.
-
-## Verifying a link
-
-```bash
+```sh
 export IPHONEOS_DEPLOYMENT_TARGET=15.0
 cargo build -p cranpose-storekit --example link_check --target aarch64-apple-ios
-otool -L target/aarch64-apple-ios/debug/examples/link_check | grep swift
+otool -L target/aarch64-apple-ios/debug/examples/link_check
 ```
 
-Every line must be an absolute `/usr/lib/swift/…` path. A single `@rpath/…`
-entry means the deployment target slipped and the binary will not launch.
-Measured on device, simulator and macOS host with Xcode 26.5: all absolute.
+## Links
 
-## License
-
-Choose [Apache-2.0](../../LICENSE) or [MIT](../../LICENSE-MIT).
+- [API documentation](https://docs.rs/cranpose-storekit/latest/cranpose_storekit/)
+- [Purchases service API](https://docs.rs/cranpose-services/latest/cranpose_services/purchases/index.html)
+- [Source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-storekit)
+- [Apache-2.0 license](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose-storekit/LICENSE)
+- [MIT license](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose-storekit/LICENSE-MIT)

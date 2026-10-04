@@ -1,27 +1,26 @@
 # Cranpose UI Layout
 
-The layout protocol and constraints system for Cranpose.
+`cranpose-ui-layout` defines measurement, placement, alignment and arrangement
+contracts for Cranpose widgets. Custom layout authors use `Constraints`,
+`Measurable`, `MeasureScope` and `Placeable`. App developers usually use
+`Column`, `Row`, `Box` and `Layout` from
+[`cranpose`](https://docs.rs/cranpose/latest/cranpose/).
 
-## When to Use
+## Adjust child constraints
 
-This crate defines the contract between parent and child layouts. You will use this crate when implementing custom `Layout` logic or creating new layout modifiers. It provides the types necessary to measure content and place it within the available space.
-
-## Key Concepts
-
--   **`Constraints`**: Immutable constraints passed from parent to child, defining the minimum and maximum width and height a child is allowed to be.
--   **`Measurable`**: A trait for any node that can be measured.
--   **`Placeable`**: The result of a measurement pass. It holds the measured size and provides a method to position the content relative to its parent.
-
-## Example: Fixed Size Measurement
+Constraints use logical pixels. A custom measure policy can deflate parent
+bounds before a child measure call:
 
 ```rust
-impl Measurable for MyNode {
-    fn measure(&self, constraints: Constraints) -> Placeable {
-        // Coerce the requested size to be within the constraints
-        let width = constraints.constrain_width(100);
-        let height = constraints.constrain_height(100);
-        
-        layout(width, height, |_| {})
-    }
-}
+use cranpose_ui_layout::Constraints;
+
+let parent = Constraints::loose(320.0, 480.0);
+let child = parent.deflate(16.0, 12.0);
+let (width, height) = child.constrain(400.0, 40.0);
+assert_eq!((width, height), (304.0, 40.0));
 ```
+
+The feature set is empty. See the
+[`Constraints` API](https://docs.rs/cranpose-ui-layout/latest/cranpose_ui_layout/struct.Constraints.html),
+the [layout guide](https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/guide.md#layout-and-lists)
+and the [crate source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-ui-layout).

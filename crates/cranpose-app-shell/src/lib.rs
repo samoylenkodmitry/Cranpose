@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use std::sync::PoisonError;
 mod focus_reveal;
 mod fps_monitor;

@@ -1457,67 +1457,34 @@ fn LazyRowNode(
     LazyRowImpl(modifier, state, spec, content)
 }
 
-/// A vertically scrolling list that only composes visible items.
-///
-/// Matches Jetpack Compose's `LazyColumn` API. The closure receives
-/// a [`LazyListIntervalContent`] which implements `LazyListScope` for defining items.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// let state = rememberLazyListState();
-/// LazyColumn(Modifier::empty(), state, LazyColumnSpec::default(), |scope| {
-///     // Single header item
-///     scope.item_keyed(Some(0), None, || {
-///         Text("Header", Modifier::empty());
-///     });
-///
-///     // Multiple items from data
-///     scope.items(data.len(), Some(|i| data[i].id), None, |i| {
-///         Text(data[i].name.clone(), Modifier::empty());
-///     });
-/// });
-/// ```
-///
-/// For convenience with slices, use the `LazyListScopeExt` extension methods:
-///
-/// ```rust,ignore
-/// use cranpose_foundation::lazy::LazyListScopeExt;
-///
-/// LazyColumn(Modifier::empty(), state, LazyColumnSpec::default(), |scope| {
-///     scope.items_slice(&my_data, |item| {
-///         Text(item.name.clone(), Modifier::empty());
-///     });
-/// });
-/// ```
-/// A vertically scrolling list that only composes and lays out visible items.
-///
-/// # When to use
-/// Use `LazyColumn` for lists with many items (100+) or unknown length.
-/// It is much more efficient than using a `Column` with `vertical_scroll` modifier
-/// because it recycles nodes and only keeps visible items in memory (virtualization).
-///
-/// # Arguments
-///
-/// * `modifier` - Modifiers to apply to the list container.
-/// * `state` - The scroll state, used to control scroll position or observe changes.
-/// * `spec` - Configuration for content padding, item spacing, and reverse layout.
-/// * `content` - A closure that defines the list content using `LazyListScope`.
+/// Composes and measures the rows needed for a vertical viewport. The content
+/// closure declares rows through [`LazyListScope`](cranpose_foundation::lazy::LazyListScope).
+/// Use stable keys for item identity across changes and content types for distinct row shapes.
+/// The state retains the scroll position; the spec sets item space and content insets.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let state = rememberLazyListState();
-/// LazyColumn(
-///     Modifier::fill_max_size(),
-///     state,
-///     LazyColumnSpec::default(),
-///     |scope| {
-///         scope.items(1000, None, None, |i| {
-///             Text(format!("Item {}", i), Modifier::padding(16.0));
-///         });
-///     }
-/// );
+/// ```rust
+/// use cranpose_ui::*;
+///
+/// #[composable]
+/// fn Messages() {
+///     let state = rememberLazyListState();
+///     LazyColumn(
+///         Modifier::empty().fill_max_size(),
+///         state,
+///         LazyColumnSpec::default(),
+///         |scope| {
+///             scope.items(LazyItems::new(1000), |index| {
+///                 Text(
+///                     format!("Message {index}"),
+///                     Modifier::empty().padding(16.0),
+///                     TextStyle::default(),
+///                 );
+///             });
+///         },
+///     );
+/// }
 /// ```
 pub fn LazyColumn<F>(
     modifier: Modifier,
@@ -1538,20 +1505,27 @@ where
     )
 }
 
-/// A horizontally scrolling list that only composes visible items.
-///
-/// Matches Jetpack Compose's `LazyRow` API. The closure receives
-/// a [`LazyListIntervalContent`] which implements `LazyListScope` for defining items.
+/// Composes and measures the items needed for a horizontal viewport.
+/// Use [`LazyColumn`] for vertical lists.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let state = rememberLazyListState();
-/// LazyRow(Modifier::empty(), state, LazyRowSpec::default(), |scope| {
-///     scope.items(10, |i| {
-///         Text(format!("Item {}", i), Modifier::empty());
+/// ```rust
+/// use cranpose_ui::*;
+///
+/// #[composable]
+/// fn Choices() {
+///     let state = rememberLazyListState();
+///     LazyRow(Modifier::empty(), state, LazyRowSpec::default(), |scope| {
+///         scope.items(LazyItems::new(10), |index| {
+///             Text(
+///                 format!("Choice {index}"),
+///                 Modifier::empty().padding(8.0),
+///                 TextStyle::default(),
+///             );
+///         });
 ///     });
-/// });
+/// }
 /// ```
 pub fn LazyRow<F>(modifier: Modifier, state: LazyListState, spec: LazyRowSpec, content: F) -> NodeId
 where

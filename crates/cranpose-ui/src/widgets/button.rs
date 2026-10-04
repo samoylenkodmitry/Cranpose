@@ -42,28 +42,25 @@ where
     })
 }
 
-/// A clickable button with a background and content.
-///
-/// # When to use
-/// Use this to trigger an action when clicked. The button serves as a container
-/// for other composables (typically `Text`).
-///
-/// # Arguments
-///
-/// * `modifier` - Modifiers to apply to the button container.
-/// * `spec` - Configuration for button behavior.
-/// * `on_click` - The callback to execute when the button is clicked.
-/// * `content` - The content to display inside the button (e.g., `Text` or `Icon`).
+/// Calls `on_click` after a click and places content inside a button container.
+/// The modifier controls size and appearance. `spec` can supply an interaction source.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// Button(
-///     Modifier::padding(8.0),
-///     ButtonSpec::default(),
-///     || println!("Clicked!"),
-///     || Text("Click Me", Modifier::empty())
-/// );
+/// ```rust
+/// use cranpose_ui::*;
+///
+/// #[composable]
+/// fn SaveAction() {
+///     Button(
+///         Modifier::empty().padding(8.0),
+///         ButtonSpec::default(),
+///         || println!("Save requested"),
+///         || {
+///             Text("Save", Modifier::empty(), TextStyle::default());
+///         },
+///     );
+/// }
 /// ```
 #[composable]
 pub fn Button<F, G>(modifier: Modifier, spec: ButtonSpec, on_click: F, content: G) -> NodeId

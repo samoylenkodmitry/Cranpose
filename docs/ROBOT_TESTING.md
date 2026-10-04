@@ -1,343 +1,56 @@
-# Robot Testing
+# Robot tests
 
-Robot testing provides automated UI testing capabilities for Cranpose applications. The robot can interact with your app programmatically, find elements by semantic properties, and validate UI state.
+Cranpose's desktop robot drives a real app through `AppLauncher` and exposes
+rendered semantics to the driver. Headless end-to-end runners check observable
+app behavior through public entry points.
 
-## Quick Start
+## Run the demo runners
 
-### Enable Robot Testing
+All runners are modules of the `robot` Cargo example in
+`apps/desktop-demo/robot-runners/`. `main.rs` registers their names, and the
+root `run_robot_test.sh` builds and launches each runner in the configured
+headless test environment:
 
-`Robot` and `AppLauncher::with_test_driver` live in the `cranpose` crate behind
-the `robot` feature (which also needs `desktop-shell` and `renderer-wgpu`).
-`apps/desktop-demo` wires this up through its own `robot-app` feature in
-`Cargo.toml`. Every robot runner is a module of one example binary, `robot`,
-which takes the runner's name as its argument:
+```sh
+# Run one runner
+./run_robot_test.sh --example robot_interactive
 
-```toml
-[features]
-robot-app = ["logging", "cranpose-ui/test-helpers"]
+# Run the full suite sequentially
+./run_robot_test.sh --sequential
 
-[[example]]
-name = "robot"
-path = "robot-runners/main.rs"
-required-features = ["desktop", "renderer-wgpu", "robot-app"]
+# List runner scheduling classes
+./run_robot_test.sh --list-classes
 ```
 
-A runner is a file `robot-runners/robot_<name>.rs` whose entry point is
-`pub(crate) fn main`, listed in the `runners!` table of
-`robot-runners/main.rs`. It reaches the shared helpers declared there through
-`use crate::<helper>;`. `cargo xtask test-layout` fails when a runner is
-missing from the table.
+`run_robot_test.sh` acquires its host lock. Run `./run_robot_test.sh --help`
+for its other options. `cargo xtask test-layout` checks runner modules against
+the registration table.
 
-For the separate headless end-to-end harness that drives full example
-binaries via `run_robot_test.sh`, see
-[`crates/cranpose-testing/README.md`](../crates/cranpose-testing/README.md).
+The crate-level `Robot` API and the `cranpose-testing` E2E helpers appear in
+[`cranpose-testing`](../crates/cranpose-testing/README.md). The demo runner
+target uses `desktop`, `renderer-wgpu`, and `robot-app`; the
+`cranpose-testing` dev dependency enables Cranpose's `robot` feature.
 
-### Basic Example
+## Add a runner
 
-```rust
-use cranpose::{AppLauncher, Robot};
-
-AppLauncher::new()
-    .with_test_driver(|robot| {
-        // Wait for app to be ready
-        robot.wait_for_idle().ok();
-        
-        // Click a button by finding it semantically
-        robot.click_by_text("Increment")?;
-        
-        // Validate content
-        robot.validate_content("Counter: 1")?;
-        
-        robot.exit()?;
-    })
-    .run(|| {
-        // Your app code
-    });
-```
-
-## API Reference
-
-### Core Methods
-
-#### `click(x, y) -> Result<(), String>`
-Click at specific coordinates (logical pixels).
+Add a `robot_<name>.rs` module under `apps/desktop-demo/robot-runners/` and
+add the runner name to `main.rs`. Launch the app with `robot_launch::launch`, interact
+through semantics or coordinates, check visible state, and exit cleanly. Use
+exact semantic matches when labels overlap. For example:
 
 ```rust
-robot.click(150.0, 560.0)?;
-```
-
-#### `move_to(x, y) -> Result<(), String>`
-Move cursor to coordinates without clicking.
-
-```rust
-robot.move_to(150.0, 560.0)?;
-```
-
-#### `wait_for_idle() -> Result<(), String>`
-Wait for the application to become idle (no redraws, no animations).
-
-**Note:** This will timeout and return `Err` for tabs with continuous animations. This is expected behavior, not a failure.
-
-```rust
-match robot.wait_for_idle() {
-    Ok(_) => println!("App is idle"),
-    Err(e) => println!("Timeout (animations active): {}", e),
-}
-```
-
-#### `exit() -> Result<(), String>`
-Shutdown the application gracefully.
-
-```rust
+robot.click_by_text("Increment")?;
+robot.validate_content("Counter: 1")?;
 robot.exit()?;
 ```
 
-### Semantic API
+`click_by_text` finds a clickable semantic node with the requested text
+and clicks its center. Use `find_button_bounds_exact` for an exact label,
+`get_semantics` to inspect the accessibility tree. Call
+`set_semantics_enabled(true)` before `spoken_tree` to inspect screen-reader
+order and actions. Use `wait_for_idle` for settled screens. For animated
+content, poll for the target semantic state.
 
-The semantic API allows you to find and interact with UI elements by their properties instead of hardcoded coordinates.
-
-#### `get_semantics() -> Result<Vec<SemanticElement>, String>`
-Retrieve the semantic tree with geometric bounds.
-
-```rust
-let semantics = robot.get_semantics()?;
-```
-
-#### `spoken_tree() -> Result<String, String>`
-The screen the way a screen reader speaks it, one control per line: the name,
-the role, the state, the value and the actions, in reading order. Turn
-semantics on with `set_semantics_enabled(true)` first. A test compares the
-lines a blind user hears; a person prints them to look at a screen from a
-terminal.
-
-```rust
-robot.set_semantics_enabled(true)?;
-println!("{}", robot.spoken_tree()?);
-```
-
-Output:
-```
-Library, pane
-Search receipts, search field
-Flash, switch, on
-Capture, button, actions: Take the photo
-Milk 3.40, list item, 1 of 12
-```
-
-#### `audit_accessibility() -> Result<Vec<String>, String>`
-The issues `cranpose_testing::audit_accessibility` finds on the screen the app
-shows, one line each: what a reader user hits and what fixes it. Empty when
-the screen passes. A suite that walks every screen of an app calls it on each
-one and keeps a list of the issues it leaves as they are, so a new issue
-fails the run and the list only shrinks.
-
-```rust
-let issues = robot.audit_accessibility()?;
-assert!(issues.is_empty(), "{}", issues.join("\n"));
-```
-
-`cranpose_testing::audit_changes(screen, &issues, KNOWN)` keeps that list for
-you: it returns the new lines and the listed issues that went away, and a
-test fails on either. A `*` entry stands for every screen.
-
-```rust
-const KNOWN: &[cranpose_testing::KnownIssue] = &[
-    ("library", "SmallTarget: control \"Pill\"", "the pill sits over the first tab"),
-];
-let issues = robot.audit_accessibility()?;
-cranpose_testing::audit_changes("library", &issues, KNOWN).unwrap();
-```
-
-#### `assert_accessible()`
-Panics with every issue `audit_accessibility` finds, or returns.
-
-#### `find_by_text(elements, text) -> Option<&SemanticElement>`
-Find any element containing the specified text (recursive search).
-
-```rust
-let elem = Robot::find_by_text(&semantics, "Hello")?;
-```
-
-#### `find_button(elements, text) -> Option<&SemanticElement>`
-Find clickable element by text content. Searches in both the element and its children (handles Compose's composite pattern where clickable Layouts contain Text children).
-
-```rust
-let button = Robot::find_button(&semantics, "Increment")
-    .ok_or("Button not found")?;
-```
-
-### Helper Methods
-
-#### `click_by_text(text) -> Result<(), String>`
-Convenience method that finds a button and clicks its center in one call.
-
-```rust
-robot.click_by_text("Save")?;
-```
-
-This is equivalent to:
-```rust
-let semantics = robot.get_semantics()?;
-let elem = Robot::find_button(&semantics, "Save")?;
-let center_x = elem.bounds.x + elem.bounds.width / 2.0;
-let center_y = elem.bounds.y + elem.bounds.height / 2.0;
-robot.click(center_x, center_y)?;
-```
-
-#### `validate_content(text) -> Result<(), String>`
-Assert that text exists anywhere in the semantic tree.
-
-```rust
-robot.validate_content("Success!")?;
-```
-
-#### `print_semantics(elements, indent)`
-Print hierarchical view of semantic tree for debugging.
-
-```rust
-let semantics = robot.get_semantics()?;
-Robot::print_semantics(&semantics, 0);
-```
-
-Output:
-```
-role=Layout
-  role=Layout [CLICKABLE]
-    role=Text text="Increment"
-  role=Layout [CLICKABLE]
-    role=Text text="Decrement"
-```
-
-## SemanticElement Structure
-
-```rust
-pub struct SemanticElement {
-    pub role: String,                              // "Button", "Text", "Layout", etc.
-    pub text: Option<String>,                       // Text content if available
-    pub state_description: Option<String>,          // Compose's `stateDescription`
-    pub bounds: SemanticRect,                       // Geometric bounds
-    pub clickable: bool,                            // Has click actions
-    pub editable_text: bool,                        // Represents editable text
-    pub text_selection: Option<(usize, usize)>,     // Selection as UTF-8 byte offsets
-    pub children: Vec<SemanticElement>,
-}
-
-pub struct SemanticRect {
-    pub x: f32,      // X coordinate (logical pixels)
-    pub y: f32,      // Y coordinate (logical pixels)  
-    pub width: f32,  // Width
-    pub height: f32, // Height
-}
-```
-
-## Complete Example
-
-```rust
-use desktop_app::app;
-use cranpose::{AppLauncher, Robot};
-use std::time::Duration;
-
-fn main() {
-    AppLauncher::new()
-        .with_title("Robot Test")
-        .with_size(800, 600)
-        .with_test_driver(|robot| {
-            // Wait for initial render
-            std::thread::sleep(Duration::from_millis(500));
-            robot.wait_for_idle().ok();
-
-            // Print semantic tree for debugging
-            if let Ok(sem) = robot.get_semantics() {
-                Robot::print_semantics(&sem, 0);
-            }
-
-            // Test counter workflow
-            for i in 1..=5 {
-                println!("Click {}", i);
-                robot.click_by_text("Increment")?;
-                std::thread::sleep(Duration::from_millis(300));
-            }
-
-            // Validate final state
-            robot.validate_content("Counter: 5")?;
-
-            // Test tab navigation
-            robot.click_by_text("Settings")?;
-            robot.validate_content("Settings Page")?;
-
-            // Cleanup
-            robot.exit()?;
-            
-            Ok::<(), String>(())
-        })
-        .run(|| {
-            app::my_app();
-        });
-}
-```
-
-## Best Practices
-
-### 1. Use Semantic Queries
-**✅ Good:**
-```rust
-robot.click_by_text("Submit")?;
-```
-
-**❌ Avoid:**
-```rust
-robot.click(450.0, 320.0)?;  // Brittle - breaks if layout changes
-```
-
-### 2. Handle Timeouts Gracefully
-```rust
-match robot.wait_for_idle() {
-    Ok(_) => {},  // Tab is idle
-    Err(_) => {}, // Tab has animations - this is OK
-}
-```
-
-### 3. Add Small Delays
-Give the UI time to update between interactions:
-```rust
-robot.click_by_text("Next")?;
-std::thread::sleep(Duration::from_millis(300));
-robot.validate_content("Page 2")?;
-```
-
-### 4. Debug with print_semantics
-When tests fail, print the tree to see what's available:
-```rust
-let semantics = robot.get_semantics()?;
-Robot::print_semantics(&semantics, 0);
-```
-
-## Running Robot Tests
-
-```bash
-# Run a specific robot test
-cargo run --package desktop-app --example robot --features robot-app -- robot_interactive
-
-# Run with full logging
-RUST_LOG=debug cargo run --package desktop-app --example robot --features robot-app -- robot_interactive
-
-# List every runner
-cargo run --package desktop-app --example robot --features robot-app -- --list
-```
-
-## Troubleshooting
-
-### "Button not found"
-- Use `print_semantics()` to see available elements
-- Check if the button text matches exactly (case-sensitive)
-- Verify the element is actually clickable
-
-### "wait_for_idle timeout"
-- This is normal for animated tabs
-- Use `match` to handle timeouts gracefully
-- Don't call `.expect()` on `wait_for_idle()`
-
-### Clicks miss target
-- Ensure the app has finished rendering
-- Add a small delay before clicking
-- Verify bounds using `print_semantics()`
+`Robot::screenshot` redraws the scene offscreen. For windowed presentation or
+external-capture assertions, use the existing windowed robot patterns and
+capture tools described in [render verification](render_verification.md).

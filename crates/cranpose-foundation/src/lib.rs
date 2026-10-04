@@ -1,4 +1,4 @@
-//! Foundation elements for Cranpose: modifiers, input, and core functionality
+#![doc = include_str!("../README.md")]
 
 pub mod gesture_constants;
 pub mod lazy;

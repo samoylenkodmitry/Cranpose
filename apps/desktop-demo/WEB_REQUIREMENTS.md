@@ -1,68 +1,42 @@
-# Web Build Technical Details
+# Web build and browser backends
 
-## Rendering Backend
+The desktop demo's WebAssembly build uses wgpu. WebGL2 is the default browser
+backend. WebGPU requires browser and adapter support. The URL query selects
+the backend:
 
-The Cranpose web demo uses **WebGL2** as the rendering backend via wgpu's GL backend. This provides excellent compatibility with all modern browsers while maintaining the same rendering code used on desktop platforms.
+- default URL or `?backend=gl`: use WebGL2;
+- `?backend=webgpu`: select browser WebGPU;
+- `?backend=auto`: try browser WebGPU, then fall back to WebGL2.
 
-## Why WebGL Instead of WebGPU?
+## Build and run
 
-While WebGPU is the future of web graphics, we use WebGL2 for the following reasons:
+Install the WebAssembly target and `wasm-pack`, then build from the repository
+root:
 
-1. **Universal Browser Support**: WebGL2 is supported by all modern browsers (Chrome, Firefox, Edge, Safari) without requiring experimental flags.
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack
+just web
+```
 
-2. **Avoiding Spec Incompatibilities**: wgpu 0.19 uses newer WebGPU specification field names (e.g., `maxInterStageShaderComponents`) that Chrome stable doesn't recognize yet (it expects `maxInterStageShaderVariables`). This would require users to install Chrome Canary/Dev.
+`just web` builds the optimized desktop demo under `apps/desktop-demo/pkg/`.
+Serve the app directory. The app's `index.html` loads the built package:
 
-3. **Same Codebase**: wgpu provides a unified API that works identically on both WebGL and WebGPU backends, so the same Rust rendering code works everywhere.
-
-4. **Good Performance**: WebGL2 is hardware-accelerated and provides good performance for UI rendering.
-
-## Browser Requirements
-
-- **Chrome/Edge**: Version 56+ (released 2017)
-- **Firefox**: Version 51+ (released 2017)
-- **Safari**: Version 15+ (released 2021)
-
-Essentially any browser from the last few years works out of the box.
-
-## Building for Web
-
-```bash
+```sh
 cd apps/desktop-demo
-./build-web.sh
-./build-web.sh --release   # optimized output / CI-style build
-
-# Start a local server
 python3 -m http.server 8080
-
-# Open in any modern browser
-# http://localhost:8080
 ```
 
-## Technical Implementation
+Open <http://localhost:8080>. For a size-optimized build, install Binaryen so
+`wasm-opt` is available. `apps/desktop-demo/build-web.sh --fast` selects the
+local development profile; `--release` selects the optimized profile.
 
-In `crates/cranpose/src/web.rs`, we initialize wgpu with the GL backend:
+`apps/desktop-demo/package-web.sh <output-dir>` packages the built WASM and
+`index.html` into a content-addressed static site directory.
 
-```rust
-let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-    backends: wgpu::Backends::GL,  // Use WebGL backend
-    ..Default::default()
-});
-```
+## Implementation
 
-The `webgl` feature is enabled in `crates/cranpose-render/wgpu/Cargo.toml`:
-
-```toml
-wgpu = { version = "0.19", features = ["webgl"] }
-```
-
-This tells wgpu to use the `glow` library (OpenGL/WebGL wrapper) instead of the browser's `navigator.gpu` WebGPU API.
-
-## Future: Switching to WebGPU
-
-When WebGPU support stabilizes across browsers, we can:
-
-1. **Runtime Detection**: Try WebGPU first, fall back to WebGL if it fails
-2. **Build-time Flag**: Allow users to choose which backend at build time
-3. **Automatic Selection**: Use WebGPU when available, WebGL otherwise
-
-The benefit of using wgpu is that switching between backends requires minimal code changes - just changing the `backends` parameter.
+The backend preference is read by `crates/cranpose/src/web.rs`. wgpu's web
+renderer enables its `webgl` feature in
+`crates/cranpose-render/wgpu/Cargo.toml`; the runtime chooses browser WebGPU or
+WebGL2 according to the URL preference and available adapters.

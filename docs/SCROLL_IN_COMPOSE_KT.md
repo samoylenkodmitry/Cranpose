@@ -1,4 +1,12 @@
-# Scrolling in Jetpack Compose - Complete Investigation
+# Scroll behavior in Jetpack Compose: source notes
+
+This document records a source review of Jetpack Compose scroll behavior. The
+Source revision: unspecified. The Kotlin excerpts and class details serve as a
+historical architecture reference. Current
+Cranpose scroll behavior lives in
+[`scroll.rs`](../crates/cranpose-ui/src/modifier/scroll.rs),
+[`lazy_list_doc.md`](lazy_list_doc.md) and
+[`lazy_list_state.rs`](../crates/cranpose-foundation/src/lazy/lazy_list_state.rs).
 
 ## Table of Contents
 1. [Executive Summary](#executive-summary)
@@ -27,21 +35,21 @@ Compose's scrolling system consists of **three interconnected layers**:
 
 ```mermaid
 graph TD
-    A[User Touch/Drag] --\u003e B[PointerInputEventProcessor]
-    B --\u003e C[HitPathTracker - 3 Pass Dispatch]
-    C --\u003e D[ScrollableNode PointerInputModifierNode]
-    D --\u003e E[DragGestureNode - Drag Detection]
-    E --\u003e F[ScrollingLogic.scrollByWithOverscroll]
-    F --\u003e G[NestedScrollDispatcher - Pre/Post Scroll]
-    G --\u003e H[ScrollableState.scrollBy]
-    H --\u003e I[ScrollState.value Update]
-    I --\u003e J{Snapshot System}
-    J --\u003e K[Recomposition Triggered]
-    K --\u003e L[ScrollNode.measure]
-    L --\u003e M[Read state.value]
-    M --\u003e N[Calculate offset: -state.value]
-    N --\u003e O[placeable.placeRelativeWithLayer xOffset, yOffset]
-    O --\u003e P[Content Visually Scrolled!]
+    A[User Touch/Drag] --> B[PointerInputEventProcessor]
+    B --> C[HitPathTracker - 3 Pass Dispatch]
+    C --> D[ScrollableNode PointerInputModifierNode]
+    D --> E[DragGestureNode - Drag Detection]
+    E --> F[ScrollingLogic.scrollByWithOverscroll]
+    F --> G[NestedScrollDispatcher - Pre/Post Scroll]
+    G --> H[ScrollableState.scrollBy]
+    H --> I[ScrollState.value Update]
+    I --> J{Snapshot System}
+    J --> K[Recomposition Triggered]
+    K --> L[ScrollNode.measure]
+    L --> M[Read state.value]
+    M --> N[Calculate offset: -state.value]
+    N --> O[placeable.placeRelativeWithLayer xOffset, yOffset]
+    O --> P[Content Visually Scrolled!]
 ```
 
 ---
@@ -98,7 +106,7 @@ class Node(val modifierNode: Modifier.Node) : NodeParent() {
     // Caches per-dispatch
     private var coordinates: LayoutCoordinates?  // For position transformation
     private var pointerEvent: PointerEvent?       // Event in local coordinates
-    private val relevantChanges: LongSparseArray\u003cPointerInputChange\u003e
+    private val relevantChanges: LongSparseArray<PointerInputChange>
     
     override fun dispatchMainEventPass(...) {
         // Initial pass - parent first
@@ -144,7 +152,7 @@ interface AwaitPointerEventScope {
 // Usage in gesture detector:
 awaitPointerEventScope {
     val down = awaitFirstDown()  // Suspends until pointer down
-    drag(down.id) { change -\u003e
+    drag(down.id) { change ->
         change.consume()  // Consume immediately
         onDelta(change.positionChange())
     }
@@ -193,10 +201,10 @@ override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, 
 
 **Drag Handling:**
 ```kotlin
-override suspend fun drag(forEachDelta: suspend ((dragDelta: DragEvent.DragDelta) -\u003e Unit) -\u003e Unit) {
+override suspend fun drag(forEachDelta: suspend ((dragDelta: DragEvent.DragDelta) -> Unit) -> Unit) {
     with(scrollingLogic) {
         scroll(scrollPriority = MutatePriority.UserInput) {
-            forEachDelta { dragDelta -\u003e
+            forEachDelta { dragDelta ->
                 // Account for indirect pointer events (trackpad, etc)
                 val invertIndirectPointer = if (dragDelta.isIndirectPointerEvent) -1f else 1f
                 scrollByWithOverscroll(
@@ -231,7 +239,7 @@ private fun ScrollScope.performScroll(delta: Offset, source: NestedScrollSource)
     val scrollAvailableAfterPreScroll = delta - consumedByPreScroll
     val singleAxisDelta = scrollAvailableAfterPreScroll.singleAxisOffset().reverseIfNeeded()
     
-    val consumedBySelfScroll = scrollBy(singleAxisDelta.toFloat())  // \u003c-- Updates state here
+    val consumedBySelfScroll = scrollBy(singleAxisDelta.toFloat())  // <-- Updates state here
         .toOffset()
         .reverseIfNeeded()
     
@@ -255,7 +263,7 @@ private fun ScrollScope.performScroll(delta: Offset, source: NestedScrollSource)
 fun NestedScrollScope.scrollByWithOverscroll(offset: Offset, source: NestedScrollSource): Offset {
     val overscroll = overscrollEffect
     return if (overscroll != null \u0026\u0026 shouldDispatchOverscroll) {
-        overscroll.applyToScroll(offset, source) { delta -\u003e
+        overscroll.applyToScroll(offset, source) { delta ->
             performScroll(delta, source)  // Wrapped
         }
     } else {
@@ -267,7 +275,7 @@ fun NestedScrollScope.scrollByWithOverscroll(offset: Offset, source: NestedScrol
 **Fling Handling:**
 ```kotlin
 suspend fun onScrollStopped(initialVelocity: Velocity, isMouseWheel: Boolean) {
-    val performFling: suspend (Velocity) -\u003e Velocity = { velocity -\u003e
+    val performFling: suspend (Velocity) -> Velocity = { velocity ->
         // 1. Pre-fling (parent consumes first)
         val preConsumed = nestedScrollDispatcher.dispatchPreFling(velocity)
         val available = velocity - preConsumed
@@ -317,7 +325,7 @@ class ScrollState(initial: Int) : ScrollableState {
         get() = _maxValueState.intValue
         internal set(newMax) {
             _maxValueState.intValue = newMax
-            if (value \u003e newMax) value = newMax
+            if (value > newMax) value = newMax
         }
     
     // Viewport size (visible area)
@@ -331,13 +339,13 @@ class ScrollState(initial: Int) : ScrollableState {
     private var accumulator: Float = 0f
     
     // The actual state implementation
-    private val scrollableState = ScrollableState { delta -\u003e
+    private val scrollableState = ScrollableState { delta ->
         val absolute = (value + delta + accumulator)
         val newValue = absolute.coerceIn(0f, maxValue.toFloat())
         val changed = absolute != newValue
         val consumed = newValue - value
         val consumedInt = consumed.fastRoundToInt()
-        value += consumedInt  // \u003c-- STATE UPDATE HAPPENS HERE
+        value += consumedInt  // <-- STATE UPDATE HAPPENS HERE
         accumulator = consumed - consumedInt
         
         if (changed) consumed else delta  // Return consumed amount
@@ -352,11 +360,11 @@ suspend fun scrollTo(value: Int): Float =
     this.scrollBy((value - this.value).toFloat())
 
 // Animated scroll
-suspend fun animateScrollTo(value: Int, animationSpec: AnimationSpec\u003cFloat\u003e = SpringSpec()) =
+suspend fun animateScrollTo(value: Int, animationSpec: AnimationSpec<Float> = SpringSpec()) =
     this.animateScrollBy((value - this.value).toFloat(), animationSpec)
 
 // ScrollableState delegation
-override suspend fun scroll(scrollPriority: MutatePriority, block: suspend ScrollScope.() -\u003e Unit) =
+override suspend fun scroll(scrollPriority: MutatePriority, block: suspend ScrollScope.() -> Unit) =
     scrollableState.scroll(scrollPriority, block)
 
 override fun dispatchRawDelta(delta: Float): Float = 
@@ -366,7 +374,7 @@ override fun dispatchRawDelta(delta: Float): Float =
 **State Update Mechanism:**
 ```kotlin
 // When scrollBy() is called from ScrollingLogic:
-scrollableState { delta -\u003e
+scrollableState { delta ->
     val newValue = (value + delta).coerceIn(0f, maxValue.toFloat())
     val consumed = newValue - value
     value += consumed.roundToInt()  // Triggers Compose recomposition
@@ -421,7 +429,7 @@ internal class ScrollNode(
         val side = if (isVertical) scrollHeight else scrollWidth
         
         // Step 5: Update state with layout measurements
-        state.maxValue = side  // \u003c-- Tells state max scroll
+        state.maxValue = side  // <-- Tells state max scroll
         state.viewportSize = if (isVertical) height else width
         state.contentSize = if (isVertical) placeable.height else placeable.width
         
@@ -548,8 +556,8 @@ MAIN PASS (Child → Parent):
   → DragGestureNode's pointer input handler runs:
   
     awaitPointerEventScope {
-        drag(pointerId) { change -\u003e
-            change.consume()  // \u003c-- Consumes event
+        drag(pointerId) { change ->
+            change.consume()  // <-- Consumes event
             onDelta(change.positionChange())  // (0, -10)
         }
     }
@@ -558,7 +566,7 @@ MAIN PASS (Child → Parent):
   
     suspend fun drag(forEachDelta) {
         scrollingLogic.scroll(MutatePriority.UserInput) {
-            forEachDelta { dragDelta -\u003e
+            forEachDelta { dragDelta ->
                 scrollByWithOverscroll(
                     delta = (0, -10).singleAxisOffset(),  // (0, -10) for vertical
                     source = UserInput
@@ -576,7 +584,7 @@ FINAL PASS (Parent → Child):
 ```
 ScrollingLogic.scrollByWithOverscroll((0, -10)):
   
-  → overscrollEffect?.applyToScroll((0, -10), UserInput) { delta -\u003e
+  → overscrollEffect?.applyToScroll((0, -10), UserInput) { delta ->
       performScroll(delta, UserInput)
   }
   
@@ -593,14 +601,14 @@ ScrollingLogic.scrollByWithOverscroll((0, -10)):
     // reverseIfNeeded() → (0, 10)  [natural scrolling]
     // toFloat() → 10.0
     
-    consumed2 = scrollBy(10.0)  // \u003c-- Calls ScrollableState
+    consumed2 = scrollBy(10.0)  // <-- Calls ScrollableState
     
-    → ScrollState.scrollableState { delta=10.0 -\u003e
+    → ScrollState.scrollableState { delta=10.0 ->
         val newValue = (value + 10.0).coerceIn(0, maxValue)
         // If value was 50, maxValue 700:
         val newValue = 60.coerceIn(0, 700) = 60
         val consumed = 60 - 50 = 10
-        value = 60  // \u003c\u003c\u003c STATE UPDATE - TRIGGERS RECOMPOSITION
+        value = 60  // <<< STATE UPDATE - TRIGGERS RECOMPOSITION
         return 10.0
     }
     
@@ -628,7 +636,7 @@ Marks composition as invalid
 Schedules recomposition for next frame
 ```
 
-**Event processing done. No visual update yet!**
+**The input phase completes here. The next layout and draw pass shows the updated position.**
 
 ---
 
@@ -883,7 +891,7 @@ Column(
 
 **Mechanism:**
 ```kotlin
-overscrollEffect.applyToScroll(delta, source) { actualDelta -\u003e
+overscrollEffect.applyToScroll(delta, source) { actualDelta ->
     performScroll(actualDelta, source)
 }
 ```
@@ -959,10 +967,10 @@ suspend fun doFlingAnimation(velocity: Velocity): Velocity {
 override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
     animationState.animateDecay(flingDecay) {
         val delta = value - lastValue
-        val consumed = scrollBy(delta)  // \u003c-- Calls scrollBy many times during animation
+        val consumed = scrollBy(delta)  // <-- Calls scrollBy many times during animation
         lastValue = value
         velocityLeft = this.velocity
-        if (abs(delta - consumed) \u003e 0.5f) cancelAnimation()  // Hit boundary
+        if (abs(delta - consumed) > 0.5f) cancelAnimation()  // Hit boundary
     }
     return velocityLeft
 }
@@ -1034,7 +1042,7 @@ val scrollState = rememberScrollState()
 **3. Custom `ScrollableState`:**
 ```kotlin
 val customState = remember {
-    ScrollableState { delta -\u003e
+    ScrollableState { delta ->
         // Custom logic
         println("Scroll delta: $delta")
         delta  // Consume all

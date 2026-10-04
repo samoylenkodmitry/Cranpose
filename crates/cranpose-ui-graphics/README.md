@@ -1,24 +1,23 @@
 # Cranpose UI Graphics
 
-Graphics primitives and drawing definitions for Cranpose.
+`cranpose-ui-graphics` provides geometry, units, colors, brushes, paths and
+render-effect data. Widget authors use these values to describe visual
+content. Renderer authors consume the same values to produce pixels.
+Application code can import common types through
+[`cranpose::prelude`](https://docs.rs/cranpose/latest/cranpose/prelude/).
 
-## When to Use
-
-This crate contains the mathematical and visual types used for drawing. You will use it when:
--   Defining colors (`Color`).
--   Working with units (`Dp`, `Sp`, `Size`, `Offset`).
--   Creating custom shapes or paths for drawing modifiers.
-
-## Key Concepts
-
--   **`Density`**: Interface for converting between density-independent pixels (`Dp`), scalable pixels (`Sp`), and raw physical pixels.
--   **`Brush`**: Defines how a shape is filled (e.g., `SolidColor`, `LinearGradient`).
--   **`Shape`**: Defines the outline of a renderable object (e.g., `RoundedCornerShape`).
-
-## Example
+## Define geometry and color
 
 ```rust
-let color = Color::Red;
-let size = Size::new(100.0, 100.0);
-let rect = Rect::from_origin_size(Point::ZERO, size);
+use cranpose_ui_graphics::{Color, Dp, Point, Rect, Size};
+
+let padding = Dp(16.0);
+let bounds = Rect::from_origin_size(Point::new(8.0, 12.0), Size::new(120.0, 48.0));
+let accent = Color::from_rgb_u8(40, 110, 220);
 ```
+
+The feature set is empty. `Dp`, `Sp` and `Px` remain distinct units;
+`Density` converts logical values to the device grid. See the
+[`Density` API](https://docs.rs/cranpose-ui-graphics/latest/cranpose_ui_graphics/unit/struct.Density.html),
+the [graphics API](https://docs.rs/cranpose-ui-graphics/latest/cranpose_ui_graphics/)
+and the [crate source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-ui-graphics).

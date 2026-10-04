@@ -8,7 +8,8 @@ homepage.workspace = true
 authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Liquid UI — cranpose's first-party glass component library (iOS-26-style materials, spring motion)"
+readme = "README.md"
+description = "Glass controls, themes and motion for Cranpose apps"
 autotests = false
 
 [package.metadata.docs.rs]

@@ -1,4 +1,4 @@
-//! Common rendering contracts shared between renderer backends.
+#![doc = include_str!("../README.md")]
 
 mod annotated_text;
 mod ascii_glyphs;

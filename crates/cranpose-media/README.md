@@ -1,30 +1,31 @@
-# cranpose-media
+# Cranpose Media
 
-The in-process media backend behind `cranpose_services::media`.
+`cranpose-media` is the in-process playback backend for [`cranpose-services::media`](https://docs.rs/cranpose-services/latest/cranpose_services/media/index.html). The service API tracks the current item, playback state, progress, volume, seek position, audio focus, and media-session commands. This crate decodes audio through Symphonia and sends samples to the shared Cranpose output engine.
 
-`cranpose-services` owns the media contract — the observable `PlaybackState`,
-seeking, the audio-focus policy, media-session commands, optional analysis
-samples. This crate is what fulfils it: `symphonia` for the decoders and
-`cranpose-audio`'s output device — AAudio on Android, cpal on desktop — fed
-through the same wait-free ring the audio engine uses.
+## Setup and playback
 
-```rust,ignore
-fn main() {
-    cranpose_media::install();
-    // ...
+Cranpose apps enable the `media` feature for the in-process backend. Native desktop builds use `cpal`; Linux builds need ALSA development headers. Android integrates the decoder with its media session and AAudio output. iOS and browser builds use their platform media stacks. Direct users can install the backend on supported native desktop targets:
+
+```rust,no_run
+use cranpose_media::{install, uri_for_path};
+use cranpose_services::media::{MediaError, MediaItem, open_media, play_media};
+use std::path::Path;
+
+fn play_file(path: &Path) -> Result<(), MediaError> {
+    install();
+    open_media(MediaItem::new(uri_for_path(path)))?;
+    play_media()
 }
 ```
 
-`install` does nothing on the targets that have their own backend — iOS and the
-web, and Android, where the platform layer installs this player wrapped in the
-media session it alone can provide — so calling it unconditionally at startup is
-correct.
+`install` returns `true` when the crate installs its native player. Android, iOS, and web hosts provide their own registration. Supported native desktop files use `file:` URIs. HTTP and HTTPS sources stream through byte ranges when the server supports range requests. Android content URIs stream through the platform source opener and the app cache. Symphonia supplies MP3, AAC/MP4, FLAC, Vorbis, WAV, AIFF, and ALAC decoders.
 
-## What it plays
+## Playback controls and limits
 
-Local files as `file:` URIs, in every container `symphonia` reads. Anything else
-is opened by the platform through `open_media_source`: on Android that is a
-`content://` document, and a provider backed by a network share hands one over
-as a pipe rather than a file. Such a stream is spooled to the application's
-cache as it arrives, so playback starts at the front while the rest is still
-coming and a seek waits only for the offset it needs.
+The service module exposes `pause_media`, `seek_media`, `set_media_volume`, `set_media_speed`, `set_media_looping`, and media metadata APIs. `media_capabilities` reports the operations available on the active backend. Servers with byte-range support allow remote seek requests; other servers play forward. Analysis samples start disabled and require `set_media_analysis_enabled(true)`. The ten-band equalizer uses octave centers from 31 Hz to 16 kHz.
+
+## Links
+
+- [API documentation](https://docs.rs/cranpose-media/latest/cranpose_media/)
+- [Media service API](https://docs.rs/cranpose-services/latest/cranpose_services/media/index.html)
+- [Source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-media)

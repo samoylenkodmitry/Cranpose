@@ -201,22 +201,21 @@ fn window_pos_to_offset(
         local_y,
     )
 }
-///
-/// # When to use
-/// Use this when you need an editable text input but want full control over the
-/// styling (no built-in borders or labels).
-///
-/// # Arguments
-///
-/// * `state` - The observable text field state that holds text content and cursor position.
-/// * `modifier` - Modifiers for styling and layout.
-/// * `style` - Text styling (color, font size).
+/// Edits text through a retained [`TextFieldState`]. `modifier` controls the
+/// field bounds and input, and `style` controls the text. Use
+/// [`BasicTextFieldWithOptions`] for line limits, cursor color and edit callbacks.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let text = remember_text_field_state("Initial text");
-/// BasicTextField(text, Modifier::padding(8.0), TextStyle::default());
+/// ```rust
+/// use cranpose_ui::*;
+///
+/// #[composable]
+/// fn NameField() {
+///     let text =
+///         cranpose_core::remember(|| TextFieldState::new("Initial text")).with(|state| *state);
+///     BasicTextField(text, Modifier::empty().padding(8.0), TextStyle::default());
+/// }
 /// ```
 #[composable]
 pub fn BasicTextField(state: TextFieldState, modifier: Modifier, style: TextStyle) -> NodeId {

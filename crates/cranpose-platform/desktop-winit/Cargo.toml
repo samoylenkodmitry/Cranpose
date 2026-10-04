@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Desktop winit platform adapter for Cranpose"
+description = "Convert winit pointer and scroll input to Cranpose events"
 
 [package.metadata.docs.rs]
 all-features = true

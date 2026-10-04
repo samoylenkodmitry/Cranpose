@@ -41,33 +41,31 @@ impl Default for FlowRowSpec {
     }
 }
 
-/// A layout composable that places its children in horizontal sequence and
-/// wraps to the next line when it runs out of width (Jetpack Compose's
-/// `FlowRow`).
-///
-/// # When to use
-/// Use `FlowRow` for content whose item count or widths vary — chip groups,
-/// tag clouds, toolbars on narrow screens. For a single non-wrapping line,
-/// use [`Row`](crate::widgets::Row).
-///
-/// # Arguments
-///
-/// * `modifier` - Modifiers to apply to the flow layout.
-/// * `spec` - Spacing between items on a line and between lines.
-/// * `content` - The children composables to layout.
+/// Places children across a row and starts a new row when the available width is full.
+/// The spec sets the space between children and between rows.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// FlowRow(
-///     Modifier::fill_max_width(),
-///     FlowRowSpec::new().main_axis_spacing(8.0).cross_axis_spacing(4.0),
-///     || {
-///         for label in ["Rust", "Compose", "Android"] {
-///             Chip(label);
-///         }
-///     },
-/// );
+/// ```rust
+/// use cranpose_ui::{
+///     widgets::{FlowRow, FlowRowSpec},
+///     *,
+/// };
+///
+/// #[composable]
+/// fn Topics() {
+///     FlowRow(
+///         Modifier::empty().fill_max_width(),
+///         FlowRowSpec::new()
+///             .main_axis_spacing(8.0)
+///             .cross_axis_spacing(4.0),
+///         || {
+///             for label in ["Rust", "Compose", "Android"] {
+///                 Text(label, Modifier::empty().padding(8.0), TextStyle::default());
+///             }
+///         },
+///     );
+/// }
 /// ```
 #[composable]
 pub fn FlowRow<F>(modifier: Modifier, spec: FlowRowSpec, content: F) -> NodeId

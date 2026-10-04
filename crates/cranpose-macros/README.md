@@ -1,38 +1,35 @@
-# Cranpose Macros
+# cranpose-macros
 
-Procedural macros that power the Cranpose declarative syntax.
+`cranpose-macros` provides `#[composable]` and `#[preview]`, the procedural
+macros used by Cranpose components. Depend directly on the crate when a
+framework crate defines composables or preview fixtures. App code can import
+the macros through [`cranpose`](https://docs.rs/cranpose/latest/cranpose/).
 
-## When to Use
+## Composable functions
 
-You will rarely interact with this crate directly; it is re-exported by `cranpose`. Identifying how the `#[composable]` macro transforms your code is useful for debugging and understanding performance characteristics.
+The `#[composable]` macro gives each function call a composition group. The
+call-site identity keeps groups stable across recomposition. Value parameters
+use `Clone` and `PartialEq`; callback parameters use stored callback slots, so a
+new closure value reaches its composition position. `#[composable(no_skip)]`
+re-runs the body on each call.
 
-## Key Concepts
+This app example uses the facade and UI dependencies:
 
--   **`#[composable]`**: This attribute macro transforms a standard Rust function into a `Composable` function. It injects a hidden `Composer` parameter and wraps the function body in a uniquely identified group.
--   **Skipping**: The macro generates code to compare current arguments with previous arguments. If they haven't changed, the function body execution is skipped during recomposition, significantly improving performance.
--   **Naming**: Composables are CamelCase functions, and the macro allows that name on the function it emits, so a file of composables needs no `#![allow(non_snake_case)]`.
+```text
+use cranpose::*;
 
-## Transformation Example
-
-Conceptual expansion of what `#[composable]` does:
-
-```rust
-// Source
 #[composable]
-fn MyComponent(name: String) {
-    Text(name);
-}
-
-// Generated (Conceptual)
-fn MyComponent(composer: &mut Composer, changed: usize, name: String) {
-    composer.start_restart_group(12345); // Unique ID based on location
-    
-    if changed == 0 && composer.skipping() {
-        composer.skip_to_group_end();
-    } else {
-        Text(composer, changed, name);
-    }
-    
-    composer.end_restart_group(|composer| MyComponent(composer, changed | 1, name));
+fn Greeting(name: String) {
+    Text(name, Modifier::empty(), TextStyle::default());
 }
 ```
+
+`#[preview]` registers a parameterless component fixture for IDE previews.
+Combine `#[preview]` with `#[composable]`. The `cranpose` `preview` feature
+enables preview registration. Options include `name`, `group`, `width`,
+`height`, and `dark`.
+
+The `hot-reload` feature selects source-structure keys for development hot reload.
+
+- [API reference on docs.rs](https://docs.rs/cranpose-macros/latest/cranpose_macros/)
+- [Source on GitHub](https://github.com/samoylenkodmitry/cranpose/tree/main/crates/cranpose-macros)

@@ -1,21 +1,11 @@
 //! # State
 //!
-//! [`rememberMutableStateOf`] creates state that survives recomposition.
-//! Reading it inside a composable subscribes that composable to it, so a write
-//! recomposes exactly the readers and nothing else.
+//! [`rememberMutableStateOf`] retains observable state across recomposition.
+//! A composable subscribes to state through a read. A later write invalidates
+//! the subscribed scope. This counter updates after a button click:
 //!
 //! ```no_run
-//! #![allow(non_snake_case)]
-//! use cranpose::prelude::*;
-//! # use cranpose::{
-//! #     __branch_group_scope_deferred, __source_scope, branch_location_key,
-//! #     cached_branch_location_key, cached_composable_definition_key,
-//! #     caller_location_key,
-//! #     composable_definition_key, composable_identity_key, debug_label_current_scope,
-//! #     location_key,
-//! #     with_current_composer, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
-//! #     refresh_param, refresh_shared_param,
-//! # };
+//! use cranpose::*;
 //!
 //! #[composable]
 //! fn Counter() {
@@ -38,22 +28,21 @@
 //! fn main() {}
 //! ```
 //!
-//! State handles are `Copy`. Move them into closures directly; cloning them is
-//! never necessary.
+//! State handles are `Copy`. Move a handle into each callback to share the value.
 //!
-//! | Call | Use it for |
+//! | Call | Purpose |
 //! | --- | --- |
-//! | [`remember`] | A value computed once and not observed for changes. |
+//! | [`remember`] | A value retained for the composition lifetime. |
 //! | [`rememberKeyed`] | A value recomputed only when its key changes. |
 //! | [`rememberMutableStateOf`] | Observable state. |
-//! | [`rememberUpdatedState`] | A value a long-lived effect should see fresh without restarting. |
+//! | [`rememberUpdatedState`] | A current callback or value for a long-lived effect. |
 //! | [`rememberCoroutineScope`] | A scope for work started from an event handler. |
 //! | [`mutableStateOf`] | State owned outside the composition. |
 //!
-//! Reading state inside `draw_behind` or the lazy `graphics_layer` closure
-//! subscribes only that node's visual phase. Animation values read there redraw
-//! without recomposing or relaying out the composable. Reads outside an observed
-//! composition, layout, or draw phase subscribe nothing.
+//! A state read inside `draw_behind` or the lazy `graphics_layer` closure
+//! subscribes the node's visual phase. Updates then invalidate the draw phase.
+//! A layout read subscribes the layout phase; a composition read subscribes the
+//! composition scope. Place each read in the phase which needs the value.
 //!
 //! [`remember`]: crate::prelude::remember
 //! [`rememberKeyed`]: crate::prelude::rememberKeyed

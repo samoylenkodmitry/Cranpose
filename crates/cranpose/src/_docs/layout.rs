@@ -1,20 +1,10 @@
 //! # Layout
 //!
-//! A composable takes its modifier first, its spec second, and its content
-//! last. `Text` is the exception: its value comes first.
+//! Layout containers accept a modifier, a spec and a content closure. `Text`
+//! accepts its text value before the modifier and style.
 //!
 //! ```no_run
-//! #![allow(non_snake_case)]
-//! use cranpose::prelude::*;
-//! # use cranpose::{
-//! #     __branch_group_scope_deferred, __source_scope, branch_location_key,
-//! #     cached_branch_location_key, cached_composable_definition_key,
-//! #     caller_location_key,
-//! #     composable_definition_key, composable_identity_key, debug_label_current_scope,
-//! #     location_key,
-//! #     with_current_composer, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
-//! #     refresh_param, refresh_shared_param,
-//! # };
+//! use cranpose::*;
 //!
 //! #[composable]
 //! fn Card() {
@@ -35,27 +25,17 @@
 //! fn main() {}
 //! ```
 //!
-//! A `Modifier` is an ordered chain and the order is the meaning:
+//! Modifier order controls the area each operation affects:
 //! `.padding(8.0).background(c)` paints the background inside the padding,
-//! `.background(c).padding(8.0)` paints it outside.
+//! `.background(c).padding(8.0)` extends the background across the inner space.
 //!
 //! ## Lists
 //!
-//! A `for` loop composes every item. Anything long belongs in `LazyColumn`,
-//! which composes only what is on screen and takes its state positionally:
+//! A `for` loop composes every item. `LazyColumn` composes the visible rows
+//! and retains list state through `rememberLazyListState`:
 //!
 //! ```no_run
-//! #![allow(non_snake_case)]
-//! use cranpose::prelude::*;
-//! # use cranpose::{
-//! #     __branch_group_scope_deferred, __source_scope, branch_location_key,
-//! #     cached_branch_location_key, cached_composable_definition_key,
-//! #     caller_location_key,
-//! #     composable_definition_key, composable_identity_key, debug_label_current_scope,
-//! #     location_key,
-//! #     with_current_composer, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
-//! #     refresh_param, refresh_shared_param,
-//! # };
+//! use cranpose::*;
 //!
 //! #[composable]
 //! fn Rows(count: usize) {
@@ -80,6 +60,6 @@
 //! fn main() {}
 //! ```
 //!
-//! Give `LazyItems::content_type` a real grouping when items differ
-//! structurally: it is what lets the runtime reuse a subtree between items of
-//! the same shape instead of building a new one.
+//! Set `LazyItems::content_type` for distinct row shapes. The runtime can reuse
+//! a subtree for rows with the same content type. Use stable keys when row
+//! identity must survive insertions, removals or a new order.

@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Core runtime for a Jetpack Compose inspired UI framework in Rust"
+description = "Composition runtime and reactive state for Cranpose"
 autotests = false
 
 [package.metadata.docs.rs]

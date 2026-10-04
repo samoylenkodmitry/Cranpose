@@ -1,28 +1,21 @@
-# Cranpose Platform Web
+# Cranpose Web Platform Adapter
 
-Web platform integration layer for Cranpose, targeting WebAssembly (WASM).
-
-## When to Use
-
-This crate enables Cranpose applications to run in a web browser. It binds to the DOM to manage the canvas element and uses requestAnimationFrame for the render loop. It is used implicitly when the `web` feature is enabled.
-
-## Key Concepts
-
--   **Canvas Binding**: Attaches the renderer to an HTML `<canvas>` element specified by ID.
--   **Wasm Bindgen**: Uses `wasm-bindgen` and `web-sys` to interact with JavaScript APIs.
--   **Event Bridging**: Listens for DOM events (mousedown, touchstart, keydown) and dispatches them to the Cranpose event system.
-
-## Example
+`cranpose-platform-web` converts browser pointer coordinates and event kinds
+to Cranpose input values. Framework and browser-shell authors use
+`WebPlatform` at the DOM event boundary. App authors select `web` and a
+renderer feature on [`cranpose`](https://docs.rs/cranpose/latest/cranpose/).
 
 ```rust
-use cranpose::prelude::*;
-use wasm_bindgen::prelude::*;
+use cranpose_foundation::PointerEventKind;
+use cranpose_platform_web::WebPlatform;
 
-#[wasm_bindgen]
-pub async fn run_app() -> Result<(), JsValue> {
-    // "canvas-id" must match the id of a canvas element in your index.html
-    AppLauncher::new()
-        .run_web("canvas-id", MyApp)
-        .await
-}
+let platform = WebPlatform::new(1.0);
+let event = platform.pointer_event(PointerEventKind::Move, 24.0, 32.0);
+assert_eq!((event.position.x, event.position.y), (24.0, 32.0));
 ```
+
+The browser shell owns DOM registration, canvas state and frame presentation.
+The [web shell](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/web.rs)
+shows the browser event path and WGPU backend selection. See the
+[`WebPlatform` API](https://docs.rs/cranpose-platform-web/latest/cranpose_platform_web/struct.WebPlatform.html),
+and the [crate source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-platform/web).

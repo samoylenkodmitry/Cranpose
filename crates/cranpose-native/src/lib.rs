@@ -1,4 +1,6 @@
 //! Shared runtime and native-language bindings for embedding Cranpose in native views.
+#![doc = include_str!("../README.md")]
+
 mod content;
 mod session;
 mod worker;

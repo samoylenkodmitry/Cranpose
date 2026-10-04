@@ -1,5 +1,7 @@
-# Pre-existing complexity and duplication debt, first made visible by #539
+# Historical complexity and duplication debt snapshot (2026-08-30)
 
+This report preserves the gate measurements from 2026-08-30. Function ranges
+and counts describe the Aug 30 source tree; run the gates before decisions based on the list.
 `#539` added `just complexity-gate` and `just duplication-gate`, both scoped
 to the lines a diff actually touches (the `gate_diff` module in
 `xtask/src/main.rs`). Scoped

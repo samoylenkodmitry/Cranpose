@@ -1,132 +1,47 @@
-# Cranpose Testing
+# Cranpose Test Tools
 
-A testing framework for validating Cranpose apps, supporting both unit tests and full end-to-end (E2E) robot tests.
+`cranpose-testing` provides public test helpers for Cranpose compositions and app behavior. `ComposeTestRule` composes UI in memory; semantic queries and accessibility audits inspect the current tree. The robot API drives input against a headless or desktop app shell.
 
-## Overview
+## Test a composition
 
-Cranpose provides a "Robot" pattern for testing, where you write scripts that interact with your application programmatically (clicking, dragging, asserting text) just like a user would. These tests can run in **headless mode**, making them ideal for CI/CD pipelines.
-
-## End-to-End Robot Testing
-
-The primary way to test Cranpose apps is via "Robot Runners" — specialized test binaries that launch the actual application in a headless mode and drive it from a separate thread.
-
-### Architecture
-
-1.  **Headless Host**: The app launches using `AppLauncher` with `with_headless(true)`.
-2.  **Test Driver**: A separate thread waits for the app to become idle, inspects the semantic tree, and injects input events.
-3.  **Semantic Inspection**: Tests do not look at pixels; they inspect the **Semantics Tree** (accessibility tree) to find elements by text, role, or other properties.
-
-### Running Tests
-
-Use the `run_robot_test.sh` script in the project root to run all robot runners defined in `apps/desktop-demo/robot-runners/`:
-
-```bash
-# Run all tests sequentially, one at a time (default; headless)
-./run_robot_test.sh
-
-# Run tests in parallel, N at a time
-./run_robot_test.sh --parallel 4
-
-# See every flag and environment variable the script supports
-./run_robot_test.sh --help
-```
-
-### Writing a Robot Test
-
-A robot test is typically a Cargo example that uses the `robot-app` feature.
-
-**Basic Pattern:**
+Add `cranpose-testing` as a development dependency with `cargo add cranpose-testing --dev`. Use `ComposeTestRule` for layout, state, semantics, and accessibility checks in an in-memory composition:
 
 ```rust
-use cranpose::AppLauncher;
-use cranpose_testing::{find_button, find_in_semantics, find_text};
-use desktop_app::app; // Your app entry point
-use std::time::Duration;
+use cranpose::prelude::*;
+use cranpose_testing::ComposeTestRule;
 
-fn main() {
-    AppLauncher::new()
-        .with_title("My Robot Test")
-        .with_size(800, 600)
-        .with_headless(true)
-        .with_test_driver(|robot| {
-            // --- This code runs on a separate test thread ---
-            
-            // 1. Wait for app to be ready
-            robot.wait_for_idle().expect("Failed to wait for idle");
-
-            // 2. Interact with the app
-            if let Some((x, y, w, h)) = find_in_semantics(&robot, |elem| find_button(elem, "Click Me")) {
-                let cx = x + w / 2.0;
-                let cy = y + h / 2.0;
-
-                // Simulate mouse interaction
-                robot.mouse_move(cx, cy);
-                robot.mouse_down();
-                robot.mouse_up();
-                
-                // Wait for reaction
-                std::thread::sleep(Duration::from_millis(100));
-            } else {
-                panic!("Button not found!");
-            }
-
-            // 3. Verify state
-            if find_in_semantics(&robot, |elem| find_text(elem, "Clicked!")).is_some() {
-                println!("✓ Test Passed");
-            } else {
-                panic!("✗ Test Failed");
-            }
-            
-            // 4. Exit
-            robot.exit();
-        })
-        .run(|| {
-            // --- This runs on the main thread ---
-            app::combined_app(); 
-        });
+#[composable]
+fn Greeting() {
+    Text("Ready", Modifier::empty(), TextStyle::default());
 }
+
+let mut rule = ComposeTestRule::new();
+rule.set_content(Greeting).expect("content composes");
+let screen = rule
+    .placed_semantics(Size::new(320.0, 120.0))
+    .expect("layout succeeds")
+    .expect("screen has content");
+assert!(screen
+    .flatten()
+    .iter()
+    .any(|node| node.label.as_deref() == Some("Ready")));
 ```
 
-## Key APIs
+`placed_semantics` returns labels and bounds for a chosen viewport. `assert_accessible` checks the placed tree, and `audit_accessibility` returns structured issues for custom summaries.
 
-### `cranpose::Robot`
-The `robot` object passed to the test driver provides low-level control:
--   `wait_for_idle()`: Blocks until the main thread has finished processing layout and drawing.
--   `mouse_move(x, y)`, `mouse_down()`, `mouse_up()`: Simulates pointer events.
--   `get_semantics()`: Returns the current semantic tree for inspection.
--   `exit()`: Shuts down the application.
+## Run robot tests
 
-### `cranpose_testing` Helpers
-High-level helpers for finding elements in the semantic tree.
+The `desktop-robot` feature enables helper queries and assertions. The app test target also selects `cranpose/robot`, `desktop`, and a renderer such as `renderer-wgpu`. A robot runner starts `AppLauncher` with `with_headless(true)` and supplies a `with_test_driver` closure. The driver waits for app work, queries semantics, sends input, and exits the app.
 
-| Function | Description |
-| :--- | :--- |
-| `find_in_semantics(&robot, finder)` | Generic search. Applies `finder` to every node. Returns bounds `(x, y, w, h)` of the first match. |
-| `find_text(elem, "text")` | Use with `find_in_semantics`. Matches if element contains text. |
-| `find_text_exact(elem, "text")` | Matches exact text only. |
-| `find_button(elem, "text")` | Matches clickable elements containing text. |
-| `find_button_center(elem, "text")` | Returns center `(x, y)` of a matched button. |
-| `assert_accessible(&placed)` | Fails the test with every issue a screen reader user would hit: a control with no name, two controls with one name, a target under 24 points, a control out of reading order, a screen with no title, a picture with no words. `RobotTestRule::assert_accessible()` and `ComposeTestRule::assert_accessible(size)` run it in place. |
-
-**Example Usage:**
-
-```rust
-// Find a button and get its center
-let center = find_in_semantics(&robot, |elem| find_button_center(elem, "Submit"));
-
-// Find text and check existence
-let exists = find_in_semantics(&robot, |elem| find_text(elem, "Success")).is_some();
+```sh
+cargo add cranpose-testing --dev --features desktop-robot
 ```
 
-## Debugging
+Linux desktop robot runs need a display server; CI can run the test through `xvfb-run`. Headless composition tests use an in-memory applier and run on the CPU. The repository's [`run_robot_test.sh`](https://github.com/samoylenkodmitry/Cranpose/blob/main/run_robot_test.sh) runs repository robot scenarios.
 
-If a test fails, you can print the entire semantics tree to understand what the robot sees:
+## Links
 
-```rust
-use cranpose_testing::print_semantics_with_bounds;
-
-// Inside test driver:
-if let Ok(semantics) = robot.get_semantics() {
-    print_semantics_with_bounds(&semantics, 0);
-}
-```
+- [API documentation](https://docs.rs/cranpose-testing/latest/cranpose_testing/)
+- [App shell test APIs](https://docs.rs/cranpose-app-shell/latest/cranpose_app_shell/)
+- [Source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-testing)
+- [Test guide](https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/guide.md#testing)

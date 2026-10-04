@@ -838,10 +838,8 @@ where
     ///
     /// 1. Resolve the target chain. When a focus target is registered
     ///    (`cranpose_ui::focus_dispatch::active_focus_target`) and still
-    ///    exists in the current scene, its capture path is used, so rotary goes
-    ///    to the focused node exactly as on Wear OS. Cranpose does not yet wire
-    ///    focus automatically, so in practice this falls back to the chain
-    ///    under the current cursor position.
+    ///    exists in the current scene, rotary uses the focus target's capture
+    ///    path. Otherwise, rotary uses the hit-test chain under the cursor.
     /// 2. **Capture pass**, root to leaf, invoking `on_pre_rotary_scroll_event`
     ///    handlers.
     /// 3. **Bubble pass**, leaf to root, invoking `on_rotary_scroll_event`

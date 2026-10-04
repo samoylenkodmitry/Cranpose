@@ -34,22 +34,28 @@ pub fn local_selection_registrar() -> CompositionLocal<Option<SelectionRegistrar
     })
 }
 
-/// Makes the `Text` inside `content` selectable, as Jetpack Compose's
-/// `SelectionContainer` does.
+/// Lets users select and copy text across the content. A mouse drag selects a
+/// range; double and triple clicks select a word and a line. A touch hold starts
+/// selection and a release opens the text menu. Ctrl+C and Ctrl+A use the copy and
+/// select-all actions; macOS uses Cmd. Escape clears the selection.
 ///
-/// A mouse selects by dragging; a double click selects a word and a triple
-/// click a line, and dragging after either grows the selection by words or
-/// lines. A finger resting on a word selects it and then drags to grow the
-/// selection, and lifting it opens a Copy / Select all menu. Ctrl+C (Cmd+C on
-/// macOS) copies the selection, Ctrl+A (Cmd+A) selects all of this
-/// container's text and Escape clears it. A selection runs across all the
-/// texts in the container, in reading order; wrap part of `content` in
-/// [`DisableSelection`] to leave it out.
+/// Wrap excluded content in [`DisableSelection`].
 ///
-/// ```rust,ignore
-/// SelectionContainer(Modifier::empty(), || {
-///     Text("You can long-press and select this text!", Modifier::empty(), TextStyle::default());
-/// });
+/// # Example
+///
+/// ```rust
+/// use cranpose_ui::{widgets::SelectionContainer, *};
+///
+/// #[composable]
+/// fn Article() {
+///     SelectionContainer(Modifier::empty(), || {
+///         Text(
+///             "Select and copy this text.",
+///             Modifier::empty(),
+///             TextStyle::default(),
+///         );
+///     });
+/// }
 /// ```
 #[composable]
 pub fn SelectionContainer(modifier: Modifier, content: impl FnMut() + 'static) {

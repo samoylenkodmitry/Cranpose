@@ -1,118 +1,38 @@
-# LazyList Implementation
+# Lazy lists
 
-Last Updated: 2026-01-05
+`LazyColumn` and `LazyRow` compose and measure the items needed for the current
+viewport and the list's beyond-bounds window. The public widgets and item DSL
+are in [`lazy_list.rs`](../crates/cranpose-ui/src/widgets/lazy_list.rs) and
+[`lazy_list_scope.rs`](../crates/cranpose-foundation/src/lazy/lazy_list_scope.rs).
 
-Virtualized lazy layouts for Cranpose with 1:1 API and architecture parity with Jetpack Compose (JC). This document tracks current alignment gaps, refactor tasks, and verification steps.
+## State, measurement and reuse
 
----
+`LazyListState` holds the scroll position, visible-item information and
+scroll-to-item requests. The measure policy reads intervals from the content,
+measures the visible range, fills the beyond-bounds window and places the
+result. Item keys preserve identity when items move; content types constrain
+which subcompose slots can be reused. The measure algorithm and state live in
+[`lazy_list_measure.rs`](../crates/cranpose-foundation/src/lazy/lazy_list_measure.rs)
+and [`lazy_list_state.rs`](../crates/cranpose-foundation/src/lazy/lazy_list_state.rs).
+Subcomposition owns slot reuse and disposal in
+[`subcompose.rs`](../crates/cranpose-core/src/subcompose.rs).
 
-## Status
+Layout submits prefetch requests, and the app shell services them during
+eligible idle time through the ordinary list measurement path. The app shell
+schedules frames. See [`lazy_prefetch.rs`](../crates/cranpose-ui/src/lazy_prefetch.rs)
+and [`shell_frame.rs`](../crates/cranpose-app-shell/src/shell_frame.rs).
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| SubcomposeLayout | VERIFIED | JC-style reuse + precompose path in place. Validated against `SubcomposeLayout.kt`. Rust uses `subcompose_slot` on composer. |
-| LazyColumn/LazyRow | OK | Layout size constrained to content. Arrangement logic verified. |
-| LazyListState | OK | Core state logic matches JC. Hybrid reactive `stats` approach implemented. |
-| LazyListIntervalContent | OK | Matches JC interval model. |
-| SlotReusePool | OK | Removed; SubcomposeState is single source of truth. |
-| Lifecycle (compose/dispose) | OK | Dispose non-retained slots immediately. `dispose_or_reuse_starting_from_index` matches JC. |
-| Prefetch | OK | While a list scrolls with at least two composed items ready beyond its viewport, a frame leaves the next new item uncomposed and asks for idle prefetch. `AppShell::run_idle_prefetch` composes it in a layout pass run while the wait before the next frame still fits the recent cost of one item. The Android loop calls it before polling. Without such a wait, a frame composes new beyond items up to its frontier as before. |
-| Scrollable constraints | OK | LazyList asserts on infinite constraints (JC parity). |
-| measure_lazy_list | OK | JC scroll/backfill flow + visible/beyond-bounds separation. Logic verified against `LazyListMeasure.kt`. |
-| canScrollForward/Backward | OK | Parity. |
-| IntrinsicSize modifiers | OK | Wrap-content uses IntrinsicSize; no unbounded constraints. |
-| Item animations | BLOCKED | Needs coroutine API. |
-| Fling/animated scroll | BLOCKED | Needs coroutine API. |
+## Verification entry points
 
----
+The desktop robot runner accepts named examples through `run_robot_test.sh`.
+For example:
 
-## Architecture
-
-### Files
-
-| File | Purpose |
-|------|---------|
-| `cranpose-foundation/src/lazy/lazy_list_state.rs` | Scroll state + stats. Implements `LazyListState` with `Rc<RefCell<Inner>>` and reactive `stats`. |
-| `cranpose-foundation/src/lazy/lazy_list_scope.rs` | DSL + IntervalContent |
-| `cranpose-foundation/src/lazy/lazy_list_measure.rs` | Measurement algorithm. `measure_lazy_list` function. |
-| `cranpose-ui/src/lazy_prefetch.rs` | Idle prefetch requests, pass flag and item cost |
-| `cranpose-ui/src/widgets/lazy_list.rs` | LazyColumn/LazyRow widgets |
-| `cranpose-ui/src/subcompose_layout.rs` | SubcomposeLayoutNode implementation. Uses `SubcomposeMeasureScopeImpl`. |
-| `cranpose-ui/src/modifier/scroll.rs` | Scroll gestures |
-| `cranpose-core/src/subcompose.rs` | SubcomposeState + lifecycle. Tracks active/reusable/precomposed slots. |
-
-### JC Reference (`/media/huge/composerepo/`)
-
-| JC File | Path |
-|---------|------|
-| SubcomposeLayout | `compose/ui/ui/src/commonMain/.../SubcomposeLayout.kt` |
-| LazyLayout | `compose/foundation/.../lazy/layout/LazyLayout.kt` |
-| LazyListState | `compose/foundation/.../lazy/LazyListState.kt` |
-| LazyListMeasure | `compose/foundation/.../lazy/LazyListMeasure.kt` |
-| LazyLayoutPrefetchState | `compose/foundation/.../lazy/layout/LazyLayoutPrefetchState.kt` |
-
----
-
-### Architectural Alignment & Code Quality Deep Dive
-
-1.  **Shortcuts & "Laziness" (Ease over Rigor)**:
-    *   **RefCell Proliferation**: `LazyListState` heavily relies on `Rc<RefCell<Inner>>` for all state. While standard for Rust GUIs to handle interior mutability, it risks runtime panics if `borrow_mut()` usage isn't strictly controlled (e.g., during nested calls). This is the "easy path" compared to more robust, potentially lock-free or message-passing state architectures, but acceptable for single-threaded UI.
-    *   **Magic Numbers**:
-        *   `MAX_VISIBLE_ITEMS = 500` in `measure_lazy_list` prevents infinite loops. This is a hardcoded limit that could bite users with massive screens or tiny items.
-        *   `MAX_CACHE_SIZE = 100` in `LazyListState` is a fixed LRU size. Simple, but might thrash on large screens/lists.
-
-
-2.  **Architectural Choices (The Good & The Risky)**:
-    *   **Key Separation (Good)**: `LazyLayoutKey` enum (User vs Index) is a solid choice to prevent ID collisions, a common "shoot in the foot" problem in list frameworks.
-    *   **Binary Search (Good)**: `find_interval` uses `partition_point` (O(log n)), fixing a previous O(n) bottleneck.
-    *   **Subcompose Bridge (Acceptable Risk)**: The `RefCell` bridge in `LazyColumn` widget (`content_cell`) to pass updated closures to the measure policy is a standard Cranpose pattern. It allows stable policy pointers but relies on imperative updates.
-
-3.  **"Shoot in the Foot" Potential**:
-    *   **Average Size Estimation**: `measure_lazy_list` relies on `state.average_item_size()` when scrolling to random locations. If item sizes vary significantly, this heuristic will cause the scrollbar to jump or position to be inaccurate. This is a known trade-off but undocumented in the API surface.
-    *   **Interior Mutability Panic**: The mix of `dispatch_scroll_delta` (mutates state) and layout (reads state) needs careful sequencing to avoid `RefCell` borrowing errors.
-
-4.  **Performance & Correctness**:
-    *   **Subcompose Slot Management**: Strong alignment with JC. `SlotId` (u64) adaptation is valid.
-    *   **Prefetch Execution**: An idle prefetch pass is an ordinary layout pass of the list, with its beyond-bounds window held at the size the last scroll gave it (`LazyListState::hold_scroll_window`). It composes one new item per pass, so it is covered by the normal lazy layout paths, and it never schedules a frame of its own.
-    *   **Infinite Constraint Handling**: Correctly handles infinite constraints (horizontal/vertical separation) similar to JC.
-
----
-
-## JC Alignment Notes
-
-Key JC behavior to match (sources above):
-
--   **Slot Reuse**: Owned by `SubcomposeState` (aligned).
--   **Content Types**: `ContentTypeReusePolicy` implements per-type caps and compatibility (aligned).
--   **Immediate Disposal**: Slots not retained are disposed immediately (aligned).
--   **Prefetching**: Queue selection is implemented in `PrefetchScheduler`; precompose execution currently happens inside lazy-list measure.
--   **Structure**: Lazy measure logic (`measure_lazy_list`) closely follows `LazyListMeasure.kt` (aligned).
-
----
-
-## Verification
-
-Robot tests (run independently):
-
-```
-cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_list
-cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_lifecycle
-cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_perf_validation
-cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_complex_scroll
-cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_list_after_modifiers
-cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_list_end_start_dup
-cargo run --package desktop-app --example robot --features robot-app -- robot_lazy_list_end_alignment
-cargo run --package desktop-app --example robot --features robot-app -- robot_positioned_boxes_after_lazy_list
-cargo run --package desktop-app --example robot --features robot-app -- robot_recursive_layout
+```sh
+./run_robot_test.sh --sequential --example robot_lazy_list --example robot_lazy_lifecycle
 ```
 
-Workspace verification:
-
-```
-cargo fmt
-cargo test --workspace
-cargo clippy --workspace
-cargo xtask dependency-budget
-```
-
-Last verified: 2026-01-05 (Code review and Architecture validation performed)
+The integration cases for list composition are under
+[`crates/cranpose-ui/tests`](../crates/cranpose-ui/tests), while shell-level
+scroll and lifecycle behavior is covered under
+[`crates/cranpose-app-shell/src/tests`](../crates/cranpose-app-shell/src/tests).
+Use the repository's current host/build workflow for either suite.

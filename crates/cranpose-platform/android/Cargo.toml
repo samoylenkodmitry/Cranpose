@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Android platform adapter for Cranpose"
+description = "Convert Android pointer coordinates to Cranpose input"
 
 [lints]
 workspace = true

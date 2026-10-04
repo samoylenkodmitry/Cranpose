@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Common rendering contracts for Cranpose"
+description = "Scene, renderer and hit-test contracts for Cranpose backends"
 autotests = false
 
 [package.metadata.docs.rs]

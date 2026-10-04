@@ -1,24 +1,31 @@
-# Cranpose Render Pixels
+# Cranpose Pixels Renderer
 
-A software rendering backend for Cranpose, powered by the `pixels` crate.
+`cranpose-render-pixels` draws Cranpose scenes into a caller-owned RGBA byte
+buffer. Renderer and host authors use `PixelsRenderer` when a software frame
+fits the target surface. App authors can select the `renderer-pixels` feature
+on [`cranpose`](https://docs.rs/cranpose/latest/cranpose/).
 
-## When to Use
+`PixelsRenderer::draw_scaled` writes the current scene into a host-owned RGBA
+buffer at the requested device scale:
 
-Use this renderer when:
--   Hardware acceleration is unavailable or unstable.
--   You are debugging rendering issues and want a simpler reference implementation.
--   You are targeting a platform where `wgpu` is not yet supported.
+```rust
+use cranpose_render_pixels::PixelsRenderer;
 
-## Key Concepts
-
--   **Software Rasterization**: All shapes and text are drawn to a CPU buffer internally.
--   **Pixels**: The library used to blit the CPU buffer to the window surface.
-
-## Usage
-
-To use this backend, disable default features and enable `renderer-pixels` in your `Cargo.toml`:
-
-```toml
-[dependencies]
-cranpose = { version = "...", default-features = false, features = ["desktop", "renderer-pixels"] }
+let renderer = PixelsRenderer::new();
+let mut rgba = vec![0; 64 * 64 * 4];
+renderer.draw_scaled(&mut rgba, 64, 64, 2.0);
 ```
+
+`AppShell` supplies the scene before each frame. The host presents the image.
+The [watchOS host](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/watchos.rs)
+shows the complete integration.
+
+Default features are empty. The optional
+`embedded-default-font` feature supplies a fallback font. The
+[`renderer-pixels` feature](https://docs.rs/cranpose/latest/cranpose/#select-a-platform)
+selects this backend through `cranpose`; the `watchos` feature selects the same
+backend.
+
+See the [`PixelsRenderer` API](https://docs.rs/cranpose-render-pixels/latest/cranpose_render_pixels/struct.PixelsRenderer.html),
+the [renderer architecture guide](https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/render_arch.md)
+and the [crate source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-render/pixels).

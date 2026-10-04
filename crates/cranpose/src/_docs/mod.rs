@@ -1,14 +1,11 @@
-//! Guides for using Cranpose.
+//! App setup, state, layout and platform guides.
 //!
-//! These pages live in the crate rather than in a separate site so they are
-//! version-locked to the code and their examples are compiled by
-//! `cargo test --doc`. A guide that stops compiling is a guide that is wrong,
-//! and CI finds out before a reader does.
+//! Start with the [counter app](crate). These guides cover the next steps:
 //!
-//! - `getting_started` -- a window on screen.
-//! - `state` -- state that survives recomposition.
-//! - `layout` -- modifiers, stacks, and lists that stay cheap.
-//! - `platforms` -- what each target needs.
+//! - [Start an app](crate::_docs::getting_started): project structure and the first window.
+//! - [State](crate::_docs::state): values, callbacks and effects across recomposition.
+//! - [Layout](crate::_docs::layout): modifiers, containers and lazy lists.
+//! - [Platforms](crate::_docs::platforms): platform features and host requirements.
 
 pub mod getting_started;
 pub mod layout;

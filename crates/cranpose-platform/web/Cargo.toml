@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Web platform adapter for Cranpose"
+description = "Convert browser pointer events to Cranpose input"
 
 [lints]
 workspace = true

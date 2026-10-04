@@ -1,46 +1,43 @@
-//! # Getting started
+//! # Start an app
 //!
-//! Copy [`apps/isolated-demo`] rather than starting from scratch: it is a
-//! complete project that already carries the desktop, Android and web entry
-//! points, and it depends only on published crates.
+//! Use the [project template](https://github.com/samoylenkodmitry/cranpose-showcase)
+//! for screens, view models and platform hosts. [`apps/isolated-demo`] supplies
+//! a smaller example with published dependencies.
 //!
-//! ```toml
-//! [dependencies]
-//! cranpose = { version = "0.1", features = ["desktop", "renderer-wgpu"] }
+//! For a desktop app with one source file:
+//!
+//! ```sh
+//! cargo new hello
+//! cd hello
+//! cargo add cranpose --features desktop,renderer-wgpu
 //! ```
 //!
-//! Composables are CamelCase functions, which is why every file starts by
-//! allowing the non-snake-case name:
+//! Put this code in `src/main.rs`, then run `cargo run`:
 //!
 //! ```no_run
-//! #![allow(non_snake_case)]
-//! use cranpose::prelude::*;
-//! # use cranpose::{
-//! #     __branch_group_scope_deferred, __source_scope, branch_location_key,
-//! #     cached_branch_location_key, cached_composable_definition_key,
-//! #     caller_location_key,
-//! #     composable_definition_key, composable_identity_key, debug_label_current_scope,
-//! #     location_key,
-//! #     with_current_composer, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
-//! #     refresh_param, refresh_shared_param,
-//! # };
+//! use cranpose::*;
 //!
 //! #[composable]
 //! fn Hello() {
 //!     Text("Hello", Modifier::empty(), TextStyle::default());
 //! }
 //!
-//! fn main() {
-//! #   #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+//! # #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
+//! fn main() -> Result<(), cranpose::LaunchError> {
 //!     AppLauncher::new()
 //!         .with_title("Hello")
 //!         .with_size(320, 200)
 //!         .try_run(Hello)
-//!         .expect("launch the app");
 //! }
+//! # #[cfg(not(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android"))))]
+//! # fn main() {}
 //! ```
 //!
-//! Cranpose is pre-alpha: versions are not compatible with each other and APIs
-//! change without deprecation cycles. Pin an exact version.
+//! `#[composable]` retains the function's state and subscriptions. The launcher
+//! owns the window and event loop. Reuse the same composable from mobile and
+//! web hosts through their platform entry points.
+//!
+//! Continue with the [state guide](super::state) for a control with callbacks,
+//! or the [platform guide](super::platforms) for another target.
 //!
 //! [`apps/isolated-demo`]: https://github.com/samoylenkodmitry/cranpose/tree/main/apps/isolated-demo

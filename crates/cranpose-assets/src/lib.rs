@@ -1,4 +1,4 @@
-//! Asset loading and management primitives for Cranpose.
+#![doc = include_str!("../README.md")]
 
 use std::{
     collections::HashMap,

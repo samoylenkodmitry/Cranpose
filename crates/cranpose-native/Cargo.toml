@@ -4,7 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Reusable native mobile hosting runtime for Cranpose"
+readme = "README.md"
+description = "UniFFI runtime for native Cranpose host views"
 autotests = false
 
 [lints]

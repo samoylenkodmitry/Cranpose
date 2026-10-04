@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Layout contracts & policies for Cranpose"
+description = "Layout measurement and placement contracts for Cranpose UI"
 
 [package.metadata.docs.rs]
 all-features = true

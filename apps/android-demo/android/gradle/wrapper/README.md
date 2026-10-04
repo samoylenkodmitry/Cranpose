@@ -1,9 +1,7 @@
-# Gradle Wrapper JAR
+# Gradle Wrapper
 
-The `gradle-wrapper.jar` file will be automatically downloaded by Android Studio when you open this project, or you can generate it by running:
+The Gradle wrapper files are checked into this project. Run `./gradlew` from
+`apps/android-demo/android`. A first run downloads the distribution pinned in
+`gradle/wrapper/gradle-wrapper.properties`; later runs use the cached copy.
 
-```bash
-./gradlew wrapper --gradle-version 8.4
-```
-
-This is normal for Gradle projects and is not included in the repository to keep it clean.
+Use the checked-in wrapper for demo builds.
