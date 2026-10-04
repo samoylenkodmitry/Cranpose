@@ -574,6 +574,23 @@ fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
     );
 }
 
+/// Glass folding set for one test, then restored: it is process-wide.
+struct FoldsFor(bool);
+
+impl FoldsFor {
+    fn test(folds: bool) -> Self {
+        let restore = Self(cranpose_ui_graphics::glass_material_folds_enabled());
+        cranpose_ui_graphics::set_glass_material_folds(folds);
+        restore
+    }
+}
+
+impl Drop for FoldsFor {
+    fn drop(&mut self) {
+        cranpose_ui_graphics::set_glass_material_folds(self.0);
+    }
+}
+
 /// A material no launch drew stands in with the general glass while its own
 /// pipeline compiles. After an update the general the last launch stood in
 /// with is built once the first frame is drawn, so standing in compiles
@@ -582,7 +599,7 @@ fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
 fn an_updated_build_stands_a_new_glass_in_with_a_general_built_after_its_first_frame() {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
     // Folded, each material below is a pipeline of its own.
-    cranpose_ui_graphics::set_glass_material_folds(true);
+    let _folds = FoldsFor::test(true);
     let frosted = LiquidGlassSpec {
         blur_radius: 4.0,
         ..LiquidGlassSpec::default()
