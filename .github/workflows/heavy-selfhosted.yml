@@ -98,6 +98,10 @@ jobs:
         # machine.
         run: just robot-linux-fast
 
+      - name: Check the wgpu fork's Vulkan synchronization
+        if: steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
+        run: just vulkan-sync
+
       - name: sccache stats
         if: always() && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true'
         run: '"$RUSTC_WRAPPER" --show-stats || true'

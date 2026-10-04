@@ -86,5 +86,6 @@ mod transparent_child;
 mod vertex_gradient_parity;
 mod viewport_crop;
 mod viewport_uniform_growth;
+mod vulkan_sync;
 mod wear_layer_alpha_pixels;
 mod wear_scaling_list_pixels;
