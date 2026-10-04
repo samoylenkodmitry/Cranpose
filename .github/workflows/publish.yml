@@ -160,6 +160,33 @@ jobs:
           fi
           cargo xtask verify-tag "$TAG_NAME"
 
+      # The release crates depend on the patched upstream forks
+      # (forks/README.md), which keep the upstream version and change only
+      # when the fork does, so most releases skip every one of them. Each
+      # fork depends on the one before it.
+      - name: Publish upstream forks (skip existing versions)
+        run: |
+          set -euo pipefail
+          for fork in \
+            wgpu-hal \
+            wgpu-core-deps-apple \
+            wgpu-core-deps-emscripten \
+            wgpu-core-deps-wasm \
+            wgpu-core-deps-windows-linux-android \
+            wgpu-core \
+            wgpu; do
+            manifest="forks/wgpu/${fork}/Cargo.toml"
+            version="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
+            if cargo xtask crate-published "cranpose-${fork}" "$version"; then
+              echo "Skipping cranpose-${fork} ${version} (already published)."
+              continue
+            elif [ "$?" -ne 1 ]; then
+              echo "Failed to determine publish status for cranpose-${fork} ${version}." >&2
+              exit 1
+            fi
+            cargo publish --manifest-path "$manifest"
+          done
+
       - name: Publish crates (skip existing versions)
         run: |
           set -euo pipefail
