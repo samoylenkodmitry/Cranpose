@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 rust-version = "1.87.0"
-name = "wgpu"
+name = "cranpose-wgpu"
 version = "30.0.1"
 authors = ["gfx-rs developers"]
 build = "build.rs"
@@ -22,12 +22,12 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "Cross-platform, safe, pure-rust graphics API"
-homepage = "https://wgpu.rs/"
+description = "Cranpose's patched fork of wgpu 30.0.1 (forks/README.md in the Cranpose repository). Cross-platform, safe, pure-rust graphics API"
+homepage = "https://github.com/samoylenkodmitry/Cranpose/tree/main/forks"
 readme = "README.md"
 keywords = ["graphics"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/gfx-rs/wgpu"
+repository = "https://github.com/samoylenkodmitry/Cranpose"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -192,6 +192,8 @@ default-features = false
 version = "1.1"
 
 [dependencies.wgpu-core]
+package = "cranpose-wgpu-core"
+path = "../wgpu-core"
 version = "30.0.0"
 optional = true
 
@@ -238,10 +240,14 @@ optional = true
 default-features = false
 
 [target.'cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))'.dependencies.wgpu-core]
+package = "cranpose-wgpu-core"
+path = "../wgpu-core"
 version = "30.0.0"
 optional = true
 
 [target.'cfg(all(target_arch = "wasm32", not(target_os = "emscripten")))'.dependencies.wgpu-hal]
+package = "cranpose-wgpu-hal"
+path = "../wgpu-hal"
 version = "30.0.0"
 optional = true
 
@@ -249,6 +255,8 @@ optional = true
 version = "1.14"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.wgpu-core]
+package = "cranpose-wgpu-core"
+path = "../wgpu-core"
 version = "30.0.0"
 features = [
     "renderdoc",
@@ -257,6 +265,8 @@ features = [
 ]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies.wgpu-hal]
+package = "cranpose-wgpu-hal"
+path = "../wgpu-hal"
 version = "30.0.0"
 
 [target.'cfg(not(target_has_atomic = "64"))'.dependencies.portable-atomic]
@@ -266,9 +276,13 @@ version = "1.10"
 version = "1.14"
 
 [target.'cfg(target_os = "emscripten")'.dependencies.wgpu-core]
+package = "cranpose-wgpu-core"
+path = "../wgpu-core"
 version = "30.0.0"
 
 [target.'cfg(target_os = "emscripten")'.dependencies.wgpu-hal]
+package = "cranpose-wgpu-hal"
+path = "../wgpu-hal"
 version = "30.0.0"
 
 [lints.clippy]

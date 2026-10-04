@@ -48,7 +48,7 @@ smallvec = "1.16.2"
 rayon = "1.12"
 
 [target.'cfg(all(target_os = "linux", not(target_arch = "wasm32")))'.dependencies]
-wgpu = { version = "30.0", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -61,7 +61,7 @@ wgpu = { version = "30.0", default-features = false, features = [
 rustix = { version = "1.1", features = ["thread"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { version = "30.0", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "dx12",
@@ -70,7 +70,7 @@ wgpu = { version = "30.0", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-wgpu = { version = "30.0", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "metal",
@@ -78,7 +78,7 @@ wgpu = { version = "30.0", default-features = false, features = [
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos")))'.dependencies]
-wgpu = { version = "30.0", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -86,7 +86,7 @@ wgpu = { version = "30.0", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]
-wgpu = { version = "30.0", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "parking_lot",
     "vulkan",
@@ -94,7 +94,7 @@ wgpu = { version = "30.0", default-features = false, features = [
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wgpu = { version = "30.0", default-features = false, features = [
+wgpu = { workspace = true, features = [
     "std",
     "webgpu",
     "webgl",

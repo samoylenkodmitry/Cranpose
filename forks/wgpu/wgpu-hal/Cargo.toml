@@ -12,7 +12,7 @@
 [package]
 edition = "2021"
 rust-version = "1.87"
-name = "wgpu-hal"
+name = "cranpose-wgpu-hal"
 version = "30.0.1"
 authors = ["gfx-rs developers"]
 build = "build.rs"
@@ -21,12 +21,12 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "Hardware abstraction layer for wgpu, the cross-platform, safe, pure-rust graphics API"
-homepage = "https://wgpu.rs/"
+description = "Cranpose's patched fork of wgpu-hal 30.0.1 (forks/README.md in the Cranpose repository). Hardware abstraction layer for wgpu, the cross-platform, safe, pure-rust graphics API"
+homepage = "https://github.com/samoylenkodmitry/Cranpose/tree/main/forks"
 readme = "README.md"
 keywords = ["graphics"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/gfx-rs/wgpu"
+repository = "https://github.com/samoylenkodmitry/Cranpose"
 
 [package.metadata.docs.rs]
 features = [
