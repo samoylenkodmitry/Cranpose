@@ -21,3 +21,5 @@ mod text_overflow_ellipsis_integration;
 mod text_prepared_cache_annotations_integration;
 mod wear_list_and_painters;
 mod widget_composition;
+mod window_root_routing_scratch;
+mod with_content_once_integration;

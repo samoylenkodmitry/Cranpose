@@ -25,8 +25,10 @@
 use std::rc::Rc;
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::location_key;
-use cranpose_render_common::{RenderScene, Renderer, graph::RenderGraph, graph_scene::Scene};
+use cranpose_core::{MemoryApplier, NodeId, location_key};
+use cranpose_render_common::{
+    RenderScene, Renderer, SceneUpdates, graph::RenderGraph, graph_scene::Scene,
+};
 use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Point, Rect, Size};
 
@@ -482,16 +484,34 @@ impl Renderer for TestRenderer {
 
     fn rebuild_scene_from_applier(
         &mut self,
-        applier: &mut cranpose_core::MemoryApplier,
-        root: cranpose_core::NodeId,
+        applier: &mut MemoryApplier,
+        root: NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        self.scene.clear();
-        if let Some(graph) =
-            cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
-        {
-            self.install_graph(graph);
-        }
+        self.scene.rebuild_from_applier(applier, root);
+        Ok(())
+    }
+
+    fn update_scene_from_applier(
+        &mut self,
+        applier: &mut MemoryApplier,
+        root: NodeId,
+        _viewport: Size,
+        updates: SceneUpdates<'_>,
+    ) -> Result<(), Self::Error> {
+        self.scene.update_from_applier(applier, root, updates, true);
+        Ok(())
+    }
+
+    fn update_visual_scene_from_applier(
+        &mut self,
+        applier: &mut MemoryApplier,
+        root: NodeId,
+        _viewport: Size,
+        updates: SceneUpdates<'_>,
+    ) -> Result<(), Self::Error> {
+        self.scene
+            .update_from_applier(applier, root, updates, false);
         Ok(())
     }
 }

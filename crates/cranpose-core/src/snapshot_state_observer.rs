@@ -383,22 +383,19 @@ impl SnapshotStateObserverInner {
         should_remove: impl Fn(&ScopeEntry) -> bool,
     ) -> Vec<Rc<RefCell<ScopeEntry>>> {
         let mut owned_scopes = self.owned_scopes.borrow_mut();
-        let mut retained = HashMap::default();
         let mut removed = Vec::new();
-        for (key, mut bucket) in owned_scopes.drain() {
-            let mut retained_bucket = OwnedScopeBucket::new();
-            for entry in bucket.drain(..) {
-                if should_remove(&entry.borrow()) {
-                    removed.push(entry);
+        owned_scopes.retain(|_, bucket| {
+            let mut index = 0;
+            while index < bucket.len() {
+                let remove = should_remove(&bucket[index].borrow());
+                if remove {
+                    removed.push(bucket.swap_remove(index));
                 } else {
-                    retained_bucket.push(entry);
+                    index += 1;
                 }
             }
-            if !retained_bucket.is_empty() {
-                retained.insert(key, retained_bucket);
-            }
-        }
-        *owned_scopes = retained;
+            !bucket.is_empty()
+        });
         shrink_map_if_sparse(&mut owned_scopes, Self::MIN_RETAINED_SCOPE_CAPACITY);
         removed
     }

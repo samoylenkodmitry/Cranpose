@@ -28,23 +28,6 @@ impl<T> IdlePool<T> {
         Some(self.available.remove(index).0)
     }
 
-    /// Takes the item `matches` accepts with the smallest `key`, the oldest
-    /// of equals.
-    pub(crate) fn take_min_by_key<K: Ord>(
-        &mut self,
-        matches: impl Fn(&T) -> bool,
-        key: impl Fn(&T) -> K,
-    ) -> Option<T> {
-        let index = self
-            .available
-            .iter()
-            .enumerate()
-            .filter(|(_, (item, _))| matches(item))
-            .min_by_key(|(_, (item, _))| key(item))
-            .map(|(index, _)| index)?;
-        Some(self.available.remove(index).0)
-    }
-
     /// Hands `item` back, then drops the oldest items while more than
     /// `max_len` are held or, beyond the newest, they weigh more than
     /// `max_bytes`.

@@ -76,7 +76,7 @@ impl HeadlessRenderer {
 
     fn render_box(&self, layout: &LayoutBox, operations: &mut Vec<RenderOp>) {
         let rect = layout.rect;
-        let (mut behind, mut overlay) = evaluate_modifier(layout.node_id, &layout.node_data, rect);
+        let (mut behind, overlay) = evaluate_modifier(layout.node_id, &layout.node_data, rect);
 
         operations.append(&mut behind);
 
@@ -92,35 +92,26 @@ impl HeadlessRenderer {
             self.render_box(child, operations);
         }
 
-        operations.append(&mut overlay);
+        append_overlay(operations, layout.node_id, rect, overlay);
     }
+}
+
+enum PendingOverlay<'a> {
+    Recorded(std::vec::IntoIter<DrawPrimitive>),
+    Command(&'a crate::draw::DrawCommandFn),
 }
 
 fn evaluate_modifier(
     node_id: NodeId,
     data: &LayoutNodeData,
     rect: Rect,
-) -> (Vec<RenderOp>, Vec<RenderOp>) {
+) -> (Vec<RenderOp>, Vec<PendingOverlay<'_>>) {
     let size = Size {
         width: rect.width,
         height: rect.height,
     };
 
-    let behind = collect_primitives_from_commands(
-        node_id,
-        rect,
-        size,
-        data.modifier_slices().draw_commands(),
-        PaintLayer::Behind,
-    );
-    let overlay = collect_primitives_from_commands(
-        node_id,
-        rect,
-        size,
-        data.modifier_slices().draw_commands(),
-        PaintLayer::Overlay,
-    );
-    (behind, overlay)
+    collect_primitives_from_commands(node_id, rect, size, data.modifier_slices().draw_commands())
 }
 
 fn collect_primitives_from_commands(
@@ -128,71 +119,82 @@ fn collect_primitives_from_commands(
     rect: Rect,
     size: Size,
     commands: &[ModifierDrawCommand],
-    layer: PaintLayer,
-) -> Vec<RenderOp> {
-    let split_with_content = |primitives: Vec<DrawPrimitive>, layer| {
-        let Some(last_content_idx) = primitives
-            .iter()
-            .rposition(|primitive| matches!(primitive, DrawPrimitive::Content))
-        else {
-            return if layer == PaintLayer::Overlay {
-                primitives
-                    .into_iter()
-                    .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
-                    .collect()
-            } else {
-                Vec::new()
-            };
-        };
-
-        primitives
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, primitive)| {
-                if matches!(primitive, DrawPrimitive::Content) {
-                    return None;
-                }
-                let is_before = index < last_content_idx;
-                match layer {
-                    PaintLayer::Behind if is_before => Some(primitive),
-                    PaintLayer::Overlay if !is_before => Some(primitive),
-                    _ => None,
-                }
-            })
-            .collect()
-    };
-
-    let run = |func: &crate::draw::DrawCommandFn| {
-        use cranpose_ui_graphics::DrawScope as _;
-        let mut scope = crate::draw::command_draw_scope(size);
-        func(&mut scope);
-        scope.into_primitives()
-    };
-    let mut ops = Vec::new();
+) -> (Vec<RenderOp>, Vec<PendingOverlay<'_>>) {
+    let mut behind = Vec::new();
+    let mut overlay = Vec::new();
     for command in commands {
-        let primitives = match (layer, command) {
-            (PaintLayer::Behind, ModifierDrawCommand::Behind(func)) => run(func)
-                .into_iter()
-                .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
-                .collect(),
-            (PaintLayer::Overlay, ModifierDrawCommand::Overlay(func)) => run(func)
-                .into_iter()
-                .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
-                .collect(),
-            (PaintLayer::Behind | PaintLayer::Overlay, ModifierDrawCommand::WithContent(func)) => {
-                split_with_content(run(func), layer)
+        match command {
+            ModifierDrawCommand::Behind(func) => {
+                for primitive in record(func, size) {
+                    append_primitive(&mut behind, node_id, rect, PaintLayer::Behind, primitive);
+                }
             }
-            _ => Vec::new(),
-        };
-        for primitive in primitives {
-            ops.push(RenderOp::Primitive {
-                node_id,
-                layer,
-                primitive: primitive.translate(rect.x, rect.y),
-            });
+            ModifierDrawCommand::Overlay(func) => {
+                overlay.push(PendingOverlay::Command(func));
+            }
+            ModifierDrawCommand::WithContent(func) => {
+                let primitives = record(func, size);
+                let last_content = primitives
+                    .iter()
+                    .rposition(|primitive| matches!(primitive, DrawPrimitive::Content));
+                let mut primitives = primitives.into_iter();
+                if let Some(last_content) = last_content {
+                    for primitive in primitives.by_ref().take(last_content) {
+                        append_primitive(&mut behind, node_id, rect, PaintLayer::Behind, primitive);
+                    }
+                    let _ = primitives.next();
+                }
+                if !primitives.as_slice().is_empty() {
+                    overlay.push(PendingOverlay::Recorded(primitives));
+                }
+            }
         }
     }
-    ops
+    (behind, overlay)
+}
+
+fn record(func: &crate::draw::DrawCommandFn, size: Size) -> Vec<DrawPrimitive> {
+    use cranpose_ui_graphics::DrawScope as _;
+    let mut scope = crate::draw::command_draw_scope(size);
+    func(&mut scope);
+    scope.into_primitives()
+}
+
+fn append_overlay(
+    operations: &mut Vec<RenderOp>,
+    node_id: NodeId,
+    rect: Rect,
+    pending: Vec<PendingOverlay<'_>>,
+) {
+    let size = Size {
+        width: rect.width,
+        height: rect.height,
+    };
+    for part in pending {
+        let primitives = match part {
+            PendingOverlay::Recorded(primitives) => primitives,
+            PendingOverlay::Command(func) => record(func, size).into_iter(),
+        };
+        for primitive in primitives {
+            append_primitive(operations, node_id, rect, PaintLayer::Overlay, primitive);
+        }
+    }
+}
+
+fn append_primitive(
+    operations: &mut Vec<RenderOp>,
+    node_id: NodeId,
+    rect: Rect,
+    layer: PaintLayer,
+    primitive: DrawPrimitive,
+) {
+    if !matches!(primitive, DrawPrimitive::Content) {
+        operations.push(RenderOp::Primitive {
+            node_id,
+            layer,
+            primitive: primitive.translate(rect.x, rect.y),
+        });
+    }
 }
 
 impl HeadlessRenderer {
@@ -255,13 +257,9 @@ impl HeadlessRenderer {
             height: rect.height,
         };
 
-        operations.extend(collect_primitives_from_commands(
-            node_id,
-            rect,
-            size,
-            modifier_slices.draw_commands(),
-            PaintLayer::Behind,
-        ));
+        let (behind, overlay) =
+            collect_primitives_from_commands(node_id, rect, size, modifier_slices.draw_commands());
+        operations.extend(behind);
 
         if let Some(text) = modifier_slices.text_content() {
             operations.push(RenderOp::Text {
@@ -282,13 +280,7 @@ impl HeadlessRenderer {
         }
         child_stack.truncate(first_child);
 
-        operations.extend(collect_primitives_from_commands(
-            node_id,
-            rect,
-            size,
-            modifier_slices.draw_commands(),
-            PaintLayer::Overlay,
-        ));
+        append_overlay(operations, node_id, rect, overlay);
     }
 }
 

@@ -1,9 +1,6 @@
 use std::{any::Any, cell::Cell, rc::Rc};
 
-use cranpose_core::{
-    MemoryApplier, NodeId,
-    collections::map::{HashMap, HashSet},
-};
+use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect, Size,
     SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, text::TextStyle,
@@ -14,6 +11,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
+    SceneUpdates,
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, HitTestNode, IsolationReasons, LayerNode,
         PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
@@ -160,50 +158,43 @@ pub fn rebuild_graph_from_applier(
 pub fn update_graph_from_applier(
     applier: &MemoryApplier,
     graph: &mut RenderGraph,
-    dirty_nodes: &[NodeId],
+    updates: SceneUpdates<'_>,
     scale: f32,
 ) -> bool {
-    update_graph_from_applier_report(applier, graph, dirty_nodes, scale).applied()
+    update_graph_from_applier_report(applier, graph, updates, scale).applied()
 }
 
 pub fn update_graph_from_applier_report(
     applier: &MemoryApplier,
     graph: &mut RenderGraph,
-    dirty_nodes: &[NodeId],
-    scale: f32,
-) -> GraphUpdateReport {
-    let mut changed_nodes = Vec::new();
-    update_graph_from_applier_report_into(applier, graph, dirty_nodes, scale, &mut changed_nodes)
-}
-
-pub fn update_graph_from_applier_report_into(
-    applier: &MemoryApplier,
-    graph: &mut RenderGraph,
-    dirty_nodes: &[NodeId],
+    updates: SceneUpdates<'_>,
     _scale: f32,
-    changed_nodes: &mut Vec<NodeId>,
 ) -> GraphUpdateReport {
-    let report =
-        update_graph_from_applier_report_into_inner(applier, graph, dirty_nodes, changed_nodes);
+    let report = update_graph_from_applier_report_inner(applier, graph, updates);
     crate::layer_recycling::release();
     if let GraphUpdate::NeedsRebuild(reason) = report.update
         && cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG")
     {
         eprintln!(
             "[scene-update-diag] scoped update abandoned, whole scene rebuilt: {reason:?} dirty={}",
-            dirty_nodes.len()
+            updates.content.len() + updates.layers.len()
         );
     }
     report
 }
 
-fn update_graph_from_applier_report_into_inner(
+#[derive(Clone, Copy)]
+enum NodeUpdate {
+    Content,
+    Layer,
+}
+
+fn update_graph_from_applier_report_inner(
     applier: &MemoryApplier,
     graph: &mut RenderGraph,
-    dirty_nodes: &[NodeId],
-    changed_nodes: &mut Vec<NodeId>,
+    updates: SceneUpdates<'_>,
 ) -> GraphUpdateReport {
-    if dirty_nodes.is_empty() {
+    if updates.is_empty() {
         return GraphUpdateReport {
             update: GraphUpdate::Patched,
             hit_graph_dirty: false,
@@ -212,19 +203,24 @@ fn update_graph_from_applier_report_into_inner(
     bump_recording_generation();
 
     if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
-        eprintln!("[scene-update-diag] dirty={dirty_nodes:?}");
+        eprintln!("[scene-update-diag] dirty={updates:?}");
     }
 
-    let mut remaining_dirty_nodes = dirty_nodes.iter().copied().collect::<HashSet<_>>();
+    let mut remaining_dirty_nodes: HashMap<NodeId, NodeUpdate> = updates
+        .layers
+        .iter()
+        .map(|&id| (id, NodeUpdate::Layer))
+        .chain(updates.content.iter().map(|&id| (id, NodeUpdate::Content)))
+        .collect();
     if let Some(root_id) = layer_identity(&graph.root)
-        && remaining_dirty_nodes.contains(&root_id)
+        && let Some(kind) = remaining_dirty_nodes.remove(&root_id)
     {
-        remaining_dirty_nodes.remove(&root_id);
-        if try_translate_scrolled_layer(
+        if let Some(hit_graph_dirty) = try_update_retained_layer(
             applier,
             &mut graph.root,
             &mut remaining_dirty_nodes,
-            changed_nodes,
+            kind,
+            true,
             TranslateAncestorContext {
                 inherited_motion_context_animated: false,
                 ancestor_hashed: false,
@@ -236,7 +232,7 @@ fn update_graph_from_applier_report_into_inner(
             if remaining_dirty_nodes.is_empty() {
                 return GraphUpdateReport {
                     update: GraphUpdate::Patched,
-                    hit_graph_dirty: true,
+                    hit_graph_dirty,
                 };
             }
             let inherited = graph.root.translated_content_context;
@@ -248,14 +244,13 @@ fn update_graph_from_applier_report_into_inner(
                 &mut remaining_dirty_nodes,
                 inherited,
                 false,
-                changed_nodes,
             );
             return GraphUpdateReport {
                 update: classify_walk(walked.is_some(), &remaining_dirty_nodes),
-                hit_graph_dirty: true,
+                hit_graph_dirty: hit_graph_dirty || walked.is_none_or(|r| r.hit_graph_dirty),
             };
         }
-        collect_layer_node_ids(&graph.root, changed_nodes);
+
         let previous = HitGraphState::of(&graph.root);
         release_for_rebuild(&mut graph.root);
         if !lower_root_into(applier, root_id, &mut graph.root) {
@@ -266,7 +261,7 @@ fn update_graph_from_applier_report_into_inner(
         }
         let hit_graph_dirty = previous.dirty_against(&HitGraphState::of(&graph.root));
         graph.root.recompute_raster_cache_hashes();
-        collect_layer_node_ids(&graph.root, changed_nodes);
+
         return GraphUpdateReport {
             update: GraphUpdate::Patched,
             hit_graph_dirty,
@@ -282,7 +277,6 @@ fn update_graph_from_applier_report_into_inner(
         &mut remaining_dirty_nodes,
         inherited_translated_content_context,
         false,
-        changed_nodes,
     ) else {
         return GraphUpdateReport {
             update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
@@ -302,7 +296,7 @@ fn update_graph_from_applier_report_into_inner(
     }
 }
 
-fn classify_walk(walked: bool, remaining_dirty_nodes: &HashSet<NodeId>) -> GraphUpdate {
+fn classify_walk(walked: bool, remaining_dirty_nodes: &HashMap<NodeId, NodeUpdate>) -> GraphUpdate {
     if !walked {
         GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable)
     } else if !remaining_dirty_nodes.is_empty() {
@@ -324,10 +318,9 @@ fn replace_dirty_layers_from_applier(
     applier: &MemoryApplier,
     parent: &mut LayerNode,
     parent_children: AbsOrigin,
-    dirty_nodes: &mut HashSet<NodeId>,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     inherited_translated_content_context: bool,
     ancestor_hashed: bool,
-    changed_nodes: &mut Vec<NodeId>,
 ) -> Option<ReplaceDirtyLayersReport> {
     if dirty_nodes.is_empty() {
         return Some(ReplaceDirtyLayersReport::default());
@@ -344,12 +337,13 @@ fn replace_dirty_layers_from_applier(
             continue;
         };
 
-        if layer_identity(child_layer).is_some_and(|node_id| dirty_nodes.remove(&node_id)) {
-            if try_translate_scrolled_layer(
+        if let Some(kind) = layer_identity(child_layer).and_then(|id| dirty_nodes.remove(&id)) {
+            if let Some(hit_graph_dirty) = try_update_retained_layer(
                 applier,
                 child_layer,
                 dirty_nodes,
-                changed_nodes,
+                kind,
+                false,
                 TranslateAncestorContext {
                     inherited_motion_context_animated: parent.motion_context_animated,
                     ancestor_hashed: child_ancestor_hashed,
@@ -359,7 +353,7 @@ fn replace_dirty_layers_from_applier(
                     parent_abs: parent_children,
                 },
             ) {
-                report.hit_graph_dirty = true;
+                report.hit_graph_dirty |= hit_graph_dirty;
                 report.updated = true;
                 let child_children = parent_children.children_of(child_layer);
                 let child_report = replace_dirty_layers_from_applier(
@@ -369,13 +363,12 @@ fn replace_dirty_layers_from_applier(
                     dirty_nodes,
                     child_inherited_translated_content_context,
                     child_ancestor_hashed,
-                    changed_nodes,
                 )?;
                 report.hit_graph_dirty |= child_report.hit_graph_dirty;
                 continue;
             }
             let node_id = layer_identity(child_layer).expect("dirty layer must have a node id");
-            collect_layer_node_ids(child_layer, changed_nodes);
+
             let previous = HitGraphState::of(child_layer);
             // Nodes that leave this subtree are gone from the scene: nothing
             // remains to update for them, and a dirty one would otherwise go
@@ -393,7 +386,7 @@ fn replace_dirty_layers_from_applier(
             })?;
             report.hit_graph_dirty |= previous.dirty_against(&HitGraphState::of(child_layer));
             remove_dirty_descendants(child_layer, dirty_nodes);
-            collect_layer_node_ids(child_layer, changed_nodes);
+
             crate::graph_hash::recompute_layer_raster_cache_hashes_under(
                 child_layer,
                 child_ancestor_hashed,
@@ -410,7 +403,6 @@ fn replace_dirty_layers_from_applier(
             dirty_nodes,
             child_inherited_translated_content_context,
             child_ancestor_hashed,
-            changed_nodes,
         )?;
         report.updated |= child_report.updated;
         report.hit_graph_dirty |= child_report.hit_graph_dirty;
@@ -423,9 +415,6 @@ fn replace_dirty_layers_from_applier(
         // the scroll fast path off; a child that started must set it.
         parent.has_origin_sinks |= children_have_origin_sinks(&parent.children);
         crate::graph_hash::refresh_layer_own_raster_cache_hashes(parent, ancestor_hashed);
-        if let Some(node_id) = parent.node_id {
-            changed_nodes.push(node_id);
-        }
     }
 
     Some(report)
@@ -447,11 +436,154 @@ struct TranslateAncestorContext {
     parent_abs: AbsOrigin,
 }
 
+fn try_update_retained_layer(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    kind: NodeUpdate,
+    root: bool,
+    ancestors: TranslateAncestorContext,
+) -> Option<bool> {
+    match kind {
+        NodeUpdate::Content => {
+            try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors).then_some(true)
+        }
+        NodeUpdate::Layer => update_layer_properties(applier, layer, root, ancestors),
+    }
+}
+
+fn content_layer_mut(container: &mut LayerNode) -> Option<&mut LayerNode> {
+    let Some(node_id) = container.wraps else {
+        return Some(container);
+    };
+    container.children.iter_mut().find_map(|child| match child {
+        RenderNode::Layer(layer) if layer.node_id == Some(node_id) => Some(&mut **layer),
+        _ => None,
+    })
+}
+
+fn retained_layer_matches_layout(
+    layer: &LayerNode,
+    data: &SnapshotNodeData<'_>,
+    placement: Point,
+    wrapped: bool,
+) -> bool {
+    let state = &data.layout_state;
+    let slices = &data.modifier_slices;
+    state.position() == placement
+        && Rect::from_size(state.size()) == layer.node_rect()
+        && slices.layer_bounds(state.size()) == layer.local_bounds
+        && state.content_offset() == layer.content_offset
+        && (slices.outer_draw_command_count() > 0) == wrapped
+}
+
+fn update_layer_properties(
+    applier: &MemoryApplier,
+    container: &mut LayerNode,
+    root: bool,
+    ancestors: TranslateAncestorContext,
+) -> Option<bool> {
+    let node_id = layer_identity(container)?;
+    let wrapped = container.wraps.is_some();
+    let placement = container.origin_in_parent;
+    let target_ancestor_hashed = if wrapped {
+        crate::graph_hash::layer_children_ancestor_hashed(container, ancestors.ancestor_hashed)
+    } else {
+        ancestors.ancestor_hashed
+    };
+    let hit_graph_dirty = read_placed_node_data(applier, node_id, root, |data| {
+        let target = content_layer_mut(container)?;
+        let slices = &data.modifier_slices;
+        let state = &data.layout_state;
+        if !retained_layer_matches_layout(target, &data, placement, wrapped) {
+            return None;
+        }
+        let context = LowerContext {
+            inherited_motion_context_animated: ancestors.inherited_motion_context_animated,
+            inherited_translated_content_context: ancestors.inherited_translated_content_context,
+            parent_abs: Some(ancestors.parent_abs),
+            parent_content_offset: ancestors.parent_content_offset,
+        };
+        let previous = HitGraphState::of(target);
+        let children_hashed =
+            crate::graph_hash::layer_children_ancestor_hashed(target, target_ancestor_hashed);
+        let (head, child_context) = prepare_node_layer(node_id, slices, state, context);
+        assign_layer(target, head);
+        if wrapped {
+            target.transform_to_parent = layer_transform_to_parent(
+                target.local_bounds,
+                Point::default(),
+                &target.graphics_layer,
+            );
+            target.origin_in_parent = Point::default();
+        }
+        if target.has_origin_sinks
+            && let Some(child_abs) = child_context.parent_abs
+        {
+            for child in &target.children {
+                if let RenderNode::Layer(child) = child {
+                    publish_retained_window_geometry(applier, child, child_abs);
+                }
+            }
+        }
+        if children_hashed
+            == crate::graph_hash::layer_children_ancestor_hashed(target, target_ancestor_hashed)
+        {
+            crate::graph_hash::refresh_layer_own_raster_cache_hashes(
+                target,
+                target_ancestor_hashed,
+            );
+        } else {
+            crate::graph_hash::recompute_layer_raster_cache_hashes_under(
+                target,
+                target_ancestor_hashed,
+            );
+        }
+        Some(previous.dirty_against(&HitGraphState::of(target)))
+    })??;
+    if wrapped {
+        container.refresh_child_facts();
+        container.has_origin_sinks = children_have_origin_sinks(&container.children);
+        crate::graph_hash::refresh_layer_own_raster_cache_hashes(
+            container,
+            ancestors.ancestor_hashed,
+        );
+    }
+    Some(hit_graph_dirty)
+}
+
+fn publish_retained_window_geometry(
+    applier: &MemoryApplier,
+    layer: &LayerNode,
+    parent_abs: AbsOrigin,
+) {
+    if !layer.has_origin_sinks {
+        return;
+    }
+    let child_abs = parent_abs.children_of(layer);
+    if let Some(node_id) = layer.node_id {
+        read_node_data(applier, node_id, |data| {
+            data.modifier_slices.publish_window_geometry(
+                Point {
+                    x: parent_abs.content_origin.x + layer.origin_in_parent.x,
+                    y: parent_abs.content_origin.y + layer.origin_in_parent.y,
+                },
+                child_abs.window_transform,
+                data.layout_state.size(),
+            );
+        });
+    }
+    for child in &layer.children {
+        if let RenderNode::Layer(child) = child {
+            publish_retained_window_geometry(applier, child, child_abs);
+        }
+    }
+}
+
 fn try_translate_scrolled_layer(
     applier: &MemoryApplier,
     container: &mut LayerNode,
-    dirty_nodes: &mut HashSet<NodeId>,
-    changed_nodes: &mut Vec<NodeId>,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     ancestors: TranslateAncestorContext,
 ) -> bool {
     let Some(node_id) = layer_identity(container) else {
@@ -463,7 +595,6 @@ fn try_translate_scrolled_layer(
                 applier,
                 container,
                 dirty_nodes,
-                changed_nodes,
                 ancestors,
                 data,
                 false,
@@ -483,21 +614,10 @@ fn try_translate_scrolled_layer(
             ),
             ..ancestors
         };
-        let Some(inner) = container.children.iter_mut().find_map(|child| match child {
-            RenderNode::Layer(layer) if layer.node_id == Some(node_id) => Some(layer),
-            _ => None,
-        }) else {
+        let Some(inner) = content_layer_mut(container) else {
             return translate_bail("wrapped layer missing");
         };
-        if !translate_layer_from_data(
-            applier,
-            inner,
-            dirty_nodes,
-            changed_nodes,
-            inner_ancestors,
-            data,
-            true,
-        ) {
+        if !translate_layer_from_data(applier, inner, dirty_nodes, inner_ancestors, data, true) {
             return false;
         }
         let outer = outer_draws(node_id, slices.draw_commands(), outer_count, size)
@@ -607,7 +727,7 @@ thread_local! {
 fn translated_children(
     applier: &MemoryApplier,
     container: &LayerNode,
-    dirty_nodes: &HashSet<NodeId>,
+    dirty_nodes: &HashMap<NodeId, NodeUpdate>,
     fresh_children: &[NodeId],
     scratch: &mut TranslateScratch,
 ) -> Result<bool, &'static str> {
@@ -655,7 +775,7 @@ fn translated_children(
 
 fn check_retained_children(
     container: &LayerNode,
-    dirty_nodes: &HashSet<NodeId>,
+    dirty_nodes: &HashMap<NodeId, NodeUpdate>,
     placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
     children_unchanged: bool,
     old_index_by_id: &HashMap<NodeId, usize>,
@@ -671,7 +791,7 @@ fn check_retained_children(
         let RenderNode::Layer(layer) = &container.children[old_index] else {
             return Err("retained child slot is not a layer");
         };
-        if dirty_nodes.contains(child_id) {
+        if dirty_nodes.contains_key(child_id) {
             continue;
         }
         if layer.has_origin_sinks {
@@ -739,8 +859,7 @@ impl TranslateGeometry {
 fn recycle_leaving_children(
     container: &mut LayerNode,
     scratch: &mut TranslateScratch,
-    dirty_nodes: &mut HashSet<NodeId>,
-    changed_nodes: &mut Vec<NodeId>,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
 ) {
     let TranslateScratch {
         placed_fresh,
@@ -761,7 +880,6 @@ fn recycle_leaving_children(
             .and_then(|index| retained[*index].take())
     }));
     for leaving in retained.drain(..).flatten() {
-        collect_layer_node_ids(&leaving, changed_nodes);
         forget_dirty_subtree(&leaving, dirty_nodes);
         crate::layer_recycling::recycle(leaving);
     }
@@ -774,7 +892,7 @@ fn build_entering_children(
     applier: &MemoryApplier,
     container: &LayerNode,
     scratch: &mut TranslateScratch,
-    dirty_nodes: &mut HashSet<NodeId>,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     geometry: TranslateGeometry,
     inherited: (bool, bool),
 ) {
@@ -861,8 +979,7 @@ fn apply_translated_container_state(
 
 fn reconcile_translated_children(
     container: &mut LayerNode,
-    dirty_nodes: &mut HashSet<NodeId>,
-    changed_nodes: &mut Vec<NodeId>,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     scratch: &mut TranslateScratch,
     children_unchanged: bool,
     geometry: TranslateGeometry,
@@ -872,9 +989,8 @@ fn reconcile_translated_children(
             let RenderNode::Layer(layer) = child else {
                 unreachable!("retained child identities were checked");
             };
-            if !dirty_nodes.contains(child_id) {
+            if !dirty_nodes.contains_key(child_id) {
                 translate_retained_child(layer, state, geometry.content_offset);
-                changed_nodes.push(*child_id);
             }
         }
         return;
@@ -882,15 +998,14 @@ fn reconcile_translated_children(
     let mut entering = scratch.entering.drain(..).peekable();
     for ((child_id, state), kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
         if let Some(mut layer) = kept {
-            if !dirty_nodes.contains(child_id) {
+            if !dirty_nodes.contains_key(child_id) {
                 translate_retained_child(&mut layer, state, geometry.content_offset);
-                changed_nodes.push(*child_id);
             }
             container.children.push(RenderNode::Layer(layer));
         } else if let Some((_, lowered)) = entering.next_if(|(id, _)| id == child_id) {
             dirty_nodes.remove(child_id);
             remove_dirty_descendants(&lowered, dirty_nodes);
-            collect_layer_node_ids(&lowered, changed_nodes);
+
             container.children.push(RenderNode::Layer(lowered));
         }
     }
@@ -899,8 +1014,7 @@ fn reconcile_translated_children(
 fn translate_layer_from_data(
     applier: &MemoryApplier,
     container: &mut LayerNode,
-    dirty_nodes: &mut HashSet<NodeId>,
-    changed_nodes: &mut Vec<NodeId>,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     ancestors: TranslateAncestorContext,
     data: SnapshotNodeData<'_>,
     wrapped: bool,
@@ -968,7 +1082,7 @@ fn translate_layer_from_data(
     let children_ancestor_hashed =
         crate::graph_hash::layer_children_ancestor_hashed(container, container_ancestor_hashed);
     if !children_unchanged {
-        recycle_leaving_children(container, &mut scratch, dirty_nodes, changed_nodes);
+        recycle_leaving_children(container, &mut scratch, dirty_nodes);
         build_entering_children(
             applier,
             container,
@@ -994,7 +1108,6 @@ fn translate_layer_from_data(
     reconcile_translated_children(
         container,
         dirty_nodes,
-        changed_nodes,
         &mut scratch,
         children_unchanged,
         geometry,
@@ -1007,7 +1120,7 @@ fn translate_layer_from_data(
         || children_have_origin_sinks(&container.children);
     container.refresh_child_facts();
     crate::graph_hash::refresh_layer_own_raster_cache_hashes(container, container_ancestor_hashed);
-    changed_nodes.push(node_id);
+
     true
 }
 
@@ -1061,26 +1174,15 @@ fn release_for_rebuild(layer: &mut LayerNode) {
     crate::layer_recycling::recycle_children(layer);
 }
 
-fn collect_layer_node_ids(layer: &LayerNode, out: &mut Vec<NodeId>) {
-    if let Some(node_id) = layer.node_id {
-        out.push(node_id);
-    }
-    for child in &layer.children {
-        if let RenderNode::Layer(child_layer) = child {
-            collect_layer_node_ids(child_layer, out);
-        }
-    }
-}
-
 /// Takes `layer`'s node and every node beneath it out of `dirty_nodes`.
-fn forget_dirty_subtree(layer: &LayerNode, dirty_nodes: &mut HashSet<NodeId>) {
+fn forget_dirty_subtree(layer: &LayerNode, dirty_nodes: &mut HashMap<NodeId, NodeUpdate>) {
     if let Some(node_id) = layer_identity(layer) {
         dirty_nodes.remove(&node_id);
     }
     remove_dirty_descendants(layer, dirty_nodes);
 }
 
-fn remove_dirty_descendants(layer: &LayerNode, dirty_nodes: &mut HashSet<NodeId>) {
+fn remove_dirty_descendants(layer: &LayerNode, dirty_nodes: &mut HashMap<NodeId, NodeUpdate>) {
     for child in &layer.children {
         let RenderNode::Layer(child_layer) = child else {
             continue;
@@ -1283,12 +1385,13 @@ fn write_node_content(
         child_count,
         slices.annotated_text().is_some(),
     ));
+    let first_draw = list.len();
     append_draw_nodes(
         list,
         node_id,
         commands,
         outer_count,
-        DrawPlacement::Behind,
+        DrawPass::Record(DrawPlacement::Behind),
         size,
         PrimitivePhase::BeforeChildren,
     );
@@ -1311,7 +1414,7 @@ fn write_node_content(
         node_id,
         commands,
         outer_count,
-        DrawPlacement::Overlay,
+        DrawPass::OverlayFromOutput(first_draw),
         size,
         PrimitivePhase::AfterChildren,
     );
@@ -1525,6 +1628,56 @@ fn slices_hit_something(slices: &ModifierNodeSlices) -> bool {
     !slices.pointer_inputs().is_empty() || slices.pointer_icon().is_some()
 }
 
+fn prepare_node_layer(
+    node_id: NodeId,
+    slices: &Rc<ModifierNodeSlices>,
+    layout_state: &cranpose_ui::widgets::LayoutState,
+    context: LowerContext,
+) -> (LayerHead, LowerContext) {
+    let size = layout_state.size();
+    let placement = layout_state.position();
+    let (local_bounds, node_bounds) = layer_and_node_bounds(slices, size);
+    let graphics_layer = graphics_layer_with_shaped_clip(
+        slices.graphics_layer(),
+        slices.clip_to_bounds(),
+        slices.corner_shape(),
+        local_bounds,
+    );
+    let geometry = context.parent_abs.map(|parent_abs| {
+        TranslateGeometry::new(
+            layout_state,
+            graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT),
+            local_bounds,
+            parent_abs,
+        )
+    });
+    if let Some(geometry) = geometry {
+        slices.publish_window_geometry(geometry.top_left, geometry.window_transform, size);
+    } else {
+        slices.publish_pointer_input_size(size);
+    }
+    let content_offset = layout_state.content_offset();
+    let child_context = context.for_children(
+        slices,
+        content_offset,
+        geometry.map(TranslateGeometry::child_abs),
+    );
+    let head = node_layer_head(
+        node_id,
+        slices,
+        NodeFrame {
+            local_bounds,
+            node_bounds,
+            placement,
+            content_offset,
+            translated_content_offset: slices.translated_content_offset().unwrap_or(content_offset),
+        },
+        graphics_layer,
+        context,
+    );
+    (head, child_context)
+}
+
 fn write_node_layer(
     applier: &MemoryApplier,
     node_id: NodeId,
@@ -1540,51 +1693,13 @@ fn write_node_layer(
     } = data;
     let size = layout_state.size();
     let placement = layout_state.position();
-    let (local_bounds, node_bounds) = layer_and_node_bounds(&slices, size);
     if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!(
             "[scene-update-diag] build layer node={node_id:?} size=({:.2},{:.2}) pos=({:.2},{:.2})",
             size.width, size.height, placement.x, placement.y,
         );
     }
-    let graphics_layer = graphics_layer_with_shaped_clip(
-        slices.graphics_layer(),
-        slices.clip_to_bounds(),
-        slices.corner_shape(),
-        local_bounds,
-    );
-    let geometry = context.parent_abs.map(|parent_abs| {
-        TranslateGeometry::new(
-            &layout_state,
-            graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT),
-            local_bounds,
-            parent_abs,
-        )
-    });
-    if let Some(geometry) = geometry {
-        slices.publish_window_geometry(geometry.top_left, geometry.window_transform, size);
-    } else {
-        slices.publish_pointer_input_size(size);
-    }
-    let content_offset = layout_state.content_offset();
-    let child_context = context.for_children(
-        &slices,
-        content_offset,
-        geometry.map(TranslateGeometry::child_abs),
-    );
-    let head = node_layer_head(
-        node_id,
-        &slices,
-        NodeFrame {
-            local_bounds,
-            node_bounds,
-            placement,
-            content_offset,
-            translated_content_offset: slices.translated_content_offset().unwrap_or(content_offset),
-        },
-        graphics_layer,
-        context,
-    );
+    let (head, child_context) = prepare_node_layer(node_id, &slices, &layout_state, context);
     let outer = outer_draws(
         node_id,
         slices.draw_commands(),
@@ -1611,15 +1726,30 @@ fn write_node_layer(
 
 struct RecorderSlot {
     generation: u64,
-    handles: [Option<Rc<CommandRecording>>; 2],
+    handles: [Option<Rc<CommandRecording>>; 3],
     /// The allocation of a handle whose recording `acquire_storage` took,
     /// which the next recording the slot publishes moves into.
     spare: Option<Rc<CommandRecording>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct RecorderKey {
+    node_id: NodeId,
+    command_index: u32,
+}
+
+impl From<DrawCommandId> for RecorderKey {
+    fn from(id: DrawCommandId) -> Self {
+        Self {
+            node_id: id.node_id,
+            command_index: id.command_index,
+        }
+    }
+}
+
 thread_local! {
     static COMMAND_RECORDINGS: std::cell::RefCell<
-        std::collections::HashMap<DrawCommandId, RecorderSlot, cranpose_ui_graphics::FxBuildHasher>,
+        std::collections::HashMap<RecorderKey, RecorderSlot, cranpose_ui_graphics::FxBuildHasher>,
     > = std::cell::RefCell::new(std::collections::HashMap::default());
     static RECORDING_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -1646,16 +1776,28 @@ fn bump_recording_generation() {
 fn acquire_storage(id: DrawCommandId) -> CommandRecording {
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
-        let Some(slot) = map.get_mut(&id) else {
+        let Some(slot) = map.get_mut(&RecorderKey::from(id)) else {
             return CommandRecording::default();
         };
         for handle in &mut slot.handles {
             let Some(recording) = handle.as_mut().and_then(Rc::get_mut) else {
                 continue;
             };
-            let storage = std::mem::take(recording);
+            let Some(storage) = recording.try_take_reusable() else {
+                continue;
+            };
             slot.spare = handle.take();
             return storage;
+        }
+        if slot.handles.iter().all(Option::is_some) {
+            let storage = slot.handles[2]
+                .as_mut()
+                .and_then(Rc::get_mut)
+                .map(std::mem::take);
+            if let Some(storage) = storage {
+                slot.spare = slot.handles[2].take();
+                return storage;
+            }
         }
         CommandRecording::default()
     })
@@ -1665,11 +1807,13 @@ fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<Comma
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let generation = RECORDING_GENERATION.with(Cell::get);
-        let slot = map.entry(id).or_insert_with(|| RecorderSlot {
-            generation,
-            handles: [None, None],
-            spare: None,
-        });
+        let slot = map
+            .entry(RecorderKey::from(id))
+            .or_insert_with(|| RecorderSlot {
+                generation,
+                handles: [None, None, None],
+                spare: None,
+            });
         let shared = match slot.spare.take() {
             Some(mut spare) => match Rc::get_mut(&mut spare) {
                 Some(storage) => {
@@ -1681,10 +1825,49 @@ fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<Comma
             None => Rc::new(recording),
         };
         slot.generation = generation;
+        slot.handles[2] = slot.handles[1].take();
         slot.handles[1] = slot.handles[0].take();
         slot.handles[0] = Some(Rc::clone(&shared));
         shared
     })
+}
+
+enum DrawPass<'a> {
+    Record(DrawPlacement),
+    OverlayFrom(std::slice::Iter<'a, RenderNode>),
+    OverlayFromOutput(usize),
+}
+
+impl DrawPass<'_> {
+    fn placement(&self) -> DrawPlacement {
+        match self {
+            Self::Record(placement) => *placement,
+            Self::OverlayFrom(_) | Self::OverlayFromOutput(_) => DrawPlacement::Overlay,
+        }
+    }
+
+    fn take_recording(
+        &mut self,
+        command: &DrawCommand,
+        output: &[RenderNode],
+    ) -> Option<Rc<CommandRecording>> {
+        if matches!(command, DrawCommand::Overlay(_)) {
+            return None;
+        }
+        let node = match self {
+            Self::Record(_) => return None,
+            Self::OverlayFrom(nodes) => nodes.next().expect("each behind command has a draw run"),
+            Self::OverlayFromOutput(index) => {
+                let node = &output[*index];
+                *index += 1;
+                node
+            }
+        };
+        let RenderNode::DrawRun(run) = node else {
+            unreachable!("behind commands produce draw runs");
+        };
+        matches!(command, DrawCommand::WithContent(_)).then(|| Rc::clone(&run.recording))
+    }
 }
 
 fn layer_node_capacity(commands: &[DrawCommand], children: usize, has_text: bool) -> usize {
@@ -1711,7 +1894,7 @@ fn draw_nodes(
         node_id,
         commands,
         first_command_index,
-        placement,
+        DrawPass::Record(placement),
         size,
         phase,
     );
@@ -1723,53 +1906,33 @@ fn append_draw_nodes(
     node_id: NodeId,
     commands: &[DrawCommand],
     first_command_index: usize,
-    placement: DrawPlacement,
+    mut pass: DrawPass<'_>,
     size: Size,
     phase: PrimitivePhase,
 ) {
+    let placement = pass.placement();
     for (command_index, command) in commands.iter().enumerate() {
         let id = DrawCommandId {
             node_id,
             command_index: (first_command_index + command_index) as u32,
             placement,
         };
-        let Some((recording, segments)) =
-            recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
-        else {
-            retain_empty_draw_command(nodes, phase, id, placement, command);
-            continue;
+        let (shared, segments) = if let Some(shared) = pass.take_recording(command, nodes) {
+            let segments = shared.content_split(false);
+            (shared, segments)
+        } else {
+            let Some((recording, segments)) =
+                recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
+            else {
+                continue;
+            };
+            (publish_recording(id, recording), segments)
         };
-        let shared = publish_recording(id, recording);
-        if shared.is_empty_in(&segments) {
-            retain_empty_draw_command(nodes, phase, id, placement, command);
-            continue;
-        }
         nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_shared(
             phase,
             Some(id),
             shared,
             segments,
-        )));
-    }
-}
-
-fn retain_empty_draw_command(
-    nodes: &mut Vec<RenderNode>,
-    phase: PrimitivePhase,
-    id: DrawCommandId,
-    placement: DrawPlacement,
-    command: &DrawCommand,
-) {
-    if matches!(
-        (placement, command),
-        (DrawPlacement::Behind, DrawCommand::Behind(_))
-            | (DrawPlacement::Overlay, DrawCommand::Overlay(_))
-            | (_, DrawCommand::WithContent(_))
-    ) {
-        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command(
-            phase,
-            Some(id),
-            Vec::new(),
         )));
     }
 }
@@ -1799,24 +1962,25 @@ fn outer_draws(
 ) -> Option<OuterDraws> {
     (outer_draw_command_count > 0).then(|| {
         let commands = &draw_commands[..outer_draw_command_count];
-        OuterDraws {
-            behind: draw_nodes(
-                node_id,
-                commands,
-                0,
-                DrawPlacement::Behind,
-                size,
-                PrimitivePhase::BeforeChildren,
-            ),
-            overlay: draw_nodes(
-                node_id,
-                commands,
-                0,
-                DrawPlacement::Overlay,
-                size,
-                PrimitivePhase::AfterChildren,
-            ),
-        }
+        let behind = draw_nodes(
+            node_id,
+            commands,
+            0,
+            DrawPlacement::Behind,
+            size,
+            PrimitivePhase::BeforeChildren,
+        );
+        let mut overlay = crate::layer_recycling::child_list(commands.len());
+        append_draw_nodes(
+            &mut overlay,
+            node_id,
+            commands,
+            0,
+            DrawPass::OverlayFrom(behind.iter()),
+            size,
+            PrimitivePhase::AfterChildren,
+        );
+        OuterDraws { behind, overlay }
     })
 }
 

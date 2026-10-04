@@ -23,6 +23,7 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{Color, ImageBitmap, Point, Rect};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
+use unicode_segmentation::UnicodeSegmentation;
 
 #[cfg(test)]
 use crate::font_layout::layout_line_glyphs;
@@ -30,7 +31,7 @@ use crate::font_layout::layout_line_glyphs;
 use crate::text_hyphenation::HyphenationDictionaryError;
 use crate::{
     Brush,
-    annotated_text::{AnnotatedTextLayout, AnnotatedTextSegment},
+    annotated_text::{AnnotatedBrushExtent, AnnotatedTextLayout, AnnotatedTextSegment},
     ascii_glyphs::{ASCII_COUNT, ascii_slot},
     brush_sampling::{color_to_rgba, sample_brush_rgba},
     direct_mapped_cache::DirectMappedCache,
@@ -389,16 +390,16 @@ impl SoftwareTextFontSet {
     /// matching: lighter first below 400, heavier first above 500, and weights
     /// up to 500 before lighter or heavier alternatives in the 400–500 interval.
     pub fn resolve(&self, style: &TextStyle) -> Option<&SoftwareTextFont> {
-        let target_weight = style.span_style.font_weight.unwrap_or_default();
-        let target_style = style.span_style.font_style.unwrap_or_default();
-        let request = FontFamilyRequest::resolve(
-            style.span_style.font_family.as_ref(),
+        self.resolve_for_request(FontSelectionRequest::resolve(
+            style,
             &self.registered_families,
-        );
+        ))
+    }
 
+    fn resolve_for_request(&self, request: FontSelectionRequest<'_>) -> Option<&SoftwareTextFont> {
         let mut best: Option<(usize, FontMatchScore)> = None;
         for (index, font) in self.fonts.iter().enumerate() {
-            let Some(score) = font_match_score(font, target_weight, target_style, request) else {
+            let Some(score) = font_match_score(font, request) else {
                 continue;
             };
             if best.is_none_or(|(_, best_score)| score < best_score) {
@@ -409,6 +410,89 @@ impl SoftwareTextFontSet {
         let index = best.map(|(index, _)| index).or(self.default_index);
         index.and_then(|index| self.fonts.get(index))
     }
+
+    fn resolve_grapheme<'a>(
+        &'a self,
+        primary: &'a SoftwareTextFont,
+        grapheme: &str,
+        request: FontSelectionRequest<'_>,
+    ) -> &'a SoftwareTextFont {
+        if font_supports_grapheme(primary, grapheme) {
+            return primary;
+        }
+
+        self.fonts
+            .iter()
+            .enumerate()
+            .filter(|(_, font)| font_supports_grapheme(font, grapheme))
+            .min_by_key(|(index, font)| {
+                (
+                    u8::from(!request.family.matches(font)),
+                    font_match_score_unfiltered(font, request.target_weight, request.target_style),
+                    *index,
+                )
+            })
+            .map_or(primary, |(_, font)| font)
+    }
+
+    pub(crate) fn visit_font_runs<'a>(
+        &'a self,
+        text: &'a str,
+        style: &TextStyle,
+        mut visit: impl FnMut(std::ops::Range<usize>, &'a SoftwareTextFont),
+    ) -> Option<()> {
+        let request = FontSelectionRequest::resolve(style, &self.registered_families);
+        let primary = self.resolve_for_request(request)?;
+        if self.fonts.len() == 1 {
+            if !text.is_empty() {
+                visit(0..text.len(), primary);
+            }
+            return Some(());
+        }
+        let mut run_start = 0;
+        let mut run_font = None;
+        for (start, grapheme) in text.grapheme_indices(true) {
+            let font = self.resolve_grapheme(primary, grapheme, request);
+            match run_font {
+                None => {
+                    run_start = start;
+                    run_font = Some(font);
+                }
+                Some(previous) if !std::ptr::eq(previous, font) => {
+                    visit(run_start..start, previous);
+                    run_start = start;
+                    run_font = Some(font);
+                }
+                Some(_) => {}
+            }
+        }
+        if let Some(font) = run_font {
+            visit(run_start..text.len(), font);
+        }
+        Some(())
+    }
+
+    pub(crate) fn single_font_for_text(
+        &self,
+        text: &str,
+        style: &TextStyle,
+    ) -> Option<&SoftwareTextFont> {
+        let request = FontSelectionRequest::resolve(style, &self.registered_families);
+        let primary = self.resolve_for_request(request)?;
+        if self.fonts.len() == 1 {
+            return Some(primary);
+        }
+        for grapheme in text.graphemes(true) {
+            if !std::ptr::eq(primary, self.resolve_grapheme(primary, grapheme, request)) {
+                return None;
+            }
+        }
+        Some(primary)
+    }
+}
+
+fn font_supports_grapheme(font: &SoftwareTextFont, grapheme: &str) -> bool {
+    grapheme.chars().all(|ch| font.font.glyph_id(ch).0 != 0)
 }
 
 pub fn software_text_font_from_fonts_or_default(
@@ -510,9 +594,9 @@ impl<'a> FontFamilyRequest<'a> {
     fn resolve(font_family: Option<&'a FontFamily>, registered: &[FontFamilyKey]) -> Self {
         match font_family {
             None | Some(FontFamily::Default) => Self::Any,
-            Some(FontFamily::Named(name)) => Self::Named {
+            Some(family @ FontFamily::Named(name)) => Self::Named {
                 name: name.as_str(),
-                key: FontFamilyKey::of(&FontFamily::Named(name.clone())),
+                key: FontFamilyKey::of(family),
             },
             Some(family @ (FontFamily::FileBacked(_) | FontFamily::LoadedTypeface(_))) => {
                 Self::Registered(FontFamilyKey::of(family))
@@ -539,17 +623,44 @@ impl<'a> FontFamilyRequest<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct FontSelectionRequest<'a> {
+    family: FontFamilyRequest<'a>,
+    target_weight: FontWeight,
+    target_style: FontStyle,
+}
+
+impl<'a> FontSelectionRequest<'a> {
+    fn resolve(style: &'a TextStyle, registered: &[FontFamilyKey]) -> Self {
+        Self {
+            family: FontFamilyRequest::resolve(style.span_style.font_family.as_ref(), registered),
+            target_weight: style.span_style.font_weight.unwrap_or_default(),
+            target_style: style.span_style.font_style.unwrap_or_default(),
+        }
+    }
+}
+
 type FontMatchScore = (u32, u8, u16);
 
 fn font_match_score(
     font: &SoftwareTextFont,
-    target_weight: FontWeight,
-    target_style: FontStyle,
-    request: FontFamilyRequest<'_>,
+    request: FontSelectionRequest<'_>,
 ) -> Option<FontMatchScore> {
-    if !request.matches(font) {
+    if !request.family.matches(font) {
         return None;
     }
+    Some(font_match_score_unfiltered(
+        font,
+        request.target_weight,
+        request.target_style,
+    ))
+}
+
+fn font_match_score_unfiltered(
+    font: &SoftwareTextFont,
+    target_weight: FontWeight,
+    target_style: FontStyle,
+) -> FontMatchScore {
     let style_penalty = if font.style() == target_style {
         0
     } else {
@@ -559,11 +670,11 @@ fn font_match_score(
     let coverage_penalty =
         (21usize.saturating_sub(text_font_score(font).supported_latin_chars) as u32) * 1_000;
 
-    Some((
+    (
         style_penalty + coverage_penalty,
         weight_group,
         weight_distance,
-    ))
+    )
 }
 
 fn font_weight_rank(candidate: FontWeight, requested: FontWeight) -> (u8, u16) {
@@ -1023,14 +1134,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
         x: f32,
         y: f32,
     ) -> usize {
-        if !text.span_styles.is_empty() {
-            return annotated_offset_for_position(text, style, x, y, &self.fonts);
-        }
-        if let Some(font) = self.fonts.resolve(style) {
-            text_offset_for_position_with_font(text.text.as_str(), style, x, y, font)
-        } else {
-            fallback_text_offset_for_position(text.text.as_str(), style, x, y)
-        }
+        annotated_offset_for_position(text, style, x, y, &self.fonts)
     }
 
     fn get_cursor_x_for_offset(
@@ -1039,14 +1143,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
         style: &TextStyle,
         offset: usize,
     ) -> f32 {
-        if !text.span_styles.is_empty() {
-            return annotated_cursor_x_for_offset(text, style, offset, &self.fonts);
-        }
-        if let Some(font) = self.fonts.resolve(style) {
-            cursor_x_for_offset_with_font(text.text.as_str(), style, offset, font)
-        } else {
-            fallback_cursor_x_for_offset(text.text.as_str(), style, offset)
-        }
+        annotated_cursor_x_for_offset(text, style, offset, &self.fonts)
     }
 
     fn layout(
@@ -1054,14 +1151,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
         text: &cranpose_ui::text::AnnotatedString,
         style: &TextStyle,
     ) -> TextLayoutResult {
-        if !text.span_styles.is_empty() {
-            return layout_annotated_text_with_font_set(text, style, &self.fonts);
-        }
-        if let Some(font) = self.fonts.resolve(style) {
-            layout_text_with_font(text.text.as_str(), style, font)
-        } else {
-            fallback_layout_text(text.text.as_str(), style)
-        }
+        layout_annotated_text_with_font_set(text, style, &self.fonts)
     }
 
     fn choose_auto_hyphen_break(
@@ -1647,16 +1737,7 @@ fn annotated_line_alignment_offsets(
     let mut block = 0.0_f32;
     for index in 0..layout.lines.len() {
         let advance = layout.walk_line(index, 0.0, |segment| {
-            let font = segment.font.shaped_for(segment.style);
-            Some(segment_advance_px(
-                &font.font,
-                segment.text,
-                font.ab_glyph_px_size(segment.font_size) * scale,
-                font.metadata
-                    .tracking
-                    .resolve(segment.style, segment.font_size)
-                    * scale,
-            ))
+            Some(annotated_raster_segment_advance(&segment, scale))
         })?;
         block = block.max(advance);
         offsets.push(advance);
@@ -1685,6 +1766,19 @@ fn segment_advance_px(
         previous = Some(glyph_id);
     }
     caret.max(0.0)
+}
+
+fn annotated_raster_segment_advance(segment: &AnnotatedTextSegment<'_>, scale: f32) -> f32 {
+    let font = segment.font.shaped_for(segment.style);
+    segment_advance_px(
+        &font.font,
+        segment.text,
+        font.ab_glyph_px_size(segment.font_size) * scale,
+        font.metadata
+            .tracking
+            .resolve(segment.style, segment.font_size)
+            * scale,
+    )
 }
 
 fn text_render_request_is_degenerate(
@@ -1793,19 +1887,6 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
     glyph_cache: &mut SoftwareGlyphRasterCache,
 ) -> Option<ImageBitmap> {
     let text = text.into();
-    if text.span_styles.is_empty() {
-        let font = fonts.resolve(style)?;
-        return rasterize_text_to_image_with_glyph_cache(
-            text.text,
-            rect,
-            style,
-            fallback_color,
-            font_size,
-            scale,
-            font,
-            glyph_cache,
-        );
-    }
     rasterize_annotated_text_region(
         text,
         rect,
@@ -1838,12 +1919,44 @@ pub fn rasterize_annotated_text_region<'a>(
     if text_render_request_is_degenerate(text.is_empty(), rect, font_size, scale) {
         return None;
     }
+    if text.span_styles.is_empty()
+        && text_origin.x == rect.x
+        && text_origin.y == rect.y
+        && let Some(font) = fonts.single_font_for_text(text.text, style)
+    {
+        return match glyph_cache.as_deref_mut() {
+            Some(cache) => rasterize_text_to_image_with_glyph_cache(
+                text.text,
+                rect,
+                style,
+                fallback_color,
+                font_size,
+                scale,
+                font,
+                cache,
+            ),
+            None => rasterize_text_to_image(
+                text.text,
+                rect,
+                style,
+                fallback_color,
+                font_size,
+                scale,
+                font,
+            ),
+        };
+    }
     let layout = AnnotatedTextLayout::new(text, style, font_size, scale, 1.0, fonts)?;
     let solid = layout.all_styles(style_can_rasterize_direct_solid);
     let width = rect.width.ceil().max(1.0) as u32;
     let height = rect.height.ceil().max(1.0) as u32;
     let mut canvas = TextRasterCanvas::new(width, height, solid);
     let offsets = annotated_line_alignment_offsets(&layout, &text, style, scale);
+    let brush_extents = layout.has_non_solid_brush().then(|| {
+        layout.brush_extents(offsets.as_deref(), scale, |segment| {
+            annotated_raster_segment_advance(segment, scale)
+        })
+    });
     layout.walk(offsets.as_deref(), |segment| {
         let static_text_motion = segment
             .style
@@ -1887,22 +2000,13 @@ pub fn rasterize_annotated_text_region<'a>(
                             .clamp(0.0, 1.0),
                     )
                 });
-        let brush_rect = if matches!(brush, Brush::Solid(_)) {
-            rect
-        } else {
-            let metrics = measure_text_with_font(
-                segment.text,
-                segment.style,
-                segment.font_size,
-                segment.font,
-            );
-            Rect {
-                x: text_origin.x + segment.origin.x,
-                y: text_origin.y + segment.origin.y,
-                width: (metrics.width * scale).ceil().max(1.0),
-                height: (metrics.height * scale).ceil().max(1.0),
-            }
-        };
+        let brush_rect = annotated_brush_rect(
+            brush,
+            brush_extents.as_deref().unwrap_or_default(),
+            &segment,
+            text_origin,
+            rect,
+        )?;
         let paint = GlyphPaint {
             brush,
             alpha,
@@ -1929,6 +2033,24 @@ pub fn rasterize_annotated_text_region<'a>(
         ))
     })?;
     canvas.into_image()
+}
+
+fn annotated_brush_rect(
+    brush: &Brush,
+    extents: &[AnnotatedBrushExtent],
+    segment: &AnnotatedTextSegment<'_>,
+    text_origin: Point,
+    fallback: Rect,
+) -> Option<Rect> {
+    if matches!(brush, Brush::Solid(_)) {
+        return Some(fallback);
+    }
+    let index = extents
+        .binary_search_by_key(&(segment.line_index, segment.style_index), |extent| {
+            (extent.line_index, extent.style_index)
+        })
+        .ok()?;
+    Some(extents[index].rect.translate(text_origin.x, text_origin.y))
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -1962,23 +2084,25 @@ fn walk_solid_text_atlas_segments<'a, T>(
         if !text_segment_supports_solid_atlas(style) {
             return None;
         }
-        return collect_segment(
-            text.text,
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: rect.width,
-                height: rect.height,
-            },
-            style,
-            style.resolve_text_color(fallback_color),
-            font_size,
-            scale,
-            fonts.resolve(style)?,
-            glyph_cache,
-            out,
-        )
-        .map(|_| ());
+        if let Some(font) = fonts.single_font_for_text(text.text, style) {
+            return collect_segment(
+                text.text,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: rect.width,
+                    height: rect.height,
+                },
+                style,
+                style.resolve_text_color(fallback_color),
+                font_size,
+                scale,
+                font,
+                glyph_cache,
+                out,
+            )
+            .map(|_| ());
+        }
     }
     let initial_len = out.len();
     let result = visit_annotated_text_segments(text, style, font_size, scale, fonts, |segment| {
@@ -2131,11 +2255,10 @@ pub fn measure_annotated_text_with_font_set(
     font_size: f32,
     fonts: &SoftwareTextFontSet,
 ) -> TextMetrics {
-    if text.span_styles.is_empty() {
-        if let Some(font) = fonts.resolve(style) {
-            return measure_text_with_font(text.text.as_str(), style, font_size, font);
-        }
-        return fallback_text_metrics(text.text.as_str(), style, font_size);
+    if text.span_styles.is_empty()
+        && let Some(font) = fonts.single_font_for_text(text.text.as_str(), style)
+    {
+        return measure_text_with_font(text.text.as_str(), style, font_size, font);
     }
     measure_annotated_text_with_resolver(text, style, font_size, fonts, None)
 }
@@ -2147,17 +2270,10 @@ fn measure_annotated_text_with_font_set_cached(
     fonts: &SoftwareTextFontSet,
     cache: &mut SoftwareTextMetricsCache,
 ) -> TextMetrics {
-    if text.span_styles.is_empty() {
-        if let Some(font) = fonts.resolve(style) {
-            return measure_text_with_font_cached(
-                text.text.as_str(),
-                style,
-                font_size,
-                font,
-                cache,
-            );
-        }
-        return fallback_text_metrics(text.text.as_str(), style, font_size);
+    if text.span_styles.is_empty()
+        && let Some(font) = fonts.single_font_for_text(text.text.as_str(), style)
+    {
+        return measure_text_with_font_cached(text.text.as_str(), style, font_size, font, cache);
     }
     measure_annotated_text_with_resolver(text, style, font_size, fonts, Some(cache))
 }
@@ -2385,6 +2501,11 @@ pub(crate) fn layout_annotated_text_with_font_set(
     style: &TextStyle,
     fonts: &SoftwareTextFontSet,
 ) -> TextLayoutResult {
+    if text.span_styles.is_empty()
+        && let Some(font) = fonts.single_font_for_text(text.text.as_str(), style)
+    {
+        return layout_text_with_font(&text.text, style, font);
+    }
     let Some(layout) = AnnotatedTextLayout::new(
         text.into(),
         style,
@@ -2442,6 +2563,11 @@ pub(crate) fn annotated_cursor_x_for_offset(
     fonts: &SoftwareTextFontSet,
 ) -> f32 {
     let offset = clamp_to_char_boundary(&text.text, offset);
+    if text.span_styles.is_empty()
+        && let Some(font) = fonts.single_font_for_text(text.text.as_str(), style)
+    {
+        return cursor_x_for_offset_with_font(&text.text, style, offset, font);
+    }
     let Some(layout) = AnnotatedTextLayout::new(
         text.into(),
         style,
@@ -2488,6 +2614,11 @@ pub(crate) fn annotated_offset_for_position(
     y: f32,
     fonts: &SoftwareTextFontSet,
 ) -> usize {
+    if text.span_styles.is_empty()
+        && let Some(font) = fonts.single_font_for_text(text.text.as_str(), style)
+    {
+        return text_offset_for_position_with_font(&text.text, style, x, y, font);
+    }
     let Some(layout) = AnnotatedTextLayout::new(
         text.into(),
         style,
@@ -3235,15 +3366,6 @@ pub(crate) fn asked_line_height(style: &TextStyle, scale: f32) -> f32 {
     (style.resolve_line_height(14.0, f32::NAN) * scale).max(1.0)
 }
 
-/// The advance between a paragraph's baselines in `style`, from the font it
-/// resolves to.
-fn style_line_height(style: &TextStyle, font_size: f32, fonts: &SoftwareTextFontSet) -> f32 {
-    fonts.resolve(style).map_or_else(
-        || fallback_line_height(style, font_size),
-        |font| line_height_for_style(style, font_size, font),
-    )
-}
-
 fn resolve_letter_spacing(style: &TextStyle, font_size: f32) -> f32 {
     let _ = font_size;
     style.resolve_letter_spacing(14.0)
@@ -3551,9 +3673,19 @@ fn append_prefix_width_segment<S: PrefixWidthSink>(
     }
 
     let font_size = resolve_font_size(style);
-    if let Some(font) = fonts.resolve(style) {
-        append_font_prefix_width_segment(segment, style, font_size, font, glyph_metrics, walk);
-    } else {
+    if fonts
+        .visit_font_runs(segment, style, |range, font| {
+            append_font_prefix_width_segment(
+                &segment[range],
+                style,
+                font_size,
+                font,
+                glyph_metrics,
+                walk,
+            );
+        })
+        .is_none()
+    {
         let char_width = fallback_char_width(font_size);
         let letter_spacing = resolve_letter_spacing(style, font_size);
         for _ in segment.chars() {
@@ -3632,11 +3764,10 @@ fn measure_text_impl(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, 1.0);
     let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, 1.0);
 
-    let lines: Vec<&str> = text.split('\n').collect();
-    let line_count = lines.len().max(1);
-
     let mut max_width: f32 = 0.0;
-    for line in &lines {
+    let mut line_count = 0usize;
+    for line in text.split('\n') {
+        line_count += 1;
         let line_width = line_advance_width(font, line, glyph_font_size);
         let char_spacing = run_tracking(line.chars().count(), letter_spacing);
         let line_width = (weight_synthesis.apply_width(line_width) + char_spacing).max(0.0);
@@ -3670,11 +3801,10 @@ fn measure_text_impl_cached(
     let line_box = font_line_box(style, font, font_size);
     let line_height = line_box.height;
 
-    let lines: Vec<&str> = text.split('\n').collect();
-    let line_count = lines.len().max(1);
-
     let mut max_width: f32 = 0.0;
-    for line in &lines {
+    let mut line_count = 0usize;
+    for line in text.split('\n') {
+        line_count += 1;
         let line_width =
             cached_line_advance_width(font, line, glyph_font_size, &mut cache.glyph_metrics);
         let char_spacing = run_tracking(line.chars().count(), letter_spacing);
@@ -3731,8 +3861,10 @@ fn max_line_height_for_annotated_text_with_resolver(
     font_size: f32,
     fonts: &SoftwareTextFontSet,
 ) -> f32 {
-    if text.span_styles.is_empty() {
-        return style_line_height(style, font_size, fonts);
+    if text.span_styles.is_empty()
+        && let Some(font) = fonts.single_font_for_text(text.text.as_str(), style)
+    {
+        return font_line_box(style, font, font_size).height;
     }
     AnnotatedTextLayout::new(text.into(), style, font_size, 1.0, measure_grid(), fonts).map_or_else(
         || fallback_line_height(style, font_size),
@@ -3773,10 +3905,6 @@ pub(crate) fn effective_style_for_range(
         }
     }
     effective
-}
-
-fn line_height_for_style(style: &TextStyle, font_size: f32, font: &SoftwareTextFont) -> f32 {
-    font_line_box(style, font, font_size).height
 }
 
 fn clamp_to_char_boundary(text: &str, mut offset: usize) -> usize {

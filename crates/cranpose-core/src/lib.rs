@@ -1694,6 +1694,22 @@ pub trait Node: Any {
     fn collect_owned_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
         self.collect_children_into(out);
     }
+    /// Finds a child in the order returned by [`Node::collect_owned_children_into`].
+    /// Nodes with slice-backed child storage should override this to avoid
+    /// materializing the whole list for a single lookup.
+    ///
+    /// ```
+    /// use cranpose_core::{Node, NodeId};
+    ///
+    /// fn child_is_first(parent: &dyn Node, child: NodeId) -> bool {
+    ///     parent.owned_child_index(child) == Some(0)
+    /// }
+    /// ```
+    fn owned_child_index(&self, child: NodeId) -> Option<usize> {
+        let mut children = SmallVec::<[NodeId; 8]>::new();
+        self.collect_owned_children_into(&mut children);
+        children.iter().position(|&id| id == child)
+    }
     /// Called after the node is created to record its own ID.
     /// Useful for nodes that need to store their ID for later operations.
     fn set_node_id(&mut self, _id: NodeId) {}
@@ -2980,7 +2996,7 @@ fn attach_child_at(
 ) {
     if insert_child_with_reparenting(applier, parent_id, child_id) {
         if let Some(target) = insert_index {
-            move_appended_child_to(applier, parent_id, target);
+            move_attached_child_left_to(applier, parent_id, child_id, target);
         }
         bubble.apply(applier, parent_id);
     } else if let Ok(child) = applier.get_mut(child_id) {
@@ -2993,16 +3009,21 @@ fn attach_child_at(
     }
 }
 
-fn move_appended_child_to(applier: &mut dyn Applier, parent_id: NodeId, target: usize) {
+fn move_attached_child_left_to(
+    applier: &mut dyn Applier,
+    parent_id: NodeId,
+    child_id: NodeId,
+    target: usize,
+) {
     let Ok(parent_node) = applier.get_mut(parent_id) else {
         return;
     };
-    let mut owned: SmallVec<[NodeId; 8]> = SmallVec::new();
-    parent_node.collect_owned_children_into(&mut owned);
-    let appended_index = owned.len().saturating_sub(1);
-    if target < appended_index {
-        parent_node.move_child(appended_index, target);
-        note_structural_move(parent_id, appended_index, target);
+    let Some(current_index) = parent_node.owned_child_index(child_id) else {
+        return;
+    };
+    if target < current_index {
+        parent_node.move_child(current_index, target);
+        note_structural_move(parent_id, current_index, target);
     }
 }
 
@@ -3341,6 +3362,16 @@ pub struct MemoryApplier {
     virtual_node_ids: HashSet<NodeId>,
 }
 
+/// Reusable ancestry storage for [`MemoryApplier::scene_nodes_attached_to_into`].
+///
+/// Attachment results are kept only for one batch, so callers can reuse this
+/// value without keeping stale attachment results after graph mutations.
+#[derive(Default)]
+pub struct SceneNodeAttachmentScratch {
+    attached: HashMap<NodeId, bool>,
+    path: Vec<NodeId>,
+}
+
 struct RemovalFrame {
     node_id: NodeId,
     children: SmallVec<[NodeId; 8]>,
@@ -3483,45 +3514,104 @@ impl MemoryApplier {
         nodes: impl IntoIterator<Item = NodeId>,
         root: NodeId,
     ) -> Vec<Option<NodeId>> {
-        let mut attached: HashMap<NodeId, bool> = HashMap::default();
-        attached.insert(root, true);
-        let mut path = Vec::new();
-        nodes
-            .into_iter()
-            .map(|node_id| {
-                let resolved = self.first_non_virtual_ancestor(node_id)?;
-                let mut current = resolved;
-                path.clear();
-                let answer = loop {
-                    if let Some(known) = attached.get(&current) {
-                        break *known;
-                    }
-                    path.push(current);
-                    match self.get_mut(current).ok().and_then(|node| node.parent()) {
-                        Some(parent) if path.len() < 100_000 => current = parent,
-                        _ => break false,
-                    }
-                };
-                for visited in path.drain(..) {
-                    attached.insert(visited, answer);
+        let mut result = Vec::new();
+        self.scene_nodes_attached_to_into(
+            nodes,
+            root,
+            &mut result,
+            &mut SceneNodeAttachmentScratch::default(),
+        );
+        result
+    }
+
+    /// Fills `output` with [`Self::scene_nodes_attached_to`] results, reusing
+    /// its storage and the ancestry cache in `scratch` across batches.
+    ///
+    /// Each distinct ancestor is inspected at most once per call. The cache
+    /// is cleared for each call, so graph mutations are observed by the next
+    /// batch.
+    ///
+    /// ```
+    /// use cranpose_core::{MemoryApplier, NodeId, SceneNodeAttachmentScratch};
+    ///
+    /// let mut applier = MemoryApplier::new();
+    /// let mut scratch = SceneNodeAttachmentScratch::default();
+    /// let mut attached: Vec<Option<NodeId>> = Vec::new();
+    /// let root = NodeId::default();
+    /// applier.scene_nodes_attached_to_into([], root, &mut attached, &mut scratch);
+    /// assert!(attached.is_empty());
+    /// ```
+    pub fn scene_nodes_attached_to_into(
+        &mut self,
+        nodes: impl IntoIterator<Item = NodeId>,
+        root: NodeId,
+        output: &mut Vec<Option<NodeId>>,
+        scratch: &mut SceneNodeAttachmentScratch,
+    ) {
+        let nodes = nodes.into_iter();
+        scratch.attached.clear();
+        output.clear();
+        let (lower_bound, upper_bound) = nodes.size_hint();
+        if lower_bound == 0 && upper_bound == Some(0) {
+            scratch.path.clear();
+            return;
+        }
+        scratch.attached.insert(root, true);
+        output.reserve(lower_bound);
+        scratch.path.clear();
+        for node_id in nodes {
+            let Some(resolved) = self.first_non_virtual_ancestor(node_id) else {
+                output.push(None);
+                continue;
+            };
+            let mut current = resolved;
+            scratch.path.clear();
+            let answer = loop {
+                if let Some(known) = scratch.attached.get(&current) {
+                    break *known;
                 }
-                answer.then_some(resolved)
-            })
-            .collect()
+                scratch.path.push(current);
+                match self.get_mut(current).ok().and_then(|node| node.parent()) {
+                    Some(parent) if scratch.path.len() < 100_000 => current = parent,
+                    _ => break false,
+                }
+            };
+            for visited in scratch.path.drain(..) {
+                scratch.attached.insert(visited, answer);
+            }
+            output.push(answer.then_some(resolved));
+        }
     }
 
     pub fn take_structural_change_parents_attached_to(&mut self, root: NodeId) -> Vec<NodeId> {
-        let recorded = std::mem::take(&mut self.structural_change_parents);
-        let mut attached = Vec::with_capacity(recorded.len());
-        for parent_id in recorded {
-            let Some(parent_id) = self.first_non_virtual_ancestor(parent_id) else {
-                continue;
+        let mut candidates = Vec::new();
+        self.take_structural_change_parents_into(&mut candidates);
+        let mut seen = HashSet::<NodeId>::default();
+        candidates.retain_mut(|parent_id| {
+            let Some(resolved) = self.first_non_virtual_ancestor(*parent_id) else {
+                return false;
             };
-            if self.is_attached_to(parent_id, root) && !attached.contains(&parent_id) {
-                attached.push(parent_id);
-            }
-        }
-        attached
+            *parent_id = resolved;
+            self.is_attached_to(resolved, root) && seen.insert(resolved)
+        });
+        candidates
+    }
+
+    /// Takes the recorded structural-change candidates into reusable storage.
+    /// Candidates are not resolved or attachment-filtered; callers that route
+    /// them into scenes should use [`Self::scene_nodes_attached_to_into`].
+    ///
+    /// ```
+    /// use cranpose_core::MemoryApplier;
+    ///
+    /// let mut applier = MemoryApplier::new();
+    /// let mut nodes = Vec::new();
+    /// applier.take_structural_change_parents_into(&mut nodes);
+    /// assert!(nodes.is_empty());
+    /// ```
+    pub fn take_structural_change_parents_into(&mut self, output: &mut Vec<NodeId>) {
+        output.clear();
+        std::mem::swap(&mut self.structural_change_parents, output);
     }
 
     fn first_non_virtual_ancestor(&mut self, node_id: NodeId) -> Option<NodeId> {
@@ -3560,22 +3650,14 @@ impl MemoryApplier {
         id: NodeId,
         f: impl FnOnce(&mut N) -> R,
     ) -> Result<R, NodeError> {
-        let physical_id = self
-            .resolve_node_index(id)
-            .ok_or(NodeError::Missing { id })?;
-        let slot = self
-            .nodes
-            .get_mut(physical_id)
-            .ok_or(NodeError::Missing { id })?
-            .as_deref_mut()
-            .ok_or(NodeError::Missing { id })?;
-        let typed =
-            slot.as_any_mut()
-                .downcast_mut::<N>()
-                .ok_or_else(|| NodeError::TypeMismatch {
-                    id,
-                    expected: std::any::type_name::<N>(),
-                })?;
+        let typed = self
+            .get_mut(id)?
+            .as_any_mut()
+            .downcast_mut::<N>()
+            .ok_or_else(|| NodeError::TypeMismatch {
+                id,
+                expected: std::any::type_name::<N>(),
+            })?;
         Ok(f(typed))
     }
 
@@ -3977,23 +4059,23 @@ impl MemoryApplier {
 
     fn dump_node(&self, output: &mut String, id: NodeId, depth: usize) {
         let indent = "  ".repeat(depth);
-        if let Some(physical_id) = self.resolve_node_index(id) {
-            if let Some(node) = self.nodes.get(physical_id).and_then(Option::as_ref) {
-                let type_name = std::any::type_name_of_val(&**node);
-                output.push_str(&format!("{indent}[{id}] {type_name}\n"));
-
-                let mut children = SmallVec::<[NodeId; 8]>::new();
-                node.collect_children_into(&mut children);
-                for child_id in children {
-                    self.dump_node(output, child_id, depth + 1);
-                }
-            } else {
+        let Ok(node) = self.get_ref(id) else {
+            if let Some(physical_id) = self.resolve_node_index(id) {
                 output.push_str(&format!(
                     "{indent}[{id}] (missing physical node {physical_id})\n"
                 ));
+            } else {
+                output.push_str(&format!("{indent}[{id}] (missing)\n"));
             }
-        } else {
-            output.push_str(&format!("{indent}[{id}] (missing)\n"));
+            return;
+        };
+        let type_name = std::any::type_name_of_val(node);
+        output.push_str(&format!("{indent}[{id}] {type_name}\n"));
+
+        let mut children = SmallVec::<[NodeId; 8]>::new();
+        node.collect_children_into(&mut children);
+        for child_id in children {
+            self.dump_node(output, child_id, depth + 1);
         }
     }
 
@@ -4213,7 +4295,10 @@ impl Applier for MemoryApplier {
 
     fn get_mut(&mut self, id: NodeId) -> Result<&mut dyn Node, NodeError> {
         if let Some(physical_id) = self.resolve_node_index(id) {
-            let slot = self.nodes[physical_id]
+            let slot = self
+                .nodes
+                .get_mut(physical_id)
+                .ok_or(NodeError::Missing { id })?
                 .as_deref_mut()
                 .ok_or(NodeError::Missing { id })?;
             return Ok(slot);

@@ -6,6 +6,8 @@ use crate::{
     },
 };
 
+pub(crate) const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
 /// Why the present stage refused a packet without drawing it. Each reason
 /// names the expectation the packet no longer matches; the frame is not an
 /// error, its scene travels back through `RenderReturns` for recycling.

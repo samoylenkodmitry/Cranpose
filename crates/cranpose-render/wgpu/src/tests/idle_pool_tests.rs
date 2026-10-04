@@ -17,21 +17,6 @@ fn take_hands_out_the_oldest_match_and_leaves_the_rest() {
 }
 
 #[test]
-fn take_min_by_key_hands_out_the_smallest_match_oldest_first() {
-    let mut pool = IdlePool::default();
-    for item in [9, 4, 6, 4] {
-        pool.put(item, 8, u64::MAX, weight);
-    }
-    assert_eq!(
-        pool.take_min_by_key(|item| *item > 4, |item| *item),
-        Some(6)
-    );
-    assert_eq!(pool.take_min_by_key(|_| true, |item| *item), Some(4));
-    assert_eq!(pool.iter().copied().collect::<Vec<_>>(), vec![9, 4]);
-    assert_eq!(pool.take_min_by_key(|item| *item > 100, |item| *item), None);
-}
-
-#[test]
 fn put_drops_the_oldest_past_the_count_or_the_weight() {
     let mut pool = IdlePool::default();
     for item in [1, 2, 3] {

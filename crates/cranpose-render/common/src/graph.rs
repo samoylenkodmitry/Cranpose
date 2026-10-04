@@ -387,14 +387,10 @@ pub enum RenderNode {
     Layer(Box<LayerNode>),
 }
 
-/// Stable identity of the draw command a run was recorded from: the layout
-/// node owning the command, the command's index in that node's command list,
-/// and which placement pass produced this run (a `WithContent` command emits
-/// one run per placement, so the pair alone is not unique). Rendering does
-/// not read it yet; it is the key under which retained recording state lives
-/// as retention moves up to the draw-command recorder, and it must survive
-/// recording, graph construction, normalized-scene creation, and renderer
-/// cache lookup unchanged.
+/// Stable identity of one placement of a draw command: its layout node,
+/// command index and placement pass. A `WithContent` command shares one CPU
+/// recording between its two runs, while each placement retains independent
+/// renderer state under this identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DrawCommandId {
     pub node_id: NodeId,
@@ -408,10 +404,10 @@ pub struct DrawRunNode {
     /// Which draw command recorded these primitives. `None` only for runs
     /// with no per-command provenance (hand-built tests).
     pub command: Option<DrawCommandId>,
-    /// Shared, not owned: the recording registry keyed by [`DrawCommandId`]
-    /// keeps a handle to the same recording, so its buffers survive this
-    /// node being dropped on the next rebuild and the command re-records
-    /// into them. Nothing mutates a recording after construction, which is
+    /// The recording registry keeps a handle per layout node and command,
+    /// so this recording's buffers survive the draw run being dropped and
+    /// the command can record into them on a later update. Nothing mutates
+    /// a recording after construction, which is
     /// what makes sharing sound.
     pub recording: Rc<CommandRecording>,
     /// The segments of the recording this run draws: one placement's part

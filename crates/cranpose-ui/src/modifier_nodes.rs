@@ -755,8 +755,10 @@ impl GraphicsLayerNode {
             let node_id = Rc::clone(&self.node_id);
             Rc::new(move || {
                 if let Some(node_id) = node_id.get() {
-                    let scope =
-                        crate::render_state::DrawObservationScope::new(node_id, modifier_index, 0);
+                    let scope = crate::render_state::DrawObservationScope::layer_properties(
+                        node_id,
+                        modifier_index,
+                    );
                     crate::render_state::observe_draw_reads(scope, || resolve())
                 } else {
                     resolve()
