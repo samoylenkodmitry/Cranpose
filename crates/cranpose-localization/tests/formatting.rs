@@ -25,6 +25,45 @@ fn locale(tag: &str) -> Locale {
 }
 
 #[test]
+fn system_tags_accept_extensions_without_losing_script_or_region() {
+    for (tag, expected) in [
+        ("en-US-u-fw-mon-ms-metric-mu-celsius", "en-US"),
+        ("zh-Hant-TW-u-nu-hanidec", "zh-Hant-TW"),
+        ("de-DE-x-phone", "de-DE"),
+    ] {
+        assert_eq!(locale(tag).to_string(), expected);
+    }
+    for invalid in [
+        "en-u",
+        "en-u-",
+        "en-u-abcdefghi",
+        "en-u-ca-gregory-u-nu-latn",
+        "en-x",
+        "en-u-💥",
+    ] {
+        assert!(Locale::parse(invalid).is_err(), "invalid tag: {invalid}");
+    }
+}
+
+#[test]
+fn unavailable_language_uses_the_selected_catalog_direction() {
+    let catalog = catalog(&[Resource {
+        locale: "fr",
+        namespace: "app",
+        source: "plain = Français",
+    }]);
+    let translator = catalog.negotiate(&[locale("he"), locale("fr-CA")]);
+    assert_eq!(
+        translator.format(&PLAIN, &[]).expect("translation"),
+        "Français"
+    );
+    assert_eq!(translator.locale().to_string(), "fr");
+    assert!(!translator.locale().is_rtl());
+    let preview = catalog.translator(locale("he").with_preview(PreviewMode::Rtl));
+    assert!(preview.locale().is_rtl());
+}
+
+#[test]
 fn translated_sentences_can_reorder_borrowed_arguments() {
     let catalog = catalog(&[Resource {
         locale: "fr",

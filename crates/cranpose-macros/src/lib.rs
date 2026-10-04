@@ -32,6 +32,16 @@ pub fn translations(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Captures readable source text and arguments for translation when displayed.
+/// Accepts the same syntax as `tr!`, but works outside composition.
+#[cfg(feature = "localization")]
+#[proc_macro]
+pub fn message(input: TokenStream) -> TokenStream {
+    localization::message(input.into())
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
+
 /// Generates a module of named message accessors from a source-language Fluent file.
 /// Syntax: `translation_messages!(pub mod messages, "locales/en/app.ftl")`.
 #[cfg(feature = "localization")]

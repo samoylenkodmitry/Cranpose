@@ -19,26 +19,41 @@
 //! let _ = cranpose_ui::tr!("Save", unused = 42);
 //! ```
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::RefCell;
 
 use cranpose_core::{
     CompositionLocal, CompositionLocalProvider, compositionLocalOf, remember, rememberKeyed,
 };
 pub use cranpose_localization::{
-    Argument, Catalog, FluentValue, Locale, LocalizationError, Message, PreviewMode, Resource,
-    SourceCatalog, Translator,
+    Argument, Catalog, DeferredMessage, FluentValue, Locale, LocalizationError, Message,
+    PreviewMode, Resource, SourceCatalog, Translator,
 };
 
 /// A formatted translation with shared text storage and owned-string conversions.
 pub type LocalizedText = crate::text::SharedText;
 
+/// Displays a message captured by `message!` using the current provider.
+/// A language change updates the text even when the request remains in application state.
+#[track_caller]
+pub fn localized_message(message: &DeferredMessage) -> LocalizedText {
+    let translator = local_translator().current();
+    rememberKeyed((message.clone(), translator), |(message, translator)| {
+        LocalizedText::from(message.format(translator.as_ref()).unwrap_or_else(|error| {
+            log::error!("{error}");
+            message.fallback_text()
+        }))
+    })
+}
+
 /// The translator installed by the nearest [`ProvideLocalization`].
 /// `None` uses each message's inline source-language catalog.
 pub fn local_translator() -> CompositionLocal<Option<Translator>> {
-    thread_local! {
-        static LOCAL: OnceCell<CompositionLocal<Option<Translator>>> = const { OnceCell::new() };
-    }
-    LOCAL.with(|local| local.get_or_init(|| compositionLocalOf(|| None)).clone())
+    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+        locals
+            .translator
+            .get_or_init(|| compositionLocalOf(|| None))
+            .clone()
+    })
 }
 
 /// Installs a catalog and language for this subtree, including its reading direction.
@@ -73,13 +88,33 @@ fn provide(translator: Translator, content: impl FnOnce()) {
     } else {
         crate::LayoutDirection::Ltr
     };
+    let locales = rememberKeyed(translator.locale().clone(), |locale| {
+        crate::text::LocaleList::new(vec![locale.to_string()])
+    });
     CompositionLocalProvider(
         [
             local_translator().provides(Some(translator)),
             crate::local_layout_direction().provides(direction),
+            text_locales().provides(Some(locales)),
         ],
         content,
     );
+}
+
+fn text_locales() -> CompositionLocal<Option<crate::text::LocaleList>> {
+    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+        locals
+            .text_locales
+            .get_or_init(|| compositionLocalOf(|| None))
+            .clone()
+    })
+}
+
+pub(crate) fn apply_text_locale(mut style: crate::text::TextStyle) -> crate::text::TextStyle {
+    if style.span_style.locale_list.is_none() {
+        style.span_style.locale_list = text_locales().current();
+    }
+    style
 }
 
 struct CachedTranslation {

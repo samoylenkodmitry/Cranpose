@@ -13,6 +13,39 @@ fn locale(tag: &str) -> Locale {
     Locale::parse(tag).expect("locale")
 }
 
+#[test]
+fn event_messages_own_arguments_and_follow_later_language_changes() {
+    let name = String::from("Ana 商品");
+    let message = cranpose_ui::message!("Hello, {name}!", id = "hello", name = name.as_str());
+    drop(name);
+    let mut composition = run_test_composition(|| {});
+    let language = MutableState::with_runtime(locale("en"), composition.runtime_handle());
+    let output = Rc::new(RefCell::new(String::new()));
+    composition
+        .render(981, || {
+            DeferredRoot(language, message.clone(), output.clone());
+        })
+        .expect("initial render");
+    assert!(output.borrow().contains("Hello"));
+    language.set_value(locale("fr"));
+    composition
+        .process_invalid_scopes()
+        .expect("language change");
+    assert!(output.borrow().contains("Bonjour"));
+    assert!(output.borrow().contains("Ana 商品"));
+}
+
+#[composable]
+fn DeferredRoot(
+    language: MutableState<Locale>,
+    message: cranpose_ui::localization::DeferredMessage,
+    output: Rc<RefCell<String>>,
+) {
+    ProvideLocalization(&catalog(), language.value(), || {
+        *output.borrow_mut() = cranpose_ui::localization::localized_message(&message).into();
+    });
+}
+
 fn catalog() -> Catalog {
     translations!("tests/fixtures/localization", fallback = "en")
 }

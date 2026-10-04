@@ -18,6 +18,14 @@ pub enum LayoutDirection {
 }
 
 impl LayoutDirection {
+    /// Converts a distance from the start edge to a physical horizontal position.
+    pub fn place_x(self, start: f32, width: f32, item_width: f32) -> f32 {
+        if self.is_rtl() {
+            width - start - item_width
+        } else {
+            start
+        }
+    }
     /// Whether the start edge is the right one.
     pub fn is_rtl(self) -> bool {
         matches!(self, LayoutDirection::Rtl)
@@ -42,13 +50,10 @@ impl LayoutDirection {
 
 /// The [`CompositionLocal`] carrying the current layout direction.
 pub fn local_layout_direction() -> CompositionLocal<LayoutDirection> {
-    thread_local! {
-        static LOCAL: std::cell::RefCell<Option<CompositionLocal<LayoutDirection>>> =
-            const { std::cell::RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(LayoutDirection::default))
+    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+        locals
+            .direction
+            .get_or_init(|| compositionLocalOf(LayoutDirection::default))
             .clone()
     })
 }

@@ -37,6 +37,11 @@ pub(crate) fn translate(input: TokenStream) -> syn::Result<TokenStream> {
     Ok(call.expand(&ui_path()?))
 }
 
+pub(crate) fn message(input: TokenStream) -> syn::Result<TokenStream> {
+    let call: TranslationCall = syn::parse2(input)?;
+    Ok(call.expand_deferred(&ui_path()?))
+}
+
 struct CatalogInput {
     directory: LitStr,
     fallback: LitStr,

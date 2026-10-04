@@ -25,7 +25,8 @@ workspace = true
 ignored = ["cranpose-render-pixels"]
 
 [features]
-localization = ["cranpose-ui/localization"]
+localization = ["cranpose-ui/localization", "cranpose-services/localization", "dep:sys-locale", "text-shaping"]
+text-shaping = ["cranpose-render-common/text-shaping"]
 default = ["embedded-default-font"]
 # Compiles every crate's debug and trace log calls out of release builds.
 # The logger this crate installs on Android passes Info and above, so there
@@ -284,6 +285,7 @@ serde = { version = "1.0.229", features = ["derive"], optional = true }
 serde_json = { version = "1.0.151", optional = true }
 inventory = { version = "0.3.24", optional = true }
 cranpose-macros = { workspace = true }
+sys-locale = { version = "0.3.2", features = ["js"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
@@ -600,6 +602,11 @@ cranpose-runtime-std = { path = "../cranpose-runtime-std" }
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[test]]
+name = "system_languages"
+path = "tests/system_languages.rs"
+required-features = ["localization"]
 
 [[example]]
 name = "localization"

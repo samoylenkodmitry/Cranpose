@@ -11,7 +11,7 @@ use cranpose_core::{ApplierGuard, MemoryApplier, NodeError, NodeId, RuntimeHandl
 pub use cranpose_core::{Composition, Key};
 pub use cranpose_macros::composable;
 #[cfg(feature = "localization")]
-pub use cranpose_macros::{tr, translation_messages, translations};
+pub use cranpose_macros::{message, tr, translation_messages, translations};
 #[cfg(feature = "localization")]
 pub use localization::{
     Catalog, Locale, LocalizedText, PreviewMode, ProvideLocalization, ProvideTranslator,
@@ -27,6 +27,7 @@ mod debug;
 pub mod density;
 pub mod draggable;
 mod draw;
+mod environment_locals;
 pub mod fling_animation;
 mod focus_dispatch;
 pub mod focus_manager;

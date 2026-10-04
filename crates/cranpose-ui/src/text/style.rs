@@ -49,22 +49,24 @@ impl Default for TextGeometricTransform {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct LocaleList {
-    locales: Vec<String>,
+    locales: std::sync::Arc<[String]>,
 }
 
 impl LocaleList {
     pub fn new(locales: Vec<String>) -> Self {
-        Self { locales }
+        Self {
+            locales: locales.into(),
+        }
     }
 
     pub fn from_language_tags(tags: &str) -> Self {
-        let locales = tags
+        let locales: Vec<_> = tags
             .split(',')
             .map(str::trim)
             .filter(|tag| !tag.is_empty())
             .map(ToString::to_string)
             .collect();
-        Self { locales }
+        Self::new(locales)
     }
 
     pub fn locales(&self) -> &[String] {

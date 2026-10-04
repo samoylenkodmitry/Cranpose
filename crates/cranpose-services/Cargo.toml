@@ -31,6 +31,7 @@ thiserror = "2.0.21"
 web-time.workspace = true
 
 [features]
+localization = []
 default = []
 http-native = ["dep:reqwest", "dep:webpki-root-certs"]
 web-http = [

@@ -306,13 +306,16 @@ test-features: test-watchos test-localization
 
 # Localization contracts, embedded catalogs, optional feature, and public UI integration.
 test-localization: check-localization
+    cargo test --profile ci -p cranpose --no-default-features --features localization --test system_languages
     cargo test --profile ci -p cranpose-localization --features tooling
     cargo test --profile ci -p cranpose-ui --features localization
     cargo test --profile ci -p cranpose-liquid --features localization
+    cargo test --profile ci -p cranpose-render-common --features text-shaping
 
 # Compile and lint both localization-enabled and ordinary consumers.
 check-localization:
     cargo clippy -p cranpose-localization -p cranpose-ui -p cranpose-liquid --all-targets --features cranpose-localization/tooling,cranpose-ui/localization,cranpose-liquid/localization -- -D warnings
+    cargo clippy -p cranpose-render-common --all-targets --features text-shaping -- -D warnings
     cargo check -p cranpose-ui --no-default-features
     cargo check -p cranpose --example localization --features desktop,renderer-wgpu,localization
     cargo run -p cranpose-localization --features tooling --bin cranpose-l10n -- check --catalogs crates/cranpose-ui/locales --fallback en

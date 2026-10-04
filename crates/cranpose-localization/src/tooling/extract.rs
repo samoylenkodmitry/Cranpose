@@ -144,7 +144,7 @@ fn visit_tokens(
     while let Some(token) = tokens.next() {
         match token {
             TokenTree::Ident(name)
-                if name == "tr"
+                if (name == "tr" || name == "message")
                     && matches!(tokens.peek(), Some(TokenTree::Punct(punct)) if punct.as_char() == '!') =>
             {
                 tokens.next();

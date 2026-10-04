@@ -133,10 +133,13 @@ impl Catalog {
                 prepared
             })
             .collect();
-        let locale = preferences
-            .first()
-            .cloned()
-            .unwrap_or_else(|| self.0.fallback.clone());
+        let locale = Locale {
+            language: languages.first().map_or_else(
+                || self.0.fallback.language.clone(),
+                |language| (*language).clone(),
+            ),
+            preview: preferences.first().map_or_default(|locale| locale.preview),
+        };
         Translator(Rc::new(TranslatorData {
             catalog: self.clone(),
             locale,
@@ -171,7 +174,8 @@ impl PartialEq for Translator {
 }
 
 impl Translator {
-    /// The requested language and preview settings.
+    /// The first selected catalog language and the requested preview settings.
+    /// Layout direction follows this effective language, including on fallback.
     pub fn locale(&self) -> &Locale {
         &self.0.locale
     }

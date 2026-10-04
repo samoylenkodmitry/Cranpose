@@ -73,6 +73,7 @@ pub struct TextLayoutResult {
     /// Height of a single line
     pub line_height: f32,
     glyph_x_positions: Vec<f32>,
+    cursor_positions_monotonic: bool,
     char_to_byte: Vec<usize>,
     /// Line layout information
     pub lines: Vec<LineLayout>,
@@ -87,6 +88,10 @@ impl TextLayoutResult {
             width: data.width,
             height: data.height,
             line_height: data.line_height,
+            cursor_positions_monotonic: data
+                .glyph_x_positions
+                .windows(2)
+                .all(|pair| pair[0] <= pair[1]),
             glyph_x_positions: data.glyph_x_positions,
             char_to_byte: data.char_to_byte,
             lines: data.lines,
@@ -96,16 +101,12 @@ impl TextLayoutResult {
     }
 
     /// Returns X position for cursor at given byte offset.
-    /// O(1) lookup from pre-computed positions.
+    /// Uses logical byte boundaries, including positions shared by a shaped cluster.
     pub fn get_cursor_x(&self, byte_offset: usize) -> f32 {
         let char_idx = self
             .char_to_byte
-            .iter()
-            .position(|&b| b > byte_offset)
-            .map_or_else(
-                || self.char_to_byte.len().saturating_sub(1),
-                |i| i.saturating_sub(1),
-            );
+            .partition_point(|&byte| byte <= byte_offset)
+            .saturating_sub(1);
 
         self.glyph_x_positions
             .get(char_idx)
@@ -114,10 +115,20 @@ impl TextLayoutResult {
     }
 
     /// Returns byte offset for X position.
-    /// O(log n) binary search through glyph positions.
+    /// Uses binary search for monotonic positions and nearest-edge lookup for bidirectional text.
     pub fn get_offset_for_x(&self, x: f32) -> usize {
         if self.glyph_x_positions.is_empty() {
             return 0;
+        }
+        if !self.cursor_positions_monotonic {
+            return self
+                .glyph_x_positions
+                .iter()
+                .enumerate()
+                .min_by(|(_, left), (_, right)| (**left - x).abs().total_cmp(&(**right - x).abs()))
+                .and_then(|(index, _)| self.char_to_byte.get(index))
+                .copied()
+                .unwrap_or(0);
         }
 
         let char_idx = match self

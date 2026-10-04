@@ -54,8 +54,24 @@ let translator = translations.negotiate(&preferred_locales);
 ProvideTranslator(translator, || App());
 ```
 
-The host supplies the preferences; this API does not poll operating-system
-settings. `Catalog::translator` and `Translator::format` also work without UI
+To follow the operating system automatically, read `local_system_languages()`
+inside composition and negotiate a translator from its current value:
+
+```rust
+let preferred = cranpose::local_system_languages().current();
+let translator = rememberKeyed(preferred, |locales| translations.negotiate(locales));
+ProvideTranslator(translator, || App());
+```
+
+Native app roots refresh this value after resume and Android configuration
+changes. Android includes the app-specific language choice from system settings.
+`system_languages()` returns a one-time snapshot outside composition. Embedded
+hosts can supply ordered BCP 47 tags through `HostController::preferred_languages`.
+Region and script tags remain available for negotiation; Unicode extensions do
+not prevent a language match. An explicit application choice can take precedence
+by supplying its translator instead of the negotiated one.
+
+`Catalog::translator` and `Translator::format` also work without UI
 composition, including background workers. Catalogs are immutable and shareable
 across threads; construct a thread-owned translator on each worker so formatting
 does not contend with the UI. Replace a catalog to install new resources; a provider observes
@@ -109,11 +125,25 @@ catalog. Target-language files are never rewritten. Review source changes before
 updating translations. Use `extract --check` in CI to reject a stale source
 catalog and `check --allow-missing` when incomplete translations are intentional.
 
-The extractor recognizes literal `tr!` invocations. A wrapper macro that generates
+The extractor recognizes literal `tr!` and `message!` invocations. A wrapper macro that generates
 translation calls from Rust macro parameters needs its messages defined in a
 Fluent file and generated accessors instead.
 
 ## Plurals, grammar, and generated accessors
+
+For a notice captured by an event callback, retain the message request and
+format it when it appears. This lets an existing notice follow later language
+changes:
+
+```rust
+let notice = message!("Saved {count} documents", count = 3);
+// Inside composition:
+Text(localized_message(&notice), modifier, style);
+```
+
+`message!` accepts the same source text, identifiers, and checked arguments as
+`tr!`. Its `DeferredMessage` owns borrowed argument text and shares that storage
+when cloned. It does not require composition at construction time.
 
 For richer messages, write Fluent directly in a source file:
 
@@ -154,7 +184,8 @@ It also does not turn translated text into markup or rich-text annotations.
 
 Text-selection menus, caret-action menus, selection containers, default search
 hints, and the tab-bar search accessory use the `cranpose-ui` namespace. English,
-French, Serbian Latin, and Arabic catalogs are bundled only with localization
+Spanish, French, German, Brazilian Portuguese, Russian, Serbian Latin, Arabic,
+Hindi, Indonesian, Simplified Chinese, Japanese, and Korean catalogs are bundled only with localization
 enabled. Application catalogs take precedence for matching messages; omitted
 entries retain the library translation. For example `locales/fr/cranpose-ui.ftl`:
 
@@ -183,9 +214,13 @@ let rtl = Locale::parse("en")?.with_preview(PreviewMode::Rtl);
 
 Expanded preview adds accents and length. RTL preview applies bidi isolation and
 an RTL layout default. It is a layout stress test, not an Arabic translation.
-Supply fonts covering the selected scripts. Direction defaults use Cranpose's
-existing layout-direction support; they do not establish complete RTL coverage
-for every widget or change the shaping locale in every text style.
+Supply fonts covering the selected scripts. The localization feature enables
+script shaping and bidirectional text order in the shared text renderer. A
+provider supplies the text locale unless a style explicitly sets its own locale
+list. Rows, columns, boxes, flow rows, lazy lists, relative offsets, and liquid
+tabs resolve placement using the current direction. Absolute offsets retain
+physical coordinates. Custom draw and gesture code must define how it uses
+direction; the provider cannot infer those coordinates.
 
 The runnable example exercises language switching, interpolation, plurals,
 menus, tab labels, accessibility labels, and both preview modes:

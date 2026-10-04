@@ -2,6 +2,7 @@ mod api_surface;
 mod baseline_alignment_integration;
 mod basic_text_field_style_integration;
 mod debug_and_draw_scopes;
+mod directional_layout;
 mod draw_scope_text_integration;
 mod geometry_and_modifiers;
 mod graphics_layer_backdrop_integration;

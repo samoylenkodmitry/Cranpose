@@ -2,6 +2,7 @@
 #![doc = include_str!("../README.md")]
 
 mod catalog;
+mod deferred;
 mod locale;
 mod message;
 
@@ -18,6 +19,7 @@ fn new_bundle<R: std::borrow::Borrow<fluent_bundle::FluentResource>>(
 pub mod tooling;
 
 pub use catalog::{Catalog, Resource, Translator};
+pub use deferred::DeferredMessage;
 /// Values accepted by generated message accessors, including borrowed text and numbers.
 pub use fluent_bundle::FluentValue;
 pub use locale::{Locale, PreviewMode};

@@ -37,6 +37,8 @@ mod text_cache_key;
 pub mod text_hyphenation;
 pub mod text_mask_gamma;
 pub mod text_measure;
+#[cfg(feature = "text-shaping")]
+mod text_shaping;
 
 #[cfg(test)]
 #[path = "tests/pointer_slices.rs"]

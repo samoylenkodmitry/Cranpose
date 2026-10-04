@@ -588,6 +588,78 @@ fn reader_reveal_scrolls_both_axes_without_starting_keyboard_focus() {
     }
 }
 
+#[test]
+fn reader_reveal_keeps_controls_clear_of_scroll_content_insets() {
+    let _guard = test_guard();
+    for horizontal in [false, true] {
+        for reverse in [false, true] {
+            assert_reader_content_insets(horizontal, reverse);
+        }
+    }
+}
+
+fn assert_reader_content_insets(horizontal: bool, reverse: bool) {
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        move || {
+            let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            let content = move || {
+                for label in ["English", "Spanish", "Korean"] {
+                    Box(
+                        Modifier::empty()
+                            .size(if horizontal {
+                                Size::new(48.0, 200.0)
+                            } else {
+                                Size::new(200.0, 48.0)
+                            })
+                            .content_description(label)
+                            .clickable(|_| {}),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    Spacer(Modifier::empty().size(Size::new(160.0, 160.0)));
+                }
+            };
+            let padding = if horizontal {
+                cranpose_ui_graphics::EdgeInsets::from_components(24.0, 0.0, 40.0, 0.0)
+            } else {
+                cranpose_ui_graphics::EdgeInsets::from_components(0.0, 24.0, 0.0, 40.0)
+            };
+            if horizontal {
+                Row(
+                    Modifier::empty()
+                        .size(Size::new(160.0, 240.0))
+                        .horizontal_scroll_with_content_padding(scroll, reverse, padding),
+                    RowSpec::default(),
+                    content,
+                );
+            } else {
+                Column(
+                    Modifier::empty()
+                        .size(Size::new(240.0, 160.0))
+                        .vertical_scroll_with_content_padding(scroll, reverse, padding),
+                    ColumnSpec::default(),
+                    content,
+                );
+            }
+        },
+    );
+    shell.set_semantics_enabled(true);
+    shell.update();
+    for label in ["Korean", "Spanish", "English"] {
+        let target = reader_control_id(&mut shell, label);
+        shell.accessibility_reveal(target);
+        shell.update();
+        let (x, y, width, height) = shell.node_layout_bounds(target).expect("control bounds");
+        let (start, size) = if horizontal { (x, width) } else { (y, height) };
+        assert!(
+            start >= 24.0 && start + size <= 120.0,
+            "{label}: start={start}, size={size}, horizontal={horizontal}, reverse={reverse}"
+        );
+    }
+}
+
 struct LazyEditorFixture {
     shell: AppShell<HitGraphRenderer>,
     list: cranpose_foundation::lazy::LazyListState,

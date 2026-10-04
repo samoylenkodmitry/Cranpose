@@ -93,6 +93,18 @@ impl TranslationCall {
 
     /// Expands into a static message and a reactive lookup through `ui_path`.
     pub fn expand(&self, ui_path: &TokenStream) -> TokenStream {
+        self.expand_call(ui_path, quote!(#ui_path::localization::localized))
+    }
+
+    /// Expands into a deferred request suitable for event handlers and application state.
+    pub fn expand_deferred(&self, ui_path: &TokenStream) -> TokenStream {
+        self.expand_call(
+            ui_path,
+            quote!(#ui_path::localization::DeferredMessage::new),
+        )
+    }
+
+    fn expand_call(&self, ui_path: &TokenStream, resolve: TokenStream) -> TokenStream {
         let id = &self.id;
         let source_locale = &self.source_locale;
         let resource = self.resource();
@@ -105,7 +117,7 @@ impl TranslationCall {
                 #ui_path::localization::SourceCatalog::new(#source_locale, #resource);
             static MESSAGE: #ui_path::localization::Message =
                 #ui_path::localization::Message::new(env!("CARGO_PKG_NAME"), #id, &SOURCE);
-            #ui_path::localization::localized(&MESSAGE, [#(#arguments),*])
+            #resolve(&MESSAGE, [#(#arguments),*])
         })
     }
 

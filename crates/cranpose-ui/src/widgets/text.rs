@@ -136,6 +136,8 @@ fn compose_basic_text_group(
     style: TextStyle,
     options: TextLayoutOptions,
 ) -> NodeId {
+    #[cfg(feature = "localization")]
+    let style = crate::localization::apply_text_locale(style);
     let current = text.resolve();
 
     let options = options.normalized();

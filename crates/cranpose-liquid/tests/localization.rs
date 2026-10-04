@@ -81,3 +81,40 @@ fn changing_language_updates_tab_search_and_action_accessibility_labels() {
         }
     }
 }
+
+#[test]
+fn rtl_tabs_remain_visible_and_select_the_logical_index() {
+    let selected = Rc::new(Cell::new(usize::MAX));
+    let selection = selected.clone();
+    let mut robot = create_headless_robot_test(400, 120, move || {
+        let selection = selection.clone();
+        cranpose_ui::ProvideLayoutDirection(cranpose_ui::LayoutDirection::Rtl, || {
+            LiquidTheme(LiquidThemeSpec::default(), move || {
+                LiquidTabBar(
+                    Modifier::empty().width(390.0),
+                    LiquidTabBarSpec::default(),
+                    2,
+                    move |index| selection.set(index),
+                    |tabs| {
+                        tabs.tab(cranpose_liquid::icons::BOOKMARK, "Library");
+                        tabs.tab(cranpose_liquid::icons::SEARCH, "Scan");
+                        tabs.tab(cranpose_liquid::icons::STAR, "Settings");
+                    },
+                );
+            });
+        });
+    });
+    robot.wait_for_idle();
+    let mut previous = 400.0;
+    for (index, label) in ["Library", "Scan", "Settings"].into_iter().enumerate() {
+        let bounds = robot.find_by_text(label).bounds().expect("tab bounds");
+        assert!(
+            bounds.x >= 0.0 && bounds.x + bounds.width <= 400.0,
+            "{label}: {bounds:?}"
+        );
+        assert!(bounds.x < previous, "tabs follow right-to-left order");
+        previous = bounds.x;
+        robot.find_by_text(label).click();
+        assert_eq!(selected.get(), index, "{label} selects its logical index");
+    }
+}

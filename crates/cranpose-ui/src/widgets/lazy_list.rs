@@ -355,6 +355,7 @@ fn measure_lazy_list_children(
     let mut max_cross_size: f32 = 0.0;
     let mut node_ids: SmallNodeVec = SmallVec::with_capacity(root_children.len());
     let mut child_offsets: SmallOffsetVec = SmallVec::new();
+    let mut child_cross_axis_sizes: SmallOffsetVec = SmallVec::new();
     let mut retained_children: SmallVec<[Rc<MeasuredNode>; 4]> =
         SmallVec::with_capacity(root_children.len());
 
@@ -374,6 +375,7 @@ fn measure_lazy_list_children(
         };
 
         child_offsets.push(total_main_size);
+        child_cross_axis_sizes.push(cross);
         node_ids.push(child.node_id() as u64);
         if let Some(retained) = retained {
             retained_children.push(retained);
@@ -393,6 +395,7 @@ fn measure_lazy_list_children(
     );
     item.node_ids = node_ids;
     item.child_offsets = child_offsets;
+    item.child_cross_axis_sizes = child_cross_axis_sizes;
 
     measured_item_cache
         .borrow_mut()
@@ -579,6 +582,7 @@ fn measure_lazy_list_internal(
             is_vertical,
             effective_viewport_size,
             config,
+            cross_axis_size,
         );
         let bounce = overscroll.offset();
         for placement in placements.iter_mut() {
@@ -1048,11 +1052,7 @@ fn normalized_axis_bits(size: f32) -> u32 {
     }
 }
 
-/// Writes placements for measured lazy list items.
-///
-/// This helper encapsulates the logic for:
-/// - Applying arrangement when all items fit (hasSpareSpace in JC)
-/// - Using sequential positioning during scrolling
+#[expect(clippy::too_many_arguments)]
 fn push_lazy_list_placements(
     placements: &mut Vec<Placement>,
     density: f32,
@@ -1061,6 +1061,7 @@ fn push_lazy_list_placements(
     is_vertical: bool,
     viewport_size: f32,
     config: &LazyListMeasureConfig,
+    cross_axis_size: f32,
 ) {
     use cranpose_ui_layout::Arrangement;
 
@@ -1098,52 +1099,70 @@ fn push_lazy_list_placements(
         arrangement.arrange(density, available_main_axis, &sizes, &mut positions);
 
         for (item, &pos) in visible_items.iter().zip(positions.iter()) {
-            for (&nid, &child_offset) in item.node_ids.iter().zip(item.child_offsets.iter()) {
-                let node_id: NodeId = nid as NodeId;
-                let item_size = item.main_axis_size;
-
-                let placement = if is_vertical {
-                    let y = if config.reverse_layout {
-                        viewport_size - (content_offset + pos) - item_size + child_offset
-                    } else {
-                        content_offset + pos + child_offset
-                    };
-                    Placement::new(node_id, 0.0, y, 0)
-                } else {
-                    let x = if config.reverse_layout {
-                        viewport_size - (content_offset + pos) - item_size + child_offset
-                    } else {
-                        content_offset + pos + child_offset
-                    };
-                    Placement::new(node_id, x, 0.0, 0)
-                };
-                placements.push(placement);
-            }
+            push_lazy_item_placements(
+                placements,
+                item,
+                content_offset + pos,
+                is_vertical,
+                viewport_size,
+                cross_axis_size,
+                config,
+            );
         }
     } else {
         for item in visible_items {
-            for (&nid, &child_offset) in item.node_ids.iter().zip(item.child_offsets.iter()) {
-                let node_id: NodeId = nid as NodeId;
-                let item_size = item.main_axis_size;
-
-                let placement = if is_vertical {
-                    let y = if config.reverse_layout {
-                        viewport_size - item.offset - item_size + child_offset
-                    } else {
-                        item.offset + child_offset
-                    };
-                    Placement::new(node_id, 0.0, y, 0)
-                } else {
-                    let x = if config.reverse_layout {
-                        viewport_size - item.offset - item_size + child_offset
-                    } else {
-                        item.offset + child_offset
-                    };
-                    Placement::new(node_id, x, 0.0, 0)
-                };
-                placements.push(placement);
-            }
+            push_lazy_item_placements(
+                placements,
+                item,
+                item.offset,
+                is_vertical,
+                viewport_size,
+                cross_axis_size,
+                config,
+            );
         }
+    }
+}
+
+fn push_lazy_item_placements(
+    placements: &mut Vec<Placement>,
+    item: &LazyListMeasuredItem,
+    offset: f32,
+    is_vertical: bool,
+    viewport_size: f32,
+    cross_axis_size: f32,
+    config: &LazyListMeasureConfig,
+) {
+    let start = if config.reverse_layout {
+        viewport_size - offset - item.main_axis_size
+    } else {
+        offset
+    };
+    for (index, (&node_id, &offset)) in item.node_ids.iter().zip(&item.child_offsets).enumerate() {
+        let main = start + offset;
+        let (mut x, y) = if is_vertical {
+            (0.0, main)
+        } else {
+            (main, 0.0)
+        };
+        if config.is_rtl {
+            x = if is_vertical {
+                cross_axis_size
+                    - item
+                        .child_cross_axis_sizes
+                        .get(index)
+                        .copied()
+                        .unwrap_or(item.cross_axis_size)
+            } else {
+                let end = item
+                    .child_offsets
+                    .get(index + 1)
+                    .copied()
+                    .unwrap_or(item.main_axis_size);
+                viewport_size - x - (end - offset)
+            };
+        }
+        placements.push(Placement::new(node_id as NodeId, x, y, 0));
     }
 }
 
@@ -1185,6 +1204,7 @@ fn LazyColumnImpl(
     let composed_density = crate::density::density();
     let config = LazyListMeasureConfig {
         is_vertical: true,
+        is_rtl: crate::layout_direction().is_rtl(),
         reverse_layout: spec.reverse_layout,
         before_content_padding: spec.content_padding_top,
         after_content_padding: spec.content_padding_bottom,
@@ -1272,6 +1292,7 @@ fn LazyColumnImpl(
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
+        node.set_layout_direction(crate::layout_direction());
         if inputs_changed {
             measured_item_cache.borrow_mut().clear();
             node.invalidate_subcomposition();
@@ -1306,8 +1327,11 @@ fn LazyRowImpl(
     let caller_modifier_changed = super::layout::caller_modifier_changed(&modifier);
 
     let composed_density = crate::density::density();
+    let is_rtl = crate::layout_direction().is_rtl();
+    let reverse_scrolling = spec.reverse_layout ^ is_rtl;
     let config = LazyListMeasureConfig {
         is_vertical: false,
+        is_rtl,
         reverse_layout: spec.reverse_layout,
         before_content_padding: spec.content_padding_start,
         after_content_padding: spec.content_padding_end,
@@ -1334,7 +1358,7 @@ fn LazyRowImpl(
     let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
         state_identity: lazy_list_state_identity(&state),
         is_vertical: false,
-        reverse_scrolling: spec.reverse_layout,
+        reverse_scrolling,
     });
     let overscroll = motion_context.overscroll();
 
@@ -1372,7 +1396,7 @@ fn LazyRowImpl(
         .clip_to_bounds()
         .lazy_horizontal_scroll_with_context(
             state,
-            spec.reverse_layout,
+            reverse_scrolling,
             (spec.content_padding_start, spec.content_padding_end),
             motion_context,
         );
@@ -1397,6 +1421,7 @@ fn LazyRowImpl(
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
+        node.set_layout_direction(crate::layout_direction());
         if inputs_changed {
             measured_item_cache.borrow_mut().clear();
             node.invalidate_subcomposition();

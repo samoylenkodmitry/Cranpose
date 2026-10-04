@@ -10,6 +10,7 @@ mod gpos_kerning_measure;
 mod layer_and_raster_rules;
 mod layer_property_updates;
 mod lazy_trim_scene;
+mod multilingual_text;
 mod recording_reuse;
 mod scaling_list_scene;
 mod text_glyph_fallback;

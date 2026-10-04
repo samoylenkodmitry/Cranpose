@@ -24,11 +24,14 @@ pub struct Locale {
 }
 
 impl Locale {
-    /// Parses a Unicode language identifier such as `sr-Latn` or `ar-EG`.
+    /// Parses a language tag such as `sr-Latn` or `ar-EG`.
+    /// Valid BCP 47 extensions and private-use subtags are ignored for catalog selection.
     pub fn parse(tag: &str) -> Result<Self, LocalizationError> {
-        let language = tag
+        let invalid = || LocalizationError::InvalidLocale(tag.to_owned());
+        let language = language_identifier(tag)
+            .ok_or_else(invalid)?
             .parse()
-            .map_err(|_| LocalizationError::InvalidLocale(tag.to_owned()))?;
+            .map_err(|_| invalid())?;
         Ok(Self {
             language,
             preview: PreviewMode::None,
@@ -46,6 +49,48 @@ impl Locale {
         self.preview == PreviewMode::Rtl
             || self.language.character_direction() == CharacterDirection::RTL
     }
+}
+
+fn language_identifier(tag: &str) -> Option<&str> {
+    let mut end = tag.len();
+    let mut offset = 0;
+    let mut extension = false;
+    let mut private = false;
+    let mut needs_value = false;
+    let mut seen = 0u64;
+    for part in tag.split('-') {
+        if !extension && offset != 0 && part.len() == 1 {
+            end = offset - 1;
+            extension = true;
+        }
+        if extension {
+            if part.len() == 1 && !private {
+                let byte = part.as_bytes()[0].to_ascii_lowercase();
+                let index = match byte {
+                    b'0'..=b'9' => byte - b'0',
+                    b'a'..=b'z' => byte - b'a' + 10,
+                    _ => return None,
+                };
+                let flag = 1u64 << index;
+                if needs_value || seen & flag != 0 {
+                    return None;
+                }
+                seen |= flag;
+                private = byte == b'x';
+                needs_value = true;
+            } else {
+                let minimum = if private { 1 } else { 2 };
+                if !(minimum..=8).contains(&part.len())
+                    || !part.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                {
+                    return None;
+                }
+                needs_value = false;
+            }
+        }
+        offset += part.len() + 1;
+    }
+    (!needs_value).then_some(&tag[..end])
 }
 
 impl FromStr for Locale {

@@ -2112,6 +2112,7 @@ pub struct OffsetNode {
     x: f32,
     y: f32,
     rtl_aware: bool,
+    layout_direction: crate::LayoutDirection,
     state: NodeState,
 }
 
@@ -2121,13 +2122,18 @@ impl OffsetNode {
             x,
             y,
             rtl_aware,
+            layout_direction: crate::LayoutDirection::Ltr,
             state: NodeState::new(),
         }
     }
 
     pub fn offset(&self) -> Point {
         Point {
-            x: self.x,
+            x: if self.rtl_aware && self.layout_direction.is_rtl() {
+                -self.x
+            } else {
+                self.x
+            },
             y: self.y,
         }
     }
@@ -2136,14 +2142,19 @@ impl OffsetNode {
     /// `OffsetNode` places its content.
     pub fn device_offset(&self, density: f32) -> Point {
         use cranpose_ui_layout::round_to_px;
+        let offset = self.offset();
         Point {
-            x: round_to_px(self.x, density),
-            y: round_to_px(self.y, density),
+            x: round_to_px(offset.x, density),
+            y: round_to_px(offset.y, density),
         }
     }
 
     pub fn rtl_aware(&self) -> bool {
         self.rtl_aware
+    }
+
+    pub(crate) fn set_layout_direction(&mut self, direction: crate::LayoutDirection) {
+        self.layout_direction = direction;
     }
 }
 

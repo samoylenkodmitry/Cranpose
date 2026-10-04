@@ -72,6 +72,7 @@ pub fn FlowRow<F>(modifier: Modifier, spec: FlowRowSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
 {
-    let policy = FlowRowMeasurePolicy::new(spec.main_axis_spacing, spec.cross_axis_spacing);
+    let mut policy = FlowRowMeasurePolicy::new(spec.main_axis_spacing, spec.cross_axis_spacing);
+    policy.layout_direction = crate::layout_direction();
     Layout(modifier, policy, content)
 }

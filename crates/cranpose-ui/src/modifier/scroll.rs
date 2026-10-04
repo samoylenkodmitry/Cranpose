@@ -1435,7 +1435,13 @@ impl Modifier {
     /// );
     /// ```
     pub fn horizontal_scroll(self, state: ScrollState, reverse_scrolling: bool) -> Self {
-        self.then(scroll_impl(state, false, reverse_scrolling, None))
+        self.then(scroll_impl(
+            state,
+            false,
+            reverse_scrolling,
+            None,
+            (0.0, 0.0),
+        ))
     }
 
     /// Creates a vertically scrollable modifier.
@@ -1447,7 +1453,55 @@ impl Modifier {
     ///   NOT the drag direction. Drag gestures always follow natural touch semantics:
     ///   drag down = scroll up (content moves down under finger).
     pub fn vertical_scroll(self, state: ScrollState, reverse_scrolling: bool) -> Self {
-        self.then(scroll_impl(state, true, reverse_scrolling, None))
+        self.then(scroll_impl(
+            state,
+            true,
+            reverse_scrolling,
+            None,
+            (0.0, 0.0),
+        ))
+    }
+
+    /// Adds a vertical scroll container with content padding in logical pixels.
+    ///
+    /// The padding scrolls with the content. Keyboard and accessibility focus
+    /// keep controls inside the padded viewport, clear of overlaid system UI.
+    pub fn vertical_scroll_with_content_padding(
+        self,
+        state: ScrollState,
+        reverse_scrolling: bool,
+        padding: cranpose_ui_graphics::EdgeInsets,
+    ) -> Self {
+        let density = crate::density();
+        self.then(scroll_impl(
+            state,
+            true,
+            reverse_scrolling,
+            None,
+            (density.dp(padding.top), density.dp(padding.bottom)),
+        ))
+        .window_insets_padding(padding)
+    }
+
+    /// Adds a horizontal scroll container with content padding in logical pixels.
+    ///
+    /// The padding scrolls with the content. Keyboard and accessibility focus
+    /// keep controls inside the padded viewport. Insets use physical edges.
+    pub fn horizontal_scroll_with_content_padding(
+        self,
+        state: ScrollState,
+        reverse_scrolling: bool,
+        padding: cranpose_ui_graphics::EdgeInsets,
+    ) -> Self {
+        let density = crate::density();
+        self.then(scroll_impl(
+            state,
+            false,
+            reverse_scrolling,
+            None,
+            (density.dp(padding.left), density.dp(padding.right)),
+        ))
+        .window_insets_padding(padding)
     }
 
     /// A horizontal scroll that never claims a pointer gesture.
@@ -1466,6 +1520,7 @@ impl Modifier {
             false,
             reverse_scrolling,
             Some(Rc::new(|| false)),
+            (0.0, 0.0),
         ))
     }
 
@@ -1482,6 +1537,7 @@ impl Modifier {
             true,
             reverse_scrolling,
             Some(Rc::new(|| false)),
+            (0.0, 0.0),
         ))
     }
 }
@@ -1491,6 +1547,7 @@ fn scroll_impl(
     is_vertical: bool,
     reverse_scrolling: bool,
     guard: Option<Rc<dyn Fn() -> bool>>,
+    content_padding: (f32, f32),
 ) -> Modifier {
     let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
         state_id: state.id(),
@@ -1538,7 +1595,12 @@ fn scroll_impl(
         .then(motion_modifier)
         .then(translated_content_modifier)
         .then(layout_modifier)
-        .semantics(scroll_semantics(state, is_vertical, reverse_scrolling))
+        .semantics(scroll_semantics(
+            state,
+            is_vertical,
+            reverse_scrolling,
+            content_padding,
+        ))
 }
 
 /// What a screen reader learns about a scroll container: how far it has
@@ -1549,13 +1611,15 @@ fn scroll_semantics(
     state: ScrollState,
     is_vertical: bool,
     reverse_scrolling: bool,
+    content_padding: (f32, f32),
 ) -> impl Fn(&mut cranpose_foundation::SemanticsConfiguration) + 'static {
     move |config| {
         let range = cranpose_foundation::ScrollAxisRange::new(
             state.value(),
             state.max_value(),
             reverse_scrolling,
-        );
+        )
+        .with_content_padding(content_padding.0, content_padding.1);
         if is_vertical {
             config.vertical_scroll = Some(range);
         } else {

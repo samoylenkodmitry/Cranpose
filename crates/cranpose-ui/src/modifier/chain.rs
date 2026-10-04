@@ -40,6 +40,7 @@ pub type ModifierLocalsHandle = Rc<RefCell<ModifierLocalManager>>;
 
 pub struct ModifierChainHandle {
     chain: ModifierNodeChain,
+    layout_direction: crate::LayoutDirection,
     context: RefCell<BasicModifierNodeContext>,
     resolved: ResolvedModifiers,
     capabilities: NodeCapabilities,
@@ -54,6 +55,7 @@ impl Default for ModifierChainHandle {
     fn default() -> Self {
         Self {
             chain: ModifierNodeChain::new(),
+            layout_direction: crate::LayoutDirection::Ltr,
             context: RefCell::new(BasicModifierNodeContext::new()),
             resolved: ResolvedModifiers::default(),
             capabilities: NodeCapabilities::default(),
@@ -69,6 +71,38 @@ impl ModifierChainHandle {
         Self::default()
     }
 
+    pub(crate) fn for_layout_direction(layout_direction: crate::LayoutDirection) -> Self {
+        Self {
+            layout_direction,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn layout_direction(&self) -> crate::LayoutDirection {
+        self.layout_direction
+    }
+
+    pub(crate) fn set_layout_direction(&mut self, direction: crate::LayoutDirection) -> bool {
+        if self.layout_direction == direction {
+            return false;
+        }
+        self.layout_direction = direction;
+        self.update_offset_direction();
+        self.resolved = self.compute_resolved();
+        true
+    }
+
+    fn update_offset_direction(&mut self) {
+        let direction = self.layout_direction;
+        self.chain.visit_nodes_mut(|node, capabilities| {
+            if capabilities.contains(NodeCapabilities::LAYOUT)
+                && let Some(offset) = node.as_any_mut().downcast_mut::<OffsetNode>()
+            {
+                offset.set_layout_direction(direction);
+            }
+        });
+    }
+
     /// Reconciles the underlying [`ModifierNodeChain`] with the elements stored in `modifier`.
     pub fn update(&mut self, modifier: &Modifier) -> ModifierInvalidations {
         let mut resolver = |_: &ModifierLocalToken| None;
@@ -82,6 +116,9 @@ impl ModifierChainHandle {
     ) -> ModifierInvalidations {
         self.chain
             .update_from_ref_iter(modifier.iter_elements(), &mut *self.context.borrow_mut());
+        if self.layout_direction.is_rtl() {
+            self.update_offset_direction();
+        }
         self.capabilities = self.chain.capabilities();
         self.aggregate_child_capabilities = self.chain.head().aggregate_child_capabilities();
         let modifier_local_invalidations = self.sync_modifier_locals(resolver);
