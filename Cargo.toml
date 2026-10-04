@@ -36,6 +36,9 @@ members = [
     "apps/coroflow-demo/android",
     "apps/coroflow-demo/web",
 ]
+# Upstream crates Cranpose ships patched under its own names; see
+# forks/README.md. They build as path dependencies, outside the workspace.
+exclude = ["forks"]
 resolver = "2"
 
 [workspace.package]

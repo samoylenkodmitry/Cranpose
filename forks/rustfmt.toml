@@ -1,0 +1,3 @@
+# Upstream sources keep upstream's formatting (forks/README.md); `cargo fmt
+# --all` reaches them as local path dependencies.
+disable_all_formatting = true

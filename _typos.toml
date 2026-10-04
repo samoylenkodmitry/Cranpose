@@ -5,6 +5,9 @@
 [files]
 extend-exclude = [
   "target/**",
+  # Upstream sources Cranpose ships patched (forks/README.md): their spelling
+  # is upstream's.
+  "forks/**",
   # Build directories beside it: worktrees keep one per CARGO_TARGET_DIR
   # (target-clippy, target-android, ...), each tagged by cargo as a cache.
   "target-*/**",

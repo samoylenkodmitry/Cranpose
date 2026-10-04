@@ -178,7 +178,7 @@ def findings(path):
 def added_lines(base):
     """{path: {line numbers the diff against `base` adds}}"""
     diff = subprocess.run(
-        ["git", "diff", "--unified=0", f"{base}...HEAD", "--", "*.rs"],
+        ["git", "diff", "--unified=0", f"{base}...HEAD", "--", "*.rs", ":(exclude)forks"],
         capture_output=True,
         text=True,
         check=False,
