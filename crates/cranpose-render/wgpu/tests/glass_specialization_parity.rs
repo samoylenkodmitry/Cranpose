@@ -12,7 +12,8 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{
-    Brush, Color, DrawScope, LIQUID_GLASS_SPECIALIZATIONS, Point, RenderEffect, TileMode,
+    Brush, Color, DrawScope, LIQUID_GLASS_SPECIALIZATIONS, LIQUID_GLASS_WGSL, Point, RenderEffect,
+    RuntimeShader, ShaderTarget, ShaderWarmUp, TileMode,
 };
 
 use crate::support;
@@ -218,17 +219,31 @@ fn settle(
     }
 }
 
-/// The card's first frame cannot wait for its specializations: it draws
-/// with the glass shader's general pipeline, counted as fallback draws, and
-/// every later frame lands on the same bytes until the specialized
-/// pipelines take over in the background.
+/// Asks renderers to build the glass shader's general pipelines on their
+/// background compilers: a new material stands in with them while its own
+/// compile, where without them it waits for its own.
+fn request_glass_general() {
+    cranpose_ui_graphics::request_shader_warm_ups([ShaderTarget::Page, ShaderTarget::Layer].map(
+        |target| ShaderWarmUp {
+            shader: RuntimeShader::new(LIQUID_GLASS_WGSL),
+            target,
+        },
+    ));
+}
+
+/// Once the glass shader's general pipeline is built, a new card material
+/// draws with it, counted as fallback draws, and every later frame lands on
+/// the same bytes until its specialized pipelines take over in the
+/// background.
 #[test]
 fn a_glass_draws_with_its_general_pipeline_until_the_specialization_lands() {
+    request_glass_general();
     let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
         eprintln!("skipping glass pipeline readiness: no headless renderer");
         return;
     };
     let mut shell = card_shell(renderer, false);
+    support::wait_for_background_compiler_idle();
     let (first, first_stats) = capture_card_frame(&mut shell).expect("first capture");
     assert!(
         first_stats.shader_pipeline_fallback_draws > 0,
@@ -394,11 +409,13 @@ fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixe
 
 #[test]
 fn a_floating_button_keeps_its_picture_when_specialization_arrives() {
+    request_glass_general();
     let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
         eprintln!("skipping floating glass parity: no headless renderer");
         return;
     };
     let mut shell = card_shell(renderer, true);
+    support::wait_for_background_compiler_idle();
     let (first, first_stats) = capture_card_frame(&mut shell).expect("first capture");
     assert!(first_stats.shader_pipeline_fallback_draws > 0);
     support::wait_for_background_compiler_idle();

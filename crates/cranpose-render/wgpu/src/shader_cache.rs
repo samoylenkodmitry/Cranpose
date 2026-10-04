@@ -267,6 +267,10 @@ pub(crate) struct ShaderPipelineCache {
     /// The material a draw of this frame waited for its own pipelines of,
     /// because the general was not built.
     waited_this_frame: Option<PipelineKey>,
+    /// The general that material went without, queued when the next frame
+    /// starts: compiled beside the frame's own pipelines it would hold them,
+    /// since a Mali driver compiles largely one pipeline at a time.
+    general_due: Option<(PipelineKey, PipelineJob)>,
     /// The pipelines draws asked for, each noted once for the next launches.
     #[cfg(not(target_arch = "wasm32"))]
     noted: HashSet<PipelineKey, FxBuildHasher>,
@@ -312,6 +316,7 @@ impl ShaderPipelineCache {
             forced: Vec::new(),
             forced_hash: 0,
             waited_this_frame: None,
+            general_due: None,
             #[cfg(not(target_arch = "wasm32"))]
             noted: HashSet::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -323,6 +328,16 @@ impl ShaderPipelineCache {
     /// for its own.
     pub(crate) fn begin_frame(&mut self) {
         self.waited_this_frame = None;
+        if let Some((general, job)) = self.general_due.take()
+            && !self.pipelines.contains_key(&general)
+        {
+            self.slot(general).queue(
+                &self.compiler,
+                CompileLane::WarmUp,
+                self.factory.backend,
+                || job.build(),
+            );
+        }
     }
 
     pub fn set_forced_flags(&mut self, flags: impl Iterator<Item = &'static str>) {
@@ -503,8 +518,8 @@ impl ShaderPipelineCache {
         // Without a built general, the first material a frame cannot serve
         // waits for its own pipelines: a specialization compiles in a
         // fraction of the general's time (glass on a Mali: ~0.3 s a part
-        // against ~1.4 s). The general follows on the warm-up lane, for later
-        // materials to stand in with.
+        // against ~1.4 s). The general follows on the warm-up lane once the
+        // frame is over, for later materials to stand in with.
         let wait_for_own = !own
             && !self.ready(general)
             && (self.pipelines.contains_key(&key)
@@ -528,7 +543,9 @@ impl ShaderPipelineCache {
         };
         if wait_for_own {
             self.waited_this_frame = Some(key.unsplit());
-            self.request(shader, specialization, general, CompileLane::WarmUp);
+            if self.general_due.is_none() && !self.pipelines.contains_key(&general) {
+                self.general_due = Some((general, self.job(shader, specialization, general)));
+            }
         }
         if !self.ready(build) {
             let job = self.job(shader, specialization, build);
