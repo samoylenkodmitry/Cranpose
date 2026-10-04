@@ -23,15 +23,10 @@ use crate::{
 /// The container the `Text` composed here selects in: set by
 /// [`SelectionContainer`], cleared by [`DisableSelection`].
 pub fn local_selection_registrar() -> CompositionLocal<Option<SelectionRegistrar>> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<Option<SelectionRegistrar>>>> =
-            const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| cranpose_core::compositionLocalOf(|| None))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.selection_registrar,
+        || cranpose_core::compositionLocalOf(|| None),
+    )
 }
 
 /// Lets users select and copy text across the content. A mouse drag selects a

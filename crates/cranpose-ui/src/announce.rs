@@ -43,16 +43,10 @@ impl Announcer {
 /// CompositionLocal carrying the [`Announcer`]. The same instance comes back on
 /// every call.
 pub fn local_announcer() -> CompositionLocal<Announcer> {
-    thread_local! {
-        static LOCAL_ANNOUNCER: RefCell<Option<CompositionLocal<Announcer>>> =
-            const { RefCell::new(None) };
-    }
-
-    LOCAL_ANNOUNCER.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| cranpose_core::compositionLocalOf(Announcer::default))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.announcer,
+        || cranpose_core::compositionLocalOf(Announcer::default),
+    )
 }
 
 /// Reads `text` out politely. Short form of [`Announcer::announce`] for code

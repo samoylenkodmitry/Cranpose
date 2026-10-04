@@ -21,15 +21,10 @@ use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocal
 
 /// The [`CompositionLocal`] carrying the current lazy item's key.
 pub fn local_lazy_item_key() -> CompositionLocal<Option<u64>> {
-    thread_local! {
-        static LOCAL: std::cell::RefCell<Option<CompositionLocal<Option<u64>>>> =
-            const { std::cell::RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(|| None))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.lazy_item_key,
+        || compositionLocalOf(|| None),
+    )
 }
 
 /// The key of the lazy item being composed, or `None` outside a keyed lazy item.
