@@ -9,6 +9,8 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError, Weak},
 };
 
+use smallvec::SmallVec;
+
 use crate::{
     RecomposeScope, RecomposeScopeInner, RuntimeHandle, ScopeId, StateId,
     collections::map::{HashMap, HashSet},
@@ -154,19 +156,38 @@ impl StateRecord {
         self.tombstone.set(tombstone);
     }
 
-    pub(crate) fn clear_value(&self) {
-        self.value.borrow_mut().take();
+    /// Takes the value out, for the caller to drop once the operation that
+    /// cleared it is done: its destructor may read or write state.
+    #[must_use = "drop the cleared value once the record chain is consistent"]
+    pub(crate) fn clear_value(&self) -> Option<Box<dyn RecordValue>> {
+        self.value.borrow_mut().take()
     }
 
-    pub(crate) fn replace_value<T: Any + Clone>(&self, new_value: T) {
+    /// Marks the record dead and retires its value, for an operation that
+    /// holds a [`RetiredValuesScope`].
+    pub(crate) fn tombstone_retiring_value(&self) {
+        self.set_tombstone(true);
+        if let Some(value) = self.clear_value() {
+            retire_record_value(value);
+        }
+    }
+
+    /// Stores `new_value` and returns the value it displaced, for the caller
+    /// to drop once the write is published: its destructor may read or write
+    /// state.
+    #[must_use = "drop the displaced value once the write is published"]
+    pub(crate) fn replace_value<T: Any + Clone>(&self, new_value: T) -> Option<T> {
         let mut value = self.value.borrow_mut();
-        match value
+        if let Some(slot) = value
             .as_mut()
             .and_then(|current| (&mut **current as &mut dyn Any).downcast_mut::<T>())
         {
-            Some(slot) => *slot = new_value,
-            None => *value = Some(Box::new(new_value)),
+            return Some(std::mem::replace(slot, new_value));
         }
+        let placeholder = value.replace(Box::new(new_value));
+        drop(value);
+        drop(placeholder);
+        None
     }
 
     fn cloned_value(&self) -> Option<Box<dyn RecordValue>> {
@@ -185,7 +206,10 @@ impl StateRecord {
     }
 
     fn set_boxed_value(&self, value: Box<dyn RecordValue>) {
-        *self.value.borrow_mut() = Some(value);
+        let displaced = self.value.borrow_mut().replace(value);
+        if let Some(displaced) = displaced {
+            retire_record_value(displaced);
+        }
     }
 
     pub(crate) fn with_value<T: Any, R>(&self, f: impl FnOnce(&T) -> R) -> R {
@@ -203,7 +227,7 @@ impl StateRecord {
 
     #[cfg(test)]
     pub(crate) fn clear_for_reuse(&self) {
-        self.clear_value();
+        drop(self.clear_value());
     }
 
     pub(crate) fn assign_value(&self, source: &StateRecord) -> Result<(), StateRecordValueError> {
@@ -302,26 +326,6 @@ pub(crate) fn readable_record_for(
     }
 
     best
-}
-
-fn find_youngest_or<F>(head: &Rc<StateRecord>, predicate: F) -> Rc<StateRecord>
-where
-    F: Fn(&Rc<StateRecord>) -> bool,
-{
-    let mut current = Some(Rc::clone(head));
-    let mut youngest = Rc::clone(head);
-
-    while let Some(record) = current {
-        if predicate(&record) {
-            return record;
-        }
-        if youngest.snapshot_id() < record.snapshot_id() {
-            youngest = Rc::clone(&record);
-        }
-        current = record.next();
-    }
-
-    youngest
 }
 
 pub(crate) fn used_locked(head: &Rc<StateRecord>) -> Option<Rc<StateRecord>> {
@@ -495,10 +499,55 @@ fn commit_merged_record_locked(
     })
 }
 
+std::thread_local! {
+    // Record values displaced inside snapshot bookkeeping, and how many
+    // operations that hold them back are running.
+    static RETIRED_RECORD_VALUES: RefCell<Vec<Box<dyn RecordValue>>> =
+        const { RefCell::new(Vec::new()) };
+    static RETIRE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Drops `value`, a record value displaced inside snapshot bookkeeping, once
+/// the outermost [`RetiredValuesScope`] ends, or now when none is open: its
+/// destructor may read or write state.
+pub(crate) fn retire_record_value(value: Box<dyn RecordValue>) {
+    if RETIRE_DEPTH.with(Cell::get) == 0 {
+        drop(value);
+    } else {
+        RETIRED_RECORD_VALUES.with(|retired| retired.borrow_mut().push(value));
+    }
+}
+
+/// Holds back the drop of retired record values until the outermost scope
+/// ends, so no destructor runs while snapshot bookkeeping is half done.
+pub(crate) struct RetiredValuesScope(());
+
+impl RetiredValuesScope {
+    pub(crate) fn enter() -> Self {
+        RETIRE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        Self(())
+    }
+}
+
+impl Drop for RetiredValuesScope {
+    fn drop(&mut self) {
+        let outermost = RETIRE_DEPTH.with(|depth| {
+            depth.set(depth.get() - 1);
+            depth.get() == 0
+        });
+        if outermost {
+            let retired =
+                RETIRED_RECORD_VALUES.with(|retired| std::mem::take(&mut *retired.borrow_mut()));
+            drop(retired);
+        }
+    }
+}
+
+/// Marks the records of `state` that no open snapshot can read as free for
+/// reuse, retiring their values, and reports whether the state still keeps
+/// more than one record.
 pub(crate) fn overwrite_unused_records_locked(state: &dyn StateObject) -> bool {
-    let head = state.first_record();
-    let mut current = Some(Rc::clone(&head));
-    let mut overwrite_record: Option<Rc<StateRecord>> = None;
+    let mut current = Some(state.first_record());
     let mut valid_record: Option<Rc<StateRecord>> = None;
 
     let reuse_limit =
@@ -511,35 +560,23 @@ pub(crate) fn overwrite_unused_records_locked(state: &dyn StateObject) -> bool {
 
         if current_id == INVALID_SNAPSHOT_ID {
         } else if current_id < reuse_limit {
-            if valid_record.is_none() {
-                valid_record = Some(Rc::clone(&record));
-                retained_records += 1;
-            } else {
-                let Some(valid) = valid_record.as_ref() else {
+            match valid_record.as_ref() {
+                None => {
                     valid_record = Some(Rc::clone(&record));
                     retained_records += 1;
-                    current = record.next();
-                    continue;
-                };
-                let record_to_overwrite = if current_id < valid.snapshot_id() {
-                    Rc::clone(&record)
-                } else {
-                    let to_overwrite = Rc::clone(valid);
-                    valid_record = Some(Rc::clone(&record));
-                    to_overwrite
-                };
-
-                let source_record = overwrite_record.get_or_insert_with(|| {
-                    find_youngest_or(&head, |r| r.snapshot_id() >= reuse_limit)
-                });
-
-                record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
-                if let Err(error) = record_to_overwrite.assign_value(source_record) {
-                    log::error!(
-                        "snapshot cleanup could not copy retained state record value for state {:?}: {:?}",
-                        state.object_id(),
-                        error
-                    );
+                }
+                Some(valid) => {
+                    let record_to_overwrite = if current_id < valid.snapshot_id() {
+                        Rc::clone(&record)
+                    } else {
+                        let to_overwrite = Rc::clone(valid);
+                        valid_record = Some(Rc::clone(&record));
+                        to_overwrite
+                    };
+                    record_to_overwrite.set_snapshot_id(INVALID_SNAPSHOT_ID);
+                    if let Some(value) = record_to_overwrite.clear_value() {
+                        retire_record_value(value);
+                    }
                 }
             }
         } else {
@@ -709,8 +746,6 @@ impl WriteTarget<'_> {
         mark_update_write(self.id);
         let new_id = allocate_record_id();
         let record = new_overwritable_record_as_head_locked(self.state);
-        record.set_snapshot_id(new_id);
-        record.set_tombstone(false);
         GlobalWrite {
             record,
             new_id,
@@ -724,14 +759,19 @@ impl WriteTarget<'_> {
         write: GlobalWrite,
         snapshot_id: SnapshotId,
     ) {
+        // Published only now that its value is stored: nothing may read the
+        // record while the store runs.
+        write.record.set_snapshot_id(write.new_id);
+        write.record.set_tombstone(false);
         advance_global_snapshot(write.new_id);
         self.assert_chain_integrity("set(global-push)", Some(snapshot_id));
 
+        let mut cleared: SmallVec<[Box<dyn RecordValue>; 2]> = SmallVec::new();
         if !global.has_pending_children() {
             let mut cursor = write.record.next();
             while let Some(node) = cursor {
                 if !node.is_tombstone() && node.snapshot_id() != PREEXISTING_SNAPSHOT_ID {
-                    node.clear_value();
+                    cleared.extend(node.clear_value());
                     node.set_tombstone(true);
                 }
                 cursor = node.next();
@@ -745,6 +785,7 @@ impl WriteTarget<'_> {
                 write.new_id,
             );
         }
+        drop(cleared);
     }
 
     fn begin_child_write(
@@ -1085,8 +1126,9 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                 }
                 let write =
                     target.begin_global_write(&snapshot, global, snapshot_id, self.written_state());
-                write.record.replace_value(new_value);
+                let displaced = write.record.replace_value(new_value);
                 target.finish_global_write(global, write, snapshot_id);
+                drop(displaced);
             }
             AnySnapshot::Mutable(_)
             | AnySnapshot::NestedMutable(_)
@@ -1101,8 +1143,9 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
                     &invalid,
                     self.written_state(),
                 );
-                record.replace_value(new_value);
+                let displaced = record.replace_value(new_value);
                 target.assert_chain_integrity("set(child-writable)", Some(snapshot_id));
+                drop(displaced);
             }
             AnySnapshot::Readonly(_)
             | AnySnapshot::NestedReadonly(_)

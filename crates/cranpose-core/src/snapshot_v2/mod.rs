@@ -689,6 +689,7 @@ pub(crate) fn clear_last_writes() {
 }
 
 pub(crate) fn check_and_overwrite_unused_records_locked() {
+    let _retiring = super::state::RetiredValuesScope::enter();
     EXTRA_STATE_OBJECTS.with(|cell| {
         cell.borrow_mut()
             .remove_if(super::state::StateObject::overwrite_unused_records);
