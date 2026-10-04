@@ -230,41 +230,49 @@ fn a_layer_drawn_only_by_its_shader_shows_the_placeholder_until_its_pipeline_lan
     assert_lands(&mut renderer, graph);
 }
 
-#[test]
-fn a_placeholder_with_a_shape_fills_only_that_rounded_rectangle() {
-    let half = ShaderPlaceholder {
-        shape: Some(PlaceholderShape {
-            bounds: Rect {
-                x: 0.25,
-                y: 0.25,
-                width: 0.5,
-                height: 0.5,
-            },
-            corner_radius: 0.25,
-        }),
-        ..RED
-    };
-    let graph = backdrop_page(shader("shaped placeholder", Some(half)));
-    let (mut renderer, first) = first_frame(&graph);
+/// The red placeholder over the middle half of the pane, its corners
+/// rounded by a quarter of the pane.
+const MIDDLE: ShaderPlaceholder = ShaderPlaceholder {
+    shape: Some(PlaceholderShape {
+        bounds: Rect {
+            x: 0.25,
+            y: 0.25,
+            width: 0.5,
+            height: 0.5,
+        },
+        corner_radius: 0.25,
+    }),
+    ..RED
+};
+
+/// Asserts `frame` shows `inside` in the middle of the pane and the white
+/// page outside [`MIDDLE`]'s shape, its rounded corner included.
+fn assert_in_middle(frame: &CapturedFrame, inside: [u8; 4]) {
     let pixel = |x: f32, y: f32| {
         let start = (((PANE.y + y) as u32 * SIZE + (PANE.x + x) as u32) * 4) as usize;
-        [0, 1, 2, 3].map(|channel| first.pixels[start + channel])
+        [0, 1, 2, 3].map(|channel| frame.pixels[start + channel])
     };
-    assert_eq!(
-        pixel(8.0, 8.0),
-        [255, 0, 0, 255],
-        "the shape's middle is filled"
-    );
-    assert_eq!(
-        pixel(2.0, 2.0),
-        [255, 255, 255, 255],
-        "outside the shape is left to what is beneath"
-    );
-    assert_eq!(
-        pixel(4.0, 4.0),
-        [255, 255, 255, 255],
-        "the shape's corner is rounded"
-    );
+    assert_eq!(pixel(8.0, 8.0), inside, "the shape's middle");
+    assert_eq!(pixel(2.0, 2.0), [255; 4], "outside the shape");
+    assert_eq!(pixel(4.0, 4.0), [255; 4], "the shape's rounded corner");
+}
+
+#[test]
+fn a_placeholder_with_a_shape_fills_only_that_rounded_rectangle() {
+    let graph = backdrop_page(shader("shaped placeholder", Some(MIDDLE)));
+    let (mut renderer, first) = first_frame(&graph);
+    assert_in_middle(&first, [255, 0, 0, 255]);
+    assert_lands(&mut renderer, graph);
+}
+
+/// A glass that masks its layer's content keeps the content in its shape
+/// while it compiles.
+#[test]
+fn a_layer_effect_with_a_shaped_placeholder_keeps_the_content_in_that_shape() {
+    let effect = RenderEffect::runtime_shader(shader("shaped layer effect", Some(MIDDLE)));
+    let graph = effect_page(Some(effect));
+    let (mut renderer, first) = first_frame(&graph);
+    assert_in_middle(&first, [0, 255, 0, 255]);
     assert_lands(&mut renderer, graph);
 }
 

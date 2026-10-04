@@ -738,6 +738,61 @@ fn placeholder(effect: &RenderEffect) -> Option<ShaderPlaceholder> {
     }
 }
 
+/// A child's surface after its effect.
+enum ThroughEffect<'l> {
+    /// The effect is a shader drawn in the final pass over the surface.
+    Tail(ResolvedComposite),
+    /// The surface to composite, and the effect it is drawn without while
+    /// the effect's pipelines compile.
+    Source {
+        source: CompositeSource,
+        waiting: Option<&'l RenderEffect>,
+    },
+}
+
+impl ThroughEffect<'_> {
+    fn plain(surface: &SurfaceRender) -> Self {
+        Self::Source {
+            source: surface.source.clone(),
+            waiting: None,
+        }
+    }
+}
+
+/// The rounded mask of `placeholder`'s shape over a layer at `layer`; none
+/// when it fills the layer's own shape.
+fn placeholder_mask(
+    placeholder: ShaderPlaceholder,
+    layer: DeviceRect,
+) -> Option<RoundedCompositeMask> {
+    let shape = placeholder.shape?;
+    Some(RoundedCompositeMask {
+        rect: [
+            layer.x + shape.bounds.x * layer.width,
+            layer.y + shape.bounds.y * layer.height,
+            shape.bounds.width * layer.width,
+            shape.bounds.height * layer.height,
+        ],
+        radii: [shape.corner_radius * layer.width; 4],
+    })
+}
+
+/// Clips `composite`, a layer's content drawn without `effect` while the
+/// effect compiles, to the shape of the effect's placeholder over a layer at
+/// `layer`: a glass that masks its content keeps the content in its shape.
+fn clip_to_placeholder(
+    composite: &mut ResolvedComposite,
+    effect: &RenderEffect,
+    layer: DeviceRect,
+) {
+    if let Some(mask) =
+        placeholder(effect).and_then(|placeholder| placeholder_mask(placeholder, layer))
+        && let ResolvedCompositeKind::Blit { rounded_mask, .. } = &mut composite.kind
+    {
+        *rounded_mask = Some(mask);
+    }
+}
+
 fn batched_effect(effect: &RenderEffect) -> Option<BatchedEffect<'_>> {
     match effect {
         RenderEffect::Blur { .. } => blur_spec(effect).map(BatchedEffect::Blur),
@@ -2640,18 +2695,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         alpha: f32,
         rounded_mask: Option<RoundedCompositeMask>,
     ) -> ResolvedComposite {
-        let rounded_mask = match placeholder.shape {
-            Some(shape) => Some(RoundedCompositeMask {
-                rect: [
-                    dest.x + shape.bounds.x * dest.width,
-                    dest.y + shape.bounds.y * dest.height,
-                    shape.bounds.width * dest.width,
-                    shape.bounds.height * dest.height,
-                ],
-                radii: [shape.corner_radius * dest.width; 4],
-            }),
-            None => rounded_mask,
-        };
+        let rounded_mask = placeholder_mask(placeholder, dest).or(rounded_mask);
         let Color(r, g, b, a) = placeholder.color;
         let source = self.acquire_transient("Placeholder", 1, 1);
         self.renderer.clear_target(
@@ -3934,26 +3978,20 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             layer_rect_device.width,
             layer_rect_device.height,
         ];
+        let waiting = effect.effect.as_ref().filter(|render_effect| {
+            !self.effect_draws_now(render_effect, layer_pixel_rect, (width, height), false)
+        });
         let result = match &effect.effect {
-            Some(render_effect)
-                if self.effect_draws_now(
-                    render_effect,
-                    layer_pixel_rect,
-                    (width, height),
-                    false,
-                ) =>
-            {
-                self.apply_effect(
-                    &texture,
-                    render_effect,
-                    layer_pixel_rect,
-                    EffectReads::default(),
-                    "Effect Range Result",
-                )?
-            }
+            Some(render_effect) if waiting.is_none() => self.apply_effect(
+                &texture,
+                render_effect,
+                layer_pixel_rect,
+                EffectReads::default(),
+                "Effect Range Result",
+            )?,
             _ => texture,
         };
-        Ok(Some(ResolvedComposite {
+        let mut composite = ResolvedComposite {
             z_index: effect.z_start,
             source: result,
             content: SourceContent::Transient,
@@ -3966,7 +4004,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 sample_mode: CompositeSampleMode::Nearest,
                 source_viewport: None,
             },
-        }))
+        };
+        if let Some(render_effect) = waiting {
+            clip_to_placeholder(&mut composite, render_effect, layer_rect_device);
+        }
+        Ok(Some(composite))
     }
 
     /// Runs an effect chain over `source` into a fresh texture of the same
@@ -4042,6 +4084,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             dest,
             visible: visible_device,
         } = ChildFrame::of(child, scale, pass.target_rect());
+        let layer_rect = dest;
 
         if !self.renderer.ablation.stages
             && child.backdrop_alpha != 0.0
@@ -4085,20 +4128,31 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(surface) = resolved else {
             return Ok(());
         };
-        if let Some(composite) =
-            self.shader_tail_over_surface(child, &surface, snap, z, scale, shown)
-        {
-            pass.pending.push(composite);
-            return Ok(());
-        }
-        let source = match &child.effect {
-            Some(effect) => self.effect_over_surface(child, &surface, effect)?,
-            None => surface.source.clone(),
-        };
+        let (source, waiting) =
+            match self.surface_through_effect(child, &surface, snap, z, scale, shown)? {
+                ThroughEffect::Tail(composite) => {
+                    pass.pending.push(composite);
+                    return Ok(());
+                }
+                ThroughEffect::Source { source, waiting } => (source, waiting),
+            };
         let composite = match surface.grid_dest {
             Some(dest) => {
                 let visible = dest.intersect(shown).unwrap_or(visible);
-                grid_child_composite(child, z, source, surface.region, dest, snap, scale, visible)
+                let mut composite = grid_child_composite(
+                    child,
+                    z,
+                    source,
+                    surface.region,
+                    dest,
+                    snap,
+                    scale,
+                    visible,
+                );
+                if let Some(effect) = waiting {
+                    clip_to_placeholder(&mut composite, effect, layer_rect);
+                }
+                composite
             }
             None => {
                 let Some(composite) =
@@ -4113,22 +4167,55 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
+    /// The child's surface through its effect: a shader drawn in the final
+    /// pass, or the surface the effect drew into, or, while the effect
+    /// compiles, the surface as it is and the effect it waits for.
+    fn surface_through_effect<'l>(
+        &mut self,
+        child: &'l ChildLayer,
+        surface: &SurfaceRender,
+        snap: Point,
+        z: usize,
+        scale: f32,
+        shown: DeviceRect,
+    ) -> Result<ThroughEffect<'l>, String> {
+        let Some(effect) = &child.effect else {
+            return Ok(ThroughEffect::plain(surface));
+        };
+        let drawn = match self.shader_tail_over_surface(child, surface, snap, z, scale, shown) {
+            Some(Some(composite)) => return Ok(ThroughEffect::Tail(composite)),
+            Some(None) => None,
+            None => self.effect_over_surface(child, surface, effect)?,
+        };
+        Ok(match drawn {
+            Some(source) => ThroughEffect::Source {
+                source,
+                waiting: None,
+            },
+            None => ThroughEffect::Source {
+                source: surface.source.clone(),
+                waiting: Some(effect),
+            },
+        })
+    }
+
     /// The child's effect applied over its surface. Over a retained surface
     /// the output is a pure function of the surface's content and the
     /// effect, so it lives in the layer cache once the same output was
     /// wanted two frames running: an animated effect over still content is
     /// drawn afresh, and content that changes carries its effect with it.
+    /// None while the effect's pipelines compile.
     fn effect_over_surface(
         &mut self,
         child: &ChildLayer,
         surface: &SurfaceRender,
         effect: &RenderEffect,
-    ) -> Result<CompositeSource, String> {
+    ) -> Result<Option<CompositeSource>, String> {
         let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
         let source = &surface.source.texture;
         let (width, height) = (source.width, source.height);
         if !self.effect_draws_now(effect, layer_pixel_rect, (width, height), false) {
-            return Ok(surface.source.clone());
+            return Ok(None);
         }
         let content = surface.source.content.derived(&effect.render_hash());
         let retained = surface.source.content.retained_hash().zip(child.node_id);
@@ -4154,10 +4241,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 if let Some(gate) = self.renderer.effect_gates.get_mut(&node_id) {
                     gate.hit(key);
                 }
-                return Ok(CompositeSource {
+                return Ok(Some(CompositeSource {
                     texture: cached.texture,
                     content,
-                });
+                }));
             }
             self.renderer
                 .frame_stats
@@ -4188,10 +4275,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 {
                     gate.admitted();
                 }
-                return Ok(CompositeSource {
+                return Ok(Some(CompositeSource {
                     texture: dest,
                     content,
-                });
+                }));
             }
         }
         let texture = self.apply_effect(
@@ -4201,7 +4288,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             EffectReads::default(),
             "Layer Effect",
         )?;
-        Ok(CompositeSource { texture, content })
+        Ok(Some(CompositeSource { texture, content }))
     }
 
     fn shader_tail_composites(&mut self, child: &ChildLayer, shader: &RuntimeShader) -> bool {
@@ -4216,6 +4303,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 .position_independent(shader)
     }
 
+    /// The child's shader drawn in the final pass over its surface: `None`
+    /// when it does not draw that way, no composite while its pipeline
+    /// compiles.
     fn shader_tail_over_surface(
         &mut self,
         child: &ChildLayer,
@@ -4224,7 +4314,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         z: usize,
         scale: f32,
         visible: DeviceRect,
-    ) -> Option<ResolvedComposite> {
+    ) -> Option<Option<ResolvedComposite>> {
         let effect = child.effect.as_ref()?;
         let RenderEffect::Shader { shader } = effect else {
             return None;
@@ -4237,19 +4327,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let layer_pixel_rect = layer_pixel_rect(child, surface.rect, surface.scale);
         let source_size = (surface.source.texture.width, surface.source.texture.height);
         if !self.effect_draws_now(effect, layer_pixel_rect, source_size, true) {
-            let source = surface.source.clone();
-            return Some(grid_child_composite(
-                child,
-                z,
-                source,
-                surface.region,
-                dest,
-                snap,
-                scale,
-                visible,
-            ));
+            return Some(None);
         }
-        Some(shader_tail_composite(
+        Some(Some(shader_tail_composite(
             child,
             shader,
             z,
@@ -4258,7 +4338,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             layer_pixel_rect,
             grid_rounded_mask(child, snap, scale),
             visible,
-        ))
+        )))
     }
 
     /// A child that draws only its shader, composited without a surface of
