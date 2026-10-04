@@ -3795,6 +3795,7 @@ impl GpuRenderer {
         self.warm_requested_shaders();
         self.shape_pipelines.begin_frame();
         self.recorder.begin_frame();
+        self.effect_renderer.shader_cache.begin_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
         self.begin_text_glyph_run_frame();

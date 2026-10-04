@@ -116,32 +116,53 @@ fn warm_pipeline_lookups_do_not_rebuild_constants() {
 }
 
 #[test]
-fn a_specialization_draws_with_the_general_pipeline_until_it_lands() {
+fn a_frame_waits_for_its_first_material_and_stands_the_next_in_with_the_general() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let mut cache = cache(&device, PipelineCompiler::spawn());
+    let compiler = PipelineCompiler::spawn();
+    // Every warm-up thread holds, so the general queued behind them cannot
+    // land during the frame.
+    let holds: Vec<_> = (0..3)
+        .map(|_| {
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            compiler.enqueue(CompileLane::WarmUp, move || {
+                let _ = held.recv();
+            });
+            release
+        })
+        .collect();
+    let mut cache = cache(&device, compiler);
     let shader = split_shader();
     let mode = RuntimeShaderPipelineMode::Replace;
+    cache.begin_frame();
+    for variant in [ShaderDrawVariant::Interior, ShaderDrawVariant::Rim] {
+        let (_, fit) = cache
+            .get_or_create(&shader, shader.draw_specialization(0), mode, variant)
+            .expect("valid shader");
+        assert_eq!(
+            fit,
+            ShaderPipelineFit::Specialized,
+            "without a built general, the frame's first material waits for its {variant:?}"
+        );
+    }
+    let mut other = split_shader();
+    other.set_override("RED", 1.0);
     let (general, fit) = cache
         .get_or_create(
-            &shader,
-            shader.draw_specialization(0),
+            &other,
+            other.draw_specialization(0),
             mode,
             ShaderDrawVariant::Interior,
         )
         .expect("valid shader");
-    assert_eq!(fit, ShaderPipelineFit::Fallback);
+    assert_eq!(
+        fit,
+        ShaderPipelineFit::Fallback,
+        "another material of the frame stands in with the general"
+    );
     let general = general.clone();
-    let (again, fit) = cache
-        .get_or_create(
-            &shader,
-            shader.draw_specialization(0),
-            mode,
-            ShaderDrawVariant::Rim,
-        )
-        .expect("valid shader");
-    assert_eq!(fit, ShaderPipelineFit::Fallback);
-    assert!(*again == general, "both draws share the general pipeline");
+    drop(holds);
     settle(&mut cache, &shader);
+    cache.begin_frame();
     for variant in [ShaderDrawVariant::Interior, ShaderDrawVariant::Rim] {
         let (specialized, fit) = cache
             .get_or_create(&shader, shader.draw_specialization(0), mode, variant)
@@ -165,8 +186,8 @@ fn a_specialization_draws_with_the_general_pipeline_until_it_lands() {
     assert!(*whole != general);
     assert_eq!(
         builds(&cache),
-        (1, 4),
-        "the general pipeline plus three variants"
+        (1, 5),
+        "the general, three variants, and the other material's interior"
     );
 }
 
@@ -291,8 +312,9 @@ fn a_drawn_specialization_does_not_wait_for_its_queued_warm_up() {
             .expect("the warm-up lane drains");
         assert_eq!(
             builds(&cache),
-            (1, 1 + usize::from(fallback_ready)),
-            "the requested pipeline builds without a new general stand-in"
+            (1, 2),
+            "the requested pipeline builds, and the general either stood in or follows \
+             on the warm-up lane"
         );
     }
 }

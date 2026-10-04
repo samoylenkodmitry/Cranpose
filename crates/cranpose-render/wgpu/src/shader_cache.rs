@@ -127,6 +127,14 @@ struct PipelineKey {
 }
 
 impl PipelineKey {
+    /// The key of the material's whole draw, whichever part this one draws.
+    fn unsplit(self) -> Self {
+        Self {
+            split: None,
+            ..self
+        }
+    }
+
     fn general(self) -> Self {
         Self {
             overrides: 0,
@@ -256,6 +264,9 @@ pub(crate) struct ShaderPipelineCache {
     demanded: HashSet<PipelineKey, FxBuildHasher>,
     forced: Vec<&'static str>,
     forced_hash: u64,
+    /// The material a draw of this frame waited for its own pipelines of,
+    /// because the general was not built.
+    waited_this_frame: Option<PipelineKey>,
     /// The pipelines draws asked for, each noted once for the next launches.
     #[cfg(not(target_arch = "wasm32"))]
     noted: HashSet<PipelineKey, FxBuildHasher>,
@@ -300,11 +311,18 @@ impl ShaderPipelineCache {
             demanded: HashSet::default(),
             forced: Vec::new(),
             forced_hash: 0,
+            waited_this_frame: None,
             #[cfg(not(target_arch = "wasm32"))]
             noted: HashSet::default(),
             #[cfg(not(target_arch = "wasm32"))]
             recorder,
         }
+    }
+
+    /// Starts a frame: its first material without a built pipeline may wait
+    /// for its own.
+    pub(crate) fn begin_frame(&mut self) {
+        self.waited_this_frame = None;
     }
 
     pub fn set_forced_flags(&mut self, flags: impl Iterator<Item = &'static str>) {
@@ -478,12 +496,22 @@ impl ShaderPipelineCache {
         #[cfg(not(target_arch = "wasm32"))]
         self.note_drawn(specialization, key);
         let general = key.general();
-        let (build, fit) = if self.ready(key)
+        let own = self.ready(key)
             || key == general
             || !self.compiler.is_active()
-            || !specialization.exact()
-            || (self.pipelines.contains_key(&key) && !self.ready(general))
-        {
+            || !specialization.exact();
+        // Without a built general, the first material a frame cannot serve
+        // waits for its own pipelines: a specialization compiles in a
+        // fraction of the general's time (glass on a Mali: ~0.3 s a part
+        // against ~1.4 s). The general follows on the warm-up lane, for later
+        // materials to stand in with.
+        let wait_for_own = !own
+            && !self.ready(general)
+            && (self.pipelines.contains_key(&key)
+                || self
+                    .waited_this_frame
+                    .is_none_or(|material| material == key.unsplit()));
+        let (build, fit) = if own || wait_for_own {
             let fit = if key.is_general() {
                 ShaderPipelineFit::General
             } else {
@@ -498,6 +526,10 @@ impl ShaderPipelineCache {
             self.note_drawn(specialization, general);
             (general, ShaderPipelineFit::Fallback)
         };
+        if wait_for_own {
+            self.waited_this_frame = Some(key.unsplit());
+            self.request(shader, specialization, general, CompileLane::WarmUp);
+        }
         if !self.ready(build) {
             let job = self.job(shader, specialization, build);
             let backend = self.factory.backend;
