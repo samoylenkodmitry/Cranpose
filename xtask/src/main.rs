@@ -517,8 +517,17 @@ const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
 ];
 
-const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] =
-    &["pixels", "wgpu", "wgpu-core", "wgpu-hal", "naga"];
+/// Upstream wgpu and Cranpose's fork of it (forks/README.md) alike.
+const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] = &[
+    "pixels",
+    "wgpu",
+    "wgpu-core",
+    "wgpu-hal",
+    "cranpose-wgpu",
+    "cranpose-wgpu-core",
+    "cranpose-wgpu-hal",
+    "naga",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DependencyBudgetScope {
@@ -1611,7 +1620,7 @@ fn check_renderer_pixels_feature_boundary(explain: bool) -> Result<(), String> {
     renderer_pixels_feature_boundary_violation(&stdout)?;
     if explain {
         println!(
-            "renderer-pixels feature boundary ok: no external pixels, wgpu, wgpu-core, wgpu-hal, or naga packages"
+            "renderer-pixels feature boundary ok: no external pixels, wgpu (upstream or the fork), wgpu-core, wgpu-hal, or naga packages"
         );
     }
     Ok(())
@@ -2027,8 +2036,21 @@ fn dependency_tables(manifest: &toml::Value) -> Vec<&toml::Table> {
 /// `cranpose-coroflow` adapts. [`RELEASE_CRATE_PATTERN`] matches the same
 /// names inside a manifest.
 fn is_release_crate(name: &str) -> bool {
-    name.starts_with("cranpose") || name == "coroflow"
+    (name.starts_with("cranpose") && !FORKED_CRATES.contains(&name)) || name == "coroflow"
 }
+
+/// Upstream crates Cranpose ships patched under its own names
+/// (forks/README.md). They keep the upstream version and publish ahead of
+/// the release crates instead of in lockstep with them.
+const FORKED_CRATES: &[&str] = &[
+    "cranpose-wgpu",
+    "cranpose-wgpu-core",
+    "cranpose-wgpu-core-deps-apple",
+    "cranpose-wgpu-core-deps-emscripten",
+    "cranpose-wgpu-core-deps-wasm",
+    "cranpose-wgpu-core-deps-windows-linux-android",
+    "cranpose-wgpu-hal",
+];
 
 /// The names [`is_release_crate`] accepts, as a regex fragment.
 const RELEASE_CRATE_PATTERN: &str = r"(?:cranpose[\w-]*|coroflow)";
@@ -3511,6 +3533,10 @@ mod gate_diff {
         ranges
     }
 
+    /// Upstream code Cranpose ships patched (forks/README.md) keeps its own
+    /// shape; the diff gates judge only Cranpose's code.
+    const FORKS_PATHSPEC: &str = ":(exclude)forks";
+
     pub(crate) fn changed_ranges(
         root: &Path,
         base: &str,
@@ -3525,6 +3551,7 @@ mod gate_diff {
                 &base_sha,
                 "--",
                 pathspec,
+                FORKS_PATHSPEC,
             ])
             .current_dir(root)
             .output()

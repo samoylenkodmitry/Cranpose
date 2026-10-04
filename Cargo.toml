@@ -36,6 +36,9 @@ members = [
     "apps/coroflow-demo/android",
     "apps/coroflow-demo/web",
 ]
+# Upstream crates Cranpose ships patched under its own names; see
+# forks/README.md. They build as path dependencies, outside the workspace.
+exclude = ["forks"]
 resolver = "2"
 
 [workspace.package]
@@ -50,6 +53,8 @@ categories = ["gui"]
 
 
 [workspace.dependencies]
+# Cranpose's patched wgpu (forks/README.md). Its library is still `wgpu`.
+wgpu = { package = "cranpose-wgpu", path = "forks/wgpu/wgpu", version = "30.0.1", default-features = false }
 # Force android-activity to use native-activity feature across all workspace crates
 android-activity = { version = "0.6", features = ["native-activity"] }
 bytemuck = { version = "1.25", features = ["derive"] }
@@ -159,12 +164,12 @@ opt-level = 3
 # these are the crates that run per frame or per asset, not per build. They are
 # third-party and rebuilt rarely, so optimising them costs one compile and buys
 # every subsequent run. The workspace's own crates stay unoptimised so stepping
-# through them still works.
-[profile.dev.package.wgpu]
+# through them still works. wgpu is Cranpose's fork of it (forks/README.md).
+[profile.dev.package.cranpose-wgpu]
 opt-level = 3
-[profile.dev.package.wgpu-core]
+[profile.dev.package.cranpose-wgpu-core]
 opt-level = 3
-[profile.dev.package.wgpu-hal]
+[profile.dev.package.cranpose-wgpu-hal]
 opt-level = 3
 [profile.dev.package.wgpu-types]
 opt-level = 3
