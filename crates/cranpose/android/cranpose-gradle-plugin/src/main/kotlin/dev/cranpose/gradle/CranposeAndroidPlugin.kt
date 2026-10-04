@@ -135,12 +135,37 @@ class CranposeAndroidPlugin : Plugin<Project> {
             variant.sources.jniLibs?.addGeneratedSourceDirectory(native, CranposeNativeBuild::outputDir)
             contributeCranposeSources(project, cranpose, variant, native)
             checkManifest(project, cranpose, variant, native)
+            registerPipelineRecording(project, androidComponents, variant)
         }
 
         project.afterEvaluate {
             requireCargoPackage(cranpose)
             requireWorkspace(project, cranpose)
             addDependencies(project, cranpose)
+        }
+    }
+
+    /**
+     * Registers `cranposeRecordPipelines<Variant>`, which installs the variant
+     * and records the pipelines it draws on each connected device into the
+     * application's `assets/cranpose_gpu/`, for its fresh installs.
+     */
+    private fun registerPipelineRecording(
+        project: Project,
+        androidComponents: ApplicationAndroidComponentsExtension,
+        variant: ApplicationVariant,
+    ) {
+        val name = variant.name.replaceFirstChar { first -> first.uppercase() }
+        project.tasks.register("cranposeRecordPipelines$name", CranposeRecordPipelines::class.java) {
+            description =
+                "Records the pipelines ${variant.name} draws on each connected device, for fresh installs"
+            group = "cranpose"
+            dependsOn("install$name")
+            adb.set(androidComponents.sdkComponents.adb)
+            applicationId.set(variant.applicationId)
+            drawSeconds.set(10)
+            seedDir.set(project.layout.projectDirectory.dir("src/main/assets/cranpose_gpu"))
+            outputs.upToDateWhen { false }
         }
     }
 

@@ -647,6 +647,74 @@ fn a_prepared_update_leaves_this_builds_cache() {
     );
 }
 
+/// A cache the app's build wrote while drawing its glass page, as an app
+/// ships one for its fresh installs, with the cache file removed after.
+fn shipped_cache(cache: &Path) -> Vec<u8> {
+    let mut writer =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    draw_settled(&mut writer, glass_page());
+    drop(writer);
+    wait_for_cache(cache);
+    let shipped = fs::read(cache).expect("the shipped cache");
+    fs::remove_file(cache).expect("a fresh install has no cache");
+    shipped
+}
+
+/// A fresh install that ships the cache its build wrote on a device with
+/// this GPU and driver starts from it whole, like a relaunch: its first
+/// glass finds its pipelines built. A seed never replaces a cache the app
+/// has.
+#[test]
+fn a_fresh_install_seeded_for_this_driver_launches_like_a_relaunch() {
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("seeded-same-driver.bin");
+    let shipped = shipped_cache(&cache);
+    cranpose_render_wgpu::pipeline_disk_cache::seed(&cache, shipped.clone(), true);
+    assert_eq!(fs::read(&cache).expect("the seeded cache"), shipped);
+    cranpose_render_wgpu::pipeline_disk_cache::seed(&cache, vec![0; 64], true);
+    assert_eq!(
+        fs::read(&cache).expect("the seeded cache"),
+        shipped,
+        "a seed never replaces a cache the app has"
+    );
+    let mut launch =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    wait_for_warm_ups();
+    assert_eq!(
+        frame_waits_of(&mut launch, glass_page()),
+        0,
+        "a seeded fresh install draws its first glass with pipelines built before it"
+    );
+}
+
+/// Another device's seed counts only for its records: its compiled
+/// pipelines are that driver's, but the records still build the first
+/// screen before the first frame.
+#[test]
+fn a_seed_from_another_driver_keeps_only_its_records() {
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("seeded-other-driver.bin");
+    let shipped = shipped_cache(&cache);
+    cranpose_render_wgpu::pipeline_disk_cache::seed(&cache, shipped.clone(), false);
+    let seeded = fs::read(&cache).expect("the seeded cache");
+    assert_ne!(
+        seeded[..8],
+        shipped[..8],
+        "another driver's seed is another build's"
+    );
+    assert_eq!(seeded[8..], shipped[8..]);
+    let mut launch =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    wait_for_warm_ups();
+    assert_eq!(
+        frame_waits_of(&mut launch, glass_page()),
+        0,
+        "the records build the first glass before the first frame"
+    );
+}
+
 /// The driver cache holds what the last launch drew, but a launch with no
 /// records draws no stand-in: one would compile from nothing. A relaunch
 /// draws its cached glass with the glass's own pipelines, not a stand-in.

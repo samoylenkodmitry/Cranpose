@@ -87,6 +87,34 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     }
 }
 
+/// Starts the cache file at `path` from `seed`, a cache file an app ships
+/// for its fresh installs, unless the file exists. A seed another GPU or
+/// driver wrote counts as another build's: its records name what the app
+/// draws, but its compiled pipelines are that driver's, so it is written
+/// under a build key no build has and loads without them.
+pub fn seed(path: &Path, mut bytes: Vec<u8>, same_driver: bool) {
+    if path.exists() {
+        return;
+    }
+    if !same_driver && let Some(build) = bytes.get_mut(..blob_key().len()) {
+        build.fill(0);
+    }
+    if let Some(parent) = path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        log::warn!("[pipeline-cache] create_dir_all {parent:?}: {error}");
+        return;
+    }
+    match write_file(path, &bytes) {
+        Ok(()) => log::info!(
+            "[pipeline-cache] seeded {} B from the app{}",
+            bytes.len(),
+            if same_driver { "" } else { ", records only" },
+        ),
+        Err(error) => log::warn!("[pipeline-cache] seeding {path:?}: {error}"),
+    }
+}
+
 /// The device's pipeline cache, filled from `data` when the file had this
 /// build's.
 fn driver_cache(

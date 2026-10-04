@@ -126,6 +126,26 @@ Gradle build and share Cargo's cache. ABI splits use the selected native ABIs.
 Each split receives the variant's combined service and permission declarations.
 The plugin owns `CRANPOSE_CAPABILITIES_DIR`.
 
+## Ship pipelines for fresh installs
+
+A launch compiles the GPU pipelines its screens draw with and keeps them in a
+cache file, so later launches skip the compiles. A fresh install has no such
+file; on a slow GPU, its first launch shows placeholders while it compiles.
+
+`cranposeRecordPipelines<Variant>` installs the variant and runs it for ten
+seconds on every connected device. It then pulls each device's cache file
+into `src/main/assets/cranpose_gpu/`:
+
+```bash
+./gradlew :app:cranposeRecordPipelinesRelease
+```
+
+The next build ships those files. A fresh install on a device with the same
+GPU and driver starts from that device's compiled pipelines and launches like
+a relaunch. Any other device takes the list of pipelines the app draws from
+one of the files and compiles those ahead of its first screen. Record again
+after changing what the first screen draws or the Cranpose version.
+
 ## Host windows and web views
 
 `rememberAndroidHostWindowState` requests a window size in logical pixels.

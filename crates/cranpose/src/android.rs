@@ -1192,6 +1192,73 @@ pub(crate) fn keep_pipeline_cache_in(data_path: &std::path::Path) {
     }
 }
 
+/// The app's assets, for the pipeline caches it ships for fresh installs.
+static APP_ASSETS: std::sync::OnceLock<ndk::asset::AssetManager> = std::sync::OnceLock::new();
+
+/// The asset directory an app ships pipeline caches in, each named as the
+/// device that wrote it names its cache file.
+const SEED_ASSETS: &std::ffi::CStr = c"cranpose_gpu";
+
+/// Keeps the pipeline cache in the app's data directory, and the app's
+/// assets for the caches it ships. A recording run keeps the cache where adb
+/// can read it: the app's external files directory, which the system
+/// created for it.
+fn keep_pipeline_cache(app: &android_activity::AndroidApp) {
+    let cache_root = if crate::android_frame_telemetry::property_flag(
+        "debug.cranpose.pipeline_cache_external",
+    ) {
+        app.external_data_path()
+    } else {
+        app.internal_data_path()
+    };
+    if let Some(data_path) = cache_root {
+        keep_pipeline_cache_in(&data_path);
+    }
+    let _ = APP_ASSETS.set(app.asset_manager());
+}
+
+/// Starts the named pipeline cache file from the caches the app ships,
+/// unless it exists: the one written on a device with this GPU and driver,
+/// whole, or else another device's, for its records.
+fn seed_pipeline_cache() {
+    let (Some(assets), Some(path)) = (
+        APP_ASSETS.get(),
+        cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE"),
+    ) else {
+        return;
+    };
+    let path = std::path::PathBuf::from(path);
+    let Some(seeds) = assets.open_dir(SEED_ASSETS) else {
+        return;
+    };
+    let seeds: Vec<std::ffi::CString> = seeds.collect();
+    let this_driver = path.file_name().and_then(std::ffi::OsStr::to_str);
+    let Some((name, same_driver)) = seeds
+        .iter()
+        .find(|name| name.to_str().ok() == this_driver)
+        .map(|name| (name, true))
+        .or_else(|| seeds.first().map(|name| (name, false)))
+    else {
+        return;
+    };
+    let Ok(asset_path) =
+        std::ffi::CString::new([SEED_ASSETS.to_bytes(), b"/", name.to_bytes()].concat())
+    else {
+        return;
+    };
+    let mut bytes = Vec::new();
+    match assets.open(&asset_path) {
+        Some(mut asset) => {
+            if let Err(error) = std::io::Read::read_to_end(&mut asset, &mut bytes) {
+                log::warn!("[pipeline-cache] reading the seed {asset_path:?}: {error}");
+                return;
+            }
+        }
+        None => return,
+    }
+    cranpose_render_wgpu::pipeline_disk_cache::seed(&path, bytes, same_driver);
+}
+
 /// Names the pipeline cache file for the GPU and driver `adapter_info`
 /// describes in the cache directory, unless a file is named already: a
 /// driver update leaves the old driver's pipelines behind.
@@ -1585,6 +1652,7 @@ fn create_android_gpu_resources(
     let adapter = Arc::new(adapter);
 
     name_pipeline_cache_file(&adapter_info);
+    seed_pipeline_cache();
     let (device, queue) = pollster::block_on(adapter.request_device(&android_device(&adapter)))?;
 
     let device = Arc::new(device);
@@ -1951,9 +2019,7 @@ pub fn run(
 
     cranpose_render_wgpu::pin_current_thread_to_fast_cores("producer");
 
-    if let Some(data_path) = app.internal_data_path() {
-        keep_pipeline_cache_in(&data_path);
-    }
+    keep_pipeline_cache(&app);
 
     let present_thread = crate::android_present_thread::android_uses_present_thread(
         std::env::var("CRANPOSE_PRESENT_THREAD").ok().as_deref(),
