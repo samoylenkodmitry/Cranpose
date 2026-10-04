@@ -1251,6 +1251,7 @@ dependencies = [
  "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "log",
+ "stats_alloc",
  "web-time",
 ]
 

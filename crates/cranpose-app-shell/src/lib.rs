@@ -25,8 +25,8 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, collections::map::HashSet,
-    enter_event_handler_scope, location_key, run_in_mutable_snapshot,
+    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, SceneNodeAttachmentScratch,
+    collections::map::HashSet, enter_event_handler_scope, location_key, run_in_mutable_snapshot,
 };
 pub use cranpose_foundation::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerSource, RotaryScrollEvent,
@@ -43,8 +43,8 @@ use cranpose_ui::{
     has_pending_semantics_invalidations, peek_focus_invalidation, peek_layout_invalidation,
     peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
     process_pointer_repasses, process_semantics_invalidations, request_render_invalidation,
-    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
-    take_pointer_invalidation, take_render_invalidation,
+    take_focus_invalidation, take_layout_invalidation, take_pointer_invalidation,
+    take_render_invalidation,
 };
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
@@ -54,7 +54,7 @@ use hit_path_tracker::PointerId;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
 pub use surface::{RootId, RootSurface, SurfaceMut};
-use surface::{TextInputRouter, TextInputRoutes, partition_nodes_by_surface};
+use surface::{SurfaceDirtyLane, TextInputRouter, TextInputRoutes, route_nodes_by_surface};
 use web_time::Instant;
 pub use wheel::WheelScroll;
 
@@ -217,6 +217,18 @@ where
 {
     pub(crate) app: ShellApp,
     pub(crate) surfaces: Vec<RootSurface<R>>,
+    pub(crate) routing_scratch: SurfaceRoutingScratch,
+    pub(crate) pending_dirty_nodes: Vec<NodeId>,
+    pub(crate) geometry_scene_nodes: Vec<NodeId>,
+}
+
+#[derive(Default)]
+pub(crate) struct SurfaceRoutingScratch {
+    pub(crate) attached: Vec<Option<NodeId>>,
+    pub(crate) owners: Vec<Option<NodeId>>,
+    pub(crate) seen: HashSet<(usize, NodeId)>,
+    pub(crate) attachment: SceneNodeAttachmentScratch,
+    pub(crate) window_roots: cranpose_ui::WindowRootRoutingScratch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -653,6 +665,9 @@ where
                 buffer_size,
                 viewport,
             )],
+            routing_scratch: SurfaceRoutingScratch::default(),
+            pending_dirty_nodes: Vec::new(),
+            geometry_scene_nodes: Vec::new(),
         };
         shell.process_frame();
         shell

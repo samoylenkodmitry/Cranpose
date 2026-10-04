@@ -3362,6 +3362,16 @@ pub struct MemoryApplier {
     virtual_node_ids: HashSet<NodeId>,
 }
 
+/// Reusable ancestry storage for [`MemoryApplier::scene_nodes_attached_to_into`].
+///
+/// Attachment results are kept only for one batch, so callers can reuse this
+/// value without keeping stale attachment results after graph mutations.
+#[derive(Default)]
+pub struct SceneNodeAttachmentScratch {
+    attached: HashMap<NodeId, bool>,
+    path: Vec<NodeId>,
+}
+
 struct RemovalFrame {
     node_id: NodeId,
     children: SmallVec<[NodeId; 8]>,
@@ -3504,45 +3514,104 @@ impl MemoryApplier {
         nodes: impl IntoIterator<Item = NodeId>,
         root: NodeId,
     ) -> Vec<Option<NodeId>> {
-        let mut attached: HashMap<NodeId, bool> = HashMap::default();
-        attached.insert(root, true);
-        let mut path = Vec::new();
-        nodes
-            .into_iter()
-            .map(|node_id| {
-                let resolved = self.first_non_virtual_ancestor(node_id)?;
-                let mut current = resolved;
-                path.clear();
-                let answer = loop {
-                    if let Some(known) = attached.get(&current) {
-                        break *known;
-                    }
-                    path.push(current);
-                    match self.get_mut(current).ok().and_then(|node| node.parent()) {
-                        Some(parent) if path.len() < 100_000 => current = parent,
-                        _ => break false,
-                    }
-                };
-                for visited in path.drain(..) {
-                    attached.insert(visited, answer);
+        let mut result = Vec::new();
+        self.scene_nodes_attached_to_into(
+            nodes,
+            root,
+            &mut result,
+            &mut SceneNodeAttachmentScratch::default(),
+        );
+        result
+    }
+
+    /// Fills `output` with [`Self::scene_nodes_attached_to`] results, reusing
+    /// its storage and the ancestry cache in `scratch` across batches.
+    ///
+    /// Each distinct ancestor is inspected at most once per call. The cache
+    /// is cleared for each call, so graph mutations are observed by the next
+    /// batch.
+    ///
+    /// ```
+    /// use cranpose_core::{MemoryApplier, NodeId, SceneNodeAttachmentScratch};
+    ///
+    /// let mut applier = MemoryApplier::new();
+    /// let mut scratch = SceneNodeAttachmentScratch::default();
+    /// let mut attached: Vec<Option<NodeId>> = Vec::new();
+    /// let root = NodeId::default();
+    /// applier.scene_nodes_attached_to_into([], root, &mut attached, &mut scratch);
+    /// assert!(attached.is_empty());
+    /// ```
+    pub fn scene_nodes_attached_to_into(
+        &mut self,
+        nodes: impl IntoIterator<Item = NodeId>,
+        root: NodeId,
+        output: &mut Vec<Option<NodeId>>,
+        scratch: &mut SceneNodeAttachmentScratch,
+    ) {
+        let nodes = nodes.into_iter();
+        scratch.attached.clear();
+        output.clear();
+        let (lower_bound, upper_bound) = nodes.size_hint();
+        if lower_bound == 0 && upper_bound == Some(0) {
+            scratch.path.clear();
+            return;
+        }
+        scratch.attached.insert(root, true);
+        output.reserve(lower_bound);
+        scratch.path.clear();
+        for node_id in nodes {
+            let Some(resolved) = self.first_non_virtual_ancestor(node_id) else {
+                output.push(None);
+                continue;
+            };
+            let mut current = resolved;
+            scratch.path.clear();
+            let answer = loop {
+                if let Some(known) = scratch.attached.get(&current) {
+                    break *known;
                 }
-                answer.then_some(resolved)
-            })
-            .collect()
+                scratch.path.push(current);
+                match self.get_mut(current).ok().and_then(|node| node.parent()) {
+                    Some(parent) if scratch.path.len() < 100_000 => current = parent,
+                    _ => break false,
+                }
+            };
+            for visited in scratch.path.drain(..) {
+                scratch.attached.insert(visited, answer);
+            }
+            output.push(answer.then_some(resolved));
+        }
     }
 
     pub fn take_structural_change_parents_attached_to(&mut self, root: NodeId) -> Vec<NodeId> {
-        let recorded = std::mem::take(&mut self.structural_change_parents);
-        let mut attached = Vec::with_capacity(recorded.len());
-        for parent_id in recorded {
-            let Some(parent_id) = self.first_non_virtual_ancestor(parent_id) else {
-                continue;
+        let mut candidates = Vec::new();
+        self.take_structural_change_parents_into(&mut candidates);
+        let mut seen = HashSet::default();
+        candidates.retain_mut(|parent_id| {
+            let Some(resolved) = self.first_non_virtual_ancestor(*parent_id) else {
+                return false;
             };
-            if self.is_attached_to(parent_id, root) && !attached.contains(&parent_id) {
-                attached.push(parent_id);
-            }
-        }
-        attached
+            *parent_id = resolved;
+            self.is_attached_to(resolved, root) && seen.insert(resolved)
+        });
+        candidates
+    }
+
+    /// Takes the recorded structural-change candidates into reusable storage.
+    /// Candidates are not resolved or attachment-filtered; callers that route
+    /// them into scenes should use [`Self::scene_nodes_attached_to_into`].
+    ///
+    /// ```
+    /// use cranpose_core::MemoryApplier;
+    ///
+    /// let mut applier = MemoryApplier::new();
+    /// let mut nodes = Vec::new();
+    /// applier.take_structural_change_parents_into(&mut nodes);
+    /// assert!(nodes.is_empty());
+    /// ```
+    pub fn take_structural_change_parents_into(&mut self, output: &mut Vec<NodeId>) {
+        output.clear();
+        std::mem::swap(&mut self.structural_change_parents, output);
     }
 
     fn first_non_virtual_ancestor(&mut self, node_id: NodeId) -> Option<NodeId> {

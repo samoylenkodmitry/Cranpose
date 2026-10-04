@@ -23,7 +23,7 @@ use web_time::Instant;
 
 use crate::{
     AppShell, DevOverlayControl, FramePacingMode, FrameRatePreference, FrameSchedule,
-    FrameScheduler, FrameUpdateResult, PlatformFrameDriver, ShellApp,
+    FrameScheduler, FrameUpdateResult, PlatformFrameDriver, ShellApp, SurfaceRoutingScratch,
     hit_path_tracker::{HitPathTracker, PointerId},
 };
 
@@ -61,6 +61,9 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) frame_rate_preference: FrameRatePreference,
     pub(crate) scene_dirty: bool,
     pub(crate) scoped_layout_scene_nodes: Vec<NodeId>,
+    pub(crate) scoped_draw_nodes: Vec<NodeId>,
+    pub(crate) structural_scene_nodes: Vec<NodeId>,
+    pub(crate) partial_scene_nodes: Vec<NodeId>,
     pub(crate) retained_visual_nodes: HashSet<NodeId>,
     pub(crate) is_dirty: bool,
     pub(crate) buttons_pressed: PointerButtons,
@@ -101,6 +104,9 @@ impl<R: Renderer> RootSurface<R> {
             frame_rate_preference: FrameRatePreference::default(),
             scene_dirty: true,
             scoped_layout_scene_nodes: Vec::new(),
+            scoped_draw_nodes: Vec::new(),
+            structural_scene_nodes: Vec::new(),
+            partial_scene_nodes: Vec::new(),
             retained_visual_nodes: HashSet::default(),
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
@@ -172,6 +178,9 @@ impl<R: Renderer> RootSurface<R> {
     pub(crate) fn invalidate_scene_root(&mut self, root: Option<NodeId>) {
         self.scoped_layout_scene_nodes.clear();
         self.scoped_layout_scene_nodes.extend(root);
+        self.scoped_draw_nodes.clear();
+        self.structural_scene_nodes.clear();
+        self.partial_scene_nodes.clear();
         self.scene_dirty = true;
     }
 
@@ -387,31 +396,103 @@ impl PlatformTextInputHandler for TextInputRouter {
     }
 }
 
-pub(crate) fn partition_nodes_by_surface<R: Renderer>(
-    app: &mut ShellApp,
-    surfaces: &[RootSurface<R>],
-    nodes: Vec<NodeId>,
-) -> Vec<Vec<NodeId>> {
-    let mut buckets: Vec<Vec<NodeId>> = surfaces.iter().map(|_| Vec::new()).collect();
-    let Some(primary_root) = app.composition.root() else {
-        return buckets;
-    };
-    let mut applier = app.composition.applier_mut();
-    let attached: Vec<NodeId> = applier
-        .scene_nodes_attached_to(nodes, primary_root)
-        .into_iter()
-        .flatten()
-        .collect();
-    let owners = cranpose_ui::nearest_window_roots(&mut applier, &attached);
-    for (node, owner) in attached.into_iter().zip(owners) {
-        if let Some(index) = surfaces
-            .iter()
-            .position(|surface| surface.owns_nodes_under(owner))
-        {
-            buckets[index].push(node);
+#[derive(Clone, Copy)]
+pub(crate) enum SurfaceDirtyLane {
+    Layout,
+    Draw,
+    Structural,
+}
+
+fn append_surface_dirty_node(
+    surface: &mut RootSurface<impl Renderer>,
+    surface_index: usize,
+    node: NodeId,
+    lane: SurfaceDirtyLane,
+    seen: &mut HashSet<(usize, NodeId)>,
+) {
+    match lane {
+        SurfaceDirtyLane::Layout => {
+            surface.scene_dirty = true;
+            if seen.insert((surface_index, node)) {
+                surface.scoped_layout_scene_nodes.push(node);
+            }
+        }
+        SurfaceDirtyLane::Draw => surface.scoped_draw_nodes.push(node),
+        SurfaceDirtyLane::Structural => {
+            if seen.insert((surface_index, node)) {
+                surface.structural_scene_nodes.push(node);
+            }
         }
     }
-    buckets
+}
+
+pub(crate) fn route_nodes_by_surface<R: Renderer>(
+    app: &mut ShellApp,
+    surfaces: &mut [RootSurface<R>],
+    nodes: impl IntoIterator<Item = NodeId>,
+    lane: SurfaceDirtyLane,
+    scratch: &mut SurfaceRoutingScratch,
+) {
+    let Some(primary_root) = app.composition.root() else {
+        scratch.attached.clear();
+        scratch.owners.clear();
+        return;
+    };
+    let mut applier = app.composition.applier_mut();
+    applier.scene_nodes_attached_to_into(
+        nodes,
+        primary_root,
+        &mut scratch.attached,
+        &mut scratch.attachment,
+    );
+    if scratch.attached.is_empty() {
+        scratch.owners.clear();
+        return;
+    }
+    scratch.seen.clear();
+    match lane {
+        SurfaceDirtyLane::Layout => {
+            for (index, surface) in surfaces.iter().enumerate() {
+                scratch.seen.extend(
+                    surface
+                        .scoped_layout_scene_nodes
+                        .iter()
+                        .copied()
+                        .map(|node| (index, node)),
+                );
+            }
+        }
+        SurfaceDirtyLane::Draw | SurfaceDirtyLane::Structural => {}
+    }
+    if app.app_context.window_roots().is_empty() {
+        scratch.owners.clear();
+        if let Some(index) = surfaces
+            .iter()
+            .position(|surface| surface.id == RootId::Primary)
+        {
+            let surface = &mut surfaces[index];
+            for node in scratch.attached.iter().flatten().copied() {
+                append_surface_dirty_node(surface, index, node, lane, &mut scratch.seen);
+            }
+        }
+        return;
+    }
+    cranpose_ui::nearest_window_roots_into(
+        &mut applier,
+        scratch.attached.iter().flatten().copied(),
+        &mut scratch.owners,
+        &mut scratch.window_roots,
+    );
+    for (node, owner) in scratch.attached.iter().flatten().zip(&scratch.owners) {
+        let node = *node;
+        if let Some(index) = surfaces
+            .iter()
+            .position(|surface| surface.owns_nodes_under(*owner))
+        {
+            let surface = &mut surfaces[index];
+            append_surface_dirty_node(surface, index, node, lane, &mut scratch.seen);
+        }
+    }
 }
 
 /// One surface borrowed together with its shell: the handle a platform

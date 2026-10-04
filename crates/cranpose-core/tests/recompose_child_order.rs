@@ -4,15 +4,13 @@ use cranpose_core::{
     Applier, Composition, MemoryApplier, MutableState, Node, NodeId, pop_parent, push_parent,
     with_current_composer,
 };
-#[path = "support/ordered_parent.rs"]
-mod ordered_parent;
 
-use ordered_parent::{OrderedParent, ParentTracked};
+use super::ordered_parent::{OrderedParent, ParentTracked};
 
 struct LabelNode {
     label: &'static str,
 }
-impl ordered_parent::FixtureLeaf for LabelNode {}
+impl super::ordered_parent::FixtureLeaf for LabelNode {}
 
 #[cranpose_macros::composable]
 fn Screen(

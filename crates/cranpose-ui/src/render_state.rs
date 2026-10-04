@@ -18,11 +18,11 @@ pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
 
 struct RenderState {
-    layout_repasses: Mutex<LayoutRepassManager>,
-    measure_repasses: Mutex<LayoutRepassManager>,
-    draw_repasses: Mutex<DrawRepassManager>,
-    modifier_slice_repasses: Mutex<LayoutRepassManager>,
-    geometry_scene_nodes: Mutex<LayoutRepassManager>,
+    layout_repasses: Mutex<DirtyNodeSet>,
+    measure_repasses: Mutex<DirtyNodeSet>,
+    draw_repasses: Mutex<DirtyNodeSet>,
+    modifier_slice_repasses: Mutex<DirtyNodeSet>,
+    geometry_scene_nodes: Mutex<DirtyNodeSet>,
     render_invalidated: AtomicBool,
     pointer_invalidated: AtomicBool,
     focus_invalidated: AtomicBool,
@@ -162,11 +162,11 @@ pub fn prune_draw_observations_to_nodes(retained: &HashSet<NodeId>) {
 impl RenderState {
     fn new_with_density(density: f32) -> Self {
         Self {
-            layout_repasses: Mutex::new(LayoutRepassManager::new()),
-            measure_repasses: Mutex::new(LayoutRepassManager::new()),
-            draw_repasses: Mutex::new(DrawRepassManager::new()),
-            modifier_slice_repasses: Mutex::new(LayoutRepassManager::new()),
-            geometry_scene_nodes: Mutex::new(LayoutRepassManager::new()),
+            layout_repasses: Mutex::new(DirtyNodeSet::new()),
+            measure_repasses: Mutex::new(DirtyNodeSet::new()),
+            draw_repasses: Mutex::new(DirtyNodeSet::new()),
+            modifier_slice_repasses: Mutex::new(DirtyNodeSet::new()),
+            geometry_scene_nodes: Mutex::new(DirtyNodeSet::new()),
             render_invalidated: AtomicBool::new(false),
             pointer_invalidated: AtomicBool::new(false),
             focus_invalidated: AtomicBool::new(false),
@@ -703,11 +703,11 @@ fn with_draw_observer<R>(f: impl FnOnce(&SnapshotStateObserver) -> R) -> R {
     f(&context.draw_observer)
 }
 
-struct LayoutRepassManager {
+struct DirtyNodeSet {
     dirty_nodes: HashSet<NodeId>,
 }
 
-impl LayoutRepassManager {
+impl DirtyNodeSet {
     fn new() -> Self {
         Self {
             dirty_nodes: HashSet::default(),
@@ -724,36 +724,18 @@ impl LayoutRepassManager {
 
     fn take_dirty_nodes(&mut self) -> Vec<NodeId> {
         self.dirty_nodes.drain().collect()
+    }
+
+    fn take_dirty_nodes_into(&mut self, output: &mut Vec<NodeId>) {
+        output.clear();
+        output.reserve(self.dirty_nodes.len());
+        output.extend(self.dirty_nodes.drain());
     }
 
     fn dirty_nodes_snapshot(&self) -> Vec<NodeId> {
         let mut nodes = self.dirty_nodes.iter().copied().collect::<Vec<_>>();
         nodes.sort_unstable();
         nodes
-    }
-}
-
-struct DrawRepassManager {
-    dirty_nodes: HashSet<NodeId>,
-}
-
-impl DrawRepassManager {
-    fn new() -> Self {
-        Self {
-            dirty_nodes: HashSet::default(),
-        }
-    }
-
-    fn schedule_repass(&mut self, node_id: NodeId) {
-        self.dirty_nodes.insert(node_id);
-    }
-
-    fn has_pending_repass(&self) -> bool {
-        !self.dirty_nodes.is_empty()
-    }
-
-    fn take_dirty_nodes(&mut self) -> Vec<NodeId> {
-        self.dirty_nodes.drain().collect()
     }
 }
 
@@ -860,6 +842,22 @@ pub fn take_draw_repass_nodes() -> Vec<NodeId> {
     with_render_state(|state| lock_repass_manager(&state.draw_repasses).take_dirty_nodes())
 }
 
+/// Takes pending draw repasses into reusable caller-owned storage.
+///
+/// ```
+/// let context = cranpose_ui::AppContext::new();
+/// context.enter(|| {
+///     let mut nodes = Vec::new();
+///     cranpose_ui::take_draw_repass_nodes_into(&mut nodes);
+///     assert!(nodes.is_empty());
+/// });
+/// ```
+pub fn take_draw_repass_nodes_into(output: &mut Vec<NodeId>) {
+    with_render_state(|state| {
+        lock_repass_manager(&state.draw_repasses).take_dirty_nodes_into(output);
+    });
+}
+
 /// Returns true if any layout repasses are pending.
 pub fn has_pending_layout_repasses() -> bool {
     with_render_state(|state| lock_repass_manager(&state.layout_repasses).has_pending_repass())
@@ -935,6 +933,22 @@ pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
 /// meaningless to the next.
 pub fn take_geometry_scene_nodes() -> Vec<NodeId> {
     with_render_state(|state| lock_repass_manager(&state.geometry_scene_nodes).take_dirty_nodes())
+}
+
+/// Takes changed geometry nodes into reusable caller-owned storage.
+///
+/// ```
+/// let context = cranpose_ui::AppContext::new();
+/// context.enter(|| {
+///     let mut nodes = Vec::new();
+///     cranpose_ui::take_geometry_scene_nodes_into(&mut nodes);
+///     assert!(nodes.is_empty());
+/// });
+/// ```
+pub fn take_geometry_scene_nodes_into(output: &mut Vec<NodeId>) {
+    with_render_state(|state| {
+        lock_repass_manager(&state.geometry_scene_nodes).take_dirty_nodes_into(output);
+    });
 }
 
 /// Returns the current density scale factor (logical px per dp).
