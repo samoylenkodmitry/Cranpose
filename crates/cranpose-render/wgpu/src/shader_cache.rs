@@ -492,6 +492,10 @@ impl ShaderPipelineCache {
             (key, fit)
         } else {
             self.request(shader, specialization, key, CompileLane::Demanded);
+            // The stand-in is drawn with too: a later launch builds it before
+            // another new material needs it.
+            #[cfg(not(target_arch = "wasm32"))]
+            self.note_drawn(specialization, general);
             (general, ShaderPipelineFit::Fallback)
         };
         if !self.ready(build) {

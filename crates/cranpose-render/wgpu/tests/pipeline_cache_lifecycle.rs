@@ -13,8 +13,8 @@ use cranpose_render_wgpu::{
     debug_toggle_os, pipelines_created, pipelines_created_off_frame, set_debug_toggle_os,
 };
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect,
-    RoundedCornerShape,
+    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape, LiquidGlassRect,
+    LiquidGlassSpec, Rect, RenderEffect, RoundedCornerShape, liquid_glass_effect,
 };
 
 use crate::{shared_test_support, support};
@@ -394,6 +394,27 @@ fn glass_page() -> RenderGraph {
     paned_page(support::glass_page::glass_shader())
 }
 
+/// [`glass_page`] with a pane of another material: a specialization of its
+/// own.
+fn other_glass_page() -> RenderGraph {
+    use support::glass_page::{GLASS_HEIGHT, GLASS_WIDTH};
+    paned_page(liquid_glass_effect(
+        &LiquidGlassRect {
+            left: 0.0,
+            top: 0.0,
+            width: GLASS_WIDTH,
+            height: GLASS_HEIGHT,
+            tint_color: Color(1.0, 1.0, 1.0, 0.12),
+        },
+        &LiquidGlassSpec {
+            blur_radius: 9.0,
+            ..LiquidGlassSpec::default()
+        },
+        GLASS_WIDTH,
+        GLASS_HEIGHT,
+    ))
+}
+
 /// Glass draws in `renderer`'s next frame that took the general pipeline
 /// while their own compiled.
 fn glass_fallback_draws(renderer: &mut support::LockedRenderer) -> u32 {
@@ -521,6 +542,42 @@ fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
             assert!(
                 frosted_frame_builds(relaunch) > 0,
                 "only an update prepares the pipelines of later screens"
+            );
+        },
+    );
+}
+
+/// A material no launch drew stands in with the general glass while its own
+/// pipeline compiles. After an update the general the last launch stood in
+/// with is built once the first frame is drawn, so standing in compiles
+/// nothing inside a frame.
+#[test]
+fn an_updated_build_stands_a_new_glass_in_with_a_general_built_after_its_first_frame() {
+    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
+    relaunch_after_drawing(
+        |previous| {
+            first_frame_builds(previous);
+            std::thread::sleep(Duration::from_millis(2100));
+            assert!(
+                glass_fallback_draws(previous) > 0,
+                "the last launch stands its glass in with the general pipeline"
+            );
+        },
+        |bytes| bytes[0] ^= 0xff,
+        |updated| {
+            first_frame_builds(updated);
+            wait_for_warm_ups();
+            let before = pipelines_created();
+            support::capture_graph(updated, other_glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
+            let stats = updated.last_frame_stats().expect("glass frame statistics");
+            assert!(
+                stats.shader_pipeline_fallback_draws > 0,
+                "a new material stands in while its own pipeline compiles"
+            );
+            assert_eq!(
+                pipelines_created() - before,
+                0,
+                "the stand-in must be built before the new material needs it"
             );
         },
     );
