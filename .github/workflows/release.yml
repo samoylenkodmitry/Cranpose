@@ -177,9 +177,12 @@ jobs:
           scripts/ci/rustup_locked.sh target add x86_64-pc-windows-msvc
 
       - name: Provision Windows cross-build tooling
-        env:
-          XWIN_CACHE_DIR: ${{ runner.tool_cache }}/cranpose-xwin-atl-symbols
         run: |
+          # cargo-xwin disables case-correcting SDK symlinks on macOS. Keep
+          # its cache on the system volume; runner.tool_cache may be on a
+          # case-sensitive external volume.
+          cache_root="$(getconf DARWIN_USER_CACHE_DIR)"
+          export XWIN_CACHE_DIR="${cache_root%/}/cranpose-xwin-atl-symbols-$RUNNER_NAME"
           echo "XWIN_CACHE_DIR=$XWIN_CACHE_DIR" >> "$GITHUB_ENV"
           command -v zip
           cargo install cargo-xwin --locked --version 0.23.1
