@@ -1232,10 +1232,10 @@ impl DrawScopeDefault {
             CommandRecording::default(),
         );
         draw(&mut scope);
-        let primitives = scope.into_primitives();
+        let recording = scope.finish();
         self.push_recorded(
-            primitives
-                .into_iter()
+            recording
+                .primitives_with_markers()
                 .map(|primitive| primitive.translate(inner.x, inner.y)),
         );
     }

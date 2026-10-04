@@ -32,26 +32,6 @@ fn canvas_graph(
     graph
 }
 
-fn canvas_colors(layer: &LayerNode, colors: &mut Vec<Color>) {
-    for child in &layer.children {
-        match child {
-            RenderNode::DrawRun(run) => {
-                for primitive in run.primitives() {
-                    if let DrawPrimitive::Rect {
-                        brush: Brush::Solid(color),
-                        ..
-                    } = primitive
-                    {
-                        colors.push(color);
-                    }
-                }
-            }
-            RenderNode::Layer(child) => canvas_colors(child, colors),
-            RenderNode::Primitive(_) => {}
-        }
-    }
-}
-
 fn retained_recording(layer: &LayerNode) -> Option<CommandRecording> {
     for child in &layer.children {
         match child {
@@ -111,7 +91,7 @@ fn canvas_rebuilds_keep_each_retained_frame_and_paint_the_new_state() {
             graph = canvas_graph(&mut composition, root, Some(graph));
         }
         let mut colors = Vec::new();
-        canvas_colors(&graph.root, &mut colors);
+        crate::scene_probe::painted_solid_rect_colors(&graph.root, &mut colors);
         assert_eq!(
             colors,
             vec![expected_color],
@@ -132,6 +112,6 @@ fn canvas_rebuilds_keep_each_retained_frame_and_paint_the_new_state() {
     value.set(0);
     let final_graph = canvas_graph(&mut composition, root, Some(graph));
     let mut colors = Vec::new();
-    canvas_colors(&final_graph.root, &mut colors);
+    crate::scene_probe::painted_solid_rect_colors(&final_graph.root, &mut colors);
     assert_eq!(colors, vec![Color::RED]);
 }

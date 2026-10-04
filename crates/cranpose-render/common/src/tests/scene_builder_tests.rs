@@ -2457,7 +2457,7 @@ fn appending_empty_draw_commands_preserves_existing_nodes_and_command_identity()
             42,
             &commands,
             3,
-            placement,
+            DrawPass::Record(placement),
             Size::default(),
             phase,
         );

@@ -8,8 +8,9 @@ use crate::modifier_nodes::DrawCommandElement;
 impl Modifier {
     /// Draw around content.
     ///
-    /// `draw_content()` splits drawing into behind (before) and overlay (after)
-    /// phases. If `draw_content()` is never called, primitives are treated as
+    /// The callback runs once when the modifier is recorded. Its last
+    /// `draw_content()` call splits drawing into behind (before) and overlay
+    /// (after) phases. With no `draw_content()` call, all primitives draw as
     /// overlay content.
     ///
     /// Example: `Modifier::empty().draw_with_content(|scope| { ... })`

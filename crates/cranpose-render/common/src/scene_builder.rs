@@ -1385,12 +1385,13 @@ fn write_node_content(
         child_count,
         slices.annotated_text().is_some(),
     ));
+    let first_draw = list.len();
     append_draw_nodes(
         list,
         node_id,
         commands,
         outer_count,
-        DrawPlacement::Behind,
+        DrawPass::Record(DrawPlacement::Behind),
         size,
         PrimitivePhase::BeforeChildren,
     );
@@ -1413,7 +1414,7 @@ fn write_node_content(
         node_id,
         commands,
         outer_count,
-        DrawPlacement::Overlay,
+        DrawPass::OverlayFromOutput(first_draw),
         size,
         PrimitivePhase::AfterChildren,
     );
@@ -1731,9 +1732,24 @@ struct RecorderSlot {
     spare: Option<Rc<CommandRecording>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct RecorderKey {
+    node_id: NodeId,
+    command_index: u32,
+}
+
+impl From<DrawCommandId> for RecorderKey {
+    fn from(id: DrawCommandId) -> Self {
+        Self {
+            node_id: id.node_id,
+            command_index: id.command_index,
+        }
+    }
+}
+
 thread_local! {
     static COMMAND_RECORDINGS: std::cell::RefCell<
-        std::collections::HashMap<DrawCommandId, RecorderSlot, cranpose_ui_graphics::FxBuildHasher>,
+        std::collections::HashMap<RecorderKey, RecorderSlot, cranpose_ui_graphics::FxBuildHasher>,
     > = std::cell::RefCell::new(std::collections::HashMap::default());
     static RECORDING_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -1760,7 +1776,7 @@ fn bump_recording_generation() {
 fn acquire_storage(id: DrawCommandId) -> CommandRecording {
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
-        let Some(slot) = map.get_mut(&id) else {
+        let Some(slot) = map.get_mut(&RecorderKey::from(id)) else {
             return CommandRecording::default();
         };
         for handle in &mut slot.handles {
@@ -1791,11 +1807,13 @@ fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<Comma
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let generation = RECORDING_GENERATION.with(Cell::get);
-        let slot = map.entry(id).or_insert_with(|| RecorderSlot {
-            generation,
-            handles: [None, None, None],
-            spare: None,
-        });
+        let slot = map
+            .entry(RecorderKey::from(id))
+            .or_insert_with(|| RecorderSlot {
+                generation,
+                handles: [None, None, None],
+                spare: None,
+            });
         let shared = match slot.spare.take() {
             Some(mut spare) => match Rc::get_mut(&mut spare) {
                 Some(storage) => {
@@ -1812,6 +1830,44 @@ fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<Comma
         slot.handles[0] = Some(Rc::clone(&shared));
         shared
     })
+}
+
+enum DrawPass<'a> {
+    Record(DrawPlacement),
+    OverlayFrom(std::slice::Iter<'a, RenderNode>),
+    OverlayFromOutput(usize),
+}
+
+impl DrawPass<'_> {
+    fn placement(&self) -> DrawPlacement {
+        match self {
+            Self::Record(placement) => *placement,
+            Self::OverlayFrom(_) | Self::OverlayFromOutput(_) => DrawPlacement::Overlay,
+        }
+    }
+
+    fn take_recording(
+        &mut self,
+        command: &DrawCommand,
+        output: &[RenderNode],
+    ) -> Option<Rc<CommandRecording>> {
+        if matches!(command, DrawCommand::Overlay(_)) {
+            return None;
+        }
+        let node = match self {
+            Self::Record(_) => return None,
+            Self::OverlayFrom(nodes) => nodes.next().expect("each behind command has a draw run"),
+            Self::OverlayFromOutput(index) => {
+                let node = &output[*index];
+                *index += 1;
+                node
+            }
+        };
+        let RenderNode::DrawRun(run) = node else {
+            unreachable!("behind commands produce draw runs");
+        };
+        matches!(command, DrawCommand::WithContent(_)).then(|| Rc::clone(&run.recording))
+    }
 }
 
 fn layer_node_capacity(commands: &[DrawCommand], children: usize, has_text: bool) -> usize {
@@ -1838,7 +1894,7 @@ fn draw_nodes(
         node_id,
         commands,
         first_command_index,
-        placement,
+        DrawPass::Record(placement),
         size,
         phase,
     );
@@ -1850,53 +1906,33 @@ fn append_draw_nodes(
     node_id: NodeId,
     commands: &[DrawCommand],
     first_command_index: usize,
-    placement: DrawPlacement,
+    mut pass: DrawPass<'_>,
     size: Size,
     phase: PrimitivePhase,
 ) {
+    let placement = pass.placement();
     for (command_index, command) in commands.iter().enumerate() {
         let id = DrawCommandId {
             node_id,
             command_index: (first_command_index + command_index) as u32,
             placement,
         };
-        let Some((recording, segments)) =
-            recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
-        else {
-            retain_empty_draw_command(nodes, phase, id, placement, command);
-            continue;
+        let (shared, segments) = if let Some(shared) = pass.take_recording(command, nodes) {
+            let segments = shared.content_split(false);
+            (shared, segments)
+        } else {
+            let Some((recording, segments)) =
+                recording_for_placement_reusing(command, placement, size, || acquire_storage(id))
+            else {
+                continue;
+            };
+            (publish_recording(id, recording), segments)
         };
-        let shared = publish_recording(id, recording);
-        if shared.is_empty_in(&segments) {
-            retain_empty_draw_command(nodes, phase, id, placement, command);
-            continue;
-        }
         nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_shared(
             phase,
             Some(id),
             shared,
             segments,
-        )));
-    }
-}
-
-fn retain_empty_draw_command(
-    nodes: &mut Vec<RenderNode>,
-    phase: PrimitivePhase,
-    id: DrawCommandId,
-    placement: DrawPlacement,
-    command: &DrawCommand,
-) {
-    if matches!(
-        (placement, command),
-        (DrawPlacement::Behind, DrawCommand::Behind(_))
-            | (DrawPlacement::Overlay, DrawCommand::Overlay(_))
-            | (_, DrawCommand::WithContent(_))
-    ) {
-        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command(
-            phase,
-            Some(id),
-            Vec::new(),
         )));
     }
 }
@@ -1926,24 +1962,25 @@ fn outer_draws(
 ) -> Option<OuterDraws> {
     (outer_draw_command_count > 0).then(|| {
         let commands = &draw_commands[..outer_draw_command_count];
-        OuterDraws {
-            behind: draw_nodes(
-                node_id,
-                commands,
-                0,
-                DrawPlacement::Behind,
-                size,
-                PrimitivePhase::BeforeChildren,
-            ),
-            overlay: draw_nodes(
-                node_id,
-                commands,
-                0,
-                DrawPlacement::Overlay,
-                size,
-                PrimitivePhase::AfterChildren,
-            ),
-        }
+        let behind = draw_nodes(
+            node_id,
+            commands,
+            0,
+            DrawPlacement::Behind,
+            size,
+            PrimitivePhase::BeforeChildren,
+        );
+        let mut overlay = crate::layer_recycling::child_list(commands.len());
+        append_draw_nodes(
+            &mut overlay,
+            node_id,
+            commands,
+            0,
+            DrawPass::OverlayFrom(behind.iter()),
+            size,
+            PrimitivePhase::AfterChildren,
+        );
+        OuterDraws { behind, overlay }
     })
 }
 

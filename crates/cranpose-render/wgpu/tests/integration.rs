@@ -91,3 +91,4 @@ mod viewport_uniform_growth;
 mod vulkan_sync;
 mod wear_layer_alpha_pixels;
 mod wear_scaling_list_pixels;
+mod with_content_recording;

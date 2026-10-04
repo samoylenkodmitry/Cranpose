@@ -12,8 +12,8 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui::{
-    Box, BoxSpec, Brush, Canvas, Color, GraphicsLayer, LayoutEngine, Modifier, Size,
-    TestComposition, Text, TextStyle, composable, run_test_composition,
+    Box, BoxSpec, Brush, Canvas, Color, GraphicsLayer, Modifier, Size, TestComposition, Text,
+    TextStyle, composable, run_test_composition,
 };
 use cranpose_ui_graphics::{DrawPrimitive, Rect};
 
@@ -23,15 +23,7 @@ type Rectangles = Vec<(Option<NodeId>, Rect, Color)>;
 type Texts = Vec<(NodeId, Rect, String)>;
 
 fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
-    let runtime = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(runtime);
-    applier
-        .compute_layout(root, VIEWPORT)
-        .expect("composition lays out");
-    let graph = build_graph_from_applier(&applier, root, 1.0).expect("initial scene graph");
-    applier.clear_runtime_handle();
-    graph
+    crate::scene_probe::initial_graph(composition, root, VIEWPORT)
 }
 
 fn initial_root_graph(composition: &mut TestComposition) -> (NodeId, RenderGraph) {

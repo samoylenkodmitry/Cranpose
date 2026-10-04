@@ -3,6 +3,7 @@ mod scene_probe;
 mod annotated_text_baselines;
 mod app_supplied_font_raster;
 mod draw_scope_text_raster;
+mod draw_with_content_updates;
 mod font_tracking;
 mod font_weight_matching;
 mod gpos_kerning_measure;
