@@ -366,25 +366,45 @@ fn respecializing_mutated_uniforms_matches_fresh_shader_and_preserves_caller_ove
 }
 
 #[test]
-fn changing_an_unfolded_glass_shader_retires_its_large_draw_specialization() {
-    type Change = fn(&mut RuntimeShader);
-    let changes: [(&str, Change); 5] = [
-        ("set_override", |shader| shader.set_override("CALLER", 1.0)),
-        ("clear_override", |shader| {
+fn every_setter_on_an_unfolded_glass_shader_retires_its_large_draw_specialization() {
+    type Request = fn(&mut RuntimeShader);
+    // Each setter both with a new value and with the value the shader's own
+    // specialization already holds, which the large draws may not.
+    let requests: [(&str, Request); 10] = [
+        ("set_override new", |shader| {
+            shader.set_override("CALLER", 1.0)
+        }),
+        ("set_override held", |shader| {
+            shader.set_override("GLASS_INTERIOR_GUARD", 1.0);
+        }),
+        ("clear_override held", |shader| {
             assert!(shader.clear_override("GLASS_INTERIOR_GUARD"));
         }),
-        ("set_substrates", |shader| {
+        ("clear_override absent", |shader| {
+            assert!(!shader.clear_override("CALLER"));
+        }),
+        ("set_substrates new", |shader| {
             shader.set_substrates(&[SubstrateSpec::Blur { radius_px: 3.5 }]);
         }),
-        ("set_draw_split", |shader| {
+        ("set_substrates held", |shader| {
+            let held: Vec<SubstrateSpec> = shader.substrates().to_vec();
+            shader.set_substrates(&held);
+        }),
+        ("set_draw_split new", |shader| {
             shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
         }),
-        ("set_specialization_exact", |shader| {
+        ("set_draw_split held", |shader| {
+            shader.set_draw_split(shader.draw_split());
+        }),
+        ("set_specialization_exact new", |shader| {
             let exact = shader.specialization_exact();
             shader.set_specialization_exact(!exact);
         }),
+        ("set_specialization_exact held", |shader| {
+            shader.set_specialization_exact(shader.specialization_exact());
+        }),
     ];
-    for (setter, change) in changes {
+    for (setter, change) in requests {
         let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
         specialize_liquid_glass_with_folds(&mut shader, false);
         let large = shader.draw_specialization(u64::MAX);

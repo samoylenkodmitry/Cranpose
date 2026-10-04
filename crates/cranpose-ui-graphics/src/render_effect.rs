@@ -471,15 +471,6 @@ impl RuntimeShader {
         Arc::make_mut(self.specialization.get_or_insert_with(Arc::default))
     }
 
-    /// The shader's own specialization, for a change that also drops its
-    /// large-draw specialization: derived from the specialization before the
-    /// change, that one no longer describes the shader.
-    fn own_specialization_mut(&mut self) -> &mut ShaderSpecialization {
-        let specialization = self.specialization_mut();
-        specialization.large_draws = None;
-        specialization
-    }
-
     /// Fixes a pipeline-overridable constant (`override NAME: T = ...;` in
     /// the WGSL) for every pipeline compiled from this shader. The value is
     /// converted to the constant's declared scalar type the way WebGPU does
@@ -494,13 +485,14 @@ impl RuntimeShader {
     /// A requested warm-up without an existing general pipeline finishes
     /// before its first draw instead of compiling a new stand-in.
     pub fn set_override(&mut self, name: &'static str, value: f64) {
+        self.clear_large_draws();
         let position = self
             .overrides()
             .binary_search_by(|(existing, _)| existing.cmp(&name));
         if position.is_ok_and(|index| self.overrides()[index].1.to_bits() == value.to_bits()) {
             return;
         }
-        let specialization = self.own_specialization_mut();
+        let specialization = self.specialization_mut();
         specialization.overrides_hash.take();
         let overrides = &mut specialization.overrides;
         match position {
@@ -511,13 +503,14 @@ impl RuntimeShader {
 
     /// Removes a pipeline override by name, returning whether one was present.
     pub fn clear_override(&mut self, name: &str) -> bool {
+        self.clear_large_draws();
         let Ok(index) = self
             .overrides()
             .binary_search_by(|(existing, _)| (*existing).cmp(name))
         else {
             return false;
         };
-        let specialization = self.own_specialization_mut();
+        let specialization = self.specialization_mut();
         specialization.overrides_hash.take();
         specialization.overrides.remove(index);
         true
@@ -567,7 +560,9 @@ impl RuntimeShader {
     }
 
     /// Drops a large-draw specialization, so draws of every size compile
-    /// the shader's own.
+    /// the shader's own. Every specialization setter calls it first, even
+    /// when the shader's own already holds the requested value: an explicit
+    /// request describes draws of every size.
     pub(crate) fn clear_large_draws(&mut self) {
         if self.specialization().large_draws.is_some() {
             self.specialization_mut().large_draws = None;
@@ -777,6 +772,7 @@ impl RuntimeShader {
             substrates.len() <= MAX_SUBSTRATES,
             "a runtime shader declares at most {MAX_SUBSTRATES} substrates"
         );
+        self.clear_large_draws();
         if self.substrates().len() == substrates.len()
             && self
                 .substrates()
@@ -786,7 +782,7 @@ impl RuntimeShader {
         {
             return;
         }
-        self.own_specialization_mut().substrates = substrates.iter().copied().collect();
+        self.specialization_mut().substrates = substrates.iter().copied().collect();
     }
 
     /// The substrates the shader declared, in slot order.
@@ -811,10 +807,11 @@ impl RuntimeShader {
     /// about the draw changes: the two draws partition the pixels the one
     /// draw shaded and land on the same bits.
     pub fn set_draw_split(&mut self, override_name: Option<&'static str>) {
+        self.clear_large_draws();
         if self.draw_split() == override_name {
             return;
         }
-        self.own_specialization_mut().draw_split = override_name;
+        self.specialization_mut().draw_split = override_name;
     }
 
     /// The override selecting the interior or the rim draw, when declared.
@@ -832,10 +829,11 @@ impl RuntimeShader {
     /// An explicitly requested warm-up uses an existing general pipeline
     /// while pending, or finishes before drawing if none exists.
     pub fn set_specialization_exact(&mut self, exact: bool) {
+        self.clear_large_draws();
         if self.specialization_exact() == exact {
             return;
         }
-        self.own_specialization_mut().exact = exact;
+        self.specialization_mut().exact = exact;
     }
 
     /// Whether the shader declared its specialization exact.
