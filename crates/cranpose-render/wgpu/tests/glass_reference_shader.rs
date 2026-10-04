@@ -229,15 +229,29 @@ fn variants_with_dispersion(source: &str, dispersion: f32) -> RenderGraph {
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
+// `source` without the adaptive frost block, found by its braces: the
+// embedded shader text keeps no indentation.
 fn without_adaptive_block(source: &str) -> String {
     let start = source
-        .find("    if adaptive_frost > 0.0 {\n")
+        .find("if adaptive_frost > 0.0 {\n")
         .expect("the adaptive frost block");
+    let mut depth = 0usize;
     let end = source[start..]
-        .find("\n    }\n")
-        .expect("the adaptive frost block's end")
-        + start
-        + "\n    }\n".len();
+        .char_indices()
+        .find_map(|(at, character)| {
+            match character {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(start + at + '}'.len_utf8());
+                    }
+                }
+                _ => {}
+            }
+            None
+        })
+        .expect("the adaptive frost block's end");
     format!("{}{}", &source[..start], &source[end..])
 }
 
