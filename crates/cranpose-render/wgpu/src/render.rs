@@ -1141,6 +1141,7 @@ pub(crate) fn build_pipeline_logged<T>(tag: &str, build: impl FnOnce() -> T) -> 
         PIPELINES_CREATED_OFF_FRAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     } else {
         PIPELINES_CREATED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        THREAD_BUILDS.with(|builds| builds.set(builds.get() + 1));
     }
     #[cfg(not(target_arch = "wasm32"))]
     crate::pipeline_disk_cache::note_change();
@@ -1161,6 +1162,15 @@ static PIPELINES_CREATED_OFF_FRAME: std::sync::atomic::AtomicU64 =
 
 thread_local! {
     static OFF_FRAME_BUILDS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The pipelines this drawing thread has built itself.
+    static THREAD_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The pipelines this thread has built while drawing: a frame that drew
+/// with this unchanged built nothing itself.
+#[cfg(not(target_arch = "wasm32"))]
+fn thread_builds() -> u64 {
+    THREAD_BUILDS.with(Cell::get)
 }
 
 /// Declares that pipelines built on this thread are built away from any
@@ -3878,10 +3888,11 @@ impl GpuRenderer {
         }
         returns.frame_id = packet.frame_id;
         let render_start = Instant::now();
+        #[cfg(not(target_arch = "wasm32"))]
+        let builds_before = thread_builds();
         self.warm_requested_shaders();
         self.shape_pipelines.begin_frame();
         self.recorder.begin_frame();
-        self.effect_renderer.shader_cache.begin_frame();
         self.begin_placeholder_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
@@ -3898,6 +3909,10 @@ impl GpuRenderer {
         });
         let output = frame_root.output(output_view, screenshot_bind_group.as_ref());
         let result = self.render_graph(root, packet, returns, output_mode, output);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.effect_renderer
+            .compiler()
+            .spread_demand(thread_builds() == builds_before);
         if let FrameRoot::Composition(composition) = frame_root {
             self.composition_target = Some(composition);
         }
