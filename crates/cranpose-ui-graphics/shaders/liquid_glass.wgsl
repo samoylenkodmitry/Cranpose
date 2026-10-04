@@ -1006,7 +1006,11 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     let tint_color = get_vec4(14u);
     let saturation = get_float(18u);
     let lift = get_float(20u);
-    let dither_amount = get_float(21u);
+    // Ordered-noise dither hides banding in the blurred gradients behind the
+    // glass (±0.5/255 at uniform 21 = 1). It is hashed here, where little is
+    // live: hashed beside the output, it held a Mali-G76 interior draw at 41
+    // work registers where 32 fit, halving the threads a core keeps in flight.
+    let dither = (hash12(floor(coord)) - 0.5) * (get_float(21u) / 255.0);
     var contrast = get_float(24u);
     if contrast <= 0.0 {
         contrast = 1.0;
@@ -1845,9 +1849,6 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
         key_fill_output = mix(key_fill_output, vec4<f32>(color, 1.0) * coverage, reflection);
     }
 
-    // Ordered-noise dither hides banding in the blurred gradients behind the
-    // glass (±0.5/255 at dither_amount = 1).
-    let dither = (hash12(floor(coord)) - 0.5) * (dither_amount / 255.0);
     rgb = rgb + vec3<f32>(dither);
     key_fill_output += vec4<f32>(vec3<f32>(dither) * key_fill_output.a, 0.0);
 
