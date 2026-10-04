@@ -203,10 +203,10 @@ fn shell_with(content: impl FnMut() + 'static) -> AppShell<EmptyRenderer> {
     shell
 }
 
-fn run_one_idle_pass(shell: &mut AppShell<EmptyRenderer>) -> Duration {
+fn run_one_idle_pass(shell: &mut AppShell<EmptyRenderer>, deadline: Option<Instant>) -> Duration {
     let started = Instant::now();
     let mut frame_checks = 0;
-    assert!(shell.run_idle_prefetch(None, |_| {
+    assert!(shell.run_idle_prefetch(deadline, |_| {
         frame_checks += 1;
         frame_checks > 1
     }));
@@ -232,7 +232,7 @@ fn idle_prefetch_budget_accounts_for_slice_warming_before_starting_another_pass(
         "scrolling leaves an item for idle prefetch"
     );
 
-    let first_pass_cost = run_one_idle_pass(&mut shell);
+    let first_pass_cost = run_one_idle_pass(&mut shell, None);
     assert_eq!(slice_factory_calls.get(), 1);
     assert!(
         app_context.enter(cranpose_ui::has_lazy_prefetch_requests),
@@ -270,7 +270,7 @@ fn idle_prefetch_cost_scales_with_lists_pending_after_a_multi_list_pass() {
         &app_context
     ));
 
-    let first_pass_cost = run_one_idle_pass(&mut shell);
+    let first_pass_cost = run_one_idle_pass(&mut shell, None);
     assert_eq!(slice_factory_calls.get(), 2);
     assert!(
         app_context.enter(cranpose_ui::has_lazy_prefetch_requests),
@@ -284,7 +284,7 @@ fn idle_prefetch_cost_scales_with_lists_pending_after_a_multi_list_pass() {
     );
     assert_eq!(slice_factory_calls.get(), 2);
 
-    let single_list_pass_cost = run_one_idle_pass(&mut shell);
+    let single_list_pass_cost = run_one_idle_pass(&mut shell, None);
     assert_eq!(slice_factory_calls.get(), 3);
 
     let deadline = Instant::now() + first_pass_cost * 3 / 4;
@@ -292,6 +292,6 @@ fn idle_prefetch_cost_scales_with_lists_pending_after_a_multi_list_pass() {
         single_list_pass_cost < deadline.saturating_duration_since(Instant::now()),
         "the one-list pass is materially cheaper than the two-list pass"
     );
-    assert!(shell.run_idle_prefetch(Some(deadline), |_| false));
+    run_one_idle_pass(&mut shell, Some(deadline));
     assert_eq!(slice_factory_calls.get(), 4);
 }
