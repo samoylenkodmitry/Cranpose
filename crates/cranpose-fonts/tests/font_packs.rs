@@ -1,3 +1,5 @@
+#![cfg(any(feature = "arabic", feature = "devanagari", feature = "cjk"))]
+
 use ab_glyph::{Font, FontRef};
 
 #[cfg(feature = "arabic")]

@@ -39,6 +39,7 @@ impl FontPack {
     }
 }
 
+#[cfg(any(feature = "arabic", feature = "devanagari", feature = "cjk"))]
 const UI_WEIGHTS: &[u16] = &[400, 500, 600, 700, 800];
 
 /// The Noto Sans Arabic variable font pack, enabled by the `arabic` feature.
