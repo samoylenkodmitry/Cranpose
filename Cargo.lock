@@ -1186,6 +1186,7 @@ dependencies = [
  "cranpose-services",
  "cranpose-storekit",
  "cranpose-ui",
+ "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "cranpose-wgpu",
  "dispatch2",

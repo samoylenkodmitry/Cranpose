@@ -286,6 +286,8 @@ cranpose-macros = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"
+# Turns the liquid glass material folds on in mobile browsers (`web`).
+cranpose-ui-graphics = { workspace = true }
 # Awaits the Async Clipboard API's promises (`web_clipboard`).
 wasm-bindgen-futures = "0.4"
 wgpu = { workspace = true, optional = true, features = [
