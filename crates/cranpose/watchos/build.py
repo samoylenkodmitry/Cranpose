@@ -143,7 +143,11 @@ def main():
         patches = '\n[patch.crates-io]\n'
         for name, dependency in workspace['dependencies'].items():
             if isinstance(dependency, dict) and 'path' in dependency:
-                patches += f'{name} = {{ path = {json.dumps(str(source / dependency["path"]))} }}\n'
+                # A patch names the package, which a renamed dependency
+                # (`wgpu = { package = "cranpose-wgpu", ... }`) keeps apart
+                # from its key.
+                package = dependency.get('package', name)
+                patches += f'{package} = {{ path = {json.dumps(str(source / dependency["path"]))} }}\n'
     else:
         version = '=' + (args.cranpose_version or tomllib.loads(
             (Path(__file__).resolve().parent.parent / 'Cargo.toml').read_text())['package']['version'])

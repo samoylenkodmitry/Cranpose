@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -72,6 +73,27 @@ name = "Metadata App"
         commands = self.invoke()
         self.assertEqual(commands.call_args.args[0], ['cargo', 'update', '--workspace'])
         self.assertIn('=0.9.1', (self.destination / 'runner/Cargo.toml').read_text())
+
+    def test_framework_source_patches_each_path_dependency_by_package_name(self):
+        framework = self.root / 'framework'
+        framework.mkdir()
+        (framework / 'Cargo.toml').write_text('''[workspace.package]
+version = "0.9.4"
+
+[workspace.dependencies]
+cranpose-core = { path = "crates/cranpose-core", version = "0.9.4" }
+wgpu = { package = "cranpose-wgpu", path = "forks/wgpu/wgpu", version = "30.0.1" }
+log = "0.4"
+''')
+        offset = self.args.index('--cranpose-version')
+        self.args[offset:offset + 2] = ['--framework-source', str(framework)]
+        self.invoke()
+        runner = tomllib.loads((self.destination / 'runner/Cargo.toml').read_text())
+        source = framework.resolve()
+        self.assertEqual(runner['patch']['crates-io'], {
+            'cranpose-core': {'path': str(source / 'crates/cranpose-core')},
+            'cranpose-wgpu': {'path': str(source / 'forks/wgpu/wgpu')},
+        })
 
     def test_device_rejects_unsupported_deployment_target(self):
         self.args.extend(['--target', 'device', '--deployment-target', '10.0'])
