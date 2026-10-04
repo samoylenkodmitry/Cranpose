@@ -483,23 +483,6 @@ fn release_composite(
     }
 }
 
-/// One thing a flush may draw, in the order the pass draws them: at one z
-/// a composite before an op. A composite is named by its index in the
-/// flush's list, so the candidates stay small enough to sort in place.
-enum Candidate {
-    Composite { z: usize, index: usize },
-    Op(DrawOp),
-}
-
-impl Candidate {
-    fn order(&self) -> (usize, u8) {
-        match self {
-            Candidate::Composite { z, .. } => (*z, 0),
-            Candidate::Op(op) => (op.z_index, 1),
-        }
-    }
-}
-
 fn ensure_sorted_by_key<T, K: Ord>(values: &mut [T], key: impl Fn(&T) -> K) {
     if !values.is_sorted_by_key(&key) {
         values.sort_by_key(key);
@@ -514,7 +497,7 @@ fn composite_z(composite: &ResolvedComposite) -> usize {
     composite.z_index
 }
 
-impl LayerPass<'_> {
+impl<'scene> LayerPass<'scene> {
     fn target_rect(&self) -> DeviceRect {
         self.page.rect()
     }
@@ -576,13 +559,22 @@ impl LayerPass<'_> {
         )
     }
 
-    fn release(
+    fn take_ops_below(&mut self, z: usize) -> Cow<'scene, [DrawOp]> {
+        let ops =
+            filtered_ops_in_range(&self.layer.scene.draw_ops, self.drawn_z, z, &self.excluded);
+        let deferred_end = self.deferred.partition_point(|op| op.z_index < z);
+        if deferred_end == 0 {
+            return ops;
+        }
+        merge_draw_ops(ops, self.deferred.drain(..deferred_end))
+    }
+
+    fn release<'ops>(
         &mut self,
-        mut ops: Vec<DrawOp>,
+        ops: Cow<'ops, [DrawOp]>,
         mut composites: Vec<ResolvedComposite>,
-    ) -> (Vec<DrawOp>, Vec<ResolvedComposite>) {
+    ) -> (Cow<'ops, [DrawOp]>, Vec<ResolvedComposite>) {
         if self.blockers.is_empty() {
-            ensure_sorted_by_key(&mut ops, draw_op_z);
             composites.retain(|composite| composite_coverage(composite).is_some());
             ensure_sorted_by_key(&mut composites, composite_z);
             ensure_sorted_by_key(&mut self.deferred, draw_op_z);
@@ -592,42 +584,36 @@ impl LayerPass<'_> {
         let scale = self.scale;
         let op_count = ops.len();
         let composite_count = composites.len();
-        let mut candidates: Vec<Candidate> = composites
-            .iter()
-            .enumerate()
-            .map(|(index, composite)| Candidate::Composite {
-                z: composite.z_index,
-                index,
-            })
-            .chain(ops.into_iter().map(Candidate::Op))
-            .collect();
-        candidates.sort_by_key(Candidate::order);
-        let mut composites: Vec<Option<ResolvedComposite>> =
-            composites.into_iter().map(Some).collect();
+        let mut ops = ops.iter().copied().peekable();
+        let mut composites = composites.into_iter().peekable();
         let blocker_count = self.blockers.len();
         let mut now_ops = Vec::with_capacity(op_count);
         let mut now = Vec::with_capacity(composite_count);
-        for candidate in candidates {
-            match candidate {
-                Candidate::Op(op) => release_op(
+        loop {
+            let take_composite = match (composites.peek(), ops.peek()) {
+                (None, None) => break,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (Some(composite), Some(op)) => composite.z_index <= op.z_index,
+            };
+            if take_composite {
+                if let Some(composite) = composites.next() {
+                    release_composite(composite, &mut self.blockers, &mut now, &mut self.pending);
+                }
+            } else if let Some(op) = ops.next() {
+                release_op(
                     op,
                     scene,
                     scale,
                     &mut self.blockers,
                     &mut self.deferred,
                     &mut now_ops,
-                ),
-                Candidate::Composite { index, .. } => {
-                    let composite = composites[index]
-                        .take()
-                        .expect("a flush releases each composite once");
-                    release_composite(composite, &mut self.blockers, &mut now, &mut self.pending);
-                }
+                );
             }
         }
         self.blockers.truncate(blocker_count);
         self.deferred.sort_by_key(draw_op_z);
-        (now_ops, now)
+        (Cow::Owned(now_ops), now)
     }
 
     /// The pending composites below `z`, in z order.
@@ -2736,9 +2722,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     /// the excluded ranges, the deferred ops below `z`, and every pending
     /// composite below `z`, except what still waits behind a blocker.
     fn flush_page(&mut self, pass: &mut LayerPass<'_>, z: usize) -> Result<(), String> {
-        let ops = pass.ops_below(z).into_owned();
-        let deferred_end = pass.deferred.partition_point(|op| op.z_index < z);
-        pass.deferred.drain(..deferred_end);
+        let ops = pass.take_ops_below(z);
         ensure_sorted_by_key(&mut pass.pending, composite_z);
         let end = pass
             .pending
@@ -4825,15 +4809,23 @@ fn pending_draw_ops<'a>(
     if ops.is_empty() {
         return Cow::Borrowed(deferred);
     }
+    merge_draw_ops(ops, deferred.iter().copied())
+}
+
+fn merge_draw_ops(
+    ops: Cow<'_, [DrawOp]>,
+    deferred: impl ExactSizeIterator<Item = DrawOp>,
+) -> Cow<'_, [DrawOp]> {
+    let deferred_len = deferred.len();
     let mut merged = match ops {
         Cow::Owned(ops) => ops,
         Cow::Borrowed(ops) => {
-            let mut merged = Vec::with_capacity(ops.len() + deferred.len());
+            let mut merged = Vec::with_capacity(ops.len() + deferred_len);
             merged.extend_from_slice(ops);
             merged
         }
     };
-    merged.extend_from_slice(deferred);
+    merged.extend(deferred);
     merged.sort_by_key(draw_op_z);
     Cow::Owned(merged)
 }
