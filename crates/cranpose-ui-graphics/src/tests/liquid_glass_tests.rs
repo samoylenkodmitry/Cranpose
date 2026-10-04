@@ -215,6 +215,7 @@ fn edge_lens_stages_preserve_intermediate_images_and_final_support() {
                 assert_eq!(pass.output_support(), None);
                 assert_eq!(pass.output_padding(), 0.0);
                 assert_eq!(pass.draw_split(), None);
+                assert_eq!(pass.draw_specialization(u64::MAX).draw_split(), None);
             } else {
                 assert_eq!(pass.output_support(), Some(support));
                 assert_eq!(pass.output_padding(), 8.0);
@@ -362,6 +363,72 @@ fn respecializing_mutated_uniforms_matches_fresh_shader_and_preserves_caller_ove
     assert_eq!(shader.overrides(), inactive.overrides());
     assert_eq!(shader.overrides_hash(), inactive.overrides_hash());
     assert!(shader.overrides().contains(&("CALLER_OVERRIDE", 7.0)));
+}
+
+#[test]
+fn every_setter_on_an_unfolded_glass_shader_retires_its_large_draw_specialization() {
+    type Request = fn(&mut RuntimeShader);
+    // Each setter both with a new value and with the value the shader's own
+    // specialization already holds, which the large draws may not.
+    let requests: [(&str, Request); 10] = [
+        ("set_override new", |shader| {
+            shader.set_override("CALLER", 1.0);
+        }),
+        ("set_override held", |shader| {
+            shader.set_override("GLASS_INTERIOR_GUARD", 1.0);
+        }),
+        ("clear_override held", |shader| {
+            assert!(shader.clear_override("GLASS_INTERIOR_GUARD"));
+        }),
+        ("clear_override absent", |shader| {
+            assert!(!shader.clear_override("CALLER"));
+        }),
+        ("set_substrates new", |shader| {
+            shader.set_substrates(&[SubstrateSpec::Blur { radius_px: 3.5 }]);
+        }),
+        ("set_substrates held", |shader| {
+            let held: Vec<SubstrateSpec> = shader.substrates().to_vec();
+            shader.set_substrates(&held);
+        }),
+        ("set_draw_split new", |shader| {
+            shader.set_draw_split(Some(GLASS_RIM_DRAW_OVERRIDE));
+        }),
+        ("set_draw_split held", |shader| {
+            shader.set_draw_split(shader.draw_split());
+        }),
+        ("set_specialization_exact new", |shader| {
+            let exact = shader.specialization_exact();
+            shader.set_specialization_exact(!exact);
+        }),
+        ("set_specialization_exact held", |shader| {
+            shader.set_specialization_exact(shader.specialization_exact());
+        }),
+    ];
+    for (setter, change) in requests {
+        let mut shader = RuntimeShader::new(LIQUID_GLASS_WGSL);
+        specialize_liquid_glass_with_folds(&mut shader, false);
+        let large = shader.draw_specialization(u64::MAX);
+        assert_ne!(
+            large.overrides_hash(),
+            shader.draw_specialization(0).overrides_hash(),
+            "an unfolded material folds its large draws"
+        );
+
+        change(&mut shader);
+        let large = shader.draw_specialization(u64::MAX);
+        let own = shader.draw_specialization(0);
+        assert_eq!(large.overrides(), shader.overrides(), "{setter}");
+        assert_eq!(large.overrides_hash(), own.overrides_hash(), "{setter}");
+        assert_eq!(large.draw_split(), shader.draw_split(), "{setter}");
+        assert_eq!(large.exact(), shader.specialization_exact(), "{setter}");
+
+        specialize_liquid_glass_with_folds(&mut shader, false);
+        assert_ne!(
+            shader.draw_specialization(u64::MAX).overrides_hash(),
+            shader.draw_specialization(0).overrides_hash(),
+            "respecializing after {setter} folds the large draws again"
+        );
+    }
 }
 
 #[test]
