@@ -4040,6 +4040,26 @@ impl GpuRenderer {
         }
     }
 
+    /// Queues every pipeline the cache file records, as the first frame of
+    /// an updated build does, and returns whether any is left to build: for
+    /// a renderer that prepares an app's pipelines without drawing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn prepare_recorded(&mut self) -> bool {
+        self.effect_renderer.warm_after_first_frame();
+        if let Some(records) = self.recent_after_update.take() {
+            self.warm_recent(&records);
+        }
+        self.compiling()
+    }
+
+    /// Whether the background compiler has a queued pipeline left to build.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn compiling(&self) -> bool {
+        self.landing
+            .as_ref()
+            .is_some_and(|landing| landing.in_flight())
+    }
+
     /// Whether the last frame drew a placeholder and pipelines are still
     /// compiling, so its picture is not final yet.
     pub(crate) fn awaits_pipelines(&self) -> bool {

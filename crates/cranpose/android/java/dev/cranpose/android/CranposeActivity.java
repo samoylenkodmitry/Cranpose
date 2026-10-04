@@ -2318,12 +2318,22 @@ public class CranposeActivity extends NativeActivity {
      * meta-data that {@link NativeActivity} reads, so subclasses need no extra wiring.
      */
     private void loadCranposeNativeLibrary() {
+        loadNativeLibrary(this, getComponentName());
+    }
+
+    /**
+     * Loads the native library {@code activity} names in its manifest
+     * meta-data, the one {@link NativeActivity} reads: for this activity, and
+     * for a receiver that runs native code without it.
+     */
+    static void loadNativeLibrary(
+            android.content.Context context, android.content.ComponentName activity) {
         String libraryName = DEFAULT_NATIVE_LIB_NAME;
         try {
             android.content.pm.ActivityInfo info =
-                    getPackageManager()
+                    context.getPackageManager()
                             .getActivityInfo(
-                                    getComponentName(),
+                                    activity,
                                     android.content.pm.PackageManager.GET_META_DATA);
             if (info.metaData != null) {
                 String declared = info.metaData.getString(NATIVE_LIB_NAME_META_DATA);

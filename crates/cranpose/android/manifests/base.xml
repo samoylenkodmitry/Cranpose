@@ -32,6 +32,20 @@
         </activity>
 
         <!--
+            After an update, builds the pipelines the app's last launches drew
+            before its first launch: the driver's compiled pipelines belong to
+            the build that compiled them. Android sends the broadcast only to
+            the updated app.
+        -->
+        <receiver
+            android:name="dev.cranpose.android.CranposePipelines"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
             Sharing a file out. `cranpose_services::share` stages the payload in
             the cache directory and hands the receiving application a content
             URI, which is only readable through a provider; the authority is

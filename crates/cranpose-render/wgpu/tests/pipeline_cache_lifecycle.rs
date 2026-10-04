@@ -583,6 +583,70 @@ fn a_relaunch_of_the_same_build_draws_what_it_recorded_from_the_driver_cache() {
     );
 }
 
+/// After an update an app builds every pipeline its last launches drew
+/// before it draws a frame, its later screens' included, so a screen it
+/// opens later finds them built.
+#[test]
+fn preparing_an_update_builds_every_recorded_pipeline_before_any_frame() {
+    relaunch_after_a_later_screen(
+        |bytes| bytes[0] ^= 0xff,
+        |updated| {
+            assert!(
+                updated.prepare_recorded_pipelines(Duration::from_secs(30), &|| false),
+                "the recorded pipelines must build"
+            );
+            assert_eq!(
+                frosted_frame_waits(updated),
+                0,
+                "a prepared update draws its last launch's later screen with pipelines built before it"
+            );
+        },
+    );
+}
+
+/// An app that launches while its update is being prepared stops the
+/// preparation: its own frames build what is left.
+#[test]
+fn preparing_an_update_stops_when_told() {
+    relaunch_after_a_later_screen(
+        |bytes| bytes[0] ^= 0xff,
+        |updated| {
+            assert!(
+                !updated.prepare_recorded_pipelines(Duration::from_secs(30), &|| true),
+                "a stopped preparation reports the pipelines unfinished"
+            );
+        },
+    );
+}
+
+/// After an update the pipelines an app prepares in the background are
+/// written for this build: its next launch is not an update.
+#[test]
+fn a_prepared_update_leaves_this_builds_cache() {
+    let _lock = support::gpu_test_lock();
+    let files = CacheFiles::new();
+    let cache = files.select("prepared-update.bin");
+    let mut previous =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    draw_settled(&mut previous, glass_page());
+    drop(previous);
+    wait_for_cache(&cache);
+    let this_build = fs::read(&cache).expect("this build's cache");
+    let mut old_build = this_build.clone();
+    old_build[0] ^= 0xff;
+    fs::write(&cache, &old_build).expect("an older build's cache");
+
+    let mut preparing =
+        support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
+    assert!(preparing.prepare_recorded_pipelines(Duration::from_secs(30), &|| false));
+    drop(preparing);
+    let prepared = fs::read(&cache).expect("the prepared cache");
+    assert_eq!(
+        prepared[0], this_build[0],
+        "the prepared file is this build's"
+    );
+}
+
 /// The driver cache holds what the last launch drew, but a launch with no
 /// records draws no stand-in: one would compile from nothing. A relaunch
 /// draws its cached glass with the glass's own pipelines, not a stand-in.
