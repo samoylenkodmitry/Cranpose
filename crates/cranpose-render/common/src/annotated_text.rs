@@ -1,17 +1,24 @@
 use std::ops::Range;
 
 use cranpose_ui::text::{FontExtent, LineBox, TextMetrics, TextStyle, line_box};
-use cranpose_ui_graphics::Point;
+use cranpose_ui_graphics::{Brush, Point, Rect};
 use smallvec::SmallVec;
 
 use crate::software_text_raster::{
     SoftwareTextFont, SoftwareTextFontSet, StyledTextRef, asked_line_height,
-    effective_style_for_range, font_extent,
+    effective_style_for_range, font_extent, measure_text_with_font,
 };
+
+#[derive(Clone, Copy)]
+pub(crate) struct AnnotatedBrushExtent {
+    pub style_index: usize,
+    pub line_index: usize,
+    pub rect: Rect,
+}
 
 struct ResolvedSpan<'a> {
     range: Range<usize>,
-    style: TextStyle,
+    style_index: usize,
     font: &'a SoftwareTextFont,
     font_size: f32,
     extent: FontExtent,
@@ -28,6 +35,7 @@ pub(crate) struct ResolvedLine {
 pub(crate) struct AnnotatedTextSegment<'a> {
     pub text: &'a str,
     pub range: Range<usize>,
+    pub style_index: usize,
     pub style: &'a TextStyle,
     pub font: &'a SoftwareTextFont,
     pub font_size: f32,
@@ -39,6 +47,8 @@ pub(crate) struct AnnotatedTextSegment<'a> {
 
 pub(crate) struct AnnotatedTextLayout<'a> {
     text: &'a str,
+    base_style: &'a TextStyle,
+    styles: SmallVec<[Option<TextStyle>; 2]>,
     spans: SmallVec<[ResolvedSpan<'a>; 2]>,
     pub lines: SmallVec<[ResolvedLine; 4]>,
 }
@@ -46,7 +56,7 @@ pub(crate) struct AnnotatedTextLayout<'a> {
 impl<'a> AnnotatedTextLayout<'a> {
     pub fn new(
         text: StyledTextRef<'a>,
-        style: &TextStyle,
+        style: &'a TextStyle,
         font_size: f32,
         scale: f32,
         grid: f32,
@@ -54,28 +64,52 @@ impl<'a> AnnotatedTextLayout<'a> {
     ) -> Option<Self> {
         let base_font = fonts.resolve(style)?;
         let base_extent = font_extent(base_font, font_size * scale);
+        let mut styles: SmallVec<[Option<TextStyle>; 2]> = SmallVec::new();
         let mut spans = SmallVec::new();
         for range in text.span_boundaries().windows(2) {
             let (start, end) = (range[0], range[1]);
             if start == end {
                 continue;
             }
-            let style = effective_style_for_range(text.span_styles, style, start, end);
-            let font_size = style.resolve_font_size(font_size);
-            let font = fonts.resolve(&style)?;
-            let extent = font_extent(font, font_size * scale);
-            let line_box = line_box(&style, extent, asked_line_height(&style, scale), grid);
-            spans.push(ResolvedSpan {
-                range: start..end,
-                style,
-                font,
-                font_size,
-                extent,
-                line_box,
-            });
+            let resolved_style = if text.span_styles.is_empty() {
+                None
+            } else {
+                Some(effective_style_for_range(
+                    text.span_styles,
+                    style,
+                    start,
+                    end,
+                ))
+            };
+            let style_index = styles.len();
+            styles.push(resolved_style);
+            let span_style = styles[style_index]
+                .as_ref()
+                .map_or(style, |resolved| resolved);
+            let font_size = span_style.resolve_font_size(font_size);
+            let span_text = &text.text[start..end];
+            fonts.visit_font_runs(span_text, span_style, |run, font| {
+                let extent = font_extent(font, font_size * scale);
+                let line_box = line_box(
+                    span_style,
+                    extent,
+                    asked_line_height(span_style, scale),
+                    grid,
+                );
+                spans.push(ResolvedSpan {
+                    range: start + run.start..start + run.end,
+                    style_index,
+                    font,
+                    font_size,
+                    extent,
+                    line_box,
+                });
+            })?;
         }
         let mut layout = Self {
             text: text.text,
+            base_style: style,
+            styles,
             spans,
             lines: SmallVec::new(),
         };
@@ -169,7 +203,8 @@ impl<'a> AnnotatedTextLayout<'a> {
             x += visit(AnnotatedTextSegment {
                 text: &self.text[start..end],
                 range: start..end,
-                style: &span.style,
+                style_index: span.style_index,
+                style: self.style(span.style_index),
                 font: span.font,
                 font_size: span.font_size,
                 origin: Point::new(
@@ -185,7 +220,83 @@ impl<'a> AnnotatedTextLayout<'a> {
     }
 
     pub fn all_styles(&self, matches: impl Fn(&TextStyle) -> bool) -> bool {
-        self.spans.iter().all(|span| matches(&span.style))
+        self.styles
+            .iter()
+            .all(|style| matches(style.as_ref().unwrap_or(self.base_style)))
+    }
+
+    fn style(&self, index: usize) -> &TextStyle {
+        self.styles[index]
+            .as_ref()
+            .map_or(self.base_style, |style| style)
+    }
+
+    pub fn has_non_solid_brush(&self) -> bool {
+        self.styles.iter().any(|style| {
+            style
+                .as_ref()
+                .map_or(self.base_style, |style| style)
+                .span_style
+                .brush
+                .as_ref()
+                .is_some_and(|brush| !matches!(brush, Brush::Solid(_)))
+        })
+    }
+
+    pub fn brush_extents(
+        &self,
+        line_offsets: Option<&[f32]>,
+        scale: f32,
+        mut segment_advance: impl FnMut(&AnnotatedTextSegment<'_>) -> f32,
+    ) -> SmallVec<[AnnotatedBrushExtent; 4]> {
+        let mut extents: SmallVec<[AnnotatedBrushExtent; 4]> = SmallVec::new();
+        for line_index in 0..self.lines.len() {
+            let offset = line_offsets
+                .and_then(|offsets| offsets.get(line_index))
+                .copied()
+                .unwrap_or(0.0);
+            self.walk_line(line_index, offset, |segment| {
+                if segment
+                    .style
+                    .span_style
+                    .brush
+                    .as_ref()
+                    .is_some_and(|brush| !matches!(brush, Brush::Solid(_)))
+                {
+                    let metrics = measure_text_with_font(
+                        segment.text,
+                        segment.style,
+                        segment.font_size,
+                        segment.font,
+                    );
+                    let rect = Rect {
+                        x: segment.origin.x,
+                        y: segment.origin.y,
+                        width: (metrics.width * scale).ceil().max(1.0),
+                        height: (metrics.height * scale).ceil().max(1.0),
+                    };
+                    if let Some(extent) = extents.last_mut().filter(|extent| {
+                        extent.style_index == segment.style_index
+                            && extent.line_index == segment.line_index
+                    }) {
+                        let right = (extent.rect.x + extent.rect.width).max(rect.x + rect.width);
+                        let bottom = (extent.rect.y + extent.rect.height).max(rect.y + rect.height);
+                        extent.rect.x = extent.rect.x.min(rect.x);
+                        extent.rect.y = extent.rect.y.min(rect.y);
+                        extent.rect.width = right - extent.rect.x;
+                        extent.rect.height = bottom - extent.rect.y;
+                    } else {
+                        extents.push(AnnotatedBrushExtent {
+                            style_index: segment.style_index,
+                            line_index: segment.line_index,
+                            rect,
+                        });
+                    }
+                }
+                Some(segment_advance(&segment))
+            });
+        }
+        extents
     }
 
     pub fn metrics(&self, width: f32) -> TextMetrics {

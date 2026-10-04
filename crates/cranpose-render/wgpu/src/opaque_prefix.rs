@@ -12,8 +12,9 @@ use cranpose_ui_graphics::{
 
 use crate::{
     capture_hash::capture_hasher,
-    geometry::{anchored_device_rect, canonicalized_scaled_rect, snap_delta_for_anchor},
+    geometry::{canonicalized_scaled_rect, snap_delta_for_anchor},
     render::hash_f32_for_cache,
+    run_store::device_clip,
     scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw},
 };
 
@@ -53,10 +54,23 @@ impl Edges {
     fn is_area(&self) -> bool {
         self.right > self.left && self.bottom > self.top
     }
-}
 
-fn canonical(value: f32) -> f32 {
-    value.signum() * (value.abs() * 16.0 + 0.5).floor() / 16.0
+    fn whole(self) -> Option<Self> {
+        whole(self.left)?;
+        whole(self.top)?;
+        whole(self.right)?;
+        whole(self.bottom)?;
+        self.is_area().then_some(self)
+    }
+
+    fn rect(self) -> Rect {
+        Rect {
+            x: self.left,
+            y: self.top,
+            width: self.right - self.left,
+            height: self.bottom - self.top,
+        }
+    }
 }
 
 fn whole(value: f32) -> Option<f32> {
@@ -143,23 +157,15 @@ fn is_opaque(candidate: &Candidate<'_>) -> bool {
     }
 }
 
-fn device_edges(rect: [f32; 4], offset: Point, scale: f32, canonicalize: bool) -> Option<Edges> {
-    let edge = |value: f32| {
-        let device = value * scale;
-        whole(if canonicalize {
-            canonical(device)
-        } else {
-            device
-        })
-    };
-    let [x, y, width, height] = rect;
-    let edges = Edges {
-        left: edge(x + offset.x)?,
-        top: edge(y + offset.y)?,
-        right: edge(x + width + offset.x)?,
-        bottom: edge(y + height + offset.y)?,
-    };
-    edges.is_area().then_some(edges)
+fn device_edges(rect: [f32; 4], offset: Point, scale: f32, canonicalize: bool) -> Edges {
+    let [left, top, right, bottom] =
+        crate::run_geometry::device_shape_edges(rect, 0.0, offset, scale, canonicalize);
+    Edges {
+        left,
+        top,
+        right,
+        bottom,
+    }
 }
 
 fn clip_contains(clip: Rect, edges: &Edges, scale: f32, canonicalize: bool) -> bool {
@@ -261,7 +267,7 @@ fn placed_edges(candidate: &Candidate<'_>, scale: f32) -> Option<(Edges, Point)>
         x: placement.offset.x + snap.x,
         y: placement.offset.y + snap.y,
     };
-    let edges = device_edges(candidate.record.rect, offset, scale, canonicalize)?;
+    let edges = device_edges(candidate.record.rect, offset, scale, canonicalize).whole()?;
     if placement
         .clip
         .is_some_and(|clip| !clip_contains(clip, &edges, scale, canonicalize))
@@ -319,17 +325,26 @@ pub(crate) fn capture_solid_rect(
     {
         return None;
     }
-    let [x, y, width, height] = candidate.record.rect;
     let placement = &run.placement;
-    let logical = Rect {
-        x: x + placement.offset.x,
-        y: y + placement.offset.y,
-        width,
-        height,
-    };
-    let painted = anchored_device_rect(logical, placement.snap_anchor, scale).intersect(capture)?;
-    let clip = placement.clip.map(|clip| {
-        let device = anchored_device_rect(clip, placement.snap_anchor, scale);
+    let snap = placement
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, scale))
+        .unwrap_or_default();
+    let painted = device_edges(
+        candidate.record.rect,
+        Point::new(placement.offset.x + snap.x, placement.offset.y + snap.y),
+        scale,
+        placement.snap_anchor.is_some(),
+    )
+    .rect()
+    .intersect(capture)?;
+    let clip = device_clip(placement, scale).map(|[x, y, width, height]| {
+        let device = Rect {
+            x,
+            y,
+            width,
+            height,
+        };
         device.intersect(capture).unwrap_or(device)
     });
     Some((candidate.record.color, painted, clip))

@@ -1183,7 +1183,10 @@ fn independent_cached_glasses(identified: bool) -> RenderGraph {
     support::page_graph(1104, 720, children)
 }
 
-fn identified_glasses_with(present: &[usize], effect: impl Fn() -> RenderEffect) -> RenderGraph {
+fn identified_glasses_with(
+    present: &[usize],
+    effect: impl Fn(usize) -> RenderEffect,
+) -> RenderGraph {
     let mut children = support::striped_page(1104, 720);
     for index in present {
         let mut layer = shared_test_support::layer_node(
@@ -1193,7 +1196,7 @@ fn identified_glasses_with(present: &[usize], effect: impl Fn() -> RenderEffect)
                 32.0 + (index / 3) as f32 * 240.0,
             ),
             GraphicsLayer {
-                backdrop_effect: Some(effect()),
+                backdrop_effect: Some(effect(*index)),
                 clip: true,
                 shape: LayerShape::Rounded(RoundedCornerShape::uniform(12.0)),
                 ..GraphicsLayer::default()
@@ -1207,7 +1210,7 @@ fn identified_glasses_with(present: &[usize], effect: impl Fn() -> RenderEffect)
 }
 
 fn identified_glasses(present: &[usize]) -> RenderGraph {
-    identified_glasses_with(present, || RenderEffect::blur(12.0))
+    identified_glasses_with(present, |_| RenderEffect::blur(12.0))
 }
 
 fn layout_probe() -> RenderEffect {
@@ -1227,7 +1230,41 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 fn layout_probe_glasses(present: &[usize]) -> RenderGraph {
-    identified_glasses_with(present, layout_probe)
+    identified_glasses_with(present, |_| layout_probe())
+}
+
+fn mixed_substrate_glasses(changed: &[usize]) -> RenderGraph {
+    identified_glasses_with(&ALL_NINE, |index| {
+        let specs = [
+            SubstrateSpec::Average { block: 4 },
+            SubstrateSpec::Blur { radius_px: 7.0 },
+            SubstrateSpec::Mean,
+        ];
+        let count = 1 + index % specs.len();
+        let mut shader = RuntimeShader::new(&format!(
+            "{RUNTIME_SHADER_PRELUDE_WGSL}\n{}",
+            r"@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    let slot = min(u32(input.uv.x * u[0u].y), u32(u[0u].y) - 1u);
+    let region = u[58u - slot];
+    let texel = clamp(input.uv * region.zw, vec2<f32>(0.5), region.zw - 0.5);
+    let uv = (region.xy + texel) / vec2<f32>(textureDimensions(input_texture));
+    let color = textureSampleLevel(input_texture, input_sampler, uv, 0.0).rgb;
+    return vec4<f32>(mix(color, vec3<f32>(0.9, 0.1, 0.4), u[0u].x), 1.0);
+}",
+        ));
+        shader.set_batched_source(true);
+        shader.set_substrates(&specs[..count]);
+        shader.set_float4(
+            0,
+            if changed.contains(&index) { 0.25 } else { 0.0 },
+            count as f32,
+            0.0,
+            0.0,
+        );
+        RenderEffect::blur(if changed.contains(&index) { 6.1 } else { 6.05 })
+            .then(RenderEffect::runtime_shader(shader))
+    })
 }
 
 struct NeighbourHarness {
@@ -1260,11 +1297,8 @@ impl NeighbourHarness {
 
     fn assert_exact(&mut self, label: &str, present: &[usize]) -> u32 {
         let frame = support::capture_graph(&mut self.cached, (self.graph)(present), 1104, 720);
-        let misses = self
-            .cached
-            .last_frame_stats()
-            .expect("frame stats")
-            .layer_cache_misses;
+        let stats = self.cached.last_frame_stats().expect("frame stats");
+        let misses = stats.layer_cache_misses;
         cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
         self.reference.scene_mut().graph = Some((self.graph)(present));
         let reference = self
@@ -1276,7 +1310,7 @@ impl NeighbourHarness {
             support::max_channel_delta(&frame.pixels, &reference.pixels),
             0,
             "{label}: a frame with {} cached glasses must be the bytes of a renderer that never caches",
-            present.len() as u32 - misses
+            stats.layer_cache_hits
         );
         misses
     }
@@ -1297,6 +1331,21 @@ impl NeighbourHarness {
 }
 
 const ALL_NINE: [usize; 9] = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+
+#[test]
+fn partial_cache_hits_preserve_each_glass_substrate_order() {
+    let Some(mut harness) = NeighbourHarness::new(mixed_substrate_glasses) else {
+        return;
+    };
+    harness.settle(&[]);
+    assert_eq!(
+        harness.assert_exact("first, middle and last change", &[0, 4, 8]),
+        3
+    );
+    harness.assert_exact_until_warm("changed glasses settle", &[0, 4, 8]);
+    assert_eq!(harness.assert_exact("different members change", &[1, 5]), 5);
+    harness.assert_exact_until_warm("new subset settles", &[1, 5]);
+}
 
 #[test]
 fn a_neighbour_leaving_the_stage_keeps_every_frame_exact() {

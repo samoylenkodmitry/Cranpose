@@ -4,11 +4,8 @@ use cranpose_render_common::text_measure::{
     fallback_text_metrics,
 };
 use cranpose_render_common::{
-    brush_sampling::sample_brush_rgba,
-    graph_scene::RenderDiagnostics,
-    shape_sdf,
-    software_text_raster::{rasterize_annotated_text_region, rasterize_text_to_image},
-    text_measure::SoftwareTextResources,
+    brush_sampling::sample_brush_rgba, graph_scene::RenderDiagnostics, shape_sdf,
+    software_text_raster::rasterize_annotated_text_region, text_measure::SoftwareTextResources,
 };
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{
@@ -487,32 +484,17 @@ fn draw_text(
     } else {
         rect
     };
-    let image = if draw.text.span_styles.is_empty() {
-        let Some(font) = text_resources.fonts().resolve(&draw.text_style) else {
-            return;
-        };
-        rasterize_text_to_image(
-            &draw.text.text,
-            raster_rect,
-            &draw.text_style,
-            draw.color,
-            draw.font_size,
-            text_scale,
-            font,
-        )
-    } else {
-        rasterize_annotated_text_region(
-            draw.text.as_ref(),
-            raster_rect,
-            Point::new(raster_rect.x, raster_rect.y),
-            &draw.text_style,
-            draw.color,
-            draw.font_size,
-            text_scale,
-            text_resources.fonts(),
-            None,
-        )
-    };
+    let image = rasterize_annotated_text_region(
+        draw.text.as_ref(),
+        raster_rect,
+        Point::new(raster_rect.x, raster_rect.y),
+        &draw.text_style,
+        draw.color,
+        draw.font_size,
+        text_scale,
+        text_resources.fonts(),
+        None,
+    );
     let Some(image) = image else {
         return;
     };

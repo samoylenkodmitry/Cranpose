@@ -81,6 +81,11 @@ impl LiquidPage {
     /// Updates the page and renders it.
     pub fn capture(&mut self) -> CapturedFrame {
         self.shell.update();
+        self.capture_current()
+    }
+
+    /// Renders the current scene without advancing the application clock.
+    pub fn capture_current(&mut self) -> CapturedFrame {
         let (width, height) = self.physical_size();
         self.shell
             .renderer()

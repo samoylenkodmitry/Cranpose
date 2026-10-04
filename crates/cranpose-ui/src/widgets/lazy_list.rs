@@ -172,7 +172,6 @@ fn measure_lazy_list_item(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     index: usize,
     inputs: &LazyListItemMeasureInputs<'_>,
-    retained_measurement_batch: &mut Vec<Rc<MeasuredNode>>,
 ) -> LazyListMeasuredItem {
     let measure_start = Instant::now();
     let key = inputs.content.get_key(index);
@@ -190,29 +189,41 @@ fn measure_lazy_list_item(
 
     scope.update_content_type(slot_id, content_type);
 
-    let cached_candidate = {
-        inputs
-            .measured_item_cache
-            .borrow_mut()
-            .candidate(index, key_slot_id, content_type)
-    };
-    if let Some(cached) = cached_candidate {
-        inputs
-            .measured_item_cache
-            .borrow_mut()
-            .record_candidate_hit();
-        match scope.activate_exact_retained_slot_with_known_children(slot_id, &cached.item.node_ids)
+    let candidate_cache = inputs.measured_item_cache.borrow();
+    let cached_candidate = candidate_cache
+        .candidate(index, key_slot_id, content_type)
+        .map(|cached| cached.item.clone());
+    let stale_candidate = cached_candidate.is_none() && candidate_cache.contains_index(index);
+    drop(candidate_cache);
+
+    if let Some(cached_item) = cached_candidate {
+        match scope.activate_exact_retained_slot_with_known_children(slot_id, &cached_item.node_ids)
         {
             Some(RetainedSlotChildren::Clean) => {
-                retained_measurement_batch.extend(cached.retained_children.iter().cloned());
-                inputs.measured_item_cache.borrow_mut().record_exact_reuse();
-                return cached.item;
+                let cache = inputs.measured_item_cache.borrow();
+                let current_candidate = cache.candidate(index, key_slot_id, content_type);
+                if let Some(cached) =
+                    current_candidate.filter(|cached| cached.item.node_ids == cached_item.node_ids)
+                {
+                    scope.register_retained_measurements(&cached.retained_children);
+                    drop(cache);
+                    let mut cache = inputs.measured_item_cache.borrow_mut();
+                    cache.record_candidate_hit();
+                    cache.record_exact_reuse();
+                    return cached_item;
+                }
+                drop(cache);
+
+                let mut cache = inputs.measured_item_cache.borrow_mut();
+                cache.record_candidate_hit();
+                cache.record_exact_miss();
             }
             Some(RetainedSlotChildren::Remeasure {
                 children,
                 children_match,
             }) => {
                 let mut cache = inputs.measured_item_cache.borrow_mut();
+                cache.record_candidate_hit();
                 cache.remove(index);
                 if children_match {
                     cache.record_dirty_children();
@@ -229,15 +240,17 @@ fn measure_lazy_list_item(
             }
             None => {
                 let mut cache = inputs.measured_item_cache.borrow_mut();
+                cache.record_candidate_hit();
                 cache.record_exact_miss();
                 cache.remove(index);
             }
         }
     } else {
-        inputs
-            .measured_item_cache
-            .borrow_mut()
-            .record_candidate_miss();
+        let mut cache = inputs.measured_item_cache.borrow_mut();
+        cache.record_candidate_miss();
+        if stale_candidate {
+            cache.remove(index);
+        }
     }
 
     let item_identity = key.is_user_key().then_some(key_slot_id);
@@ -262,16 +275,27 @@ fn measure_lazy_list_item(
         .map(|child| child.node_id() as u64)
         .collect();
 
-    if let Some(cached) = inputs.measured_item_cache.borrow_mut().get(
-        index,
-        key_slot_id,
-        content_type,
-        &root_node_ids,
-    ) {
+    let cache = inputs.measured_item_cache.borrow();
+    let has_cached_item = cache
+        .get(index, key_slot_id, content_type, &root_node_ids)
+        .is_some();
+    let mut remove_cache_entry = !has_cached_item && cache.contains_index(index);
+    drop(cache);
+
+    if has_cached_item {
         if !scope.children_need_relayout(&root_children) {
-            scope.register_retained_measurements(&cached.retained_children);
-            return cached.item;
+            let cache = inputs.measured_item_cache.borrow();
+            if let Some(cached) = cache.get(index, key_slot_id, content_type, &root_node_ids) {
+                scope.register_retained_measurements(&cached.retained_children);
+                let item = cached.item.clone();
+                drop(cache);
+                return item;
+            }
+            drop(cache);
         }
+        remove_cache_entry = true;
+    }
+    if remove_cache_entry {
         inputs.measured_item_cache.borrow_mut().remove(index);
     }
 
@@ -455,7 +479,6 @@ fn measure_lazy_list_internal(
 
     let scroll_delta_for_direction = state.peek_scroll_delta();
     let skipped_slots_recycled = Cell::new(false);
-    let mut retained_measurement_batch = Vec::new();
     let item_measure_inputs = LazyListItemMeasureInputs {
         is_vertical,
         cross_axis_size,
@@ -464,8 +487,7 @@ fn measure_lazy_list_internal(
         measured_item_cache,
     };
 
-    let focused_item =
-        measure_focused_lazy_item(scope, &item_measure_inputs, &mut retained_measurement_batch);
+    let focused_item = measure_focused_lazy_item(scope, &item_measure_inputs);
     let node_id = scope.root_id();
 
     let measure_item = |index: usize| -> LazyListMeasuredItem {
@@ -480,12 +502,7 @@ fn measure_lazy_list_internal(
         {
             skipped_slots_recycled.set(true);
         }
-        measure_lazy_list_item(
-            scope,
-            index,
-            &item_measure_inputs,
-            &mut retained_measurement_batch,
-        )
+        measure_lazy_list_item(scope, index, &item_measure_inputs)
     };
     let mut measure_item = measure_item;
     let mut result = measure_lazy_viewport(
@@ -497,9 +514,6 @@ fn measure_lazy_list_internal(
     );
     if let Some(item) = focused_item {
         place_focused_lazy_item(&mut result, item, &item_measure_inputs, config.spacing);
-    }
-    if !retained_measurement_batch.is_empty() {
-        scope.register_retained_measurements(&retained_measurement_batch);
     }
     register_visible_lazy_list_child_measurements(
         scope,
@@ -686,7 +700,6 @@ impl BeyondBoundsComposition {
 fn measure_focused_lazy_item(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     inputs: &LazyListItemMeasureInputs<'_>,
-    retained_measurement_batch: &mut Vec<Rc<MeasuredNode>>,
 ) -> Option<LazyListMeasuredItem> {
     let slot = scope.focused_slot()?.raw();
     let content = inputs.content;
@@ -705,12 +718,7 @@ fn measure_focused_lazy_item(
         .measured_item_cache
         .borrow_mut()
         .remember_focused(slot, index);
-    Some(measure_lazy_list_item(
-        scope,
-        index,
-        inputs,
-        retained_measurement_batch,
-    ))
+    Some(measure_lazy_list_item(scope, index, inputs))
 }
 
 fn place_focused_lazy_item(
@@ -829,7 +837,6 @@ struct LazyMeasuredItemCache {
     focused: Option<(u64, usize)>,
 }
 
-#[derive(Clone)]
 struct CachedLazyMeasuredItem {
     item: LazyListMeasuredItem,
     retained_children: SmallVec<[Rc<MeasuredNode>; 4]>,
@@ -911,39 +918,41 @@ impl LazyMeasuredItemCache {
     }
 
     fn get(
-        &mut self,
+        &self,
         index: usize,
         key: u64,
         content_type: Option<u64>,
         node_ids: &SmallNodeVec,
-    ) -> Option<CachedLazyMeasuredItem> {
+    ) -> Option<&CachedLazyMeasuredItem> {
         let cached = self.entries.get(&index)?;
         if cached.item.key != key
             || cached.item.content_type != content_type
             || cached.item.node_ids != *node_ids
             || cached.retained_children.len() != cached.item.node_ids.len()
         {
-            self.entries.remove(&index);
             return None;
         }
-        Some(cached.clone())
+        Some(cached)
+    }
+
+    fn contains_index(&self, index: usize) -> bool {
+        self.entries.contains_key(&index)
     }
 
     fn candidate(
-        &mut self,
+        &self,
         index: usize,
         key: u64,
         content_type: Option<u64>,
-    ) -> Option<CachedLazyMeasuredItem> {
+    ) -> Option<&CachedLazyMeasuredItem> {
         let cached = self.entries.get(&index)?;
         if cached.item.key != key
             || cached.item.content_type != content_type
             || cached.retained_children.len() != cached.item.node_ids.len()
         {
-            self.entries.remove(&index);
             return None;
         }
-        Some(cached.clone())
+        Some(cached)
     }
 
     fn has_candidate(&self, index: usize, key: u64, content_type: Option<u64>) -> bool {

@@ -1,11 +1,9 @@
 #[cfg(test)]
 pub(crate) use cranpose_render_common::graph::quad_bounds;
 #[cfg(test)]
-pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_rect;
+pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_quad;
 #[cfg(test)]
-pub(crate) use cranpose_render_common::layer_transform::{
-    apply_layer_affine_to_rect, apply_layer_to_quad,
-};
+pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_rect;
 #[cfg(test)]
 pub(crate) use cranpose_render_common::style_shared::{
     DrawPlacement, compose_color_filters, primitives_for_placement,
@@ -78,14 +76,12 @@ pub(crate) fn apply_draw_commands(
                 src_rect,
             } => {
                 let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
                 let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
                 let transformed = quad_bounds(quad);
                 let combined_alpha = (alpha * layer.alpha).clamp(0.0, 1.0);
                 let combined_filter = compose_color_filters(color_filter, layer.color_filter);
                 scene.push_image_with_geometry(
                     transformed,
-                    local_rect,
                     quad,
                     image,
                     combined_alpha,

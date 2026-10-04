@@ -119,6 +119,7 @@ fn deferred_draws_keep_their_order_after_interleaved_children() {
             &mut LayerMotion::default(),
             SceneCapacityHint::default(),
             1.0,
+            &mut LayerSceneRecycler::default(),
         );
         let positions: Vec<_> = collected
             .scene
@@ -205,7 +206,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                 children: vec![node],
                 ..Default::default()
             };
-            let child = isolated_child(
+            let (child, _) = isolated_child(
                 &layer,
                 &mut crate::pipeline::UiTextLayoutResolver,
                 &mut LayerMotion::default(),
@@ -218,6 +219,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     raster_scale: RasterScale::Exact(1.0),
                 },
                 &mut CompositorScene::new(),
+                &mut LayerSceneRecycler::default(),
             );
             assert_eq!(child.snap_anchor.is_some(), expected);
         }
@@ -428,6 +430,7 @@ fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_doe
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     );
     assert!(
         scene.children.is_empty(),
@@ -575,6 +578,7 @@ fn collected(layer: LayerNode) -> ChildLayer {
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     );
     scene.children.pop().expect("a turned layer isolates")
 }
@@ -782,39 +786,6 @@ fn glass_layer(transform: ProjectiveTransform) -> LayerNode {
 }
 
 #[test]
-fn a_turned_layer_reads_its_backdrop_in_its_own_space_under_its_turn() {
-    let outer = collected(glass_layer(turn(20.0)));
-
-    assert!(
-        outer.backdrop.is_none(),
-        "the turn carries no backdrop of its own"
-    );
-    assert!(outer.effect.is_none());
-    assert!(outer.rounded_clip.is_none());
-    assert_eq!(outer.alpha, GraphicsLayer::composite_alpha_8bit(0.5));
-    let [inner] = outer.content.children.as_slice() else {
-        panic!("the backdrop runs in one child in the layer's own space");
-    };
-    assert!(inner.backdrop.is_some());
-    assert!(inner.rounded_clip.is_some());
-    assert_eq!(inner.alpha, 1.0);
-    assert_eq!(
-        uniform_scale_translation(inner.transform),
-        Some((1.0, Point::default())),
-        "the inner child sits in the turned layer's own space"
-    );
-}
-
-#[test]
-fn a_moved_layer_resolves_its_backdrop_beside_its_surface() {
-    let child = collected(glass_layer(ProjectiveTransform::translation(10.0, 20.0)));
-
-    assert!(child.backdrop.is_some());
-    assert!(child.rounded_clip.is_some());
-    assert!(child.content.children.is_empty());
-}
-
-#[test]
 fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
     let mut layer = glass_layer(ProjectiveTransform::translation(10.0, 20.0));
     layer.graphics_layer.alpha = 1.0;
@@ -831,6 +802,7 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     );
     let [backdrop] = collected.scene.backdrop_layers.as_slice() else {
         panic!("the isolated layer's backdrop must be batched");
@@ -864,6 +836,7 @@ fn draw_ops_under_clip(child: LayerNode) -> usize {
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     )
     .scene
     .draw_ops
@@ -938,6 +911,7 @@ fn a_plain_texts_draw_carries_its_nodes_style() {
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
         1.0,
+        &mut LayerSceneRecycler::default(),
     )
     .scene;
     assert_eq!(scene.texts.len(), 1);
