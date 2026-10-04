@@ -13,7 +13,7 @@ use super::{
 use crate::{
     effect_renderer::EffectRenderer,
     pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER,
-    pipeline_compiler::{CompileLane, PipelineCompiler},
+    pipeline_compiler::{CompileLane, PipelineCompiler, tests::hold_warm_ups},
     pipeline_records::ShaderPipelineRecord,
 };
 
@@ -50,20 +50,6 @@ fn split_shader() -> RuntimeShader {
     shader.set_draw_split(Some("SPLIT"));
     shader.set_specialization_exact(true);
     shader
-}
-
-/// Holds every warm-up thread of `compiler` until the returned senders
-/// drop, so nothing queued behind them lands meanwhile.
-fn hold_warm_ups(compiler: &PipelineCompiler) -> Vec<std::sync::mpsc::Sender<()>> {
-    (0..3)
-        .map(|_| {
-            let (release, held) = std::sync::mpsc::channel::<()>();
-            compiler.enqueue(CompileLane::WarmUp, move || {
-                let _ = held.recv();
-            });
-            release
-        })
-        .collect()
 }
 
 /// How `shader`'s interior and rim draws were served.
