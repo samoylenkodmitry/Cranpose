@@ -662,9 +662,11 @@ impl ShaderPipelineCache {
     /// [`Self::warm_recorded`] for the pipelines the last launch drew its
     /// first screen with, behind a stand-in per shader source, blend mode and
     /// draw part that several of them share. A stand-in folds only the
-    /// overrides all of those share: folds are exact, so it draws each of them
-    /// with its own pipeline's bytes, and it compiles in about the time of one
-    /// of them. The pipelines a stand-in covers wait for
+    /// overrides all of those share. Every override of the framework's own
+    /// shaders is an exact fold on its own, so any subset of a material's
+    /// folds draws that material's bytes (for an arbitrary shader, an exact
+    /// set says nothing of its subsets: only `sources`, the framework's own,
+    /// get stand-ins). A stand-in compiles in about the time of one of them. The pipelines a stand-in covers wait for
     /// [`Self::queue_after_first_frame`]: a Mali driver compiles largely one
     /// pipeline at a time, so compiled beside the first frame they would hold
     /// the pipelines it draws with.

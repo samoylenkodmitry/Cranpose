@@ -219,6 +219,94 @@ fn settle(
     }
 }
 
+/// The runtime shader a single-pass glass effect draws with.
+fn glass_material(effect: RenderEffect) -> RuntimeShader {
+    match effect {
+        RenderEffect::Shader { shader } => std::sync::Arc::unwrap_or_clone(shader),
+        other => panic!("a single-pass glass material, not {other:?}"),
+    }
+}
+
+/// What a stand-in compiles for a first screen: the glass folded only to
+/// the overrides all its materials share. Each fold is exact on its own, so
+/// every material drawn with that pipeline lands on its own pipeline's
+/// bytes, interior and rim alike.
+#[test]
+fn a_glass_folded_only_to_what_its_neighbours_share_keeps_its_bytes() {
+    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH, GLASS_HEIGHT, GLASS_WIDTH, panes_page};
+    let _folds = support::glass_page::GlassFolds::set(true);
+    let frosted = cranpose_ui_graphics::liquid_glass_effect(
+        &cranpose_ui_graphics::LiquidGlassRect {
+            left: 0.0,
+            top: 0.0,
+            width: GLASS_WIDTH,
+            height: GLASS_HEIGHT,
+            tint_color: Color(1.0, 1.0, 1.0, 0.12),
+        },
+        &cranpose_ui_graphics::LiquidGlassSpec {
+            blur_radius: 4.0,
+            ..cranpose_ui_graphics::LiquidGlassSpec::default()
+        },
+        GLASS_WIDTH,
+        GLASS_HEIGHT,
+    );
+    let loupe = cranpose_ui_graphics::liquid_loupe_effect(
+        (GLASS_WIDTH, GLASS_HEIGHT),
+        &cranpose_ui_graphics::LiquidLoupeSpec::default(),
+    );
+    let materials = [support::glass_page::glass_shader(), frosted, loupe].map(glass_material);
+    let shared: Vec<(&'static str, f64)> = materials[0]
+        .overrides()
+        .iter()
+        .copied()
+        .filter(|&(name, value)| {
+            materials.iter().all(|material| {
+                material
+                    .overrides()
+                    .iter()
+                    .any(|&(own, fixed)| own == name && fixed.to_bits() == value.to_bits())
+            })
+        })
+        .collect();
+    assert!(
+        !shared.is_empty()
+            && materials
+                .iter()
+                .all(|material| material.overrides().len() > shared.len()),
+        "the materials share some folds, and each folds more on its own"
+    );
+    let mut renderer = support::headless_renderer().expect("GPU required for glass parity");
+    let plain = support::capture_graph(&mut renderer, panes_page([]), FRAME_WIDTH, FRAME_HEIGHT);
+    for (index, material) in materials.iter().enumerate() {
+        let mut stand_in = material.clone();
+        for &(name, value) in material.overrides() {
+            if !shared.contains(&(name, value)) {
+                stand_in.clear_override(name);
+            }
+        }
+        assert_eq!(stand_in.draw_split(), material.draw_split());
+        let own = support::capture_graph(
+            &mut renderer,
+            panes_page([RenderEffect::runtime_shader(material.clone())]),
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+        );
+        let standing_in = support::capture_graph(
+            &mut renderer,
+            panes_page([RenderEffect::runtime_shader(stand_in)]),
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+        );
+        assert!(own.pixels != plain.pixels, "material {index} must draw");
+        support::assert_same_bytes(
+            &format!("material {index} drawn with only the shared folds"),
+            FRAME_WIDTH,
+            &own.pixels,
+            &standing_in.pixels,
+        );
+    }
+}
+
 /// Asks renderers to build the glass shader's general pipelines on their
 /// background compilers: a new material stands in with them while its own
 /// compile, where without them it waits for its own.

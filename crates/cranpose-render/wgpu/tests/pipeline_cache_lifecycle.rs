@@ -10,21 +10,20 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use cranpose_render_common::{
-    Renderer,
-    graph::{ProjectiveTransform, RenderGraph, RenderNode},
-};
+use cranpose_render_common::{Renderer, graph::RenderGraph};
 use cranpose_render_wgpu::{
     CapturedFrame, debug_toggle_os, pipelines_created, pipelines_created_off_frame,
     set_debug_toggle_os,
 };
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape, LiquidGlassRect,
-    LiquidGlassSpec, LiquidLoupeSpec, Rect, RenderEffect, RoundedCornerShape, liquid_glass_effect,
-    liquid_loupe_effect,
+    Brush, Color, CornerRadii, DrawPrimitive, LiquidGlassRect, LiquidGlassSpec, LiquidLoupeSpec,
+    Rect, RenderEffect, liquid_glass_effect, liquid_loupe_effect,
 };
 
-use crate::{shared_test_support, support};
+use crate::support::{
+    self,
+    glass_page::{GlassFolds, panes_page},
+};
 
 const CACHE_FILE: &str = "CRANPOSE_PIPELINE_CACHE_FILE";
 const CACHE_ENABLED: &str = "CRANPOSE_PIPELINE_DISK_CACHE";
@@ -386,39 +385,6 @@ fn a_first_frame_uses_its_requested_warm_up_instead_of_compiling_a_stand_in() {
     );
 }
 
-/// A striped page under a row of rounded panes, one per backdrop effect.
-fn panes_page(effects: impl IntoIterator<Item = RenderEffect>) -> RenderGraph {
-    use support::glass_page::{
-        FRAME_HEIGHT, FRAME_WIDTH, GLASS_HEIGHT, GLASS_LEFT, GLASS_PITCH, GLASS_RADIUS, GLASS_TOP,
-        GLASS_WIDTH,
-    };
-    let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
-    for (index, effect) in effects.into_iter().enumerate() {
-        children.push(RenderNode::Layer(Box::new(
-            shared_test_support::layer_node(
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: GLASS_WIDTH,
-                    height: GLASS_HEIGHT,
-                },
-                ProjectiveTransform::translation(
-                    GLASS_LEFT + GLASS_PITCH * index as f32,
-                    GLASS_TOP,
-                ),
-                GraphicsLayer {
-                    backdrop_effect: Some(effect),
-                    clip: true,
-                    shape: LayerShape::Rounded(RoundedCornerShape::uniform(GLASS_RADIUS)),
-                    ..GraphicsLayer::default()
-                },
-                Vec::new(),
-            ),
-        )));
-    }
-    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
-}
-
 /// A striped page under one glass pane.
 fn glass_page() -> RenderGraph {
     panes_page([support::glass_page::glass_shader()])
@@ -574,23 +540,6 @@ fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
     );
 }
 
-/// Glass folding set for one test, then restored: it is process-wide.
-struct FoldsFor(bool);
-
-impl FoldsFor {
-    fn test(folds: bool) -> Self {
-        let restore = Self(cranpose_ui_graphics::glass_material_folds_enabled());
-        cranpose_ui_graphics::set_glass_material_folds(folds);
-        restore
-    }
-}
-
-impl Drop for FoldsFor {
-    fn drop(&mut self) {
-        cranpose_ui_graphics::set_glass_material_folds(self.0);
-    }
-}
-
 /// A material no launch drew stands in with the general glass while its own
 /// pipeline compiles. After an update the general the last launch stood in
 /// with is built once the first frame is drawn, so standing in compiles
@@ -599,7 +548,7 @@ impl Drop for FoldsFor {
 fn an_updated_build_stands_a_new_glass_in_with_a_general_built_after_its_first_frame() {
     use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
     // Folded, each material below is a pipeline of its own.
-    let _folds = FoldsFor::test(true);
+    let _folds = GlassFolds::set(true);
     let frosted = LiquidGlassSpec {
         blur_radius: 4.0,
         ..LiquidGlassSpec::default()

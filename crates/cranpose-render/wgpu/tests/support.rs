@@ -1512,6 +1512,54 @@ pub mod glass_page {
     pub const GLASS_RADIUS: f32 = 12.0;
     pub const BLUR_RADIUS: f32 = 6.0;
 
+    /// A striped page under a row of rounded panes, one per backdrop effect.
+    pub fn panes_page(effects: impl IntoIterator<Item = RenderEffect>) -> RenderGraph {
+        let mut children = striped_page(FRAME_WIDTH, FRAME_HEIGHT);
+        for (index, effect) in effects.into_iter().enumerate() {
+            children.push(RenderNode::Layer(Box::new(
+                crate::shared_test_support::layer_node(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: GLASS_WIDTH,
+                        height: GLASS_HEIGHT,
+                    },
+                    cranpose_render_common::graph::ProjectiveTransform::translation(
+                        GLASS_LEFT + GLASS_PITCH * index as f32,
+                        GLASS_TOP,
+                    ),
+                    cranpose_ui_graphics::GraphicsLayer {
+                        backdrop_effect: Some(effect),
+                        clip: true,
+                        shape: cranpose_ui_graphics::LayerShape::Rounded(
+                            cranpose_ui_graphics::RoundedCornerShape::uniform(GLASS_RADIUS),
+                        ),
+                        ..cranpose_ui_graphics::GraphicsLayer::default()
+                    },
+                    Vec::new(),
+                ),
+            )));
+        }
+        page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+    }
+
+    /// Glass folding set for one test, then restored: it is process-wide.
+    pub struct GlassFolds(bool);
+
+    impl GlassFolds {
+        pub fn set(folds: bool) -> Self {
+            let restore = Self(cranpose_ui_graphics::glass_material_folds_enabled());
+            cranpose_ui_graphics::set_glass_material_folds(folds);
+            restore
+        }
+    }
+
+    impl Drop for GlassFolds {
+        fn drop(&mut self) {
+            cranpose_ui_graphics::set_glass_material_folds(self.0);
+        }
+    }
+
     pub fn glass_shader() -> RenderEffect {
         liquid_glass_effect(
             &LiquidGlassRect {
