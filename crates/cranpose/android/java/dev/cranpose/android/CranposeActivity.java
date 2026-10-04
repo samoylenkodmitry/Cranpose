@@ -87,6 +87,7 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnCameraState(int kind, String detail);
     private static native void nativeOnCameraStill(byte[] jpeg, String error);
     private static native void nativeOnCameraLenses(String list, String active);
+    private static native void nativeOnPermissionsResult(String results);
 
     /** One preview frame, in the format the sensor produced. */
     static void onCameraFrame(
@@ -2533,6 +2534,18 @@ public class CranposeActivity extends NativeActivity {
             int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQUEST_CAMERA) {
+            // A request this activity did not make itself: a service's, such
+            // as the heart-rate sensor's. Rust routes each answer to the
+            // service that asked, one "permission<TAB>granted" line each.
+            StringBuilder results = new StringBuilder();
+            for (int at = 0; at < permissions.length && at < grantResults.length; at++) {
+                results.append(permissions[at])
+                        .append('\t')
+                        .append(grantResults[at] == android.content.pm.PackageManager.PERMISSION_GRANTED
+                                ? '1' : '0')
+                        .append('\n');
+            }
+            nativeOnPermissionsResult(results.toString());
             return;
         }
         cranposeCameraPermissionPending = false;

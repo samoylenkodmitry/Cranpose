@@ -83,6 +83,12 @@ pub(crate) fn register(
         crate::android_app_update::register(app.clone());
     }
     crate::android_camera::register(app.clone());
+    // Only an application that declared the sensor carries its Java, its
+    // permissions and this backend; anywhere else the service reports
+    // that there is no heart rate to read.
+    if capabilities.has(cranpose_capabilities::Service::HeartRate) {
+        crate::android_heart_rate::register(app.clone());
+    }
     #[cfg(feature = "media")]
     crate::android_media::register(app.clone());
     set_platform_launch_args(Rc::new(read_launch_arguments(&app)));

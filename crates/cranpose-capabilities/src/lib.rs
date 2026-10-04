@@ -38,6 +38,8 @@ pub enum Service {
     Update,
     /// The network, and whether the device is on one.
     Network,
+    /// The wearer's heart rate, from the device's own sensor.
+    HeartRate,
 }
 
 impl Service {
@@ -57,6 +59,7 @@ impl Service {
             Service::Haptics => "haptics",
             Service::Update => "update",
             Service::Network => "network",
+            Service::HeartRate => "heart-rate",
         }
     }
 
@@ -89,6 +92,20 @@ impl Service {
                 "android.permission.INTERNET",
                 "android.permission.ACCESS_NETWORK_STATE",
             ],
+            // Android 16 split the body sensors into the health
+            // permissions; older releases read the same sensor under
+            // BODY_SENSORS, which `android_permissions_up_to` carries.
+            Service::HeartRate => &["android.permission.health.READ_HEART_RATE"],
+        }
+    }
+
+    /// The Android permissions this service needs only up to an API level,
+    /// with that level: what a platform release replaced, declared with
+    /// `android:maxSdkVersion` so a newer device is never asked for it.
+    pub const fn android_permissions_up_to(self) -> &'static [(&'static str, u32)] {
+        match self {
+            Service::HeartRate => &[("android.permission.BODY_SENSORS", 35)],
+            _ => &[],
         }
     }
 
@@ -100,6 +117,7 @@ impl Service {
             Service::PhotoLibraryAdd => Some("NSPhotoLibraryAddUsageDescription"),
             Service::Microphone => Some("NSMicrophoneUsageDescription"),
             Service::Location => Some("NSLocationWhenInUseUsageDescription"),
+            Service::HeartRate => Some("NSHealthShareUsageDescription"),
             _ => None,
         }
     }
@@ -219,6 +237,17 @@ impl Use {
         Self {
             service: Service::Network,
             reason: None,
+        }
+    }
+
+    /// The wearer's heart rate, with what the person is told before the
+    /// sensor is read. Declaring it is the only way an application's build
+    /// asks for the permission; reading it still takes an explicit request
+    /// at run time.
+    pub const fn heart_rate(reason: &'static str) -> Self {
+        Self {
+            service: Service::HeartRate,
+            reason: Some(reason),
         }
     }
 
@@ -529,6 +558,15 @@ pub fn json(capabilities: &Capabilities<'_>) -> String {
         let comma = if at + 1 == permissions.len() { "" } else { "," };
         let _ = writeln!(text, "    \"{permission}\"{comma}");
     }
+    text.push_str("  ],\n  \"permissionsUpTo\": [\n");
+    let capped = android_permissions_up_to(capabilities);
+    for (at, (permission, level)) in capped.iter().enumerate() {
+        let comma = if at + 1 == capped.len() { "" } else { "," };
+        let _ = writeln!(
+            text,
+            "    {{ \"name\": \"{permission}\", \"maxSdk\": {level} }}{comma}"
+        );
+    }
     text.push_str("  ],\n  \"demands\": [\n");
     for (at, demand) in capabilities.demands.iter().enumerate() {
         let comma = if at + 1 == capabilities.demands.len() {
@@ -567,6 +605,22 @@ pub fn android_permissions(capabilities: &Capabilities<'_>) -> Vec<&'static str>
     named.into_iter().collect()
 }
 
+/// The permissions the declaration needs only up to an API level, each with
+/// that level, without repeats and leaving out any the newer list already
+/// names.
+pub fn android_permissions_up_to(capabilities: &Capabilities<'_>) -> Vec<(&'static str, u32)> {
+    let plain = android_permissions(capabilities);
+    let mut named = std::collections::BTreeMap::new();
+    for entry in capabilities.uses {
+        for (permission, level) in entry.service.android_permissions_up_to() {
+            if !plain.contains(permission) {
+                named.insert(*permission, *level);
+            }
+        }
+    }
+    named.into_iter().collect()
+}
+
 /// The Android manifest fragment the declaration becomes.
 pub fn android_manifest(capabilities: &Capabilities<'_>) -> String {
     let mut text = String::from(
@@ -577,6 +631,12 @@ pub fn android_manifest(capabilities: &Capabilities<'_>) -> String {
         let _ = writeln!(
             text,
             "    <uses-permission android:name=\"{permission}\" />"
+        );
+    }
+    for (permission, level) in android_permissions_up_to(capabilities) {
+        let _ = writeln!(
+            text,
+            "    <uses-permission android:name=\"{permission}\" android:maxSdkVersion=\"{level}\" />"
         );
     }
     for demand in capabilities.demands {
