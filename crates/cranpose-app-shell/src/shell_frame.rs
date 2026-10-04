@@ -358,7 +358,7 @@ where
 
     /// Composes lazy list items that frames left beyond their viewports for
     /// later, in layout passes, at most four of them. A pass runs while
-    /// `deadline`, if any, still leaves room for the recent cost of one item
+    /// `deadline`, if any, still leaves room for the recent cost of one full pass
     /// and `frame_can_start`, asked before each pass, says the next frame
     /// cannot start yet.
     /// Call it while waiting for the next frame. Returns whether a pass ran.
@@ -373,13 +373,15 @@ where
             while passes < IDLE_PREFETCH_MAX_PASSES
                 && cranpose_ui::has_lazy_prefetch_requests()
                 && deadline.is_none_or(|deadline| {
-                    Instant::now() + cranpose_ui::lazy_prefetch_item_cost() <= deadline
+                    Instant::now() + cranpose_ui::lazy_prefetch_pass_cost() <= deadline
                 })
                 && !frame_can_start(self.renderer())
             {
-                cranpose_ui::drain_lazy_prefetch_requests(cranpose_ui::schedule_measure_repass);
-                cranpose_ui::with_lazy_prefetch_pass(|| self.run_layout_phase_in_context());
-                cranpose_ui::warm_prefetched_slices(&mut self.app.composition.applier_mut());
+                cranpose_ui::with_lazy_prefetch_pass(|| {
+                    cranpose_ui::drain_lazy_prefetch_requests(cranpose_ui::schedule_measure_repass);
+                    self.run_layout_phase_in_context();
+                    cranpose_ui::warm_prefetched_slices(&mut self.app.composition.applier_mut());
+                });
                 passes += 1;
             }
             passes > 0
