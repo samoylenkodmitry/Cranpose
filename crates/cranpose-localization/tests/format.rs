@@ -1,3 +1,5 @@
+#![cfg(feature = "formatting")]
+
 use cranpose_localization::{FormatError, Locale, LocaleFormatters};
 
 fn formatters(locale: &str) -> LocaleFormatters {

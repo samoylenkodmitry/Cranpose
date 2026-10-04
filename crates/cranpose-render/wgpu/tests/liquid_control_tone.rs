@@ -146,7 +146,7 @@ fn chip_transition_endpoints_preserve_the_clear_and_prominent_materials() {
                                             .size_points(100.0, 28.0),
                                         selected,
                                         || {},
-                                        "",
+                                        "".into(),
                                     );
                                 },
                             );

@@ -776,12 +776,13 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// ```no_run
     /// use cranpose::{AppLauncher, text::FontFamily};
     ///
-    /// static FONT: &[u8] = include_bytes!("../assets/MyVariableFont.ttf");
-    /// let launcher = AppLauncher::new().with_variable_font_family_bytes(
+    /// # fn configure(font: &'static [u8]) {
+    /// let _launcher = AppLauncher::new().with_variable_font_family_bytes(
     ///     &FontFamily::named("My Variable Font"),
-    ///     FONT,
+    ///     font,
     ///     &[400, 500, 700],
     /// );
+    /// # }
     /// ```
     pub fn with_variable_font_family_bytes(
         self,
