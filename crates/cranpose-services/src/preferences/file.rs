@@ -122,6 +122,9 @@ impl FilePreferences {
 }
 
 fn canonical_file(path: &Path) -> Result<PathBuf, PreferencesError> {
+    if path.try_exists().map_err(io)? {
+        return fs::canonicalize(path).map_err(io);
+    }
     let name = path
         .file_name()
         .ok_or_else(|| PreferencesError::Io("preferences path must name a file".into()))?;

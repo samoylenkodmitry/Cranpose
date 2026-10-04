@@ -29,11 +29,15 @@ impl HostController for Host {
 }
 
 fn main() {
-    let root = PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .expect("pass a dedicated benchmark data directory"),
-    );
+    let root = std::env::args()
+        .skip(1)
+        .find(|argument| !argument.starts_with('-'))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/benchmarks")
+                .join(format!("persistence-{}", std::process::id()))
+        });
     set_host_controller(Arc::new(Host(root.clone())));
     set_application_id("save-benchmark").expect("benchmark id");
     for count in [1, 16, 64] {

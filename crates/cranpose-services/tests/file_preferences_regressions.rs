@@ -10,6 +10,23 @@ use cranpose_services::{
 
 struct Host(PathBuf);
 
+#[cfg(unix)]
+#[test]
+fn file_aliases_share_updates_without_replacing_the_alias() {
+    let root = cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), "preferences-alias");
+    let path = root.join("preferences");
+    let original = FilePreferences::at_path(&path);
+    original.set("seed", "value").expect("create file");
+    let alias = root.join("alias");
+    std::os::unix::fs::symlink(&path, &alias).expect("file alias");
+    let linked = FilePreferences::at_path(&alias);
+    linked.set("through-alias", "one").expect("alias write");
+    original.set("direct", "two").expect("direct write");
+    assert_eq!(original.get("through-alias").as_deref(), Some("one"));
+    assert_eq!(linked.get("direct").as_deref(), Some("two"));
+    assert!(alias.is_symlink());
+}
+
 #[test]
 fn failed_replacement_keeps_pending_values_for_an_explicit_retry() {
     let root = cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), "preferences-retry");

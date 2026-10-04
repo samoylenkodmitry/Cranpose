@@ -85,3 +85,23 @@ fn saved_values_keep_the_backend_their_namespace_was_opened_with() {
         DurableSaveOutcome::Nothing
     );
 }
+
+#[test]
+fn namespace_and_key_separators_cannot_alias_another_saved_value() {
+    let _guard = serial();
+    set_platform_preferences(Arc::new(MemoryPreferences::new()));
+    let a = SavedStateHandle::new("a/b");
+    let b = SavedStateHandle::new("a");
+    let c = SavedStateHandle::new("a%2Fb");
+    a.set("c", &1_u32).expect("nested namespace");
+    b.set("b/c", &2_u32).expect("nested key");
+    c.set("c", &3_u32).expect("percent in namespace");
+    assert_eq!(
+        run_durable_saves(Duration::from_secs(5)),
+        DurableSaveOutcome::Completed
+    );
+    drop((a, b, c));
+    assert_eq!(SavedStateHandle::new("a/b").get::<u32>("c"), Ok(Some(1)));
+    assert_eq!(SavedStateHandle::new("a").get::<u32>("b/c"), Ok(Some(2)));
+    assert_eq!(SavedStateHandle::new("a%2Fb").get::<u32>("c"), Ok(Some(3)));
+}

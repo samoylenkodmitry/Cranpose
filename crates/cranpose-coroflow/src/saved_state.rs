@@ -76,7 +76,11 @@ impl SavedStateHandle {
     }
 
     fn stored_key(&self, key: &str) -> String {
-        format!("{}/{key}", self.namespace.name)
+        let mut stored = String::with_capacity(self.namespace.name.len() + key.len() + 1);
+        push_segment(&mut stored, &self.namespace.name);
+        stored.push('/');
+        push_segment(&mut stored, key);
+        stored
     }
 
     /// Reads the live value, or restores it from storage when not opened yet.
@@ -171,5 +175,15 @@ impl SavedStateHandle {
             }),
         );
         Ok((state, true))
+    }
+}
+
+fn push_segment(stored: &mut String, segment: &str) {
+    for character in segment.chars() {
+        match character {
+            '%' => stored.push_str("%25"),
+            '/' => stored.push_str("%2F"),
+            character => stored.push(character),
+        }
     }
 }
