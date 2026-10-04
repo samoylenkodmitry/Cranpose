@@ -1,6 +1,8 @@
+#[cfg(unix)]
+use std::fs::File;
 use std::{
     collections::BTreeMap,
-    fs::{self, File},
+    fs,
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, Weak},
