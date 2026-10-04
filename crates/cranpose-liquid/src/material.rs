@@ -1257,7 +1257,7 @@ fn set_edge_return_depth(shader: &mut RuntimeShader, depth: Option<f32>) {
 
 impl ResolvedGlass {
     /// The rounded rectangle a placeholder fills while this glass compiles:
-    /// its morph's primary shape, or the whole node in its shape.
+    /// around its morph's shapes, or the whole node in its shape.
     fn placeholder_shape(&self, morph: Option<&GlassMorph>) -> PlaceholderShape {
         let Some(morph) = morph else {
             return PlaceholderShape {
@@ -1273,17 +1273,29 @@ impl ResolvedGlass {
         let (node_width, node_height) = morph.node_size;
         let (node_width, node_height) =
             (node_width.max(f32::EPSILON), node_height.max(f32::EPSILON));
-        let (center_x, center_y, width, height, radius) = morph.primary;
+        // A radius of -2 subtracts its shape: it carves a hole in the field.
+        let added = morph.shapes.iter().filter(|&&(.., radius)| radius > -1.5);
+        let (left, top, right, bottom) = std::iter::once(&morph.primary).chain(added).fold(
+            (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+            |(left, top, right, bottom), &(center_x, center_y, width, height, _)| {
+                (
+                    left.min(center_x - width * 0.5),
+                    top.min(center_y - height * 0.5),
+                    right.max(center_x + width * 0.5),
+                    bottom.max(center_y + height * 0.5),
+                )
+            },
+        );
         // A negative radius is the shader's capsule.
-        let radius = if radius < 0.0 { f32::MAX } else { radius };
+        let (.., radius) = morph.primary;
         PlaceholderShape {
             bounds: Rect {
-                x: (center_x - width * 0.5) / node_width,
-                y: (center_y - height * 0.5) / node_height,
-                width: width / node_width,
-                height: height / node_height,
+                x: left / node_width,
+                y: top / node_height,
+                width: (right - left) / node_width,
+                height: (bottom - top) / node_height,
             },
-            corner_radius: radius,
+            corner_radius: if radius < 0.0 { f32::MAX } else { radius },
         }
     }
 
