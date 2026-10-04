@@ -6,49 +6,37 @@ use std::{
 
 use crate::{Dispatch, Dispatcher, Runnable, SystemClock, sync::lock};
 
-pub(super) struct Owner {
+pub(super) fn dispatcher(name: &str, limit: usize, idle: Option<Duration>) -> Dispatcher {
+    let pool = Arc::new(Pool {
+        name: name.to_owned(),
+        limit,
+        idle,
+        state: Mutex::new(State::default()),
+        available: Condvar::new(),
+    });
+    Dispatcher::new(Executor { pool }, SystemClock::shared())
+}
+
+struct Executor {
     pool: Arc<Pool>,
 }
 
-impl Owner {
-    pub(super) fn new(name: &str, limits: [usize; 2], idle: Option<Duration>) -> Arc<Self> {
-        Arc::new(Self {
-            pool: Arc::new(Pool {
-                name: name.to_owned(),
-                limits,
-                idle,
-                state: Mutex::new(State::default()),
-                available: Condvar::new(),
-            }),
-        })
+impl Dispatch for Executor {
+    fn dispatch(&self, runnable: Runnable) {
+        self.pool.dispatch(runnable);
     }
 }
 
-impl Drop for Owner {
+impl Drop for Executor {
     fn drop(&mut self) {
         lock(&self.pool.state).closed = true;
         self.pool.available.notify_all();
     }
 }
 
-pub(super) fn dispatcher(owner: Arc<Owner>, lane: usize) -> Dispatcher {
-    Dispatcher::new(Executor { owner, lane }, SystemClock::shared())
-}
-
-struct Executor {
-    owner: Arc<Owner>,
-    lane: usize,
-}
-
-impl Dispatch for Executor {
-    fn dispatch(&self, runnable: Runnable) {
-        self.owner.pool.dispatch(self.lane, runnable);
-    }
-}
-
 struct Pool {
     name: String,
-    limits: [usize; 2],
+    limit: usize,
     idle: Option<Duration>,
     state: Mutex<State>,
     available: Condvar,
@@ -56,27 +44,18 @@ struct Pool {
 
 #[derive(Default)]
 struct State {
-    queues: [VecDeque<Runnable>; 2],
-    running: [usize; 2],
+    queue: VecDeque<Runnable>,
+    running: usize,
     workers: usize,
     next_worker: usize,
-    next_lane: usize,
     closed: bool,
 }
 
 impl Pool {
-    fn dispatch(self: &Arc<Self>, lane: usize, runnable: Runnable) {
+    fn dispatch(self: &Arc<Self>, runnable: Runnable) {
         let mut state = lock(&self.state);
-        state.queues[lane].push_back(runnable);
-        let demand: usize = (0..2)
-            .map(|lane| {
-                state.running[lane]
-                    + state.queues[lane]
-                        .len()
-                        .min(self.limits[lane] - state.running[lane])
-            })
-            .sum();
-        if state.workers < demand {
+        state.queue.push_back(runnable);
+        if state.workers < self.limit && state.workers < state.running + state.queue.len() {
             let worker = Arc::clone(self);
             let name = format!("{}-{}", self.name, state.next_worker);
             match std::thread::Builder::new()
@@ -90,32 +69,35 @@ impl Pool {
                 Err(error) => log::error!("coroflow: worker could not start: {error}"),
             }
         }
+        let idle = state.workers > state.running;
         drop(state);
-        self.available.notify_one();
+        if idle {
+            self.available.notify_one();
+        }
     }
 
-    fn next(&self) -> Option<(usize, Runnable)> {
+    fn next(&self, completed: bool) -> Option<Runnable> {
         let mut state = lock(&self.state);
-        let idle_since = Instant::now();
+        if completed {
+            state.running -= 1;
+        }
+        let mut idle_since = None;
         loop {
-            for offset in 0..2 {
-                let lane = (state.next_lane + offset) % 2;
-                if state.running[lane] < self.limits[lane]
-                    && let Some(runnable) = state.queues[lane].pop_front()
-                {
-                    state.running[lane] += 1;
-                    state.next_lane = 1 - lane;
-                    return Some((lane, runnable));
-                }
+            if let Some(runnable) = state.queue.pop_front() {
+                state.running += 1;
+                return Some(runnable);
             }
-            if state.closed || self.idle.is_some_and(|idle| idle_since.elapsed() >= idle) {
+            let remaining = self.idle.map(|idle| {
+                idle.saturating_sub(idle_since.get_or_insert_with(Instant::now).elapsed())
+            });
+            if state.closed || remaining.is_some_and(|remaining| remaining.is_zero()) {
                 state.workers -= 1;
                 return None;
             }
-            state = match self.idle {
-                Some(idle) => {
+            state = match remaining {
+                Some(remaining) => {
                     self.available
-                        .wait_timeout(state, idle.saturating_sub(idle_since.elapsed()))
+                        .wait_timeout(state, remaining)
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .0
                 }
@@ -128,10 +110,10 @@ impl Pool {
     }
 
     fn run(&self) {
-        while let Some((lane, runnable)) = self.next() {
+        let mut completed = false;
+        while let Some(runnable) = self.next(completed) {
             runnable.run_guarded();
-            lock(&self.state).running[lane] -= 1;
-            self.available.notify_one();
+            completed = true;
         }
     }
 }

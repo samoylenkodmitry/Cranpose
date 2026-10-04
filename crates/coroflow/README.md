@@ -53,7 +53,8 @@ Rust cancels a coroutine when its future drops. Background scopes require
 
 ## Native worker budgets
 
-`Dispatchers::default_pool()` and `Dispatchers::io()` share lazy workers.
+`Dispatchers::default_pool()` and `Dispatchers::io()` use lazy worker pools
+with coordinated limits and separate queues.
 Each lane can run up to the device's available parallelism; their combined
 worker limit is twice that value. Blocked I/O leaves capacity for CPU work.
 Workers retire after 30 idle seconds and release their thread-local resources.

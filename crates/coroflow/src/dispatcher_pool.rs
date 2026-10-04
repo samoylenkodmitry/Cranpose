@@ -1,5 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::Arc;
 use std::{num::NonZeroUsize, time::Duration};
 
 use crate::Dispatcher;
@@ -36,11 +34,12 @@ impl Default for DispatcherPoolConfig {
     }
 }
 
-/// CPU and I/O dispatchers sharing a demand-driven worker pool.
+/// CPU and I/O dispatchers with coordinated, demand-driven worker budgets.
 ///
-/// Native workers start when work arrives, serve either lane, and retire when
-/// idle. Each lane has its own concurrency limit; the total worker limit is
-/// their sum. Blocking every I/O worker does not consume CPU capacity.
+/// Each lane has its own queue and native workers, which start when work
+/// arrives and retire when idle. The total worker limit is the sum of the
+/// lane limits. Blocking every I/O worker does not consume CPU capacity or
+/// contend with CPU scheduling on the same queue lock.
 ///
 /// Dispatch never waits for queue capacity or discards coroutine wake-ups.
 /// Queued steps are retained until run, including the step that drops a
@@ -48,8 +47,8 @@ impl Default for DispatcherPoolConfig {
 /// when their captured data needs a memory bound. Cancellation cannot interrupt
 /// a blocking call already executing inside a coroutine step.
 ///
-/// The dispatchers keep the pool alive independently of this handle. Dropping
-/// its last dispatcher shuts down idle workers. On Web both dispatchers use
+/// Each dispatcher keeps its lane alive independently of this handle. Dropping
+/// a lane's last dispatcher shuts down its idle workers. On Web both lanes use
 /// the browser event loop; concurrency limits do not make blocking code safe.
 pub struct DispatcherPool {
     dispatchers: [Dispatcher; 2],
@@ -59,14 +58,13 @@ impl DispatcherPool {
     /// Creates a pool without starting native worker threads.
     pub fn new(config: DispatcherPoolConfig) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
-        let dispatchers = {
-            let owner = native::Owner::new(
-                "coroflow-worker",
-                [config.cpu_parallelism.get(), config.io_parallelism.get()],
-                Some(config.idle_timeout),
-            );
-            std::array::from_fn(|lane| native::dispatcher(Arc::clone(&owner), lane))
-        };
+        let dispatchers = [
+            ("coroflow-cpu", config.cpu_parallelism),
+            ("coroflow-io", config.io_parallelism),
+        ]
+        .map(|(name, parallelism)| {
+            native::dispatcher(name, parallelism.get(), Some(config.idle_timeout))
+        });
         #[cfg(target_arch = "wasm32")]
         let dispatchers = {
             let _ = config;
@@ -89,7 +87,7 @@ impl DispatcherPool {
 pub(crate) fn single_thread(name: &str) -> Dispatcher {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        native::dispatcher(native::Owner::new(name, [1, 0], None), 0)
+        native::dispatcher(name, 1, None)
     }
     #[cfg(target_arch = "wasm32")]
     {

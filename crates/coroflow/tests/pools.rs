@@ -179,6 +179,41 @@ fn a_surviving_dispatcher_remains_usable_after_the_pool_handle_is_dropped() {
 }
 
 #[test]
+fn keeping_io_alive_does_not_retain_an_unused_cpu_lanes_thread_resources() {
+    let pool = DispatcherPool::new(DispatcherPoolConfig {
+        idle_timeout: Duration::from_secs(60),
+        ..DispatcherPoolConfig::default()
+    });
+    let cpu = CoroutineScope::new(pool.cpu());
+    let io = CoroutineScope::new(pool.io());
+    let released = touch_resource(&cpu);
+    drop(pool);
+    drop(cpu);
+    released
+        .recv_timeout(PATIENCE)
+        .expect("unused CPU lane shut down");
+    let job = io.launch(async {});
+    assert_eq!(pollster::block_on(job.join()), JobOutcome::Completed);
+}
+
+#[test]
+fn zero_idle_timeout_preserves_work_during_worker_turnover() {
+    let pool = DispatcherPool::new(DispatcherPoolConfig {
+        idle_timeout: Duration::ZERO,
+        ..DispatcherPoolConfig::default()
+    });
+    for dispatcher in [pool.cpu(), pool.io()] {
+        let scope = CoroutineScope::new(dispatcher);
+        for value in 0..64 {
+            let (sent, received) = mpsc::channel();
+            let job = scope.launch(async move { sent.send(value).expect("result observed") });
+            assert_eq!(received.recv_timeout(PATIENCE), Ok(value));
+            assert_eq!(pollster::block_on(job.join()), JobOutcome::Completed);
+        }
+    }
+}
+
+#[test]
 fn a_panicking_completion_handler_does_not_strand_the_next_coroutine() {
     let scope = CoroutineScope::new(Dispatchers::single_thread("completion-panic"));
     let (release, wait) = mpsc::channel();
