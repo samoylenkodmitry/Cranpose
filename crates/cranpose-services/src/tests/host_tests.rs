@@ -81,9 +81,11 @@ fn durable_saves_run_and_report_completion() {
     let second = Arc::clone(&ran);
     let a = register_durable_save(move || {
         first.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     });
     let b = register_durable_save(move || {
         second.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     });
     assert_eq!(
         run_durable_saves(std::time::Duration::from_secs(5)),
@@ -103,6 +105,7 @@ fn a_save_that_overruns_the_deadline_reports_a_timeout() {
     let _guard = test_lock();
     let registration = register_durable_save(|| {
         std::thread::sleep(std::time::Duration::from_millis(400));
+        Ok(())
     });
     assert_eq!(
         run_durable_saves(std::time::Duration::from_millis(30)),
@@ -119,6 +122,7 @@ fn a_dropped_registration_is_no_longer_saved() {
     let counted = Arc::clone(&ran);
     let registration = register_durable_save(move || {
         counted.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     });
     drop(registration);
     assert_eq!(
@@ -149,10 +153,6 @@ fn application_id_must_be_one_component() {
 #[test]
 fn a_surviving_durable_save_keeps_its_registration_when_a_leader_leaves() {
     let _guard = test_lock();
-    durable_saves()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .clear();
     let ran: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
     let show_first = std::rc::Rc::new(std::cell::Cell::new(true));
 
@@ -163,6 +163,7 @@ fn a_surviving_durable_save_keeps_its_registration_when_a_leader_leaves() {
                 ran.lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push("first");
+                Ok(())
             });
         }
         let ran = Arc::clone(ran);
@@ -170,6 +171,7 @@ fn a_surviving_durable_save_keeps_its_registration_when_a_leader_leaves() {
             ran.lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push("tail");
+            Ok(())
         });
     }
 

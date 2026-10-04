@@ -8,6 +8,11 @@ use std::{
     },
 };
 
+pub use crate::durable_save::{
+    DurableSaveEffect, DurableSaveError, DurableSaveOutcome, DurableSaveRegistration,
+    register_durable_save, register_preference_save, run_durable_saves,
+};
+
 /// Platform directory roots for application-owned files.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PlatformDirectories {
@@ -304,11 +309,13 @@ pub fn dispatch_lifecycle_state(to: LifecycleState) {
     if from == to {
         return;
     }
-    #[cfg(not(target_arch = "wasm32"))]
     if matches!(to, LifecycleState::Paused) {
         let outcome = run_durable_saves(durable_save_deadline());
-        if outcome == DurableSaveOutcome::TimedOut {
-            log::warn!("cranpose: durable saves overran the host deadline; they keep running");
+        if matches!(
+            outcome,
+            DurableSaveOutcome::TimedOut | DurableSaveOutcome::Failed
+        ) {
+            log::warn!("cranpose: durable saves did not complete successfully: {outcome:?}");
         }
     }
     dispatch_lifecycle(LifecycleEvent { from, to });
@@ -421,143 +428,6 @@ pub fn ProvideLifecycle(content: impl FnOnce()) {
     cranpose_core::CompositionLocalProvider([local.provides(state.get())], move || {
         content();
     });
-}
-
-/// What became of the durable saves the host asked for.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DurableSaveOutcome {
-    /// Nothing was registered.
-    Nothing,
-    /// Every registered save finished inside the deadline.
-    Completed,
-    /// The deadline expired with saves still running. They keep running under
-    /// a background-work lease, but the host is free to suspend.
-    TimedOut,
-}
-
-type SaveWork = Arc<dyn Fn() + Send + Sync>;
-
-fn durable_saves() -> &'static Mutex<Vec<(u64, SaveWork)>> {
-    static SLOT: OnceLock<Mutex<Vec<(u64, SaveWork)>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-/// Keeps a durable save registered until it is dropped.
-pub struct DurableSaveRegistration {
-    id: u64,
-}
-
-impl Drop for DurableSaveRegistration {
-    fn drop(&mut self) {
-        if let Ok(mut saves) = durable_saves().lock() {
-            saves.retain(|(id, _)| *id != self.id);
-        }
-    }
-}
-
-/// Registers work that must reach durable storage before the host suspends.
-///
-/// Applications use [`DurableSaveEffect`] so the registration is scoped to the
-/// composition that owns the data.
-pub fn register_durable_save(save: impl Fn() + Send + Sync + 'static) -> DurableSaveRegistration {
-    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    if let Ok(mut saves) = durable_saves().lock() {
-        saves.push((id, Arc::new(save)));
-    }
-    DurableSaveRegistration { id }
-}
-
-/// Registers `save` for as long as this call stays in the composition.
-///
-/// The host runs it when the app is about to be suspended, off the UI thread
-/// and under a background-work lease, so a slow write does not stall the
-/// lifecycle callback the platform is waiting on.
-#[expect(non_snake_case)]
-#[track_caller]
-pub fn DurableSaveEffect<K: PartialEq + 'static>(keys: K, save: impl Fn() + Send + Sync + 'static) {
-    cranpose_core::__disposable_effect_impl(
-        cranpose_core::caller_location_key()
-            ^ cranpose_core::location_key(file!(), line!(), column!()),
-        keys,
-        move |scope| {
-            let registration = register_durable_save(save);
-            scope.on_dispose(move || drop(registration))
-        },
-    );
-}
-
-/// Runs every registered durable save, waiting up to `deadline`.
-///
-/// Platform hosts call this from the lifecycle callback the OS gives them —
-/// Android's `onPause`, iOS's `applicationDidEnterBackground` — passing the
-/// budget that platform allows. Saves run on worker threads under a
-/// background-work lease, so work that overruns the deadline still finishes
-/// while the OS keeps the process alive.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn run_durable_saves(deadline: std::time::Duration) -> DurableSaveOutcome {
-    let saves: Vec<SaveWork> = durable_saves()
-        .lock()
-        .map(|saves| saves.iter().map(|(_, save)| Arc::clone(save)).collect())
-        .unwrap_or_default();
-    if saves.is_empty() {
-        return DurableSaveOutcome::Nothing;
-    }
-
-    let outstanding = Arc::new(std::sync::atomic::AtomicUsize::new(saves.len()));
-    let finished = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
-    for save in saves {
-        let worker_outstanding = Arc::clone(&outstanding);
-        let worker_finished = Arc::clone(&finished);
-        let lease = crate::background::acquire_background_work();
-        let spawned = std::thread::Builder::new()
-            .name("cranpose-durable-save".to_string())
-            .spawn(move || {
-                save();
-                drop(lease);
-                if worker_outstanding.fetch_sub(1, Ordering::AcqRel) == 1 {
-                    let (done, wake) = &*worker_finished;
-                    if let Ok(mut done) = done.lock() {
-                        *done = true;
-                    }
-                    wake.notify_all();
-                }
-            });
-        if spawned.is_err() {
-            log::warn!("cranpose: a durable save could not be started");
-            if outstanding.fetch_sub(1, Ordering::AcqRel) == 1 {
-                let (done, wake) = &*finished;
-                if let Ok(mut done) = done.lock() {
-                    *done = true;
-                }
-                wake.notify_all();
-            }
-        }
-    }
-
-    let (done, wake) = &*finished;
-    let Ok(mut guard) = done.lock() else {
-        return DurableSaveOutcome::TimedOut;
-    };
-    let mut remaining = deadline;
-    let started = web_time::Instant::now();
-    while !*guard {
-        let Ok((next, timeout)) = wake.wait_timeout(guard, remaining) else {
-            return DurableSaveOutcome::TimedOut;
-        };
-        guard = next;
-        if timeout.timed_out() {
-            break;
-        }
-        remaining = deadline.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            break;
-        }
-    }
-    if *guard {
-        DurableSaveOutcome::Completed
-    } else {
-        DurableSaveOutcome::TimedOut
-    }
 }
 
 #[cfg(test)]

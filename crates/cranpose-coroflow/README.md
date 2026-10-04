@@ -37,6 +37,14 @@ the model a `coroflow::MainScope`. `SavedStateHandle` stores displayable values
 through the Cranpose preferences service. `StateFlowCollect` and `FlowCollect`
 expose flow values as Cranpose state.
 
+Saved-state handles using the same namespace and preferences backend share one
+value per key. `get`, `set`, and `get_mutable_state_flow` return a `Result`;
+requesting a live key with a different Rust type returns `SavedStateError`.
+Changing a returned flow or calling `set` updates every observer of that key.
+Persistence happens at the next lifecycle or explicit `run_durable_saves` boundary,
+without depending on recomposition. Keep a handle alive until that save completes;
+keeping only a flow does not retain its persistence registration.
+
 ## Android API map
 
 | Android API | Cranpose API |

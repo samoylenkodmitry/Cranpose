@@ -53,6 +53,32 @@ sensor is on the skin. On Android the service is compiled into the app only
 when declared, and the sensor pauses with the activity; other platforms report
 `Unavailable`.
 
+## Saving state
+
+`rememberSaveable(key, saver, initial)` restores once when its composition slot
+is created. Native hosts save the latest values before leaving the foreground;
+the browser host saves when its page loses foreground visibility or focus.
+Changes do not require another frame to be included. Ordinary recomposition does
+not read, serialize or write preferences again.
+
+Call `run_durable_saves(deadline)` on the composition thread for an explicit save
+boundary before discarding a composition or finishing a critical operation.
+`Completed` means all registered callbacks and preference writes succeeded.
+`Failed` is retryable; `TimedOut` allows an already running batch to finish.
+Abrupt termination before a successful save can lose pending changes. Browser
+storage is synchronous, so its deadline can be reported but cannot interrupt I/O.
+
+`DurableSaveEffect` and `register_durable_save` callbacks return
+`Result<(), DurableSaveError>`. Preference-producing callbacks should use
+`register_preference_save`: values for the same store are written as a batch.
+Native saving uses at most one worker and does not queue obsolete batches.
+
+`FilePreferences` coordinates all instances opening the same canonical file
+within the process. Writes synchronize the replacement file; Unix also
+synchronizes its directory. If a write fails, reads include pending changes and
+`PreferencesStore::flush()` retries them. Other processes must not modify that
+file concurrently. Custom backends implement `set_many` to batch their writes.
+
 ## Features and platform adapters
 
 The default feature set is empty. Select only the host integrations the application uses:

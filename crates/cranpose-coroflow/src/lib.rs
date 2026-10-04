@@ -19,6 +19,6 @@ pub use lifecycle_effects::{
     LifecyclePauseOrDisposeEffectResult, LifecycleResumeEffect, LifecycleResumePauseEffectScope,
     LifecycleStartEffect, LifecycleStartStopEffectScope, LifecycleStopOrDisposeEffectResult,
 };
-pub use saved_state::SavedStateHandle;
+pub use saved_state::{SavedStateError, SavedStateHandle};
 pub use snapshot_flow::{SnapshotFlow, SnapshotRun, snapshotFlow};
 pub use view_model::{ProvideViewModelStore, ViewModelStore, ViewModelStoreOwner, viewModel};
