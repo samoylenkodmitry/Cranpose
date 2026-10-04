@@ -138,7 +138,7 @@ pub(crate) fn main() -> ExitCode {
                                     GlassButtonSpec::default(),
                                     move || expanded.set(true),
                                     || {
-                                        GlassButtonLabel(TRIGGER_LABEL, GlassButtonSpec::glass());
+                                        GlassButtonLabel(TRIGGER_LABEL.into(), GlassButtonSpec::glass());
                                     },
                                 );
                             },

@@ -2223,7 +2223,7 @@ pub fn LiquidUiTab() {
                                             Modifier::empty().padding_each(0.0, 0.0, 8.0, 0.0),
                                             chip_state.get() == index,
                                             move || chip_state2.set(index),
-                                            *label,
+                                            (*label).into(),
                                         );
                                     }
                                     let dark2 = dark_for_chip;

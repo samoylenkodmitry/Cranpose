@@ -3072,7 +3072,10 @@ GlassButton(
     GlassButtonSpec::prominent(),
     move || saved.set(true),
     move || {
-        GlassButtonLabel(if saved.get() { "Saved" } else { "Save" }, GlassButtonSpec::prominent());
+        GlassButtonLabel(
+            if saved.get() { "Saved".into() } else { "Save".into() },
+            GlassButtonSpec::prominent(),
+        );
     },
 );
 ```
@@ -3182,7 +3185,7 @@ LiquidChip(
     Modifier::empty(),
     selected.get(),
     move || selected.update(|value| *value = !*value),
-    "Favorites",
+    "Favorites".into(),
 );
 ```
 
@@ -3198,7 +3201,7 @@ LiquidActionChip(
     Modifier::empty(),
     true,
     move || count.update(|value| *value += 1),
-    "Add",
+    "Add".into(),
 );
 ```
 
@@ -3344,7 +3347,7 @@ PopupHost(move || {
                 GlassButtonSpec::glass(),
                 move || expanded.set(true),
                 || {
-                    GlassButtonLabel("Actions", GlassButtonSpec::glass());
+                    GlassButtonLabel("Actions".into(), GlassButtonSpec::glass());
                 },
             );
         },
