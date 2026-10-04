@@ -203,7 +203,7 @@ fn cpu(busy_ui: bool) {
     let started = Instant::now();
     jobs.fill(96, &gate);
     let admission_ns = started.elapsed().as_nanos();
-    let admitted = jobs.next;
+    let submitted = jobs.next;
     let loaded = process();
     release(&gate);
     let mut previous = Instant::now();
@@ -237,7 +237,7 @@ fn cpu(busy_ui: bool) {
         "null".into()
     };
     println!(
-        "{{\"phase\":\"{phase}\",\"jobs\":{},\"checksum\":{},\"elapsed_ns\":{elapsed_ns},\"initial_admission_ns\":{admission_ns},\"initial_admitted\":{admitted},\"rejected_attempts\":{},\"main_p99_gap_us_upper\":{p99},\"main_max_gap_ns\":{maximum},\"loaded\":{loaded},\"finished\":{}}}",
+        "{{\"phase\":\"{phase}\",\"jobs\":{},\"checksum\":{},\"elapsed_ns\":{elapsed_ns},\"initial_admission_ns\":{admission_ns},\"initial_submitted\":{submitted},\"rejected_attempts\":{},\"main_p99_gap_us_upper\":{p99},\"main_max_gap_ns\":{maximum},\"loaded\":{loaded},\"finished\":{}}}",
         jobs.completed,
         jobs.checksum,
         jobs.rejected,
@@ -286,7 +286,7 @@ fn cancel() {
             Some(_) => panic!("a gated job cannot finish"),
         }
     }
-    let admitted = slots.len();
+    let pending = slots.len();
     let before_cancel = live.load(Ordering::SeqCst);
     let loaded = process();
     let started = Instant::now();
@@ -302,7 +302,7 @@ fn cancel() {
         std::thread::yield_now();
     }
     println!(
-        "{{\"phase\":\"cancel\",\"submitted\":128,\"admitted\":{admitted},\"rejected\":{rejected},\"executed\":{},\"payload_before_cancel\":{before_cancel},\"payload_after_cancel\":{after_cancel},\"cancellation_ns\":{cancellation_ns},\"loaded\":{loaded},\"finished\":{}}}",
+        "{{\"phase\":\"cancel\",\"submitted\":128,\"pending_futures\":{pending},\"rejected\":{rejected},\"executed\":{},\"payload_before_cancel\":{before_cancel},\"payload_after_cancel\":{after_cancel},\"cancellation_ns\":{cancellation_ns},\"loaded\":{loaded},\"finished\":{}}}",
         executed.load(Ordering::SeqCst),
         process()
     );
