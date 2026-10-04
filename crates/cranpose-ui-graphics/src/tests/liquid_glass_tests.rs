@@ -372,7 +372,7 @@ fn every_setter_on_an_unfolded_glass_shader_retires_its_large_draw_specializatio
     // specialization already holds, which the large draws may not.
     let requests: [(&str, Request); 10] = [
         ("set_override new", |shader| {
-            shader.set_override("CALLER", 1.0)
+            shader.set_override("CALLER", 1.0);
         }),
         ("set_override held", |shader| {
             shader.set_override("GLASS_INTERIOR_GUARD", 1.0);
