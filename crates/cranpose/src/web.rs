@@ -394,6 +394,7 @@ pub async fn run(
     );
 
     let fonts = settings.resolve_font_set();
+    fold_glass_on_mobile_devices(&window);
     let mut renderer = WgpuRenderer::with_font_set(fonts);
     #[expect(clippy::arc_with_non_send_sync)]
     renderer.init_gpu(
@@ -1014,6 +1015,22 @@ fn clear_web_frame_wake(timer: &WebFrameTimer) {
     timer
         .generation
         .set(timer.generation.get().saturating_add(1));
+}
+
+/// Turns the liquid glass material folds on when the page runs on a phone or
+/// tablet: a user agent that says so, or iPadOS Safari, which reports a
+/// desktop one but takes touch. Their tile-based GPUs are where the folds
+/// repay their compiles: a Mali-G76 shades a full-screen unfolded glass in
+/// about half a second and a folded one within the frame.
+fn fold_glass_on_mobile_devices(window: &web_sys::Window) {
+    let navigator = window.navigator();
+    let agent = navigator.user_agent().unwrap_or_default();
+    if agent.contains("Mobi")
+        || agent.contains("Android")
+        || (agent.contains("Macintosh") && navigator.max_touch_points() > 1)
+    {
+        cranpose_ui_graphics::set_glass_material_folds(true);
+    }
 }
 
 fn requested_web_backend(window: &web_sys::Window) -> WebBackendPreference {

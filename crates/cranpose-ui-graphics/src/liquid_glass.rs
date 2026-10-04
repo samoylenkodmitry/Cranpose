@@ -257,7 +257,8 @@ const GLASS_INNER_SHADOW_PRESENCE_UNIFORM: usize = GLASS_INNER_SHADOW_UNIFORM + 
 /// measured to earn that. Everywhere else one pipeline per blend mode draws
 /// the same picture -- every glass parity suite holds the folded and the
 /// plain shader byte-identical -- so folding is on for Android and off for
-/// the rest. [`set_glass_material_folds`] moves it for a measurement.
+/// the rest, except that the web platform turns it on in mobile browsers.
+/// [`set_glass_material_folds`] moves it.
 pub fn glass_material_folds_enabled() -> bool {
     GLASS_MATERIAL_FOLDS.load(Ordering::Relaxed)
 }
