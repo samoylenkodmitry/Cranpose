@@ -25,7 +25,7 @@ pub(crate) fn system_property(name: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn property_flag(name: &str) -> bool {
+pub(crate) fn property_flag(name: &str) -> bool {
     match system_property(name) {
         Some(value) => !matches!(value.as_str(), "0" | "false" | "off" | "no"),
         None => false,
