@@ -915,6 +915,12 @@ fn hash_shader_source(source: &str) -> u64 {
     hash_shader_bytes(source.bytes())
 }
 
+/// The hash [`RuntimeShader::source_hash`] gives a shader built from
+/// `source`.
+pub fn runtime_shader_source_hash(source: &str) -> u64 {
+    hash_shader_source(source)
+}
+
 fn hash_shader_bytes(bytes: impl IntoIterator<Item = u8>) -> u64 {
     const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
     const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;

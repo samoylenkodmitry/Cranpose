@@ -11,7 +11,10 @@ use std::{
 use cranpose_ui_graphics::FxHasher;
 use web_time::{Duration, Instant};
 
-use crate::debug_toggles::DebugToggle;
+use crate::{
+    debug_toggles::DebugToggle,
+    shader_records::{self, ShaderPipelineRecord},
+};
 
 static DISK_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_PIPELINE_DISK_CACHE");
 
@@ -43,11 +46,12 @@ pub(crate) fn file_path() -> Option<PathBuf> {
 }
 
 /// What the last launch left for this one: the driver's compiled
-/// pipelines, where the device keeps them, and the shape pipelines that
-/// launch drew its first screen with.
+/// pipelines, where the device keeps them, and the shape and runtime
+/// shader pipelines that launch drew its first screen with.
 pub(crate) struct Loaded {
     pub(crate) cache: Option<wgpu::PipelineCache>,
     pub(crate) first_screen: Vec<u64>,
+    pub(crate) first_screen_shaders: Vec<ShaderPipelineRecord>,
 }
 
 pub(crate) fn load(device: &wgpu::Device) -> Loaded {
@@ -60,10 +64,13 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
             None
         }
     });
-    let contents = file.as_deref().and_then(current_contents);
+    let mut contents = file.as_deref().and_then(current_contents);
     let first_screen = contents
         .as_ref()
         .map_or_else(Vec::new, |contents| contents.first_screen.clone().collect());
+    let first_screen_shaders = contents
+        .as_mut()
+        .map_or_else(Vec::new, |contents| std::mem::take(&mut contents.shaders));
     if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
         log::info!(
             "[pipeline-cache] not offered by {:?}; compiled pipelines persist only as far \
@@ -73,6 +80,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
         return Loaded {
             cache: None,
             first_screen,
+            first_screen_shaders,
         };
     }
     let data = contents
@@ -106,6 +114,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     Loaded {
         cache: Some(cache),
         first_screen,
+        first_screen_shaders,
     }
 }
 
@@ -129,6 +138,7 @@ fn blob_key() -> [u8; 8] {
 
 struct Contents<'a> {
     first_screen: FirstScreenKeys<'a>,
+    shaders: Vec<ShaderPipelineRecord>,
     blob: Option<&'a [u8]>,
 }
 
@@ -162,14 +172,20 @@ fn current_contents(file: &[u8]) -> Option<Contents<'_>> {
     let keys_len = usize::try_from(u32::from_le_bytes(*count))
         .ok()?
         .checked_mul(8)?;
-    let (keys, blob) = rest.split_at_checked(keys_len)?;
+    let (keys, rest) = rest.split_at_checked(keys_len)?;
+    let (shaders, blob) = shader_records::decode(rest)?;
     Some(Contents {
         first_screen: FirstScreenKeys(keys),
+        shaders,
         blob: (*build == blob_key()).then_some(blob),
     })
 }
 
-fn file_bytes(first_screen: impl ExactSizeIterator<Item = u64>, blob: &[u8]) -> Option<Vec<u8>> {
+fn file_bytes(
+    first_screen: impl ExactSizeIterator<Item = u64>,
+    shaders: &[ShaderPipelineRecord],
+    blob: &[u8],
+) -> Option<Vec<u8>> {
     let count = u32::try_from(first_screen.len()).ok()?;
     let mut bytes = Vec::with_capacity(20 + first_screen.len() * 8 + blob.len());
     bytes.extend_from_slice(&blob_key());
@@ -178,6 +194,7 @@ fn file_bytes(first_screen: impl ExactSizeIterator<Item = u64>, blob: &[u8]) -> 
     for key in first_screen {
         bytes.extend_from_slice(&key.to_le_bytes());
     }
+    shader_records::encode(shaders, &mut bytes)?;
     bytes.extend_from_slice(blob);
     Some(bytes)
 }
@@ -201,12 +218,12 @@ pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
                 .as_ref()
                 .map_or(0, |contents| contents.first_screen.len())
         },
-        Vec::len,
+        |(keys, shaders)| keys.len() + shaders.len(),
     );
     let bytes = match (first_screen.as_ref(), previous) {
-        (Some(keys), _) => file_bytes(keys.iter().copied(), &blob),
-        (None, Some(previous)) => file_bytes(previous.first_screen, &blob),
-        (None, None) => file_bytes(std::iter::empty(), &blob),
+        (Some((keys, shaders)), _) => file_bytes(keys.iter().copied(), shaders, &blob),
+        (None, Some(previous)) => file_bytes(previous.first_screen, &previous.shaders, &blob),
+        (None, None) => file_bytes(std::iter::empty(), &[], &blob),
     };
     let Some(bytes) = bytes else {
         return;
@@ -238,6 +255,8 @@ pub(crate) const FIRST_SCREEN_SPAN: Duration = Duration::from_secs(2);
 /// The shape pipelines, by their keys' bits, that this process's renderers
 /// drew their first screens with, in the order first drawn.
 static FIRST_SCREEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+/// The runtime shader pipelines those first screens drew with.
+static FIRST_SCREEN_SHADERS: Mutex<Vec<ShaderPipelineRecord>> = Mutex::new(Vec::new());
 static FIRST_FRAME_DRAWN: AtomicBool = AtomicBool::new(false);
 
 /// Notes a shape pipeline a renderer drew its first screen with. The notes
@@ -251,6 +270,18 @@ pub(crate) fn note_first_screen_pipeline(key: u64) {
     }
 }
 
+/// Notes a runtime shader pipeline a renderer drew its first screen with,
+/// written with the cache like [`note_first_screen_pipeline`]'s.
+pub(crate) fn note_first_screen_shader(record: ShaderPipelineRecord) {
+    let mut records = FIRST_SCREEN_SHADERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if !records.contains(&record) {
+        records.push(record);
+        CHANGES.note_change();
+    }
+}
+
 pub(crate) fn note_frame_drawn() {
     if !FIRST_FRAME_DRAWN.load(Ordering::Acquire) {
         FIRST_FRAME_DRAWN.store(true, Ordering::Release);
@@ -258,12 +289,18 @@ pub(crate) fn note_frame_drawn() {
     }
 }
 
-fn first_screen_keys() -> Option<Vec<u64>> {
+fn first_screen_keys() -> Option<(Vec<u64>, Vec<ShaderPipelineRecord>)> {
     FIRST_FRAME_DRAWN.load(Ordering::Acquire).then(|| {
-        FIRST_SCREEN
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        (
+            FIRST_SCREEN
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+            FIRST_SCREEN_SHADERS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+        )
     })
 }
 

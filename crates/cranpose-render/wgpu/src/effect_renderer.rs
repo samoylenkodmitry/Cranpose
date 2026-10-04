@@ -1182,6 +1182,21 @@ impl EffectRenderer {
         }
     }
 
+    /// Queues the runtime shader pipelines the last launch drew its first
+    /// screen with, those of the framework's own shaders.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_recorded_shaders(
+        &mut self,
+        records: &[crate::shader_records::ShaderPipelineRecord],
+    ) {
+        self.shader_cache.warm_recorded(
+            records,
+            cranpose_ui_graphics::BUILTIN_RUNTIME_SHADER_SOURCES
+                .into_iter()
+                .chain([crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER]),
+        );
+    }
+
     pub(crate) fn warm_shaders(&mut self, warm_ups: &[cranpose_ui_graphics::ShaderWarmUp]) {
         for warm_up in warm_ups {
             self.shader_cache.warm(

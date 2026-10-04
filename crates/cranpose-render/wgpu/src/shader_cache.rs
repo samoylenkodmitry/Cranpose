@@ -4,9 +4,13 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use cranpose_ui_graphics::runtime_shader_source_hash;
 use cranpose_ui_graphics::{DrawSpecialization, FxBuildHasher, RuntimeShader, ShaderTarget};
 use naga::ShaderStage;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::shader_records::ShaderPipelineRecord;
 use crate::{
     debug_toggles::DebugToggle,
     lazy_resource::LazyGpuResource,
@@ -36,6 +40,23 @@ impl RuntimeShaderPipelineMode {
             Self::PremultipliedSrcOver => wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
         }
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn disk_byte(self) -> u8 {
+        match self {
+            Self::Replace => 0,
+            Self::PremultipliedSrcOver => 1,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn from_disk_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Replace),
+            1 => Some(Self::PremultipliedSrcOver),
+            _ => None,
+        }
+    }
 }
 
 static NO_SHADER_SPECIALIZATION: DebugToggle =
@@ -61,6 +82,25 @@ impl ShaderDrawVariant {
             Self::Whole => None,
             Self::Interior => Some(1.0),
             Self::Rim => Some(2.0),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn disk_byte(self) -> u8 {
+        match self {
+            Self::Whole => 0,
+            Self::Interior => 1,
+            Self::Rim => 2,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn from_disk_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0 => Some(Self::Whole),
+            1 => Some(Self::Interior),
+            2 => Some(Self::Rim),
+            _ => None,
         }
     }
 }
@@ -106,9 +146,9 @@ struct ShaderSource {
 }
 
 impl ShaderSource {
-    fn new(shader: &RuntimeShader) -> Self {
+    fn new(text: &str) -> Self {
         Self {
-            text: Arc::from(shader.source()),
+            text: Arc::from(text),
             module: LazyGpuResource::new("runtime-shader module"),
         }
     }
@@ -216,6 +256,20 @@ pub(crate) struct ShaderPipelineCache {
     demanded: HashSet<PipelineKey, FxBuildHasher>,
     forced: Vec<&'static str>,
     forced_hash: u64,
+    #[cfg(not(target_arch = "wasm32"))]
+    first_screen: FirstScreen,
+}
+
+/// The pipelines draws asked for while the first screen came up, noted for
+/// the next launch to build before its first frame.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct FirstScreen {
+    /// When the first draw asked, moved later by every pipeline a draw then
+    /// waited to build, so a slow compile does not end the first screen.
+    started: Option<web_time::Instant>,
+    over: bool,
+    noted: HashSet<PipelineKey, FxBuildHasher>,
 }
 
 impl ShaderPipelineCache {
@@ -252,6 +306,8 @@ impl ShaderPipelineCache {
             demanded: HashSet::default(),
             forced: Vec::new(),
             forced_hash: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            first_screen: FirstScreen::default(),
         }
     }
 
@@ -318,15 +374,21 @@ impl ShaderPipelineCache {
         specialization: DrawSpecialization<'_>,
         key: PipelineKey,
     ) -> PipelineJob {
-        let source = self
-            .sources
+        self.sources
             .entry(key.source)
-            .or_insert_with(|| ShaderSource::new(shader));
-        let mut constants = if key.overrides == 0 {
+            .or_insert_with(|| ShaderSource::new(shader.source()));
+        let constants = if key.overrides == 0 {
             Vec::new()
         } else {
             specialization.overrides().to_vec()
         };
+        self.source_job(key, constants)
+    }
+
+    /// The job building `key` from its registered source with `constants`,
+    /// the overrides the key's hash names.
+    fn source_job(&self, key: PipelineKey, mut constants: Vec<(&'static str, f64)>) -> PipelineJob {
+        let source = &self.sources[&key.source];
         Self::force_declared_flags(&self.forced, &source.text, &mut constants);
         let variant = match key.split {
             Some((name, variant)) => {
@@ -353,7 +415,7 @@ impl ShaderPipelineCache {
         let source = self
             .sources
             .entry(hash)
-            .or_insert_with(|| ShaderSource::new(shader));
+            .or_insert_with(|| ShaderSource::new(shader.source()));
         source
             .module
             .get_or_init(self.factory.backend, || {
@@ -417,6 +479,8 @@ impl ShaderPipelineCache {
         variant: ShaderDrawVariant,
     ) -> Option<(&wgpu::RenderPipeline, ShaderPipelineFit)> {
         let key = self.key(shader, specialization, mode, variant);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.note_first_screen(specialization, key);
         let general = key.general();
         let (build, fit) = if self.ready(key)
             || key == general
@@ -434,21 +498,139 @@ impl ShaderPipelineCache {
             self.request(shader, specialization, key, CompileLane::Demanded);
             (general, ShaderPipelineFit::Fallback)
         };
-        if self.ready(build) {
-            return self.pipelines[&build]
-                .get()
-                .and_then(Option::as_ref)
-                .map(|pipeline| (pipeline, fit));
+        if !self.ready(build) {
+            let job = self.job(shader, specialization, build);
+            let backend = self.factory.backend;
+            #[cfg(not(target_arch = "wasm32"))]
+            let waited = web_time::Instant::now();
+            self.slot(build).get_or_init(backend, || job.build());
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(started) = &mut self.first_screen.started {
+                *started += waited.elapsed();
+            }
         }
-        let job = self.job(shader, specialization, build);
-        let backend = self.factory.backend;
-        self.pipelines
-            .entry(build)
-            .or_insert_with(|| LazyGpuResource::new("runtime-shader"))
-            .get_or_init(backend, || job.build())
-            .as_ref()
+        self.pipelines[&build]
+            .get()
+            .and_then(Option::as_ref)
             .map(|pipeline| (pipeline, fit))
     }
+
+    /// Notes `key` for the next launch while the first screen comes up.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn note_first_screen(&mut self, specialization: DrawSpecialization<'_>, key: PipelineKey) {
+        let first_screen = &mut self.first_screen;
+        if first_screen.over || key.forced != 0 {
+            return;
+        }
+        let started = *first_screen
+            .started
+            .get_or_insert_with(web_time::Instant::now);
+        if started.elapsed() > crate::pipeline_disk_cache::FIRST_SCREEN_SPAN {
+            first_screen.over = true;
+            return;
+        }
+        if !first_screen.noted.insert(key) {
+            return;
+        }
+        crate::pipeline_disk_cache::note_first_screen_shader(ShaderPipelineRecord {
+            source: key.source,
+            overrides: key.overrides,
+            mode: key.mode.disk_byte(),
+            variant: key
+                .split
+                .map_or(ShaderDrawVariant::Whole, |(_, variant)| variant)
+                .disk_byte(),
+            split: key.split.map(|(name, _)| name.to_owned()),
+            constants: if key.overrides == 0 {
+                Vec::new()
+            } else {
+                specialization
+                    .overrides()
+                    .iter()
+                    .map(|&(name, value)| (name.to_owned(), value))
+                    .collect()
+            },
+        });
+    }
+
+    /// Queues on the warm-up lane every pipeline `records` names whose shader
+    /// source is one of `sources`, built as the draw that recorded it built
+    /// it, so a launch's first frame finds the last launch's pipelines ready.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_recorded(
+        &mut self,
+        records: &[ShaderPipelineRecord],
+        sources: impl IntoIterator<Item = &'static str>,
+    ) {
+        if !self.compiler.is_active() || self.forced_hash != 0 || records.is_empty() {
+            return;
+        }
+        let sources: smallvec::SmallVec<[(u64, &'static str); 8]> = sources
+            .into_iter()
+            .map(|text| (runtime_shader_source_hash(text), text))
+            .collect();
+        for record in records {
+            let Some(&(_, text)) = sources.iter().find(|(hash, _)| *hash == record.source) else {
+                continue;
+            };
+            let Some((key, constants)) = recorded_key(record, text) else {
+                continue;
+            };
+            if self.pipelines.contains_key(&key) {
+                continue;
+            }
+            self.sources
+                .entry(key.source)
+                .or_insert_with(|| ShaderSource::new(text));
+            let job = self.source_job(key, constants);
+            self.slot(key).queue(
+                &self.compiler,
+                CompileLane::WarmUp,
+                self.factory.backend,
+                || job.build(),
+            );
+        }
+    }
+}
+
+/// The key `record` names and the overrides it compiled with, spelled as
+/// `text` declares them, or `None` when `text` no longer declares one.
+#[cfg(not(target_arch = "wasm32"))]
+fn recorded_key(
+    record: &ShaderPipelineRecord,
+    text: &'static str,
+) -> Option<(PipelineKey, Vec<(&'static str, f64)>)> {
+    let variant = ShaderDrawVariant::from_disk_byte(record.variant)?;
+    let split = match &record.split {
+        Some(name) => Some((declared_override(text, name)?, variant)),
+        None => None,
+    };
+    let constants = record
+        .constants
+        .iter()
+        .map(|(name, value)| Some((declared_override(text, name)?, *value)))
+        .collect::<Option<Vec<_>>>()?;
+    let key = PipelineKey {
+        source: record.source,
+        overrides: record.overrides,
+        forced: 0,
+        mode: RuntimeShaderPipelineMode::from_disk_byte(record.mode)?,
+        split,
+    };
+    Some((key, constants))
+}
+
+/// `name` as the `override` declaration in `text` spells it.
+#[cfg(not(target_arch = "wasm32"))]
+fn declared_override(text: &'static str, name: &str) -> Option<&'static str> {
+    const OVERRIDE: &str = "override ";
+    text.match_indices(OVERRIDE).find_map(|(at, _)| {
+        let declared = &text[at + OVERRIDE.len()..];
+        declared
+            .strip_prefix(name)?
+            .starts_with(':')
+            .then(|| &declared[..name.len()])
+    })
 }
 
 fn create_runtime_shader_module(

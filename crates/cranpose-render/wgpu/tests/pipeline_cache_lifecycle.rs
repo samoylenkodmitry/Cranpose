@@ -5,13 +5,18 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use cranpose_render_common::{Renderer, graph::RenderGraph};
+use cranpose_render_common::{
+    Renderer,
+    graph::{ProjectiveTransform, RenderGraph, RenderNode},
+};
 use cranpose_render_wgpu::{
     debug_toggle_os, pipelines_created, pipelines_created_off_frame, set_debug_toggle_os,
 };
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Rect};
+use cranpose_ui_graphics::{
+    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RoundedCornerShape,
+};
 
-use crate::support;
+use crate::{shared_test_support, support};
 
 const CACHE_FILE: &str = "CRANPOSE_PIPELINE_CACHE_FILE";
 const CACHE_ENABLED: &str = "CRANPOSE_PIPELINE_DISK_CACHE";
@@ -264,16 +269,31 @@ fn relaunch_after_cache_change(
     change: impl FnOnce(&mut [u8]),
     check: impl FnOnce(&mut support::LockedRenderer),
 ) {
+    relaunch_after_drawing(
+        |previous| {
+            assert!(
+                first_frame_builds(previous) > 0,
+                "a fresh first screen must compile pipelines"
+            );
+        },
+        change,
+        check,
+    );
+}
+
+/// A launch that `draw`s its first screen and writes its cache, then a
+/// relaunch over that cache once `change` has edited it, handed to `check`.
+fn relaunch_after_drawing(
+    draw: impl FnOnce(&mut support::LockedRenderer),
+    change: impl FnOnce(&mut [u8]),
+    check: impl FnOnce(&mut support::LockedRenderer),
+) {
     let _lock = support::gpu_test_lock();
     let files = CacheFiles::new();
     let cache = files.select("updated-build.bin");
     let mut previous =
         support::LockedRenderer::compiling_in_background_beside_locked().expect("GPU required");
-    let cold_builds = first_frame_builds(&mut previous);
-    assert!(
-        cold_builds > 0,
-        "a fresh first screen must compile pipelines"
-    );
+    draw(&mut previous);
     drop(previous);
     wait_for_cache(&cache);
 
@@ -314,6 +334,70 @@ fn a_first_frame_uses_its_requested_warm_up_instead_of_compiling_a_stand_in() {
                     .shape_pipeline_fallback_draws,
                 0,
                 "the first frame must use the pipelines already scheduled for it"
+            );
+        },
+    );
+}
+
+/// A striped page under one glass pane.
+fn glass_page() -> RenderGraph {
+    use support::glass_page::{
+        FRAME_HEIGHT, FRAME_WIDTH, GLASS_HEIGHT, GLASS_LEFT, GLASS_RADIUS, GLASS_TOP, GLASS_WIDTH,
+        glass_shader,
+    };
+    let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
+    children.push(RenderNode::Layer(Box::new(
+        shared_test_support::layer_node(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: GLASS_WIDTH,
+                height: GLASS_HEIGHT,
+            },
+            ProjectiveTransform::translation(GLASS_LEFT, GLASS_TOP),
+            GraphicsLayer {
+                backdrop_effect: Some(glass_shader()),
+                clip: true,
+                shape: LayerShape::Rounded(RoundedCornerShape::uniform(GLASS_RADIUS)),
+                ..GraphicsLayer::default()
+            },
+            Vec::new(),
+        ),
+    )));
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+/// Glass draws in `renderer`'s next frame that took the general pipeline
+/// while their own compiled.
+fn glass_fallback_draws(renderer: &mut support::LockedRenderer) -> u32 {
+    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
+    support::capture_graph(renderer, glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
+    renderer
+        .last_frame_stats()
+        .expect("glass frame statistics")
+        .shader_pipeline_fallback_draws
+}
+
+/// After an update the compiled pipelines are gone, but the glass the last
+/// launch drew its first screen with is built before the first frame from
+/// the framework's own shader source, so that frame draws with it instead
+/// of compiling the general pipeline to stand in.
+#[test]
+fn an_updated_build_draws_its_first_glass_with_pipelines_built_before_it() {
+    relaunch_after_drawing(
+        |previous| {
+            assert!(
+                glass_fallback_draws(previous) > 0,
+                "a fresh first screen's glass stands in with the general pipeline"
+            );
+        },
+        |bytes| bytes[0] ^= 0xff,
+        |updated| {
+            wait_for_warm_ups();
+            assert_eq!(
+                glass_fallback_draws(updated),
+                0,
+                "the first glass after an update must find its pipelines built"
             );
         },
     );
