@@ -6,13 +6,7 @@ use cranpose_services::{
     rememberSaveable, run_durable_saves, set_platform_preferences,
 };
 
-mod file_preferences_regressions;
-
-fn serial() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::composition_support::serial;
 
 #[derive(Default)]
 struct FallibleStore {

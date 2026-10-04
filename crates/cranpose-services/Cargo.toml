@@ -126,7 +126,3 @@ webpki-root-certs = "1.0.9"
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
-
-[[test]]
-name = "persistence_regressions"
-path = "tests/persistence_regressions.rs"

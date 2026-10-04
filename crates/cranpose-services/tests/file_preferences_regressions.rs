@@ -81,7 +81,7 @@ impl HostController for Host {
 
 #[test]
 fn concurrent_instances_preserve_every_successful_write_on_reopen() {
-    let _guard = super::serial();
+    let _guard = super::composition_support::serial();
     let root = cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), "preferences-writers");
     set_host_controller(Arc::new(Host(root)));
     set_application_id("writers").expect("application id");
