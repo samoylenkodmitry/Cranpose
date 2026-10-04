@@ -759,18 +759,18 @@ fn placeholder_mask(
     })
 }
 
-/// Clips `composite`, a layer's content drawn without `effect` while the
-/// effect compiles, to the shape of the effect's placeholder over a layer at
-/// `layer`, drawn at `scale`: a glass that masks its content keeps the
+/// Clips `composite`, a layer's content drawn without the `waiting` effect
+/// while that effect compiles, to the shape of its placeholder over a layer
+/// at `layer`, drawn at `scale`: a glass that masks its content keeps the
 /// content in its shape.
 fn clip_to_placeholder(
     composite: &mut ResolvedComposite,
-    effect: &RenderEffect,
+    waiting: Option<&RenderEffect>,
     layer: DeviceRect,
     scale: f32,
 ) {
-    if let Some(mask) = effect
-        .placeholder()
+    if let Some(mask) = waiting
+        .and_then(RenderEffect::placeholder)
         .and_then(|placeholder| placeholder_mask(placeholder, layer, scale))
         && let ResolvedCompositeKind::Blit { rounded_mask, .. } = &mut composite.kind
     {
@@ -2673,6 +2673,32 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         ))
     }
 
+    /// The placeholder of `effect` over a child at `layer` that draws nothing
+    /// but the effect, while the effect's pipelines compile; none when the
+    /// effect has none, or the child's transform turns its rectangle.
+    fn empty_layer_placeholder(
+        &mut self,
+        child: &ChildLayer,
+        effect: &RenderEffect,
+        layer: DeviceRect,
+        visible: DeviceRect,
+        snap: Point,
+        scale: f32,
+    ) -> Option<ResolvedComposite> {
+        let placeholder = effect.placeholder()?;
+        uniform_scale_translation(child.transform)?;
+        let mask = placeholder_mask(placeholder, layer, scale)
+            .or_else(|| grid_rounded_mask(child, snap, scale));
+        Some(self.placeholder_fill(
+            placeholder.color,
+            child.z_index,
+            layer,
+            visible,
+            child.alpha,
+            mask,
+        ))
+    }
+
     /// `dest` filled with `color` within `rounded_mask`, in place of an
     /// effect whose pipelines compile.
     fn placeholder_fill(
@@ -3990,9 +4016,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 source_viewport: None,
             },
         };
-        if let Some(render_effect) = waiting {
-            clip_to_placeholder(&mut composite, render_effect, layer_rect_device, scale);
-        }
+        clip_to_placeholder(&mut composite, waiting, layer_rect_device, scale);
         Ok(Some(composite))
     }
 
@@ -4121,6 +4145,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 }
                 ThroughEffect::Source { source, waiting } => (source, waiting),
             };
+        // A layer that is all its waiting effect shows the placeholder alone.
+        if let Some(effect) = waiting.filter(|_| draws_nothing(&child.content)) {
+            pass.pending.extend(
+                self.empty_layer_placeholder(child, effect, layer_rect, visible, snap, scale),
+            );
+            return Ok(());
+        }
         let composite = match surface.grid_dest {
             Some(dest) => {
                 let visible = dest.intersect(shown).unwrap_or(visible);
@@ -4134,9 +4165,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     scale,
                     visible,
                 );
-                if let Some(effect) = waiting {
-                    clip_to_placeholder(&mut composite, effect, layer_rect, scale);
-                }
+                clip_to_placeholder(&mut composite, waiting, layer_rect, scale);
                 composite
             }
             None => {
