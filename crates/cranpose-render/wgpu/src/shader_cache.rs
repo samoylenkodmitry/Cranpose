@@ -559,8 +559,7 @@ impl ShaderPipelineCache {
         if self.ready(key) {
             return true;
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        if key.forced == 0 && self.cached.contains(&key.identity()) {
+        if self.cached(key) {
             return true;
         }
         let general = key.general();
@@ -586,6 +585,18 @@ impl ShaderPipelineCache {
         }
         self.demand(shader, specialization, key);
         false
+    }
+
+    /// Whether the loaded driver cache holds `key`, so its draw builds it as
+    /// a cache hit.
+    fn cached(&self, key: PipelineKey) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return key.forced == 0 && self.cached.contains(&key.identity());
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = key;
+            false
+        }
     }
 
     /// Asks for `key` on the demand lane, unless a stand-in covers it until
@@ -619,10 +630,13 @@ impl ShaderPipelineCache {
         } else {
             ShaderPipelineFit::Specialized
         };
+        // A pipeline the driver cache holds builds from it: a stand-in would
+        // compile from nothing.
         if self.ready(key)
             || key == general
             || !self.compiler.is_active()
             || !specialization.exact()
+            || self.cached(key)
         {
             return (key, own_fit, None);
         }
@@ -732,6 +746,12 @@ impl ShaderPipelineCache {
         sources: impl IntoIterator<Item = &'static str>,
     ) {
         let recorded = self.decode_records(records, sources);
+        // What the driver cache holds builds in milliseconds: no stand-in.
+        let (cached, recorded): (Vec<_>, Vec<_>) =
+            recorded.into_iter().partition(|(key, _)| self.cached(*key));
+        for (key, constants) in cached {
+            self.queue_warm_up(key, constants);
+        }
         let mut groups: Vec<(StandIn, usize)> = Vec::new();
         for (key, constants) in &recorded {
             match groups.iter_mut().find(|(group, _)| group.key == key.part()) {
