@@ -67,7 +67,12 @@ fn settle(cache: &mut ShaderPipelineCache, shader: &RuntimeShader) {
         .into_iter()
         .any(|variant| {
             let (_, fit) = cache
-                .get_or_create(shader, RuntimeShaderPipelineMode::Replace, variant)
+                .get_or_create(
+                    shader,
+                    shader.draw_specialization(0),
+                    RuntimeShaderPipelineMode::Replace,
+                    variant,
+                )
                 .expect("valid shader");
             fit == ShaderPipelineFit::Fallback
         });
@@ -93,7 +98,12 @@ fn warm_pipeline_lookups_do_not_rebuild_constants() {
                 ShaderDrawVariant::Rim,
             ] {
                 let (_, fit) = cache
-                    .get_or_create(&shader, RuntimeShaderPipelineMode::Replace, variant)
+                    .get_or_create(
+                        &shader,
+                        shader.draw_specialization(0),
+                        RuntimeShaderPipelineMode::Replace,
+                        variant,
+                    )
                     .expect("valid shader");
                 assert_eq!(fit, ShaderPipelineFit::Specialized);
             }
@@ -110,25 +120,40 @@ fn a_specialization_draws_with_the_general_pipeline_until_it_lands() {
     let shader = split_shader();
     let mode = RuntimeShaderPipelineMode::Replace;
     let (general, fit) = cache
-        .get_or_create(&shader, mode, ShaderDrawVariant::Interior)
+        .get_or_create(
+            &shader,
+            shader.draw_specialization(0),
+            mode,
+            ShaderDrawVariant::Interior,
+        )
         .expect("valid shader");
     assert_eq!(fit, ShaderPipelineFit::Fallback);
     let general = general.clone();
     let (again, fit) = cache
-        .get_or_create(&shader, mode, ShaderDrawVariant::Rim)
+        .get_or_create(
+            &shader,
+            shader.draw_specialization(0),
+            mode,
+            ShaderDrawVariant::Rim,
+        )
         .expect("valid shader");
     assert_eq!(fit, ShaderPipelineFit::Fallback);
     assert!(*again == general, "both draws share the general pipeline");
     settle(&mut cache, &shader);
     for variant in [ShaderDrawVariant::Interior, ShaderDrawVariant::Rim] {
         let (specialized, fit) = cache
-            .get_or_create(&shader, mode, variant)
+            .get_or_create(&shader, shader.draw_specialization(0), mode, variant)
             .expect("valid shader");
         assert_eq!(fit, ShaderPipelineFit::Specialized);
         assert!(*specialized != general, "{variant:?} has its own pipeline");
     }
     let (whole, fit) = cache
-        .get_or_create(&shader, mode, ShaderDrawVariant::Whole)
+        .get_or_create(
+            &shader,
+            shader.draw_specialization(0),
+            mode,
+            ShaderDrawVariant::Whole,
+        )
         .expect("valid shader");
     assert_eq!(
         fit,
@@ -152,6 +177,7 @@ fn an_override_that_is_not_a_fold_compiles_inside_the_frame() {
     let (_, fit) = cache
         .get_or_create(
             &shader,
+            shader.draw_specialization(0),
             RuntimeShaderPipelineMode::Replace,
             ShaderDrawVariant::Interior,
         )
@@ -173,13 +199,23 @@ fn a_warmed_general_pipeline_is_ready_before_its_first_draw() {
     cache.warm(&shader, mode);
     cache.warm(&shader, mode);
     let deadline = Instant::now() + SETTLE;
-    while !cache.ready(cache.key(&shader, mode, ShaderDrawVariant::Whole)) {
+    while !cache.ready(cache.key(
+        &shader,
+        shader.draw_specialization(0),
+        mode,
+        ShaderDrawVariant::Whole,
+    )) {
         assert!(Instant::now() < deadline, "the warm-up never finished");
         std::thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(builds(&cache), (1, 1), "one warm-up per general pipeline");
     let (_, fit) = cache
-        .get_or_create(&shader, mode, ShaderDrawVariant::Whole)
+        .get_or_create(
+            &shader,
+            shader.draw_specialization(0),
+            mode,
+            ShaderDrawVariant::Whole,
+        )
         .expect("valid shader");
     assert_eq!(fit, ShaderPipelineFit::General);
     assert_eq!(
@@ -202,9 +238,11 @@ fn a_drawn_specialization_does_not_wait_for_its_queued_warm_up() {
         let shader = split_shader();
         let mode = RuntimeShaderPipelineMode::Replace;
         if fallback_ready {
+            let general = RuntimeShader::new(shader.source());
             cache
                 .get_or_create(
-                    &RuntimeShader::new(shader.source()),
+                    &general,
+                    general.draw_specialization(0),
                     mode,
                     ShaderDrawVariant::Whole,
                 )
@@ -212,7 +250,12 @@ fn a_drawn_specialization_does_not_wait_for_its_queued_warm_up() {
         }
         cache.warm(&shader, mode);
         let (_, fit) = cache
-            .get_or_create(&shader, mode, ShaderDrawVariant::Whole)
+            .get_or_create(
+                &shader,
+                shader.draw_specialization(0),
+                mode,
+                ShaderDrawVariant::Whole,
+            )
             .expect("valid shader");
         assert_eq!(
             fit,
@@ -222,7 +265,12 @@ fn a_drawn_specialization_does_not_wait_for_its_queued_warm_up() {
                 ShaderPipelineFit::Specialized
             }
         );
-        let key = cache.key(&shader, mode, ShaderDrawVariant::Whole);
+        let key = cache.key(
+            &shader,
+            shader.draw_specialization(0),
+            mode,
+            ShaderDrawVariant::Whole,
+        );
         let deadline = Instant::now() + SETTLE;
         while !cache.ready(key) {
             assert!(
@@ -256,12 +304,22 @@ fn an_invalid_shader_disables_every_variant_once() {
     let mode = RuntimeShaderPipelineMode::Replace;
     assert!(
         cache
-            .get_or_create(&shader, mode, ShaderDrawVariant::Whole)
+            .get_or_create(
+                &shader,
+                shader.draw_specialization(0),
+                mode,
+                ShaderDrawVariant::Whole
+            )
             .is_none()
     );
     assert!(
         cache
-            .get_or_create(&shader, mode, ShaderDrawVariant::Whole)
+            .get_or_create(
+                &shader,
+                shader.draw_specialization(0),
+                mode,
+                ShaderDrawVariant::Whole
+            )
             .is_none()
     );
     assert_eq!(

@@ -18,8 +18,14 @@ fn a_plain_card_splits_into_an_inset_interior_and_four_rim_bands_around_a_hole()
     let shader = plain_card();
     let rect = [10.0, 20.0, 600.0, 240.0];
     let bounds = (0, 0, 720, 480);
-    let split =
-        split_scissors(&shader, (30.0, 40.0), rect, bounds).expect("a plain rounded rect splits");
+    let split = split_scissors(
+        &shader,
+        shader.draw_specialization(0),
+        (30.0, 40.0),
+        rect,
+        bounds,
+    )
+    .expect("a plain rounded rect splits");
     let interior = split.interior.expect("the card has an interior");
     assert!(
         interior.0 > 40 && interior.1 > 60,
@@ -60,9 +66,15 @@ fn the_rim_hole_lies_deeper_than_the_rim_reach_even_for_a_wide_corner() {
     shader.set_float2(SIZE_UNIFORM, 300.0, 200.0);
     shader.set_float(CORNER_RADIUS_UNIFORM, 60.0);
     let rect = [0.0, 0.0, 600.0, 400.0];
-    let reach = reach(&shader, (0.0, 0.0), rect);
-    let split = split_scissors(&shader, (0.0, 0.0), rect, (0, 0, 600, 400))
-        .expect("a wide-cornered card splits");
+    let reach = reach(&shader, shader.draw_specialization(0), (0.0, 0.0), rect);
+    let split = split_scissors(
+        &shader,
+        shader.draw_specialization(0),
+        (0.0, 0.0),
+        rect,
+        (0, 0, 600, 400),
+    )
+    .expect("a wide-cornered card splits");
     let bands: Vec<Scissor> = split.rim.iter().flatten().copied().collect();
     assert_eq!(bands.len(), 4);
     assert_hole_corners_beyond_the_rim(&reach, &bands);
@@ -106,7 +118,7 @@ fn a_short_wide_cornered_card_keeps_a_hole_whose_corners_lie_beyond_the_rim_reac
     shader.set_float2(SIZE_UNIFORM, 200.0, 70.0);
     shader.set_float(CORNER_RADIUS_UNIFORM, 25.0);
     let rect = [0.0, 0.0, 445.0, 156.0];
-    let reach = reach(&shader, (0.0, 0.0), rect);
+    let reach = reach(&shader, shader.draw_specialization(0), (0.0, 0.0), rect);
     let whole_corner_hole = reach.height - 2.0 * (reach.rim_high + reach.corner);
     assert!(
         whole_corner_hole < 16.0,
@@ -114,8 +126,14 @@ fn a_short_wide_cornered_card_keeps_a_hole_whose_corners_lie_beyond_the_rim_reac
         whole_corner_hole,
         reach.height
     );
-    let split =
-        split_scissors(&shader, (0.0, 0.0), rect, (0, 0, 445, 156)).expect("a plain card splits");
+    let split = split_scissors(
+        &shader,
+        shader.draw_specialization(0),
+        (0.0, 0.0),
+        rect,
+        (0, 0, 445, 156),
+    )
+    .expect("a plain card splits");
     let bands: Vec<Scissor> = split.rim.iter().flatten().copied().collect();
     assert_eq!(
         bands.len(),
@@ -141,6 +159,7 @@ fn a_material_with_scene_shapes_or_wobble_or_strain_keeps_whole_quads() {
         assert!(
             split_scissors(
                 &shader,
+                shader.draw_specialization(0),
                 (0.0, 0.0),
                 [0.0, 0.0, 100.0, 50.0],
                 (0, 0, 100, 50)
@@ -154,8 +173,14 @@ fn a_material_with_scene_shapes_or_wobble_or_strain_keeps_whole_quads() {
 #[test]
 fn a_tiny_card_has_no_hole_and_the_rim_is_the_whole_bounds() {
     let shader = plain_card();
-    let split = split_scissors(&shader, (0.0, 0.0), [0.0, 0.0, 30.0, 12.0], (0, 0, 30, 12))
-        .expect("a plain card splits");
+    let split = split_scissors(
+        &shader,
+        shader.draw_specialization(0),
+        (0.0, 0.0),
+        [0.0, 0.0, 30.0, 12.0],
+        (0, 0, 30, 12),
+    )
+    .expect("a plain card splits");
     assert_eq!(split.rim, [Some((0, 0, 30, 12)), None, None, None]);
 }
 
@@ -163,8 +188,14 @@ fn a_tiny_card_has_no_hole_and_the_rim_is_the_whole_bounds() {
 fn a_card_whose_hole_and_interior_lie_outside_the_bounds_keeps_the_rim_over_the_bounds() {
     let shader = plain_card();
     let bounds = (0, 0, 720, 70);
-    let split = split_scissors(&shader, (30.0, 40.0), [10.0, 20.0, 600.0, 240.0], bounds)
-        .expect("a plain card splits");
+    let split = split_scissors(
+        &shader,
+        shader.draw_specialization(0),
+        (30.0, 40.0),
+        [10.0, 20.0, 600.0, 240.0],
+        bounds,
+    )
+    .expect("a plain card splits");
     assert_eq!(
         split.interior, None,
         "no interior pixel is inside the bounds"

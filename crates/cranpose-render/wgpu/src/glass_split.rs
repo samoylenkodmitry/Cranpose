@@ -1,5 +1,5 @@
 use cranpose_ui_graphics::{
-    GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM,
+    DrawSpecialization, GLASS_EFFECT_DENSITY_UNIFORM, GLASS_FOLD_DEPTH_UNIFORM,
     GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM, GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM,
     RuntimeShader,
 };
@@ -54,14 +54,19 @@ fn uniform(shader: &RuntimeShader, slot: usize) -> f32 {
     shader.uniforms().get(slot).copied().unwrap_or(0.0)
 }
 
-fn raised(shader: &RuntimeShader, flag: &str) -> bool {
-    shader
+fn raised(specialization: DrawSpecialization<'_>, flag: &str) -> bool {
+    specialization
         .overrides()
         .iter()
         .any(|(name, value)| *name == flag && *value != 0.0)
 }
 
-fn reach(shader: &RuntimeShader, origin: (f32, f32), layer_pixel_rect: [f32; 4]) -> Reach {
+fn reach(
+    shader: &RuntimeShader,
+    specialization: DrawSpecialization<'_>,
+    origin: (f32, f32),
+    layer_pixel_rect: [f32; 4],
+) -> Reach {
     let [left, top, rect_width, rect_height] = layer_pixel_rect;
     let left = origin.0 + left;
     let top = origin.1 + top;
@@ -103,18 +108,18 @@ fn reach(shader: &RuntimeShader, origin: (f32, f32), layer_pixel_rect: [f32; 4])
     let depth_lens = inradius * uniform(shader, REFRACTION_DEPTH_UNIFORM).max(0.0);
     let physical_lens = uniform(shader, GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM).max(0.0) * scale;
     let physical = uniform(shader, GLASS_PHYSICAL_REFRACTION_DEPTH_ENABLED_UNIFORM) > 0.5
-        && !raised(shader, PHYSICAL_REFRACTION_OFF_FLAG);
+        && !raised(specialization, PHYSICAL_REFRACTION_OFF_FLAG);
     let lens = if physical { physical_lens } else { depth_lens }.max(0.001);
     let lens_high = depth_lens.max(physical_lens).max(0.001);
     let gradient = GRADIENT_EXTENT_DP * scale;
     let edge = EDGE_EXTENT_DP * scale;
     let fold = uniform(shader, GLASS_FOLD_DEPTH_UNIFORM).max(0.0) * scale;
-    let rim_low = if raised(shader, "GLASS_RIM_STYLE_OFF") {
+    let rim_low = if raised(specialization, "GLASS_RIM_STYLE_OFF") {
         gradient.max(MIN_BAND_WIDTH_PX) + 1.0
     } else {
         1.5 * gradient + (0.25 * lens).max(MIN_BAND_WIDTH_PX) + 1.0
     };
-    let surface = raised(shader, "GLASS_RIM_STYLE_OFF");
+    let surface = raised(specialization, "GLASS_RIM_STYLE_OFF");
     let meniscus_high = if surface {
         0.0
     } else {
@@ -155,17 +160,21 @@ fn pixel_rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Option<Scissor> {
 
 pub(crate) fn split_scissors(
     shader: &RuntimeShader,
+    specialization: DrawSpecialization<'_>,
     origin: (f32, f32),
     layer_pixel_rect: [f32; 4],
     bounds: Scissor,
 ) -> Option<SplitScissors> {
     if NO_GLASS_SPLIT_SCISSORS.equals("1")
-        || PLAIN_SDF_FLAGS.iter().any(|flag| !raised(shader, flag))
+        || PLAIN_SDF_FLAGS
+            .iter()
+            .any(|flag| !raised(specialization, flag))
     {
         return None;
     }
-    let reach = reach(shader, origin, layer_pixel_rect);
-    let bounds = if raised(shader, "GLASS_SHADOW_OFF") && raised(shader, "GLASS_ELLIPSE_BLEND_OFF")
+    let reach = reach(shader, specialization, origin, layer_pixel_rect);
+    let bounds = if raised(specialization, "GLASS_SHADOW_OFF")
+        && raised(specialization, "GLASS_ELLIPSE_BLEND_OFF")
     {
         let visible = pixel_rect(
             (reach.inner_x - reach.outer_outset).floor(),

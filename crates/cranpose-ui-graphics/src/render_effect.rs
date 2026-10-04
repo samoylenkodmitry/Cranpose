@@ -141,6 +141,60 @@ struct ShaderSpecialization {
     substrates: ArrayVec<SubstrateSpec, MAX_SUBSTRATES>,
     draw_split: Option<&'static str>,
     exact: bool,
+    large_draws: Option<LargeDrawSpecialization>,
+}
+
+impl ShaderSpecialization {
+    fn overrides_hash(&self) -> u64 {
+        if self.overrides.is_empty() {
+            return 0;
+        }
+        *self.overrides_hash.get_or_init(|| {
+            #[cfg(test)]
+            OVERRIDE_HASH_COMPUTATIONS.with(|count| count.set(count.get() + 1));
+            hash_shader_bytes(self.overrides.iter().flat_map(|(name, value)| {
+                name.bytes().chain([0]).chain(value.to_bits().to_le_bytes())
+            }))
+        })
+    }
+}
+
+/// The specialization a shader's draws covering at least `min_pixels`
+/// device pixels compile instead of its own.
+#[derive(Clone, Debug)]
+struct LargeDrawSpecialization {
+    min_pixels: u64,
+    specialization: Arc<ShaderSpecialization>,
+}
+
+/// The pipeline specialization one draw of a [`RuntimeShader`] compiles,
+/// chosen by [`RuntimeShader::draw_specialization`].
+#[derive(Clone, Copy, Debug)]
+pub struct DrawSpecialization<'a> {
+    specialization: &'a ShaderSpecialization,
+}
+
+impl<'a> DrawSpecialization<'a> {
+    /// The pipeline-overridable constants the draw fixes, ordered by name.
+    pub fn overrides(self) -> &'a [(&'static str, f64)] {
+        &self.specialization.overrides
+    }
+
+    /// Hash of [`Self::overrides`]; zero when no override is fixed.
+    pub fn overrides_hash(self) -> u64 {
+        self.specialization.overrides_hash()
+    }
+
+    /// The override selecting the interior or the rim draw, when declared.
+    pub fn draw_split(self) -> Option<&'static str> {
+        self.specialization.draw_split
+    }
+
+    /// Whether the specialization lands on the general pipeline's bytes,
+    /// as [`RuntimeShader::set_specialization_exact`] declares.
+    pub fn exact(self) -> bool {
+        self.specialization.exact
+    }
 }
 
 pub(crate) struct ShaderSpecializationCache<K, const N: usize> {
@@ -208,6 +262,7 @@ static DEFAULT_SHADER_SPECIALIZATION: ShaderSpecialization = ShaderSpecializatio
     substrates: ArrayVec::new_const(),
     draw_split: None,
     exact: false,
+    large_draws: None,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -467,17 +522,47 @@ impl RuntimeShader {
 
     /// Hash of the fixed override set; zero when no override is fixed.
     pub fn overrides_hash(&self) -> u64 {
-        let specialization = self.specialization();
-        if specialization.overrides.is_empty() {
-            return 0;
+        self.specialization().overrides_hash()
+    }
+
+    /// The specialization a draw covering `pixels` device pixels compiles:
+    /// the large-draw one when the shader declares it for at least that
+    /// many pixels, else the shader's own.
+    pub fn draw_specialization(&self, pixels: u64) -> DrawSpecialization<'_> {
+        let own = self.specialization();
+        let specialization = match &own.large_draws {
+            Some(large) if pixels >= large.min_pixels => &large.specialization,
+            _ => own,
+        };
+        DrawSpecialization { specialization }
+    }
+
+    /// Specializes the shader with `own` and its draws covering at least
+    /// `min_pixels` with `large`, each applied to the specialization the
+    /// shader holds now.
+    pub(crate) fn specialize_with_large_draws(
+        &mut self,
+        min_pixels: u64,
+        large: impl FnOnce(&mut RuntimeShader),
+        own: impl FnOnce(&mut RuntimeShader),
+    ) {
+        let source = self.specialization.clone();
+        large(self);
+        let large = std::mem::replace(&mut self.specialization, source);
+        own(self);
+        self.specialization_mut().large_draws =
+            large.map(|specialization| LargeDrawSpecialization {
+                min_pixels,
+                specialization,
+            });
+    }
+
+    /// Drops a large-draw specialization, so draws of every size compile
+    /// the shader's own.
+    pub(crate) fn clear_large_draws(&mut self) {
+        if self.specialization().large_draws.is_some() {
+            self.specialization_mut().large_draws = None;
         }
-        *specialization.overrides_hash.get_or_init(|| {
-            #[cfg(test)]
-            OVERRIDE_HASH_COMPUTATIONS.with(|count| count.set(count.get() + 1));
-            hash_shader_bytes(specialization.overrides.iter().flat_map(|(name, value)| {
-                name.bytes().chain([0]).chain(value.to_bits().to_le_bytes())
-            }))
-        })
     }
 
     /// Declares how far the shader may sample outside its effect rect, in

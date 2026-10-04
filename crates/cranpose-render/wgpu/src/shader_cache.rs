@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_ui_graphics::{FxBuildHasher, RuntimeShader, ShaderTarget};
+use cranpose_ui_graphics::{DrawSpecialization, FxBuildHasher, RuntimeShader, ShaderTarget};
 use naga::ShaderStage;
 
 use crate::{
@@ -290,6 +290,7 @@ impl ShaderPipelineCache {
     fn key(
         &self,
         shader: &RuntimeShader,
+        specialization: DrawSpecialization<'_>,
         mode: RuntimeShaderPipelineMode,
         variant: ShaderDrawVariant,
     ) -> PipelineKey {
@@ -297,13 +298,13 @@ impl ShaderPipelineCache {
         PipelineKey {
             source: shader.source_hash(),
             overrides: if specialize {
-                shader.overrides_hash()
+                specialization.overrides_hash()
             } else {
                 0
             },
             forced: self.forced_hash,
             mode,
-            split: shader
+            split: specialization
                 .draw_split()
                 .filter(|_| specialize)
                 .zip(variant.constant())
@@ -311,7 +312,12 @@ impl ShaderPipelineCache {
         }
     }
 
-    fn job(&mut self, shader: &RuntimeShader, key: PipelineKey) -> PipelineJob {
+    fn job(
+        &mut self,
+        shader: &RuntimeShader,
+        specialization: DrawSpecialization<'_>,
+        key: PipelineKey,
+    ) -> PipelineJob {
         let source = self
             .sources
             .entry(key.source)
@@ -319,7 +325,7 @@ impl ShaderPipelineCache {
         let mut constants = if key.overrides == 0 {
             Vec::new()
         } else {
-            shader.overrides().to_vec()
+            specialization.overrides().to_vec()
         };
         Self::force_declared_flags(&self.forced, &source.text, &mut constants);
         let variant = match key.split {
@@ -370,13 +376,19 @@ impl ShaderPipelineCache {
             .is_some_and(|slot| slot.get().is_some())
     }
 
-    fn request(&mut self, shader: &RuntimeShader, key: PipelineKey, lane: CompileLane) {
+    fn request(
+        &mut self,
+        shader: &RuntimeShader,
+        specialization: DrawSpecialization<'_>,
+        key: PipelineKey,
+        lane: CompileLane,
+    ) {
         let queued = self.pipelines.contains_key(&key);
         let first_demand = lane == CompileLane::Demanded && self.demanded.insert(key);
         if queued && !first_demand {
             return;
         }
-        let job = self.job(shader, key);
+        let job = self.job(shader, specialization, key);
         self.slot(key)
             .queue(&self.compiler, lane, self.factory.backend, || job.build());
     }
@@ -388,25 +400,28 @@ impl ShaderPipelineCache {
         if !self.compiler.is_active() {
             return;
         }
-        let key = self.key(shader, mode, ShaderDrawVariant::Whole);
-        self.request(shader, key, CompileLane::WarmUp);
+        let specialization = shader.draw_specialization(0);
+        let key = self.key(shader, specialization, mode, ShaderDrawVariant::Whole);
+        self.request(shader, specialization, key, CompileLane::WarmUp);
     }
 
-    /// The pipeline drawing `shader` as `variant`, or `None` when the shader
-    /// failed validation. The fit says whether the draw got the
-    /// specialization it asked for or the general pipeline standing in.
+    /// The pipeline drawing `shader` as `variant` with `specialization`, or
+    /// `None` when the shader failed validation. The fit says whether the
+    /// draw got the specialization it asked for or the general pipeline
+    /// standing in.
     pub fn get_or_create(
         &mut self,
         shader: &RuntimeShader,
+        specialization: DrawSpecialization<'_>,
         mode: RuntimeShaderPipelineMode,
         variant: ShaderDrawVariant,
     ) -> Option<(&wgpu::RenderPipeline, ShaderPipelineFit)> {
-        let key = self.key(shader, mode, variant);
+        let key = self.key(shader, specialization, mode, variant);
         let general = key.general();
         let (build, fit) = if self.ready(key)
             || key == general
             || !self.compiler.is_active()
-            || !shader.specialization_exact()
+            || !specialization.exact()
             || (self.pipelines.contains_key(&key) && !self.ready(general))
         {
             let fit = if key.is_general() {
@@ -416,7 +431,7 @@ impl ShaderPipelineCache {
             };
             (key, fit)
         } else {
-            self.request(shader, key, CompileLane::Demanded);
+            self.request(shader, specialization, key, CompileLane::Demanded);
             (general, ShaderPipelineFit::Fallback)
         };
         if self.ready(build) {
@@ -425,7 +440,7 @@ impl ShaderPipelineCache {
                 .and_then(Option::as_ref)
                 .map(|pipeline| (pipeline, fit));
         }
-        let job = self.job(shader, build);
+        let job = self.job(shader, specialization, build);
         let backend = self.factory.backend;
         self.pipelines
             .entry(build)
