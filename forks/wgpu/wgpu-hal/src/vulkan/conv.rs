@@ -292,6 +292,18 @@ pub fn map_texture_usage(usage: wgt::TextureUses) -> vk::ImageUsageFlags {
     flags
 }
 
+/// The stages a shader may read or write a texture in: fragment and compute,
+/// plus upstream's vertex stage once the device's texture stages widened.
+pub fn texture_shader_stages(widened: bool) -> vk::PipelineStageFlags {
+    let fragment_and_compute =
+        vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER;
+    if widened {
+        fragment_and_compute | vk::PipelineStageFlags::VERTEX_SHADER
+    } else {
+        fragment_and_compute
+    }
+}
+
 /// The stages and access of `usage`, with `shader_stages` the stages that
 /// may read or write the texture from a shader.
 pub fn map_texture_usage_to_barrier(

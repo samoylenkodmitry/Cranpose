@@ -16,19 +16,11 @@ use super::{conv, descriptor::DescriptorCounts, RawTlasInstance};
 use crate::TlasInstance;
 
 impl super::DeviceShared {
-    /// The stages a shader may read or write a texture in: fragment and
-    /// compute, until a bind group layout lets another stage read one.
-    pub(super) fn texture_shader_stages(&self) -> vk::PipelineStageFlags {
-        let fragment_and_compute =
-            vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER;
-        if self
-            .texture_reads_before_fragment
+    /// Whether a bind group layout has let a stage other than fragment or
+    /// compute read a texture.
+    pub(super) fn texture_stages_widened(&self) -> bool {
+        self.texture_reads_before_fragment
             .load(core::sync::atomic::Ordering::Acquire)
-        {
-            fragment_and_compute | vk::PipelineStageFlags::VERTEX_SHADER
-        } else {
-            fragment_and_compute
-        }
     }
 
     /// Set the name of `object` to `name`.
@@ -1415,6 +1407,7 @@ impl crate::Device for super::Device {
             temp_texture_views: Default::default(),
             counters: Arc::clone(&self.counters),
             current_pipeline_is_multiview: false,
+            texture_stages_widened: false,
         })
     }
 

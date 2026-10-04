@@ -535,7 +535,9 @@ struct DeviceShared {
     /// compute read a texture. Until one does, a texture read by shaders is
     /// waited for only in those two stages, so a pass that samples what the
     /// previous pass drew no longer holds its vertex work behind that pass's
-    /// fragment work. Set once, never cleared.
+    /// fragment work. Set once, never cleared. Command buffers begun after
+    /// it is set wait in upstream's stages, and a [`CatchUpBarrier`] covers
+    /// the textures earlier buffers left waiting in fewer.
     texture_reads_before_fragment: core::sync::atomic::AtomicBool,
 
     // The `drop_guard` field must be the last field of this struct so it is dropped last.
@@ -661,6 +663,7 @@ pub struct Queue {
     relay_semaphores: Mutex<RelaySemaphores>,
     signal_semaphores: Mutex<SemaphoreList>,
     wait_semaphores: Mutex<SemaphoreList>,
+    catch_up_barrier: Mutex<Option<CatchUpBarrier>>,
 }
 
 impl fmt::Debug for Queue {
@@ -672,6 +675,7 @@ impl fmt::Debug for Queue {
             relay_semaphores: _,
             signal_semaphores: _,
             wait_semaphores: _,
+            catch_up_barrier: _,
         } = self;
         f.debug_struct("Queue")
             .field("family_index", family_index)
@@ -688,6 +692,107 @@ impl Queue {
 impl Drop for Queue {
     fn drop(&mut self) {
         unsafe { self.relay_semaphores.lock().destroy(&self.device.raw) };
+        if let Some(barrier) = self.catch_up_barrier.get_mut().take() {
+            unsafe { self.device.raw.destroy_command_pool(barrier.pool, None) };
+        }
+    }
+}
+
+/// A reusable command buffer that orders all earlier work and writes before
+/// all later work. A submission runs it where it moves from command buffers
+/// begun before the device widened its texture stages to ones begun after.
+///
+/// The earlier buffers waited for texture writes only in fragment and
+/// compute, and a later buffer may read such a texture in a vertex shader
+/// while the texture stays in a read state, which takes no new barrier.
+/// Separate submissions already run one after another ([`RelaySemaphores`]),
+/// and waits for earlier reads need nothing: a barrier's source stages
+/// include every logically earlier stage.
+struct CatchUpBarrier {
+    pool: vk::CommandPool,
+    raw: vk::CommandBuffer,
+}
+
+impl CatchUpBarrier {
+    fn record(device: &DeviceShared, family_index: u32) -> Result<Self, crate::DeviceError> {
+        let pool_info = vk::CommandPoolCreateInfo::default().queue_family_index(family_index);
+        let pool = unsafe { device.raw.create_command_pool(&pool_info, None) }
+            .map_err(map_host_device_oom_err)?;
+        match unsafe { Self::record_into(device, pool) } {
+            Ok(raw) => Ok(Self { pool, raw }),
+            Err(err) => {
+                unsafe { device.raw.destroy_command_pool(pool, None) };
+                Err(err)
+            }
+        }
+    }
+
+    unsafe fn record_into(
+        device: &DeviceShared,
+        pool: vk::CommandPool,
+    ) -> Result<vk::CommandBuffer, crate::DeviceError> {
+        let allocate_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+        let raw = unsafe { device.raw.allocate_command_buffers(&allocate_info) }
+            .map_err(map_host_device_oom_err)?
+            .pop()
+            .ok_or(crate::DeviceError::Unexpected)?;
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE);
+        unsafe { device.raw.begin_command_buffer(raw, &begin_info) }
+            .map_err(map_host_device_oom_err)?;
+        let barrier = vk::MemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
+            .dst_access_mask(vk::AccessFlags::MEMORY_READ | vk::AccessFlags::MEMORY_WRITE);
+        unsafe {
+            device.raw.cmd_pipeline_barrier(
+                raw,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::empty(),
+                &[barrier],
+                &[],
+                &[],
+            )
+        };
+        unsafe { device.raw.end_command_buffer(raw) }.map_err(map_host_device_oom_err)?;
+        Ok(raw)
+    }
+}
+
+impl Queue {
+    /// The Vulkan command buffers of a submission, with the
+    /// [`CatchUpBarrier`] ahead of each widened buffer that follows an
+    /// unwidened one.
+    fn submission(
+        &self,
+        command_buffers: &[&CommandBuffer],
+    ) -> Result<Vec<vk::CommandBuffer>, crate::DeviceError> {
+        let mut raw = Vec::with_capacity(command_buffers.len() + 1);
+        let mut unwidened_before = false;
+        for cmd in command_buffers {
+            if !cmd.texture_stages_widened {
+                unwidened_before = true;
+            } else if unwidened_before {
+                raw.push(self.catch_up_barrier()?);
+                unwidened_before = false;
+            }
+            raw.push(cmd.raw);
+        }
+        Ok(raw)
+    }
+
+    fn catch_up_barrier(&self) -> Result<vk::CommandBuffer, crate::DeviceError> {
+        let mut barrier = self.catch_up_barrier.lock();
+        if let Some(ref barrier) = *barrier {
+            return Ok(barrier.raw);
+        }
+        let recorded = CatchUpBarrier::record(&self.device, self.family_index)?;
+        let raw = recorded.raw;
+        *barrier = Some(recorded);
+        Ok(raw)
     }
 }
 #[derive(Debug)]
@@ -1066,6 +1171,11 @@ pub struct CommandEncoder {
     /// What kind of pass we are currently within: compute or render.
     bind_point: vk::PipelineBindPoint,
 
+    /// Whether the device had widened its texture stages when the active
+    /// buffer began, so that every texture barrier it records waits in
+    /// upstream's stages.
+    texture_stages_widened: bool,
+
     /// Allocation recycling pool for this encoder.
     temp: Temp,
 
@@ -1146,6 +1256,9 @@ impl fmt::Debug for CommandEncoder {
 #[derive(Debug)]
 pub struct CommandBuffer {
     raw: vk::CommandBuffer,
+    /// Whether every texture barrier in the buffer waits in upstream's
+    /// stages; see [`CatchUpBarrier`].
+    texture_stages_widened: bool,
 }
 
 impl crate::DynCommandBuffer for CommandBuffer {}
@@ -1479,10 +1592,7 @@ impl crate::Queue for Queue {
             }
         }
 
-        let vk_cmd_buffers = command_buffers
-            .iter()
-            .map(|cmd| cmd.raw)
-            .collect::<Vec<_>>();
+        let vk_cmd_buffers = self.submission(command_buffers)?;
 
         let mut vk_info = vk::SubmitInfo::default().command_buffers(&vk_cmd_buffers);
         let mut vk_timeline_info = mem::MaybeUninit::uninit();

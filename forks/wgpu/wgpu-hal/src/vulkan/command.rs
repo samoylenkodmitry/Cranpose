@@ -147,6 +147,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         unsafe { self.device.raw.begin_command_buffer(raw, &vk_info) }
             .map_err(super::map_host_device_oom_err)?;
         self.active = raw;
+        self.texture_stages_widened = self.device.texture_stages_widened();
 
         Ok(())
     }
@@ -160,7 +161,10 @@ impl crate::CommandEncoder for super::CommandEncoder {
             // VK_ERROR_INVALID_VIDEO_STD_PARAMETERS_KHR
             super::map_host_device_oom_err(err)
         }
-        Ok(super::CommandBuffer { raw })
+        Ok(super::CommandBuffer {
+            raw,
+            texture_stages_widened: self.texture_stages_widened,
+        })
     }
 
     unsafe fn discard_encoding(&mut self) {
@@ -240,7 +244,7 @@ impl crate::CommandEncoder for super::CommandEncoder {
         let mut dst_stages = vk::PipelineStageFlags::empty();
         let vk_barriers = &mut self.temp.image_barriers;
         vk_barriers.clear();
-        let shader_stages = self.device.texture_shader_stages();
+        let shader_stages = conv::texture_shader_stages(self.texture_stages_widened);
 
         for bar in barriers {
             let range = conv::map_subresource_range_combined_aspect(
