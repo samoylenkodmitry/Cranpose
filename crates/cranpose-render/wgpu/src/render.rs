@@ -4230,6 +4230,7 @@ impl GpuRenderer {
                 output_view,
                 bind_group,
                 self.adapter_backend,
+                &self.recorder,
             );
             recorder.record_pass();
         }

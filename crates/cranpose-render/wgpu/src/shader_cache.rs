@@ -259,7 +259,6 @@ pub(crate) struct ShaderPipelineCache {
     /// The pipelines draws asked for, each noted once for the next launches.
     #[cfg(not(target_arch = "wasm32"))]
     noted: HashSet<PipelineKey, FxBuildHasher>,
-    #[cfg(not(target_arch = "wasm32"))]
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
@@ -273,7 +272,6 @@ impl ShaderPipelineCache {
         format: wgpu::TextureFormat,
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         uniform_bind_group_layout: &wgpu::BindGroupLayout,
-        #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
         recorder: crate::pipeline_recorder::PipelineRecorder,
     ) -> Self {
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -302,7 +300,6 @@ impl ShaderPipelineCache {
             forced_hash: 0,
             #[cfg(not(target_arch = "wasm32"))]
             noted: HashSet::default(),
-            #[cfg(not(target_arch = "wasm32"))]
             recorder,
         }
     }
@@ -414,7 +411,7 @@ impl ShaderPipelineCache {
             .or_insert_with(|| ShaderSource::new(shader.source()));
         source
             .module
-            .get_or_init(self.factory.backend, || {
+            .for_draw(&self.recorder, self.factory.backend, || {
                 self.factory.module(&source.text, hash)
             })
             .as_ref()
@@ -501,11 +498,8 @@ impl ShaderPipelineCache {
         if !self.ready(build) {
             let job = self.job(shader, specialization, build);
             let backend = self.factory.backend;
-            #[cfg(not(target_arch = "wasm32"))]
-            let waited = web_time::Instant::now();
-            self.slot(build).get_or_init(backend, || job.build());
-            #[cfg(not(target_arch = "wasm32"))]
-            self.recorder.extend_first_screen(waited.elapsed());
+            self.slot(build)
+                .for_draw(&self.recorder, backend, || job.build());
         }
         self.pipelines[&build]
             .get()
