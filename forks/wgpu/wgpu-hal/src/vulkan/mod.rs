@@ -957,7 +957,6 @@ impl Texture {
     }
 }
 
-#[derive(Debug)]
 pub struct TextureView {
     raw_texture: vk::Image,
     raw: vk::ImageView,
@@ -968,6 +967,20 @@ pub struct TextureView {
     dimension: wgt::TextureViewDimension,
     texture_identity: ResourceIdentity<vk::Image>,
     view_identity: ResourceIdentity<vk::ImageView>,
+}
+
+// Written out to leave `raw_format` alone: every hal resource is formatted
+// through its `dyn` vtable, which keeps ash's large `vk::Format` table in
+// every binary for a value `format` already names.
+impl fmt::Debug for TextureView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TextureView")
+            .field("raw", &self.raw)
+            .field("format", &self.format)
+            .field("dimension", &self.dimension)
+            .field("base_mip_level", &self.base_mip_level)
+            .finish_non_exhaustive()
+    }
 }
 
 impl crate::DynTextureView for TextureView {}
@@ -989,10 +1002,19 @@ impl TextureView {
     }
 }
 
-#[derive(Debug)]
 pub struct Sampler {
     raw: vk::Sampler,
     create_info: vk::SamplerCreateInfo<'static>,
+}
+
+// Written out to leave `create_info` alone: formatting it keeps ash's
+// `vk::StructureType` table, about 36 KB of code, in every binary.
+impl fmt::Debug for Sampler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sampler")
+            .field("raw", &self.raw)
+            .finish_non_exhaustive()
+    }
 }
 
 impl crate::DynSampler for Sampler {}
