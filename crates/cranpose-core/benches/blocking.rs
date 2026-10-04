@@ -31,13 +31,18 @@ fn release(gate: &Gate) {
     gate.1.notify_all();
 }
 
-struct Ready(AtomicBool);
+struct Ready {
+    runnable: AtomicBool,
+    waiter: std::thread::Thread,
+}
 impl Wake for Ready {
     fn wake(self: Arc<Self>) {
-        self.0.store(true, Ordering::Release);
+        self.runnable.store(true, Ordering::Release);
+        self.waiter.unpark();
     }
     fn wake_by_ref(self: &Arc<Self>) {
-        self.0.store(true, Ordering::Release);
+        self.runnable.store(true, Ordering::Release);
+        self.waiter.unpark();
     }
 }
 
@@ -49,11 +54,14 @@ impl Slot {
     fn new(work: impl FnOnce() -> u64 + Send + 'static) -> Self {
         Self {
             future: Box::pin(support::run(work)),
-            ready: Arc::new(Ready(AtomicBool::new(true))),
+            ready: Arc::new(Ready {
+                runnable: AtomicBool::new(true),
+                waiter: std::thread::current(),
+            }),
         }
     }
     fn poll(&mut self) -> Option<Result<u64, Failure>> {
-        if !self.ready.0.swap(false, Ordering::AcqRel) {
+        if !self.ready.runnable.swap(false, Ordering::AcqRel) {
             return None;
         }
         let waker = Waker::from(Arc::clone(&self.ready));
@@ -183,11 +191,11 @@ impl Gaps {
     }
 }
 
-fn cpu() {
+fn cpu(busy_ui: bool) {
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
     let mut jobs = Jobs::default();
-    let composition = Composition::new(MemoryApplier::new());
-    let runtime = composition.runtime_handle();
+    let composition = busy_ui.then(|| Composition::new(MemoryApplier::new()));
+    let runtime = composition.as_ref().map(Composition::runtime_handle);
     let mut gaps = Gaps {
         counts: [0; 12],
         maximum_ns: 0,
@@ -203,9 +211,13 @@ fn cpu() {
         let now = Instant::now();
         gaps.record(now.duration_since(previous));
         previous = now;
-        runtime.drain_ui();
+        if let Some(runtime) = &runtime {
+            runtime.drain_ui();
+        }
         if jobs.collect() {
             jobs.fill(96, &gate);
+        } else if !busy_ui {
+            std::thread::park_timeout(Duration::from_secs(60).saturating_sub(started.elapsed()));
         }
         assert!(
             started.elapsed() < Duration::from_secs(60),
@@ -213,13 +225,22 @@ fn cpu() {
         );
     }
     let elapsed_ns = started.elapsed().as_nanos();
+    let phase = if busy_ui { "contended" } else { "cpu" };
+    let p99 = if busy_ui {
+        gaps.percentile().to_string()
+    } else {
+        "null".into()
+    };
+    let maximum = if busy_ui {
+        gaps.maximum_ns.to_string()
+    } else {
+        "null".into()
+    };
     println!(
-        "{{\"phase\":\"cpu\",\"jobs\":{},\"checksum\":{},\"elapsed_ns\":{elapsed_ns},\"initial_admission_ns\":{admission_ns},\"initial_admitted\":{admitted},\"rejected_attempts\":{},\"ui_p99_gap_us_upper\":{},\"ui_max_gap_ns\":{},\"loaded\":{loaded},\"finished\":{}}}",
+        "{{\"phase\":\"{phase}\",\"jobs\":{},\"checksum\":{},\"elapsed_ns\":{elapsed_ns},\"initial_admission_ns\":{admission_ns},\"initial_admitted\":{admitted},\"rejected_attempts\":{},\"main_p99_gap_us_upper\":{p99},\"main_max_gap_ns\":{maximum},\"loaded\":{loaded},\"finished\":{}}}",
         jobs.completed,
         jobs.checksum,
         jobs.rejected,
-        gaps.percentile(),
-        gaps.maximum_ns,
         process()
     );
 }
@@ -293,7 +314,8 @@ fn main() {
         .find(|argument| !argument.starts_with('-'))
         .unwrap_or_else(|| "serial".into());
     match mode.as_str() {
-        "cpu" => cpu(),
+        "cpu" => cpu(false),
+        "contended" => cpu(true),
         "cancel" => cancel(),
         "serial" => {
             support::serial(1);
@@ -305,6 +327,6 @@ fn main() {
                 process()
             );
         }
-        _ => panic!("expected serial, cpu or cancel"),
+        _ => panic!("expected serial, cpu, contended or cancel"),
     }
 }
