@@ -347,7 +347,7 @@ fn scan_hex_binary_int(code: &str, mut pos: usize) -> usize {
     }
     let next = code[pos..].chars().next().unwrap_or('\0');
     if next == 'x' {
-        pos += 2;
+        pos += 1;
         while pos < code.len()
             && (is_hex_digit(code[pos..].chars().next().unwrap_or('\0'))
                 || code[pos..].chars().next().unwrap_or('\0') == '_')
@@ -355,7 +355,7 @@ fn scan_hex_binary_int(code: &str, mut pos: usize) -> usize {
             pos += code[pos..].chars().next().unwrap_or('\0').len_utf8();
         }
     } else if next == 'b' {
-        pos += 2;
+        pos += 1;
         while pos < code.len()
             && (code[pos..].chars().next().unwrap_or('\0') == '0'
                 || code[pos..].chars().next().unwrap_or('\0') == '1'
@@ -470,7 +470,7 @@ where
             pos += ch.len_utf8();
         }
     }
-    normalize_tokens(tokens, code.len())
+    tokens
 }
 
 const RUST_KEYWORDS: &[&str] = &[
@@ -1088,44 +1088,6 @@ fn tokenize_shell(code: &str) -> Vec<Token> {
             })
             .or_else(|| scan_shell_identifier(code, pos))
     })
-}
-
-fn normalize_tokens(tokens: Vec<Token>, code_len: usize) -> Vec<Token> {
-    if tokens.is_empty() {
-        if code_len > 0 {
-            return vec![Token {
-                kind: TokenKind::Plain,
-                start: 0,
-                end: code_len,
-            }];
-        }
-        return Vec::new();
-    }
-
-    let mut result = Vec::new();
-    let mut last_end = 0;
-
-    for token in tokens {
-        if token.start > last_end {
-            result.push(Token {
-                kind: TokenKind::Plain,
-                start: last_end,
-                end: token.start,
-            });
-        }
-        result.push(token);
-        last_end = token.end;
-    }
-
-    if last_end < code_len {
-        result.push(Token {
-            kind: TokenKind::Plain,
-            start: last_end,
-            end: code_len,
-        });
-    }
-
-    result
 }
 
 #[cfg(test)]
