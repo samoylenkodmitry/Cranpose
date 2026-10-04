@@ -267,7 +267,7 @@ pub(crate) fn LiquidTabReference(backdrop: ReferenceBackdrop, dark: bool) {
                             let (painter, size) = symbols[symbol].clone();
                             let (x, y) = offsets[symbol];
                             tabs.push(
-                                LiquidTab::from_painter(painter, size, title)
+                                LiquidTab::from_painter(painter, size, title.as_str())
                                     .with_icon_offset(x, y),
                             );
                         }
