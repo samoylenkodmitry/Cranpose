@@ -13,16 +13,16 @@ struct MockState {
 }
 
 impl MockState {
-    fn new(value: i32) -> Arc<Self> {
+    fn new(value: i32) -> Rc<Self> {
         use crate::state::StateRecord;
         let record = StateRecord::new(1, value, None);
-        let mut state = Arc::new(Self {
+        let mut state = Rc::new(Self {
             id: ObjectId::default(),
             value: Cell::new(value),
             head: RwLock::new(record),
         });
         let id = ObjectId::new(&state);
-        Arc::get_mut(&mut state).unwrap().id = id;
+        Rc::get_mut(&mut state).unwrap().id = id;
         state
     }
 }

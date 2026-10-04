@@ -1,5 +1,3 @@
-use std::sync::PoisonError;
-
 use super::*;
 
 fn writable_record(
@@ -63,18 +61,9 @@ impl StateObject for ManualState {
     }
 }
 
-fn poison_mutex<T>(mutex: &Mutex<T>) {
-    let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _guard = mutex.lock().unwrap_or_else(PoisonError::into_inner);
-        panic!("poison snapshot state mutex for recovery test");
-    }));
-
-    assert!(poison_result.is_err());
-}
-
 #[test]
 fn observation_leases_drive_subscriber_liveness() {
-    let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
     let notifications = Rc::new(Cell::new(0));
     let notifications_for_callback = Rc::clone(&notifications);
     let callback: Rc<dyn Fn()> = Rc::new(move || {
@@ -99,8 +88,8 @@ fn observation_leases_drive_subscriber_liveness() {
 
 #[test]
 fn observation_leases_preserve_clones_scope_counts_and_state_lifetimes() {
-    let first = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
-    let second = SnapshotMutableState::new_in_arc(200i32, Arc::new(NeverEqual));
+    let first = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
+    let second = SnapshotMutableState::new_in_rc(200i32, Rc::new(NeverEqual));
     let lease = first.observation_lease().unwrap();
     let clone = Rc::clone(&lease);
     assert!(first.has_subscribers());
@@ -115,7 +104,7 @@ fn observation_leases_preserve_clones_scope_counts_and_state_lifetimes() {
     assert!(!first.has_subscribers());
 
     let lease = second.observation_lease().unwrap();
-    let weak = Arc::downgrade(&second);
+    let weak = Rc::downgrade(&second);
     drop(second);
     assert!(weak.upgrade().is_none());
     drop(lease);
@@ -123,35 +112,8 @@ fn observation_leases_preserve_clones_scope_counts_and_state_lifetimes() {
 }
 
 #[test]
-fn snapshot_mutable_state_recovers_poisoned_weak_self_lock() {
-    let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
-
-    poison_mutex(&state.weak_self);
-
-    assert_eq!(state.get(), 100);
-    assert!(state.set(101));
-    assert_eq!(state.get(), 101);
-}
-
-#[test]
-fn snapshot_mutable_state_recovers_poisoned_apply_observer_lock() {
-    let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
-    let calls = Rc::new(Cell::new(0usize));
-    let observed_calls = Rc::clone(&calls);
-
-    poison_mutex(&state.apply_observers);
-
-    state.add_apply_observer(Box::new(move || {
-        observed_calls.set(observed_calls.get() + 1);
-    }));
-    notify_applied(&state.apply_observers);
-
-    assert_eq!(calls.get(), 1);
-}
-
-#[test]
 fn snapshot_mutable_state_promote_missing_record_returns_error() {
-    let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
     let missing_snapshot = usize::MAX - 17;
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -166,7 +128,7 @@ fn snapshot_mutable_state_promote_missing_record_returns_error() {
 
 #[test]
 fn snapshot_mutable_state_promote_wrong_record_type_returns_error() {
-    let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
     let child_snapshot = usize::MAX - 31;
     let wrong_record = StateRecord::new(child_snapshot, "wrong type", None);
     StateObject::prepend_state_record(&*state, wrong_record);
@@ -183,7 +145,7 @@ fn snapshot_mutable_state_promote_wrong_record_type_returns_error() {
 
 #[test]
 fn snapshot_mutable_state_commit_wrong_record_type_returns_error() {
-    let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
     let merged = StateRecord::new(usize::MAX - 43, "wrong type", None);
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -198,7 +160,7 @@ fn snapshot_mutable_state_commit_wrong_record_type_returns_error() {
 
 #[test]
 fn snapshot_mutable_state_merge_wrong_record_type_returns_none() {
-    let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
     let previous = StateRecord::new(usize::MAX - 51, 1i32, None);
     let current = StateRecord::new(usize::MAX - 52, "wrong type", None);
     let applied = StateRecord::new(usize::MAX - 53, 2i32, None);
@@ -299,7 +261,7 @@ fn test_readable_record_for_picks_highest_valid() {
 
 #[test]
 fn test_new_overwritable_record_locked_reuses_invalid() {
-    let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
 
     let current_head = state.first_record();
     let invalid_rec = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, current_head.next());
@@ -317,7 +279,7 @@ fn test_new_overwritable_record_locked_creates_new() {
 
     let _pin_handle = crate::snapshot_pinning::track_pinning(1, &SnapshotIdSet::EMPTY);
 
-    let state = SnapshotMutableState::new_in_arc(100i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(100i32, Rc::new(NeverEqual));
     let old_head = state.first_record();
 
     let result = new_overwritable_record_locked(&*state);
@@ -340,7 +302,7 @@ fn test_new_overwritable_record_locked_creates_new() {
 fn test_writable_record_reuses_invalid_record() {
     crate::snapshot_pinning::reset_pinning_table();
 
-    let state = SnapshotMutableState::new_in_arc(7i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(7i32, Rc::new(NeverEqual));
 
     let head = state.first_record();
     let invalid = StateRecord::new(INVALID_SNAPSHOT_ID, 0i32, head.next());
@@ -365,7 +327,7 @@ fn test_writable_record_creates_new_when_reuse_disallowed() {
     crate::snapshot_pinning::reset_pinning_table();
     let pin = crate::snapshot_pinning::track_pinning(1, &SnapshotIdSet::EMPTY);
 
-    let state = SnapshotMutableState::new_in_arc(42i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(42i32, Rc::new(NeverEqual));
     let original_head = state.first_record();
     let preexisting = original_head
         .next()
@@ -411,7 +373,7 @@ fn test_state_record_clear_for_reuse() {
 fn test_overwrite_unused_records_no_old_records() {
     crate::snapshot_pinning::reset_pinning_table();
 
-    let state = SnapshotMutableState::new_in_arc(42i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(42i32, Rc::new(NeverEqual));
 
     let _pin = crate::snapshot_pinning::track_pinning(1, &SnapshotIdSet::EMPTY);
 
@@ -454,7 +416,7 @@ fn test_overwrite_unused_records_basic_cleanup() {
 fn test_overwrite_unused_records_single_record_only() {
     crate::snapshot_pinning::reset_pinning_table();
 
-    let state = SnapshotMutableState::new_in_arc(42i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(42i32, Rc::new(NeverEqual));
 
     let head = state.first_record();
     head.set_next(None);
@@ -468,7 +430,7 @@ fn test_overwrite_unused_records_single_record_only() {
 fn snapshot_state_try_get_reports_missing_visible_record_without_panicking() {
     crate::snapshot_pinning::reset_pinning_table();
 
-    let state = SnapshotMutableState::new_in_arc(42i32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(42i32, Rc::new(NeverEqual));
     let head = state.first_record();
     head.set_snapshot_id(SNAPSHOT_ID_MAX);
     head.set_next(None);
@@ -628,7 +590,7 @@ fn test_assign_value_self_assignment() {
 #[test]
 fn event_loop_writes_keep_the_record_chain_bounded() {
     crate::snapshot_pinning::reset_pinning_table();
-    let state = SnapshotMutableState::new_in_arc(0.0f32, Arc::new(NeverEqual));
+    let state = SnapshotMutableState::new_in_rc(0.0f32, Rc::new(NeverEqual));
 
     let mut lens = Vec::new();
     for event in 0..3000usize {

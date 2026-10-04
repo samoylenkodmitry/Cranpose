@@ -7,7 +7,7 @@ use super::*;
 ///
 /// # Thread Safety
 /// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
-/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// snapshots are stored in thread-local storage and never shared across threads. The `Rc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct ReadonlySnapshot {
     pub(super) state: SnapshotState,
@@ -19,8 +19,8 @@ impl ReadonlySnapshot {
         id: SnapshotId,
         invalid: SnapshotIdSet,
         read_observer: Option<ReadObserver>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Rc<Self> {
+        Rc::new(Self {
             state: SnapshotState::new(id, invalid, read_observer, None, false),
         })
     }
@@ -37,7 +37,7 @@ impl ReadonlySnapshot {
         true
     }
 
-    pub fn root_readonly(&self) -> Arc<Self> {
+    pub fn root_readonly(&self) -> Rc<Self> {
         ReadonlySnapshot::new(
             self.state.id.get(),
             self.state.invalid.borrow().clone(),
@@ -49,7 +49,7 @@ impl ReadonlySnapshot {
         enter_snapshot_scope(AnySnapshot::Readonly(self.root_readonly()), f)
     }
 
-    pub fn take_nested_snapshot(&self, read_observer: Option<ReadObserver>) -> Arc<Self> {
+    pub fn take_nested_snapshot(&self, read_observer: Option<ReadObserver>) -> Rc<Self> {
         let merged_observer =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
         ReadonlySnapshot::new(
@@ -71,7 +71,7 @@ impl ReadonlySnapshot {
         self.state.record_read(state);
     }
 
-    pub fn record_write(&self, _state: Arc<dyn StateObject>) {
+    pub fn record_write(&self, _state: Rc<dyn StateObject>) {
         panic!("Cannot write to a read-only snapshot");
     }
 

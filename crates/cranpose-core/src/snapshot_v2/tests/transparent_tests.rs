@@ -83,7 +83,7 @@ fn test_transparent_observer_snapshot_write_panics() {
 
     let snapshot = TransparentObserverSnapshot::new(1, SnapshotIdSet::new(), None, None);
 
-    let mock_state = Arc::new(MockState(0));
+    let mock_state = Rc::new(MockState(0));
     snapshot.record_write(mock_state);
 }
 
@@ -95,7 +95,7 @@ fn transparent_mutable_set_read_observer_replaces_observer() {
     let snapshot = TransparentObserverMutableSnapshot::new(
         1,
         SnapshotIdSet::new(),
-        Some(Arc::new({
+        Some(Rc::new({
             let initial_reads = Rc::clone(&initial_reads);
             move |_| initial_reads.set(initial_reads.get() + 1)
         })),
@@ -103,7 +103,7 @@ fn transparent_mutable_set_read_observer_replaces_observer() {
         None,
     );
 
-    snapshot.set_read_observer(Some(Arc::new({
+    snapshot.set_read_observer(Some(Rc::new({
         let replacement_reads = Rc::clone(&replacement_reads);
         move |_| replacement_reads.set(replacement_reads.get() + 1)
     })));
@@ -122,18 +122,18 @@ fn transparent_mutable_set_write_observer_replaces_observer() {
         1,
         SnapshotIdSet::new(),
         None,
-        Some(Arc::new({
+        Some(Rc::new({
             let initial_writes = Rc::clone(&initial_writes);
             move |_| initial_writes.set(initial_writes.get() + 1)
         })),
         None,
     );
 
-    snapshot.set_write_observer(Some(Arc::new({
+    snapshot.set_write_observer(Some(Rc::new({
         let replacement_writes = Rc::clone(&replacement_writes);
         move |_| replacement_writes.set(replacement_writes.get() + 1)
     })));
-    snapshot.record_write(Arc::new(MockState(2)));
+    snapshot.record_write(Rc::new(MockState(2)));
 
     assert_eq!(initial_writes.get(), 0);
     assert_eq!(replacement_writes.get(), 1);
@@ -146,18 +146,18 @@ fn transparent_mutable_nested_snapshot_inherits_replaced_observers() {
     let parent_writes = Rc::new(Cell::new(0));
     let snapshot =
         TransparentObserverMutableSnapshot::new(1, SnapshotIdSet::new(), None, None, None);
-    snapshot.set_read_observer(Some(Arc::new({
+    snapshot.set_read_observer(Some(Rc::new({
         let parent_reads = Rc::clone(&parent_reads);
         move |_| parent_reads.set(parent_reads.get() + 1)
     })));
-    snapshot.set_write_observer(Some(Arc::new({
+    snapshot.set_write_observer(Some(Rc::new({
         let parent_writes = Rc::clone(&parent_writes);
         move |_| parent_writes.set(parent_writes.get() + 1)
     })));
 
     let nested = snapshot.take_nested_mutable_snapshot(None, None);
     nested.record_read(&MockState(3));
-    nested.record_write(Arc::new(MockState(4)));
+    nested.record_write(Rc::new(MockState(4)));
 
     assert_eq!(parent_reads.get(), 1);
     assert_eq!(parent_writes.get(), 1);
@@ -171,14 +171,14 @@ fn transparent_readonly_set_read_observer_replaces_observer() {
     let snapshot = TransparentObserverSnapshot::new(
         1,
         SnapshotIdSet::new(),
-        Some(Arc::new({
+        Some(Rc::new({
             let initial_reads = Rc::clone(&initial_reads);
             move |_| initial_reads.set(initial_reads.get() + 1)
         })),
         None,
     );
 
-    snapshot.set_read_observer(Some(Arc::new({
+    snapshot.set_read_observer(Some(Rc::new({
         let replacement_reads = Rc::clone(&replacement_reads);
         move |_| replacement_reads.set(replacement_reads.get() + 1)
     })));

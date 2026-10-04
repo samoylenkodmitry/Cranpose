@@ -1,4 +1,4 @@
-use std::sync::{Arc, Weak};
+use std::rc::{Rc, Weak};
 
 use crate::state::StateObject;
 
@@ -28,10 +28,10 @@ impl SnapshotWeakSet {
     }
 
     #[cfg(test)]
-    pub(crate) fn add<T: StateObject + 'static>(&mut self, state: &Arc<T>) {
-        let hash = Arc::as_ptr(state) as *const () as usize;
-        let trait_obj: Arc<dyn StateObject> = state.clone();
-        let weak = Arc::downgrade(&trait_obj);
+    pub(crate) fn add<T: StateObject + 'static>(&mut self, state: &Rc<T>) {
+        let hash = Rc::as_ptr(state) as *const () as usize;
+        let trait_obj: Rc<dyn StateObject> = state.clone();
+        let weak = Rc::downgrade(&trait_obj);
 
         let pos = self.entries.partition_point(|(h, _)| *h < hash);
 
@@ -50,9 +50,9 @@ impl SnapshotWeakSet {
         }
     }
 
-    pub(crate) fn add_trait_object(&mut self, state: &Arc<dyn StateObject>) {
-        let hash = Arc::as_ptr(state) as *const () as usize;
-        let weak = Arc::downgrade(state);
+    pub(crate) fn add_trait_object(&mut self, state: &Rc<dyn StateObject>) {
+        let hash = Rc::as_ptr(state) as *const () as usize;
+        let weak = Rc::downgrade(state);
 
         let pos = self.entries.partition_point(|(h, _)| *h < hash);
 
@@ -115,6 +115,5 @@ impl Default for SnapshotWeakSet {
 }
 
 #[cfg(test)]
-#[expect(clippy::arc_with_non_send_sync)]
 #[path = "tests/snapshot_weak_set_tests.rs"]
 mod tests;

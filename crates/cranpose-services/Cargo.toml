@@ -22,6 +22,7 @@ workspace = true
 [dependencies]
 cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }
+cranpose-ui-graphics.workspace = true
 directories = "6.0.0"
 log = "0.4"
 parking_lot = "0.12.5"

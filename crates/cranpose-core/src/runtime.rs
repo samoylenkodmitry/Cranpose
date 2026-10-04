@@ -102,14 +102,14 @@ pub(crate) struct StateArena {
 
 impl StateArena {
     pub(crate) fn alloc<T: Clone + 'static>(&self, value: T, runtime: RuntimeHandle) -> StateId {
-        self.alloc_with_policy(value, runtime, Arc::new(NeverEqual))
+        self.alloc_with_policy(value, runtime, Rc::new(NeverEqual))
     }
 
     pub(crate) fn alloc_with_policy<T: Clone + 'static>(
         &self,
         value: T,
         runtime: RuntimeHandle,
-        policy: Arc<dyn MutationPolicy<T>>,
+        policy: Rc<dyn MutationPolicy<T>>,
     ) -> StateId {
         let (slot, generation) = {
             let mut inner = self.inner.borrow_mut();
@@ -1096,7 +1096,7 @@ impl RuntimeHandle {
     pub(crate) fn alloc_state_with_policy<T: Clone + 'static>(
         &self,
         value: T,
-        policy: Arc<dyn MutationPolicy<T>>,
+        policy: Rc<dyn MutationPolicy<T>>,
     ) -> Rc<StateHandleLease> {
         let id =
             self.with_state_arena(|arena| arena.alloc_with_policy(value, self.clone(), policy));
@@ -1118,7 +1118,7 @@ impl RuntimeHandle {
     pub(crate) fn alloc_persistent_state_with_policy<T: Clone + 'static>(
         &self,
         value: T,
-        policy: Arc<dyn MutationPolicy<T>>,
+        policy: Rc<dyn MutationPolicy<T>>,
     ) -> crate::MutableState<T> {
         self.hand_out(self.alloc_state_with_policy(value, policy))
     }

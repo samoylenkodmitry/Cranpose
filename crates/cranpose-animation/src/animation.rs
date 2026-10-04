@@ -963,7 +963,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             inner.target = target;
             inner.animation_type = animation;
             inner.start_time_nanos = exact_start_time_nanos;
-            if cranpose_services::platform_accessibility_options().reduce_motion {
+            if cranpose_ui_graphics::accessibility::platform_accessibility_options().reduce_motion {
                 Self::settle_at_target(&mut inner);
                 return;
             }

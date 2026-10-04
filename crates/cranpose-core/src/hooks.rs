@@ -1,4 +1,4 @@
-use std::{hash::Hash, rc::Rc, sync::Arc};
+use std::{hash::Hash, rc::Rc};
 
 use crate::{
     composer_context,
@@ -163,7 +163,7 @@ pub fn withFrameMillis(
 #[expect(non_snake_case)]
 pub fn mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> MutableState<T> {
     current_runtime("mutableStateOf")
-        .alloc_persistent_state_with_policy(initial, Arc::new(StructuralEqual))
+        .alloc_persistent_state_with_policy(initial, Rc::new(StructuralEqual))
 }
 
 /// Like [`mutableStateOf`], for a value that cannot be compared or whose every
@@ -205,7 +205,7 @@ fn current_runtime(what: &str) -> runtime::RuntimeHandle {
 pub fn try_mutableStateOf<T: Clone + PartialEq + 'static>(initial: T) -> Option<MutableState<T>> {
     let runtime = composer_context::try_with_composer(super::composer::Composer::runtime_handle)
         .or_else(runtime::current_runtime_handle)?;
-    Some(runtime.alloc_persistent_state_with_policy(initial, Arc::new(StructuralEqual)))
+    Some(runtime.alloc_persistent_state_with_policy(initial, Rc::new(StructuralEqual)))
 }
 
 #[expect(non_snake_case)]

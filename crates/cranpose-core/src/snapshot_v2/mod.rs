@@ -16,15 +16,14 @@
 //! # Thread Local Storage
 //!
 //! The current snapshot is stored in thread-local storage and automatically
-//! managed by the snapshot system.
-
-#![expect(clippy::arc_with_non_send_sync)]
+//! managed by the snapshot system. Snapshot handles and observers use [`Rc`]
+//! and stay on their creating thread. Background work sends results to the UI
+//! runtime instead of sharing snapshots across threads.
 
 use std::{
     cell::{Cell, RefCell},
     hash::{Hash, Hasher},
-    rc::Rc,
-    sync::{Arc, Weak},
+    rc::{Rc, Weak},
 };
 
 use crate::{
@@ -56,13 +55,13 @@ pub(crate) use runtime::{allocate_snapshot, close_snapshot, with_runtime};
 pub use transparent::{TransparentObserverMutableSnapshot, TransparentObserverSnapshot};
 
 /// Observer that is called when a state object is read.
-pub type ReadObserver = Arc<dyn Fn(&dyn StateObject) + 'static>;
+pub type ReadObserver = Rc<dyn Fn(&dyn StateObject) + 'static>;
 
 /// Observer that is called when a state object is written.
-pub type WriteObserver = Arc<dyn Fn(&dyn StateObject) + 'static>;
+pub type WriteObserver = Rc<dyn Fn(&dyn StateObject) + 'static>;
 
 /// Apply observer that is called when a snapshot is applied.
-pub type ApplyObserver = Rc<dyn Fn(&[Arc<dyn StateObject>], SnapshotId) + 'static>;
+pub type ApplyObserver = Rc<dyn Fn(&[Rc<dyn StateObject>], SnapshotId) + 'static>;
 
 /// Result of applying a mutable snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,13 +99,13 @@ pub type StateObjectId = usize;
 /// without requiring trait objects, which avoids object-safety issues.
 #[derive(Clone)]
 pub enum AnySnapshot {
-    Readonly(Arc<ReadonlySnapshot>),
-    Mutable(Arc<MutableSnapshot>),
-    NestedReadonly(Arc<NestedReadonlySnapshot>),
-    NestedMutable(Arc<NestedMutableSnapshot>),
-    Global(Arc<GlobalSnapshot>),
-    TransparentMutable(Arc<TransparentObserverMutableSnapshot>),
-    TransparentReadonly(Arc<TransparentObserverSnapshot>),
+    Readonly(Rc<ReadonlySnapshot>),
+    Mutable(Rc<MutableSnapshot>),
+    NestedReadonly(Rc<NestedReadonlySnapshot>),
+    NestedMutable(Rc<NestedMutableSnapshot>),
+    Global(Rc<GlobalSnapshot>),
+    TransparentMutable(Rc<TransparentObserverMutableSnapshot>),
+    TransparentReadonly(Rc<TransparentObserverSnapshot>),
 }
 
 /// Enum wrapper for mutable snapshot types.
@@ -117,8 +116,8 @@ pub enum AnySnapshot {
 /// mutable snapshot.
 #[derive(Clone)]
 pub enum AnyMutableSnapshot {
-    Root(Arc<MutableSnapshot>),
-    Nested(Arc<NestedMutableSnapshot>),
+    Root(Rc<MutableSnapshot>),
+    Nested(Rc<NestedMutableSnapshot>),
 }
 
 impl AnyMutableSnapshot {
@@ -232,7 +231,7 @@ impl AnySnapshot {
             AnySnapshot::Mutable(s) => AnySnapshot::Mutable(s.root_mutable()),
             AnySnapshot::NestedReadonly(s) => AnySnapshot::NestedReadonly(s.root_nested_readonly()),
             AnySnapshot::NestedMutable(s) => AnySnapshot::Mutable(s.root_mutable()),
-            AnySnapshot::Global(s) => AnySnapshot::Global(s.root_global()),
+            AnySnapshot::Global(_) => AnySnapshot::Global(GlobalSnapshot::get_or_create()),
             AnySnapshot::TransparentMutable(s) => {
                 AnySnapshot::TransparentMutable(s.root_transparent_mutable())
             }
@@ -243,21 +242,21 @@ impl AnySnapshot {
     }
 
     /// Check if this snapshot refers to the same transparent snapshot.
-    pub fn is_same_transparent(&self, other: &Arc<TransparentObserverMutableSnapshot>) -> bool {
-        matches!(self, AnySnapshot::TransparentMutable(snapshot) if Arc::ptr_eq(snapshot, other))
+    pub fn is_same_transparent(&self, other: &Rc<TransparentObserverMutableSnapshot>) -> bool {
+        matches!(self, AnySnapshot::TransparentMutable(snapshot) if Rc::ptr_eq(snapshot, other))
     }
 
     /// Check if this snapshot refers to the same transparent mutable snapshot.
     pub fn is_same_transparent_mutable(
         &self,
-        other: &Arc<TransparentObserverMutableSnapshot>,
+        other: &Rc<TransparentObserverMutableSnapshot>,
     ) -> bool {
         self.is_same_transparent(other)
     }
 
     /// Check if this snapshot refers to the same transparent readonly snapshot.
-    pub fn is_same_transparent_readonly(&self, other: &Arc<TransparentObserverSnapshot>) -> bool {
-        matches!(self, AnySnapshot::TransparentReadonly(snapshot) if Arc::ptr_eq(snapshot, other))
+    pub fn is_same_transparent_readonly(&self, other: &Rc<TransparentObserverSnapshot>) -> bool {
+        matches!(self, AnySnapshot::TransparentReadonly(snapshot) if Rc::ptr_eq(snapshot, other))
     }
 
     /// Enter this snapshot, making it current for the duration of the closure.
@@ -349,7 +348,7 @@ impl AnySnapshot {
     }
 
     /// Record a write.
-    pub fn record_write(&self, state: Arc<dyn StateObject>) {
+    pub fn record_write(&self, state: Rc<dyn StateObject>) {
         match self {
             AnySnapshot::Readonly(s) => s.record_write(state),
             AnySnapshot::Mutable(s) => s.record_write(state),
@@ -430,8 +429,9 @@ struct CurrentSnapshotGuard {
 
 impl CurrentSnapshotGuard {
     fn enter(snapshot: AnySnapshot) -> Self {
-        let previous = current_snapshot();
-        set_current_snapshot(Some(snapshot));
+        let previous = CURRENT_SNAPSHOT
+            .try_with(|cell| cell.replace(Some(snapshot)))
+            .unwrap_or(None);
         Self { previous }
     }
 }
@@ -484,15 +484,15 @@ pub fn take_mutable_snapshot(
 pub fn take_transparent_observer_mutable_snapshot(
     read_observer: Option<ReadObserver>,
     write_observer: Option<WriteObserver>,
-) -> Arc<TransparentObserverMutableSnapshot> {
+) -> Rc<TransparentObserverMutableSnapshot> {
     take_transparent_observer_mutable_snapshot_reusing(read_observer, write_observer, None)
 }
 
 pub(crate) fn take_transparent_observer_mutable_snapshot_reusing(
     read_observer: Option<ReadObserver>,
     write_observer: Option<WriteObserver>,
-    recycled: Option<Arc<TransparentObserverMutableSnapshot>>,
-) -> Arc<TransparentObserverMutableSnapshot> {
+    recycled: Option<Rc<TransparentObserverMutableSnapshot>>,
+) -> Rc<TransparentObserverMutableSnapshot> {
     let parent = current_snapshot();
     match parent {
         Some(AnySnapshot::TransparentMutable(transparent)) if transparent.can_reuse() => {
@@ -508,7 +508,7 @@ pub(crate) fn take_transparent_observer_mutable_snapshot_reusing(
                 transparent.invalid(),
                 merge_read_observers(read_observer, parent_read),
                 merge_write_observers(write_observer, parent_write),
-                Some(Arc::downgrade(&transparent)),
+                Some(Rc::downgrade(&transparent)),
             )
         }
         _ => {
@@ -531,7 +531,7 @@ pub(crate) fn take_transparent_observer_mutable_snapshot_reusing(
 fn already_observes(requested: &Option<ReadObserver>, installed: &Option<ReadObserver>) -> bool {
     match (requested, installed) {
         (None, _) => true,
-        (Some(requested), Some(installed)) => Arc::ptr_eq(requested, installed),
+        (Some(requested), Some(installed)) => Rc::ptr_eq(requested, installed),
         (Some(_), None) => false,
     }
 }
@@ -666,7 +666,7 @@ impl Drop for ObserverHandle {
     }
 }
 
-pub(crate) fn notify_apply_observers(modified: &[Arc<dyn StateObject>], snapshot_id: SnapshotId) {
+pub(crate) fn notify_apply_observers(modified: &[Rc<dyn StateObject>], snapshot_id: SnapshotId) {
     APPLY_OBSERVERS.with(|cell| {
         let observers: Vec<ApplyObserver> = cell.borrow().values().cloned().collect();
         for observer in observers.into_iter() {
@@ -725,7 +725,7 @@ pub(crate) fn clear_unused_record_cleanup_for_tests() {
 pub(crate) fn optimistic_merges(
     current_snapshot_id: SnapshotId,
     base_parent_id: SnapshotId,
-    modified_objects: &[(StateObjectId, Arc<dyn StateObject>, SnapshotId)],
+    modified_objects: &[(StateObjectId, Rc<dyn StateObject>, SnapshotId)],
     invalid_snapshots: &SnapshotIdSet,
     applying_invalid: &SnapshotIdSet,
 ) -> Option<HashMap<usize, Rc<StateRecord>>> {
@@ -772,13 +772,12 @@ pub(crate) fn optimistic_merges(
     result
 }
 
-#[expect(clippy::arc_with_non_send_sync)]
 fn merge_observers(a: Option<ReadObserver>, b: Option<ReadObserver>) -> Option<ReadObserver> {
     match (a, b) {
         (None, None) => None,
         (Some(a), None) => Some(a),
         (None, Some(b)) => Some(b),
-        (Some(a), Some(b)) => Some(Arc::new(move |state: &dyn StateObject| {
+        (Some(a), Some(b)) => Some(Rc::new(move |state: &dyn StateObject| {
             a(state);
             b(state);
         })),
@@ -788,7 +787,7 @@ fn merge_observers(a: Option<ReadObserver>, b: Option<ReadObserver>) -> Option<R
 /// Merge two read observers into one.
 ///
 /// # Thread Safety
-/// The resulting Arc-wrapped closure may capture non-Send closures. This is safe
+/// The resulting Rc-wrapped closure may capture non-Send closures. This is safe
 /// because observers are only invoked on the UI thread where they were created.
 pub fn merge_read_observers(
     a: Option<ReadObserver>,
@@ -800,7 +799,7 @@ pub fn merge_read_observers(
 /// Merge two write observers into one.
 ///
 /// # Thread Safety
-/// The resulting Arc-wrapped closure may capture non-Send closures. This is safe
+/// The resulting Rc-wrapped closure may capture non-Send closures. This is safe
 /// because observers are only invoked on the UI thread where they were created.
 pub fn merge_write_observers(
     a: Option<WriteObserver>,
@@ -817,7 +816,7 @@ pub(crate) struct SnapshotState {
     pub(crate) read_observer: RefCell<Option<ReadObserver>>,
     pub(crate) write_observer: RefCell<Option<WriteObserver>>,
     #[expect(clippy::type_complexity)]
-    pub(crate) modified: RefCell<HashMap<StateObjectId, (Arc<dyn StateObject>, SnapshotId)>>,
+    pub(crate) modified: RefCell<HashMap<StateObjectId, (Rc<dyn StateObject>, SnapshotId)>>,
     on_dispose: RefCell<Option<Box<dyn FnOnce()>>>,
     runtime_tracked: bool,
     pending_children: RefCell<HashSet<SnapshotId>>,
@@ -874,7 +873,7 @@ impl SnapshotState {
         }
     }
 
-    pub(crate) fn record_write(&self, state: Arc<dyn StateObject>, writer_id: SnapshotId) {
+    pub(crate) fn record_write(&self, state: Rc<dyn StateObject>, writer_id: SnapshotId) {
         let state_id = state.object_id().as_usize();
 
         let mut modified = self.modified.borrow_mut();
@@ -935,13 +934,13 @@ pub(crate) trait NestedMutableHost {
 }
 
 pub(crate) fn clear_nested_child_on_dispose<P>(
-    parent: &Arc<P>,
+    parent: &Rc<P>,
     child_id: SnapshotId,
 ) -> impl FnOnce() + 'static
 where
     P: NestedMutableHost + 'static,
 {
-    let weak = Arc::downgrade(parent);
+    let weak = Rc::downgrade(parent);
     move || {
         if let Some(parent) = weak.upgrade() {
             let nested_count = parent.nested_count();
@@ -957,11 +956,11 @@ where
 }
 
 pub(crate) fn allocate_nested_mutable_snapshot<P>(
-    parent: &Arc<P>,
+    parent: &Rc<P>,
     root: Weak<MutableSnapshot>,
     read_observer: Option<ReadObserver>,
     write_observer: Option<WriteObserver>,
-) -> Arc<NestedMutableSnapshot>
+) -> Rc<NestedMutableSnapshot>
 where
     P: NestedMutableHost + 'static,
 {

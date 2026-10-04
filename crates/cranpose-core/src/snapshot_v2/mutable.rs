@@ -1,4 +1,4 @@
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
 use super::*;
 use crate::{
@@ -56,18 +56,18 @@ pub(super) fn find_previous_record(
 enum ApplyOperation {
     PromoteChild {
         object_id: StateObjectId,
-        state: Arc<dyn StateObject>,
+        state: Rc<dyn StateObject>,
         writer_id: SnapshotId,
     },
     PromoteExisting {
         object_id: StateObjectId,
-        state: Arc<dyn StateObject>,
+        state: Rc<dyn StateObject>,
         source_id: SnapshotId,
         applied: Rc<StateRecord>,
     },
     CommitMerged {
         object_id: StateObjectId,
-        state: Arc<dyn StateObject>,
+        state: Rc<dyn StateObject>,
         merged: Rc<StateRecord>,
         applied: Rc<StateRecord>,
     },
@@ -81,7 +81,7 @@ enum ApplyOperation {
 ///
 /// # Thread Safety
 /// Contains `Cell<T>` which is not `Send`/`Sync`. This is safe because snapshots
-/// are stored in thread-local storage and never shared across threads. The `Arc`
+/// are stored in thread-local storage and never shared across threads. The `Rc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct MutableSnapshot {
     pub(super) state: SnapshotState,
@@ -98,8 +98,8 @@ impl MutableSnapshot {
         write_observer: Option<WriteObserver>,
         base_parent_id: SnapshotId,
         runtime_tracked: bool,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Rc<Self> {
+        Rc::new(Self {
             state: SnapshotState::new(id, invalid, read_observer, write_observer, runtime_tracked),
             base_parent_id,
             nested_count: Cell::new(0),
@@ -114,7 +114,7 @@ impl MutableSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
         base_parent_id: SnapshotId,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         Self::from_parts(
             id,
             invalid,
@@ -152,18 +152,18 @@ impl MutableSnapshot {
         self.state.set_on_dispose(f);
     }
 
-    pub fn root_mutable(self: &Arc<Self>) -> Arc<Self> {
+    pub fn root_mutable(self: &Rc<Self>) -> Rc<Self> {
         self.clone()
     }
 
-    pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
+    pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
         enter_snapshot_scope(AnySnapshot::Mutable(self.clone()), f)
     }
 
     pub fn take_nested_snapshot(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         read_observer: Option<ReadObserver>,
-    ) -> Arc<ReadonlySnapshot> {
+    ) -> Rc<ReadonlySnapshot> {
         self.validate_not_disposed();
         self.validate_not_applied();
 
@@ -178,7 +178,7 @@ impl MutableSnapshot {
 
         self.nested_count.set(self.nested_count.get() + 1);
 
-        let parent_weak = Arc::downgrade(self);
+        let parent_weak = Rc::downgrade(self);
         nested.set_on_dispose(move || {
             if let Some(parent) = parent_weak.upgrade() {
                 let cur = parent.nested_count.get();
@@ -212,7 +212,7 @@ impl MutableSnapshot {
         self.state.record_read(state);
     }
 
-    pub fn record_write(&self, state: Arc<dyn StateObject>) {
+    pub fn record_write(&self, state: Rc<dyn StateObject>) {
         self.validate_not_applied();
         self.validate_not_disposed();
         self.state.record_write(state, self.state.id.get());
@@ -245,7 +245,7 @@ impl MutableSnapshot {
         }
 
         let this_id = self.state.id.get();
-        let mut modified_objects: Vec<(StateObjectId, Arc<dyn StateObject>, SnapshotId)> =
+        let mut modified_objects: Vec<(StateObjectId, Rc<dyn StateObject>, SnapshotId)> =
             Vec::with_capacity(modified.len());
         for (&obj_id, (obj, writer_id)) in modified.iter() {
             modified_objects.push((obj_id, obj.clone(), *writer_id));
@@ -351,7 +351,7 @@ impl MutableSnapshot {
             }
         }
 
-        let mut applied_info: Vec<(StateObjectId, Arc<dyn StateObject>, SnapshotId)> =
+        let mut applied_info: Vec<(StateObjectId, Rc<dyn StateObject>, SnapshotId)> =
             Vec::with_capacity(operations.len());
 
         for operation in operations {
@@ -408,7 +408,7 @@ impl MutableSnapshot {
             });
         }
 
-        let observer_states: Vec<Arc<dyn StateObject>> = applied_info
+        let observer_states: Vec<Rc<dyn StateObject>> = applied_info
             .iter()
             .map(|(_, state, _)| state.clone())
             .collect();
@@ -417,19 +417,19 @@ impl MutableSnapshot {
     }
 
     pub fn take_nested_mutable_snapshot(
-        self: &Arc<Self>,
+        self: &Rc<Self>,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-    ) -> Arc<NestedMutableSnapshot> {
+    ) -> Rc<NestedMutableSnapshot> {
         self.validate_not_disposed();
         self.validate_not_applied();
 
-        allocate_nested_mutable_snapshot(self, Arc::downgrade(self), read_observer, write_observer)
+        allocate_nested_mutable_snapshot(self, Rc::downgrade(self), read_observer, write_observer)
     }
 
     pub(crate) fn merge_child_modifications(
         &self,
-        child_modified: &HashMap<StateObjectId, (Arc<dyn StateObject>, SnapshotId)>,
+        child_modified: &HashMap<StateObjectId, (Rc<dyn StateObject>, SnapshotId)>,
     ) -> Result<(), ()> {
         {
             let parent_mod = self.state.modified.borrow();
@@ -462,7 +462,7 @@ impl NestedMutableHost for MutableSnapshot {
 impl MutableSnapshot {
     pub(crate) fn debug_modified_objects(
         &self,
-    ) -> Vec<(StateObjectId, Arc<dyn StateObject>, SnapshotId)> {
+    ) -> Vec<(StateObjectId, Rc<dyn StateObject>, SnapshotId)> {
         let modified = self.state.modified.borrow();
         modified
             .iter()

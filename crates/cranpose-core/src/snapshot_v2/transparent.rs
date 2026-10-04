@@ -7,7 +7,7 @@ use super::*;
 ///
 /// # Thread Safety
 /// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
-/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// snapshots are stored in thread-local storage and never shared across threads. The `Rc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct TransparentObserverMutableSnapshot {
     pub(super) state: SnapshotState,
@@ -24,18 +24,18 @@ impl TransparentObserverMutableSnapshot {
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
         parent: Option<Weak<TransparentObserverMutableSnapshot>>,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         Self::new_reusing(None, id, invalid, read_observer, write_observer, parent)
     }
 
     pub(crate) fn new_reusing(
-        recycled: Option<Arc<Self>>,
+        recycled: Option<Rc<Self>>,
         id: SnapshotId,
         invalid: SnapshotIdSet,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
         parent: Option<Weak<Self>>,
-    ) -> Arc<Self> {
+    ) -> Rc<Self> {
         let fresh = Self {
             state: SnapshotState::new_with_pinning(
                 id,
@@ -51,12 +51,12 @@ impl TransparentObserverMutableSnapshot {
             reusable: Cell::new(true),
         };
         if let Some(mut recycled) = recycled
-            && let Some(target) = Arc::get_mut(&mut recycled)
+            && let Some(target) = Rc::get_mut(&mut recycled)
         {
             *target = fresh;
             recycled
         } else {
-            Arc::new(fresh)
+            Rc::new(fresh)
         }
     }
 
@@ -77,7 +77,7 @@ impl TransparentObserverMutableSnapshot {
             .read_observer
             .borrow()
             .as_ref()
-            .is_some_and(|installed| Arc::ptr_eq(installed, observer))
+            .is_some_and(|installed| Rc::ptr_eq(installed, observer))
     }
 
     /// Set the read observer (only allowed if reusable).
@@ -110,7 +110,7 @@ impl TransparentObserverMutableSnapshot {
         false
     }
 
-    pub fn root_transparent_mutable(self: &Arc<Self>) -> Arc<Self> {
+    pub fn root_transparent_mutable(self: &Rc<Self>) -> Rc<Self> {
         match &self.parent {
             Some(weak) => weak
                 .upgrade()
@@ -119,7 +119,7 @@ impl TransparentObserverMutableSnapshot {
         }
     }
 
-    pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
+    pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
         let prev = current_snapshot();
 
         if let Some(ref snapshot) = prev
@@ -134,7 +134,7 @@ impl TransparentObserverMutableSnapshot {
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
-    ) -> Arc<ReadonlySnapshot> {
+    ) -> Rc<ReadonlySnapshot> {
         let merged_observer =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
         ReadonlySnapshot::new(
@@ -158,7 +158,7 @@ impl TransparentObserverMutableSnapshot {
         self.state.record_read(state);
     }
 
-    pub fn record_write(&self, state: Arc<dyn StateObject>) {
+    pub fn record_write(&self, state: Rc<dyn StateObject>) {
         assert!(!self.applied.get(), "Cannot write to an applied snapshot");
         self.state.record_write(state, self.state.id.get());
     }
@@ -184,7 +184,7 @@ impl TransparentObserverMutableSnapshot {
         &self,
         read_observer: Option<ReadObserver>,
         write_observer: Option<WriteObserver>,
-    ) -> Arc<TransparentObserverMutableSnapshot> {
+    ) -> Rc<TransparentObserverMutableSnapshot> {
         let merged_read =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
         let merged_write =
@@ -210,7 +210,7 @@ impl TransparentObserverMutableSnapshot {
 ///
 /// # Thread Safety
 /// Contains `Cell<T>` and `RefCell<T>` which are not `Send`/`Sync`. This is safe because
-/// snapshots are stored in thread-local storage and never shared across threads. The `Arc`
+/// snapshots are stored in thread-local storage and never shared across threads. The `Rc`
 /// is used for cheap cloning within a single thread, not for cross-thread sharing.
 pub struct TransparentObserverSnapshot {
     pub(super) state: SnapshotState,
@@ -224,8 +224,8 @@ impl TransparentObserverSnapshot {
         invalid: SnapshotIdSet,
         read_observer: Option<ReadObserver>,
         parent: Option<Weak<TransparentObserverSnapshot>>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
+    ) -> Rc<Self> {
+        Rc::new(Self {
             state: SnapshotState::new_with_pinning(id, invalid, read_observer, None, false, false),
             parent,
             reusable: Cell::new(true),
@@ -258,7 +258,7 @@ impl TransparentObserverSnapshot {
         true
     }
 
-    pub fn root_transparent_readonly(self: &Arc<Self>) -> Arc<Self> {
+    pub fn root_transparent_readonly(self: &Rc<Self>) -> Rc<Self> {
         match &self.parent {
             Some(weak) => weak
                 .upgrade()
@@ -267,7 +267,7 @@ impl TransparentObserverSnapshot {
         }
     }
 
-    pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
+    pub fn enter<T>(self: &Rc<Self>, f: impl FnOnce() -> T) -> T {
         let previous = current_snapshot();
 
         if let Some(ref prev_snapshot) = previous
@@ -282,7 +282,7 @@ impl TransparentObserverSnapshot {
     pub fn take_nested_snapshot(
         &self,
         read_observer: Option<ReadObserver>,
-    ) -> Arc<TransparentObserverSnapshot> {
+    ) -> Rc<TransparentObserverSnapshot> {
         let merged_observer =
             merge_read_observers(read_observer, self.state.read_observer.borrow().clone());
         TransparentObserverSnapshot::new(
@@ -305,7 +305,7 @@ impl TransparentObserverSnapshot {
         self.state.record_read(state);
     }
 
-    pub fn record_write(&self, _state: Arc<dyn StateObject>) {
+    pub fn record_write(&self, _state: Rc<dyn StateObject>) {
         panic!("Cannot write to a read-only snapshot");
     }
 

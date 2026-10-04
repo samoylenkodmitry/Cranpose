@@ -9,8 +9,8 @@ fn counting(hits: &Rc<Cell<u32>>) -> impl Fn(&&'static str) + 'static {
 #[test]
 fn an_observer_nested_in_another_observers_pass_keeps_its_reads() {
     let _guard = reset_snapshot_runtime();
-    let outer_state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let inner_state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+    let outer_state = SnapshotMutableState::new_in_rc(0, Rc::new(NeverEqual));
+    let inner_state = SnapshotMutableState::new_in_rc(0, Rc::new(NeverEqual));
     let outer = SnapshotStateObserver::new(|job| job());
     let inner = SnapshotStateObserver::new(|job| job());
     outer.start();
@@ -40,8 +40,8 @@ fn an_observer_nested_in_another_observers_pass_keeps_its_reads() {
 #[test]
 fn nesting_the_same_observer_keeps_reads_on_the_innermost_scope() {
     let _guard = reset_snapshot_runtime();
-    let outer_state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
-    let inner_state = SnapshotMutableState::new_in_arc(0, Arc::new(NeverEqual));
+    let outer_state = SnapshotMutableState::new_in_rc(0, Rc::new(NeverEqual));
+    let inner_state = SnapshotMutableState::new_in_rc(0, Rc::new(NeverEqual));
     let observer = SnapshotStateObserver::new(|job| job());
     observer.start();
     let outer_hits = Rc::new(Cell::new(0));

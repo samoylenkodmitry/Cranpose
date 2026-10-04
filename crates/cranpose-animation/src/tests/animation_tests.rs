@@ -993,17 +993,17 @@ fn exact_retarget_never_rewinds_an_already_sampled_animation() {
 fn less_motion_ends_an_animation_on_its_first_frame() {
     let composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
-    cranpose_services::set_platform_accessibility_options(
-        cranpose_services::AccessibilityOptions {
+    cranpose_ui_graphics::accessibility::set_platform_accessibility_options(
+        cranpose_ui_graphics::accessibility::AccessibilityOptions {
             reduce_motion: true,
-            ..cranpose_services::AccessibilityOptions::default()
+            ..cranpose_ui_graphics::accessibility::AccessibilityOptions::default()
         },
     );
     let mut still = Animatable::new(0.0f32, runtime.clone());
     still.animateTo(1.0, tween(300, Easing::LinearEasing));
     let settled = (still.state().value(), still.is_running());
-    cranpose_services::set_platform_accessibility_options(
-        cranpose_services::AccessibilityOptions::default(),
+    cranpose_ui_graphics::accessibility::set_platform_accessibility_options(
+        cranpose_ui_graphics::accessibility::AccessibilityOptions::default(),
     );
     assert_eq!(
         settled,

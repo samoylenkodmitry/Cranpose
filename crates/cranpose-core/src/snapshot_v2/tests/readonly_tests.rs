@@ -115,12 +115,12 @@ fn test_readonly_snapshot_nested() {
 
 #[test]
 fn test_readonly_snapshot_read_observer() {
-    use std::sync::{Arc as StdArc, Mutex};
+    use std::{rc::Rc as ObserverRef, sync::Mutex};
 
-    let read_count = StdArc::new(Mutex::new(0));
+    let read_count = ObserverRef::new(Mutex::new(0));
     let read_count_clone = read_count.clone();
 
-    let observer = Arc::new(move |_: &dyn StateObject| {
+    let observer = Rc::new(move |_: &dyn StateObject| {
         *read_count_clone.lock().unwrap() += 1;
     });
 
@@ -135,17 +135,17 @@ fn test_readonly_snapshot_read_observer() {
 
 #[test]
 fn test_readonly_snapshot_nested_with_observer() {
-    use std::sync::{Arc as StdArc, Mutex};
+    use std::{rc::Rc as ObserverRef, sync::Mutex};
 
-    let parent_reads = StdArc::new(Mutex::new(0));
+    let parent_reads = ObserverRef::new(Mutex::new(0));
     let parent_reads_clone = parent_reads.clone();
-    let parent_observer = Arc::new(move |_: &dyn StateObject| {
+    let parent_observer = Rc::new(move |_: &dyn StateObject| {
         *parent_reads_clone.lock().unwrap() += 1;
     });
 
-    let nested_reads = StdArc::new(Mutex::new(0));
+    let nested_reads = ObserverRef::new(Mutex::new(0));
     let nested_reads_clone = nested_reads.clone();
-    let nested_observer = Arc::new(move |_: &dyn StateObject| {
+    let nested_observer = Rc::new(move |_: &dyn StateObject| {
         *nested_reads_clone.lock().unwrap() += 1;
     });
 
@@ -164,7 +164,7 @@ fn test_readonly_snapshot_nested_with_observer() {
 #[should_panic(expected = "Cannot write to a read-only snapshot")]
 fn test_readonly_snapshot_write_panics() {
     let snapshot = ReadonlySnapshot::new(1, SnapshotIdSet::new(), None);
-    let mock_state = Arc::new(MockStateObject);
+    let mock_state = Rc::new(MockStateObject);
     snapshot.record_write(mock_state);
 }
 

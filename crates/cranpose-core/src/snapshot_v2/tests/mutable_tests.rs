@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::rc::Rc;
 
 use super::*;
 use crate::state::{NeverEqual, SnapshotMutableState, StateObject};
 
-fn new_state(initial: i32) -> Arc<SnapshotMutableState<i32>> {
-    SnapshotMutableState::new_in_arc(initial, Arc::new(NeverEqual))
+fn new_state(initial: i32) -> Rc<SnapshotMutableState<i32>> {
+    SnapshotMutableState::new_in_rc(initial, Rc::new(NeverEqual))
 }
 
 struct MockStateObject;
@@ -136,12 +136,12 @@ fn test_mutable_snapshot_enter() {
 #[test]
 fn test_mutable_snapshot_read_observer() {
     let _guard = reset_runtime_for_tests();
-    use std::sync::{Arc as StdArc, Mutex};
+    use std::{rc::Rc as ObserverRef, sync::Mutex};
 
-    let read_count = StdArc::new(Mutex::new(0));
+    let read_count = ObserverRef::new(Mutex::new(0));
     let read_count_clone = read_count.clone();
 
-    let observer = Arc::new(move |_: &dyn StateObject| {
+    let observer = Rc::new(move |_: &dyn StateObject| {
         *read_count_clone.lock().unwrap() += 1;
     });
 
@@ -157,17 +157,17 @@ fn test_mutable_snapshot_read_observer() {
 #[test]
 fn test_mutable_snapshot_write_observer() {
     let _guard = reset_runtime_for_tests();
-    use std::sync::{Arc as StdArc, Mutex};
+    use std::{rc::Rc as ObserverRef, sync::Mutex};
 
-    let write_count = StdArc::new(Mutex::new(0));
+    let write_count = ObserverRef::new(Mutex::new(0));
     let write_count_clone = write_count.clone();
 
-    let observer = Arc::new(move |_: &dyn StateObject| {
+    let observer = Rc::new(move |_: &dyn StateObject| {
         *write_count_clone.lock().unwrap() += 1;
     });
 
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, Some(observer), 0);
-    let mock_state = Arc::new(MockStateObject);
+    let mock_state = Rc::new(MockStateObject);
 
     snapshot.record_write(mock_state.clone());
     snapshot.record_write(mock_state);
@@ -188,7 +188,7 @@ fn test_mutable_snapshot_apply_empty() {
 fn mutable_apply_returns_failure_when_parent_readable_record_is_missing() {
     let _guard = reset_runtime_for_tests();
     let snapshot = MutableSnapshot::new(7, SnapshotIdSet::new(), None, None, 1);
-    let state = Arc::new(MissingParentReadableStateObject::new(
+    let state = Rc::new(MissingParentReadableStateObject::new(
         snapshot.snapshot_id(),
     ));
 
@@ -265,7 +265,7 @@ fn test_mutable_snapshot_write_after_apply_panics() {
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     snapshot.apply().check();
 
-    let mock_state = Arc::new(MockStateObject);
+    let mock_state = Rc::new(MockStateObject);
     snapshot.record_write(mock_state);
 }
 
@@ -276,7 +276,7 @@ fn test_mutable_snapshot_write_after_dispose_panics() {
     let snapshot = MutableSnapshot::new(1, SnapshotIdSet::new(), None, None, 0);
     snapshot.dispose();
 
-    let mock_state = Arc::new(MockStateObject);
+    let mock_state = Rc::new(MockStateObject);
     snapshot.record_write(mock_state);
 }
 
@@ -293,13 +293,13 @@ fn test_mutable_snapshot_dispose() {
 #[test]
 fn test_mutable_snapshot_apply_observer() {
     let _guard = reset_runtime_for_tests();
-    use std::sync::{Arc as StdArc, Mutex};
+    use std::{rc::Rc as ObserverRef, sync::Mutex};
 
-    let applied_count = StdArc::new(Mutex::new(0));
+    let applied_count = ObserverRef::new(Mutex::new(0));
     let applied_count_clone = applied_count.clone();
 
     let observer = Rc::new(
-        move |_modified: &[Arc<dyn StateObject>], _snapshot_id: SnapshotId| {
+        move |_modified: &[Rc<dyn StateObject>], _snapshot_id: SnapshotId| {
             *applied_count_clone.lock().unwrap() += 1;
         },
     );
