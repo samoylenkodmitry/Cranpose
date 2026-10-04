@@ -258,7 +258,9 @@ const GLASS_INNER_SHADOW_PRESENCE_UNIFORM: usize = GLASS_INNER_SHADOW_UNIFORM + 
 /// the same picture -- every glass parity suite holds the folded and the
 /// plain shader byte-identical -- so folding is on for Android and off for
 /// the rest, except that the web platform turns it on in mobile browsers.
-/// [`set_glass_material_folds`] moves it.
+/// Where it is off, a draw covering at least a 1080p frame's pixels still
+/// takes the folded pipeline: over that much glass the general one's dead
+/// ALU costs more than one compile. [`set_glass_material_folds`] moves it.
 pub fn glass_material_folds_enabled() -> bool {
     GLASS_MATERIAL_FOLDS.load(Ordering::Relaxed)
 }
@@ -277,7 +279,9 @@ static GLASS_MATERIAL_FOLDS: AtomicBool = AtomicBool::new(cfg!(target_os = "andr
 /// `override` and the draw is split into interior and rim. Byte-exact: a
 /// raised flag substitutes the value the uniform already holds, and the
 /// interior guard skips only terms whose weight is zero. With folds off the
-/// shader skips zero-weight interior work but draws whole. Layered surfaces
+/// shader skips zero-weight interior work but draws whole, except a draw
+/// covering a 1080p frame's pixels, which takes the folded specialization
+/// ([`RuntimeShader::draw_specialization`]). Layered surfaces
 /// also fold inactive material features. Known refraction modes and the content
 /// mask predicate are fixed for folded and layered materials. Projection,
 /// partial activity, rim strength and shadows stay dynamic. Other materials
@@ -316,7 +320,7 @@ fn specialization_flags(uniforms: &[f32], folds: bool) -> u32 {
         })
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 struct GlassSpecializationKey {
     flags: u32,
     substrate_radius: Option<u32>,
@@ -330,8 +334,79 @@ struct GlassSpecializationKey {
     content_mask: Option<bool>,
 }
 
+/// A draw covering this many device pixels, a 1080p frame's worth, folds
+/// its material even where folding is off: shading every feature of the
+/// general pipeline over that many pixels costs more than the material's
+/// compile. Unfolded, the Guide's reader panel held a 6016x3210 Chrome
+/// canvas on an Apple M5 at 33 fps while scrolling, folded at 57.
+const LARGE_GLASS_DRAW_PIXELS: u64 = 1920 * 1080;
+
+/// The refraction mode a specialization fixes, when the uniform names one.
+fn pinned_refraction_mode(uniforms: &[f32]) -> Option<u8> {
+    let mode = slot(uniforms, GLASS_REFRACTION_MODE_UNIFORM);
+    matches!(mode, 0.0 | 1.0 | 2.0 | 3.0).then_some(mode as u8)
+}
+
+/// A material's specialization, and with folding off, the folded one its
+/// large draws take.
+#[derive(PartialEq)]
+struct GlassCacheKey {
+    own: GlassSpecializationKey,
+    large_draws: Option<GlassSpecializationKey>,
+}
+
 impl GlassSpecializationKey {
+    /// The specialization a material with `uniforms` takes, folding its
+    /// inactive features when `folds`.
+    fn for_uniforms(uniforms: &[f32], folds: bool) -> Self {
+        let flags = specialization_flags(uniforms, folds);
+        let specialize_modes = folds || slot(uniforms, GLASS_REFRACTION_MODE_UNIFORM) > 2.5;
+        let content_mask = slot(uniforms, 112) > 0.5;
+        let substrate_radius =
+            (!content_mask && slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0).then(|| {
+                (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
+                    * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
+                .to_bits()
+            });
+        let mean_tone = !content_mask && slot(uniforms, GLASS_ADAPTIVE_TONE_UNIFORM) > 0.5;
+        let pane_radius = (!content_mask && slot(uniforms, GLASS_PANE_BLEND_UNIFORM) > 0.0)
+            .then(|| slot(uniforms, GLASS_PANE_BLEND_UNIFORM).to_bits());
+        let projection = [
+            slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM),
+            slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM + 1),
+        ];
+        let projected = projection.iter().all(|v| *v > 0.0) && projection != [1.0, 1.0];
+        let stage = slot(uniforms, GLASS_OPTICAL_STAGE_UNIFORM) as u8;
+        let backdrop_radius =
+            (!content_mask && stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
+                .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
+        GlassSpecializationKey {
+            flags,
+            substrate_radius,
+            folds,
+            mean_tone,
+            projected,
+            pane_radius,
+            stage,
+            backdrop_radius,
+            refraction_mode: pinned_refraction_mode(uniforms).filter(|_| specialize_modes),
+            content_mask: specialize_modes.then_some(content_mask),
+        }
+    }
+
+    /// This material's specialization with every inactive feature folded.
+    fn folded(self, uniforms: &[f32]) -> Self {
+        Self {
+            flags: specialization_flags(uniforms, true),
+            folds: true,
+            refraction_mode: pinned_refraction_mode(uniforms),
+            content_mask: Some(slot(uniforms, 112) > 0.5),
+            ..self
+        }
+    }
+
     fn apply(&self, shader: &mut RuntimeShader) {
+        shader.clear_large_draws();
         let GlassSpecializationKey {
             flags,
             substrate_radius: radius,
@@ -388,51 +463,25 @@ pub fn specialize_liquid_glass_with_folds(shader: &mut RuntimeShader, folds: boo
     const _: () = assert!(LIQUID_GLASS_SPECIALIZATIONS.len() <= u32::BITS as usize);
     const CACHE_CAPACITY: usize = 32;
     thread_local! {
-        static CACHE: RefCell<ShaderSpecializationCache<GlassSpecializationKey, CACHE_CAPACITY>> =
+        static CACHE: RefCell<ShaderSpecializationCache<GlassCacheKey, CACHE_CAPACITY>> =
             const { RefCell::new(ShaderSpecializationCache::new()) };
     }
     let uniforms = shader.uniforms();
-    let flags = specialization_flags(uniforms, folds);
-    let refraction_mode = slot(uniforms, GLASS_REFRACTION_MODE_UNIFORM);
-    let specialize_modes = folds || refraction_mode > 2.5;
     let content_mask = slot(uniforms, 112) > 0.5;
-    let substrate_radius = (!content_mask && slot(uniforms, GLASS_ADAPTIVE_FROST_UNIFORM) > 0.0)
-        .then(|| {
-            (GLASS_ADAPTIVE_NEIGHBOURHOOD_DP
-                * slot(uniforms, GLASS_EFFECT_DENSITY_UNIFORM).max(1.0))
-            .to_bits()
-        });
-    let mean_tone = !content_mask && slot(uniforms, GLASS_ADAPTIVE_TONE_UNIFORM) > 0.5;
-    let pane_radius = (!content_mask && slot(uniforms, GLASS_PANE_BLEND_UNIFORM) > 0.0)
-        .then(|| slot(uniforms, GLASS_PANE_BLEND_UNIFORM).to_bits());
-    let projection = [
-        slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM),
-        slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM + 1),
-    ];
-    let projected = projection.iter().all(|v| *v > 0.0) && projection != [1.0, 1.0];
-    let stage = slot(uniforms, GLASS_OPTICAL_STAGE_UNIFORM) as u8;
-    let backdrop_radius =
-        (!content_mask && stage == 2 && slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM) > 0.0)
-            .then(|| slot(uniforms, GLASS_BACKDROP_BLUR_UNIFORM).to_bits());
-    let key = GlassSpecializationKey {
-        flags,
-        substrate_radius,
-        folds,
-        mean_tone,
-        projected,
-        pane_radius,
-        stage,
-        backdrop_radius,
-        refraction_mode: specialize_modes
-            .then_some(refraction_mode)
-            .filter(|mode| matches!(*mode, 0.0 | 1.0 | 2.0 | 3.0))
-            .map(|mode| mode as u8),
-        content_mask: specialize_modes.then_some(content_mask),
+    let own = GlassSpecializationKey::for_uniforms(uniforms, folds);
+    let key = GlassCacheKey {
+        own,
+        large_draws: (!folds).then(|| own.folded(uniforms)),
     };
     shader.set_preserves_transparency(content_mask);
     CACHE.with_borrow_mut(|cache| {
-        cache.apply(shader, key, |shader, key| {
-            key.apply(shader);
+        cache.apply(shader, key, |shader, key| match &key.large_draws {
+            Some(large) => shader.specialize_with_large_draws(
+                LARGE_GLASS_DRAW_PIXELS,
+                |shader| large.apply(shader),
+                |shader| key.own.apply(shader),
+            ),
+            None => key.own.apply(shader),
         });
     });
 }

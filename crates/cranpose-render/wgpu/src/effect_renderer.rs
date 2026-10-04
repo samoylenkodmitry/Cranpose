@@ -3,7 +3,8 @@ use std::cell::{Cell, RefCell};
 use cranpose_core::collections::bounded_lru::BoundedLruCache;
 use cranpose_render_common::geometry::{BLUR_TAP_PAIRS, BlurKernel, blur_scratch_block};
 use cranpose_ui_graphics::{
-    BlendMode, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec, TileMode,
+    BlendMode, DrawSpecialization, MAX_SUBSTRATES, RenderEffect, RuntimeShader, SubstrateSpec,
+    TileMode,
 };
 use smallvec::SmallVec;
 
@@ -553,6 +554,14 @@ impl ReservedShaderUniforms {
 }
 
 /// Pixels a shader draw shades: its viewport clipped by its scissor.
+/// The device pixels of the layer an effect draws, however much of it the
+/// target clips: it picks the draw's specialization, which must not flip
+/// while the layer scrolls across the target's edge.
+fn layer_pixels(layer_pixel_rect: [f32; 4]) -> u64 {
+    let [_, _, width, height] = layer_pixel_rect;
+    (width.max(0.0).round() as u64) * (height.max(0.0).round() as u64)
+}
+
 fn shaded_pixels(viewport: (f32, f32, f32, f32), scissor: (u32, u32, u32, u32)) -> u64 {
     let left = viewport.0.max(scissor.0 as f32);
     let top = viewport.1.max(scissor.1 as f32);
@@ -807,6 +816,7 @@ pub(crate) struct PreparedCompositeDraw<'a> {
 
 pub(crate) struct PreparedShaderDraw<'a> {
     shader: &'a RuntimeShader,
+    specialization: DrawSpecialization<'a>,
     texture_bind_group: &'a wgpu::BindGroup,
     uniform: UniformUpload,
     scissor: Option<(u32, u32, u32, u32)>,
@@ -818,10 +828,11 @@ pub(crate) struct PreparedShaderDraw<'a> {
 const WHOLE_DRAW: &[ShaderDrawVariant] = &[ShaderDrawVariant::Whole];
 const SPLIT_DRAWS: &[ShaderDrawVariant] = &[ShaderDrawVariant::Interior, ShaderDrawVariant::Rim];
 
-/// The draws a shader makes in a pass: its interior and its rim when it
-/// declared a split and the pipelines are specialized, else the one draw.
-fn shader_draw_variants(shader: &RuntimeShader) -> &'static [ShaderDrawVariant] {
-    if shader.draw_split().is_some() && shader_specialization_enabled() {
+/// The draws a shader makes in a pass: its interior and its rim when its
+/// specialization declared a split and the pipelines are specialized, else
+/// the one draw.
+fn shader_draw_variants(specialization: DrawSpecialization<'_>) -> &'static [ShaderDrawVariant] {
+    if specialization.draw_split().is_some() && shader_specialization_enabled() {
         SPLIT_DRAWS
     } else {
         WHOLE_DRAW
@@ -2182,9 +2193,13 @@ impl EffectRenderer {
         let mut pipelines = SmallVec::new();
         let mut fit = ShaderPipelineFit::General;
         let mut general = None;
-        for &variant in shader_draw_variants(item.shader) {
+        let specialization = item
+            .shader
+            .draw_specialization(layer_pixels(item.layer_pixel_rect));
+        for &variant in shader_draw_variants(specialization) {
             let (pipeline, variant_fit) = self.shader_cache.get_or_create(
                 item.shader,
+                specialization,
                 RuntimeShaderPipelineMode::PremultipliedSrcOver,
                 variant,
             )?;
@@ -2238,6 +2253,7 @@ impl EffectRenderer {
         );
         Some(PreparedShaderDraw {
             shader: item.shader,
+            specialization,
             texture_bind_group,
             uniform,
             scissor: item.scissor,
@@ -2275,6 +2291,7 @@ impl EffectRenderer {
                 (x1 > x0 && y1 > y0).then(|| {
                     split_scissors(
                         draw.shader,
+                        draw.specialization,
                         (x, y),
                         draw.layer_pixel_rect,
                         (x0, y0, x1 - x0, y1 - y0),
@@ -2334,8 +2351,10 @@ impl EffectRenderer {
             bytemuck::cast_slice(&padded),
         );
 
+        let specialization = shader.draw_specialization(layer_pixels(layer_pixel_rect));
         let Some((pipeline, fit)) = self.shader_cache.get_or_create(
             shader,
+            specialization,
             options.pipeline_mode,
             ShaderDrawVariant::Whole,
         ) else {

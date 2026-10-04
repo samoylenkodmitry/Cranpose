@@ -12,7 +12,7 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{
-    Brush, Color, LIQUID_GLASS_SPECIALIZATIONS, Point, RenderEffect, TileMode,
+    Brush, Color, DrawScope, LIQUID_GLASS_SPECIALIZATIONS, Point, RenderEffect, TileMode,
 };
 
 use crate::support;
@@ -39,8 +39,32 @@ fn card_glass() -> Glass {
         .adaptive_frost(Color::WHITE, 0.42)
 }
 
-#[composable]
-fn GlassCardScene(button: bool) {
+/// A night-sky gradient with forty stars, for the glass to refract.
+fn star_field(scope: &mut dyn DrawScope) {
+    let size = scope.size();
+    scope.draw_rect(Brush::radial_gradient_stops(
+        vec![
+            (0.0, Color::from_rgb_u8(24, 20, 46)),
+            (0.55, Color::from_rgb_u8(11, 10, 26)),
+            (1.0, Color::from_rgb_u8(4, 4, 10)),
+        ],
+        Point::new(size.width * 0.5, size.height * 0.1),
+        size.width.max(size.height) * 0.95,
+        TileMode::Clamp,
+    ));
+    for i in 0..40u32 {
+        let x = (i as f32 * 53.7) % size.width;
+        let y = (i as f32 * 29.3) % size.height;
+        scope.draw_circle(
+            Brush::solid(Color::from_rgba_u8(255, 255, 255, 120 + (i % 5) as u8 * 20)),
+            Point::new(x, y),
+            1.0 + (i % 3) as f32,
+        );
+    }
+}
+
+/// `content` over the star field, in the dark Liquid theme.
+fn night_sky(content: impl FnMut() + 'static) {
     LiquidTheme(
         LiquidThemeSpec {
             scheme: SchemeMode::Dark,
@@ -48,63 +72,38 @@ fn GlassCardScene(button: bool) {
         },
         move || {
             Box(
-                Modifier::empty().fill_max_size().draw_behind(|scope| {
-                    let size = scope.size();
-                    scope.draw_rect(Brush::radial_gradient_stops(
-                        vec![
-                            (0.0, Color::from_rgb_u8(24, 20, 46)),
-                            (0.55, Color::from_rgb_u8(11, 10, 26)),
-                            (1.0, Color::from_rgb_u8(4, 4, 10)),
-                        ],
-                        Point::new(size.width * 0.5, size.height * 0.1),
-                        size.width.max(size.height) * 0.95,
-                        TileMode::Clamp,
-                    ));
-                    for i in 0..40u32 {
-                        let x = (i as f32 * 53.7) % size.width;
-                        let y = (i as f32 * 29.3) % size.height;
-                        scope.draw_circle(
-                            Brush::solid(Color::from_rgba_u8(
-                                255,
-                                255,
-                                255,
-                                120 + (i % 5) as u8 * 20,
-                            )),
-                            Point::new(x, y),
-                            1.0 + (i % 3) as f32,
-                        );
-                    }
-                }),
+                Modifier::empty().fill_max_size().draw_behind(star_field),
                 BoxSpec::default(),
-                move || {
-                    Box(
-                        Modifier::empty()
-                            .offset(30.0, 40.0)
-                            .width(300.0)
-                            .height(120.0),
-                        BoxSpec::default(),
-                        move || {
-                            GlassSurface(
-                                Modifier::empty().fill_max_size(),
-                                card_glass(),
-                                move || {
-                                    if button {
-                                        GlassIconButton(
-                                            Modifier::empty(),
-                                            GlassButtonSpec::glass(),
-                                            40.0,
-                                            || {},
-                                            icons::STAR,
-                                        );
-                                    }
-                                },
-                            );
-                        },
-                    );
-                },
+                content,
             );
         },
     );
+}
+
+#[composable]
+fn GlassCardScene(button: bool) {
+    night_sky(move || {
+        Box(
+            Modifier::empty()
+                .offset(30.0, 40.0)
+                .width(300.0)
+                .height(120.0),
+            BoxSpec::default(),
+            move || {
+                GlassSurface(Modifier::empty().fill_max_size(), card_glass(), move || {
+                    if button {
+                        GlassIconButton(
+                            Modifier::empty(),
+                            GlassButtonSpec::glass(),
+                            40.0,
+                            || {},
+                            icons::STAR,
+                        );
+                    }
+                });
+            },
+        );
+    });
 }
 
 fn capture_card(unspecialized: bool) -> Result<CapturedFrame, String> {
@@ -133,18 +132,27 @@ fn capture_card_and_stats_under(
     captured
 }
 
-fn card_shell(mut renderer: WgpuRenderer, button: bool) -> AppShell<WgpuRenderer> {
+fn card_shell(renderer: WgpuRenderer, button: bool) -> AppShell<WgpuRenderer> {
+    scene_shell(renderer, (VIEW_WIDTH, VIEW_HEIGHT), SCALE, move || {
+        GlassCardScene(button);
+    })
+}
+
+/// A shell composing `content` in a `view` of logical pixels drawn at
+/// `scale`.
+fn scene_shell(
+    mut renderer: WgpuRenderer,
+    view: (f32, f32),
+    scale: f32,
+    content: impl FnMut() + 'static,
+) -> AppShell<WgpuRenderer> {
     let app_context = cranpose_ui::AppContext::new();
     renderer.attach_app_context_services(&app_context);
-    let mut shell = AppShell::new(
-        renderer,
-        location_key(file!(), line!(), column!()),
-        move || GlassCardScene(button),
-    );
-    shell.renderer().set_root_scale(SCALE);
-    shell.set_density(SCALE);
-    shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
-    shell.set_viewport(VIEW_WIDTH, VIEW_HEIGHT);
+    let mut shell = AppShell::new(renderer, location_key(file!(), line!(), column!()), content);
+    shell.renderer().set_root_scale(scale);
+    shell.set_density(scale);
+    shell.set_buffer_size((view.0 * scale) as u32, (view.1 * scale) as u32);
+    shell.set_viewport(view.0, view.1);
     shell.update();
     shell.update();
     shell
@@ -153,10 +161,17 @@ fn card_shell(mut renderer: WgpuRenderer, button: bool) -> AppShell<WgpuRenderer
 fn capture_card_frame(
     shell: &mut AppShell<WgpuRenderer>,
 ) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
+    capture_scene_frame(shell, (FRAME_WIDTH, FRAME_HEIGHT))
+}
+
+fn capture_scene_frame(
+    shell: &mut AppShell<WgpuRenderer>,
+    (width, height): (u32, u32),
+) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
     let frame = shell
         .renderer()
-        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-        .map_err(|err| format!("glass card capture failed: {err:?}"))?;
+        .capture_frame(width, height)
+        .map_err(|err| format!("glass capture failed: {err:?}"))?;
     assert_eq!(
         shell.renderer().device_error_count_for_tests(),
         0,
@@ -177,10 +192,21 @@ const SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
 fn render_card_and_stats(
     renderer: WgpuRenderer,
 ) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
-    let mut shell = card_shell(renderer, false);
+    settle(
+        &mut card_shell(renderer, false),
+        (FRAME_WIDTH, FRAME_HEIGHT),
+    )
+}
+
+/// Captures `shell` until every glass draw uses the specialization it
+/// asked for, so the statistics describe the settled frame.
+fn settle(
+    shell: &mut AppShell<WgpuRenderer>,
+    size: (u32, u32),
+) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
     let deadline = std::time::Instant::now() + SETTLE;
     loop {
-        let (frame, stats) = capture_card_frame(&mut shell)?;
+        let (frame, stats) = capture_scene_frame(shell, size)?;
         if stats.shader_pipeline_fallback_draws == 0 {
             return Ok((frame, stats));
         }
@@ -417,4 +443,64 @@ fn expand_content_masks(layer: &mut LayerNode) -> usize {
         }
     }
     expanded
+}
+
+/// The star field under one card-material glass filling the view.
+#[composable]
+fn GlassPanelScene() {
+    night_sky(|| GlassSurface(Modifier::empty().fill_max_size(), card_glass(), || {}));
+}
+
+/// The settled panel scene in a `width` by `height` frame at scale one,
+/// specialized with folding `folds`.
+fn settled_panel(
+    width: u32,
+    height: u32,
+    folds: bool,
+) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
+    let (_lock, renderer) = support::headless_renderer_parts()?;
+    cranpose_ui_graphics::set_glass_material_folds(folds);
+    let mut shell = scene_shell(
+        renderer,
+        (width as f32, height as f32),
+        1.0,
+        GlassPanelScene,
+    );
+    let settled = settle(&mut shell, (width, height));
+    cranpose_ui_graphics::set_glass_material_folds(true);
+    settled
+}
+
+/// Where folding is off, a glass covering more than a 1080p frame still
+/// takes its folded pipeline, drawing its interior and rim apart as the
+/// folded platforms do and landing on their bytes, while a smaller one keeps
+/// drawing whole.
+#[test]
+fn a_glass_larger_than_a_1080p_frame_folds_where_folding_is_off() {
+    let (large, large_stats) = match settled_panel(1920, 1200, false) {
+        Ok(settled) => settled,
+        Err(err) => {
+            eprintln!("skipping large glass folds: {err}");
+            return;
+        }
+    };
+    let (folded, folded_stats) =
+        settled_panel(1920, 1200, true).expect("headless WGPU init failed mid-suite");
+    support::assert_same_bytes(
+        "the folded pipeline changed the large glass",
+        1920,
+        &folded.pixels,
+        &large.pixels,
+    );
+    assert_eq!(
+        large_stats.glass_rasterized_pixels, folded_stats.glass_rasterized_pixels,
+        "a glass over a whole 1920x1200 frame must draw its folded interior and rim where \
+         folding is off: {large_stats:?}"
+    );
+    let (_, small_stats) =
+        settled_panel(640, 400, false).expect("headless WGPU init failed mid-suite");
+    assert_eq!(
+        small_stats.glass_rasterized_pixels, small_stats.shader_pixels,
+        "a glass under a 1080p frame keeps drawing whole where folding is off: {small_stats:?}"
+    );
 }
