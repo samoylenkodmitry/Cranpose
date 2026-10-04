@@ -1,6 +1,10 @@
 [workspace]
 members = [
     "crates/cranpose-localization",
+    "crates/cranpose-fonts",
+    "crates/cranpose-fonts-cjk-data-1",
+    "crates/cranpose-fonts-cjk-data-2",
+    "crates/cranpose-fonts-cjk-data-3",
     "crates/cranpose-native",
     "crates/cranpose-app-shell",
     "crates/cranpose",
@@ -72,6 +76,10 @@ coroflow = { path = "crates/coroflow", version = "0.9.7" }
 cranpose-coroflow = { path = "crates/cranpose-coroflow", version = "0.9.7" }
 cranpose-navigation = { path = "crates/cranpose-navigation", version = "0.9.7" }
 cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.9.7" }
+cranpose-fonts = { path = "crates/cranpose-fonts", version = "0.9.7", default-features = false }
+cranpose-fonts-cjk-data-1 = { path = "crates/cranpose-fonts-cjk-data-1", version = "0.9.7" }
+cranpose-fonts-cjk-data-2 = { path = "crates/cranpose-fonts-cjk-data-2", version = "0.9.7" }
+cranpose-fonts-cjk-data-3 = { path = "crates/cranpose-fonts-cjk-data-3", version = "0.9.7" }
 cranpose-macros = { path = "crates/cranpose-macros", version = "0.9.7" }
 cranpose-media = { path = "crates/cranpose-media", version = "0.9.7" }
 cranpose-platform-android = { path = "crates/cranpose-platform/android", version = "0.9.7" }

@@ -36,11 +36,36 @@ struct CatalogData {
 
 /// Immutable, shareable parsed catalogs. Replacing a catalog replaces its cache identity.
 #[derive(Clone)]
-pub struct Catalog(Arc<CatalogData>);
+pub struct Catalog(Arc<CatalogData>, Arc<[Language]>);
+
+/// A supported application language and its native display name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Language {
+    tag: Arc<str>,
+    name: Arc<str>,
+    locale: Locale,
+}
+
+impl Language {
+    /// The canonical language tag used in catalogs and saved preferences.
+    pub fn tag(&self) -> &str {
+        &self.tag
+    }
+
+    /// The native display name declared by the application.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The validated locale used to select this language.
+    pub fn locale(&self) -> &Locale {
+        &self.locale
+    }
+}
 
 impl PartialEq for Catalog {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Arc::ptr_eq(&self.0, &other.0) && (Arc::ptr_eq(&self.1, &other.1) || self.1 == other.1)
     }
 }
 
@@ -65,28 +90,87 @@ impl Catalog {
                 .push(Arc::new(source));
         }
         validate_duplicates(&parsed)?;
-        let languages = parsed.keys().cloned().collect();
-        Ok(Self(Arc::new(CatalogData {
-            fallback,
-            languages,
-            resources: parsed,
-            parents: Vec::new(),
-        })))
+        let languages: Vec<_> = parsed.keys().cloned().collect();
+        let choices = languages
+            .iter()
+            .map(|language| {
+                let tag: Arc<str> = language.to_string().into();
+                Language {
+                    name: tag.clone(),
+                    tag,
+                    locale: Locale {
+                        language: language.clone(),
+                        preview: crate::PreviewMode::None,
+                    },
+                }
+            })
+            .collect();
+        Ok(Self(
+            Arc::new(CatalogData {
+                fallback,
+                languages,
+                resources: parsed,
+                parents: Vec::new(),
+            }),
+            choices,
+        ))
+    }
+
+    /// Declares supported languages in presentation order with their native names.
+    /// Every catalog language must occur exactly once; dependency catalogs do not
+    /// add choices to an application's language selector.
+    pub fn with_languages(mut self, entries: &[(&str, &str)]) -> Result<Self, LocalizationError> {
+        let mut seen = BTreeSet::new();
+        let mut choices = Vec::with_capacity(entries.len());
+        for (tag, name) in entries {
+            let locale = Locale::parse(tag)?;
+            if name.trim().is_empty()
+                || !self.0.languages.contains(&locale.language)
+                || !seen.insert(locale.language.clone())
+            {
+                return Err(LocalizationError::InvalidResource {
+                    resource: "localization.toml".into(),
+                    detail: format!("invalid or duplicate language `{tag}`"),
+                });
+            }
+            choices.push(Language {
+                tag: locale.to_string().into(),
+                name: (*name).into(),
+                locale,
+            });
+        }
+        if seen.len() != self.0.languages.len() {
+            return Err(LocalizationError::InvalidResource {
+                resource: "localization.toml".into(),
+                detail: "language declaration must include every catalog language".into(),
+            });
+        }
+        self.1 = choices.into();
+        Ok(self)
+    }
+
+    /// Supported application languages, in their declared presentation order.
+    pub fn languages(&self) -> &[Language] {
+        &self.1
     }
 
     /// Adds a library's catalogs below application overrides without copying its resources.
     /// Lookup prefers an application message in the same language before the library's.
     pub fn with_fallback(self, library: &Catalog) -> Self {
+        let choices = self.1.clone();
         let mut languages = self.0.languages.clone();
         languages.extend(library.0.languages.iter().cloned());
         languages.sort();
         languages.dedup();
-        Self(Arc::new(CatalogData {
-            fallback: self.0.fallback.clone(),
-            languages,
-            resources: BTreeMap::new(),
-            parents: vec![self, library.clone()],
-        }))
+        Self(
+            Arc::new(CatalogData {
+                fallback: self.0.fallback.clone(),
+                languages,
+                resources: BTreeMap::new(),
+                parents: vec![self, library.clone()],
+            }),
+            choices,
+        )
     }
 
     fn prepare(&self, language: &LanguageIdentifier, output: &mut Prepared) {
@@ -145,6 +229,8 @@ impl Catalog {
             locale,
             prepared,
             preferences: preferences.to_vec(),
+            #[cfg(feature = "formatting")]
+            formatters: std::cell::OnceCell::new(),
         }))
     }
 
@@ -159,6 +245,8 @@ struct TranslatorData {
     locale: Locale,
     prepared: Vec<Prepared>,
     preferences: Vec<Locale>,
+    #[cfg(feature = "formatting")]
+    formatters: std::cell::OnceCell<Result<Rc<crate::LocaleFormatters>, crate::FormatError>>,
 }
 
 /// A thread-owned formatter with no cross-thread locks during formatting.
@@ -174,6 +262,25 @@ impl PartialEq for Translator {
 }
 
 impl Translator {
+    /// The requested regional locale that selected this catalog language.
+    /// Data formatting retains region preferences such as `en-GB` even when UI
+    /// messages come from the more general `en` catalog.
+    pub fn formatting_locale(&self) -> &Locale {
+        self.0
+            .preferences
+            .iter()
+            .find(|locale| locale.language.language == self.0.locale.language.language)
+            .unwrap_or(&self.0.locale)
+    }
+
+    /// Reuses locale-aware data formatters across every consumer of this translator.
+    #[cfg(feature = "formatting")]
+    pub fn formatters(&self) -> Result<Rc<crate::LocaleFormatters>, crate::FormatError> {
+        self.0
+            .formatters
+            .get_or_init(|| crate::LocaleFormatters::new(self.formatting_locale()).map(Rc::new))
+            .clone()
+    }
     /// The first selected catalog language and the requested preview settings.
     /// Layout direction follows this effective language, including on fallback.
     pub fn locale(&self) -> &Locale {

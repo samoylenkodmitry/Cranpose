@@ -2,7 +2,7 @@ use cranpose_animation::{Animatable, AnimationSpec, AnimationType, Easing};
 use cranpose_core::{RuntimeHandle, remember, with_current_composer};
 use cranpose_macros::composable;
 use cranpose_services::HapticFeedback;
-use cranpose_ui::{Box, BoxSpec, Modifier};
+use cranpose_ui::{Box, BoxSpec, Modifier, SharedText};
 use cranpose_ui_graphics::GraphicsLayer;
 use cranpose_ui_layout::Alignment;
 
@@ -68,9 +68,8 @@ pub fn LiquidChip(
     modifier: Modifier,
     selected: bool,
     on_click: impl Fn() + 'static,
-    label: impl Into<String>,
+    label: SharedText,
 ) {
-    let label = label.into();
     let runtime = with_current_composer(|composer| composer.runtime_handle());
     let appearance = remember(move || ChipAppearance::new(selected, runtime));
     let (label_progress, tint_progress, blue_vibrancy, prominent_on_top) =
@@ -87,7 +86,7 @@ pub fn LiquidChip(
     GlassButtonWithFeedback(
         modifier.stable_semantics(move |config| {
             config.selected = Some(selected);
-            config.content_description = Some(description.clone());
+            config.content_description = Some(description.as_str().to_owned());
         }),
         GlassButtonSpec::prominent().with_size(GlassButtonSize::Small),
         HapticFeedback::Selection,
@@ -130,7 +129,7 @@ pub fn LiquidActionChip(
     modifier: Modifier,
     prominent: bool,
     on_click: impl Fn() + 'static,
-    label: impl Into<String>,
+    label: SharedText,
 ) {
     let spec = if prominent {
         super::button::GlassButtonSpec::prominent()
@@ -138,7 +137,6 @@ pub fn LiquidActionChip(
         super::button::GlassButtonSpec::glass()
     }
     .with_size(super::button::GlassButtonSize::Small);
-    let label = label.into();
     super::button::GlassButton(modifier, spec.clone(), on_click, move || {
         super::button::GlassButtonLabel(label.clone(), spec.clone());
     });

@@ -14,9 +14,20 @@ pub use cranpose_macros::composable;
 pub use cranpose_macros::{message, tr, translation_messages, translations};
 #[cfg(feature = "localization")]
 pub use localization::{
-    Catalog, Locale, LocalizedText, PreviewMode, ProvideLocalization, ProvideTranslator,
+    Catalog, Language, LanguagePreference, Locale, LocalizedText, PreviewMode, ProvideLocalization,
+    ProvideTranslator,
 };
 pub use text::SharedText;
+#[cfg(feature = "localization")]
+mod ui_text;
+#[cfg(feature = "localization")]
+pub use ui_text::UiText;
+#[cfg(feature = "localization")]
+mod language_preferences;
+#[cfg(feature = "localization")]
+pub use language_preferences::{
+    LocalizationController, ProvideLanguagePreferences, local_localization,
+};
 pub use ui_strings::UiString;
 
 pub mod announce;

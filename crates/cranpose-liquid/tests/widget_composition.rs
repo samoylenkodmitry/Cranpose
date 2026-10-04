@@ -84,7 +84,7 @@ fn a_glass_surface_composes_its_content() {
 #[test]
 fn a_glass_button_label_composes_inside_a_button_spec() {
     themed(|| {
-        GlassButtonLabel("Add", GlassButtonSpec::prominent());
+        GlassButtonLabel("Add".into(), GlassButtonSpec::prominent());
     });
 }
 
@@ -149,7 +149,7 @@ fn a_card_composes_its_content() {
 fn a_chip_composes_selected_and_unselected() {
     for selected in [false, true] {
         themed(move || {
-            LiquidChip(Modifier::empty(), selected, || {}, "Filter");
+            LiquidChip(Modifier::empty(), selected, || {}, "Filter".into());
         });
     }
 }

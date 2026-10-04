@@ -23,7 +23,7 @@ use cranpose_ui::{Modifier, composable};
 fn SaveAction(on_save: impl Fn() + 'static) {
     LiquidTheme(LiquidThemeSpec::default(), move || {
         GlassButton(Modifier::empty(), GlassButtonSpec::prominent(), on_save, || {
-            GlassButtonLabel("Save", GlassButtonSpec::prominent());
+            GlassButtonLabel("Save".into(), GlassButtonSpec::prominent());
         });
     });
 }

@@ -179,3 +179,143 @@ fn replacing_catalogs_and_changing_arguments_refreshes_text() {
         assert!(result.contains(&count.to_string()));
     }
 }
+
+#[test]
+fn application_preferences_update_retained_text_and_restore_system_language() {
+    use cranpose_ui::{
+        UiText,
+        localization::{LanguagePreference, Localization},
+    };
+    let application =
+        Localization::persistent(catalog(), vec![locale("fr")], PreferenceStore::default());
+    let controller = Rc::new(RefCell::new(None));
+    let output = Rc::new(RefCell::new(String::new()));
+    let retained = UiText::from(cranpose_ui::message!("Save", id = "save"));
+    let mut composition = run_test_composition(|| {});
+    composition
+        .render(991, || {
+            PreferenceRoot(
+                application.clone(),
+                controller.clone(),
+                retained.clone(),
+                output.clone(),
+            );
+        })
+        .expect("render");
+    let controller = controller.borrow().clone().expect("controller");
+    wait_for_preferences(&mut composition, &controller);
+    assert_eq!(*output.borrow(), "Enregistrer");
+    choose_language(
+        &mut composition,
+        &controller,
+        LanguagePreference::from_setting(Some("en"), application.catalog()),
+    );
+    assert_eq!(*output.borrow(), "Save");
+    choose_language(&mut composition, &controller, LanguagePreference::System);
+    assert_eq!(*output.borrow(), "Enregistrer");
+}
+
+#[derive(Default)]
+struct PreferenceStore(std::sync::Mutex<Option<String>>);
+
+impl cranpose_ui::localization::LanguagePreferenceStore for PreferenceStore {
+    fn load(&self) -> Result<Option<String>, cranpose_ui::localization::LocalizationError> {
+        Ok(self.0.lock().expect("preference store").clone())
+    }
+
+    fn save(&self, value: &str) -> Result<(), cranpose_ui::localization::LocalizationError> {
+        *self.0.lock().expect("preference store") = Some(value.into());
+        Ok(())
+    }
+}
+
+#[test]
+fn in_memory_language_changes_do_not_require_a_worker_runtime() {
+    use cranpose_ui::localization::{LanguagePreference, Localization};
+    let application = Localization::new(catalog(), vec![locale("fr")]);
+    let controller = Rc::new(RefCell::new(None));
+    let output = Rc::new(RefCell::new(String::new()));
+    let mut composition = run_test_composition(|| {});
+    composition
+        .render(992, || {
+            PreferenceRoot(
+                application.clone(),
+                controller.clone(),
+                cranpose_ui::message!("Save", id = "save").into(),
+                output.clone(),
+            );
+        })
+        .expect("render");
+    let controller = controller.borrow().clone().expect("controller");
+    assert!(!controller.is_busy());
+    controller.select(LanguagePreference::from_setting(
+        Some("en"),
+        application.catalog(),
+    ));
+    composition
+        .process_invalid_scopes()
+        .expect("language change");
+    assert_eq!(controller.error(), None);
+    assert_eq!(*output.borrow(), "Save");
+}
+
+#[composable]
+fn PreferenceRoot(
+    application: cranpose_ui::localization::Localization,
+    controller: Rc<RefCell<Option<cranpose_ui::LocalizationController>>>,
+    retained: cranpose_ui::UiText,
+    output: Rc<RefCell<String>>,
+) {
+    cranpose_ui::ProvideLanguagePreferences(application, &[locale("fr")], || {
+        *controller.borrow_mut() = cranpose_ui::local_localization().current();
+        *output.borrow_mut() = retained.resolve().to_string();
+    });
+}
+
+fn choose_language(
+    composition: &mut cranpose_ui::TestComposition,
+    controller: &cranpose_ui::LocalizationController,
+    preference: cranpose_ui::localization::LanguagePreference,
+) {
+    let action = controller.clone();
+    composition
+        .runtime_handle()
+        .spawn_ui(async move {
+            action.select(preference);
+        })
+        .expect("event");
+    wait_for_preferences(composition, controller);
+}
+
+fn wait_for_preferences(
+    composition: &mut cranpose_ui::TestComposition,
+    controller: &cranpose_ui::LocalizationController,
+) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        composition.runtime_handle().drain_ui();
+        composition
+            .process_invalid_scopes()
+            .expect("preference update");
+        if !controller.is_busy() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "preference request exceeded deadline"
+        );
+        std::thread::yield_now();
+    }
+    assert_eq!(controller.error(), None);
+}
+
+#[test]
+fn literal_ui_text_remains_literal_inside_a_language_provider() {
+    let literal = cranpose_ui::UiText::from("Save");
+    run_test_composition(|| {
+        ProvideLocalization(&catalog(), locale("fr"), || {
+            assert_eq!(literal.resolve().as_str(), "Save");
+            Text(literal.clone(), Modifier::empty(), TextStyle::default());
+        });
+    });
+}

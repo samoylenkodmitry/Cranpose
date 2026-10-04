@@ -60,6 +60,7 @@ static MESSAGES: [crate::localization::Message; 7] = {
 };
 
 #[cfg(feature = "localization")]
-pub(crate) fn catalog() -> crate::localization::Catalog {
+/// Translations for Cranpose controls, with namespaces applications can override.
+pub fn catalog() -> crate::localization::Catalog {
     crate::translations!("locales", fallback = "en")
 }

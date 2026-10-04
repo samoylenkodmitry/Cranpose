@@ -25,12 +25,33 @@ use cranpose_core::{
     CompositionLocal, CompositionLocalProvider, compositionLocalOf, remember, rememberKeyed,
 };
 pub use cranpose_localization::{
-    Argument, Catalog, DeferredMessage, FluentValue, Locale, LocalizationError, Message,
-    PreviewMode, Resource, SourceCatalog, Translator,
+    Argument, Catalog, DeferredMessage, FluentValue, Language, LanguagePreference,
+    LanguagePreferenceStore, Locale, Localization, LocalizationError, Message, PreviewMode,
+    Resource, SourceCatalog, Translator,
 };
 
 /// A formatted translation with shared text storage and owned-string conversions.
 pub type LocalizedText = crate::text::SharedText;
+
+#[cfg(feature = "localization-formatting")]
+pub use cranpose_localization::{FormatError, LocaleFormatters};
+
+/// Translations for Cranpose controls, also usable by native services and test tools.
+/// UI providers add this fallback automatically; applications can override its namespaces.
+pub use crate::ui_strings::catalog as framework_catalog;
+
+/// Locale-aware data formatters retained for the current language provider.
+/// A language change replaces these formatters without changing stored application data.
+#[cfg(feature = "localization-formatting")]
+#[track_caller]
+pub fn local_formatters() -> Result<std::rc::Rc<LocaleFormatters>, FormatError> {
+    if let Some(translator) = local_translator().current() {
+        return translator.formatters();
+    }
+    rememberKeyed((), |()| {
+        LocaleFormatters::new(&Locale::parse("en").expect("source locale")).map(std::rc::Rc::new)
+    })
+}
 
 /// Displays a message captured by `message!` using the current provider.
 /// A language change updates the text even when the request remains in application state.

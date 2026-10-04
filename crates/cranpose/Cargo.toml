@@ -25,7 +25,11 @@ workspace = true
 ignored = ["cranpose-render-pixels"]
 
 [features]
-localization = ["cranpose-ui/localization", "cranpose-services/localization", "dep:sys-locale", "text-shaping"]
+localized-arabic = ["dep:cranpose-fonts", "cranpose-fonts/arabic"]
+localized-devanagari = ["dep:cranpose-fonts", "cranpose-fonts/devanagari"]
+localized-cjk = ["dep:cranpose-fonts", "cranpose-fonts/cjk"]
+localization = ["cranpose-ui/localization", "cranpose-liquid/localization", "cranpose-services/localization", "dep:sys-locale", "text-shaping"]
+localization-formatting = ["localization", "cranpose-ui/localization-formatting"]
 text-shaping = ["cranpose-render-common/text-shaping"]
 default = ["embedded-default-font"]
 # Compiles every crate's debug and trace log calls out of release builds.
@@ -187,6 +191,7 @@ webview = ["dep:wry", "dep:gtk"]
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
+cranpose-fonts = { workspace = true, optional = true }
 cranpose-audio = { workspace = true, optional = true }
 cranpose-core = { workspace = true }
 cranpose-foundation = { workspace = true }

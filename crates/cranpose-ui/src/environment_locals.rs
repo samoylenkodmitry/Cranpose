@@ -23,6 +23,9 @@ pub(crate) struct EnvironmentLocals {
     pub(crate) translator: OnceCell<CompositionLocal<Option<crate::localization::Translator>>>,
     #[cfg(feature = "localization")]
     pub(crate) text_locales: OnceCell<CompositionLocal<Option<crate::text::LocaleList>>>,
+    #[cfg(feature = "localization")]
+    pub(crate) localization_controller:
+        OnceCell<CompositionLocal<Option<crate::LocalizationController>>>,
 }
 
 thread_local! {
@@ -45,6 +48,8 @@ thread_local! {
         translator: OnceCell::new(),
         #[cfg(feature = "localization")]
         text_locales: OnceCell::new(),
+        #[cfg(feature = "localization")]
+        localization_controller: OnceCell::new(),
     } };
 }
 

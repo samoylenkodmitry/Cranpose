@@ -1,0 +1,32 @@
+[package]
+name = "cranpose-fonts"
+version.workspace = true
+edition.workspace = true
+license = "(Apache-2.0 OR MIT) AND OFL-1.1"
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Optional multilingual variable font packs for Cranpose applications"
+
+[features]
+default = []
+arabic = []
+devanagari = []
+cjk = [
+    "dep:cranpose-fonts-cjk-data-1",
+    "dep:cranpose-fonts-cjk-data-2",
+    "dep:cranpose-fonts-cjk-data-3",
+]
+
+[build-dependencies]
+cranpose-fonts-cjk-data-1 = { workspace = true, optional = true }
+cranpose-fonts-cjk-data-2 = { workspace = true, optional = true }
+cranpose-fonts-cjk-data-3 = { workspace = true, optional = true }
+
+[dev-dependencies]
+ab_glyph = "0.2.32"
+
+[lints]
+workspace = true

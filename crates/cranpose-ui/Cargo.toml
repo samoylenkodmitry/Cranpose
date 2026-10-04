@@ -44,6 +44,7 @@ inspection = ["cranpose-core/inspection"]
 # This adds global state for cross-thread test access, so only enable in test builds.
 test-helpers = []
 localization = ["dep:cranpose-localization", "cranpose-macros/localization"]
+localization-formatting = ["localization", "cranpose-localization/formatting"]
 
 [dev-dependencies]
 criterion = "0.8"

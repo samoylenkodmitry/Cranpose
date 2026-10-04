@@ -1,0 +1,9 @@
+[package]
+name = "cranpose-fonts-cjk-data-1"
+version.workspace = true
+edition.workspace = true
+license-file = "OFL.txt"
+description = "Private font data chunk for cranpose-fonts"
+
+[lints]
+workspace = true

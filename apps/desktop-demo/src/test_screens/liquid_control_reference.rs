@@ -147,7 +147,7 @@ fn ReferenceSelection(control: Control, initial: f32, activations: cranpose::Mut
                 checked.set(!checked.get());
                 activations.set(activations.get() + 1);
             },
-            "Unread",
+            "Unread".into(),
         ),
         _ => unreachable!("selection controls are dispatched by ControlContent"),
     }
@@ -176,7 +176,7 @@ fn ReferenceSurface(control: Control, initial: f32, activations: cranpose::Mutab
             move || {
                 activations.set(activations.get() + 1);
             },
-            "Unread",
+            "Unread".into(),
         ),
         Control::Card => LiquidCard(Modifier::empty().size_points(300.0, 160.0), || {
             Box(
@@ -224,7 +224,7 @@ fn ReferenceSurface(control: Control, initial: f32, activations: cranpose::Mutab
 #[composable]
 fn ReferenceButton(label: &'static str, spec: GlassButtonSpec, on_click: impl Fn() + 'static) {
     GlassButton(Modifier::empty(), spec.clone(), on_click, move || {
-        GlassButtonLabel(label, spec.clone());
+        GlassButtonLabel(label.into(), spec.clone());
     });
 }
 

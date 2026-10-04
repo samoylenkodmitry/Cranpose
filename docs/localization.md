@@ -46,6 +46,48 @@ fn main() {
 }
 ```
 
+An optional `locales/localization.toml` declares the ordered languages offered
+by an application. Each `[[locale]]` entry has a canonical `tag` matching a
+catalog directory and a `native_name` for the language picker. When present,
+`translations!` embeds this metadata in the returned `Catalog` and checks that
+its tags match the catalog directories.
+
+For a persistent in-app choice, share a `Localization` handle between the UI
+and application services. The app supplies a `LanguagePreferenceStore` adapter
+for its existing settings database:
+
+```rust
+let application = Localization::persistent(
+    translations!("locales", fallback = "en"),
+    cranpose::system_languages(),
+    MySettingsStore,
+);
+ProvideApplicationLocalization(application, || App());
+```
+
+Inside the settings screen, pass `local_localization().current()`'s controller
+to `cranpose::liquid::LiquidLanguagePicker`. The controller loads and saves
+preferences asynchronously, retains only the latest pending choice, and
+reports storage errors. The picker gets its languages from the catalog
+manifest. `Localization::new` provides the same behavior without persistence.
+
+Store `UiText` in application state for either literal text or a deferred
+`message!`. Pass it directly to `Text` so retained notices follow language
+changes. Outside composition, `application.text(&message!("Saved"))` uses the
+same selected language and a bounded thread-local formatter cache.
+
+Enable `localization-formatting` for `local_formatters()`, which shares ICU
+date, decimal, percent, and currency formatters for the active language.
+Formatting preserves a requested region even when messages use a broader
+language catalog. Percent input is a ratio; currency formatting changes the
+presentation, never the amount or currency.
+
+Enable `localized-arabic`, `localized-devanagari`, or `localized-cjk` only for
+the fonts the application needs. Register the corresponding `ARABIC_FONT_PACK`,
+`DEVANAGARI_FONT_PACK`, or `CJK_FONT_PACK` with `AppLauncher::with_font_pack`.
+These optional assets retain the source character maps and include their
+licenses in `cranpose-fonts`.
+
 Language identifiers preserve script and region (`sr-Latn`, `sr-Cyrl`, `fr-CA`).
 To use several ordered language preferences supplied by your platform host:
 
@@ -115,6 +157,28 @@ cargo run -p cranpose-localization --features tooling --bin cranpose-l10n -- \
 Published consumers can install `cranpose-l10n` with
 `cargo install cranpose-localization --features tooling`. The same commands
 then start with `cranpose-l10n`.
+
+The CLI also audits likely untranslated UI literals in built-in Cranpose APIs
+and app-configured widget arguments, and generates native locale declarations
+and fixture labels from Fluent catalogs:
+
+```sh
+cranpose-l10n audit --source app/src --config app/locales/tooling.toml --check
+cranpose-l10n native-fixtures --manifest app/locales/localization.toml \
+  --catalogs app/locales --config app/locales/tooling.toml \
+  --library-catalogs path/to/cranpose-ui/locales \
+  --output platform/android/app/src/androidTest/assets/localization.json
+```
+
+The app config uses `[[widget]]` entries with a function `name` and translated
+string `arguments` indexes. Its optional `[audit] ignore` list excludes app
+branding or symbols that should remain literal. The `[native_fixture]` table
+maps fixture labels to Fluent message IDs and names the app catalog `namespace`.
+Use `namespace/message-id` for a label from another catalog namespace and pass
+that dependency's catalog root with `--library-catalogs`. App resources take
+precedence when both roots contain the same locale and namespace. Fixture
+generation parses Fluent resources and rejects labels with placeables, since
+native test labels must be static.
 
 Extraction parses Rust tokens, including nested macros and code behind target
 `cfg` attributes. It records source locations and translator guidance, combines

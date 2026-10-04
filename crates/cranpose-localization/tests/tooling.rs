@@ -3,8 +3,9 @@
 use std::{fs, process::Command};
 
 use cranpose_localization::tooling::{
-    TranslationCall, catalog_signatures, extract_sources, load_catalogs, merge_source_catalog,
-    validate_catalogs,
+    TranslationCall, audit_ui_sources, catalog_signatures, extract_sources,
+    generate_android_locale_config, generate_native_fixtures, load_catalogs, load_locale_manifest,
+    merge_source_catalog, update_ios_localizations, validate_catalogs,
 };
 
 #[test]
@@ -156,4 +157,117 @@ fn extraction_preserves_handwritten_messages_and_translator_notes() {
         merged,
         merge_source_catalog(&merged, extracted).expect("idempotent")
     );
+}
+
+#[test]
+fn manifest_drives_ui_audit_and_native_localization_artifacts() {
+    let directory = tempfile::tempdir().expect("directory");
+    let locales = directory.path().join("locales");
+    fs::create_dir_all(locales.join("en")).expect("English catalog");
+    fs::create_dir_all(locales.join("fr")).expect("French catalog");
+    fs::write(
+        locales.join("localization.toml"),
+        "[[locale]]\ntag = \"en\"\nnative_name = \"English\"\n\n[[locale]]\ntag = \"fr\"\nnative_name = \"Français\"\n",
+    )
+    .expect("manifest");
+    fs::write(
+        locales.join("en/app.ftl"),
+        "settings = Settings\nheading = App language\n",
+    )
+    .expect("English Fluent catalog");
+    fs::write(
+        locales.join("fr/app.ftl"),
+        "settings = Paramètres\nheading = Langue de l’application\n",
+    )
+    .expect("French Fluent catalog");
+    let libraries = directory.path().join("library-locales");
+    fs::create_dir_all(libraries.join("en")).expect("English library catalog");
+    fs::create_dir_all(libraries.join("fr")).expect("French library catalog");
+    fs::write(
+        libraries.join("en/cranpose-ui.ftl"),
+        "app-language = App language\nsystem-language = System default\nchange-language = Change app language\n",
+    )
+    .expect("English framework catalog");
+    fs::write(
+        libraries.join("fr/cranpose-ui.ftl"),
+        "app-language = Langue de l’application\nsystem-language = Valeur par défaut du système\nchange-language = Changer la langue de l’application\n",
+    )
+    .expect("French framework catalog");
+    let config = directory.path().join("tooling.toml");
+    fs::write(
+        &config,
+        "[audit]\nignore = [\"Ready\"]\n\n[[widget]]\nname = \"CustomText\"\narguments = [1]\n\n[native_fixture]\nnamespace = \"app\"\nsettings = \"settings\"\nheading = \"cranpose-ui/app-language\"\nsystem = \"cranpose-ui/system-language\"\nchange = \"cranpose-ui/change-language\"\n",
+    )
+    .expect("tooling config");
+    let source = directory.path().join("src");
+    fs::create_dir(&source).expect("source");
+    fs::write(
+        source.join("ui.rs"),
+        "fn ui() { Text(if ready { \"Ready\" } else { \"Please wait\" }); CustomText(icon, \"Custom label\"); Text(format!(\"{value} ×\")); Text(tr!(\"Translated\")); }",
+    )
+    .expect("Rust source");
+
+    let findings = audit_ui_sources(&source, &config).expect("audit");
+    assert_eq!(
+        findings
+            .iter()
+            .map(|finding| finding.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Please wait", "Custom label"]
+    );
+    let audit = Command::new(env!("CARGO_BIN_EXE_cranpose-l10n"))
+        .args(["audit", "--source"])
+        .arg(&source)
+        .args(["--config"])
+        .arg(&config)
+        .output()
+        .expect("audit CLI");
+    assert!(audit.status.success());
+    assert!(String::from_utf8_lossy(&audit.stdout).contains("Custom label"));
+    let languages = load_locale_manifest(&locales.join("localization.toml")).expect("manifest");
+    assert_eq!(
+        languages
+            .iter()
+            .map(|language| language.tag.as_str())
+            .collect::<Vec<_>>(),
+        ["en", "fr"]
+    );
+    let generated = generate_native_fixtures(
+        &locales.join("localization.toml"),
+        &locales,
+        Some(&libraries),
+        &config,
+    )
+    .expect("fixture JSON");
+    assert!(generated.contains("\"name\": \"Français\""));
+    assert!(generated.contains("\"settings\": \"Paramètres\""));
+    assert!(generated.contains("\"heading\": \"Langue de l’application\""));
+    let fixture_output = directory.path().join("native.json");
+    let generated_cli = Command::new(env!("CARGO_BIN_EXE_cranpose-l10n"))
+        .args(["native-fixtures", "--manifest"])
+        .arg(locales.join("localization.toml"))
+        .args(["--catalogs"])
+        .arg(&locales)
+        .args(["--library-catalogs"])
+        .arg(&libraries)
+        .args(["--config"])
+        .arg(&config)
+        .args(["--output"])
+        .arg(&fixture_output)
+        .output()
+        .expect("fixture CLI");
+    assert!(generated_cli.status.success());
+    assert_eq!(
+        fs::read_to_string(fixture_output).expect("generated CLI fixture"),
+        generated
+    );
+    let android = generate_android_locale_config(&locales.join("localization.toml"))
+        .expect("Android locale XML");
+    assert!(android.contains("android:name=\"fr\""));
+    let plist = update_ios_localizations(
+        "<key>CFBundleLocalizations</key>\n\t<array>\n\t\t<string>en</string>\n\t</array>",
+        &locales.join("localization.toml"),
+    )
+    .expect("iOS plist");
+    assert!(plist.contains("<string>fr</string>"));
 }

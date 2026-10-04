@@ -1,7 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
 use cranpose_localization::tooling::{
-    TranslationCall, catalog_signatures, load_catalogs, validate_catalogs,
+    TranslationCall, catalog_signatures, load_catalogs, load_locale_manifest, validate_catalogs,
 };
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::TokenStream;
@@ -81,6 +81,30 @@ pub(crate) fn catalogs(input: TokenStream) -> syn::Result<TokenStream> {
         .map_err(|error| syn::Error::new(input.directory.span(), error))?;
     let path = ui_path()?;
     let fallback = input.fallback;
+    let manifest_path = absolute_path(&input.directory)?.join("localization.toml");
+    let (languages, manifest_dependency) = if manifest_path.exists() {
+        let entries = load_locale_manifest(&manifest_path)
+            .map_err(|error| syn::Error::new(input.directory.span(), error))?;
+        let catalog_tags: std::collections::BTreeSet<_> =
+            files.iter().map(|file| file.locale.as_str()).collect();
+        let manifest_tags: std::collections::BTreeSet<_> =
+            entries.iter().map(|entry| entry.tag.as_str()).collect();
+        if catalog_tags != manifest_tags {
+            return Err(syn::Error::new(
+                input.directory.span(),
+                "localization.toml locale tags must match the catalog directories",
+            ));
+        }
+        let tags = entries.iter().map(|entry| &entry.tag);
+        let names = entries.iter().map(|entry| &entry.native_name);
+        let manifest_filename = manifest_path.to_string_lossy();
+        (
+            quote!(.with_languages(&[#((#tags, #names)),*]).expect("checked language metadata")),
+            quote!(let _ = include_str!(#manifest_filename);),
+        )
+    } else {
+        (quote!(), quote!())
+    };
     let resources = files.iter().map(|file| {
         let locale = &file.locale;
         let namespace = &file.namespace;
@@ -89,8 +113,10 @@ pub(crate) fn catalogs(input: TokenStream) -> syn::Result<TokenStream> {
     });
     Ok(quote!({
         static CATALOG: ::std::sync::LazyLock<#path::localization::Catalog> = ::std::sync::LazyLock::new(|| {
+            #manifest_dependency
             #path::localization::Catalog::from_resources(#fallback, &[#(#resources),*])
                 .expect("catalogs validated by translations!")
+                #languages
         });
         CATALOG.clone()
     }))

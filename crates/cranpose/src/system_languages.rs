@@ -30,3 +30,16 @@ pub fn local_system_languages() -> CompositionLocal<Rc<[Locale]>> {
             .clone()
     })
 }
+
+/// Provides stored language choices and automatic host-language updates to an app.
+/// Preference I/O runs on workers; UI labels, accessibility and scoped controls
+/// update after a successful choice without a platform-specific application adapter.
+#[expect(non_snake_case)]
+#[track_caller]
+pub fn ProvideApplicationLocalization(
+    application: cranpose_ui::localization::Localization,
+    content: impl FnOnce(),
+) {
+    let system = local_system_languages().current();
+    cranpose_ui::ProvideLanguagePreferences(application, &system, content);
+}
