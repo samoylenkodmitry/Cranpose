@@ -360,7 +360,6 @@ pub(crate) struct FrameStats {
     pub command_copy_count: Cell<u32>,
     pub command_copy_pixels: Cell<u64>,
     pub command_transient_texture_bytes: Cell<u64>,
-    pub command_retained_texture_bytes: Cell<u64>,
     pub command_upload_bytes: Cell<u64>,
     pub offscreen_acquires: Cell<u32>,
     pub offscreen_news: Cell<u32>,
@@ -482,11 +481,6 @@ impl FrameStats {
             self.command_transient_texture_bytes
                 .get()
                 .saturating_add(stats.transient_texture_bytes),
-        );
-        self.command_retained_texture_bytes.set(
-            self.command_retained_texture_bytes
-                .get()
-                .max(stats.retained_texture_bytes),
         );
         self.command_upload_bytes.set(
             self.command_upload_bytes
@@ -748,8 +742,7 @@ impl FrameStats {
                 .offscreen_total_bytes
                 .get()
                 .saturating_add(self.command_transient_texture_bytes.get()),
-            retained_texture_bytes: retained_texture_bytes
-                .saturating_add(self.command_retained_texture_bytes.get()),
+            retained_texture_bytes,
             upload_bytes: self.command_upload_bytes.get(),
             upload_writes: self.upload_writes.get(),
             isolated_layer_renders: self.isolated_layer_renders.get(),
@@ -824,7 +817,6 @@ impl FrameStats {
         self.command_copy_count.set(0);
         self.command_copy_pixels.set(0);
         self.command_transient_texture_bytes.set(0);
-        self.command_retained_texture_bytes.set(0);
         self.command_upload_bytes.set(0);
         self.upload_writes.set(0);
         self.offscreen_acquires.set(0);

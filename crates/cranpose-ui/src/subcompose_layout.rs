@@ -1241,6 +1241,14 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         out.extend_from_slice(&self.inner.borrow().children);
     }
 
+    fn owned_child_index(&self, child: NodeId) -> Option<usize> {
+        self.inner
+            .borrow()
+            .children
+            .iter()
+            .position(|&id| id == child)
+    }
+
     fn set_node_id(&mut self, id: NodeId) {
         self.id.set(Some(id));
         self.layout_state.borrow_mut().set_node_id(id);

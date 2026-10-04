@@ -183,20 +183,12 @@ impl LayerCache {
 
     pub(crate) fn take_released(
         &mut self,
-    ) -> Vec<(Option<FrameTextureDescriptor>, OffscreenTarget)> {
-        let mut released = Vec::new();
-        let retired = std::mem::take(&mut self.retired);
-        self.retired = retired
-            .into_iter()
-            .filter_map(|(transient, texture)| match Rc::try_unwrap(texture) {
-                Ok(texture) => {
-                    released.push((transient, texture));
-                    None
-                }
-                Err(texture) => Some((transient, texture)),
+    ) -> impl Iterator<Item = (Option<FrameTextureDescriptor>, OffscreenTarget)> + '_ {
+        self.retired
+            .extract_if(.., |(_, texture)| Rc::strong_count(texture) == 1)
+            .filter_map(|(transient, texture)| {
+                Rc::into_inner(texture).map(|target| (transient, target))
             })
-            .collect();
-        released
     }
 
     pub(crate) fn len(&self) -> usize {

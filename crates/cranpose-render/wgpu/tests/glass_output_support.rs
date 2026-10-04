@@ -32,65 +32,127 @@ fn lens_dynamics() -> GlassDynamics {
     )
 }
 
+fn left_lens_dynamics() -> GlassDynamics {
+    support::morphing_lens_dynamics(
+        Rect {
+            x: NODE[0],
+            y: NODE[1],
+            width: NODE[2],
+            height: NODE[3],
+        },
+        (55.0, 80.0, 56.0, 36.0, -1.0),
+    )
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PageContent {
+    Lens,
+    DisjointGlass,
+    Empty,
+}
+
 #[composable]
-fn LensPage() {
-    LiquidTheme(LiquidThemeSpec::default(), || {
-        FramePage(
-            FRAME_WIDTH,
-            FRAME_HEIGHT,
-            Color(0.1, 0.1, 0.16, 1.0),
-            || {
-                Box(
-                    Modifier::empty().fill_max_size().draw_behind(|scope| {
-                        let size = scope.size();
-                        scope.draw_rect(Brush::radial_gradient_stops(
-                            vec![
-                                (0.0, Color::from_rgb_u8(90, 70, 140)),
-                                (0.6, Color::from_rgb_u8(30, 26, 60)),
-                                (1.0, Color::from_rgb_u8(8, 8, 20)),
-                            ],
-                            Point::new(size.width * 0.4, size.height * 0.3),
-                            size.width.max(size.height) * 0.9,
-                            TileMode::Clamp,
-                        ));
-                        for i in 0..60u32 {
-                            let x = (i as f32 * 41.3) % size.width;
-                            let y = (i as f32 * 23.7) % size.height;
-                            scope.draw_circle(
-                                Brush::solid(Color::from_rgba_u8(
-                                    255,
-                                    240,
-                                    200,
-                                    150 + (i % 4) as u8 * 25,
-                                )),
-                                Point::new(x, y),
-                                1.0 + (i % 4) as f32,
-                            );
-                        }
-                    }),
-                    BoxSpec::default(),
-                    || {
+fn PatternedFrame(content: PageContent) {
+    FramePage(
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        Color(0.1, 0.1, 0.16, 1.0),
+        move || {
+            Box(
+                Modifier::empty().fill_max_size().draw_behind(|scope| {
+                    let size = scope.size();
+                    scope.draw_rect(Brush::radial_gradient_stops(
+                        vec![
+                            (0.0, Color::from_rgb_u8(90, 70, 140)),
+                            (0.6, Color::from_rgb_u8(30, 26, 60)),
+                            (1.0, Color::from_rgb_u8(8, 8, 20)),
+                        ],
+                        Point::new(size.width * 0.4, size.height * 0.3),
+                        size.width.max(size.height) * 0.9,
+                        TileMode::Clamp,
+                    ));
+                    for i in 0..60u32 {
+                        let x = (i as f32 * 41.3) % size.width;
+                        let y = (i as f32 * 23.7) % size.height;
+                        scope.draw_circle(
+                            Brush::solid(Color::from_rgba_u8(
+                                255,
+                                240,
+                                200,
+                                150 + (i % 4) as u8 * 25,
+                            )),
+                            Point::new(x, y),
+                            1.0 + (i % 4) as f32,
+                        );
+                    }
+                }),
+                BoxSpec::default(),
+                move || {
+                    if content != PageContent::Empty {
+                        let dynamics = if content == PageContent::DisjointGlass {
+                            left_lens_dynamics
+                        } else {
+                            lens_dynamics
+                        };
                         Box(
-                            rect_modifier(NODE).glass_effect_with(lens_glass(), lens_dynamics),
+                            rect_modifier(NODE).glass_effect_with(lens_glass(), dynamics),
                             BoxSpec::default(),
                             || {},
                         );
-                    },
-                );
-            },
-        );
+                    }
+                    if content == PageContent::DisjointGlass {
+                        Box(
+                            rect_modifier([245.0, 90.0, 65.0, 50.0]).glass_effect(lens_glass()),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    }
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+fn LensPage() {
+    LiquidTheme(LiquidThemeSpec::default(), || {
+        PatternedFrame(PageContent::Lens);
+    });
+}
+
+#[composable]
+fn DisjointGlassPage() {
+    LiquidTheme(LiquidThemeSpec::default(), || {
+        PatternedFrame(PageContent::DisjointGlass);
+    });
+}
+
+#[composable]
+fn PlainPage() {
+    LiquidTheme(LiquidThemeSpec::default(), || {
+        PatternedFrame(PageContent::Empty);
     });
 }
 
 fn capture(whole_node: bool) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
+    capture_page(LensPage, whole_node)
+}
+
+fn capture_page(page: fn(), whole_node: bool) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
     cranpose_render_wgpu::set_debug_toggle(TOGGLE, whole_node.then_some("1"));
-    let captured = capture_with_current_toggles();
+    let captured = support::warm_app_frame(page, FRAME_WIDTH, FRAME_HEIGHT);
     cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
     captured
 }
 
-fn capture_with_current_toggles() -> Option<(CapturedFrame, RenderStatsSnapshot)> {
-    support::warm_app_frame(LensPage, FRAME_WIDTH, FRAME_HEIGHT)
+fn capture_uncached_page(
+    page: fn(),
+    whole_node: bool,
+) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
+    let captured = capture_page(page, whole_node);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+    captured
 }
 
 #[test]
@@ -121,5 +183,47 @@ fn a_lens_composited_within_its_declared_support_is_the_lens_composited_over_its
         with_support.blur_pixels, without_support.blur_pixels,
         "a material that declares no sample domain keeps its whole blur (stages {})",
         with_support.stages
+    );
+}
+
+#[test]
+fn disjoint_glass_outputs_share_a_stage_without_changing_the_picture() {
+    let Some((with_support, supported_stats)) = capture_uncached_page(DisjointGlassPage, false)
+    else {
+        return;
+    };
+    let (whole_node, conservative_stats) = capture_uncached_page(DisjointGlassPage, true)
+        .expect("headless WGPU init failed mid-suite");
+    let (plain, _) = capture_page(PlainPage, false).expect("headless WGPU init failed mid-suite");
+
+    let differing =
+        support::differing_pixels(FRAME_WIDTH, &with_support.pixels, &whole_node.pixels);
+    assert!(
+        differing.is_empty(),
+        "support-based backdrop staging changed pixels: {}",
+        support::describe_differing(&differing)
+    );
+    assert!(
+        !support::differing_pixels(FRAME_WIDTH, &with_support.pixels, &plain.pixels).is_empty(),
+        "the glass surfaces must visibly render over the patterned page"
+    );
+    eprintln!(
+        "glass stages {} -> {}, render passes {} -> {}",
+        conservative_stats.stages,
+        supported_stats.stages,
+        conservative_stats.pass_count,
+        supported_stats.pass_count
+    );
+    assert!(
+        supported_stats.stages < conservative_stats.stages,
+        "disjoint actual output support should allow one fewer stage ({} vs {})",
+        supported_stats.stages,
+        conservative_stats.stages
+    );
+    assert!(
+        supported_stats.pass_count < conservative_stats.pass_count,
+        "sharing the capture stage should remove side/capture passes ({} vs {})",
+        supported_stats.pass_count,
+        conservative_stats.pass_count
     );
 }

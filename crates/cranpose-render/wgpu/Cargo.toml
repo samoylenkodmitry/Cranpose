@@ -115,6 +115,7 @@ cranpose-render-common = { path = "../common", features = ["embedded-default-fon
 naga = { version = "30.0.1", features = ["wgsl-in", "glsl-out"] }
 png = "0.18.1"
 pollster = "0.4.0"
+stats_alloc = "0.1.10"
 
 [[test]]
 name = "integration"

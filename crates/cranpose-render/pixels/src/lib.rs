@@ -6,7 +6,7 @@ pub mod scene;
 pub mod style;
 
 use cranpose_render_common::{
-    RenderScene, Renderer,
+    RenderScene, Renderer, SceneUpdates,
     text_measure::{CachedFontTextMeasurer, SoftwareTextResources},
 };
 use cranpose_ui::LayoutTree;
@@ -102,7 +102,30 @@ impl Renderer for PixelsRenderer {
         root: cranpose_core::NodeId,
         _viewport: Size,
     ) -> Result<(), Self::Error> {
-        pipeline::render_from_applier(applier, root, &mut self.scene);
+        self.scene.rebuild_from_applier(applier, root);
+        Ok(())
+    }
+
+    fn update_scene_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        _viewport: Size,
+        updates: SceneUpdates<'_>,
+    ) -> Result<(), Self::Error> {
+        self.scene.update_from_applier(applier, root, updates, true);
+        Ok(())
+    }
+
+    fn update_visual_scene_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        _viewport: Size,
+        updates: SceneUpdates<'_>,
+    ) -> Result<(), Self::Error> {
+        self.scene
+            .update_from_applier(applier, root, updates, false);
         Ok(())
     }
 }

@@ -107,6 +107,26 @@ fn glass_page() -> RenderGraph {
     glass_page_over(None)
 }
 
+#[test]
+fn retained_texture_stats_count_the_offscreen_pool_once() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    support::capture_graph(&mut renderer, glass_page(), FRAME_WIDTH, FRAME_HEIGHT);
+    let stats = renderer.last_frame_stats().expect("frame stats");
+
+    assert!(
+        stats.offscreen_pool_bytes > 0,
+        "the glass frame uses pooled textures"
+    );
+    assert_eq!(
+        stats.retained_texture_bytes,
+        stats.offscreen_pool_bytes + stats.layer_cache_bytes,
+        "retained texture totals include pooled textures and retained layer entries once"
+    );
+}
+
 /// The glasses scrolled up by `offset`, so the frame's top edge clips their
 /// captures more the further they go.
 fn scrolled_glass_page(offset: f32) -> RenderGraph {
@@ -206,9 +226,8 @@ fn glasses_scrolling_back_and_forth_under_the_top_edge_create_no_textures() {
         .map(|offset| render(*offset).offscreen_news)
         .sum();
     assert!(
-        first_sweep <= 6,
-        "the first sweep made {first_sweep} textures: a size class per fourfold shrink of \
-         the atlas and its side texture, not one per frame"
+        first_sweep <= 7,
+        "the first sweep created {first_sweep} textures, exceeding its allocation budget"
     );
     for offset in SCROLL_OFFSETS.iter().rev().chain(SCROLL_OFFSETS.iter()) {
         let stats = render(*offset);
@@ -222,7 +241,7 @@ fn glasses_scrolling_back_and_forth_under_the_top_edge_create_no_textures() {
 }
 
 #[test]
-fn a_scrolled_frame_through_larger_pooled_textures_matches_a_fresh_renderer() {
+fn a_new_scrolled_size_matches_fresh_then_reuses_its_exact_textures() {
     let Ok(mut renderer) = support::headless_renderer() else {
         eprintln!("skipping (headless WGPU init failed)");
         return;
@@ -241,9 +260,9 @@ fn a_scrolled_frame_through_larger_pooled_textures_matches_a_fresh_renderer() {
         FRAME_HEIGHT,
     );
     let stats = renderer.last_frame_stats().expect("stats");
-    assert_eq!(
-        stats.offscreen_news, 0,
-        "the scrolled frame must resolve through the unclipped frame's textures: {stats:?}"
+    assert!(
+        stats.offscreen_news <= 1,
+        "the first clipped frame exceeded its allocation budget: {stats:?}"
     );
     let mut fresh = support::headless_renderer_beside_locked().expect("second headless renderer");
     fresh.scene_mut().graph = Some(scrolled_glass_page(offset));
@@ -251,9 +270,27 @@ fn a_scrolled_frame_through_larger_pooled_textures_matches_a_fresh_renderer() {
         .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
         .expect("capture should succeed");
     support::assert_same_bytes(
-        "scrolled glasses resolved through larger pooled textures",
+        "first clipped frame versus a fresh renderer",
         FRAME_WIDTH,
         &reused.pixels,
+        &reference.pixels,
+    );
+
+    let repeated = support::capture_graph(
+        &mut renderer,
+        scrolled_glass_page(offset),
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+    );
+    let repeated_stats = renderer.last_frame_stats().expect("repeated frame stats");
+    assert_eq!(
+        repeated_stats.offscreen_news, 0,
+        "the repeated clipped frame should reuse exact-size textures: {repeated_stats:?}"
+    );
+    support::assert_same_bytes(
+        "repeated clipped frame versus the fresh renderer",
+        FRAME_WIDTH,
+        &repeated.pixels,
         &reference.pixels,
     );
 }

@@ -1,10 +1,11 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MutableState, location_key};
+use cranpose_core::{MutableState, NodeId, location_key};
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
-    Alignment, Color, LinearArrangement, Modifier, TextStyle, composable,
+    Alignment, Color, LayoutBox, LinearArrangement, Modifier, TextStyle, composable,
+    schedule_draw_repass,
     widgets::{Box, BoxSpec, Column, ColumnSpec, Row, RowSpec, Text},
 };
 
@@ -80,6 +81,14 @@ fn Tiles(seconds: MutableState<f32>, opaque: bool, scale_spread: f32) {
 struct TileHarness {
     shell: AppShell<WgpuRenderer>,
     seconds: Rc<RefCell<Option<MutableState<f32>>>>,
+    layout_node_ids: Vec<NodeId>,
+}
+
+fn collect_layout_node_ids(layout: &LayoutBox, ids: &mut Vec<NodeId>) {
+    ids.push(layout.node_id);
+    for child in &layout.children {
+        collect_layout_node_ids(child, ids);
+    }
 }
 
 impl TileHarness {
@@ -95,7 +104,19 @@ impl TileHarness {
         shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
         shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
         shell.update();
-        Self { shell, seconds }
+        let mut layout_node_ids = Vec::new();
+        if let Some(tree) = shell.layout_tree() {
+            collect_layout_node_ids(tree.root(), &mut layout_node_ids);
+        }
+        assert!(
+            !layout_node_ids.is_empty(),
+            "the tile scene has layout nodes"
+        );
+        Self {
+            shell,
+            seconds,
+            layout_node_ids,
+        }
     }
 
     fn frame(&mut self, seconds: f32) -> (RenderStatsSnapshot, CapturedFrame) {
@@ -111,6 +132,23 @@ impl TileHarness {
 
     fn settled_frame(&mut self, seconds: f32) -> CapturedFrame {
         support::settle(|| self.frame(seconds))
+    }
+
+    fn forced_content_frame(&mut self, seconds: f32) -> (RenderStatsSnapshot, CapturedFrame) {
+        let state = self
+            .seconds
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("state captured");
+        let layout_node_ids = &self.layout_node_ids;
+        self.shell.debug_enter_app_context(|| {
+            state.set(seconds);
+            for &node_id in layout_node_ids {
+                schedule_draw_repass(node_id);
+            }
+        });
+        support::update_and_capture(&mut self.shell, FRAME_WIDTH, FRAME_HEIGHT)
     }
 }
 
@@ -242,6 +280,32 @@ fn scale_animation_pixels_do_not_depend_on_repeated_input_frames() {
             FRAME_WIDTH,
             &expected.pixels,
             &actual.pixels,
+        );
+    }
+}
+
+#[test]
+fn layer_property_animation_matches_forced_content_rerecord_at_the_same_time() {
+    let Some((_lock, mut harness)) = harness(false) else {
+        return;
+    };
+    harness.settled_frame(0.0);
+    support::wait_for_background_compiler_idle();
+
+    for frame in [7, 31, 63, 97] {
+        let seconds = frame_seconds(frame);
+        let (animated_stats, animated) = harness.frame(seconds);
+        assert!(
+            support::pipelines_settled(&animated_stats),
+            "animated frame {frame} used a stand-in pipeline: {animated_stats:?}"
+        );
+
+        let rerecorded = support::settle(|| harness.forced_content_frame(seconds));
+        support::assert_same_bytes(
+            &format!("animated layer vs forced rerecord at frame {frame}"),
+            FRAME_WIDTH,
+            &rerecorded.pixels,
+            &animated.pixels,
         );
     }
 }
