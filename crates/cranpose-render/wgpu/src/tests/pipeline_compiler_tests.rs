@@ -4,9 +4,8 @@ use web_time::{Duration, Instant};
 
 use super::{CompileLane, PipelineCompiler};
 
-/// Both lanes run every job off the calling thread; the demanded lane's one
-/// thread runs them in queue order, while the warm-up lane's threads start
-/// them in that order and may finish them in any.
+/// Both lanes run every job off the calling thread. Each starts its jobs in
+/// queue order, on several threads, so they may finish in any.
 #[test]
 fn each_lane_runs_its_jobs_off_the_calling_thread() {
     let compiler = PipelineCompiler::spawn();
@@ -27,9 +26,7 @@ fn each_lane_runs_its_jobs_off_the_calling_thread() {
                 index
             })
             .collect();
-        if lane == CompileLane::WarmUp {
-            indices.sort_unstable();
-        }
+        indices.sort_unstable();
         assert_eq!(indices, [0, 1, 2]);
     }
 }
@@ -54,6 +51,90 @@ fn a_demanded_job_runs_while_a_warm_up_is_still_compiling() {
         "a demanded job must not wait behind a warm-up"
     );
     release.send(()).unwrap();
+}
+
+/// Holds every warm-up thread of `compiler` until the returned senders
+/// drop, so nothing queued for them lands meanwhile.
+pub(crate) fn hold_warm_ups(compiler: &PipelineCompiler) -> Vec<mpsc::Sender<()>> {
+    hold(compiler, CompileLane::WarmUp, super::warm_up_threads())
+}
+
+/// Holds `count` threads of `compiler` inside jobs on `lane` until the
+/// returned senders drop.
+fn hold(compiler: &PipelineCompiler, lane: CompileLane, count: usize) -> Vec<mpsc::Sender<()>> {
+    let (started, holding) = mpsc::channel();
+    let releases = (0..count)
+        .map(|_| {
+            let (release, held) = mpsc::channel::<()>();
+            let started = started.clone();
+            compiler.enqueue(lane, move || {
+                started.send(()).unwrap();
+                let _ = held.recv();
+            });
+            release
+        })
+        .collect();
+    for _ in 0..count {
+        holding.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+    releases
+}
+
+/// A screen of new materials demands many pipelines at once; once frames
+/// stop building their own, the warm-up threads take them while the
+/// demanded lane's own thread is busy.
+#[test]
+fn demanded_jobs_compile_on_idle_warm_up_threads_once_spread() {
+    let compiler = PipelineCompiler::spawn();
+    compiler.spread_demand(true);
+    let threads = 1 + super::warm_up_threads();
+    let _held = hold(&compiler, CompileLane::Demanded, threads);
+}
+
+/// While a frame builds its own pipelines, demanded jobs keep to their one
+/// thread, so no more compiles run beside the frame's.
+#[test]
+fn a_demanded_job_waits_for_its_own_thread_until_spread() {
+    let compiler = PipelineCompiler::spawn();
+    let held = hold(&compiler, CompileLane::Demanded, 1);
+    let (ran, demanded_ran) = mpsc::channel();
+    compiler.enqueue(CompileLane::Demanded, move || ran.send(()).unwrap());
+    assert!(
+        demanded_ran
+            .recv_timeout(Duration::from_millis(100))
+            .is_err(),
+        "idle warm-up threads leave it queued"
+    );
+    compiler.spread_demand(true);
+    assert_eq!(
+        demanded_ran.recv_timeout(Duration::from_secs(5)),
+        Ok(()),
+        "a warm-up thread takes it once spread"
+    );
+    drop(held);
+}
+
+/// A warm-up waits for every demanded job queued before it, however many
+/// threads are idle.
+#[test]
+fn a_warm_up_waits_while_demanded_jobs_are_queued() {
+    let compiler = PipelineCompiler::spawn();
+    compiler.spread_demand(true);
+    let threads = 1 + super::warm_up_threads();
+    let held = hold(&compiler, CompileLane::Demanded, threads);
+    let (ran, order) = mpsc::channel();
+    let warm_up = ran.clone();
+    compiler.enqueue(CompileLane::WarmUp, move || {
+        warm_up.send("warm-up").unwrap();
+    });
+    compiler.enqueue(CompileLane::Demanded, move || ran.send("demanded").unwrap());
+    assert!(
+        order.recv_timeout(Duration::from_millis(100)).is_err(),
+        "every thread is held"
+    );
+    drop(held);
+    assert_eq!(order.recv_timeout(Duration::from_secs(5)), Ok("demanded"));
+    assert_eq!(order.recv_timeout(Duration::from_secs(5)), Ok("warm-up"));
 }
 
 #[test]
@@ -138,17 +219,16 @@ fn the_last_handle_waits_for_the_compile_in_flight() {
     );
 }
 
-/// Runs a job on the demanded lane and returns once its thread is done with
-/// it, landing included: the lane runs its jobs in order.
+/// Runs a job on the demanded lane and returns once it is counted built.
 fn build_one(compiler: &PipelineCompiler) {
-    let (done, finished) = mpsc::channel();
+    let landing = compiler.landing().expect("a spawned compiler");
+    let built = landing.built();
     compiler.enqueue(CompileLane::Demanded, || {});
-    compiler.enqueue(CompileLane::Demanded, move || {
-        done.send(()).expect("test waits");
-    });
-    finished
-        .recv_timeout(Duration::from_secs(5))
-        .expect("the lane runs its jobs");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while landing.built() == built {
+        assert!(Instant::now() < deadline, "the lane runs its jobs");
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 #[test]
@@ -169,7 +249,7 @@ fn a_pipeline_landing_after_a_placeholder_wakes_the_app_once() {
     landing.await_since(landing.built());
     build_one(&compiler);
     assert!(
-        wakes.try_recv().is_ok(),
+        wakes.recv_timeout(Duration::from_secs(5)).is_ok(),
         "the awaited landing wakes the app"
     );
     assert!(wakes.try_recv().is_err(), "once");

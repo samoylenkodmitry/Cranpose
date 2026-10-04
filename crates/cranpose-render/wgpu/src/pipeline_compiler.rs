@@ -1,8 +1,11 @@
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::{
-    Arc, Mutex, OnceLock, PoisonError,
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc::{self, Receiver, Sender},
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
 };
 
 /// Tells a renderer that drew a placeholder when a pipeline lands, so it
@@ -126,26 +129,84 @@ pub(crate) enum CompileLane {
 
 /// Runs pipeline creation on background threads, so a draw finds its
 /// pipeline ready instead of paying the driver's compile inside the frame.
-/// Each [`CompileLane`] has its own threads, one for the demanded lane and
-/// a few for warm-ups, and starts its jobs in the order they were queued, so
-/// a pipeline a frame is waiting for never queues behind warm-ups, which
-/// take seconds each on a slow device's driver. The threads end with the
-/// last handle, which skips the jobs they had not started and waits, up to
-/// [`LANE_FINISH_WAIT`], for the ones they had.
+/// Each [`CompileLane`] starts its jobs in the order they were queued. One
+/// thread takes only demanded jobs, so a pipeline a frame is waiting for
+/// never queues behind warm-ups, which take seconds each on a slow device's
+/// driver. While [`Self::spread_demand`] is on, the warm-up threads take a
+/// waiting demanded job before their own, so a screen of new materials
+/// compiles on all of them. The threads
+/// end with the last handle, which skips the jobs they had not started and
+/// waits, up to [`LANE_FINISH_WAIT`], for the ones they had.
 #[derive(Clone, Default)]
 pub(crate) struct PipelineCompiler {
     #[cfg(not(target_arch = "wasm32"))]
     workers: Option<Arc<Workers>>,
 }
 
+/// The jobs waiting for a compiler thread, per lane.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct Queues {
+    demanded: VecDeque<Job>,
+    warm_up: VecDeque<Job>,
+    /// Set by the last handle: the threads start nothing more.
+    closed: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Queues {
+    /// The next job a thread taking `warm_ups` or only demanded jobs
+    /// starts; a warm-up thread takes demanded jobs only when `spread`.
+    fn next(&mut self, warm_ups: bool, spread: bool) -> Option<Job> {
+        let demanded = if warm_ups && !spread {
+            None
+        } else {
+            self.demanded.pop_front()
+        };
+        demanded.or_else(|| warm_ups.then(|| self.warm_up.pop_front()).flatten())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct Pool {
+    queues: Mutex<Queues>,
+    queued: Condvar,
+    /// Whether the warm-up threads take demanded jobs; set outside the
+    /// lock, read under it.
+    spread: AtomicBool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Pool {
+    fn queues(&self) -> MutexGuard<'_, Queues> {
+        self.queues.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Waits for the next job a thread taking `warm_ups` or only demanded
+    /// jobs starts; `None` once the pool is closed.
+    fn take(&self, warm_ups: bool) -> Option<Job> {
+        let mut queues = self.queues();
+        loop {
+            if queues.closed {
+                return None;
+            }
+            if let Some(job) = queues.next(warm_ups, self.spread.load(Ordering::Acquire)) {
+                return Some(job);
+            }
+            queues = self
+                .queued
+                .wait(queues)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 struct Workers {
-    /// `None` once dropping has closed the lanes.
-    demanded: Option<Sender<Job>>,
-    warm_up: Option<Sender<Job>>,
-    stopped: Arc<AtomicBool>,
-    /// Each lane thread says here that it has ended. Behind a mutex only so
-    /// the handle is `Sync`; the last handle reads it without locking.
+    pool: Arc<Pool>,
+    /// Each thread says here that it has ended. Behind a mutex only so the
+    /// handle is `Sync`; the last handle reads it without locking.
     finished: Mutex<Receiver<()>>,
     threads: usize,
     landing: Arc<Landing>,
@@ -154,9 +215,16 @@ struct Workers {
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for Workers {
     fn drop(&mut self) {
-        self.stopped.store(true, Ordering::Release);
-        self.demanded = None;
-        self.warm_up = None;
+        let skipped = {
+            let mut queues = self.pool.queues();
+            queues.closed = true;
+            (
+                std::mem::take(&mut queues.demanded),
+                std::mem::take(&mut queues.warm_up),
+            )
+        };
+        drop(skipped);
+        self.pool.queued.notify_all();
         let finished = self
             .finished
             .get_mut()
@@ -174,41 +242,30 @@ impl Drop for Workers {
     }
 }
 
-/// A lane of `threads` threads taking its jobs in the order queued.
+/// A compiler thread named `name` taking jobs from `pool`: demanded ones
+/// only, or demanded ones first and then `warm_ups`.
 #[cfg(not(target_arch = "wasm32"))]
-fn spawn_lane(
+fn spawn_thread(
     name: &str,
-    threads: usize,
-    stopped: &Arc<AtomicBool>,
+    warm_ups: bool,
+    pool: &Arc<Pool>,
     finished: &Sender<()>,
     landing: &Arc<Landing>,
-) -> std::io::Result<Sender<Job>> {
-    let (jobs, queued) = mpsc::channel::<Job>();
-    let queued = Arc::new(Mutex::new(queued));
-    for _ in 0..threads {
-        let queued = Arc::clone(&queued);
-        let stopped = Arc::clone(stopped);
-        let finished = finished.clone();
-        let landing = Arc::clone(landing);
-        std::thread::Builder::new()
-            .name(name.into())
-            .spawn(move || {
-                crate::render::mark_thread_off_frame();
-                loop {
-                    let job = queued.lock().unwrap_or_else(PoisonError::into_inner).recv();
-                    let Ok(job) = job else {
-                        break;
-                    };
-                    if stopped.load(Ordering::Acquire) {
-                        break;
-                    }
-                    job();
-                    landing.after_build();
-                }
-                let _ = finished.send(());
-            })?;
-    }
-    Ok(jobs)
+) -> std::io::Result<()> {
+    let pool = Arc::clone(pool);
+    let finished = finished.clone();
+    let landing = Arc::clone(landing);
+    std::thread::Builder::new()
+        .name(name.into())
+        .spawn(move || {
+            crate::render::mark_thread_off_frame();
+            while let Some(job) = pool.take(warm_ups) {
+                job();
+                landing.after_build();
+            }
+            let _ = finished.send(());
+        })
+        .map(drop)
 }
 
 /// Where a renderer compiles its pipelines.
@@ -243,31 +300,32 @@ impl PipelineCompiler {
             if BACKGROUND_PIPELINES.equals("0") {
                 return Self::inactive();
             }
-            let stopped = Arc::new(AtomicBool::new(false));
             let (finished_tx, finished) = mpsc::channel();
-            let warm_up_threads = warm_up_threads();
-            let landing = Arc::new(Landing::default());
-            let lanes = spawn_lane("cranpose-pipelines", 1, &stopped, &finished_tx, &landing)
-                .and_then(|demanded| {
-                    spawn_lane(
-                        "cranpose-warm-up",
-                        warm_up_threads,
-                        &stopped,
+            let mut workers = Workers {
+                pool: Arc::default(),
+                finished: Mutex::new(finished),
+                threads: 0,
+                landing: Arc::default(),
+            };
+            let spawned = std::iter::once(("cranpose-pipelines", false))
+                .chain(std::iter::repeat_n(
+                    ("cranpose-warm-up", true),
+                    warm_up_threads(),
+                ))
+                .try_for_each(|(name, warm_ups)| -> std::io::Result<()> {
+                    spawn_thread(
+                        name,
+                        warm_ups,
+                        &workers.pool,
                         &finished_tx,
-                        &landing,
-                    )
-                    .map(|warm_up| (demanded, warm_up))
+                        &workers.landing,
+                    )?;
+                    workers.threads += 1;
+                    Ok(())
                 });
-            match lanes {
-                Ok((demanded, warm_up)) => Self {
-                    workers: Some(Arc::new(Workers {
-                        demanded: Some(demanded),
-                        warm_up: Some(warm_up),
-                        stopped,
-                        finished: Mutex::new(finished),
-                        threads: 1 + warm_up_threads,
-                        landing,
-                    })),
+            match spawned {
+                Ok(()) => Self {
+                    workers: Some(Arc::new(workers)),
                 },
                 Err(error) => {
                     log::error!("[gpu-pipeline] background compiler failed to spawn: {error}");
@@ -301,20 +359,40 @@ impl PipelineCompiler {
         }
     }
 
+    /// Whether the warm-up threads take demanded jobs before their own. A
+    /// frame that built a pipeline itself turns it off: on a driver that
+    /// serializes much of each compile, compiles beside the frame's own slow
+    /// it several times (a Mali blit: 33 ms alone, 180 ms beside three
+    /// glass compiles), and the frame shows nothing until it is done.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn spread_demand(&self, spread: bool) {
+        if let Some(workers) = self.workers.as_ref()
+            && workers.pool.spread.swap(spread, Ordering::AcqRel) != spread
+            && spread
+        {
+            // A thread that read the old value under the lock is waiting
+            // by the time the lock is free.
+            drop(workers.pool.queues());
+            workers.pool.queued.notify_all();
+        }
+    }
+
     /// Queues `job` on `lane`'s thread, behind the jobs already waiting
     /// there; an inactive compiler drops it, and the caller compiles at
     /// first use as before.
     pub(crate) fn enqueue(&self, lane: CompileLane, job: impl FnOnce() + CompilerSend + 'static) {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(workers) = self.workers.as_ref() {
-            let jobs = match lane {
-                CompileLane::Demanded => workers.demanded.as_ref(),
-                CompileLane::WarmUp => workers.warm_up.as_ref(),
-            };
             workers.landing.queued.fetch_add(1, Ordering::AcqRel);
-            if jobs.is_none_or(|jobs| jobs.send(Box::new(job)).is_err()) {
-                log::error!("[gpu-pipeline] background compiler stopped unexpectedly");
+            let mut queues = workers.pool.queues();
+            match lane {
+                CompileLane::Demanded => queues.demanded.push_back(Box::new(job)),
+                CompileLane::WarmUp => queues.warm_up.push_back(Box::new(job)),
             }
+            drop(queues);
+            // A warm-up wakes every thread: the one taking only demanded
+            // jobs may be the one woken, and it would leave the job queued.
+            workers.pool.queued.notify_all();
         }
         #[cfg(target_arch = "wasm32")]
         drop((lane, job));
@@ -323,4 +401,4 @@ impl PipelineCompiler {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "tests/pipeline_compiler_tests.rs"]
-mod tests;
+pub(crate) mod tests;
