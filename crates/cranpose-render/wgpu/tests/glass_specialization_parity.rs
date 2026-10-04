@@ -108,25 +108,29 @@ fn GlassCardScene(button: bool) {
 }
 
 fn capture_card(unspecialized: bool) -> Result<CapturedFrame, String> {
-    capture_card_and_stats_under(unspecialized.then_some(TOGGLE)).map(|(frame, _)| frame)
+    capture_glass_under(unspecialized.then_some(TOGGLE), false).map(|(frame, _)| frame)
 }
 
 fn capture_card_and_stats() -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
-    capture_card_and_stats_under(None)
+    capture_glass_under(None, false)
 }
 
 /// The toggles are process-global, so one raised for a capture is raised
 /// only while this capture holds the GPU lock: set after the lock, cleared
 /// before it is released, or a concurrent capture in this binary renders
 /// under it.
-fn capture_card_and_stats_under(
+fn capture_glass_under(
     toggle: Option<&'static str>,
+    button: bool,
 ) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
     let (_lock, renderer) = support::headless_renderer_parts()?;
     if let Some(toggle) = toggle {
         cranpose_render_wgpu::set_debug_toggle(toggle, Some("1"));
     }
-    let captured = render_card_and_stats(renderer);
+    let captured = settle(
+        &mut card_shell(renderer, button),
+        (FRAME_WIDTH, FRAME_HEIGHT),
+    );
     if let Some(toggle) = toggle {
         cranpose_render_wgpu::set_debug_toggle(toggle, None);
     }
@@ -187,17 +191,6 @@ fn capture_scene_frame(
 }
 
 const SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Captures the card until every glass draw uses the specialization it
-/// asked for, so the statistics describe the settled frame.
-fn render_card_and_stats(
-    renderer: WgpuRenderer,
-) -> Result<(CapturedFrame, RenderStatsSnapshot), String> {
-    settle(
-        &mut card_shell(renderer, false),
-        (FRAME_WIDTH, FRAME_HEIGHT),
-    )
-}
 
 /// Captures `shell` until every glass draw uses the specialization it
 /// asked for, so the statistics describe the settled frame.
@@ -326,8 +319,7 @@ fn first_drawn_frame(shell: &mut AppShell<WgpuRenderer>) -> (CapturedFrame, Rend
 }
 
 /// Asks renderers to build the glass shader's general pipelines on their
-/// background compilers: a new material stands in with them while its own
-/// compile, where without them it waits for its own.
+/// background compilers.
 fn request_glass_general() {
     cranpose_ui_graphics::request_shader_warm_ups([ShaderTarget::Page, ShaderTarget::Layer].map(
         |target| ShaderWarmUp {
@@ -337,12 +329,12 @@ fn request_glass_general() {
     ));
 }
 
-/// Once the glass shader's general pipeline is built, a new card material
-/// draws with it, counted as fallback draws, and every later frame lands on
-/// the same bytes until its specialized pipelines take over in the
-/// background.
+/// The general draws a glass several times slower than its own pipelines
+/// (~300 ms frames on a Mali), so even with it built a new card material
+/// shows its placeholder until its own pipelines land, and never the
+/// general.
 #[test]
-fn a_glass_draws_with_its_general_pipeline_until_the_specialization_lands() {
+fn a_new_glass_waits_for_its_own_pipelines_rather_than_draw_with_the_general() {
     request_glass_general();
     let Ok((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background() else {
         eprintln!("skipping glass pipeline readiness: no headless renderer");
@@ -350,38 +342,14 @@ fn a_glass_draws_with_its_general_pipeline_until_the_specialization_lands() {
     };
     let mut shell = card_shell(renderer, false);
     support::wait_for_background_compiler_idle();
-    let (first, first_stats) = first_drawn_frame(&mut shell);
+    let (_, waiting) = capture_card_frame(&mut shell).expect("capture");
     assert!(
-        first_stats.shader_pipeline_fallback_draws > 0,
-        "the first frame must not wait for the specializations: {first_stats:?}"
+        waiting.placeholder_draws > 0,
+        "the first frame shows the placeholder: {waiting:?}"
     );
-    assert_eq!(first_stats.shader_specialized_draws, 0);
-    assert!(
-        support::distinct_colors(&first.pixels) > 600,
-        "the fallback frame must carry the refracted star field"
-    );
-    let deadline = std::time::Instant::now() + SETTLE;
-    loop {
-        let (frame, stats) = capture_card_frame(&mut shell).expect("capture");
-        support::assert_same_bytes(
-            "a specialization landing changed the picture",
-            FRAME_WIDTH,
-            &first.pixels,
-            &frame.pixels,
-        );
-        if stats.shader_pipeline_fallback_draws == 0 {
-            assert!(
-                stats.shader_specialized_draws > 0,
-                "the settled frame must use the specialization: {stats:?}"
-            );
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the glass specializations never finished compiling"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    let (_, drawn) = first_drawn_frame(&mut shell);
+    assert_eq!(drawn.shader_pipeline_fallback_draws, 0, "{drawn:?}");
+    assert!(drawn.shader_specialized_draws > 0, "{drawn:?}");
 }
 
 /// The card's adaptive frost reads a wide neighbourhood of its capture; the
@@ -391,7 +359,7 @@ fn a_glass_draws_with_its_general_pipeline_until_the_specialization_lands() {
 /// no substrate, and the settled frame is a replay.
 #[test]
 fn a_card_glass_with_adaptive_frost_is_handed_one_substrate() {
-    let (_, stats) = match capture_card_and_stats_under(Some("CRANPOSE_NO_BACKDROP_CACHE")) {
+    let (_, stats) = match capture_glass_under(Some("CRANPOSE_NO_BACKDROP_CACHE"), false) {
         Ok(captured) => captured,
         Err(err) => {
             eprintln!("skipping substrate count: {err}");
@@ -493,7 +461,7 @@ fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixe
         }
     };
     let (whole, whole_stats) =
-        capture_card_and_stats_under(Some(NO_SPLIT)).expect("headless WGPU init failed mid-suite");
+        capture_glass_under(Some(NO_SPLIT), false).expect("headless WGPU init failed mid-suite");
     assert_eq!(
         split_stats.shader_pixels, whole_stats.shader_pixels,
         "the split shades the same composite area once"
@@ -514,24 +482,26 @@ fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixe
 }
 
 #[test]
-fn a_floating_button_keeps_its_picture_when_specialization_arrives() {
-    request_glass_general();
-    let Ok((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background() else {
+fn a_floating_button_draws_the_same_with_its_general_and_its_own_pipelines() {
+    let general = match capture_glass_under(Some(TOGGLE), true) {
+        Ok((frame, _)) => frame,
+        Err(err) => {
+            eprintln!("skipping floating glass parity: {err}");
+            return;
+        }
+    };
+    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
         eprintln!("skipping floating glass parity: no headless renderer");
         return;
     };
     let mut shell = card_shell(renderer, true);
-    support::wait_for_background_compiler_idle();
-    let (first, first_stats) = first_drawn_frame(&mut shell);
-    assert!(first_stats.shader_pipeline_fallback_draws > 0);
-    support::wait_for_background_compiler_idle();
-    let (settled, settled_stats) = capture_card_frame(&mut shell).expect("settled capture");
-    assert_eq!(settled_stats.shader_pipeline_fallback_draws, 0);
+    let (settled, settled_stats) =
+        settle(&mut shell, (FRAME_WIDTH, FRAME_HEIGHT)).expect("settled capture");
     assert!(settled_stats.shader_specialized_draws > 0);
     support::assert_same_bytes(
-        "the floating button retains its glass, glyph and ring shadow after specialization",
+        "the floating button's glass, glyph and ring shadow with its own pipelines",
         FRAME_WIDTH,
-        &first.pixels,
+        &general.pixels,
         &settled.pixels,
     );
     let graph = shell

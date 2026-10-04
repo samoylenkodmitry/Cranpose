@@ -87,34 +87,6 @@ fn builds(cache: &ShaderPipelineCache) -> (usize, usize) {
     )
 }
 
-fn settle(cache: &mut ShaderPipelineCache, shader: &RuntimeShader) {
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        let pending = [
-            ShaderDrawVariant::Whole,
-            ShaderDrawVariant::Interior,
-            ShaderDrawVariant::Rim,
-        ]
-        .into_iter()
-        .any(|variant| {
-            let (_, fit) = cache
-                .get_or_create(
-                    shader,
-                    shader.draw_specialization(0),
-                    RuntimeShaderPipelineMode::Replace,
-                    variant,
-                )
-                .expect("valid shader");
-            fit == ShaderPipelineFit::Fallback
-        });
-        if !pending {
-            return;
-        }
-        assert!(Instant::now() < deadline, "specializations never landed");
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
 #[test]
 fn warm_pipeline_lookups_do_not_rebuild_constants() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
@@ -155,121 +127,49 @@ fn parts_ready(
         .map(|variant| cache.ready_to_draw(shader, shader.draw_specialization(0), mode, variant))
 }
 
-/// Starts frames until `ready` holds.
-fn frames_until(
+/// Builds `shader`'s general pipeline: the unspecialized whole draw.
+fn build_general(
     cache: &mut ShaderPipelineCache,
-    what: &str,
-    mut ready: impl FnMut(&mut ShaderPipelineCache) -> bool,
+    shader: &RuntimeShader,
+    mode: RuntimeShaderPipelineMode,
 ) {
-    let deadline = Instant::now() + SETTLE;
-    loop {
-        cache.begin_frame();
-        if ready(cache) {
-            return;
-        }
-        assert!(Instant::now() < deadline, "{what} never landed");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    let general = RuntimeShader::new(shader.source());
+    cache
+        .get_or_create(
+            &general,
+            general.draw_specialization(0),
+            mode,
+            ShaderDrawVariant::Whole,
+        )
+        .expect("valid general shader");
 }
 
+/// The general draws a material several times slower than its own
+/// pipelines (a glass on a Mali: ~300 ms frames), so a material waits for
+/// its own parts even when the general is built.
 #[test]
-fn a_new_material_waits_for_its_own_parts_and_the_general_follows_its_frame() {
+fn a_new_material_waits_for_its_own_parts_rather_than_draw_with_the_general() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
     let mut cache = cache(&device, PipelineCompiler::spawn());
     let shader = split_shader();
     let mode = RuntimeShaderPipelineMode::Replace;
-    cache.begin_frame();
+    build_general(&mut cache, &shader, mode);
     assert_eq!(
         parts_ready(&mut cache, &shader, mode),
         [false; 2],
-        "nothing is built for a new material"
+        "a built general does not stand in"
     );
-    let general = cache
-        .key(
-            &shader,
-            shader.draw_specialization(0),
-            mode,
-            ShaderDrawVariant::Whole,
-        )
-        .general();
-    assert!(
-        !cache.pipelines.contains_key(&general),
-        "the general must not compile beside the frame's own pipelines"
-    );
-    frames_until(&mut cache, "the general and the parts", |cache| {
-        cache.ready(general) && parts_ready(cache, &shader, mode) == [true; 2]
-    });
+    let deadline = Instant::now() + SETTLE;
+    while parts_ready(&mut cache, &shader, mode) != [true; 2] {
+        assert!(Instant::now() < deadline, "the parts never landed");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     assert_eq!(
         draw_parts(&mut cache, &shader, mode),
         [ShaderPipelineFit::Specialized; 2],
         "the material draws with its own parts"
     );
-    assert_eq!(builds(&cache), (1, 3), "both parts, then the general");
-}
-
-#[test]
-fn another_material_stands_in_with_the_general_once_it_lands() {
-    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let compiler = PipelineCompiler::spawn();
-    // The general queued behind the held warm-up threads cannot land
-    // before the holds drop.
-    let holds = hold_warm_ups(&compiler);
-    let mut cache = cache(&device, compiler);
-    let shader = split_shader();
-    let mode = RuntimeShaderPipelineMode::Replace;
-    cache.begin_frame();
-    assert_eq!(parts_ready(&mut cache, &shader, mode), [false; 2]);
-    let general_key = cache
-        .key(
-            &shader,
-            shader.draw_specialization(0),
-            mode,
-            ShaderDrawVariant::Whole,
-        )
-        .general();
-    cache.begin_frame();
-    drop(holds);
-    frames_until(&mut cache, "the general", |cache| cache.ready(general_key));
-    let mut other = split_shader();
-    other.set_override("RED", 1.0);
-    let specialization = other.draw_specialization(0);
-    assert!(
-        cache.ready_to_draw(&other, specialization, mode, ShaderDrawVariant::Interior),
-        "another material draws at once with the general"
-    );
-    let (general, fit) = cache
-        .get_or_create(&other, specialization, mode, ShaderDrawVariant::Interior)
-        .expect("valid shader");
-    assert_eq!(fit, ShaderPipelineFit::Fallback);
-    let general = general.clone();
-    settle(&mut cache, &shader);
-    cache.begin_frame();
-    for variant in [ShaderDrawVariant::Interior, ShaderDrawVariant::Rim] {
-        let (specialized, fit) = cache
-            .get_or_create(&shader, shader.draw_specialization(0), mode, variant)
-            .expect("valid shader");
-        assert_eq!(fit, ShaderPipelineFit::Specialized);
-        assert!(*specialized != general, "{variant:?} has its own pipeline");
-    }
-    let (whole, fit) = cache
-        .get_or_create(
-            &shader,
-            shader.draw_specialization(0),
-            mode,
-            ShaderDrawVariant::Whole,
-        )
-        .expect("valid shader");
-    assert_eq!(
-        fit,
-        ShaderPipelineFit::Specialized,
-        "an override set is a specialization"
-    );
-    assert!(*whole != general);
-    assert_eq!(
-        builds(&cache),
-        (1, 5),
-        "the general, three variants, and the other material's interior"
-    );
+    assert_eq!(builds(&cache), (1, 3), "the general and both parts");
 }
 
 /// A material of a shader declaring two flags, told apart by `green`.
@@ -316,7 +216,6 @@ fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
         })
         .collect();
     cache.warm_first_screen(&records, [text]);
-    cache.begin_frame();
     for shader in &materials {
         let (_, fit) = cache
             .get_or_create(
@@ -353,7 +252,6 @@ fn a_first_screens_shared_stand_in_draws_its_materials_before_their_own() {
     drop(holds);
     let deadline = Instant::now() + SETTLE;
     loop {
-        cache.begin_frame();
         let landed = materials.iter().all(|shader| {
             cache
                 .get_or_create(
@@ -442,71 +340,38 @@ fn a_warmed_general_pipeline_is_ready_before_its_first_draw() {
 #[test]
 fn a_drawn_specialization_does_not_wait_for_its_queued_warm_up() {
     let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    for fallback_ready in [false, true] {
-        let compiler = PipelineCompiler::spawn();
-        let (release, blocked) = std::sync::mpsc::channel::<()>();
-        compiler.enqueue(CompileLane::WarmUp, move || {
-            let _ = blocked.recv();
-        });
-        let mut cache = cache(&device, compiler.clone());
-        let shader = split_shader();
-        let mode = RuntimeShaderPipelineMode::Replace;
-        if fallback_ready {
-            let general = RuntimeShader::new(shader.source());
-            cache
-                .get_or_create(
-                    &general,
-                    general.draw_specialization(0),
-                    mode,
-                    ShaderDrawVariant::Whole,
-                )
-                .expect("valid general shader");
-        }
-        cache.warm(&shader, mode);
-        let (_, fit) = cache
-            .get_or_create(
-                &shader,
-                shader.draw_specialization(0),
-                mode,
-                ShaderDrawVariant::Whole,
-            )
-            .expect("valid shader");
-        assert_eq!(
-            fit,
-            if fallback_ready {
-                ShaderPipelineFit::Fallback
-            } else {
-                ShaderPipelineFit::Specialized
-            }
-        );
-        let key = cache.key(
+    let compiler = PipelineCompiler::spawn();
+    let (release, blocked) = std::sync::mpsc::channel::<()>();
+    compiler.enqueue(CompileLane::WarmUp, move || {
+        let _ = blocked.recv();
+    });
+    let mut cache = cache(&device, compiler.clone());
+    let shader = split_shader();
+    let mode = RuntimeShaderPipelineMode::Replace;
+    build_general(&mut cache, &shader, mode);
+    cache.warm(&shader, mode);
+    let (_, fit) = cache
+        .get_or_create(
             &shader,
             shader.draw_specialization(0),
             mode,
             ShaderDrawVariant::Whole,
-        );
-        let deadline = Instant::now() + SETTLE;
-        while !cache.ready(key) {
-            assert!(
-                Instant::now() < deadline,
-                "the drawn specialization waited behind the warm-up lane"
-            );
-            std::thread::sleep(Duration::from_millis(5));
-        }
-        release.send(()).expect("the blocking warm-up is waiting");
-        let (drained, warm_ups_done) = std::sync::mpsc::channel();
-        compiler.enqueue(CompileLane::WarmUp, move || {
-            let _ = drained.send(());
-        });
-        warm_ups_done
-            .recv_timeout(SETTLE)
-            .expect("the warm-up lane drains");
-        assert_eq!(
-            builds(&cache),
-            (1, 1 + usize::from(fallback_ready)),
-            "the requested pipeline builds without a new general stand-in"
-        );
-    }
+        )
+        .expect("valid shader");
+    assert_eq!(fit, ShaderPipelineFit::Specialized);
+    release.send(()).expect("the blocking warm-up is waiting");
+    let (drained, warm_ups_done) = std::sync::mpsc::channel();
+    compiler.enqueue(CompileLane::WarmUp, move || {
+        let _ = drained.send(());
+    });
+    warm_ups_done
+        .recv_timeout(SETTLE)
+        .expect("the warm-up lane drains");
+    assert_eq!(
+        builds(&cache),
+        (1, 2),
+        "the general and the drawn specialization, which its warm-up found built"
+    );
 }
 
 #[test]

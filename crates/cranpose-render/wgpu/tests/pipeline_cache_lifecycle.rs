@@ -16,8 +16,8 @@ use cranpose_render_wgpu::{
     set_debug_toggle_os,
 };
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, LiquidGlassRect, LiquidGlassSpec, LiquidLoupeSpec,
-    Rect, RenderEffect, liquid_glass_effect, liquid_loupe_effect,
+    Brush, Color, CornerRadii, DrawPrimitive, LiquidGlassRect, LiquidGlassSpec, Rect, RenderEffect,
+    liquid_glass_effect,
 };
 
 use crate::support::{
@@ -680,59 +680,6 @@ fn a_relaunch_draws_cached_glass_with_its_own_pipelines() {
                 "a cached glass draws with its own pipelines"
             );
             assert_eq!(stats.placeholder_draws, 0);
-        },
-    );
-}
-
-/// A material no launch drew stands in with the general glass while its own
-/// pipeline compiles. After an update the general the last launch stood in
-/// with is built once the first frame is drawn, so standing in compiles
-/// nothing inside a frame.
-#[test]
-fn an_updated_build_stands_a_new_glass_in_with_a_general_built_after_its_first_frame() {
-    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
-    // Folded, each material below is a pipeline of its own.
-    let _folds = GlassFolds::set(true);
-    let frosted = LiquidGlassSpec {
-        blur_radius: 4.0,
-        ..LiquidGlassSpec::default()
-    };
-    relaunch_after_drawing(
-        |previous| {
-            first_frame_builds(previous);
-            std::thread::sleep(Duration::from_millis(2100));
-            // A new material waits for its own pipelines; the general
-            // follows its frame, and the next new material stands in.
-            draw_settled(previous, panes_page([support::glass_page::glass_shader()]));
-            support::wait_for_background_compiler_idle();
-            let (_, stats) = support::capture_drawn(
-                previous,
-                &panes_page([glass_of(&frosted)]),
-                FRAME_WIDTH,
-                FRAME_HEIGHT,
-            );
-            assert!(
-                stats.shader_pipeline_fallback_draws > 0,
-                "the last launch stands a glass in with the general pipeline"
-            );
-        },
-        |bytes| bytes[0] ^= 0xff,
-        |updated| {
-            first_frame_builds(updated);
-            wait_for_warm_ups();
-            use support::glass_page::{GLASS_HEIGHT, GLASS_WIDTH};
-            let loupe =
-                liquid_loupe_effect((GLASS_WIDTH, GLASS_HEIGHT), &LiquidLoupeSpec::default());
-            let builds = frame_waits_of(updated, panes_page([loupe]));
-            let stats = updated.last_frame_stats().expect("glass frame statistics");
-            assert!(
-                stats.shader_pipeline_fallback_draws > 0,
-                "a new material stands in while its own pipeline compiles"
-            );
-            assert_eq!(
-                builds, 0,
-                "the stand-in must be built before the new material needs it"
-            );
         },
     );
 }

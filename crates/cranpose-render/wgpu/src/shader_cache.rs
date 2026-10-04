@@ -107,9 +107,9 @@ impl ShaderDrawVariant {
 
 /// How the pipeline a lookup returned fits the draw: the specialization it
 /// asked for, the shader's general pipeline because the draw asked for
-/// nothing more, or that general pipeline standing in while the
-/// specialization compiles. The general pipeline lands on the same bytes,
-/// shading every feature the specialization folded away.
+/// nothing more, or a first screen's stand-in, folded only to what its
+/// materials share, while the specialization compiles. Both land on the
+/// specialization's bytes, shading every feature it folded away.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ShaderPipelineFit {
     Specialized,
@@ -287,10 +287,6 @@ pub(crate) struct ShaderPipelineCache {
     /// The recorded pipelines a stand-in covers, queued once the first frame
     /// is drawn.
     after_first_frame: Vec<(PipelineKey, Vec<(&'static str, f64)>)>,
-    /// The general a material went without, queued when the next frame
-    /// starts: compiled beside the frame's own pipelines it would hold them,
-    /// since a Mali driver compiles largely one pipeline at a time.
-    general_due: Option<(PipelineKey, PipelineJob)>,
     /// The pipelines draws asked for, each noted once for the next launches.
     #[cfg(not(target_arch = "wasm32"))]
     noted: HashSet<PipelineKey, FxBuildHasher>,
@@ -339,27 +335,11 @@ impl ShaderPipelineCache {
             forced_hash: 0,
             stand_ins: Vec::new(),
             after_first_frame: Vec::new(),
-            general_due: None,
             #[cfg(not(target_arch = "wasm32"))]
             noted: HashSet::default(),
             #[cfg(not(target_arch = "wasm32"))]
             cached: HashSet::default(),
             recorder,
-        }
-    }
-
-    /// Starts a frame: the general a material of the last one went without
-    /// is queued.
-    pub(crate) fn begin_frame(&mut self) {
-        if let Some((general, job)) = self.general_due.take()
-            && !self.pipelines.contains_key(&general)
-        {
-            self.slot(general).queue(
-                &self.compiler,
-                CompileLane::WarmUp,
-                self.factory.backend,
-                || job.build(),
-            );
         }
     }
 
@@ -543,8 +523,8 @@ impl ShaderPipelineCache {
     }
 
     /// Whether drawing `shader` as `variant` now finds a pipeline built: its
-    /// own, a stand-in, or the general standing in. When none is, its own
-    /// is asked for, unless a stand-in covers it.
+    /// own or a first screen's stand-in. When neither is, its own is asked
+    /// for, unless a stand-in covers it.
     pub(crate) fn ready_to_draw(
         &mut self,
         shader: &RuntimeShader,
@@ -556,32 +536,19 @@ impl ShaderPipelineCache {
             return true;
         }
         let key = self.key(shader, specialization, mode, variant);
-        if self.ready(key) {
+        if self.ready(key) || self.cached(key) {
             return true;
         }
-        if self.cached(key) {
-            return true;
-        }
-        let general = key.general();
-        if specialization.exact() && key != general {
-            let stand_in = self.stand_in_for(key, specialization);
-            if stand_in.is_some_and(|index| self.ready(self.stand_ins[index].key))
-                || self.ready(general)
-            {
-                return true;
-            }
-            if stand_in.is_some() {
-                return false;
-            }
-            // Without a built general, a material waits for its own
-            // pipelines: a specialization compiles in a fraction of the
-            // general's time (glass on a Mali: ~0.3 s a part against
-            // ~1.4 s). The general follows on the warm-up lane once the
-            // frame is over, for the materials still waiting to stand in
-            // with.
-            if self.general_due.is_none() && !self.pipelines.contains_key(&general) {
-                self.general_due = Some((general, self.job(shader, specialization, general)));
-            }
+        // A first screen's shared stand-in draws its materials until their
+        // own pipelines, queued after the first frame, land. No general
+        // stands in: it draws a glass several times slower than its
+        // specialization (on a Mali, ~300 ms frames), and compiles several
+        // times longer, holding the pipelines the screen waits for.
+        if specialization.exact()
+            && key != key.general()
+            && let Some(index) = self.stand_in_for(key, specialization)
+        {
+            return self.ready(self.stand_ins[index].key);
         }
         self.demand(shader, specialization, key);
         false
@@ -624,7 +591,6 @@ impl ShaderPipelineCache {
         specialization: DrawSpecialization<'_>,
         key: PipelineKey,
     ) -> (PipelineKey, ShaderPipelineFit, Option<usize>) {
-        let general = key.general();
         let own_fit = if key.is_general() {
             ShaderPipelineFit::General
         } else {
@@ -633,7 +599,7 @@ impl ShaderPipelineCache {
         // A pipeline the driver cache holds builds from it: a stand-in would
         // compile from nothing.
         if self.ready(key)
-            || key == general
+            || key == key.general()
             || !self.compiler.is_active()
             || !specialization.exact()
             || self.cached(key)
@@ -642,26 +608,17 @@ impl ShaderPipelineCache {
         }
         self.demand(shader, specialization, key);
         // A shared stand-in, queued ahead of the recorded pipelines, draws a
-        // first screen while its materials' own pipelines compile; the
-        // general draws while the stand-in compiles.
-        if let Some(index) = self.stand_in_for(key, specialization)
-            && (self.ready(self.stand_ins[index].key) || !self.ready(general))
-        {
-            return (
+        // first screen while its materials' own pipelines compile. A draw
+        // that did not ask whether it is ready waits for it, already queued
+        // and shared, rather than start a compile of its own.
+        match self.stand_in_for(key, specialization) {
+            Some(index) => (
                 self.stand_ins[index].key,
                 ShaderPipelineFit::Fallback,
                 Some(index),
-            );
+            ),
+            None => (key, own_fit, None),
         }
-        // A draw that did not ask whether it is ready waits for its own.
-        if !self.ready(general) {
-            return (key, own_fit, None);
-        }
-        // The stand-in is drawn with too: a later launch builds it before
-        // another new material needs it.
-        #[cfg(not(target_arch = "wasm32"))]
-        self.note_drawn(specialization, general);
-        (general, ShaderPipelineFit::Fallback, None)
     }
 
     /// Builds `build` on this thread, or waits for the job building it.
