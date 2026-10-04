@@ -13,7 +13,7 @@ use web_time::{Duration, Instant};
 
 use crate::{
     debug_toggles::DebugToggle,
-    shader_records::{self, ShaderPipelineRecord},
+    pipeline_records::{self, FirstScreenRecords, ShaderPipelineRecord},
 };
 
 static DISK_CACHE: DebugToggle = DebugToggle::new("CRANPOSE_PIPELINE_DISK_CACHE");
@@ -46,12 +46,12 @@ pub(crate) fn file_path() -> Option<PathBuf> {
 }
 
 /// What the last launch left for this one: the driver's compiled
-/// pipelines, where the device keeps them, and the shape and runtime
-/// shader pipelines that launch drew its first screen with.
+/// pipelines, where the device keeps them, and the shape, runtime shader
+/// and fixed pipelines that launch drew its first screen with.
 pub(crate) struct Loaded {
     pub(crate) cache: Option<wgpu::PipelineCache>,
     pub(crate) first_screen: Vec<u64>,
-    pub(crate) first_screen_shaders: Vec<ShaderPipelineRecord>,
+    pub(crate) first_screen_records: FirstScreenRecords,
 }
 
 pub(crate) fn load(device: &wgpu::Device) -> Loaded {
@@ -68,9 +68,10 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     let first_screen = contents
         .as_ref()
         .map_or_else(Vec::new, |contents| contents.first_screen.clone().collect());
-    let first_screen_shaders = contents
+    let first_screen_records = contents
         .as_mut()
-        .map_or_else(Vec::new, |contents| std::mem::take(&mut contents.shaders));
+        .map(|contents| std::mem::take(&mut contents.records))
+        .unwrap_or_default();
     if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
         log::info!(
             "[pipeline-cache] not offered by {:?}; compiled pipelines persist only as far \
@@ -80,7 +81,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
         return Loaded {
             cache: None,
             first_screen,
-            first_screen_shaders,
+            first_screen_records,
         };
     }
     let data = contents
@@ -114,7 +115,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
     Loaded {
         cache: Some(cache),
         first_screen,
-        first_screen_shaders,
+        first_screen_records,
     }
 }
 
@@ -138,7 +139,7 @@ fn blob_key() -> [u8; 8] {
 
 struct Contents<'a> {
     first_screen: FirstScreenKeys<'a>,
-    shaders: Vec<ShaderPipelineRecord>,
+    records: FirstScreenRecords,
     blob: Option<&'a [u8]>,
 }
 
@@ -173,20 +174,23 @@ fn current_contents(file: &[u8]) -> Option<Contents<'_>> {
         .ok()?
         .checked_mul(8)?;
     let (keys, rest) = rest.split_at_checked(keys_len)?;
-    // The shape keys stand on their own: shader records that do not decode
-    // cost only themselves and the driver blob behind them.
-    let (shaders, blob) = shader_records::decode(rest)
-        .map_or((Vec::new(), None), |(shaders, blob)| (shaders, Some(blob)));
+    // The shape keys stand on their own: records that do not decode cost
+    // only themselves and the driver blob behind them.
+    let (records, blob) = pipeline_records::decode(rest).map_or_else(
+        || (FirstScreenRecords::default(), None),
+        |(records, blob)| (records, Some(blob)),
+    );
     Some(Contents {
         first_screen: FirstScreenKeys(keys),
-        shaders,
+        records,
         blob: blob.filter(|_| *build == blob_key()),
     })
 }
 
-fn file_bytes(
+fn file_bytes<'a>(
     first_screen: impl ExactSizeIterator<Item = u64>,
     shaders: &[ShaderPipelineRecord],
+    fixed: impl ExactSizeIterator<Item = &'a str>,
     blob: &[u8],
 ) -> Option<Vec<u8>> {
     let count = u32::try_from(first_screen.len()).ok()?;
@@ -197,7 +201,7 @@ fn file_bytes(
     for key in first_screen {
         bytes.extend_from_slice(&key.to_le_bytes());
     }
-    shader_records::encode(shaders, &mut bytes)?;
+    pipeline_records::encode(shaders, fixed, &mut bytes)?;
     bytes.extend_from_slice(blob);
     Some(bytes)
 }
@@ -214,19 +218,35 @@ pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
         .unwrap_or_default();
     let existing = std::fs::read(path).ok();
     let previous = existing.as_deref().and_then(current_contents);
-    let first_screen = first_screen_keys();
-    let key_count = first_screen.as_ref().map_or_else(
-        || {
-            previous
-                .as_ref()
-                .map_or(0, |contents| contents.first_screen.len())
-        },
-        |(keys, shaders)| keys.len() + shaders.len(),
-    );
-    let bytes = match (first_screen.as_ref(), previous) {
-        (Some((keys, shaders)), _) => file_bytes(keys.iter().copied(), shaders, &blob),
-        (None, Some(previous)) => file_bytes(previous.first_screen, &previous.shaders, &blob),
-        (None, None) => file_bytes(std::iter::empty(), &[], &blob),
+    // A launch closed before its first frame keeps the previous launch's
+    // first screen.
+    let (bytes, key_count) = if FIRST_FRAME_DRAWN.load(Ordering::Acquire) {
+        let first_screen = first_screen();
+        (
+            file_bytes(
+                first_screen.keys.iter().copied(),
+                &first_screen.shaders,
+                first_screen.fixed.iter().copied(),
+                &blob,
+            ),
+            first_screen.len(),
+        )
+    } else if let Some(previous) = previous {
+        let records = &previous.records;
+        (
+            file_bytes(
+                previous.first_screen.clone(),
+                &records.shaders,
+                records.fixed.iter().map(String::as_str),
+                &blob,
+            ),
+            previous.first_screen.len() + records.shaders.len() + records.fixed.len(),
+        )
+    } else {
+        (
+            file_bytes(std::iter::empty(), &[], std::iter::empty(), &blob),
+            0,
+        )
     };
     let Some(bytes) = bytes else {
         return;
@@ -255,20 +275,40 @@ pub(crate) fn persist(cache: Option<&wgpu::PipelineCache>, path: &Path) {
 
 pub(crate) const FIRST_SCREEN_SPAN: Duration = Duration::from_secs(2);
 
-/// The shape pipelines, by their keys' bits, that this process's renderers
-/// drew their first screens with, in the order first drawn.
-static FIRST_SCREEN: Mutex<Vec<u64>> = Mutex::new(Vec::new());
-/// The runtime shader pipelines those first screens drew with.
-static FIRST_SCREEN_SHADERS: Mutex<Vec<ShaderPipelineRecord>> = Mutex::new(Vec::new());
+/// The pipelines this process's renderers drew their first screens with,
+/// each list in the order first drawn.
+struct FirstScreen {
+    /// The shape pipelines, by their keys' bits.
+    keys: Vec<u64>,
+    shaders: Vec<ShaderPipelineRecord>,
+    /// The fixed pipelines, by label.
+    fixed: Vec<&'static str>,
+}
+
+impl FirstScreen {
+    fn len(&self) -> usize {
+        self.keys.len() + self.shaders.len() + self.fixed.len()
+    }
+}
+
+static FIRST_SCREEN: Mutex<FirstScreen> = Mutex::new(FirstScreen {
+    keys: Vec::new(),
+    shaders: Vec::new(),
+    fixed: Vec::new(),
+});
 static FIRST_FRAME_DRAWN: AtomicBool = AtomicBool::new(false);
+
+fn first_screen() -> MutexGuard<'static, FirstScreen> {
+    FIRST_SCREEN.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// Notes a shape pipeline a renderer drew its first screen with. The notes
 /// are written with the cache, for the next launch to build ahead of its
 /// first frame.
 pub(crate) fn note_first_screen_pipeline(key: u64) {
-    let mut keys = FIRST_SCREEN.lock().unwrap_or_else(PoisonError::into_inner);
-    if !keys.contains(&key) {
-        keys.push(key);
+    let mut first_screen = first_screen();
+    if !first_screen.keys.contains(&key) {
+        first_screen.keys.push(key);
         CHANGES.note_change();
     }
 }
@@ -276,11 +316,19 @@ pub(crate) fn note_first_screen_pipeline(key: u64) {
 /// Notes a runtime shader pipeline a renderer drew its first screen with,
 /// written with the cache like [`note_first_screen_pipeline`]'s.
 pub(crate) fn note_first_screen_shader(record: ShaderPipelineRecord) {
-    let mut records = FIRST_SCREEN_SHADERS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    if !records.contains(&record) {
-        records.push(record);
+    let mut first_screen = first_screen();
+    if !first_screen.shaders.contains(&record) {
+        first_screen.shaders.push(record);
+        CHANGES.note_change();
+    }
+}
+
+/// Notes a fixed pipeline a renderer drew its first screen with, written
+/// with the cache like [`note_first_screen_pipeline`]'s.
+pub(crate) fn note_first_screen_fixed(label: &'static str) {
+    let mut first_screen = first_screen();
+    if !first_screen.fixed.contains(&label) {
+        first_screen.fixed.push(label);
         CHANGES.note_change();
     }
 }
@@ -290,21 +338,6 @@ pub(crate) fn note_frame_drawn() {
         FIRST_FRAME_DRAWN.store(true, Ordering::Release);
         CHANGES.note_change();
     }
-}
-
-fn first_screen_keys() -> Option<(Vec<u64>, Vec<ShaderPipelineRecord>)> {
-    FIRST_FRAME_DRAWN.load(Ordering::Acquire).then(|| {
-        (
-            FIRST_SCREEN
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone(),
-            FIRST_SCREEN_SHADERS
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone(),
-        )
-    })
 }
 
 /// How long pipeline builds must pause before the cache is written. A burst

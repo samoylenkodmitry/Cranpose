@@ -1,6 +1,6 @@
-//! The runtime shader pipelines a launch drew its first screen with, as the
-//! pipeline cache file keeps them for the next launch to build ahead of its
-//! first frame.
+//! The runtime shader and fixed pipelines a launch drew its first screen
+//! with, as the pipeline cache file keeps them for the next launch to build
+//! ahead of its first frame.
 
 /// One runtime shader pipeline as its draw named it: the shader's source and
 /// override set, its blend mode, the draw variant, and the overrides it
@@ -15,15 +15,27 @@ pub(crate) struct ShaderPipelineRecord {
     pub(crate) constants: Vec<(String, f64)>,
 }
 
-/// Opens the records' section of the cache file.
-const SECTION: &[u8; 4] = b"RSP1";
+/// The pipelines besides its shapes a first screen drew with.
+#[derive(Default)]
+pub(crate) struct FirstScreenRecords {
+    pub(crate) shaders: Vec<ShaderPipelineRecord>,
+    /// The fixed pipelines, by label.
+    pub(crate) fixed: Vec<String>,
+}
 
-/// Appends a section holding `records` to `bytes`, or `None` when one of
-/// them does not fit the layout.
-pub(crate) fn encode(records: &[ShaderPipelineRecord], bytes: &mut Vec<u8>) -> Option<()> {
+/// Opens the records' section of the cache file.
+const SECTION: &[u8; 4] = b"RSP2";
+
+/// Appends a section holding `shaders` and the `fixed` pipelines' labels to
+/// `bytes`, or `None` when one of them does not fit the layout.
+pub(crate) fn encode<'a>(
+    shaders: &[ShaderPipelineRecord],
+    fixed: impl ExactSizeIterator<Item = &'a str>,
+    bytes: &mut Vec<u8>,
+) -> Option<()> {
     bytes.extend_from_slice(SECTION);
-    bytes.extend_from_slice(&u32::try_from(records.len()).ok()?.to_le_bytes());
-    for record in records {
+    bytes.extend_from_slice(&u32::try_from(shaders.len()).ok()?.to_le_bytes());
+    for record in shaders {
         bytes.extend_from_slice(&record.source.to_le_bytes());
         bytes.extend_from_slice(&record.overrides.to_le_bytes());
         bytes.extend_from_slice(&[record.mode, record.variant]);
@@ -33,6 +45,10 @@ pub(crate) fn encode(records: &[ShaderPipelineRecord], bytes: &mut Vec<u8>) -> O
             put_name(bytes, name)?;
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+    }
+    bytes.extend_from_slice(&u16::try_from(fixed.len()).ok()?.to_le_bytes());
+    for label in fixed {
+        put_name(bytes, label)?;
     }
     Some(())
 }
@@ -45,10 +61,10 @@ fn put_name(bytes: &mut Vec<u8>, name: &str) -> Option<()> {
 
 /// The records the section at the start of `bytes` holds and the bytes
 /// after it, or `None` when `bytes` opens no section.
-pub(crate) fn decode(bytes: &[u8]) -> Option<(Vec<ShaderPipelineRecord>, &[u8])> {
+pub(crate) fn decode(bytes: &[u8]) -> Option<(FirstScreenRecords, &[u8])> {
     let mut reader = Reader(bytes.strip_prefix(SECTION.as_slice())?);
     let count = reader.u32()?;
-    let mut records = Vec::new();
+    let mut shaders = Vec::new();
     for _ in 0..count {
         let source = reader.u64()?;
         let overrides = reader.u64()?;
@@ -57,7 +73,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<(Vec<ShaderPipelineRecord>, &[u8])>
         let constants = (0..reader.u16()?)
             .map(|_| Some((reader.name()?, f64::from_le_bytes(reader.take()?))))
             .collect::<Option<Vec<_>>>()?;
-        records.push(ShaderPipelineRecord {
+        shaders.push(ShaderPipelineRecord {
             source,
             overrides,
             mode,
@@ -66,7 +82,10 @@ pub(crate) fn decode(bytes: &[u8]) -> Option<(Vec<ShaderPipelineRecord>, &[u8])>
             constants,
         });
     }
-    Some((records, reader.0))
+    let fixed = (0..reader.u16()?)
+        .map(|_| reader.name())
+        .collect::<Option<Vec<_>>>()?;
+    Some((FirstScreenRecords { shaders, fixed }, reader.0))
 }
 
 struct Reader<'a>(&'a [u8]);

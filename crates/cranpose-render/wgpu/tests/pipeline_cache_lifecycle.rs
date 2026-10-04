@@ -13,7 +13,8 @@ use cranpose_render_wgpu::{
     debug_toggle_os, pipelines_created, pipelines_created_off_frame, set_debug_toggle_os,
 };
 use cranpose_ui_graphics::{
-    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RoundedCornerShape,
+    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, LayerShape, Rect, RenderEffect,
+    RoundedCornerShape,
 };
 
 use crate::{shared_test_support, support};
@@ -322,23 +323,22 @@ fn an_updated_build_prepares_the_previous_first_screen_with_fresh_pipelines() {
 }
 
 #[test]
-fn a_previous_build_without_shader_records_keeps_its_first_screen_shapes() {
+fn a_cache_file_without_pipeline_records_keeps_its_first_screen_shapes() {
     relaunch_after_cache_change(
         |bytes| {
             bytes[0] ^= 0xff;
-            let no_shaders = *b"RSP1\0\0\0\0";
             let section = bytes
-                .windows(no_shaders.len())
-                .position(|window| window == no_shaders)
-                .expect("a first screen of shapes records no shaders");
-            bytes.drain(section..section + no_shaders.len());
+                .windows(4)
+                .position(|window| window == b"RSP2")
+                .expect("the cache file keeps its first screen's records");
+            bytes.truncate(section);
         },
         |renderer| {
             wait_for_warm_ups();
             assert_eq!(
                 first_frame_builds(renderer),
                 0,
-                "a file from before the shader records must keep its shape warm-ups"
+                "a file without pipeline records must keep its shape warm-ups"
             );
         },
     );
@@ -362,11 +362,10 @@ fn a_first_frame_uses_its_requested_warm_up_instead_of_compiling_a_stand_in() {
     );
 }
 
-/// A striped page under one glass pane.
-fn glass_page() -> RenderGraph {
+/// A striped page under one rounded pane whose backdrop `effect` draws.
+fn paned_page(effect: RenderEffect) -> RenderGraph {
     use support::glass_page::{
         FRAME_HEIGHT, FRAME_WIDTH, GLASS_HEIGHT, GLASS_LEFT, GLASS_RADIUS, GLASS_TOP, GLASS_WIDTH,
-        glass_shader,
     };
     let mut children = support::striped_page(FRAME_WIDTH, FRAME_HEIGHT);
     children.push(RenderNode::Layer(Box::new(
@@ -379,7 +378,7 @@ fn glass_page() -> RenderGraph {
             },
             ProjectiveTransform::translation(GLASS_LEFT, GLASS_TOP),
             GraphicsLayer {
-                backdrop_effect: Some(glass_shader()),
+                backdrop_effect: Some(effect),
                 clip: true,
                 shape: LayerShape::Rounded(RoundedCornerShape::uniform(GLASS_RADIUS)),
                 ..GraphicsLayer::default()
@@ -388,6 +387,11 @@ fn glass_page() -> RenderGraph {
         ),
     )));
     support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
+}
+
+/// A striped page under one glass pane.
+fn glass_page() -> RenderGraph {
+    paned_page(support::glass_page::glass_shader())
 }
 
 /// Glass draws in `renderer`'s next frame that took the general pipeline
@@ -421,6 +425,49 @@ fn an_updated_build_draws_its_first_glass_with_pipelines_built_before_it() {
                 glass_fallback_draws(updated),
                 0,
                 "the first glass after an update must find its pipelines built"
+            );
+        },
+    );
+}
+
+/// A striped page under one frosted pane: its blur and the composite that
+/// places it draw with fixed pipelines.
+fn frosted_page() -> RenderGraph {
+    paned_page(RenderEffect::blur(8.0))
+}
+
+/// Pipelines `renderer` built on the frame thread while drawing the frosted
+/// page.
+fn frosted_frame_builds(renderer: &mut support::LockedRenderer) -> u64 {
+    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
+    let before = pipelines_created();
+    support::capture_graph(renderer, frosted_page(), FRAME_WIDTH, FRAME_HEIGHT);
+    let stats = renderer
+        .last_frame_stats()
+        .expect("frosted frame statistics");
+    assert!(stats.blur_passes > 0, "the pane must blur");
+    pipelines_created() - before
+}
+
+/// The blur and composite pipelines the last launch drew its first screen
+/// with are built before the next launch's first frame, like its shapes and
+/// glass, so after an update that frame builds nothing.
+#[test]
+fn an_updated_build_draws_its_first_frosted_pane_with_pipelines_built_before_it() {
+    relaunch_after_drawing(
+        |previous| {
+            assert!(
+                frosted_frame_builds(previous) > 0,
+                "a fresh first screen builds its blur inside its frame"
+            );
+        },
+        |bytes| bytes[0] ^= 0xff,
+        |updated| {
+            wait_for_warm_ups();
+            assert_eq!(
+                frosted_frame_builds(updated),
+                0,
+                "the first frosted pane after an update must find its pipelines built"
             );
         },
     );
