@@ -66,11 +66,11 @@ fn a_removed_entry_is_retired_and_its_texture_released_once_unshared() {
         "the removed entry no longer counts against the budget"
     );
     assert!(
-        cache.take_released().is_empty(),
+        cache.take_released().next().is_none(),
         "a texture still held elsewhere is not handed back yet"
     );
     drop(atlas);
-    let released = cache.take_released();
+    let released: Vec<_> = cache.take_released().collect();
     assert_eq!(released.len(), 1);
     assert_eq!(released[0].0, Some(descriptor(64)));
 }
@@ -120,19 +120,19 @@ fn entries_replaying_one_stage_texture_pay_for_it_once_and_retire_it_once() {
     assert_eq!(cache.len(), 2);
     assert_eq!(cache.bytes(), atlas_bytes);
     cache.insert(key(1), Retained::surface(texture(&device, 8)), None);
-    assert!(cache.take_released().is_empty());
+    assert!(cache.take_released().next().is_none());
     assert_eq!(cache.bytes(), atlas_bytes + offscreen_byte_size(8, 1));
     cache.insert(key(2), Retained::surface(texture(&device, 8)), None);
     assert_eq!(cache.bytes(), 2 * offscreen_byte_size(8, 1));
     assert!(
-        cache.take_released().is_empty(),
+        cache.take_released().next().is_none(),
         "a texture a frame still holds must wait"
     );
     drop(atlas);
-    let released = cache.take_released();
+    let released: Vec<_> = cache.take_released().collect();
     assert_eq!(released.len(), 1);
     assert_eq!(released[0].0, Some(descriptor(64)));
-    assert!(cache.take_released().is_empty());
+    assert!(cache.take_released().next().is_none());
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn the_budget_evicts_the_least_recently_used_entry_and_returns_its_surface() {
     assert_eq!(cache.len(), 2);
     assert_eq!(cache.bytes(), 2 * bytes);
     assert!(cache.get(&key(1)).is_none());
-    let released = cache.take_released();
+    let released: Vec<_> = cache.take_released().collect();
     assert_eq!(released.len(), 1);
     assert_eq!(released[0].0, None);
     assert!(cache.get(&key(2)).is_some());
@@ -156,7 +156,7 @@ fn the_budget_evicts_the_least_recently_used_entry_and_returns_its_surface() {
         "the untouched entry leaves first"
     );
     assert!(cache.get(&key(2)).is_some());
-    assert_eq!(cache.take_released().len(), 1);
+    assert_eq!(cache.take_released().count(), 1);
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn a_raster_no_frame_reads_for_the_idle_frames_is_released() {
         cache.end_frame();
     }
     assert_eq!(cache.len(), 2, "a raster unread for the idle frames stays");
-    assert!(cache.take_released().is_empty());
+    assert!(cache.take_released().next().is_none());
     assert!(cache.get(&key(1)).is_some());
     cache.end_frame();
     assert_eq!(cache.len(), 1, "one frame more releases it");
@@ -180,7 +180,7 @@ fn a_raster_no_frame_reads_for_the_idle_frames_is_released() {
         "a raster read every frame stays"
     );
     assert_eq!(cache.bytes(), offscreen_byte_size(8, 1));
-    let released = cache.take_released();
+    let released: Vec<_> = cache.take_released().collect();
     assert_eq!(released.len(), 1);
     assert_eq!(released[0].0, None);
 }
@@ -196,7 +196,7 @@ fn a_texture_over_the_budget_is_refused_without_evicting_anything() {
     assert_eq!(cache.len(), 1);
     assert_eq!(cache.bytes(), bytes);
     assert!(cache.get(&key(1)).is_some());
-    assert!(cache.take_released().is_empty());
+    assert!(cache.take_released().next().is_none());
 }
 
 #[test]
@@ -212,14 +212,14 @@ fn a_texture_retained_again_while_pending_retirement_is_pending_no_more() {
     assert_eq!(cache.bytes(), atlas_bytes + offscreen_byte_size(8, 1));
     drop(atlas);
     assert!(
-        cache.take_released().is_empty(),
+        cache.take_released().next().is_none(),
         "the revived texture is held by its entry, not by the pending list"
     );
     assert!(cache.insert(key(2), Retained::surface(texture(&device, 8)), None));
-    let released = cache.take_released();
+    let released: Vec<_> = cache.take_released().collect();
     assert_eq!(released.len(), 1, "one retirement, one alias");
     assert_eq!(released[0].0, Some(descriptor(64)));
-    assert!(cache.take_released().is_empty());
+    assert!(cache.take_released().next().is_none());
 }
 
 #[test]

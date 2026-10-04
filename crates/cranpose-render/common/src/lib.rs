@@ -48,6 +48,44 @@ use cranpose_ui::LayoutTree;
 pub use cranpose_ui_graphics::Brush;
 use cranpose_ui_graphics::Size;
 
+/// Describes scene nodes whose recorded content or layer properties changed.
+///
+/// Content updates may re-record a node's draw commands. Layer updates change
+/// graphics-layer properties while retaining those recordings. If a node
+/// appears in both slices, content dirt takes precedence.
+/// Layout, child structure, and draw-command changes belong in `content`.
+///
+/// ```
+/// use cranpose_render_common::SceneUpdates;
+/// let updates = SceneUpdates {
+///     content: &[1],
+///     layers: &[2],
+/// };
+/// assert!(!updates.is_empty());
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SceneUpdates<'a> {
+    /// Nodes whose recorded draw content must be refreshed.
+    pub content: &'a [cranpose_core::NodeId],
+    /// Nodes whose graphics-layer properties changed without content dirt.
+    pub layers: &'a [cranpose_core::NodeId],
+}
+
+impl<'a> SceneUpdates<'a> {
+    /// Creates an update containing only nodes with changed draw content.
+    pub const fn content(nodes: &'a [cranpose_core::NodeId]) -> Self {
+        Self {
+            content: nodes,
+            layers: &[],
+        }
+    }
+
+    /// Returns whether the update contains no dirty nodes.
+    pub const fn is_empty(self) -> bool {
+        self.content.is_empty() && self.layers.is_empty()
+    }
+}
+
 /// Trait implemented by hit-test targets stored inside a [`RenderScene`].
 pub trait HitTestTarget {
     /// Dispatches a pointer event to this target's handlers.
@@ -170,9 +208,9 @@ pub trait Renderer {
         applier: &mut cranpose_core::MemoryApplier,
         root: cranpose_core::NodeId,
         viewport: Size,
-        dirty_nodes: &[cranpose_core::NodeId],
+        updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
-        let _ = dirty_nodes;
+        let _ = updates;
         self.rebuild_scene_from_applier(applier, root, viewport)
     }
 
@@ -181,9 +219,9 @@ pub trait Renderer {
         applier: &mut cranpose_core::MemoryApplier,
         root: cranpose_core::NodeId,
         viewport: Size,
-        dirty_nodes: &[cranpose_core::NodeId],
+        updates: SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
-        self.update_scene_from_applier(applier, root, viewport, dirty_nodes)
+        self.update_scene_from_applier(applier, root, viewport, updates)
     }
 
     /// Draw a development overlay (e.g., FPS counter) on top of the scene.

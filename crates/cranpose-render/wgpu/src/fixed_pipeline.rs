@@ -31,7 +31,6 @@ impl FixedPipeline {
 
     /// The pipeline for a draw, built here if nothing has built it yet. The
     /// first draw is noted with `recorder`.
-    #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
     pub(crate) fn for_draw(
         &self,
         recorder: &PipelineRecorder,
@@ -42,7 +41,7 @@ impl FixedPipeline {
         if !self.drawn.replace(true) {
             recorder.note_fixed(self.resource.label(), recorder.in_first_screen());
         }
-        self.resource.get_or_init(backend, create)
+        self.resource.for_draw(recorder, backend, create)
     }
 
     pub(crate) fn get(&self) -> Option<&wgpu::RenderPipeline> {

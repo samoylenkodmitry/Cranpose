@@ -2,7 +2,10 @@ use std::sync::{Arc, OnceLock};
 
 use web_time::Instant;
 
-use crate::pipeline_compiler::{CompileLane, CompilerSend, CompilerSync, PipelineCompiler};
+use crate::{
+    pipeline_compiler::{CompileLane, CompilerSend, CompilerSync, PipelineCompiler},
+    pipeline_recorder::PipelineRecorder,
+};
 
 /// A GPU resource created once, by whichever thread asks first: a job
 /// queued on the background compiler, or the frame that needs it. A frame
@@ -46,6 +49,18 @@ impl<T> LazyGpuResource<T> {
 
     pub(crate) fn get(&self) -> Option<&T> {
         self.value.get()
+    }
+
+    pub(crate) fn for_draw(
+        &self,
+        recorder: &PipelineRecorder,
+        backend: wgpu::Backend,
+        create: impl FnOnce() -> T,
+    ) -> &T {
+        if let Some(value) = self.get() {
+            return value;
+        }
+        recorder.during_demand(|| self.get_or_init(backend, create))
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -58,3 +58,11 @@ web-sys = { version = "0.3", features = ["Window"] }
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[bench]]
+name = "observation_cleanup"
+harness = false
+
+[[bench]]
+name = "recompose_sibling_cursor"
+harness = false

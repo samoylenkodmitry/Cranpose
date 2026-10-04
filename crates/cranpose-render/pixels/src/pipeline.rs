@@ -1,8 +1,7 @@
 use std::rc::Rc;
 
-use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
-    Brush, RenderScene,
+    Brush,
     graph::{
         LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
         RenderNode, TextPrimitiveNode,
@@ -613,20 +612,6 @@ fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
 
 #[cfg(test)]
 use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
-
-/// Replaces `scene` with `root`'s graph, built in the allocations of the
-/// graph it held.
-pub(crate) fn render_from_applier(applier: &mut MemoryApplier, root: NodeId, scene: &mut Scene) {
-    let previous = scene.graph.take();
-    scene.clear();
-    let Some(graph) = cranpose_render_common::scene_builder::rebuild_graph_from_applier(
-        applier, root, 1.0, previous,
-    ) else {
-        return;
-    };
-    collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);
-    scene.replace_graph(graph);
-}
 
 pub(crate) fn build_raster_scene(
     graph: &RenderGraph,

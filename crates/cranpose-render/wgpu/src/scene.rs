@@ -195,14 +195,12 @@ pub(crate) struct TextDraw {
 #[derive(Clone)]
 pub(crate) struct ImageDraw {
     pub rect: Rect,
-    pub local_rect: Rect,
     pub quad: [[f32; 2]; 4],
     pub snap_anchor: Option<SnapAnchor>,
     pub image: ImageBitmap,
     pub alpha: f32,
     pub color_filter: Option<ColorFilter>,
     pub sampling: ImageSampling,
-    pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
     pub src_rect: Option<Rect>,
@@ -273,6 +271,7 @@ pub(crate) struct LayerRoundedClip {
 #[derive(Clone)]
 pub(crate) struct BackdropLayer {
     pub node_id: Option<NodeId>,
+    pub alpha: f32,
     pub rect: Rect,
     /// What the layer paints within: the clips above it and its own.
     pub clip: Option<Rect>,
@@ -409,6 +408,7 @@ impl CompositorScene {
 
     pub fn clear(&mut self) {
         self.runs.clear();
+        self.loose.recorder.clear();
         self.images.clear();
         self.texts.clear();
         let recorder_limit = self.shadow_draws.capacity().saturating_mul(2);
@@ -486,7 +486,6 @@ impl CompositorScene {
     pub fn push_image_with_geometry(
         &mut self,
         rect: Rect,
-        local_rect: Rect,
         quad: [[f32; 2]; 4],
         image: ImageBitmap,
         alpha: f32,
@@ -503,14 +502,12 @@ impl CompositorScene {
         let index = self.images.len();
         self.images.push(ImageDraw {
             rect,
-            local_rect,
             quad,
             snap_anchor: None,
             image,
             alpha: alpha.clamp(0.0, 1.0),
             color_filter,
             sampling,
-            z_index,
             clip,
             blend_mode,
             src_rect,

@@ -1,12 +1,12 @@
 use std::{ops::Range, rc::Rc, sync::Arc};
 
-use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_core::NodeId;
 #[cfg(test)]
 use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 #[cfg(test)]
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
-    Brush, RenderScene,
+    Brush,
     hit_graph::collect_hits_from_graph,
     layer_shadow::layer_shadow_geometry,
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
@@ -1736,82 +1736,6 @@ fn decoration_brush_for_span(
 #[cfg(test)]
 use cranpose_render_common::scene_builder::expand_text_bounds_for_baseline_shift;
 
-/// Replaces `scene` with `root`'s graph, built in the allocations of the
-/// graph it held.
-pub(crate) fn render_from_applier(
-    applier: &mut MemoryApplier,
-    root: NodeId,
-    scene: &mut Scene,
-    scale: f32,
-) {
-    let previous = scene.graph.take();
-    scene.clear();
-    let Some(mut graph) = cranpose_render_common::scene_builder::rebuild_graph_from_applier(
-        applier, root, scale, previous,
-    ) else {
-        return;
-    };
-    graph.root.recompute_raster_cache_hashes();
-    collect_hits_from_graph(
-        &graph.root,
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        scene,
-        None,
-    );
-    scene.replace_graph(graph);
-}
-
-pub(crate) enum SceneUpdateOutcome {
-    Patched,
-    Rebuilt,
-}
-
-pub(crate) fn update_from_applier(
-    applier: &mut MemoryApplier,
-    root: NodeId,
-    scene: &mut Scene,
-    scale: f32,
-    dirty_nodes: &[NodeId],
-    refresh_hits: bool,
-    changed_nodes: &mut Vec<NodeId>,
-) -> SceneUpdateOutcome {
-    changed_nodes.clear();
-    let Some(update_report) = scene.graph.as_mut().map(|graph| {
-        cranpose_render_common::scene_builder::update_graph_from_applier_report_into(
-            applier,
-            graph,
-            dirty_nodes,
-            scale,
-            changed_nodes,
-        )
-    }) else {
-        render_from_applier(applier, root, scene, scale);
-        return SceneUpdateOutcome::Rebuilt;
-    };
-    if !update_report.applied() {
-        render_from_applier(applier, root, scene, scale);
-        return SceneUpdateOutcome::Rebuilt;
-    }
-
-    if !refresh_hits && !update_report.hit_graph_dirty {
-        return SceneUpdateOutcome::Patched;
-    }
-
-    scene.clear_hits();
-    let Some(graph) = scene.graph.take() else {
-        render_from_applier(applier, root, scene, scale);
-        return SceneUpdateOutcome::Rebuilt;
-    };
-    collect_hits_from_graph(
-        &graph.root,
-        cranpose_render_common::graph::ProjectiveTransform::identity(),
-        scene,
-        None,
-    );
-    scene.replace_graph(graph);
-    SceneUpdateOutcome::Patched
-}
-
 const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
 
 /// The primitive with the layer's paint folded into its brushes, for a
@@ -1933,7 +1857,6 @@ pub(crate) fn push_draw_primitive(
         fn push_image(&mut self, params: ImageDrawParams) {
             self.scene.push_image_with_geometry(
                 params.rect,
-                params.local_rect,
                 params.quad,
                 params.image,
                 params.alpha,

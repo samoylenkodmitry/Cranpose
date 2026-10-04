@@ -3,6 +3,30 @@ use cranpose_ui_graphics::{
     StrokeCap, arc_trig, band_padded_range, strip_vertices,
 };
 
+pub(crate) fn device_shape_edges(
+    rect: [f32; 4],
+    half_width: f32,
+    offset: Point,
+    scale: f32,
+    canonicalize: bool,
+) -> [f32; 4] {
+    let edge = |value: f32| {
+        let device = value * scale;
+        if canonicalize {
+            device.signum() * (device.abs() * 16.0 + 0.5).floor() / 16.0
+        } else {
+            device
+        }
+    };
+    let [x, y, width, height] = rect;
+    [
+        edge(x - half_width + offset.x),
+        edge(y - half_width + offset.y),
+        edge(x + width + half_width + offset.x),
+        edge(y + height + half_width + offset.y),
+    ]
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BandStrip {
     pub(crate) center: [f32; 2],

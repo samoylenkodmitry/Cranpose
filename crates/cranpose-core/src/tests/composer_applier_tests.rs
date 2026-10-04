@@ -336,12 +336,23 @@ fn composer_retention_uses_checked_detached_root_key() {
 
 #[test]
 fn memory_applier_dump_tree_reports_stale_physical_mapping() {
+    struct Counted;
+    impl Node for Counted {}
+
     let mut applier = MemoryApplier::new();
     applier.stable_index.set_slot(42, 4_096);
 
     let tree = applier.dump_tree(Some(42));
 
     assert!(tree.contains("[42] (missing physical node"));
+    assert!(matches!(
+        applier.get_mut(42),
+        Err(NodeError::Missing { id: 42 })
+    ));
+    assert!(matches!(
+        applier.with_node::<Counted, _>(42, |_| ()),
+        Err(NodeError::Missing { id: 42 })
+    ));
 }
 
 #[test]

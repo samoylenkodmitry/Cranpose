@@ -1556,6 +1556,40 @@ impl PartialEq for CommandRecording {
 }
 
 impl CommandRecording {
+    /// Takes this recording when no retained reader shares its shape data.
+    ///
+    /// The returned recording keeps the existing data and capacities. This
+    /// recording is reset to an empty value. Pass the returned recording to
+    /// [`CommandRecorder::reusing`] to clear it for another draw. If another
+    /// strong or weak reference shares the shape data, this returns `None` and
+    /// leaves the recording unchanged.
+    ///
+    /// ```
+    /// use cranpose_ui_graphics::{Brush, Color, CommandRecorder, DrawPrimitive, Rect};
+    ///
+    /// let mut builder = CommandRecorder::default();
+    /// builder.push_primitive(DrawPrimitive::Rect {
+    ///     rect: Rect {
+    ///         x: 0.0,
+    ///         y: 0.0,
+    ///         width: 1.0,
+    ///         height: 1.0,
+    ///     },
+    ///     brush: Brush::Solid(Color::RED),
+    ///     stroke: None,
+    /// });
+    /// let mut completed = builder.finish();
+    /// if let Some(storage) = completed.try_take_reusable() {
+    ///     let mut recorder = CommandRecorder::reusing(storage);
+    ///     recorder.push_content();
+    ///     let _next = recorder.finish();
+    /// }
+    /// ```
+    pub fn try_take_reusable(&mut self) -> Option<Self> {
+        Arc::get_mut(&mut self.shapes)?;
+        Some(std::mem::take(self))
+    }
+
     /// Returns owned command data for further recording.
     /// Shape data is copied only when a retained reader still shares it.
     pub fn into_recorder(self) -> CommandRecorder {

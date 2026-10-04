@@ -4,8 +4,9 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{MemoryApplier, MutableState, NodeId};
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, rememberLazyListState};
-use cranpose_render_common::scene_builder::{
-    build_graph_from_applier, update_graph_from_applier_report,
+use cranpose_render_common::{
+    SceneUpdates,
+    scene_builder::{build_graph_from_applier, update_graph_from_applier_report},
 };
 use cranpose_ui::{
     LayoutEngine, LinearArrangement, Modifier, Size, Text, TextStyle,
@@ -132,7 +133,14 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
                 "dropping row {} told the scene phase nothing had moved",
                 count - 1
             );
-            if !update_graph_from_applier_report(&applier, &mut graph, &dirty, 1.0).applied() {
+            if !update_graph_from_applier_report(
+                &applier,
+                &mut graph,
+                SceneUpdates::content(&dirty),
+                1.0,
+            )
+            .applied()
+            {
                 graph =
                     build_graph_from_applier(&applier, root, 1.0).expect("rebuilt render graph");
             }

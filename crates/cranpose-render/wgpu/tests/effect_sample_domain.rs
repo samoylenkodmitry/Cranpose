@@ -18,6 +18,7 @@ const SUPPORT: Rect = Rect {
 };
 const TOGGLE: &str = "CRANPOSE_NO_EFFECT_DOMAINS";
 const BLUR: f32 = 6.0;
+const SAMPLE_OUTSET: f32 = 18.0;
 
 fn support_mask_wgsl() -> String {
     format!(
@@ -69,6 +70,16 @@ fn nearby_wgsl(texels: f32) -> String {
 }
 
 fn nearby_glass(samples: f32, declared: f32) -> RenderNode {
+    nearby_glass_with_layer(samples, declared, 1.0, 1.0, 1.0)
+}
+
+fn nearby_glass_with_layer(
+    samples: f32,
+    declared: f32,
+    alpha: f32,
+    scale_x: f32,
+    scale_y: f32,
+) -> RenderNode {
     let mut shader = RuntimeShader::new(&nearby_wgsl(samples));
     shader.set_output_support(Some(SUPPORT));
     shader.set_sample_domain(Some(Rect {
@@ -77,10 +88,17 @@ fn nearby_glass(samples: f32, declared: f32) -> RenderNode {
         width: SUPPORT.width + 2.0 * declared,
         height: SUPPORT.height + 2.0 * declared,
     }));
+    let translate_x = GLASS.x + GLASS.width * (1.0 - scale_x) * 0.5;
+    let translate_y = GLASS.y + GLASS.height * (1.0 - scale_y) * 0.5;
     RenderNode::Layer(Box::new(shared_test_support::layer_node(
         rect(0.0, 0.0, GLASS.width, GLASS.height),
-        ProjectiveTransform::translation(GLASS.x, GLASS.y),
+        ProjectiveTransform::from_homogeneous([
+            [scale_x, 0.0, translate_x],
+            [0.0, scale_y, translate_y],
+            [0.0, 0.0, 1.0],
+        ]),
         GraphicsLayer {
+            alpha,
             backdrop_effect: Some(
                 RenderEffect::blur(BLUR).then(RenderEffect::runtime_shader(shader)),
             ),
@@ -88,6 +106,63 @@ fn nearby_glass(samples: f32, declared: f32) -> RenderNode {
         },
         Vec::new(),
     )))
+}
+
+fn padded_sample_glass() -> RenderNode {
+    let mut shader = RuntimeShader::new(&format!(
+        r"{RUNTIME_SHADER_PRELUDE_WGSL}
+@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {{
+    let rect = u[{rect_slot}];
+    let local_sample = vec2<f32>({sample_x}, {sample_y});
+    let source_px = rect.xy + local_sample * rect.zw / vec2<f32>({width}, {height});
+    let source_uv = source_px / vec2<f32>(textureDimensions(input_texture));
+    return vec4<f32>(textureSample(input_texture, input_sampler, source_uv).rgb, 1.0);
+}}
+",
+        rect_slot = RuntimeShader::EFFECT_RECT_UNIFORM / 4,
+        sample_x = GLASS.width + SAMPLE_OUTSET,
+        sample_y = GLASS.height * 0.5,
+        width = GLASS.width,
+        height = GLASS.height,
+    ));
+    shader.set_input_padding(20.0);
+    let scale = 0.5;
+    let translate_x = GLASS.x + GLASS.width * (1.0 - scale) * 0.5;
+    let translate_y = GLASS.y + GLASS.height * (1.0 - scale) * 0.5;
+    RenderNode::Layer(Box::new(shared_test_support::layer_node(
+        rect(0.0, 0.0, GLASS.width, GLASS.height),
+        ProjectiveTransform::from_homogeneous([
+            [scale, 0.0, translate_x],
+            [0.0, scale, translate_y],
+            [0.0, 0.0, 1.0],
+        ]),
+        GraphicsLayer {
+            alpha: 0.9,
+            scale_x: scale,
+            scale_y: scale,
+            backdrop_effect: Some(RenderEffect::runtime_shader(shader)),
+            ..GraphicsLayer::default()
+        },
+        Vec::new(),
+    )))
+}
+
+fn padded_sample_page(glass: Option<RenderNode>) -> RenderGraph {
+    let sample_x = GLASS.x + GLASS.width * 0.25 + 0.5 * (GLASS.width + SAMPLE_OUTSET);
+    let sample_y = GLASS.y + GLASS.height * 0.25 + 0.5 * (GLASS.height * 0.5);
+    let mut children = vec![solid_rect(
+        rect(0.0, 0.0, FRAME_WIDTH as f32, FRAME_HEIGHT as f32),
+        Color::from_rgb_u8(255, 0, 255),
+    )];
+    children.push(solid_rect(
+        rect(sample_x - 1.0, sample_y - 6.0, 2.0, 12.0),
+        Color::from_rgb_u8(0, 255, 0),
+    ));
+    if let Some(glass) = glass {
+        children.push(glass);
+    }
+    support::page_graph(FRAME_WIDTH, FRAME_HEIGHT, children)
 }
 
 fn wrapped_corner_glass(alpha: f32) -> RenderNode {
@@ -242,6 +317,68 @@ fn a_sample_domain_smaller_than_what_the_shader_reads_shows_in_the_pixels() {
         count > 0,
         "a shader reading 12 texels past a domain it declared 4 wide must render differently \
          when the blur is pruned to the declaration, else the pruning is not live"
+    );
+}
+
+#[test]
+fn a_scaled_child_backdrop_sample_domain_preserves_pixels() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let (without_effect, _) = capture(
+        &mut renderer,
+        || solid_rect(rect(0.0, 0.0, 0.0, 0.0), Color::TRANSPARENT),
+        false,
+    );
+    for (scale_x, scale_y) in [(0.5, 0.5), (1.5, 1.5), (0.5, 1.5)] {
+        let path = format!("child backdrop at scale ({scale_x}, {scale_y})");
+        let (pruned, pruned_blur) = capture(
+            &mut renderer,
+            || nearby_glass_with_layer(4.0, 4.0, 0.9, scale_x, scale_y),
+            false,
+        );
+        let (whole, whole_blur) = capture(
+            &mut renderer,
+            || nearby_glass_with_layer(4.0, 4.0, 0.9, scale_x, scale_y),
+            true,
+        );
+        let count = differing(&pruned, &whole);
+        assert_eq!(
+            count, 0,
+            "{path}: declared sample-domain pruning changed {count} pixels"
+        );
+        let changed = differing(&pruned, &without_effect);
+        assert!(
+            changed > 0,
+            "{path}: the shader output must reach the frame; otherwise the pixel comparison is vacuous"
+        );
+        assert!(
+            pruned_blur < whole_blur,
+            "{path}: the declared domain should reduce blur work ({pruned_blur} vs {whole_blur})"
+        );
+    }
+}
+
+#[test]
+fn a_scaled_child_backdrop_can_read_inside_its_declared_input_padding() {
+    let Ok(mut renderer) = support::headless_renderer() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let frame = support::capture_graph(
+        &mut renderer,
+        padded_sample_page(Some(padded_sample_glass())),
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+    );
+    let center_x = (GLASS.x + GLASS.width * 0.5) as usize;
+    let center_y = (GLASS.y + GLASS.height * 0.5) as usize;
+    let pixel = &frame.pixels[(center_y * frame.width as usize + center_x) * 4..][..4];
+    assert!(
+        i16::from(pixel[1]) > i16::from(pixel[0]) + 80
+            && i16::from(pixel[1]) > i16::from(pixel[2]) + 80,
+        "the shader samples the green page stripe {SAMPLE_OUTSET} logical pixels past the pane; got {pixel:?}"
     );
 }
 

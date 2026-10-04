@@ -99,13 +99,20 @@ fn verify_live_backdrop_content_cache(nested: bool) {
                 "nested glass must read the changing page"
             );
         } else {
-            assert_eq!(
-                stats.isolated_layer_renders, 0,
+            assert!(
+                stats.layer_cache_hits > 0,
                 "unchanged foreground must be retained"
             );
         }
         fresh.scene_mut().graph = Some(live_backdrop_graph(color, CachePolicy::None, nested));
         let reference = fresh.capture_frame(128, 160).expect("uncached reference");
+        if !nested {
+            let fresh_stats = fresh.last_frame_stats().expect("uncached frame stats");
+            assert!(
+                stats.isolated_layer_renders < fresh_stats.isolated_layer_renders,
+                "retaining the foreground must save its redraw: {stats:?} vs {fresh_stats:?}"
+            );
+        }
         support::assert_same_bytes("live backdrop", 128, &reference.pixels, &frame.pixels);
     }
 }

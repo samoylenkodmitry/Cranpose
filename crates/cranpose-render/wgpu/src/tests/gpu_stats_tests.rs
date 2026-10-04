@@ -81,7 +81,7 @@ fn layer_cache_counters_accumulate_and_reset() {
     assert_eq!(snapshot.submit_count, 1);
     assert_eq!(snapshot.pass_count, 2);
     assert_eq!(snapshot.transient_texture_bytes, 1280);
-    assert_eq!(snapshot.retained_texture_bytes, 2176);
+    assert_eq!(snapshot.retained_texture_bytes, 2048);
     assert_eq!(snapshot.layer_cache_hits, 2);
     assert_eq!(snapshot.layer_cache_misses, 1);
     assert_eq!(snapshot.shadow_shape_cache_hits, 1);
@@ -139,6 +139,7 @@ fn command_stats_accumulate_and_reset() {
         upload_bytes: 512,
         ..FrameCommandStats::default()
     });
+    stats.offscreen_pool_bytes.set(2048);
     stats.bump_shapes();
 
     let snapshot = stats.snapshot();
@@ -157,7 +158,7 @@ fn command_stats_accumulate_and_reset() {
     assert_eq!(reset.submit_count, 0);
     assert_eq!(reset.pass_count, 0);
     assert_eq!(reset.transient_texture_bytes, 0);
-    assert_eq!(reset.retained_texture_bytes, 0);
+    assert_eq!(reset.retained_texture_bytes, 2048);
     assert_eq!(reset.upload_bytes, 0);
 }
 
@@ -173,6 +174,7 @@ fn snapshot_adds_explicit_readback_command_stats() {
         upload_bytes: 64,
         ..FrameCommandStats::default()
     });
+    stats.offscreen_pool_bytes.set(512);
     let snapshot = stats
         .snapshot()
         .with_command_stats_added(FrameCommandStats {

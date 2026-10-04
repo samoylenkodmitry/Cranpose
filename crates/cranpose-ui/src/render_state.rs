@@ -18,11 +18,12 @@ pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
 
 struct RenderState {
-    layout_repasses: Mutex<LayoutRepassManager>,
-    measure_repasses: Mutex<LayoutRepassManager>,
-    draw_repasses: Mutex<DrawRepassManager>,
-    modifier_slice_repasses: Mutex<LayoutRepassManager>,
-    geometry_scene_nodes: Mutex<LayoutRepassManager>,
+    layout_repasses: Mutex<DirtyNodeSet>,
+    measure_repasses: Mutex<DirtyNodeSet>,
+    draw_repasses: Mutex<DirtyNodeSet>,
+    layer_property_repasses: Mutex<DirtyNodeSet>,
+    modifier_slice_repasses: Mutex<DirtyNodeSet>,
+    geometry_scene_nodes: Mutex<DirtyNodeSet>,
     render_invalidated: AtomicBool,
     pointer_invalidated: AtomicBool,
     focus_invalidated: AtomicBool,
@@ -72,6 +73,13 @@ pub(crate) struct DrawObservationScope {
     node_id: NodeId,
     modifier_index: usize,
     command_index: usize,
+    kind: DrawObservationKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum DrawObservationKind {
+    Content,
+    LayerProperties,
 }
 
 impl DrawObservationScope {
@@ -80,6 +88,16 @@ impl DrawObservationScope {
             node_id,
             modifier_index,
             command_index,
+            kind: DrawObservationKind::Content,
+        }
+    }
+
+    pub(crate) fn layer_properties(node_id: NodeId, modifier_index: usize) -> Self {
+        Self {
+            node_id,
+            modifier_index,
+            command_index: 0,
+            kind: DrawObservationKind::LayerProperties,
         }
     }
 }
@@ -118,8 +136,13 @@ pub(crate) fn observe_draw_reads<R>(scope: DrawObservationScope, block: impl FnO
     };
     context.draw_observer.observe_reads(
         scope,
-        move |scope| {
-            schedule_draw_repass_for_app_context(context_id, scope.node_id);
+        move |scope| match scope.kind {
+            DrawObservationKind::Content => {
+                schedule_draw_repass_for_app_context(context_id, scope.node_id);
+            }
+            DrawObservationKind::LayerProperties => {
+                schedule_layer_property_repass_for_app_context(context_id, scope.node_id);
+            }
         },
         block,
     )
@@ -162,11 +185,12 @@ pub fn prune_draw_observations_to_nodes(retained: &HashSet<NodeId>) {
 impl RenderState {
     fn new_with_density(density: f32) -> Self {
         Self {
-            layout_repasses: Mutex::new(LayoutRepassManager::new()),
-            measure_repasses: Mutex::new(LayoutRepassManager::new()),
-            draw_repasses: Mutex::new(DrawRepassManager::new()),
-            modifier_slice_repasses: Mutex::new(LayoutRepassManager::new()),
-            geometry_scene_nodes: Mutex::new(LayoutRepassManager::new()),
+            layout_repasses: Mutex::new(DirtyNodeSet::new()),
+            measure_repasses: Mutex::new(DirtyNodeSet::new()),
+            draw_repasses: Mutex::new(DirtyNodeSet::new()),
+            layer_property_repasses: Mutex::new(DirtyNodeSet::new()),
+            modifier_slice_repasses: Mutex::new(DirtyNodeSet::new()),
+            geometry_scene_nodes: Mutex::new(DirtyNodeSet::new()),
             render_invalidated: AtomicBool::new(false),
             pointer_invalidated: AtomicBool::new(false),
             focus_invalidated: AtomicBool::new(false),
@@ -703,11 +727,11 @@ fn with_draw_observer<R>(f: impl FnOnce(&SnapshotStateObserver) -> R) -> R {
     f(&context.draw_observer)
 }
 
-struct LayoutRepassManager {
+struct DirtyNodeSet {
     dirty_nodes: HashSet<NodeId>,
 }
 
-impl LayoutRepassManager {
+impl DirtyNodeSet {
     fn new() -> Self {
         Self {
             dirty_nodes: HashSet::default(),
@@ -724,36 +748,18 @@ impl LayoutRepassManager {
 
     fn take_dirty_nodes(&mut self) -> Vec<NodeId> {
         self.dirty_nodes.drain().collect()
+    }
+
+    fn take_dirty_nodes_into(&mut self, output: &mut Vec<NodeId>) {
+        output.clear();
+        output.reserve(self.dirty_nodes.len());
+        output.extend(self.dirty_nodes.drain());
     }
 
     fn dirty_nodes_snapshot(&self) -> Vec<NodeId> {
         let mut nodes = self.dirty_nodes.iter().copied().collect::<Vec<_>>();
         nodes.sort_unstable();
         nodes
-    }
-}
-
-struct DrawRepassManager {
-    dirty_nodes: HashSet<NodeId>,
-}
-
-impl DrawRepassManager {
-    fn new() -> Self {
-        Self {
-            dirty_nodes: HashSet::default(),
-        }
-    }
-
-    fn schedule_repass(&mut self, node_id: NodeId) {
-        self.dirty_nodes.insert(node_id);
-    }
-
-    fn has_pending_repass(&self) -> bool {
-        !self.dirty_nodes.is_empty()
-    }
-
-    fn take_dirty_nodes(&mut self) -> Vec<NodeId> {
-        self.dirty_nodes.drain().collect()
     }
 }
 
@@ -850,6 +856,20 @@ fn schedule_draw_repass_in_context(context: &AppContext, node_id: NodeId) {
         .store(true, Ordering::Relaxed);
 }
 
+fn schedule_layer_property_repass_for_app_context(context_id: AppContextId, node_id: NodeId) {
+    let _ = with_app_context_by_id(context_id, |context| {
+        schedule_layer_property_repass_in_context(context, node_id);
+    });
+}
+
+fn schedule_layer_property_repass_in_context(context: &AppContext, node_id: NodeId) {
+    lock_repass_manager(&context.state.layer_property_repasses).schedule_repass(node_id);
+    context
+        .state
+        .render_invalidated
+        .store(true, Ordering::Relaxed);
+}
+
 /// Returns true if any draw repasses are pending.
 pub fn has_pending_draw_repasses() -> bool {
     with_render_state(|state| lock_repass_manager(&state.draw_repasses).has_pending_repass())
@@ -858,6 +878,38 @@ pub fn has_pending_draw_repasses() -> bool {
 /// Takes all pending draw repass node IDs.
 pub fn take_draw_repass_nodes() -> Vec<NodeId> {
     with_render_state(|state| lock_repass_manager(&state.draw_repasses).take_dirty_nodes())
+}
+
+/// Takes pending draw repasses into reusable caller-owned storage.
+///
+/// ```
+/// let context = cranpose_ui::AppContext::new();
+/// context.enter(|| {
+///     let mut nodes = Vec::new();
+///     cranpose_ui::take_draw_repass_nodes_into(&mut nodes);
+///     assert!(nodes.is_empty());
+/// });
+/// ```
+pub fn take_draw_repass_nodes_into(output: &mut Vec<NodeId>) {
+    with_render_state(|state| {
+        lock_repass_manager(&state.draw_repasses).take_dirty_nodes_into(output);
+    });
+}
+
+/// Returns true if graphics-layer property updates are pending.
+#[doc(hidden)]
+pub fn has_pending_layer_property_repasses() -> bool {
+    with_render_state(|state| {
+        lock_repass_manager(&state.layer_property_repasses).has_pending_repass()
+    })
+}
+
+/// Takes pending graphics-layer property updates into reusable storage.
+#[doc(hidden)]
+pub fn take_layer_property_repass_nodes_into(output: &mut Vec<NodeId>) {
+    with_render_state(|state| {
+        lock_repass_manager(&state.layer_property_repasses).take_dirty_nodes_into(output);
+    });
 }
 
 /// Returns true if any layout repasses are pending.
@@ -935,6 +987,22 @@ pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
 /// meaningless to the next.
 pub fn take_geometry_scene_nodes() -> Vec<NodeId> {
     with_render_state(|state| lock_repass_manager(&state.geometry_scene_nodes).take_dirty_nodes())
+}
+
+/// Takes changed geometry nodes into reusable caller-owned storage.
+///
+/// ```
+/// let context = cranpose_ui::AppContext::new();
+/// context.enter(|| {
+///     let mut nodes = Vec::new();
+///     cranpose_ui::take_geometry_scene_nodes_into(&mut nodes);
+///     assert!(nodes.is_empty());
+/// });
+/// ```
+pub fn take_geometry_scene_nodes_into(output: &mut Vec<NodeId>) {
+    with_render_state(|state| {
+        lock_repass_manager(&state.geometry_scene_nodes).take_dirty_nodes_into(output);
+    });
 }
 
 /// Returns the current density scale factor (logical px per dp).
@@ -1119,6 +1187,8 @@ pub fn peek_layout_invalidation() -> bool {
 #[doc(hidden)]
 pub fn reset_render_state_for_tests() {
     let _ = take_draw_repass_nodes();
+    let mut layer_nodes = Vec::new();
+    take_layer_property_repass_nodes_into(&mut layer_nodes);
     let _ = take_layout_repass_nodes();
     let _ = take_modifier_slice_repass_nodes();
     let _ = take_render_invalidation();

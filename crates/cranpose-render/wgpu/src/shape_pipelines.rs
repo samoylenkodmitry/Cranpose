@@ -49,7 +49,6 @@ pub(crate) struct ShapePipelines {
     /// Whether a draw takes the general pipeline while its specialized one
     /// builds on the background compiler.
     asynchronous: bool,
-    #[cfg(not(target_arch = "wasm32"))]
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
@@ -62,7 +61,6 @@ impl ShapePipelines {
         backend: wgpu::Backend,
         compiler: &PipelineCompiler,
         first_screen: impl IntoIterator<Item = ShapePipelineKey>,
-        #[cfg_attr(target_arch = "wasm32", expect(unused_variables))]
         recorder: crate::pipeline_recorder::PipelineRecorder,
     ) -> Self {
         static ASYNC_SHAPE_PIPELINES: crate::debug_toggles::DebugToggle =
@@ -77,7 +75,6 @@ impl ShapePipelines {
         Self {
             slots,
             asynchronous,
-            #[cfg(not(target_arch = "wasm32"))]
             recorder,
         }
     }
@@ -107,20 +104,18 @@ impl ShapePipelines {
         if need.ready {
             return;
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let compile_started = web_time::Instant::now();
-        let general = key.general();
-        if self.asynchronous
-            && key != general
-            && (!need.queued || self.slots.get(general).is_some())
-        {
-            self.slots.build(general);
-            self.slots.want(key, vertices);
-        } else {
-            self.slots.build(key);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.recorder.extend_first_screen(compile_started.elapsed());
+        self.recorder.during_demand(|| {
+            let general = key.general();
+            if self.asynchronous
+                && key != general
+                && (!need.queued || self.slots.get(general).is_some())
+            {
+                self.slots.build(general);
+                self.slots.want(key, vertices);
+            } else {
+                self.slots.build(key);
+            }
+        });
     }
 
     pub(crate) fn get(&self, key: ShapePipelineKey) -> Option<(&wgpu::RenderPipeline, bool)> {

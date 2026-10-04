@@ -313,31 +313,13 @@ pub(crate) struct TextureResource {
     label: &'static str,
 }
 
-/// How the users of a transient texture address it, which decides the
-/// pooled textures that can stand in for it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TextureReuse {
-    /// Its whole extent is its content: only a texture of exactly its size
-    /// serves.
-    Exact,
-    /// Every pass that reads or writes it names the texel region it uses,
-    /// so any texture at least as large serves.
-    Regions,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FrameTextureDescriptor {
     pub(crate) label: &'static str,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: wgpu::TextureFormat,
-    pub(crate) reuse: TextureReuse,
 }
-
-/// How many times its own area a pooled texture may cover and still serve a
-/// region-addressed request: past that, the request takes a texture of its
-/// own and the large one stays free for a frame that needs it.
-const MAX_REGION_REUSE_AREA_RATIO: u64 = 4;
 
 impl FrameTextureDescriptor {
     pub(crate) fn render_attachment(
@@ -351,27 +333,9 @@ impl FrameTextureDescriptor {
             width: width.max(1),
             height: height.max(1),
             format,
-            reuse: TextureReuse::Exact,
         }
     }
 
-    /// A render attachment that every pass addresses through texel regions:
-    /// a capture atlas, or the side texture its blurs and substrates run
-    /// in, whose packed size changes as its members scroll and clip.
-    pub(crate) fn region_attachment(
-        label: &'static str,
-        width: u32,
-        height: u32,
-        format: wgpu::TextureFormat,
-    ) -> Self {
-        Self {
-            reuse: TextureReuse::Regions,
-            ..Self::render_attachment(label, width, height, format)
-        }
-    }
-
-    /// This descriptor at the size of `target`, which may exceed the size
-    /// requested.
     fn sized_as(self, target: &OffscreenTarget) -> Self {
         Self {
             width: target.width,
@@ -380,24 +344,10 @@ impl FrameTextureDescriptor {
         }
     }
 
-    fn texels(self) -> u64 {
-        u64::from(self.width) * u64::from(self.height)
-    }
-
     /// Whether the pooled texture `pooled` describes can stand in for this
     /// request.
     fn served_by(self, pooled: Self) -> bool {
-        if pooled.format != self.format {
-            return false;
-        }
-        match self.reuse {
-            TextureReuse::Exact => pooled.width == self.width && pooled.height == self.height,
-            TextureReuse::Regions => {
-                pooled.width >= self.width
-                    && pooled.height >= self.height
-                    && pooled.texels() <= self.texels().saturating_mul(MAX_REGION_REUSE_AREA_RATIO)
-            }
-        }
+        pooled.format == self.format && pooled.width == self.width && pooled.height == self.height
     }
 
     fn estimated_bytes(self) -> u64 {
@@ -467,10 +417,10 @@ impl TransientTexturePool {
         descriptor: FrameTextureDescriptor,
     ) -> OffscreenTarget {
         self.acquires = self.acquires.saturating_add(1);
-        if let Some(entry) = self.available.take_min_by_key(
-            |entry| descriptor.served_by(entry.descriptor),
-            |entry| entry.descriptor.texels(),
-        ) {
+        if let Some(entry) = self
+            .available
+            .take(|entry| descriptor.served_by(entry.descriptor))
+        {
             self.working_set.note(entry.descriptor.estimated_bytes());
             return entry.target;
         }

@@ -268,7 +268,7 @@ fn acquire_recorded_effect_scratch_textures_into<C: FrameCommandRecorder>(
             if !shader.substrates().is_empty() {
                 let layout = ChainedSubstrates::new(shader, width, height);
                 for _ in 0..2 {
-                    let descriptor = FrameTextureDescriptor::region_attachment(
+                    let descriptor = FrameTextureDescriptor::render_attachment(
                         "Chained Shader Substrates",
                         layout.width,
                         layout.height,

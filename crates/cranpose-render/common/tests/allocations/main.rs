@@ -5,6 +5,7 @@ use std::{alloc::System, cell::RefCell, rc::Rc};
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_render_common::{
+    SceneUpdates,
     graph::{LayerNode, RenderGraph, RenderNode},
     scene_builder::{
         build_graph_from_applier, rebuild_graph_from_applier, update_graph_from_applier,
@@ -99,7 +100,7 @@ fn rebuilding_a_cell_reuses_the_cell_it_replaces() {
     let per_cell = allocations_per_cell(|applier, _, graph| {
         let dirty = cell_ids(&graph.root);
         assert!(
-            update_graph_from_applier(applier, graph, &dirty, 1.0),
+            update_graph_from_applier(applier, graph, SceneUpdates::content(&dirty), 1.0),
             "the cells rebuild in place"
         );
     });
@@ -185,7 +186,7 @@ fn scroll_step_allocations() -> usize {
         dirty.dedup();
         let region = Region::new(GLOBAL);
         assert!(
-            update_graph_from_applier(&applier, &mut graph, &dirty, 1.0),
+            update_graph_from_applier(&applier, &mut graph, SceneUpdates::content(&dirty), 1.0),
             "the scroll updates the scene in place"
         );
         let allocations = region.change().allocations;

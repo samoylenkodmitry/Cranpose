@@ -23,6 +23,45 @@ use cranpose_foundation::{
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::LayoutModifierMeasureResult;
 
+type InvalidationCallbackMap = HashMap<u64, Rc<dyn Fn()>>;
+
+struct InvalidationCallbacks {
+    callbacks: RefCell<Rc<InvalidationCallbackMap>>,
+    next_id: Cell<u64>,
+}
+
+impl InvalidationCallbacks {
+    fn new() -> Self {
+        Self {
+            callbacks: RefCell::new(Rc::new(HashMap::new())),
+            next_id: Cell::new(1),
+        }
+    }
+
+    fn add(&self, callback: Rc<dyn Fn()>) -> u64 {
+        let id = self.next_id.get();
+        self.next_id.set(id.saturating_add(1));
+        let displaced = {
+            let mut callbacks = self.callbacks.borrow_mut();
+            Rc::make_mut(&mut callbacks).insert(id, callback)
+        };
+        drop(displaced);
+        id
+    }
+
+    fn remove(&self, id: u64) {
+        let removed = {
+            let mut callbacks = self.callbacks.borrow_mut();
+            Rc::make_mut(&mut callbacks).remove(&id)
+        };
+        drop(removed);
+    }
+
+    fn snapshot(&self) -> Rc<InvalidationCallbackMap> {
+        Rc::clone(&self.callbacks.borrow())
+    }
+}
+
 /// State object for scroll position tracking.
 ///
 /// Holds the current scroll offset and provides methods to programmatically
@@ -39,8 +78,7 @@ pub struct ScrollState {
 pub(crate) struct ScrollStateInner {
     max_value: RefCell<f32>,
     viewport_extent: RefCell<f32>,
-    invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
-    next_invalidate_callback_id: Cell<u64>,
+    invalidate_callbacks: InvalidationCallbacks,
     pending_invalidation: Cell<bool>,
     settle_policy: RefCell<Option<ScrollSettlePolicy>>,
 }
@@ -124,8 +162,7 @@ struct OverscrollEffectInner {
     raw: Cell<f32>,
     visible: Cell<f32>,
     dimension: Cell<f32>,
-    invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
-    next_callback_id: Cell<u64>,
+    invalidate_callbacks: InvalidationCallbacks,
 }
 
 impl OverscrollEffect {
@@ -135,8 +172,7 @@ impl OverscrollEffect {
                 raw: Cell::new(0.0),
                 visible: Cell::new(0.0),
                 dimension: Cell::new(0.0),
-                invalidate_callbacks: RefCell::new(HashMap::new()),
-                next_callback_id: Cell::new(1),
+                invalidate_callbacks: InvalidationCallbacks::new(),
             }),
         }
     }
@@ -220,17 +256,13 @@ impl OverscrollEffect {
     }
 
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        let id = self.inner.next_callback_id.get();
-        self.inner.next_callback_id.set(id.saturating_add(1));
         self.inner
             .invalidate_callbacks
-            .borrow_mut()
-            .insert(id, app_owned_invalidation_callback(callback));
-        id
+            .add(app_owned_invalidation_callback(callback))
     }
 
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
-        self.inner.invalidate_callbacks.borrow_mut().remove(&id);
+        self.inner.invalidate_callbacks.remove(id);
     }
 
     pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
@@ -242,14 +274,8 @@ impl OverscrollEffect {
             return;
         }
         self.inner.visible.set(visible);
-        let callbacks = self
-            .inner
-            .invalidate_callbacks
-            .borrow()
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
-        for callback in callbacks {
+        let callbacks = self.inner.invalidate_callbacks.snapshot();
+        for callback in callbacks.values() {
             callback();
         }
     }
@@ -272,8 +298,7 @@ impl ScrollState {
                 Rc::new(ScrollStateInner {
                     max_value: RefCell::new(0.0),
                     viewport_extent: RefCell::new(0.0),
-                    invalidate_callbacks: RefCell::new(HashMap::new()),
-                    next_invalidate_callback_id: Cell::new(1),
+                    invalidate_callbacks: InvalidationCallbacks::new(),
                     pending_invalidation: Cell::new(false),
                     settle_policy: RefCell::new(None),
                 }),
@@ -388,13 +413,8 @@ impl ScrollState {
 
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
         let inner = self.inner();
-        let id = inner.next_invalidate_callback_id.get();
-        inner.next_invalidate_callback_id.set(id.saturating_add(1));
         let callback = app_owned_invalidation_callback(callback);
-        inner
-            .invalidate_callbacks
-            .borrow_mut()
-            .insert(id, Rc::clone(&callback));
+        let id = inner.invalidate_callbacks.add(Rc::clone(&callback));
         if inner.pending_invalidation.replace(false) {
             callback();
         }
@@ -402,20 +422,17 @@ impl ScrollState {
     }
 
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
-        self.inner().invalidate_callbacks.borrow_mut().remove(&id);
+        self.inner().invalidate_callbacks.remove(id);
     }
 
     fn invalidate(&self) {
         let inner = self.inner();
-        let callbacks: Vec<Rc<dyn Fn()>> = {
-            let callbacks = inner.invalidate_callbacks.borrow();
-            if callbacks.is_empty() {
-                inner.pending_invalidation.set(true);
-                return;
-            }
-            callbacks.values().cloned().collect()
-        };
-        for callback in callbacks {
+        let callbacks = inner.invalidate_callbacks.snapshot();
+        if callbacks.is_empty() {
+            inner.pending_invalidation.set(true);
+            return;
+        }
+        for callback in callbacks.values() {
             callback();
         }
     }
@@ -460,8 +477,7 @@ struct ScrollMotionContextInner {
     active: Cell<bool>,
     transient_active: Cell<bool>,
     generation: Cell<u64>,
-    invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
-    next_invalidate_callback_id: Cell<u64>,
+    invalidate_callbacks: InvalidationCallbacks,
     pending_invalidation: Cell<bool>,
     overscroll: OverscrollEffect,
 }
@@ -516,8 +532,7 @@ impl ScrollMotionContext {
                 active: Cell::new(false),
                 transient_active: Cell::new(false),
                 generation: Cell::new(0),
-                invalidate_callbacks: RefCell::new(HashMap::new()),
-                next_invalidate_callback_id: Cell::new(1),
+                invalidate_callbacks: InvalidationCallbacks::new(),
                 pending_invalidation: Cell::new(false),
                 overscroll: OverscrollEffect::new(),
             }),
@@ -562,15 +577,8 @@ impl ScrollMotionContext {
     }
 
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        let id = self.inner.next_invalidate_callback_id.get();
-        self.inner
-            .next_invalidate_callback_id
-            .set(id.saturating_add(1));
         let callback = app_owned_invalidation_callback(callback);
-        self.inner
-            .invalidate_callbacks
-            .borrow_mut()
-            .insert(id, Rc::clone(&callback));
+        let id = self.inner.invalidate_callbacks.add(Rc::clone(&callback));
         if self.inner.pending_invalidation.replace(false) {
             callback();
         }
@@ -578,7 +586,7 @@ impl ScrollMotionContext {
     }
 
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
-        self.inner.invalidate_callbacks.borrow_mut().remove(&id);
+        self.inner.invalidate_callbacks.remove(id);
     }
 
     fn bump_generation(&self) -> u64 {
@@ -598,15 +606,12 @@ impl ScrollMotionContext {
     }
 
     fn invalidate(&self) {
-        let callbacks: Vec<Rc<dyn Fn()>> = {
-            let callbacks = self.inner.invalidate_callbacks.borrow();
-            if callbacks.is_empty() {
-                self.inner.pending_invalidation.set(true);
-                return;
-            }
-            callbacks.values().cloned().collect()
-        };
-        for callback in callbacks {
+        let callbacks = self.inner.invalidate_callbacks.snapshot();
+        if callbacks.is_empty() {
+            self.inner.pending_invalidation.set(true);
+            return;
+        }
+        for callback in callbacks.values() {
             callback();
         }
     }

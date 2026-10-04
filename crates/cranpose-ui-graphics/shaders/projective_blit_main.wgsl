@@ -6,7 +6,6 @@ fn projective_blit_vs(input: VertexInput) -> VertexOutput {
     let x = (input.position.x / blit.viewport.x) * 2.0 - 1.0;
     let y = 1.0 - (input.position.y / blit.viewport.y) * 2.0;
     output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    output.world_pos = input.position;
     return output;
 }
 
@@ -39,7 +38,7 @@ fn projective_texels(source_pos: vec2<f32>, origin: vec2<i32>, extent: vec2<f32>
 
 @fragment
 fn projective_blit_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let p = vec3<f32>(input.world_pos, 1.0);
+    let p = vec3<f32>(input.clip_position.xy, 1.0);
     let denom = dot(blit.inverse_row2.xyz, p);
     if (abs(denom) <= 0.00001) {
         discard;

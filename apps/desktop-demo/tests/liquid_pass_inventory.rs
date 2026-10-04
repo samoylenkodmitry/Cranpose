@@ -28,7 +28,7 @@ fn scrolling_liquid_cards_adds_no_blur_passes_over_the_existing_page_budget() {
             "scroll step {step} added a pass for unchanged controls: {stats:?}"
         );
         cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
-        let uncached = page.capture();
+        let uncached = page.capture_current();
         cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
         if cached.pixels != uncached.pixels {
             let output = std::path::Path::new("target/liquid-cache-parity");

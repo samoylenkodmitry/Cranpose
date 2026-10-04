@@ -25,15 +25,15 @@ use std::{
 };
 
 use cranpose_core::{
-    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, collections::map::HashSet,
-    enter_event_handler_scope, location_key, run_in_mutable_snapshot,
+    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, SceneNodeAttachmentScratch,
+    collections::map::HashSet, enter_event_handler_scope, location_key, run_in_mutable_snapshot,
 };
 pub use cranpose_foundation::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerSource, RotaryScrollEvent,
     rotary_scroll_pixels_from_detents,
 };
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
-use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
+use cranpose_render_common::{HitTestTarget, RenderScene, Renderer, SceneUpdates};
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
     HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, MeasureLayoutOptions, SemanticsTree,
@@ -43,8 +43,8 @@ use cranpose_ui::{
     has_pending_semantics_invalidations, peek_focus_invalidation, peek_layout_invalidation,
     peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
     process_pointer_repasses, process_semantics_invalidations, request_render_invalidation,
-    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
-    take_pointer_invalidation, take_render_invalidation,
+    take_focus_invalidation, take_layout_invalidation, take_pointer_invalidation,
+    take_render_invalidation,
 };
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, Size};
@@ -54,7 +54,7 @@ use hit_path_tracker::PointerId;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
 pub use surface::{RootId, RootSurface, SurfaceMut};
-use surface::{TextInputRouter, TextInputRoutes, partition_nodes_by_surface};
+use surface::{SurfaceDirtyLane, TextInputRouter, TextInputRoutes, route_nodes_by_surface};
 use web_time::Instant;
 pub use wheel::WheelScroll;
 
@@ -217,6 +217,19 @@ where
 {
     pub(crate) app: ShellApp,
     pub(crate) surfaces: Vec<RootSurface<R>>,
+    pub(crate) routing_scratch: SurfaceRoutingScratch,
+    pub(crate) pending_dirty_nodes: Vec<NodeId>,
+    pub(crate) pending_layer_property_nodes: Vec<NodeId>,
+    pub(crate) geometry_scene_nodes: Vec<NodeId>,
+}
+
+#[derive(Default)]
+pub(crate) struct SurfaceRoutingScratch {
+    pub(crate) attached: Vec<Option<NodeId>>,
+    pub(crate) owners: Vec<Option<NodeId>>,
+    pub(crate) seen: HashSet<(usize, NodeId)>,
+    pub(crate) attachment: SceneNodeAttachmentScratch,
+    pub(crate) window_roots: cranpose_ui::WindowRootRoutingScratch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -500,6 +513,7 @@ impl ShellApp {
             || cranpose_ui::has_pending_layout_repasses()
             || cranpose_ui::has_pending_measure_repasses()
             || cranpose_ui::has_pending_draw_repasses()
+            || cranpose_ui::has_pending_layer_property_repasses()
             || has_pending_pointer_repasses()
             || has_pending_focus_invalidations()
     }
@@ -512,6 +526,7 @@ impl ShellApp {
             || peek_layout_invalidation()
             || cranpose_ui::has_pending_layout_repasses()
             || cranpose_ui::has_pending_measure_repasses()
+            || cranpose_ui::has_pending_layer_property_repasses()
             || self.composition.should_render()
     }
 
@@ -653,6 +668,10 @@ where
                 buffer_size,
                 viewport,
             )],
+            routing_scratch: SurfaceRoutingScratch::default(),
+            pending_dirty_nodes: Vec::new(),
+            pending_layer_property_nodes: Vec::new(),
+            geometry_scene_nodes: Vec::new(),
         };
         shell.process_frame();
         shell
