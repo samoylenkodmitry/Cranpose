@@ -266,7 +266,7 @@ fn a_relaunch_prepares_the_first_screen_even_when_startup_was_slow() {
 }
 
 fn relaunch_after_cache_change(
-    change: impl FnOnce(&mut [u8]),
+    change: impl FnOnce(&mut Vec<u8>),
     check: impl FnOnce(&mut support::LockedRenderer),
 ) {
     relaunch_after_drawing(
@@ -285,7 +285,7 @@ fn relaunch_after_cache_change(
 /// relaunch over that cache once `change` has edited it, handed to `check`.
 fn relaunch_after_drawing(
     draw: impl FnOnce(&mut support::LockedRenderer),
-    change: impl FnOnce(&mut [u8]),
+    change: impl FnOnce(&mut Vec<u8>),
     check: impl FnOnce(&mut support::LockedRenderer),
 ) {
     let _lock = support::gpu_test_lock();
@@ -316,6 +316,29 @@ fn an_updated_build_prepares_the_previous_first_screen_with_fresh_pipelines() {
                 first_frame_builds(renderer),
                 0,
                 "an update must retain which pipelines to prepare before the first screen"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_previous_build_without_shader_records_keeps_its_first_screen_shapes() {
+    relaunch_after_cache_change(
+        |bytes| {
+            bytes[0] ^= 0xff;
+            let no_shaders = *b"RSP1\0\0\0\0";
+            let section = bytes
+                .windows(no_shaders.len())
+                .position(|window| window == no_shaders)
+                .expect("a first screen of shapes records no shaders");
+            bytes.drain(section..section + no_shaders.len());
+        },
+        |renderer| {
+            wait_for_warm_ups();
+            assert_eq!(
+                first_frame_builds(renderer),
+                0,
+                "a file from before the shader records must keep its shape warm-ups"
             );
         },
     );

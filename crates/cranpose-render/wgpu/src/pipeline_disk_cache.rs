@@ -173,11 +173,14 @@ fn current_contents(file: &[u8]) -> Option<Contents<'_>> {
         .ok()?
         .checked_mul(8)?;
     let (keys, rest) = rest.split_at_checked(keys_len)?;
-    let (shaders, blob) = shader_records::decode(rest)?;
+    // The shape keys stand on their own: shader records that do not decode
+    // cost only themselves and the driver blob behind them.
+    let (shaders, blob) = shader_records::decode(rest)
+        .map_or((Vec::new(), None), |(shaders, blob)| (shaders, Some(blob)));
     Some(Contents {
         first_screen: FirstScreenKeys(keys),
         shaders,
-        blob: (*build == blob_key()).then_some(blob),
+        blob: blob.filter(|_| *build == blob_key()),
     })
 }
 
