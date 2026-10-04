@@ -69,6 +69,7 @@ struct RenderPhaseDirtyDiagnostics<'a> {
     scene_dirty: bool,
     draw_repass_pending: bool,
     draw_dirty_nodes: usize,
+    layer_property_nodes: usize,
     layout_dirty_nodes: usize,
     structural_dirty_nodes: usize,
     partial_dirty_nodes: usize,
@@ -89,6 +90,7 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
         scene_dirty,
         draw_repass_pending,
         draw_dirty_nodes,
+        layer_property_nodes,
         layout_dirty_nodes,
         structural_dirty_nodes,
         partial_dirty_nodes,
@@ -99,11 +101,11 @@ fn log_render_phase_dirty_diagnostics(diagnostics: RenderPhaseDirtyDiagnostics<'
     } = diagnostics;
     if let Some(dirty_node_ids) = dirty_node_ids {
         log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layout_dirty_nodes={layout_dirty_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame} ids={dirty_node_ids}",
         );
     } else {
         log::warn!(
-            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layout_dirty_nodes={layout_dirty_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
+            "[render-phase-dirty] path={path} render_dirty={render_dirty} pointer_dirty={pointer_dirty} scene_dirty={scene_dirty} draw_repass_pending={draw_repass_pending} draw_dirty_nodes={draw_dirty_nodes} layer_property_nodes={layer_property_nodes} layout_dirty_nodes={layout_dirty_nodes} structural_dirty_nodes={structural_dirty_nodes} partial_dirty_nodes={partial_dirty_nodes} render_only_dirty={render_only_dirty} recomposed_this_frame={recomposed_this_frame}",
         );
     }
 }
@@ -113,19 +115,26 @@ struct FrameDirt {
     render_dirty: bool,
     pointer_dirty: bool,
     attributed: bool,
+    layer_properties_pending: bool,
     recomposed_this_frame: bool,
 }
 
 struct SurfaceDirt {
     draw_dirty_nodes: Vec<NodeId>,
+    layer_property_nodes: Vec<NodeId>,
     layout_dirty_nodes: Vec<NodeId>,
     structural_parents: Vec<NodeId>,
     partial_dirty_nodes: Vec<NodeId>,
     draw_repass_pending: bool,
     render_only_dirty: bool,
-    draw_only_partial_dirty: bool,
+    visual_only_partial_dirty: bool,
     full_scene_dirty: bool,
     needs_scene_rebuild: bool,
+}
+
+struct ScopedVisualNodes {
+    draw: Vec<NodeId>,
+    layers: Vec<NodeId>,
 }
 
 impl SurfaceDirt {
@@ -133,11 +142,15 @@ impl SurfaceDirt {
         frame: &FrameDirt,
         scene_dirty: bool,
         draw_repass_pending: bool,
-        draw_dirty_nodes: Vec<NodeId>,
+        visual_nodes: ScopedVisualNodes,
         layout_dirty_nodes: Vec<NodeId>,
         structural_parents: Vec<NodeId>,
         mut partial_dirty_nodes: Vec<NodeId>,
     ) -> Self {
+        let ScopedVisualNodes {
+            draw: draw_dirty_nodes,
+            layers: layer_property_nodes,
+        } = visual_nodes;
         let structural_dirty = !structural_parents.is_empty();
         partial_dirty_nodes.clear();
         partial_dirty_nodes.extend(draw_dirty_nodes.iter().copied());
@@ -149,46 +162,46 @@ impl SurfaceDirt {
         let render_only_dirty = frame.render_dirty
             && !frame.attributed
             && partial_dirty_nodes.is_empty()
+            && layer_property_nodes.is_empty()
             && !draw_repass_pending
             && !structural_dirty;
-        let draw_only_partial_dirty = !draw_dirty_nodes.is_empty()
+        let visual_only_partial_dirty = (!draw_dirty_nodes.is_empty()
+            || !layer_property_nodes.is_empty())
             && layout_dirty_nodes.is_empty()
             && !frame.pointer_dirty
             && !frame.recomposed_this_frame
             && !structural_dirty;
         let scoped_scene_dirty = scene_dirty && !layout_dirty_nodes.is_empty();
-        let full_scene_dirty = scene_dirty && !scoped_scene_dirty && !draw_only_partial_dirty;
+        let full_scene_dirty = scene_dirty && !scoped_scene_dirty && !visual_only_partial_dirty;
         let partial_scene_dirty = !partial_dirty_nodes.is_empty();
         let needs_scene_rebuild = full_scene_dirty
             || scoped_scene_dirty
             || partial_scene_dirty
+            || !layer_property_nodes.is_empty()
             || draw_repass_pending
             || structural_dirty;
         Self {
             draw_dirty_nodes,
+            layer_property_nodes,
             layout_dirty_nodes,
             structural_parents,
             partial_dirty_nodes,
             draw_repass_pending,
             render_only_dirty,
-            draw_only_partial_dirty,
+            visual_only_partial_dirty,
             full_scene_dirty,
             needs_scene_rebuild,
         }
     }
 
     fn use_partial_update(&self) -> bool {
-        !self.partial_dirty_nodes.is_empty() && !self.render_only_dirty && !self.full_scene_dirty
+        (!self.partial_dirty_nodes.is_empty() || !self.layer_property_nodes.is_empty())
+            && !self.render_only_dirty
+            && !self.full_scene_dirty
     }
 
     fn use_visual_update(&self) -> bool {
-        self.use_partial_update() && self.draw_only_partial_dirty
-    }
-
-    fn visual_update_only(&self) -> bool {
-        self.draw_only_partial_dirty
-            && !self.partial_dirty_nodes.is_empty()
-            && !self.full_scene_dirty
+        self.use_partial_update() && self.visual_only_partial_dirty
     }
 
     fn rebuild_path(&self) -> &'static str {
@@ -208,13 +221,15 @@ impl SurfaceDirt {
             scene_dirty,
             draw_repass_pending: self.draw_repass_pending,
             draw_dirty_nodes: self.draw_dirty_nodes.len(),
+            layer_property_nodes: self.layer_property_nodes.len(),
             layout_dirty_nodes: self.layout_dirty_nodes.len(),
             structural_dirty_nodes: self.structural_parents.len(),
             partial_dirty_nodes: self.partial_dirty_nodes.len(),
             dirty_node_ids: render_phase_dirty_diagnostics_enabled().then(|| {
                 format!(
-                    "draw={:?} layout={:?} structural={:?} partial={:?}",
+                    "draw={:?} layers={:?} layout={:?} structural={:?} partial={:?}",
                     self.draw_dirty_nodes,
+                    self.layer_property_nodes,
                     self.layout_dirty_nodes,
                     self.structural_parents,
                     self.partial_dirty_nodes,
@@ -620,6 +635,7 @@ where
         take_focus_invalidation();
         for surface in &mut self.surfaces {
             surface.scoped_draw_nodes.clear();
+            surface.scoped_layer_property_nodes.clear();
             surface.structural_scene_nodes.clear();
         }
         cranpose_ui::take_draw_repass_nodes_into(&mut self.pending_dirty_nodes);
@@ -628,6 +644,14 @@ where
             &mut self.surfaces,
             self.pending_dirty_nodes.iter().copied(),
             SurfaceDirtyLane::Draw,
+            &mut self.routing_scratch,
+        );
+        cranpose_ui::take_layer_property_repass_nodes_into(&mut self.pending_layer_property_nodes);
+        route_nodes_by_surface(
+            &mut self.app,
+            &mut self.surfaces,
+            self.pending_layer_property_nodes.iter().copied(),
+            SurfaceDirtyLane::LayerProperties,
             &mut self.routing_scratch,
         );
         self.take_structural_change_parents();
@@ -639,17 +663,25 @@ where
             &mut self.routing_scratch,
         );
         self.pending_dirty_nodes.clear();
+        self.pending_layer_property_nodes.clear();
         let _ = cranpose_ui::has_focused_field();
         let attributed = self.surfaces.iter().any(|surface| {
-            !surface.scoped_draw_nodes.is_empty() || !surface.structural_scene_nodes.is_empty()
+            !surface.scoped_draw_nodes.is_empty()
+                || !surface.scoped_layer_property_nodes.is_empty()
+                || !surface.structural_scene_nodes.is_empty()
         }) || self
             .surfaces
             .iter()
             .any(|surface| !surface.scoped_layout_scene_nodes.is_empty());
+        let layer_properties_pending = self
+            .surfaces
+            .iter()
+            .any(|surface| !surface.scoped_layer_property_nodes.is_empty());
         let frame = FrameDirt {
             render_dirty,
             pointer_dirty,
             attributed,
+            layer_properties_pending,
             recomposed_this_frame,
         };
 
@@ -711,10 +743,11 @@ where
     R::Error: Debug,
 {
     let draw_dirty_nodes = std::mem::take(&mut surface.scoped_draw_nodes);
+    let layer_property_nodes = std::mem::take(&mut surface.scoped_layer_property_nodes);
     let structural_parents = std::mem::take(&mut surface.structural_scene_nodes);
     let draw_repass_pending = !draw_dirty_nodes.is_empty();
     let mut draw_dirty_nodes = refresh_draw_nodes(app, surface, draw_dirty_nodes);
-    if frame.render_dirty && !draw_repass_pending {
+    if frame.render_dirty && !frame.layer_properties_pending && !draw_repass_pending {
         draw_dirty_nodes = refresh_retained_redraw_nodes(app, surface, draw_dirty_nodes);
     }
     let layout_dirty_nodes = std::mem::take(&mut surface.scoped_layout_scene_nodes);
@@ -724,7 +757,10 @@ where
         frame,
         scene_dirty,
         draw_repass_pending,
-        draw_dirty_nodes,
+        ScopedVisualNodes {
+            draw: draw_dirty_nodes,
+            layers: layer_property_nodes,
+        },
         layout_dirty_nodes,
         structural_parents,
         partial_dirty_nodes,
@@ -742,6 +778,7 @@ where
         );
         surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
         surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
+        surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
         surface.structural_scene_nodes = dirt.structural_parents;
         surface.partial_scene_nodes = dirt.partial_dirty_nodes;
         if dirt.render_only_dirty && app.dev_options.fps_counter {
@@ -757,13 +794,14 @@ where
     }
 
     surface.scene_dirty = false;
-    let structure_changed = !dirt.render_only_dirty && !dirt.visual_update_only();
+    let structure_changed = !dirt.render_only_dirty && !dirt.use_visual_update();
     rebuild_surface_scene(app, surface, frame, scene_dirty, &dirt);
     if dev_overlay_belongs_on(surface.id, app.dev_options.fps_counter) {
         draw_dev_overlay(app, surface);
     }
     dirt.layout_dirty_nodes.clear();
     surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
+    surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
     surface.structural_scene_nodes = dirt.structural_parents;
     surface.partial_scene_nodes = dirt.partial_dirty_nodes;
     surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
@@ -799,14 +837,20 @@ fn rebuild_surface_scene<R>(
             &mut applier,
             root,
             viewport_size,
-            &dirt.partial_dirty_nodes,
+            SceneUpdates {
+                content: &dirt.partial_dirty_nodes,
+                layers: &dirt.layer_property_nodes,
+            },
         )
     } else if dirt.use_partial_update() {
         surface.renderer.update_scene_from_applier(
             &mut applier,
             root,
             viewport_size,
-            &dirt.partial_dirty_nodes,
+            SceneUpdates {
+                content: &dirt.partial_dirty_nodes,
+                layers: &dirt.layer_property_nodes,
+            },
         )
     } else {
         surface

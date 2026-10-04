@@ -13,7 +13,7 @@ use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, PointerIcon, Rect, RoundedCornerShape};
 
 use crate::{
-    HitTestTarget, RenderScene,
+    HitTestTarget, RenderScene, SceneUpdates,
     graph::{ProjectiveTransform, RenderGraph},
 };
 
@@ -337,6 +337,61 @@ impl Scene {
 
     pub fn diagnostics(&self) -> &RenderDiagnostics {
         self.diagnostics.as_ref()
+    }
+
+    /// Rebuilds the retained graph and hit targets from the applier, reusing
+    /// storage from the previous graph.
+    pub fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
+        let previous = self.graph.take();
+        self.clear_hits();
+        let Some(mut graph) =
+            crate::scene_builder::rebuild_graph_from_applier(applier, root, 1.0, previous)
+        else {
+            return;
+        };
+        graph.root.recompute_raster_cache_hashes();
+        self.install_graph_with_hits(graph);
+    }
+
+    fn install_graph_with_hits(&mut self, graph: RenderGraph) {
+        crate::hit_graph::collect_hits_from_graph(
+            &graph.root,
+            ProjectiveTransform::identity(),
+            self,
+            None,
+        );
+        self.replace_graph(graph);
+    }
+
+    /// Applies content and layer-property changes to the retained graph.
+    /// Empty updates or an unavailable scoped update rebuild the scene.
+    /// Hit targets are refreshed when their geometry changes or `refresh_hits`
+    /// is true, as required after layout or pointer-handler changes.
+    pub fn update_from_applier(
+        &mut self,
+        applier: &MemoryApplier,
+        root: NodeId,
+        updates: SceneUpdates<'_>,
+        refresh_hits: bool,
+    ) {
+        let report = if updates.is_empty() {
+            None
+        } else {
+            self.graph.as_mut().map(|graph| {
+                crate::scene_builder::update_graph_from_applier_report(applier, graph, updates, 1.0)
+            })
+        };
+        let Some(report) = report.filter(|report| report.applied()) else {
+            self.rebuild_from_applier(applier, root);
+            return;
+        };
+        if !refresh_hits && !report.hit_graph_dirty {
+            return;
+        }
+        self.clear_hits();
+        if let Some(graph) = self.graph.take() {
+            self.install_graph_with_hits(graph);
+        }
     }
 
     /// Adds an interactive target in draw order, ignoring targets that neither

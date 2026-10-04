@@ -62,6 +62,7 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) scene_dirty: bool,
     pub(crate) scoped_layout_scene_nodes: Vec<NodeId>,
     pub(crate) scoped_draw_nodes: Vec<NodeId>,
+    pub(crate) scoped_layer_property_nodes: Vec<NodeId>,
     pub(crate) structural_scene_nodes: Vec<NodeId>,
     pub(crate) partial_scene_nodes: Vec<NodeId>,
     pub(crate) retained_visual_nodes: HashSet<NodeId>,
@@ -105,6 +106,7 @@ impl<R: Renderer> RootSurface<R> {
             scene_dirty: true,
             scoped_layout_scene_nodes: Vec::new(),
             scoped_draw_nodes: Vec::new(),
+            scoped_layer_property_nodes: Vec::new(),
             structural_scene_nodes: Vec::new(),
             partial_scene_nodes: Vec::new(),
             retained_visual_nodes: HashSet::default(),
@@ -179,6 +181,7 @@ impl<R: Renderer> RootSurface<R> {
         self.scoped_layout_scene_nodes.clear();
         self.scoped_layout_scene_nodes.extend(root);
         self.scoped_draw_nodes.clear();
+        self.scoped_layer_property_nodes.clear();
         self.structural_scene_nodes.clear();
         self.partial_scene_nodes.clear();
         self.scene_dirty = true;
@@ -400,6 +403,7 @@ impl PlatformTextInputHandler for TextInputRouter {
 pub(crate) enum SurfaceDirtyLane {
     Layout,
     Draw,
+    LayerProperties,
     Structural,
 }
 
@@ -418,6 +422,7 @@ fn append_surface_dirty_node(
             }
         }
         SurfaceDirtyLane::Draw => surface.scoped_draw_nodes.push(node),
+        SurfaceDirtyLane::LayerProperties => surface.scoped_layer_property_nodes.push(node),
         SurfaceDirtyLane::Structural => {
             if seen.insert((surface_index, node)) {
                 surface.structural_scene_nodes.push(node);
@@ -462,7 +467,9 @@ pub(crate) fn route_nodes_by_surface<R: Renderer>(
                 );
             }
         }
-        SurfaceDirtyLane::Draw | SurfaceDirtyLane::Structural => {}
+        SurfaceDirtyLane::Draw
+        | SurfaceDirtyLane::LayerProperties
+        | SurfaceDirtyLane::Structural => {}
     }
     if app.app_context.window_roots().is_empty() {
         scratch.owners.clear();

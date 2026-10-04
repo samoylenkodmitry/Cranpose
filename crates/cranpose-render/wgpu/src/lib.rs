@@ -282,27 +282,6 @@ pub struct WgpuRenderer {
 }
 
 impl WgpuRenderer {
-    fn update_scene(
-        &mut self,
-        applier: &mut MemoryApplier,
-        root: NodeId,
-        dirty_nodes: &[NodeId],
-        refresh_hits: bool,
-    ) {
-        let mut changed_nodes = std::mem::take(&mut self.frontend.changed_nodes);
-        pipeline::update_from_applier(
-            applier,
-            root,
-            &mut self.frontend.scene,
-            1.0,
-            dirty_nodes,
-            refresh_hits,
-            &mut changed_nodes,
-        );
-        changed_nodes.clear();
-        self.frontend.changed_nodes = changed_nodes;
-    }
-
     /// Create a new WGPU renderer.
     ///
     /// * `fonts` – font bytes to load, ordered by priority (first = highest priority).
@@ -1151,7 +1130,7 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.frontend.clear_fps_overlay();
-        pipeline::render_from_applier(applier, root, &mut self.frontend.scene, 1.0);
+        self.frontend.scene.rebuild_from_applier(applier, root);
         Ok(())
     }
 
@@ -1159,13 +1138,15 @@ impl Renderer for WgpuRenderer {
         &mut self,
         applier: &mut MemoryApplier,
         root: NodeId,
-        viewport: Size,
-        dirty_nodes: &[NodeId],
+        _viewport: Size,
+        updates: cranpose_render_common::SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
-        if dirty_nodes.is_empty() {
-            return self.rebuild_scene_from_applier(applier, root, viewport);
+        if updates.is_empty() {
+            self.frontend.clear_fps_overlay();
         }
-        self.update_scene(applier, root, dirty_nodes, true);
+        self.frontend
+            .scene
+            .update_from_applier(applier, root, updates, true);
         Ok(())
     }
 
@@ -1173,13 +1154,15 @@ impl Renderer for WgpuRenderer {
         &mut self,
         applier: &mut MemoryApplier,
         root: NodeId,
-        viewport: Size,
-        dirty_nodes: &[NodeId],
+        _viewport: Size,
+        updates: cranpose_render_common::SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
-        if dirty_nodes.is_empty() {
-            return self.rebuild_scene_from_applier(applier, root, viewport);
+        if updates.is_empty() {
+            self.frontend.clear_fps_overlay();
         }
-        self.update_scene(applier, root, dirty_nodes, false);
+        self.frontend
+            .scene
+            .update_from_applier(applier, root, updates, false);
         Ok(())
     }
 

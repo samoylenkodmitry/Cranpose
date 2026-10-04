@@ -3586,7 +3586,7 @@ impl MemoryApplier {
     pub fn take_structural_change_parents_attached_to(&mut self, root: NodeId) -> Vec<NodeId> {
         let mut candidates = Vec::new();
         self.take_structural_change_parents_into(&mut candidates);
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::<NodeId>::default();
         candidates.retain_mut(|parent_id| {
             let Some(resolved) = self.first_non_virtual_ancestor(*parent_id) else {
                 return false;

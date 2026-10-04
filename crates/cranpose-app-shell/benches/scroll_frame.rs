@@ -6,7 +6,7 @@ use std::{
 use cranpose_app_shell::AppShell;
 use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
-    Renderer,
+    Renderer, SceneUpdates,
     graph::{LayerNode, RenderNode},
     graph_scene::Scene,
     scene_builder::{
@@ -70,15 +70,15 @@ impl Renderer for GraphRenderer {
         applier: &mut MemoryApplier,
         root: NodeId,
         viewport: Size,
-        nodes: &[NodeId],
+        updates: SceneUpdates<'_>,
     ) -> Result<(), ()> {
         self.updates += 1;
-        self.dirty_ids += nodes.len();
+        self.dirty_ids += updates.content.len() + updates.layers.len();
         let updated = self
             .scene
             .graph
             .as_mut()
-            .is_some_and(|graph| update_graph_from_applier(applier, graph, nodes, 1.0));
+            .is_some_and(|graph| update_graph_from_applier(applier, graph, updates, 1.0));
         if !updated {
             self.rebuild_scene_from_applier(applier, root, viewport)?;
         }

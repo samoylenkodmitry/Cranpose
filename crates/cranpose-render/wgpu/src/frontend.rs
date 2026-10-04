@@ -35,7 +35,6 @@ pub(crate) struct RendererFrontend {
     returned_scenes: usize,
     pub(crate) layer_motion: LayerMotion,
     pub(crate) frame_sequence: u64,
-    pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
     pub(crate) transparent_background: bool,
 }
 
@@ -77,7 +76,6 @@ impl RendererFrontend {
             returned_scenes: 0,
             layer_motion: LayerMotion::default(),
             frame_sequence: 0,
-            changed_nodes: Vec::new(),
             transparent_background: false,
         }
     }

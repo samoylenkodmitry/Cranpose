@@ -33,7 +33,7 @@ pub use cranpose_foundation::{
     rotary_scroll_pixels_from_detents,
 };
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
-use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
+use cranpose_render_common::{HitTestTarget, RenderScene, Renderer, SceneUpdates};
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
     HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, MeasureLayoutOptions, SemanticsTree,
@@ -219,6 +219,7 @@ where
     pub(crate) surfaces: Vec<RootSurface<R>>,
     pub(crate) routing_scratch: SurfaceRoutingScratch,
     pub(crate) pending_dirty_nodes: Vec<NodeId>,
+    pub(crate) pending_layer_property_nodes: Vec<NodeId>,
     pub(crate) geometry_scene_nodes: Vec<NodeId>,
 }
 
@@ -512,6 +513,7 @@ impl ShellApp {
             || cranpose_ui::has_pending_layout_repasses()
             || cranpose_ui::has_pending_measure_repasses()
             || cranpose_ui::has_pending_draw_repasses()
+            || cranpose_ui::has_pending_layer_property_repasses()
             || has_pending_pointer_repasses()
             || has_pending_focus_invalidations()
     }
@@ -524,6 +526,7 @@ impl ShellApp {
             || peek_layout_invalidation()
             || cranpose_ui::has_pending_layout_repasses()
             || cranpose_ui::has_pending_measure_repasses()
+            || cranpose_ui::has_pending_layer_property_repasses()
             || self.composition.should_render()
     }
 
@@ -667,6 +670,7 @@ where
             )],
             routing_scratch: SurfaceRoutingScratch::default(),
             pending_dirty_nodes: Vec::new(),
+            pending_layer_property_nodes: Vec::new(),
             geometry_scene_nodes: Vec::new(),
         };
         shell.process_frame();

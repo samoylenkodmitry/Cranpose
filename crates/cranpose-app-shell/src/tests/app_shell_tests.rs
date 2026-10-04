@@ -43,6 +43,9 @@ mod reader_activation_tests;
 #[path = "scoped_structural_frame_tests.rs"]
 mod scoped_structural_frame_tests;
 
+#[path = "layer_property_updates.rs"]
+mod layer_property_updates;
+
 #[path = "unhandled_key_tests.rs"]
 mod unhandled_key_tests;
 
@@ -1592,6 +1595,37 @@ impl ScopedUpdateCountingRenderer {
             last_dirty_nodes,
         }
     }
+
+    fn update_from_applier(
+        &mut self,
+        applier: &mut cranpose_core::MemoryApplier,
+        root: cranpose_core::NodeId,
+        updates: cranpose_render_common::SceneUpdates<'_>,
+        visual: bool,
+    ) {
+        if visual {
+            self.visual_updates.set(self.visual_updates.get() + 1);
+        } else {
+            self.updates.set(self.updates.get() + 1);
+        }
+        let mut dirty_nodes = updates.content.to_vec();
+        dirty_nodes.extend_from_slice(updates.layers);
+        *self.last_dirty_nodes.borrow_mut() = dirty_nodes;
+        let updated = self.scene.graph.as_mut().is_some_and(|graph| {
+            cranpose_render_common::scene_builder::update_graph_from_applier(
+                applier, graph, updates, 1.0,
+            )
+        });
+        if !updated {
+            self.rebuilds.set(self.rebuilds.get() + 1);
+            self.scene.clear();
+            if let Some(graph) =
+                cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
+            {
+                self.scene.replace_graph(graph);
+            }
+        }
+    }
 }
 
 impl Renderer for ScopedUpdateCountingRenderer {
@@ -1636,27 +1670,9 @@ impl Renderer for ScopedUpdateCountingRenderer {
         applier: &mut cranpose_core::MemoryApplier,
         root: cranpose_core::NodeId,
         _viewport: Size,
-        dirty_nodes: &[cranpose_core::NodeId],
+        updates: cranpose_render_common::SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
-        self.updates.set(self.updates.get() + 1);
-        *self.last_dirty_nodes.borrow_mut() = dirty_nodes.to_vec();
-        let updated = self.scene.graph.as_mut().is_some_and(|graph| {
-            cranpose_render_common::scene_builder::update_graph_from_applier(
-                applier,
-                graph,
-                dirty_nodes,
-                1.0,
-            )
-        });
-        if !updated {
-            self.rebuilds.set(self.rebuilds.get() + 1);
-            self.scene.clear();
-            if let Some(graph) =
-                cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
-            {
-                self.scene.replace_graph(graph);
-            }
-        }
+        self.update_from_applier(applier, root, updates, false);
         Ok(())
     }
 
@@ -1665,27 +1681,9 @@ impl Renderer for ScopedUpdateCountingRenderer {
         applier: &mut cranpose_core::MemoryApplier,
         root: cranpose_core::NodeId,
         _viewport: Size,
-        dirty_nodes: &[cranpose_core::NodeId],
+        updates: cranpose_render_common::SceneUpdates<'_>,
     ) -> Result<(), Self::Error> {
-        self.visual_updates.set(self.visual_updates.get() + 1);
-        *self.last_dirty_nodes.borrow_mut() = dirty_nodes.to_vec();
-        let updated = self.scene.graph.as_mut().is_some_and(|graph| {
-            cranpose_render_common::scene_builder::update_graph_from_applier(
-                applier,
-                graph,
-                dirty_nodes,
-                1.0,
-            )
-        });
-        if !updated {
-            self.rebuilds.set(self.rebuilds.get() + 1);
-            self.scene.clear();
-            if let Some(graph) =
-                cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
-            {
-                self.scene.replace_graph(graph);
-            }
-        }
+        self.update_from_applier(applier, root, updates, true);
         Ok(())
     }
 }

@@ -7,6 +7,7 @@ mod font_tracking;
 mod font_weight_matching;
 mod gpos_kerning_measure;
 mod layer_and_raster_rules;
+mod layer_property_updates;
 mod lazy_trim_scene;
 mod recording_reuse;
 mod scaling_list_scene;
