@@ -294,6 +294,9 @@ pub fn map_texture_usage(usage: wgt::TextureUses) -> vk::ImageUsageFlags {
 
 /// The stages a shader may read or write a texture in: fragment and compute,
 /// plus upstream's vertex stage once the device's texture stages widened.
+/// Widened, they are exactly upstream's: like upstream, which names no task
+/// or mesh stage in any barrier, this leaves experimental mesh shading's
+/// reads unsynchronized.
 pub fn texture_shader_stages(widened: bool) -> vk::PipelineStageFlags {
     let fragment_and_compute =
         vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER;

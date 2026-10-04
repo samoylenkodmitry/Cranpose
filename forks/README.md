@@ -38,8 +38,10 @@ separate queues, so on a Mali this drains the GPU at every dependent pass.
 The fork's Vulkan device records whether any bind group layout lets a
 stage other than fragment or compute read a texture. Until one does, a
 sampled texture's barrier waits only in the fragment and compute stages;
-command buffers begun after one does wait in upstream's stages. Cranpose's
-renderer samples textures in fragment shaders only.
+command buffers begun after one does wait in upstream's stages: vertex,
+fragment and compute. Upstream names no task or mesh stage in any barrier,
+so experimental mesh shading stays as unsynchronized as it is upstream.
+Cranpose's renderer samples textures in fragment shaders only.
 
 A texture an earlier buffer left in a read state takes no new barrier, so
 a vertex shader in a later buffer could read it before the earlier
