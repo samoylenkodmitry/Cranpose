@@ -51,5 +51,30 @@ Flow operators are structs. A chain stores operator state once per collection.
 Rust cancels a coroutine when its future drops. Background scopes require
 `Send` captures; main-thread scopes stay thread-confined.
 
+## Native worker budgets
+
+`Dispatchers::default_pool()` and `Dispatchers::io()` share lazy workers.
+Each lane can run up to the device's available parallelism; their combined
+worker limit is twice that value. Blocked I/O leaves capacity for CPU work.
+Workers retire after 30 idle seconds and release their thread-local resources.
+Getting a dispatcher without submitting work starts no worker threads.
+
+Use `DispatcherPool::new(DispatcherPoolConfig { ..Default::default() })` for
+an owned pair with different CPU/I/O limits or an idle timeout. Its `cpu()` and
+`io()` handles keep the pool alive independently. `Dispatchers::single_thread`
+starts its dedicated thread on first use and preserves that thread's identity
+until the dispatcher is no longer used.
+
+Coroutine wake-ups are never rejected for overload. The limits bound executing
+steps and worker threads; queued steps and suspended futures still retain data.
+Bound producer concurrency with structured scopes, channels or semaphores when
+launching large batches. Cancellation drops a future on its dispatcher and
+cannot interrupt an already-running blocking call. Browser dispatchers use the
+page event loop, where blocking code remains unsuitable.
+
+Cranpose's `withBlocking` executor has its own bounded queue and worker budget.
+These coroutine limits do not change that executor or require a context
+parameter in composables.
+
 - [API reference on docs.rs](https://docs.rs/coroflow/latest/coroflow/)
 - [Source on GitHub](https://github.com/samoylenkodmitry/cranpose/tree/main/crates/coroflow)

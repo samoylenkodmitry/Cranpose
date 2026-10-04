@@ -9,6 +9,7 @@ mod channel;
 mod clock;
 mod combining;
 mod dispatcher;
+mod dispatcher_pool;
 mod errors;
 mod exclusion;
 mod flattening;
@@ -39,9 +40,8 @@ pub use combining::{
     Combine3, Combine3Run, Combine4, Combine4Run, Combine5, Combine5Run, CombineAll, CombineAllRun,
     Merge, MergeRun, Zip, ZipRun, combine_all, combine3, combine4, combine5, merge,
 };
-pub use dispatcher::{
-    ConfinedDispatcher, Dispatch, Dispatcher, Dispatchers, IO_POOL_MIN_THREADS, Runnable,
-};
+pub use dispatcher::{ConfinedDispatcher, Dispatch, Dispatcher, Dispatchers, Runnable};
+pub use dispatcher_pool::{DispatcherPool, DispatcherPoolConfig};
 pub use errors::{Catch, CatchRun, RetryRun, RetryWhen};
 pub use exclusion::{Mutex, MutexGuard, Permit, Semaphore};
 pub use flattening::{FlatMap, FlatMapRun, Flatten};

@@ -1,5 +1,6 @@
 use std::{
     future::Future,
+    panic::{AssertUnwindSafe, catch_unwind},
     pin::Pin,
     sync::{Arc, Mutex, Weak},
     task::{Context, Poll, Waker},
@@ -226,10 +227,10 @@ impl Job {
             )
         };
         for waker in joiners {
-            waker.wake();
+            let _ = catch_unwind(AssertUnwindSafe(|| waker.wake()));
         }
         for handler in completion {
-            handler(outcome);
+            let _ = catch_unwind(AssertUnwindSafe(|| handler(outcome)));
         }
         if let Some(parent) = parent.and_then(|parent| parent.upgrade()) {
             parent.child_finished(outcome, reported);
