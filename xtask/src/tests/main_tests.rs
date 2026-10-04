@@ -580,6 +580,23 @@ cranpose v0.1.0
 }
 
 #[test]
+fn renderer_pixels_feature_boundary_rejects_the_wgpu_fork() {
+    let tree = "\
+cranpose v0.9.4
+├── cranpose-render-pixels v0.9.4
+└── cranpose-render-wgpu v0.9.4
+    └── cranpose-wgpu v30.0.1
+        └── cranpose-wgpu-core v30.0.1
+            └── cranpose-wgpu-hal v30.0.1
+";
+
+    let error = renderer_pixels_feature_boundary_violation(tree)
+        .expect_err("the wgpu fork is a GPU renderer stack too");
+
+    assert!(error.contains("cranpose-wgpu, cranpose-wgpu-core, cranpose-wgpu-hal"));
+}
+
+#[test]
 fn create_bundle_writes_expected_layout() {
     let workspace = unique_temp_dir();
     let binary = workspace.join("target/release/desktop-app");

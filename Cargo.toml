@@ -164,12 +164,12 @@ opt-level = 3
 # these are the crates that run per frame or per asset, not per build. They are
 # third-party and rebuilt rarely, so optimising them costs one compile and buys
 # every subsequent run. The workspace's own crates stay unoptimised so stepping
-# through them still works.
-[profile.dev.package.wgpu]
+# through them still works. wgpu is Cranpose's fork of it (forks/README.md).
+[profile.dev.package.cranpose-wgpu]
 opt-level = 3
-[profile.dev.package.wgpu-core]
+[profile.dev.package.cranpose-wgpu-core]
 opt-level = 3
-[profile.dev.package.wgpu-hal]
+[profile.dev.package.cranpose-wgpu-hal]
 opt-level = 3
 [profile.dev.package.wgpu-types]
 opt-level = 3

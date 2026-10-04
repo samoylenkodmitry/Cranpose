@@ -517,8 +517,17 @@ const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[
     },
 ];
 
-const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] =
-    &["pixels", "wgpu", "wgpu-core", "wgpu-hal", "naga"];
+/// Upstream wgpu and Cranpose's fork of it (forks/README.md) alike.
+const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] = &[
+    "pixels",
+    "wgpu",
+    "wgpu-core",
+    "wgpu-hal",
+    "cranpose-wgpu",
+    "cranpose-wgpu-core",
+    "cranpose-wgpu-hal",
+    "naga",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DependencyBudgetScope {
@@ -1611,7 +1620,7 @@ fn check_renderer_pixels_feature_boundary(explain: bool) -> Result<(), String> {
     renderer_pixels_feature_boundary_violation(&stdout)?;
     if explain {
         println!(
-            "renderer-pixels feature boundary ok: no external pixels, wgpu, wgpu-core, wgpu-hal, or naga packages"
+            "renderer-pixels feature boundary ok: no external pixels, wgpu (upstream or the fork), wgpu-core, wgpu-hal, or naga packages"
         );
     }
     Ok(())
