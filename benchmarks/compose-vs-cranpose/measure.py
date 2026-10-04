@@ -294,21 +294,43 @@ def mali_clock_summary(freqs, mali_khz):
     return {'gpu_mhz': statistics.mean(mali_khz) / 1e3}
 
 
+CLOCKS = [('gpu_mhz', 1e6), ('ddr_mhz', 1e6), ('cpu_little_mhz', 1e3), ('cpu_mid_mhz', 1e3),
+          ('cpu_big_mhz', 1e3)]
+
+
+def clock_samples(lines):
+    """The sampler's clock lines as lists of values, None where the shell could
+    not read the node. The sampler reads the Kirin 980's clock files; on another
+    SoC the line comes back short and the clocks go unreported."""
+    samples = []
+    for line in lines:
+        if not line.startswith('F '):
+            continue
+        fields = line.split()[1:]
+        if len(fields) == len(CLOCKS) + len(HARDWARE_MAX):
+            samples.append([int(field) if field.isdigit() else None for field in fields])
+    return samples
+
+
 def clock_summary(freqs):
     """Mean clocks over the window, and the lowest cap seen as a share of each
     domain's hardware maximum: below 100 means thermal management throttled
-    that domain. Empty when the device has no clock samples."""
+    that domain. A clock or cap the shell could not read is left out rather
+    than read as zero. Empty when the device has no clock samples."""
     if not freqs:
         return {'cap_pct': {}}
-    return {
-        'gpu_mhz': statistics.mean(f[0] for f in freqs) / 1e6,
-        'ddr_mhz': statistics.mean(f[1] for f in freqs) / 1e6,
-        'cpu_little_mhz': statistics.mean(f[2] for f in freqs) / 1e3,
-        'cpu_mid_mhz': statistics.mean(f[3] for f in freqs) / 1e3,
-        'cpu_big_mhz': statistics.mean(f[4] for f in freqs) / 1e3,
-        'cap_pct': {domain: 100.0 * min(f[5 + index] for f in freqs) / HARDWARE_MAX[domain]
-                    for index, domain in enumerate(HARDWARE_MAX)},
-    }
+    summary = {}
+    for index, (key, scale) in enumerate(CLOCKS):
+        values = [sample[index] for sample in freqs if sample[index] is not None]
+        if values:
+            summary[key] = statistics.mean(values) / scale
+    caps = {}
+    for index, domain in enumerate(HARDWARE_MAX):
+        values = [sample[len(CLOCKS) + index] for sample in freqs]
+        if None not in values:
+            caps[domain] = 100.0 * min(values) / HARDWARE_MAX[domain]
+    summary['cap_pct'] = caps
+    return summary
 
 
 def measure_run(device, app, scenario, args, destination):
@@ -343,10 +365,7 @@ def measure_run(device, app, scenario, args, destination):
     # smallest gap is the clock offset to within about one frame.
     offset = min(calibration)
     stats = frame_stats(frames, t0 - offset, t1 - offset, vsync_ms)
-    # The sampler reads the Kirin 980's clock files; on another SoC the
-    # line comes back short and the clocks go unreported.
-    freqs = [list(map(int, line.split()[1:])) for line in lines if line.startswith('F ')]
-    freqs = [sample for sample in freqs if len(sample) == 5 + len(HARDWARE_MAX)]
+    freqs = clock_samples(lines)
     mali_khz = [int(fields[1]) for fields in (line.split() for line in lines if line.startswith('G '))
                 if len(fields) == 2 and fields[1].isdigit()]
     ticks_per_s = args.clock_ticks

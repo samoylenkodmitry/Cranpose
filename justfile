@@ -333,6 +333,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     {{benchmark_python}} scripts/android_visual_contract_test.py
     python3 scripts/perf_report_test.py
     python3 benchmarks/compose-vs-cranpose/tests/test_surfaceflinger_report.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_clock_samples.py
 
 # Covers the shared/exclusive lock that keeps builds off the machine while a
 # measurement runs, and the turnstile that keeps a stream of builds from
