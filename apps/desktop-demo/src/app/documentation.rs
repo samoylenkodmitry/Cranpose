@@ -583,7 +583,7 @@ fn GuideSurfaces(
                     geometry.height(),
                     compact,
                     header_height,
-                )
+                );
             },
         );
         if preview {
