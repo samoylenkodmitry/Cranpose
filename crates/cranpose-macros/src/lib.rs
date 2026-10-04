@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use proc_macro::TokenStream;
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream as TokenStream2};

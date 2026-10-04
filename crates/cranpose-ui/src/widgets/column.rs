@@ -38,28 +38,25 @@ impl Default for ColumnSpec {
     }
 }
 
-/// A layout composable that places its children in a vertical sequence.
-///
-/// # When to use
-/// Use `Column` to arrange items top-to-bottom. For horizontal arrangement, use [`Row`](crate::widgets::Row).
-///
-/// # Arguments
-///
-/// * `modifier` - Modifiers to apply to the column layout.
-/// * `spec` - Configuration for vertical arrangement and horizontal alignment.
-/// * `content` - The children composables to layout.
+/// Places children from top to bottom. `spec` sets vertical space and horizontal alignment.
+/// Use [`Row`](crate::Row) for a horizontal sequence.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// Column(
-///     Modifier::padding(16.0),
-///     ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(8.0)),
-///     || {
-///         Text("Title", Modifier::empty());
-///         Text("Subtitle", Modifier::empty());
-///     }
-/// );
+/// ```rust
+/// use cranpose_ui::*;
+///
+/// #[composable]
+/// fn Details() {
+///     Column(
+///         Modifier::empty().padding(16.0),
+///         ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(8.0)),
+///         || {
+///             Text("Title", Modifier::empty(), TextStyle::default());
+///             Text("Subtitle", Modifier::empty(), TextStyle::default());
+///         },
+///     );
+/// }
 /// ```
 #[composable]
 pub fn Column<F>(modifier: Modifier, spec: ColumnSpec, content: F) -> NodeId

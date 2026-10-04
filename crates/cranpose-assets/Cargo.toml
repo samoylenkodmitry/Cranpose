@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Asset loading and management utilities for Cranpose"
+description = "Read and cache local asset files for Cranpose apps"
 
 [package.metadata.docs.rs]
 all-features = true

@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Cranpose runtime and UI facade"
+description = "Build desktop, mobile and web apps with composable Rust functions"
 autotests = false
 
 [package.metadata.docs.rs]

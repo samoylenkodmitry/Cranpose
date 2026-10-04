@@ -1,7 +1,4 @@
-//! Pure math/data for drawing & units in Cranpose
-//!
-//! This crate contains geometry primitives, color definitions, brushes,
-//! and unit types that are used throughout the Cranpose framework.
+#![doc = include_str!("../README.md")]
 
 // A framework shader as the build script wrote it: `shaders/NAME` without
 // its comments.

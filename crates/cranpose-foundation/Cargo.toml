@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Modifiers, nodes, and foundation elements for Cranpose"
+description = "Modifier-node, input, focus, text and semantics contracts for Cranpose UI"
 autotests = false
 
 [package.metadata.docs.rs]

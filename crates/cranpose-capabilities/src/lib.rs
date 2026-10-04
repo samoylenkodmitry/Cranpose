@@ -1,24 +1,4 @@
-//! What an application asks of the device it runs on, written once in Rust.
-//!
-//! An application declares this in its build script:
-//!
-//! ```no_run
-//! use cranpose_capabilities::{Use, declare};
-//!
-//! declare(&[
-//!     Use::camera("Reads a receipt with the camera. Nothing leaves this device."),
-//!     Use::notifications(),
-//! ])
-//! .opening(&["image/*", "application/pdf"])
-//! .emit();
-//! ```
-//!
-//! From that one list the build writes the Android permissions and feature
-//! declarations, the Android intent filters that offer the application for
-//! the files it opens, the Apple usage descriptions, and a constant the
-//! application itself reads at run time. A service is a function, so a name cannot be
-//! misspelled, and a service Apple wants a sentence for takes that sentence as
-//! an argument, so it cannot be forgotten.
+#![doc = include_str!("../README.md")]
 
 use std::{
     collections::BTreeSet,

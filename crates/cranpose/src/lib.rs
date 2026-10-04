@@ -1,6 +1,5 @@
 #![deny(missing_docs)]
-
-//! High level utilities for running Cranpose applications with minimal boilerplate.
+#![doc = include_str!("../README.md")]
 
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_file_picker;
@@ -146,9 +145,7 @@ mod window_local;
     not(target_arch = "wasm32")
 ))]
 mod window_node;
-/// The activity handle `NativeActivity` hands to the entry point. Re-exported so
-/// an application declares its entry point with [`android_main!`] and never
-/// depends on `android_activity` for a parameter type.
+/// Android activity state passed to the [`android_main!`] entry point.
 #[cfg(all(feature = "android", target_os = "android"))]
 pub use android_activity::AndroidApp;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
@@ -165,14 +162,10 @@ pub use app_launcher::{
     AndroidGpuBackend, AndroidOverlayWindowOptions, AppFonts, AppLauncher, AppSettings,
     CustomCursorSize, DefaultFont, LauncherFonts,
 };
-/// Font registration vocabulary named by [`AppLauncher`]'s font methods:
-/// the platform font directory [`AppLauncher::with_system_font_family`] wants,
-/// the weight set it registers, the registry and error
-/// [`AppLauncher::with_fonts_from`] hands out, and the bytes
-/// [`AppLauncher::with_font_face_bytes`] takes.
 pub use cranpose_render_common::font_source::{
     ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, SoftwareTextFontRegistry,
 };
+/// Shared font data accepted by [`AppLauncher::with_font_face_bytes`].
 pub use cranpose_render_common::software_text_raster::FontBytes;
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
@@ -180,10 +173,10 @@ pub use native_window::{
     rememberWindowState, rememberWindowStateAt,
 };
 pub use window_local::LocalWindowState;
-/// Brings in what this crate's build script declared.
+/// Includes the app capability declaration from the build script.
 ///
-/// Writes `pub const CAPABILITIES: cranpose::capabilities::Capabilities`, read
-/// from the file `cranpose::capabilities::Declaration::emit` wrote:
+/// Defines `pub const CAPABILITIES: cranpose::capabilities::Capabilities` from
+/// the file produced by `cranpose::capabilities::Declaration::emit`:
 ///
 /// ```ignore
 /// cranpose::app_capabilities!();
@@ -225,16 +218,11 @@ macro_rules! renderer_wgpu_platform_modules {
 
 renderer_wgpu_platform_modules!(present_mode, surface_format, wgpu_surface);
 
-/// The real-time audio engine that backs `cranpose_services::audio`. Call
-/// [`install_audio`] once at startup; Android installs it automatically.
 #[cfg(feature = "audio")]
 pub use cranpose_audio::{AudioEngine, install as install_audio};
-/// What an application asks of a device: the services it uses and the
-/// hardware it cannot run without, declared in its build script with
-/// `cranpose::capabilities::declare` and read back with
-/// [`app_capabilities!`](crate::app_capabilities).
+/// Declare app services, permissions and required hardware in the build script.
+/// [`app_capabilities!`](crate::app_capabilities) includes the generated values.
 pub use cranpose_capabilities as capabilities;
-/// Core runtime helpers commonly used by applications.
 pub use cranpose_core::{
     CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
     LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MovableContent, MutableState,
@@ -244,21 +232,14 @@ pub use cranpose_core::{
     remember, rememberCoroutineScope, rememberKeyed, rememberMovableContentOf,
     rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
 };
-/// Liquid UI — the first-party glass component library
-/// (`use cranpose::liquid::prelude::*;`).
+/// Glass controls, themes and motion for Cranpose apps.
+/// Import common components with `use cranpose::liquid::prelude::*;`.
 pub use cranpose_liquid as liquid;
-/// The in-process media backend that backs `cranpose_services::media`.
-/// Installed automatically by the desktop shell and, wrapped in the platform
-/// media session, by the Android one; iOS and the web install their own
-/// platform backend instead. [`uri_for_path`] builds the `file:` URI a
-/// [`cranpose_services::MediaItem`] takes from a path.
 #[cfg(feature = "media")]
 pub use cranpose_media::{SoftwareMediaPlayer, path_from_uri, uri_for_path};
 /// Whether the host's current application theme is dark.
 pub use cranpose_services::isSystemInDarkTheme;
-/// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
 pub use cranpose_services::*;
-/// Re-export the UI crate so applications can depend on a single crate.
 pub use cranpose_ui::*;
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
@@ -396,8 +377,7 @@ pub use cranpose_core::{
 #[doc(hidden)]
 pub type RobotAppHook = dyn FnMut(String, String) -> Result<Option<String>, String>;
 
-/// Guides for using Cranpose, compiled with the crate so they cannot drift from
-/// it. Built only for documentation, so they cost a reader nothing at runtime.
+/// App setup, state, layout and platform guides.
 #[cfg(doc)]
 pub mod _docs;
 

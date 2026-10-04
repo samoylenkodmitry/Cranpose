@@ -15,57 +15,31 @@ use crate::{
     widgets::ClickableText,
 };
 
-/// Renders an [`AnnotatedString`] and automatically dispatches link clicks:
+/// Displays annotated text and dispatches each link action. A URL annotation
+/// calls `open_url`; a clickable annotation calls its own handler. A shared
+/// [`Rc<AnnotatedString>`] retains the prepared text across uses.
 ///
-/// - [`LinkAnnotation::Url`] → calls `open_url(url)` (platform provides the URI handler).
-/// - [`LinkAnnotation::Clickable`] → calls the handler stored in the annotation.
+/// # Example
 ///
-/// Accepts owned or shared text. Passing an [`Rc<AnnotatedString>`] reuses its
-/// prepared text and annotations without copying them.
+/// ```rust
+/// use cranpose_ui::{text::AnnotatedString, *};
 ///
-/// # Example — opening a URL
-///
-/// ```rust,ignore
-/// let uri_handler = local_uri_handler().current();
-/// let text = AnnotatedString::builder()
-///     .append("Visit the ")
-///     .with_link(
-///         LinkAnnotation::Url("https://developer.android.com/".into()),
-///         |b| b.append("Android Developers"),
-///     )
-///     .append(" site.")
-///     .to_annotated_string();
-///
-/// LinkedText(
-///     text,
-///     Modifier::empty(),
-///     TextStyle::default(),
-///     move |url| { uri_handler.open_uri(url).ok(); },
-/// );
+/// #[composable]
+/// fn WebsiteLink() {
+///     let text = AnnotatedString::builder()
+///         .append("Visit ")
+///         .with_link(
+///             LinkAnnotation::Url("https://example.com".into()),
+///             |builder| builder.append("the website"),
+///         )
+///         .to_annotated_string();
+///     LinkedText(text, Modifier::empty(), TextStyle::default(), |url| {
+///         println!("Open URL: {url}");
+///     });
+/// }
 /// ```
 ///
-/// # Example — custom action (`LinkAnnotation::Clickable`)
-///
-/// ```rust,ignore
-/// let text = AnnotatedString::builder()
-///     .append("Click ")
-///     .with_link(
-///         LinkAnnotation::Clickable {
-///             tag: "action".into(),
-///             handler: Rc::new(move || println!("clicked!")),
-///         },
-///         |b| b.append("here"),
-///     )
-///     .to_annotated_string();
-///
-/// // open_url is never called for Clickable — pass a no-op.
-/// LinkedText(text, Modifier::empty(), TextStyle::default(), |_| {});
-/// ```
-///
-/// # JC parity
-///
-/// Equivalent to `Text(buildAnnotatedString { withLink(LinkAnnotation.Url(…)) { … } })`.
-/// The `open_url` parameter corresponds to the platform-provided `LocalUriHandler`.
+/// An app can pass a callback from the platform URI service to open the URL.
 pub fn LinkedText(
     text: impl Into<Rc<AnnotatedString>>,
     modifier: Modifier,

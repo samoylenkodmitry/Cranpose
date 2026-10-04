@@ -1,6 +1,4 @@
-//! Animation system for Cranpose
-//!
-//! This crate provides animation primitives including tweens, springs, and easing functions.
+#![doc = include_str!("../README.md")]
 
 pub mod animation;
 pub mod color;

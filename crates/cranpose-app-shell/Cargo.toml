@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Application orchestration shell for Cranpose"
+description = "App lifecycle, frame cadence and input dispatch for Cranpose"
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 mod draw;
 mod pipeline;
 pub mod scene;

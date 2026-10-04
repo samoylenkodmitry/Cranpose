@@ -1,22 +1,21 @@
-# Cranpose web platform
+# Cranpose Web Platform Adapter
 
-This internal platform crate connects Cranpose to browser APIs on
-`wasm32`. The crate binds the renderer to an HTML canvas, requests frames from
-the browser, and translates browser input events for the shared runtime.
-Applications enable `web` and `renderer-wgpu` on `cranpose`.
+`cranpose-platform-web` converts browser pointer coordinates and event kinds
+to Cranpose input values. Framework and browser-shell authors use
+`WebPlatform` at the DOM event boundary. App authors select `web` and a
+renderer feature on [`cranpose`](https://docs.rs/cranpose/latest/cranpose/).
 
-Call `AppLauncher::run_web` with the canvas element's ID and root composable:
+```rust
+use cranpose_foundation::PointerEventKind;
+use cranpose_platform_web::WebPlatform;
 
-```rust,ignore
-use cranpose::AppLauncher;
-use wasm_bindgen::prelude::*;
-
-#[wasm_bindgen]
-pub async fn run_app() -> Result<(), JsValue> {
-    AppLauncher::new()
-        .run_web("app-canvas", || {
-            MyApp();
-        })
-        .await
-}
+let platform = WebPlatform::new(1.0);
+let event = platform.pointer_event(PointerEventKind::Move, 24.0, 32.0);
+assert_eq!((event.position.x, event.position.y), (24.0, 32.0));
 ```
+
+The browser shell owns DOM registration, canvas state and frame presentation.
+The [web shell](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/web.rs)
+shows the browser event path and WGPU backend selection. See the
+[`WebPlatform` API](https://docs.rs/cranpose-platform-web/latest/cranpose_platform_web/struct.WebPlatform.html),
+and the [crate source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-platform/web).

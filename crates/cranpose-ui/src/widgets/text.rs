@@ -214,22 +214,22 @@ where
     )
 }
 
-/// High-level element that displays text.
-///
-/// # When to use
-/// Use this widget to display read-only text on the screen. For editable text,
-/// use [`BasicTextField`](crate::widgets::BasicTextField).
-///
-/// # Arguments
-///
-/// * `value` - The string to display. Can be a `&str`, `String`, or `State<String>`.
-/// * `modifier` - Modifiers to apply (e.g., padding, background, layout instructions).
-/// * `style` - Text styling (color, font size).
+/// Displays plain or annotated text with the supplied style. The modifier
+/// controls layout, appearance and input around the text.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// Text("Hello World", Modifier::padding(16.0), TextStyle::default());
+/// ```rust
+/// use cranpose_ui::*;
+///
+/// #[composable]
+/// fn Greeting() {
+///     Text(
+///         "Hello",
+///         Modifier::empty().padding(16.0),
+///         TextStyle::default(),
+///     );
+/// }
 /// ```
 #[composable]
 pub fn Text<S>(value: S, modifier: Modifier, style: TextStyle) -> NodeId

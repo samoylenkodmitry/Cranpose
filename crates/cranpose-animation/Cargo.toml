@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Animation system for Cranpose"
+description = "Spring, tween, decay and transition APIs for Cranpose"
 
 [package.metadata.docs.rs]
 all-features = true

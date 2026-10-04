@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Procedural macros for Cranpose"
+description = "Composable and preview macros for Cranpose"
 
 [package.metadata.docs.rs]
 all-features = true

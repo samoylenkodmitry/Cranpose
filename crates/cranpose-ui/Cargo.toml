@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "UI primitives for Cranpose"
+description = "Composable widgets, text, layouts and input for Cranpose apps"
 autotests = false
 
 [package.metadata.docs.rs]

@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Testing utilities and harness for Cranpose"
+description = "Composition, semantics, accessibility, and robot test utilities for Cranpose"
 autotests = false
 
 [package.metadata.docs.rs]

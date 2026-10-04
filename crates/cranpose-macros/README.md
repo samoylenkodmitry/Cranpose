@@ -1,13 +1,35 @@
-# Cranpose macros
+# cranpose-macros
 
-Procedural macros used by Cranpose. Applications normally import them through
-the `cranpose` crate.
+`cranpose-macros` provides `#[composable]` and `#[preview]`, the procedural
+macros used by Cranpose components. Depend directly on the crate when a
+framework crate defines composables or preview fixtures. App code can import
+the macros through [`cranpose`](https://docs.rs/cranpose/latest/cranpose/).
 
-`#[composable]` marks a function for composition. The macro analyzes its
-parameters and body and emits the runtime bookkeeping needed to retain values
-and callbacks across recomposition. Its expansion is an implementation detail;
-the exact generated Rust and runtime strategy can change with the macro.
+## Composable functions
 
-`#[preview]` registers a parameterless composable for IDE previews with the
-`preview` feature. Apply `#[preview]` and `#[composable]` together. Options are
-`name`, `group`, `width`, `height` and `dark`.
+The `#[composable]` macro gives each function call a composition group. The
+call-site identity keeps groups stable across recomposition. Value parameters
+use `Clone` and `PartialEq`; callback parameters use stored callback slots, so a
+new closure value reaches its composition position. `#[composable(no_skip)]`
+re-runs the body on each call.
+
+This app example uses the facade and UI dependencies:
+
+```text
+use cranpose::*;
+
+#[composable]
+fn Greeting(name: String) {
+    Text(name, Modifier::empty(), TextStyle::default());
+}
+```
+
+`#[preview]` registers a parameterless component fixture for IDE previews.
+Combine `#[preview]` with `#[composable]`. The `cranpose` `preview` feature
+enables preview registration. Options include `name`, `group`, `width`,
+`height`, and `dark`.
+
+The `hot-reload` feature selects source-structure keys for development hot reload.
+
+- [API reference on docs.rs](https://docs.rs/cranpose-macros/latest/cranpose_macros/)
+- [Source on GitHub](https://github.com/samoylenkodmitry/cranpose/tree/main/crates/cranpose-macros)

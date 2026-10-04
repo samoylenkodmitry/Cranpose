@@ -1,7 +1,4 @@
-//! WGPU renderer backend for GPU-accelerated 2D rendering.
-//!
-//! This renderer uses WGPU for cross-platform GPU support across
-//! desktop (Windows/Mac/Linux), web (WebGPU), and mobile Android.
+#![doc = include_str!("../README.md")]
 
 pub(crate) use cranpose_render_common::debug_toggles;
 pub use debug_toggles::{

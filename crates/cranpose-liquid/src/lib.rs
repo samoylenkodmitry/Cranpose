@@ -1,20 +1,4 @@
-//! Liquid UI — cranpose's first-party component library.
-//!
-//! An iOS-26-style "Liquid Glass" design system: translucent lens materials
-//! over live backdrop (wcKSRD refraction, blur, vibrancy, and edge light),
-//! semantic theming with automatic light/dark, and
-//! spring-physics motion. Pure UI code — no platform dependencies; runs on
-//! every cranpose target.
-//!
-//! ```ignore
-//! use cranpose::liquid::prelude::*;
-//!
-//! LiquidTheme(LiquidThemeSpec::default(), || {
-//!     GlassButton(Modifier::empty(), GlassButtonSpec::prominent(), on_click, || {
-//!         GlassButtonLabel("Add");
-//!     });
-//! });
-//! ```
+#![doc = include_str!("../README.md")]
 
 pub mod appearance;
 pub mod dynamics;

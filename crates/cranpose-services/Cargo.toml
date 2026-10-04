@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Multiplatform system services for Cranpose (HTTP, URI, and OS integrations)"
+description = "Multiplatform service contracts and platform integrations for Cranpose apps"
 autotests = false
 
 [package.metadata.docs.rs]

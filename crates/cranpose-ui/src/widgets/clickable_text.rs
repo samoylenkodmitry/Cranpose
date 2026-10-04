@@ -32,34 +32,23 @@ impl IntoSharedAnnotatedString for Rc<AnnotatedString> {
     }
 }
 
-/// Displays an [`AnnotatedString`] and calls `on_click` with the **byte offset** of the character
-/// under the pointer at the time of the click.
+/// Displays annotated text and calls `on_click` with the byte offset under the pointer.
+/// Use [`LinkedText`](crate::LinkedText) for URL and custom-action annotations.
 ///
-/// Callers typically use the offset to query string annotations:
+/// # Example
 ///
-/// ```rust,ignore
-/// ClickableText(
-///     text.clone(),
-///     Modifier::empty(),
-///     TextStyle::default(),
-///     |offset| {
-///         for ann in text.get_string_annotations("URL", offset, offset + 1) {
-///             uri_handler.open_uri(&ann.item.annotation).ok();
-///         }
-///     },
-/// );
-/// ```
+/// ```rust
+/// use cranpose_ui::{text::AnnotatedString, *};
 ///
-/// # JC parity
-///
-/// ```kotlin
-/// @Composable
-/// fun ClickableText(
-///     text: AnnotatedString,
-///     modifier: Modifier = Modifier,
-///     style: TextStyle = TextStyle.Default,
-///     onClick: (Int) -> Unit,
-/// )
+/// #[composable]
+/// fn OffsetLabel() {
+///     ClickableText(
+///         AnnotatedString::from("Click a character"),
+///         Modifier::empty(),
+///         TextStyle::default(),
+///         |offset| println!("Byte offset: {offset}"),
+///     );
+/// }
 /// ```
 pub fn ClickableText<T>(
     text: T,

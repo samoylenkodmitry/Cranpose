@@ -47,29 +47,18 @@ const LINEAR_BAND_FRACTION: f32 = 0.4;
 /// Track alpha relative to the indicator color.
 const LINEAR_TRACK_ALPHA: f32 = 0.24;
 
-/// An indeterminate circular progress indicator (spinner).
-///
-/// Follows Jetpack Compose's `CircularProgressIndicator`: an arc sweeps
-/// around a circle forever, rotating while its length pulses between
-/// `MIN_SWEEP_DEGREES` and `MAX_SWEEP_DEGREES`.
-///
-/// # Arguments
-///
-/// * `modifier` - Modifiers for styling and layout. The indicator applies a
-///   default size of [`CIRCULAR_INDICATOR_DIAMETER`] dp which outer size
-///   modifiers can override.
-/// * `color` - Arc color (see [`PROGRESS_INDICATOR_COLOR`] for the default).
-/// * `stroke_width` - Arc thickness in dp
-///   (see [`CIRCULAR_INDICATOR_STROKE_WIDTH`] for the default).
+/// Draws an animated circular indicator for work with an unknown completion fraction.
+/// `color` and `stroke_width` control the arc appearance.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// CircularProgressIndicator(
-///     Modifier::empty(),
-///     PROGRESS_INDICATOR_COLOR,
-///     CIRCULAR_INDICATOR_STROKE_WIDTH,
-/// );
+/// ```rust
+/// use cranpose_ui::{widgets::CircularProgressIndicator, *};
+///
+/// #[composable]
+/// fn Progress() {
+///     CircularProgressIndicator(Modifier::empty(), Color(0.1, 0.3, 0.9, 1.0), 4.0);
+/// }
 /// ```
 #[composable]
 pub fn CircularProgressIndicator(modifier: Modifier, color: Color, stroke_width: f32) -> NodeId {

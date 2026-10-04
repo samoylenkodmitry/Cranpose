@@ -1,4 +1,4 @@
-//! Multiplatform service abstractions used by Cranpose applications.
+#![doc = include_str!("../README.md")]
 
 #[cfg(test)]
 use cranpose_core::{Composition, MemoryApplier, location_key};

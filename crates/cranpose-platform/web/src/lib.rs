@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::Point;
 

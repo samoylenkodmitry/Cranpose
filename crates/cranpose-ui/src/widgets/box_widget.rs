@@ -38,29 +38,26 @@ impl Default for BoxSpec {
     }
 }
 
-/// A layout composable that stacks its children on top of each other.
-///
-/// Use `Box` to:
-/// - Overlay elements (e.g., text over an image).
-/// - Size a child to match its parent.
-/// - Apply a background or border to a single child.
-///
-/// # Arguments
-///
-/// * `modifier` - Modifiers to apply to the box layout.
-/// * `spec` - Configuration for content alignment.
-/// * `content` - The children composables to layout (z-order is first-to-last).
+/// Places children over the same area. `content_alignment` selects each child's
+/// position within the box; later children draw above earlier children.
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// Box(
-///     Modifier::size(100.0, 100.0).background(Color::Blue),
-///     BoxSpec::default().content_alignment(Alignment::Center),
-///     || {
-///         Text("Centered", Modifier::empty());
-///     }
-/// );
+/// ```rust
+/// use cranpose_ui::*;
+///
+/// #[composable]
+/// fn Badge() {
+///     Box(
+///         Modifier::empty()
+///             .size_points(100.0, 100.0)
+///             .background(Color(0.1, 0.3, 0.9, 1.0)),
+///         BoxSpec::default().content_alignment(Alignment::CENTER),
+///         || {
+///             Text("Centered", Modifier::empty(), TextStyle::default());
+///         },
+///     );
+/// }
 /// ```
 #[composable]
 pub fn Box<F>(modifier: Modifier, spec: BoxSpec, content: F) -> NodeId

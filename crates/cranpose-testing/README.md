@@ -1,27 +1,47 @@
-# Cranpose tests
+# Cranpose Test Tools
 
-Tools for Cranpose layout, semantics and app behavior through public entry
-points. The crate provides semantic-tree queries,
-robot interaction helpers, and accessibility audits.
+`cranpose-testing` provides public test helpers for Cranpose compositions and app behavior. `ComposeTestRule` composes UI in memory; semantic queries and accessibility audits inspect the current tree. The robot API drives input against a headless or desktop app shell.
 
-## Robot runners
+## Test a composition
 
-Enable `cranpose-testing/desktop-robot` in the runner package; this feature
-enables `cranpose/robot`. A runner starts the app with
-`AppLauncher::with_headless(true)` and supplies a
-`with_test_driver` closure. The closure waits for the app, queries semantics,
-injects input and exits. The root `run_robot_test.sh` script discovers and runs the
-repository's robot examples; use `./run_robot_test.sh --help` for its current
-options.
+Add `cranpose-testing` as a development dependency with `cargo add cranpose-testing --dev`. Use `ComposeTestRule` for layout, state, semantics, and accessibility checks in an in-memory composition:
 
-The convenience functions such as `find_in_semantics`, `find_text` and
-`find_button` are gated by this crate's `desktop-robot` feature. The lower-level
-`Robot` API is re-exported from `cranpose` when its `robot` feature is enabled.
+```rust
+use cranpose::prelude::*;
+use cranpose_testing::ComposeTestRule;
 
-## Accessibility audits
+#[composable]
+fn Greeting() {
+    Text("Ready", Modifier::empty(), TextStyle::default());
+}
 
-`assert_accessible` checks a placed semantics tree for issues such as unnamed
-controls, duplicate names, small targets and missing screen titles. Use
-`audit_accessibility` when the caller needs the issues as data instead of a
-panic. `Robot::assert_accessible` and `ComposeTestRule::assert_accessible`
-provide harness-specific entry points.
+let mut rule = ComposeTestRule::new();
+rule.set_content(Greeting).expect("content composes");
+let screen = rule
+    .placed_semantics(Size::new(320.0, 120.0))
+    .expect("layout succeeds")
+    .expect("screen has content");
+assert!(screen
+    .flatten()
+    .iter()
+    .any(|node| node.label.as_deref() == Some("Ready")));
+```
+
+`placed_semantics` returns labels and bounds for a chosen viewport. `assert_accessible` checks the placed tree, and `audit_accessibility` returns structured issues for custom summaries.
+
+## Run robot tests
+
+The `desktop-robot` feature enables helper queries and assertions. The app test target also selects `cranpose/robot`, `desktop`, and a renderer such as `renderer-wgpu`. A robot runner starts `AppLauncher` with `with_headless(true)` and supplies a `with_test_driver` closure. The driver waits for app work, queries semantics, sends input, and exits the app.
+
+```sh
+cargo add cranpose-testing --dev --features desktop-robot
+```
+
+Linux desktop robot runs need a display server; CI can run the test through `xvfb-run`. Headless composition tests use an in-memory applier and run on the CPU. The repository's [`run_robot_test.sh`](https://github.com/samoylenkodmitry/Cranpose/blob/main/run_robot_test.sh) runs repository robot scenarios.
+
+## Links
+
+- [API documentation](https://docs.rs/cranpose-testing/latest/cranpose_testing/)
+- [App shell test APIs](https://docs.rs/cranpose-app-shell/latest/cranpose_app_shell/)
+- [Source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-testing)
+- [Test guide](https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/guide.md#testing)

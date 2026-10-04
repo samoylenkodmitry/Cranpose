@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Pixels renderer backend for Cranpose"
+description = "Software renderer for Cranpose scenes and RGBA framebuffers"
 
 [package.metadata.docs.rs]
 all-features = true

@@ -1,4 +1,4 @@
-//! Layout contracts & policies for Cranpose
+#![doc = include_str!("../README.md")]
 
 mod alignment;
 mod alignment_lines;

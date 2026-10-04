@@ -1,23 +1,25 @@
-# Cranpose Android platform
+# Cranpose Android Platform Adapter
 
-This internal platform crate connects Cranpose's application shell to
-`android-activity`. Android lifecycle, surface, keyboard and touch events flow
-through this crate to the shared runtime. Applications use the `android`
-feature on `cranpose`; the platform crate serves framework integrations.
+`cranpose-platform-android` converts Android physical pointer coordinates to
+Cranpose logical coordinates. Framework and Android host authors use
+`AndroidPlatform` before they send pointer input to the UI shell. App authors
+select the `android` feature on
+[`cranpose`](https://docs.rs/cranpose/latest/cranpose/).
 
-The Android entry point passes its `AndroidApp` handle to the launcher. The
-root composable uses a zero-argument closure:
+```rust
+use cranpose_platform_android::AndroidPlatform;
 
-```rust,ignore
-use cranpose::AppLauncher;
-
-#[unsafe(no_mangle)]
-fn android_main(app: android_activity::AndroidApp) {
-    AppLauncher::new().run(app, || {
-        MyApp();
-    });
-}
+let mut platform = AndroidPlatform::new();
+platform.set_scale_factor(2.0);
+platform.set_input_surface_offset_px(4.0, 8.0);
+let position = platform.pointer_position(20.0, 24.0);
+assert_eq!((position.x, position.y), (12.0, 16.0));
 ```
 
-For the Android Gradle plugin, manifest declarations and optional services, see
-the [`cranpose` crate guide](../../cranpose/README.md).
+The adapter adds the native-surface offset before density conversion. The
+[Android shell](https://github.com/samoylenkodmitry/Cranpose/blob/main/crates/cranpose/src/android.rs)
+connects Android events, surface state and the renderer.
+
+The feature set is empty. See the [`AndroidPlatform` API](https://docs.rs/cranpose-platform-android/latest/cranpose_platform_android/struct.AndroidPlatform.html),
+the [Android host guide](https://github.com/samoylenkodmitry/Cranpose/blob/main/docs/guide.md#put-a-rust-screen-inside-an-android-compose-screen)
+and the [crate source](https://github.com/samoylenkodmitry/Cranpose/tree/main/crates/cranpose-platform/android).
