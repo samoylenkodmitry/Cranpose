@@ -980,7 +980,7 @@ fn build_dist_min(mut options: DistMinOptions) -> Result<(), String> {
         command.arg("--manifest-path").arg(manifest_path);
     }
     if options.binary.patch_workspace_cranpose {
-        add_workspace_cranpose_patches(&mut command, &workspace);
+        add_workspace_cranpose_patches(&mut command, &workspace)?;
     }
     command.args([
         "-p",
@@ -1123,7 +1123,7 @@ fn build_binary(workspace: &Path, options: &CargoBinaryOptions) -> Result<(), St
         command.arg("--manifest-path").arg(manifest_path);
     }
     if options.patch_workspace_cranpose {
-        add_workspace_cranpose_patches(&mut command, workspace);
+        add_workspace_cranpose_patches(&mut command, workspace)?;
     }
     command.args([
         "-p",
@@ -1147,40 +1147,32 @@ fn build_binary(workspace: &Path, options: &CargoBinaryOptions) -> Result<(), St
     }
 }
 
-const WORKSPACE_CRANPOSE_PATCHES: &[(&str, &str)] = &[
-    ("cranpose", "crates/cranpose"),
-    ("cranpose-animation", "crates/cranpose-animation"),
-    ("cranpose-app-shell", "crates/cranpose-app-shell"),
-    ("cranpose-core", "crates/cranpose-core"),
-    ("cranpose-foundation", "crates/cranpose-foundation"),
-    ("cranpose-macros", "crates/cranpose-macros"),
-    (
-        "cranpose-platform-android",
-        "crates/cranpose-platform/android",
-    ),
-    (
-        "cranpose-platform-desktop-winit",
-        "crates/cranpose-platform/desktop-winit",
-    ),
-    ("cranpose-platform-web", "crates/cranpose-platform/web"),
-    ("cranpose-render-common", "crates/cranpose-render/common"),
-    ("cranpose-render-pixels", "crates/cranpose-render/pixels"),
-    ("cranpose-render-wgpu", "crates/cranpose-render/wgpu"),
-    ("cranpose-runtime-std", "crates/cranpose-runtime-std"),
-    ("cranpose-services", "crates/cranpose-services"),
-    ("cranpose-ui", "crates/cranpose-ui"),
-    ("cranpose-ui-graphics", "crates/cranpose-ui-graphics"),
-    ("cranpose-ui-layout", "crates/cranpose-ui-layout"),
-];
+fn add_workspace_cranpose_patches(command: &mut Command, workspace: &Path) -> Result<(), String> {
+    let manifest = load_toml(&workspace.join("Cargo.toml"))?;
+    let dependencies = manifest
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| "workspace manifest has no [workspace.dependencies] table".to_owned())?;
 
-fn add_workspace_cranpose_patches(command: &mut Command, workspace: &Path) {
-    for (package, relative_path) in WORKSPACE_CRANPOSE_PATCHES {
+    for (dependency, spec) in dependencies {
+        let Some(spec) = spec.as_table() else {
+            continue;
+        };
+        let Some(relative_path) = spec.get("path").and_then(toml::Value::as_str) else {
+            continue;
+        };
+        let package = spec
+            .get("package")
+            .and_then(toml::Value::as_str)
+            .unwrap_or(dependency);
         let package_path = workspace.join(relative_path);
         command.arg("--config").arg(format!(
             "patch.crates-io.{package}.path=\"{}\"",
             escape_toml_string(&package_path.display().to_string())
         ));
     }
+    Ok(())
 }
 
 fn escape_toml_string(value: &str) -> String {

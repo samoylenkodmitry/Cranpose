@@ -139,20 +139,46 @@ fn capture(whole_node: bool) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
 }
 
 fn capture_page(page: fn(), whole_node: bool) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, whole_node.then_some("1"));
-    let captured = support::warm_app_frame(page, FRAME_WIDTH, FRAME_HEIGHT);
-    cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
-    captured
+    capture_page_with_cache(page, whole_node, false)
 }
 
 fn capture_uncached_page(
     page: fn(),
     whole_node: bool,
 ) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", Some("1"));
-    let captured = capture_page(page, whole_node);
-    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
-    captured
+    capture_page_with_cache(page, whole_node, true)
+}
+
+struct CaptureToggles;
+
+impl Drop for CaptureToggles {
+    fn drop(&mut self) {
+        cranpose_render_wgpu::set_debug_toggle(TOGGLE, None);
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", None);
+    }
+}
+
+fn capture_page_with_cache(
+    page: fn(),
+    whole_node: bool,
+    uncached: bool,
+) -> Option<(CapturedFrame, RenderStatsSnapshot)> {
+    let (_lock, mut shell) = support::app_shell_for(
+        page,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        wgpu::TextureFormat::Bgra8UnormSrgb,
+        |_| {},
+    )?;
+
+    let _toggles = CaptureToggles;
+    cranpose_render_wgpu::set_debug_toggle(TOGGLE, whole_node.then_some("1"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_NO_BACKDROP_CACHE", uncached.then_some("1"));
+    Some(support::warm_shell_frame(
+        &mut shell,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+    ))
 }
 
 #[test]

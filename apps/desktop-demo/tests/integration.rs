@@ -17,6 +17,7 @@ mod font_variations;
 mod liquid_page_support;
 mod liquid_pass_inventory;
 mod liquid_scroll_phase;
+mod markdown_lexer_regression;
 mod mineswapper_lazy_list_regression;
 mod modifier_showcase_layout_tests;
 mod modifier_showcase_rendering_tests;
