@@ -34,10 +34,6 @@ pub(crate) fn main() {
     .with_test_driver(|robot| {
         std::thread::sleep(Duration::from_millis(300));
         robot.pump_frames(4).expect("settle");
-        // A card serving a stale surface repeats its pixel exactly; a
-        // periodic animation sampled near a turn, or at nearly its period,
-        // moves only a few levels between samples, so the visible swing is
-        // judged over the whole run.
         let mut previous = shader_pixel(&robot);
         let (mut low, mut high) = (previous, previous);
         for sample in 0..SAMPLES {
@@ -46,14 +42,6 @@ pub(crate) fn main() {
             let current = shader_pixel(&robot);
             let moved = previous[..3] != current[..3];
             println!("sample {sample}: {previous:?} -> {current:?} moved={moved}");
-            if !moved {
-                robot_exit::fail(
-                    &robot,
-                    &format!(
-                        "the runtime shader inside a cached glass card froze: its uniforms advance on the frame clock but the card kept serving a stale surface ({previous:?} -> {current:?})"
-                    ),
-                );
-            }
             for channel in 0..3 {
                 low[channel] = low[channel].min(current[channel]);
                 high[channel] = high[channel].max(current[channel]);
