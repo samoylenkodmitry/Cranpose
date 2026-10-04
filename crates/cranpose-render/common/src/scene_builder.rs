@@ -1611,7 +1611,7 @@ fn write_node_layer(
 
 struct RecorderSlot {
     generation: u64,
-    handles: [Option<Rc<CommandRecording>>; 2],
+    handles: [Option<Rc<CommandRecording>>; 3],
     /// The allocation of a handle whose recording `acquire_storage` took,
     /// which the next recording the slot publishes moves into.
     spare: Option<Rc<CommandRecording>>,
@@ -1653,9 +1653,21 @@ fn acquire_storage(id: DrawCommandId) -> CommandRecording {
             let Some(recording) = handle.as_mut().and_then(Rc::get_mut) else {
                 continue;
             };
-            let storage = std::mem::take(recording);
+            let Some(storage) = recording.try_take_reusable() else {
+                continue;
+            };
             slot.spare = handle.take();
             return storage;
+        }
+        if slot.handles.iter().all(Option::is_some) {
+            let storage = slot.handles[2]
+                .as_mut()
+                .and_then(Rc::get_mut)
+                .map(std::mem::take);
+            if let Some(storage) = storage {
+                slot.spare = slot.handles[2].take();
+                return storage;
+            }
         }
         CommandRecording::default()
     })
@@ -1667,7 +1679,7 @@ fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<Comma
         let generation = RECORDING_GENERATION.with(Cell::get);
         let slot = map.entry(id).or_insert_with(|| RecorderSlot {
             generation,
-            handles: [None, None],
+            handles: [None, None, None],
             spare: None,
         });
         let shared = match slot.spare.take() {
@@ -1681,6 +1693,7 @@ fn publish_recording(id: DrawCommandId, recording: CommandRecording) -> Rc<Comma
             None => Rc::new(recording),
         };
         slot.generation = generation;
+        slot.handles[2] = slot.handles[1].take();
         slot.handles[1] = slot.handles[0].take();
         slot.handles[0] = Some(Rc::clone(&shared));
         shared

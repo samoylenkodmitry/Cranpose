@@ -51,3 +51,7 @@ path = "tests/integration.rs"
 [[test]]
 name = "allocations"
 path = "tests/allocations/main.rs"
+
+[[bench]]
+name = "canvas_recording"
+harness = false
