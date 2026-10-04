@@ -623,14 +623,30 @@ pub fn TextSelectionMenu(
     on_select_all: impl Fn() + 'static,
 ) {
     let mut items = vec![
-        TextMenuItem::new("Copy", on_copy),
-        TextMenuItem::new("Cut", on_cut),
+        TextMenuItem::new(crate::UiString::Copy.resolve(), on_copy),
+        TextMenuItem::new(crate::UiString::Cut.resolve(), on_cut),
     ];
-    if can_paste {
-        items.push(TextMenuItem::new("Paste", on_paste));
-    }
-    items.push(TextMenuItem::new("Select all", on_select_all));
+    append_edit_actions(&mut items, can_paste, on_paste, on_select_all);
     LiquidTextMenu(anchor, visible, live_point, items);
+}
+
+#[track_caller]
+fn append_edit_actions(
+    items: &mut Vec<TextMenuItem>,
+    can_paste: bool,
+    on_paste: impl Fn() + 'static,
+    on_select_all: impl Fn() + 'static,
+) {
+    if can_paste {
+        items.push(TextMenuItem::new(
+            crate::UiString::Paste.resolve(),
+            on_paste,
+        ));
+    }
+    items.push(TextMenuItem::new(
+        crate::UiString::SelectAll.resolve(),
+        on_select_all,
+    ));
 }
 
 /// A floating Paste / Select all / Undo / Redo menu shown near the collapsed
@@ -653,15 +669,12 @@ pub fn CaretActionMenu(
     on_redo: impl Fn() + 'static,
 ) {
     let mut items = Vec::new();
-    if can_paste {
-        items.push(TextMenuItem::new("Paste", on_paste));
-    }
-    items.push(TextMenuItem::new("Select all", on_select_all));
+    append_edit_actions(&mut items, can_paste, on_paste, on_select_all);
     if can_undo {
-        items.push(TextMenuItem::new("Undo", on_undo));
+        items.push(TextMenuItem::new(crate::UiString::Undo.resolve(), on_undo));
     }
     if can_redo {
-        items.push(TextMenuItem::new("Redo", on_redo));
+        items.push(TextMenuItem::new(crate::UiString::Redo.resolve(), on_redo));
     }
     LiquidTextMenu(anchor, visible, None, items);
 }

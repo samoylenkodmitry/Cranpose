@@ -16,7 +16,8 @@ use crate::{
 /// Configuration for [`LiquidSearchField`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiquidSearchFieldSpec {
-    pub placeholder: String,
+    /// Custom hint, or `None` for the localized framework search hint.
+    pub placeholder: Option<String>,
     /// Render on glass (floating) instead of the flat fill (inline in lists).
     pub on_glass: bool,
     /// Optional material override for the floating variant.
@@ -29,7 +30,7 @@ pub struct LiquidSearchFieldSpec {
 impl Default for LiquidSearchFieldSpec {
     fn default() -> Self {
         Self {
-            placeholder: "Search".to_string(),
+            placeholder: None,
             on_glass: true,
             glass: None,
             foreground: None,
@@ -85,7 +86,9 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
         },
         ..body
     };
-    let placeholder = spec.placeholder;
+    let placeholder = spec
+        .placeholder
+        .unwrap_or_else(|| cranpose_ui::UiString::Search.resolve());
     BasicTextFieldDecorated(
         state,
         modifier
@@ -147,7 +150,7 @@ pub fn SearchBar(modifier: Modifier, state: TextFieldState, placeholder: impl In
         modifier,
         state,
         LiquidSearchFieldSpec {
-            placeholder: placeholder.into(),
+            placeholder: Some(placeholder.into()),
             ..Default::default()
         },
     );

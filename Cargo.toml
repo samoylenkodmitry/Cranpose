@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/cranpose-localization",
     "crates/cranpose-native",
     "crates/cranpose-app-shell",
     "crates/cranpose",
@@ -53,6 +54,7 @@ categories = ["gui"]
 
 
 [workspace.dependencies]
+cranpose-localization = { path = "crates/cranpose-localization", version = "0.9.7" }
 # Cranpose's patched wgpu (forks/README.md). Its library is still `wgpu`.
 wgpu = { package = "cranpose-wgpu", path = "forks/wgpu/wgpu", version = "30.0.2", default-features = false }
 # Force android-activity to use native-activity feature across all workspace crates

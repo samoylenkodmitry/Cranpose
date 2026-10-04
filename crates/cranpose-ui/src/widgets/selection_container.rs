@@ -131,11 +131,13 @@ fn selection_menu(registrar: &SelectionRegistrar, gesture: &Rc<SelectionGesture>
     let copy = Rc::clone(gesture);
     let everything = registrar.clone();
     let items = vec![
-        TextMenuItem::new("Copy", move || {
+        TextMenuItem::new(crate::UiString::Copy.resolve(), move || {
             copy.copy();
             copy.dismiss();
         }),
-        TextMenuItem::new("Select all", move || everything.select_all()),
+        TextMenuItem::new(crate::UiString::SelectAll.resolve(), move || {
+            everything.select_all();
+        }),
     ];
     let anchor = MenuAnchor {
         center_x: line.x + line.width * 0.5,

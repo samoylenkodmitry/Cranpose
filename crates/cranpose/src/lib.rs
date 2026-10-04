@@ -1,6 +1,8 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+extern crate self as cranpose;
+
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_file_picker;
 #[cfg(any(

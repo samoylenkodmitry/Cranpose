@@ -6,6 +6,7 @@ pub mod layout_options;
 pub mod line_box;
 pub mod measure;
 pub mod paragraph;
+mod shared_text;
 pub mod style;
 pub mod unit;
 
@@ -32,6 +33,7 @@ pub use paragraph::{
     Hyphens, LineBreak, ResolvedTextDirection, TextAlign, TextDirection, TextIndent,
     resolve_text_direction,
 };
+pub use shared_text::SharedText;
 pub use style::{
     BaselineShift, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
     LocaleList, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,

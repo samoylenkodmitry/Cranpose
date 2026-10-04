@@ -7,7 +7,40 @@ use quote::quote;
 use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input};
 
 mod branch_groups;
+#[cfg(feature = "localization")]
+mod localization;
 mod preview;
+
+/// Localizes readable source text using the nearest localization provider.
+/// Named arguments use `name = expression`; optional literal metadata is
+/// `id`, `context`, `comment`, and `source_locale` (default `en`).
+#[cfg(feature = "localization")]
+#[proc_macro]
+pub fn tr(input: TokenStream) -> TokenStream {
+    localization::translate(input.into())
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
+
+/// Embeds `<directory>/<locale>/<namespace>.ftl` catalogs and checks them at compile time.
+/// Syntax: `translations!("locales", fallback = "en")`.
+#[cfg(feature = "localization")]
+#[proc_macro]
+pub fn translations(input: TokenStream) -> TokenStream {
+    localization::catalogs(input.into())
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
+
+/// Generates a module of named message accessors from a source-language Fluent file.
+/// Syntax: `translation_messages!(pub mod messages, "locales/en/app.ftl")`.
+#[cfg(feature = "localization")]
+#[proc_macro]
+pub fn translation_messages(input: TokenStream) -> TokenStream {
+    localization::bindings(input.into())
+        .unwrap_or_else(|error| error.to_compile_error())
+        .into()
+}
 #[cfg(test)]
 #[path = "tests/preview_tests.rs"]
 mod preview_tests;

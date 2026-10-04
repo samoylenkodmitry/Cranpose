@@ -7,6 +7,8 @@ mod geometry_and_modifiers;
 mod graphics_layer_backdrop_integration;
 mod inspector_and_insets;
 mod lazy_retained_many_roots;
+#[cfg(feature = "localization")]
+mod localization;
 mod round_scaling_list_integration;
 mod round_scroll_indicator_integration;
 mod shadow_api_integration;

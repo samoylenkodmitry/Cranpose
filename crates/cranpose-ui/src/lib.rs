@@ -1,5 +1,7 @@
 #![doc = include_str!("../README.md")]
 
+extern crate self as cranpose_ui;
+
 use std::{
     ops::{Deref, DerefMut},
     rc::Rc,
@@ -8,6 +10,14 @@ use std::{
 use cranpose_core::{ApplierGuard, MemoryApplier, NodeError, NodeId, RuntimeHandle, location_key};
 pub use cranpose_core::{Composition, Key};
 pub use cranpose_macros::composable;
+#[cfg(feature = "localization")]
+pub use cranpose_macros::{tr, translation_messages, translations};
+#[cfg(feature = "localization")]
+pub use localization::{
+    Catalog, Locale, LocalizedText, PreviewMode, ProvideLocalization, ProvideTranslator,
+};
+pub use text::SharedText;
+pub use ui_strings::UiString;
 
 pub mod announce;
 pub mod bring_into_view;
@@ -29,6 +39,8 @@ pub mod layout;
 pub mod layout_direction;
 pub mod lazy_item;
 mod lazy_prefetch;
+#[cfg(feature = "localization")]
+pub mod localization;
 pub mod modal;
 mod modal_nodes;
 mod modifier;
@@ -59,6 +71,7 @@ pub mod text_input_session;
 pub mod text_layout_result;
 mod text_modifier_node;
 pub mod text_selection;
+mod ui_strings;
 mod unhandled_keys;
 pub mod widgets;
 mod word_boundaries;

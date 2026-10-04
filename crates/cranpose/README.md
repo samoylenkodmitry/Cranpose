@@ -66,6 +66,11 @@ state updates. State handles are `Copy`, so the callbacks share one state value.
 
 ## Choose a project structure
 
+For translatable text, enable `localization` and wrap source strings with
+`tr!("Save")`. A scoped `ProvideLocalization` updates text when the app's language
+changes. See the [localization guide](https://github.com/samoylenkodmitry/cranpose/blob/main/docs/localization.md)
+for catalogs, plural forms, extraction, and framework overrides.
+
 For a complete app, start from the
 [project template](https://github.com/samoylenkodmitry/cranpose-showcase).
 The template includes screens, view models, navigation and platform hosts.

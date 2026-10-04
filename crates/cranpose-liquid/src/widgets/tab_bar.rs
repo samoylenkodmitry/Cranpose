@@ -48,7 +48,8 @@ pub enum LiquidTabIcon {
 pub struct LiquidTab {
     /// Vector or template artwork shown above the label.
     pub icon: LiquidTabIcon,
-    pub label: &'static str,
+    /// Shared display and accessibility text, including runtime translations.
+    pub label: cranpose_ui::SharedText,
     pub icon_style: LiquidTabIconStyle,
     /// Optical correction for symbols whose path bounds do not fill the
     /// shared icon frame uniformly.
@@ -58,10 +59,11 @@ pub struct LiquidTab {
 }
 
 impl LiquidTab {
-    pub fn new(icon: &'static str, label: &'static str) -> Self {
+    /// A tab with a vector icon and static or shared runtime label.
+    pub fn new(icon: &'static str, label: impl Into<cranpose_ui::SharedText>) -> Self {
         Self {
             icon: LiquidTabIcon::Vector(icon),
-            label,
+            label: label.into(),
             icon_style: LiquidTabIconStyle::Plain,
             icon_scale: 1.0,
             icon_offset: (0.0, 0.0),
@@ -69,20 +71,25 @@ impl LiquidTab {
     }
 
     /// A tab using template artwork and its logical size.
-    pub fn from_painter(painter: Painter, size: Size, label: &'static str) -> Self {
+    pub fn from_painter(
+        painter: Painter,
+        size: Size,
+        label: impl Into<cranpose_ui::SharedText>,
+    ) -> Self {
         Self {
             icon: LiquidTabIcon::Painter { painter, size },
-            label,
+            label: label.into(),
             icon_style: LiquidTabIconStyle::Plain,
             icon_scale: 1.0,
             icon_offset: (0.0, 0.0),
         }
     }
 
-    pub fn app_badge(icon: &'static str, label: &'static str) -> Self {
+    /// A tab whose icon is drawn as an application badge.
+    pub fn app_badge(icon: &'static str, label: impl Into<cranpose_ui::SharedText>) -> Self {
         Self {
             icon: LiquidTabIcon::Vector(icon),
-            label,
+            label: label.into(),
             icon_style: LiquidTabIconStyle::AppBadge,
             icon_scale: 1.0,
             icon_offset: (0.0, 0.0),
@@ -484,14 +491,13 @@ fn TabCells(
             move || {
                 for (index, tab) in tabs.iter().enumerate() {
                     let color = spec.base_color;
-                    let label_for_semantics = tab.label;
                     let icon_offset = tab.icon_offset;
                     let on_select = Rc::clone(&on_select);
                     let cell = Modifier::empty()
                         .offset(BLOB_MARGIN + index as f32 * geometry.pitch, BLOB_MARGIN)
                         .size(Size::new(geometry.cell_width, BLOB_HEIGHT))
                         .stable_semantics(super::selection::selection_semantics(
-                            label_for_semantics.to_string(),
+                            tab.label.to_string(),
                             SemanticsWidgetRole::Tab,
                             index,
                             spec.committed_selection,
@@ -501,7 +507,7 @@ fn TabCells(
                     let icon = tab.icon.clone();
                     let icon_style = tab.icon_style;
                     let icon_scale = tab.icon_scale;
-                    let label = tab.label;
+                    let label = tab.label.clone();
                     let label_style = TextStyle {
                         span_style: SpanStyle {
                             color: Some(color),
@@ -519,6 +525,7 @@ fn TabCells(
                         },
                     };
                     Box(cell, BoxSpec::default(), move || {
+                        let label = label.clone();
                         let label_style = label_style.clone();
                         let icon = icon.clone();
                         Box(
@@ -537,7 +544,7 @@ fn TabCells(
                                 .size(Size::new(geometry.cell_width, 12.0)),
                             BoxSpec::default().content_alignment(Alignment::CENTER),
                             move || {
-                                Text(label, Modifier::empty(), label_style.clone());
+                                Text(label.clone(), Modifier::empty(), label_style.clone());
                             },
                         );
                     });
@@ -702,12 +709,12 @@ pub struct LiquidTabBarScope {
 
 impl LiquidTabBarScope {
     /// A destination showing `icon` above `label`.
-    pub fn tab(&self, icon: &'static str, label: &'static str) {
+    pub fn tab(&self, icon: &'static str, label: impl Into<cranpose_ui::SharedText>) {
         self.push(LiquidTab::new(icon, label));
     }
 
     /// A destination whose icon is drawn as an application badge.
-    pub fn app_badge(&self, icon: &'static str, label: &'static str) {
+    pub fn app_badge(&self, icon: &'static str, label: impl Into<cranpose_ui::SharedText>) {
         self.push(LiquidTab::app_badge(icon, label));
     }
 
@@ -1243,7 +1250,7 @@ impl TabLensDrawing {
 #[composable]
 pub fn LiquidTabBarSearchAccessory(on_click: impl Fn() + 'static) {
     crate::widgets::GlassIconButton(
-        Modifier::empty().content_description("Search"),
+        Modifier::empty().content_description(cranpose_ui::UiString::Search.resolve()),
         crate::widgets::GlassButtonSpec::glass(),
         BAR_HEIGHT * 0.94,
         on_click,

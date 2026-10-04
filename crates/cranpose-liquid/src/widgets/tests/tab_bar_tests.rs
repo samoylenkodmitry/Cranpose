@@ -79,7 +79,7 @@ fn liquid_tab_builds_reference_content() {
     assert_eq!(TAB_ICON_SIZE, 32.0);
     let tab = LiquidTab::new(crate::icons::STAR, "Discover");
     assert_eq!(tab.icon, LiquidTabIcon::Vector(crate::icons::STAR));
-    assert_eq!(tab.label, "Discover");
+    assert_eq!(tab.label.as_str(), "Discover");
     assert_eq!(tab.icon_style, LiquidTabIconStyle::Plain);
 
     let badge = LiquidTab::app_badge(crate::icons::APPLE, "WWDC");
@@ -116,7 +116,7 @@ fn template_tab_keeps_artwork_size_and_label() {
     let size = Size::new(24.0, 28.0);
     let tab = LiquidTab::from_painter(painter.clone(), size, "Saved");
     assert_eq!(tab.icon, LiquidTabIcon::Painter { painter, size });
-    assert_eq!(tab.label, "Saved");
+    assert_eq!(tab.label.as_str(), "Saved");
     assert_eq!(tab.icon_style, LiquidTabIconStyle::Plain);
 }
 
@@ -412,7 +412,7 @@ fn a_scope_declares_destinations_in_order() {
     });
 
     assert_eq!(tabs.len(), 3);
-    assert_eq!(tabs[0].label, "Discover");
+    assert_eq!(tabs[0].label.as_str(), "Discover");
     assert_eq!(tabs[0].icon_style, LiquidTabIconStyle::Plain);
     assert_eq!(tabs[0].icon_scale, 1.0);
     assert_eq!(tabs[1].icon_style, LiquidTabIconStyle::AppBadge);

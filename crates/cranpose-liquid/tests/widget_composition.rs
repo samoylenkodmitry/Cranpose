@@ -446,7 +446,7 @@ fn a_liquid_search_field_composes_inline_without_glass() {
             Modifier::empty(),
             state,
             LiquidSearchFieldSpec {
-                placeholder: "Search".to_string(),
+                placeholder: Some("Search".to_string()),
                 on_glass: false,
                 ..Default::default()
             },

@@ -25,6 +25,7 @@ workspace = true
 ignored = ["cranpose-render-pixels"]
 
 [features]
+localization = ["cranpose-ui/localization"]
 default = ["embedded-default-font"]
 # Compiles every crate's debug and trace log calls out of release builds.
 # The logger this crate installs on Android passes Info and above, so there
@@ -599,3 +600,8 @@ cranpose-runtime-std = { path = "../cranpose-runtime-std" }
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
+
+[[example]]
+name = "localization"
+path = "examples/localization.rs"
+required-features = ["desktop", "renderer-wgpu", "localization"]

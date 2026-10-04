@@ -73,6 +73,8 @@ clippy-wasm:
     scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
     scripts/ci/with_host_lock.sh --shared \
       cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
+    scripts/ci/with_host_lock.sh --shared \
+      cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu,cranpose/localization -- -D warnings
 
 # Lint the iOS simulator binary.
 clippy-ios:
@@ -292,7 +294,7 @@ test-ide:
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview preview::tests::
     cargo test --profile ci -p cranpose --no-default-features --features desktop,preview desktop_launcher_uses_embed_endpoint_before_event_loop
 
-test-features: test-watchos
+test-features: test-watchos test-localization
     cargo test --profile ci -p cranpose-core --features std-hash
     cargo test --profile ci -p cranpose-core --features internal
     cargo test --profile ci -p cranpose-ui --features svg
@@ -301,6 +303,24 @@ test-features: test-watchos
     cargo clippy -p cranpose --no-default-features --features webview -- -D warnings
     cargo test --profile ci -p cranpose --no-default-features --features embed
     cargo test --profile ci -p cranpose --no-default-features --features desktop,renderer-wgpu,camera-desktop,robot,audio-desktop,media,storekit,playbilling
+
+# Localization contracts, embedded catalogs, optional feature, and public UI integration.
+test-localization: check-localization
+    cargo test --profile ci -p cranpose-localization --features tooling
+    cargo test --profile ci -p cranpose-ui --features localization
+    cargo test --profile ci -p cranpose-liquid --features localization
+
+# Compile and lint both localization-enabled and ordinary consumers.
+check-localization:
+    cargo clippy -p cranpose-localization -p cranpose-ui -p cranpose-liquid --all-targets --features cranpose-localization/tooling,cranpose-ui/localization,cranpose-liquid/localization -- -D warnings
+    cargo check -p cranpose-ui --no-default-features
+    cargo check -p cranpose --example localization --features desktop,renderer-wgpu,localization
+    cargo run -p cranpose-localization --features tooling --bin cranpose-l10n -- check --catalogs crates/cranpose-ui/locales --fallback en
+    cargo run -p cranpose-localization --features tooling --bin cranpose-l10n -- check --catalogs crates/cranpose/examples/localization/locales --fallback en
+
+# Diagnostic CPU benchmark; mobile acceptance still uses the physical-device protocol.
+bench-localization:
+    cargo bench -p cranpose-ui --features localization --bench localization
 
 # The docs-only trigger filter that lets the heavy jobs skip a prose diff.
 # A wrong answer there disables the robot suite silently, so the predicate is

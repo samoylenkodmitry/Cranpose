@@ -19,6 +19,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+[features]
+default = []
+localization = ["cranpose-ui/localization"]
+
 [dependencies]
 cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }
