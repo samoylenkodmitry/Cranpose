@@ -3137,6 +3137,7 @@ impl GpuRenderer {
             cache: pipeline_cache,
             records,
             updated,
+            holds_recorded,
         } = crate::pipeline_disk_cache::load(&device);
         #[cfg(not(target_arch = "wasm32"))]
         let first_screen: Vec<u64> = records
@@ -3332,7 +3333,7 @@ impl GpuRenderer {
             shader_warm_ups_queued: 0,
         };
         #[cfg(not(target_arch = "wasm32"))]
-        renderer.warm_first_screen(&records, updated);
+        renderer.warm_first_screen(&records, holds_recorded);
         renderer.warm_requested_shaders();
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
@@ -3346,13 +3347,14 @@ impl GpuRenderer {
     /// Prepares the first screen the last launches recorded. The first frame
     /// waits for its shapes and fixed pipelines, but draws placeholders for
     /// runtime shaders that have not compiled: those queue behind, since a
-    /// Mali driver compiles largely one pipeline at a time. The driver cache
-    /// this build wrote holds what its launches drew, so those draw from it.
+    /// Mali driver compiles largely one pipeline at a time. A driver cache
+    /// that `holds_recorded` pipelines builds them as cache hits, so those
+    /// draw from it, and need no stand-in.
     #[cfg(not(target_arch = "wasm32"))]
     fn warm_first_screen(
         &mut self,
         records: &crate::pipeline_records::PipelineRecords,
-        updated: bool,
+        holds_recorded: bool,
     ) {
         self.warm_fixed_pipelines(&|label| {
             records
@@ -3360,7 +3362,7 @@ impl GpuRenderer {
                 .iter()
                 .any(|fixed| fixed.first_screen && fixed.entry == label)
         });
-        if !updated && self.pipeline_cache.is_some() {
+        if holds_recorded {
             self.effect_renderer.trust_cached(records);
         }
         self.effect_renderer.warm_first_screen_shaders(

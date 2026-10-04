@@ -647,6 +647,43 @@ fn a_prepared_update_leaves_this_builds_cache() {
     );
 }
 
+/// The driver cache holds what the last launch drew, but a launch with no
+/// records draws no stand-in: one would compile from nothing. A relaunch
+/// draws its cached glass with the glass's own pipelines, not a stand-in.
+#[test]
+fn a_relaunch_draws_cached_glass_with_its_own_pipelines() {
+    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH};
+    // Folded, each material below is a pipeline of its own.
+    let _folds = GlassFolds::set(true);
+    let frosted = LiquidGlassSpec {
+        blur_radius: 4.0,
+        ..LiquidGlassSpec::default()
+    };
+    let page = || panes_page([support::glass_page::glass_shader(), glass_of(&frosted)]);
+    relaunch_after_drawing(
+        |previous| draw_settled(previous, page()),
+        |_| {},
+        |relaunch| {
+            if !relaunch
+                .try_device()
+                .expect("GPU initialized")
+                .features()
+                .contains(wgpu::Features::PIPELINE_CACHE)
+            {
+                eprintln!("the driver cache needs PIPELINE_CACHE support");
+                return;
+            }
+            support::capture_graph(relaunch, page(), FRAME_WIDTH, FRAME_HEIGHT);
+            let stats = relaunch.last_frame_stats().expect("glass frame statistics");
+            assert_eq!(
+                stats.shader_pipeline_fallback_draws, 0,
+                "a cached glass draws with its own pipelines"
+            );
+            assert_eq!(stats.placeholder_draws, 0);
+        },
+    );
+}
+
 /// A material no launch drew stands in with the general glass while its own
 /// pipeline compiles. After an update the general the last launch stood in
 /// with is built once the first frame is drawn, so standing in compiles

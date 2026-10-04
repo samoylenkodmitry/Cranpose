@@ -55,6 +55,9 @@ pub(crate) struct Loaded {
     /// Whether another build wrote the records: an update, whose compiled
     /// pipelines are gone.
     pub(crate) updated: bool,
+    /// Whether the driver cache was filled from this build's compiled
+    /// pipelines, so a recorded pipeline builds from it as a cache hit.
+    pub(crate) holds_recorded: bool,
 }
 
 pub(crate) fn load(device: &wgpu::Device) -> Loaded {
@@ -75,8 +78,10 @@ pub(crate) fn load(device: &wgpu::Device) -> Loaded {
         .as_ref()
         .and_then(|contents| contents.blob)
         .filter(|blob| !blob.is_empty());
+    let cache = driver_cache(device, data, file.as_deref(), updated);
     Loaded {
-        cache: driver_cache(device, data, file.as_deref(), updated),
+        holds_recorded: data.is_some() && cache.is_some(),
+        cache,
         records: Arc::new(contents.map(Contents::into_records).unwrap_or_default()),
         updated,
     }
