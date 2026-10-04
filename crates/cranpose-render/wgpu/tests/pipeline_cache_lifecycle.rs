@@ -552,6 +552,37 @@ fn a_relaunch_of_the_same_build_leaves_later_screens_to_their_first_draw() {
     );
 }
 
+/// The same build finds what its launches drew in the driver's cache: a
+/// later screen's first draw builds those pipelines in its frame, as cache
+/// hits, instead of drawing placeholders.
+#[test]
+fn a_relaunch_of_the_same_build_draws_what_it_recorded_from_the_driver_cache() {
+    relaunch_after_a_later_screen(
+        |_| {},
+        |relaunch| {
+            if !relaunch
+                .try_device()
+                .expect("GPU initialized")
+                .features()
+                .contains(wgpu::Features::PIPELINE_CACHE)
+            {
+                eprintln!("the driver cache needs PIPELINE_CACHE support");
+                return;
+            }
+            first_frame_builds(relaunch);
+            wait_for_warm_ups();
+            frosted_frame_waits(relaunch);
+            let stats = relaunch
+                .last_frame_stats()
+                .expect("frosted frame statistics");
+            assert_eq!(
+                stats.placeholder_draws, 0,
+                "a pipeline this build recorded is drawn from the driver cache"
+            );
+        },
+    );
+}
+
 /// A material no launch drew stands in with the general glass while its own
 /// pipeline compiles. After an update the general the last launch stood in
 /// with is built once the first frame is drawn, so standing in compiles

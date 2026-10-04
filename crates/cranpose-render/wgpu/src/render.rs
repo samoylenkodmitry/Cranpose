@@ -3331,25 +3331,8 @@ impl GpuRenderer {
             frame_count: 0,
             shader_warm_ups_queued: 0,
         };
-        // The first frame waits for its shapes and fixed pipelines, but draws
-        // placeholders for runtime shaders that have not compiled: those
-        // queue behind, since a Mali driver compiles largely one pipeline at
-        // a time.
         #[cfg(not(target_arch = "wasm32"))]
-        renderer.warm_fixed_pipelines(&|label| {
-            records
-                .fixed
-                .iter()
-                .any(|fixed| fixed.first_screen && fixed.entry == label)
-        });
-        #[cfg(not(target_arch = "wasm32"))]
-        renderer.effect_renderer.warm_first_screen_shaders(
-            records
-                .shaders
-                .iter()
-                .filter(|shader| shader.first_screen)
-                .map(|shader| &shader.entry),
-        );
+        renderer.warm_first_screen(&records, updated);
         renderer.warm_requested_shaders();
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
@@ -3358,6 +3341,35 @@ impl GpuRenderer {
             effects_ms,
         );
         renderer
+    }
+
+    /// Prepares the first screen the last launches recorded. The first frame
+    /// waits for its shapes and fixed pipelines, but draws placeholders for
+    /// runtime shaders that have not compiled: those queue behind, since a
+    /// Mali driver compiles largely one pipeline at a time. The driver cache
+    /// this build wrote holds what its launches drew, so those draw from it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn warm_first_screen(
+        &mut self,
+        records: &crate::pipeline_records::PipelineRecords,
+        updated: bool,
+    ) {
+        self.warm_fixed_pipelines(&|label| {
+            records
+                .fixed
+                .iter()
+                .any(|fixed| fixed.first_screen && fixed.entry == label)
+        });
+        if !updated && self.pipeline_cache.is_some() {
+            self.effect_renderer.trust_cached(records);
+        }
+        self.effect_renderer.warm_first_screen_shaders(
+            records
+                .shaders
+                .iter()
+                .filter(|shader| shader.first_screen)
+                .map(|shader| &shader.entry),
+        );
     }
 
     fn ensure_shape_pipeline(&mut self, key: ShapePipelineKey, vertices: u64) {

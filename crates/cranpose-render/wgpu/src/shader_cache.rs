@@ -126,7 +126,24 @@ struct PipelineKey {
     split: Option<(&'static str, ShaderDrawVariant)>,
 }
 
+/// A pipeline as a record names it: its source, overrides, blend mode and
+/// draw part.
+#[cfg(not(target_arch = "wasm32"))]
+type PipelineIdentity = (u64, u64, u8, u8);
+
 impl PipelineKey {
+    #[cfg(not(target_arch = "wasm32"))]
+    fn identity(self) -> PipelineIdentity {
+        (
+            self.source,
+            self.overrides,
+            self.mode.disk_byte(),
+            self.split
+                .map_or(ShaderDrawVariant::Whole, |(_, variant)| variant)
+                .disk_byte(),
+        )
+    }
+
     /// The key of every material's pipeline for this source, blend mode and
     /// part.
     fn part(self) -> Self {
@@ -277,6 +294,10 @@ pub(crate) struct ShaderPipelineCache {
     /// The pipelines draws asked for, each noted once for the next launches.
     #[cfg(not(target_arch = "wasm32"))]
     noted: HashSet<PipelineKey, FxBuildHasher>,
+    /// The pipelines this build's launches drew, which the loaded driver
+    /// cache holds: a draw builds one in its frame as a cache hit.
+    #[cfg(not(target_arch = "wasm32"))]
+    cached: HashSet<PipelineIdentity, FxBuildHasher>,
     recorder: crate::pipeline_recorder::PipelineRecorder,
 }
 
@@ -321,6 +342,8 @@ impl ShaderPipelineCache {
             general_due: None,
             #[cfg(not(target_arch = "wasm32"))]
             noted: HashSet::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            cached: HashSet::default(),
             recorder,
         }
     }
@@ -536,6 +559,10 @@ impl ShaderPipelineCache {
         if self.ready(key) {
             return true;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if key.forced == 0 && self.cached.contains(&key.identity()) {
+            return true;
+        }
         let general = key.general();
         if specialization.exact() && key != general {
             let stand_in = self.stand_in_for(key, specialization);
@@ -744,6 +771,20 @@ impl ShaderPipelineCache {
                 self.queue_warm_up(key, constants);
             }
         }
+    }
+
+    /// Trusts the loaded driver cache with the pipelines `records` names,
+    /// which this build's launches drew: their draws build them in the frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn trust_cached<'a>(
+        &mut self,
+        records: impl IntoIterator<Item = &'a ShaderPipelineRecord>,
+    ) {
+        self.cached.extend(
+            records
+                .into_iter()
+                .map(|record| (record.source, record.overrides, record.mode, record.variant)),
+        );
     }
 
     /// Queues the recorded pipelines a stand-in drew the first frame for.

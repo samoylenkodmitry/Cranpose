@@ -1376,6 +1376,28 @@ impl EffectRenderer {
         self.shader_cache.queue_after_first_frame();
     }
 
+    /// Trusts the loaded driver cache with the pipelines `records` names,
+    /// which this build's launches drew: a frame needing one builds it as a
+    /// cache hit instead of drawing a placeholder.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn trust_cached(&mut self, records: &crate::pipeline_records::PipelineRecords) {
+        self.shader_cache
+            .trust_cached(records.shaders.iter().map(|shader| &shader.entry));
+        let blurs = (0..BLUR_TILE_MODES.len())
+            .flat_map(blur_family)
+            .chain([BlurPipeline::Mean])
+            .map(|blur| self.blur_resource(blur));
+        for pipeline in blurs.chain([&self.offset_pipeline]) {
+            if records
+                .fixed
+                .iter()
+                .any(|fixed| fixed.entry == pipeline.label())
+            {
+                pipeline.trust_cached();
+            }
+        }
+    }
+
     /// Queues the fixed pipelines whose labels `wanted` accepts.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_fixed(&self, device: &wgpu::Device, wanted: &dyn Fn(&str) -> bool) {

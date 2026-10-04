@@ -17,6 +17,9 @@ pub(crate) struct FixedPipeline {
     resource: LazyGpuResource<wgpu::RenderPipeline>,
     /// Whether its build is queued, so it is queued once.
     queued: Cell<bool>,
+    /// Whether the loaded driver cache holds it: a draw builds it in its
+    /// frame as a cache hit.
+    cached: Cell<bool>,
     #[cfg(not(target_arch = "wasm32"))]
     drawn: Cell<bool>,
 }
@@ -26,6 +29,7 @@ impl FixedPipeline {
         Self {
             resource: LazyGpuResource::new(label),
             queued: Cell::new(false),
+            cached: Cell::new(false),
             #[cfg(not(target_arch = "wasm32"))]
             drawn: Cell::new(false),
         }
@@ -74,7 +78,7 @@ impl FixedPipeline {
     where
         J: FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static,
     {
-        if self.resource.get().is_some() {
+        if self.resource.get().is_some() || self.cached.get() {
             return true;
         }
         if compiler.is_active() {
@@ -82,6 +86,12 @@ impl FixedPipeline {
             return false;
         }
         true
+    }
+
+    /// Trusts the loaded driver cache with this pipeline.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn trust_cached(&self) {
+        self.cached.set(true);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
