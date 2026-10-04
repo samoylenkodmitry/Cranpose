@@ -4,8 +4,11 @@ use web_time::{Duration, Instant};
 
 use super::{CompileLane, PipelineCompiler};
 
+/// Both lanes run every job off the calling thread; the demanded lane's one
+/// thread runs them in queue order, while the warm-up lane's threads start
+/// them in that order and may finish them in any.
 #[test]
-fn each_lane_runs_its_jobs_in_queue_order_off_the_calling_thread() {
+fn each_lane_runs_its_jobs_off_the_calling_thread() {
     let compiler = PipelineCompiler::spawn();
     assert!(compiler.is_active());
     let caller = std::thread::current().id();
@@ -17,11 +20,17 @@ fn each_lane_runs_its_jobs_in_queue_order_off_the_calling_thread() {
                 finished.send((index, std::thread::current().id())).unwrap();
             });
         }
-        for expected in 0..3 {
-            let (index, thread) = observed.recv_timeout(Duration::from_secs(5)).unwrap();
-            assert_eq!(index, expected);
-            assert_ne!(thread, caller);
+        let mut indices: Vec<_> = (0..3)
+            .map(|_| {
+                let (index, thread) = observed.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert_ne!(thread, caller);
+                index
+            })
+            .collect();
+        if lane == CompileLane::WarmUp {
+            indices.sort_unstable();
         }
+        assert_eq!(indices, [0, 1, 2]);
     }
 }
 
@@ -52,24 +61,35 @@ fn dropping_every_handle_skips_the_jobs_not_started() {
     let compiler = PipelineCompiler::spawn();
     let handle = compiler.clone();
     let (started, observed) = mpsc::channel();
-    let (release, blocked) = mpsc::channel::<()>();
-    compiler.enqueue(CompileLane::WarmUp, move || {
-        started.send("first").unwrap();
-        blocked.recv().unwrap();
-    });
+    let threads = super::warm_up_threads();
+    let releases: Vec<_> = (0..threads)
+        .map(|_| {
+            let (release, blocked) = mpsc::channel::<()>();
+            let started = started.clone();
+            compiler.enqueue(CompileLane::WarmUp, move || {
+                started.send("blocking").unwrap();
+                blocked.recv().unwrap();
+            });
+            release
+        })
+        .collect();
     let (ran, second_ran) = mpsc::channel();
     compiler.enqueue(CompileLane::WarmUp, move || ran.send("second").unwrap());
-    assert_eq!(
-        observed.recv_timeout(Duration::from_secs(5)).unwrap(),
-        "first"
-    );
+    for _ in 0..threads {
+        assert_eq!(
+            observed.recv_timeout(Duration::from_secs(5)).unwrap(),
+            "blocking"
+        );
+    }
     drop(compiler);
     assert!(handle.is_active(), "a surviving handle keeps the worker");
-    // The last handle waits for the job in flight, so it is released while
-    // that drop waits.
+    // The last handle waits for the jobs in flight, so they are released
+    // while that drop waits.
     let releaser = std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(50));
-        release.send(()).expect("the first job is waiting");
+        for release in releases {
+            release.send(()).expect("a blocking job is waiting");
+        }
     });
     drop(handle);
     releaser.join().expect("the releaser ends");
