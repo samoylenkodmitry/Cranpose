@@ -10,6 +10,7 @@ use std::sync::{
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub(crate) struct Landing {
+    queued: AtomicU64,
     built: AtomicU64,
     awaited: AtomicBool,
     landed: AtomicBool,
@@ -21,6 +22,11 @@ impl Landing {
     /// The pipelines the background threads have built.
     pub(crate) fn built(&self) -> u64 {
         self.built.load(Ordering::Acquire)
+    }
+
+    /// Whether a queued pipeline has not been built yet.
+    pub(crate) fn in_flight(&self) -> bool {
+        self.queued.load(Ordering::Acquire) != self.built()
     }
 
     /// Waits for the next pipeline to land: a frame drew a placeholder.
@@ -305,6 +311,7 @@ impl PipelineCompiler {
                 CompileLane::Demanded => workers.demanded.as_ref(),
                 CompileLane::WarmUp => workers.warm_up.as_ref(),
             };
+            workers.landing.queued.fetch_add(1, Ordering::AcqRel);
             if jobs.is_none_or(|jobs| jobs.send(Box::new(job)).is_err()) {
                 log::error!("[gpu-pipeline] background compiler stopped unexpectedly");
             }

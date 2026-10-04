@@ -1217,6 +1217,24 @@ impl Renderer for WgpuRenderer {
             PresentBackend::None => false,
         }
     }
+
+    fn awaits_pipelines(&self) -> bool {
+        match &self.backend {
+            PresentBackend::Sync(gpu_renderer) => gpu_renderer.awaits_pipelines(),
+            #[cfg(not(target_arch = "wasm32"))]
+            PresentBackend::Threaded(handle) => {
+                let status = handle.status();
+                status
+                    .drew_placeholder
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    && status
+                        .landing
+                        .get()
+                        .is_some_and(|landing| landing.in_flight())
+            }
+            PresentBackend::None => false,
+        }
+    }
 }
 
 #[cfg(test)]

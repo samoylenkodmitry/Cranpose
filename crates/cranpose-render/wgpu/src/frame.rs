@@ -728,16 +728,6 @@ fn blur_spec(effect: &RenderEffect) -> Option<BlurSpec> {
     }
 }
 
-/// What an effect draws while its pipelines compile: the placeholder of the
-/// shader that draws last.
-fn placeholder(effect: &RenderEffect) -> Option<ShaderPlaceholder> {
-    match effect {
-        RenderEffect::Shader { shader } => shader.placeholder(),
-        RenderEffect::Chain { second, .. } => placeholder(second),
-        RenderEffect::Blur { .. } | RenderEffect::Offset { .. } => None,
-    }
-}
-
 /// A child's surface after its effect.
 enum ThroughEffect<'l> {
     /// The effect is a shader drawn in the final pass over the surface.
@@ -759,34 +749,43 @@ impl ThroughEffect<'_> {
     }
 }
 
-/// The rounded mask of `placeholder`'s shape over a layer at `layer`; none
-/// when it fills the layer's own shape.
+/// The rounded mask of `placeholder`'s shape over a layer at `layer`, drawn
+/// at `scale`; none when it fills the layer's own shape.
 fn placeholder_mask(
     placeholder: ShaderPlaceholder,
     layer: DeviceRect,
+    scale: f32,
 ) -> Option<RoundedCompositeMask> {
     let shape = placeholder.shape?;
+    let (width, height) = (
+        shape.bounds.width * layer.width,
+        shape.bounds.height * layer.height,
+    );
+    let radius = (shape.corner_radius * scale).clamp(0.0, 0.5 * width.min(height));
     Some(RoundedCompositeMask {
         rect: [
             layer.x + shape.bounds.x * layer.width,
             layer.y + shape.bounds.y * layer.height,
-            shape.bounds.width * layer.width,
-            shape.bounds.height * layer.height,
+            width,
+            height,
         ],
-        radii: [shape.corner_radius * layer.width; 4],
+        radii: [radius; 4],
     })
 }
 
 /// Clips `composite`, a layer's content drawn without `effect` while the
 /// effect compiles, to the shape of the effect's placeholder over a layer at
-/// `layer`: a glass that masks its content keeps the content in its shape.
+/// `layer`, drawn at `scale`: a glass that masks its content keeps the
+/// content in its shape.
 fn clip_to_placeholder(
     composite: &mut ResolvedComposite,
     effect: &RenderEffect,
     layer: DeviceRect,
+    scale: f32,
 ) {
-    if let Some(mask) =
-        placeholder(effect).and_then(|placeholder| placeholder_mask(placeholder, layer))
+    if let Some(mask) = effect
+        .placeholder()
+        .and_then(|placeholder| placeholder_mask(placeholder, layer, scale))
         && let ResolvedCompositeKind::Blit { rounded_mask, .. } = &mut composite.kind
     {
         *rounded_mask = Some(mask);
@@ -2670,33 +2669,35 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         )
     }
 
-    /// The backdrop's placeholder while its effect's pipelines compile;
-    /// nothing for an effect without one.
-    fn backdrop_placeholder(&mut self, item: &PendingBackdrop<'_>) -> Option<ResolvedComposite> {
-        let placeholder = placeholder(item.effect)?;
+    /// The backdrop's placeholder, drawn at `scale`, while its effect's
+    /// pipelines compile; nothing for an effect without one.
+    fn backdrop_placeholder(
+        &mut self,
+        item: &PendingBackdrop<'_>,
+        scale: f32,
+    ) -> Option<ResolvedComposite> {
+        let placeholder = item.effect.placeholder()?;
         Some(self.placeholder_fill(
-            placeholder,
+            placeholder.color,
             item.z,
             item.layer_rect,
             item.support.unwrap_or(item.visible),
             item.alpha,
-            item.rounded_mask,
+            placeholder_mask(placeholder, item.layer_rect, scale).or(item.rounded_mask),
         ))
     }
 
-    /// `placeholder` drawn over a layer at `dest`, in place of an effect
-    /// whose pipelines compile: its shape, or the layer's `rounded_mask`.
+    /// `dest` filled with `color` within `rounded_mask`, in place of an
+    /// effect whose pipelines compile.
     fn placeholder_fill(
         &mut self,
-        placeholder: ShaderPlaceholder,
+        Color(r, g, b, a): Color,
         z: usize,
         dest: DeviceRect,
         visible: DeviceRect,
         alpha: f32,
         rounded_mask: Option<RoundedCompositeMask>,
     ) -> ResolvedComposite {
-        let rounded_mask = placeholder_mask(placeholder, dest).or(rounded_mask);
-        let Color(r, g, b, a) = placeholder.color;
         let source = self.acquire_transient("Placeholder", 1, 1);
         self.renderer.clear_target(
             self.recorder,
@@ -2835,7 +2836,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     {
                         if self.backdrop_draws_now(&item) {
                             pass.stages.push(item);
-                        } else if let Some(placeholder) = self.backdrop_placeholder(&item) {
+                        } else if let Some(placeholder) = self.backdrop_placeholder(&item, scale) {
                             pass.pending.push(placeholder);
                         }
                     }
@@ -3435,7 +3436,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             support: Some(support),
         };
         if !self.backdrop_draws_now(&item) {
-            return Ok(self.backdrop_placeholder(&item));
+            return Ok(self.backdrop_placeholder(&item, scale));
         }
         if item
             .batched
@@ -4006,7 +4007,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             },
         };
         if let Some(render_effect) = waiting {
-            clip_to_placeholder(&mut composite, render_effect, layer_rect_device);
+            clip_to_placeholder(&mut composite, render_effect, layer_rect_device, scale);
         }
         Ok(Some(composite))
     }
@@ -4150,7 +4151,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     visible,
                 );
                 if let Some(effect) = waiting {
-                    clip_to_placeholder(&mut composite, effect, layer_rect);
+                    clip_to_placeholder(&mut composite, effect, layer_rect, scale);
                 }
                 composite
             }
@@ -4378,8 +4379,16 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let layer_pixel_rect = layer_pixel_rect(child, surface_rect, scale);
         let rounded_mask = grid_rounded_mask(child, snap, scale);
         if !self.effect_draws_now(effect, layer_pixel_rect, (width, height), true) {
-            return Some(shader.placeholder().map(|color| {
-                self.placeholder_fill(color, z, dest, support, child.alpha, rounded_mask)
+            let [x, y, width, height] = layer_pixel_rect;
+            let layer = DeviceRect {
+                x: dest.x + x,
+                y: dest.y + y,
+                width,
+                height,
+            };
+            return Some(shader.placeholder().map(|placeholder| {
+                let mask = placeholder_mask(placeholder, layer, scale).or(rounded_mask);
+                self.placeholder_fill(placeholder.color, z, layer, support, child.alpha, mask)
             }));
         }
         let source = self

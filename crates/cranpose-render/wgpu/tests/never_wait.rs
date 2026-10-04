@@ -240,7 +240,7 @@ const MIDDLE: ShaderPlaceholder = ShaderPlaceholder {
             width: 0.5,
             height: 0.5,
         },
-        corner_radius: 0.25,
+        corner_radius: PANE.width * 0.25,
     }),
     ..RED
 };
@@ -303,4 +303,25 @@ fn a_shadow_is_left_out_until_its_blur_lands() {
         &settled(shadowed(0.0)).pixels,
     );
     assert_lands(&mut renderer, graph);
+}
+
+/// A frame that drew placeholders is not the final picture while their
+/// pipelines compile; the renderer stops saying so once they land, with no
+/// frame drawn meanwhile, and the next frame draws the effects.
+#[test]
+fn a_frame_with_placeholders_awaits_their_pipelines_until_they_land() {
+    let graph = backdrop_page(shader("awaited backdrop", Some(RED)));
+    let (mut renderer, _) = first_frame(&graph);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while renderer.awaits_pipelines() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the pipelines never landed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    support::capture_graph(&mut renderer, graph, SIZE, SIZE);
+    let stats = renderer.last_frame_stats().expect("frame statistics");
+    assert_eq!(stats.placeholder_draws, 0);
+    assert!(!renderer.awaits_pipelines());
 }

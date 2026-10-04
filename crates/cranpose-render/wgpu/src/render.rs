@@ -4026,6 +4026,23 @@ impl GpuRenderer {
         }
     }
 
+    /// Whether the last frame drew a placeholder and pipelines are still
+    /// compiling, so its picture is not final yet.
+    pub(crate) fn awaits_pipelines(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(landing) = &self.landing {
+            return self.drew_placeholder && landing.in_flight();
+        }
+        self.drew_placeholder
+    }
+
+    /// The compiler's account of the pipelines it builds, for a runtime that
+    /// reads it off the present thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn landing(&self) -> Option<Arc<crate::pipeline_compiler::Landing>> {
+        self.landing.clone()
+    }
+
     /// Calls `wake` from the compiling thread when a pipeline a placeholder
     /// waited for lands, so an app with nothing else to draw draws again.
     #[cfg(not(target_arch = "wasm32"))]

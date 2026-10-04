@@ -1297,6 +1297,38 @@ pub(crate) fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
     }
 }
 
+/// What a robot's idle wait sees pending.
+#[derive(Clone, Copy)]
+pub(crate) struct RobotIdlePending {
+    pub(crate) needs_frame: bool,
+    pub(crate) needs_update: bool,
+    pub(crate) transient_frame_callbacks: bool,
+    pub(crate) waiting_for_present: bool,
+    /// The last frame drew placeholders whose pipelines still compile, so
+    /// its picture is not final; the renderer asks for the frame after.
+    pub(crate) awaits_pipelines: bool,
+}
+
+impl RobotIdlePending {
+    /// Only a frame the renderer asked for is pending, and the picture is
+    /// final.
+    pub(crate) fn frame_only(self) -> bool {
+        self.needs_frame
+            && !self.needs_update
+            && !self.transient_frame_callbacks
+            && !self.waiting_for_present
+            && !self.awaits_pipelines
+    }
+
+    /// Nothing but an update is pending, and the picture is final.
+    pub(crate) fn quiet(self) -> bool {
+        !self.needs_frame
+            && !self.transient_frame_callbacks
+            && !self.waiting_for_present
+            && !self.awaits_pipelines
+    }
+}
+
 pub(crate) fn robot_wait_for_idle_animation_loop_only(
     has_active_animations: bool,
     has_transient_frame_callbacks: bool,

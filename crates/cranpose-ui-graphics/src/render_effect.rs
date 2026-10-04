@@ -146,12 +146,13 @@ pub struct ShaderPlaceholder {
     pub shape: Option<PlaceholderShape>,
 }
 
-/// A rounded rectangle relative to a layer's bounds.
+/// A rounded rectangle within a layer.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlaceholderShape {
     /// The rectangle, in fractions of the layer's width and height.
     pub bounds: Rect,
-    /// The corner radius, as a fraction of the layer's width.
+    /// The corner radius in the layer's units, kept within half the
+    /// rectangle's shorter side: `f32::MAX` makes a capsule.
     pub corner_radius: f32,
 }
 
@@ -1116,6 +1117,16 @@ pub enum RenderEffect {
 }
 
 impl RenderEffect {
+    /// What the effect draws while its pipelines compile: the placeholder
+    /// of the shader that draws last, if it has one.
+    pub fn placeholder(&self) -> Option<ShaderPlaceholder> {
+        match self {
+            RenderEffect::Shader { shader } => shader.placeholder(),
+            RenderEffect::Chain { second, .. } => second.placeholder(),
+            _ => None,
+        }
+    }
+
     /// Create a blur effect with equal radius in both directions.
     pub fn blur(radius: f32) -> Self {
         Self::blur_with_edge_treatment(radius, TileMode::default())

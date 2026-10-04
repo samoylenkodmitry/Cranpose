@@ -242,4 +242,11 @@ pub trait Renderer {
     fn needs_frame_warmup(&self) -> bool {
         false
     }
+
+    /// Returns whether the last frame drew a placeholder for an effect whose
+    /// pipelines are still compiling, so its picture is not final yet; the
+    /// renderer asks for the frame that replaces it once they land.
+    fn awaits_pipelines(&self) -> bool {
+        false
+    }
 }

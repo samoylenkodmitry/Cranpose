@@ -67,6 +67,12 @@ pub(crate) enum PresentMsg {
 pub(crate) struct PresentStatus {
     pub(crate) last_frame_stats: Mutex<Option<crate::gpu_stats::FrameStatsSnapshot>>,
     pub(crate) needs_frame_warmup: AtomicBool,
+    /// Whether the last frame drew a placeholder for an effect whose
+    /// pipelines compile.
+    pub(crate) drew_placeholder: AtomicBool,
+    /// The renderer's compiler account, to tell whether pipelines a
+    /// placeholder waits for still compile.
+    pub(crate) landing: std::sync::OnceLock<Arc<crate::pipeline_compiler::Landing>>,
     pub(crate) presented_frames: AtomicU64,
     /// Frames handed back to the producer, whatever their outcome.
     pub(crate) returned_frames: AtomicU64,
@@ -121,6 +127,9 @@ impl PresentState {
         let device = Arc::clone(&gpu.device);
         let renderer_epoch = gpu.renderer_epoch;
         let gpu_renderer = GpuRenderer::new(gpu);
+        if let Some(landing) = gpu_renderer.landing() {
+            let _ = status.landing.set(landing);
+        }
         gpu_renderer.wake_on_landing(Box::new({
             let status = Arc::clone(&status);
             let waker = Arc::clone(&waker);
@@ -475,6 +484,9 @@ impl PresentState {
         self.status
             .needs_frame_warmup
             .store(self.gpu_renderer.needs_frame_warmup(), Ordering::Relaxed);
+        self.status
+            .drew_placeholder
+            .store(self.gpu_renderer.drew_placeholder, Ordering::Relaxed);
         if returns.outcome == PresentOutcome::Presented {
             self.status.presented_frames.fetch_add(1, Ordering::Relaxed);
         }

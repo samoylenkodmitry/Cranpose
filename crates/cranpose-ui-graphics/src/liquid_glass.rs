@@ -561,12 +561,23 @@ pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
 /// frosted glass while the glass's pipelines compile.
 const PLACEHOLDER_FROST: f32 = 0.18;
 
-/// A glass's tint over its rounded shape, which its uniforms place in the
-/// effect's area: its area's size, its centre, its size and its corner
-/// radius.
+/// What a glass draws while its pipelines compile: `tint`, given with a
+/// straight alpha, at least frosted, over `shape`.
+pub fn liquid_glass_placeholder(tint: Color, shape: Option<PlaceholderShape>) -> ShaderPlaceholder {
+    let Color(r, g, b, a) = tint;
+    let alpha = a.clamp(0.0, 1.0).max(PLACEHOLDER_FROST);
+    ShaderPlaceholder {
+        color: Color(r * alpha, g * alpha, b * alpha, alpha),
+        shape,
+    }
+}
+
+/// The placeholder of a glass whose material set none: its tint over the
+/// rounded shape its uniforms place in the effect's area, which is the
+/// layer: its area's size, its centre, its size and its corner radius,
+/// negative for a capsule.
 fn glass_placeholder(uniforms: &[f32]) -> ShaderPlaceholder {
     let [r, g, b, a] = [14, 15, 16, 17].map(|index| slot(uniforms, index));
-    let alpha = a.clamp(0.0, 1.0).max(PLACEHOLDER_FROST);
     let [
         area_width,
         area_height,
@@ -583,12 +594,9 @@ fn glass_placeholder(uniforms: &[f32]) -> ShaderPlaceholder {
             width: width / area_width,
             height: height / area_height,
         },
-        corner_radius: radius.clamp(0.0, 0.5 * width.min(height)) / area_width,
+        corner_radius: if radius < 0.0 { f32::MAX } else { radius },
     });
-    ShaderPlaceholder {
-        color: Color(r * alpha, g * alpha, b * alpha, alpha),
-        shape,
-    }
+    liquid_glass_placeholder(Color(r, g, b, a), shape)
 }
 
 fn glass_shader_effect(mut shader: RuntimeShader) -> RenderEffect {
@@ -596,10 +604,12 @@ fn glass_shader_effect(mut shader: RuntimeShader) -> RenderEffect {
     specialize_liquid_glass(&mut shader);
     // An edge lens's first stages feed the last, which draws the glass: it
     // alone has a placeholder, or a split glass would be tinted twice.
-    if !matches!(
+    if matches!(
         slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM),
         1.0 | 2.0
     ) {
+        shader.set_placeholder(None);
+    } else if shader.placeholder().is_none() {
         let placeholder = glass_placeholder(shader.uniforms());
         shader.set_placeholder(Some(placeholder));
     }
