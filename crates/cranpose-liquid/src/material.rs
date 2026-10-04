@@ -21,8 +21,9 @@ use cranpose_ui_graphics::{
     GLASS_PHYSICAL_REFRACTION_DEPTH_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM,
     GLASS_REFRACTION_MODE_UNIFORM, GLASS_RESTING_EDGE_SHARPNESS_UNIFORM,
     GLASS_RESTING_TINT_UNIFORM, GLASS_TOUCH_RADIUS_UNIFORM, GLASS_TRANSMISSION_REFRACTION_UNIFORM,
-    GraphicsLayer, LIQUID_GLASS_WGSL, LayerShape, Rect, RenderEffect, RoundedCornerShape,
-    RuntimeShader, TileMode, liquid_glass_runtime_effect, specialize_liquid_glass,
+    GraphicsLayer, LIQUID_GLASS_WGSL, LayerShape, PlaceholderShape, Rect, RenderEffect,
+    RoundedCornerShape, RuntimeShader, TileMode, liquid_glass_placeholder,
+    liquid_glass_runtime_effect, specialize_liquid_glass,
 };
 
 use crate::{appearance::GlassTintAmount, theme::LiquidColors};
@@ -80,6 +81,14 @@ impl LiquidShape {
         match self {
             LiquidShape::Capsule | LiquidShape::Circle => CAPSULE_SHADER_RADIUS,
             LiquidShape::RoundedRect(radius) => radius * density,
+        }
+    }
+
+    /// The corner radius in dp, the largest one making a capsule.
+    fn radius_dp(&self) -> f32 {
+        match self {
+            LiquidShape::Capsule | LiquidShape::Circle => f32::MAX,
+            LiquidShape::RoundedRect(radius) => *radius,
         }
     }
 }
@@ -282,6 +291,22 @@ fn foreground_is_dark(foreground: Color) -> bool {
     let foreground_luma =
         0.2126 * foreground.r() + 0.7152 * foreground.g() + 0.0722 * foreground.b();
     foreground_luma < 0.5
+}
+
+/// The tint a glass shows: `tint`, or, while it crossfades from a previous
+/// tint, the two mixed by the crossfade's progress.
+fn shown_tint(tint: Color, crossfade: Option<(Color, f32)>) -> Color {
+    let Some((previous, progress)) = crossfade.filter(|(_, progress)| progress.is_finite()) else {
+        return tint;
+    };
+    let progress = progress.clamp(0.0, 1.0);
+    let mix = |from: f32, to: f32| from + (to - from) * progress;
+    Color(
+        mix(previous.0, tint.0),
+        mix(previous.1, tint.1),
+        mix(previous.2, tint.2),
+        mix(previous.3, tint.3),
+    )
 }
 
 fn boost_tint_saturation(tint: Color, boost: f32) -> Color {
@@ -1231,6 +1256,49 @@ fn set_edge_return_depth(shader: &mut RuntimeShader, depth: Option<f32>) {
 }
 
 impl ResolvedGlass {
+    /// The rounded rectangle a placeholder fills while this glass compiles:
+    /// around its morph's shapes, or the whole node in its shape.
+    fn placeholder_shape(&self, morph: Option<&GlassMorph>) -> PlaceholderShape {
+        let Some(morph) = morph else {
+            return PlaceholderShape {
+                bounds: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                corner_radius: self.shape.radius_dp(),
+            };
+        };
+        let (node_width, node_height) = morph.node_size;
+        let (node_width, node_height) =
+            (node_width.max(f32::EPSILON), node_height.max(f32::EPSILON));
+        // A radius of -2 subtracts its shape: it carves a hole in the field.
+        let added = morph.shapes.iter().filter(|&&(.., radius)| radius > -1.5);
+        let (left, top, right, bottom) = std::iter::once(&morph.primary).chain(added).fold(
+            (f32::MAX, f32::MAX, f32::MIN, f32::MIN),
+            |(left, top, right, bottom), &(center_x, center_y, width, height, _)| {
+                (
+                    left.min(center_x - width * 0.5),
+                    top.min(center_y - height * 0.5),
+                    right.max(center_x + width * 0.5),
+                    bottom.max(center_y + height * 0.5),
+                )
+            },
+        );
+        // A negative radius is the shader's capsule.
+        let (.., radius) = morph.primary;
+        PlaceholderShape {
+            bounds: Rect {
+                x: left / node_width,
+                y: top / node_height,
+                width: (right - left) / node_width,
+                height: (bottom - top) / node_height,
+            },
+            corner_radius: if radius < 0.0 { f32::MAX } else { radius },
+        }
+    }
+
     /// The same glass as a flat surface, for a person who asked the system
     /// for less transparency: the surface color with no blur, no refraction
     /// and no spectrum, the shape and the shadow as they were.
@@ -1619,6 +1687,18 @@ impl ResolvedGlass {
             shader.set_output_support(Some(support));
         }
 
+        shader.set_placeholder(Some(liquid_glass_placeholder(
+            shown_tint(
+                Color(
+                    dynamic_tint.r(),
+                    dynamic_tint.g(),
+                    dynamic_tint.b(),
+                    dynamic_tint_alpha,
+                ),
+                dynamics.tint_crossfade,
+            ),
+            Some(self.placeholder_shape(dynamics.morph.as_ref())),
+        )));
         let optical_effect = liquid_glass_runtime_effect(shader);
         if gaussian_blur_radius > f32::EPSILON {
             RenderEffect::blur_with_edge_treatment(gaussian_blur_radius, TileMode::Mirror)

@@ -414,6 +414,7 @@ fn desktop_input_prefers_winit_cursor_before_x11_global_probe() {
     );
 }
 
+#[cfg(feature = "robot")]
 #[test]
 fn desktop_robot_idle_wait_considers_update_only_work() {
     let source = include_str!("../desktop.rs");
@@ -423,21 +424,46 @@ fn desktop_robot_idle_wait_considers_update_only_work() {
         "robot wait_for_idle must read update-only scheduler state"
     );
     assert!(
-        source
-            .contains("if !needs_frame && !has_transient_frame_callbacks && !waiting_for_present"),
+        source.contains("} else if pending.quiet() {"),
         "robot wait_for_idle must not finish while update-only work is pending"
+    );
+    assert!(
+        !crate::robot::RobotIdlePending {
+            needs_frame: false,
+            needs_update: true,
+            transient_frame_callbacks: false,
+            waiting_for_present: false,
+            awaits_pipelines: false,
+        }
+        .frame_only(),
+        "update-only work is not a frame-only loop"
     );
 }
 
+#[cfg(feature = "robot")]
 #[test]
 fn desktop_robot_idle_wait_allows_frame_only_loops() {
     let source = include_str!("../desktop.rs");
 
     assert!(
-        source.contains(
-            "let frame_only = needs_frame\n                    && !needs_update\n                    && !has_transient_frame_callbacks\n                    && !waiting_for_present;",
-        ),
+        source.contains("if pending.frame_only() || animation_loop_only {"),
         "robot wait_for_idle must not block on frame-only renderer or animation loops after pending UI work has drained"
+    );
+    let frame_only = crate::robot::RobotIdlePending {
+        needs_frame: true,
+        needs_update: false,
+        transient_frame_callbacks: false,
+        waiting_for_present: false,
+        awaits_pipelines: false,
+    };
+    assert!(frame_only.frame_only());
+    assert!(
+        !crate::robot::RobotIdlePending {
+            awaits_pipelines: true,
+            ..frame_only
+        }
+        .frame_only(),
+        "a frame that drew placeholders is not the final picture"
     );
 }
 

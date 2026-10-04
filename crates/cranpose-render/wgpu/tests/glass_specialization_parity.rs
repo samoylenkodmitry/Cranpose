@@ -12,7 +12,8 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{
-    Brush, Color, DrawScope, LIQUID_GLASS_SPECIALIZATIONS, Point, RenderEffect, TileMode,
+    Brush, Color, DrawScope, LIQUID_GLASS_SPECIALIZATIONS, LIQUID_GLASS_WGSL, Point, RenderEffect,
+    RuntimeShader, ShaderTarget, ShaderWarmUp, TileMode,
 };
 
 use crate::support;
@@ -218,18 +219,138 @@ fn settle(
     }
 }
 
-/// The card's first frame cannot wait for its specializations: it draws
-/// with the glass shader's general pipeline, counted as fallback draws, and
-/// every later frame lands on the same bytes until the specialized
-/// pipelines take over in the background.
+/// The runtime shader a single-pass glass effect draws with.
+fn glass_material(effect: RenderEffect) -> RuntimeShader {
+    match effect {
+        RenderEffect::Shader { shader } => std::sync::Arc::unwrap_or_clone(shader),
+        other => panic!("a single-pass glass material, not {other:?}"),
+    }
+}
+
+/// What a stand-in compiles for a first screen: the glass folded only to
+/// the overrides all its materials share. Each fold is exact on its own, so
+/// every material drawn with that pipeline lands on its own pipeline's
+/// bytes, interior and rim alike.
+#[test]
+fn a_glass_folded_only_to_what_its_neighbours_share_keeps_its_bytes() {
+    use support::glass_page::{FRAME_HEIGHT, FRAME_WIDTH, GLASS_HEIGHT, GLASS_WIDTH, panes_page};
+    let _folds = support::glass_page::GlassFolds::set(true);
+    let frosted = cranpose_ui_graphics::liquid_glass_effect(
+        &cranpose_ui_graphics::LiquidGlassRect {
+            left: 0.0,
+            top: 0.0,
+            width: GLASS_WIDTH,
+            height: GLASS_HEIGHT,
+            tint_color: Color(1.0, 1.0, 1.0, 0.12),
+        },
+        &cranpose_ui_graphics::LiquidGlassSpec {
+            blur_radius: 4.0,
+            ..cranpose_ui_graphics::LiquidGlassSpec::default()
+        },
+        GLASS_WIDTH,
+        GLASS_HEIGHT,
+    );
+    let loupe = cranpose_ui_graphics::liquid_loupe_effect(
+        (GLASS_WIDTH, GLASS_HEIGHT),
+        &cranpose_ui_graphics::LiquidLoupeSpec::default(),
+    );
+    let materials = [support::glass_page::glass_shader(), frosted, loupe].map(glass_material);
+    let shared: Vec<(&'static str, f64)> = materials[0]
+        .overrides()
+        .iter()
+        .copied()
+        .filter(|&(name, value)| {
+            materials.iter().all(|material| {
+                material
+                    .overrides()
+                    .iter()
+                    .any(|&(own, fixed)| own == name && fixed.to_bits() == value.to_bits())
+            })
+        })
+        .collect();
+    assert!(
+        !shared.is_empty()
+            && materials
+                .iter()
+                .all(|material| material.overrides().len() > shared.len()),
+        "the materials share some folds, and each folds more on its own"
+    );
+    let mut renderer = support::headless_renderer().expect("GPU required for glass parity");
+    let plain = support::capture_graph(&mut renderer, panes_page([]), FRAME_WIDTH, FRAME_HEIGHT);
+    for (index, material) in materials.iter().enumerate() {
+        let mut stand_in = material.clone();
+        for &(name, value) in material.overrides() {
+            if !shared.contains(&(name, value)) {
+                stand_in.clear_override(name);
+            }
+        }
+        assert_eq!(stand_in.draw_split(), material.draw_split());
+        let own = support::capture_graph(
+            &mut renderer,
+            panes_page([RenderEffect::runtime_shader(material.clone())]),
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+        );
+        let standing_in = support::capture_graph(
+            &mut renderer,
+            panes_page([RenderEffect::runtime_shader(stand_in)]),
+            FRAME_WIDTH,
+            FRAME_HEIGHT,
+        );
+        assert!(own.pixels != plain.pixels, "material {index} must draw");
+        support::assert_same_bytes(
+            &format!("material {index} drawn with only the shared folds"),
+            FRAME_WIDTH,
+            &own.pixels,
+            &standing_in.pixels,
+        );
+    }
+}
+
+/// The first frame of the card that draws its glass, not a placeholder
+/// while the glass's blur pipelines compile. A material's own pipeline is
+/// asked for by its first draw, so this frame stands in.
+fn first_drawn_frame(shell: &mut AppShell<WgpuRenderer>) -> (CapturedFrame, RenderStatsSnapshot) {
+    let deadline = std::time::Instant::now() + SETTLE;
+    loop {
+        let (frame, stats) = capture_card_frame(shell).expect("capture");
+        if stats.placeholder_draws == 0 {
+            return (frame, stats);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the glass pipelines never landed"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Asks renderers to build the glass shader's general pipelines on their
+/// background compilers: a new material stands in with them while its own
+/// compile, where without them it waits for its own.
+fn request_glass_general() {
+    cranpose_ui_graphics::request_shader_warm_ups([ShaderTarget::Page, ShaderTarget::Layer].map(
+        |target| ShaderWarmUp {
+            shader: RuntimeShader::new(LIQUID_GLASS_WGSL),
+            target,
+        },
+    ));
+}
+
+/// Once the glass shader's general pipeline is built, a new card material
+/// draws with it, counted as fallback draws, and every later frame lands on
+/// the same bytes until its specialized pipelines take over in the
+/// background.
 #[test]
 fn a_glass_draws_with_its_general_pipeline_until_the_specialization_lands() {
-    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+    request_glass_general();
+    let Ok((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background() else {
         eprintln!("skipping glass pipeline readiness: no headless renderer");
         return;
     };
     let mut shell = card_shell(renderer, false);
-    let (first, first_stats) = capture_card_frame(&mut shell).expect("first capture");
+    support::wait_for_background_compiler_idle();
+    let (first, first_stats) = first_drawn_frame(&mut shell);
     assert!(
         first_stats.shader_pipeline_fallback_draws > 0,
         "the first frame must not wait for the specializations: {first_stats:?}"
@@ -394,12 +515,14 @@ fn a_scissor_split_glass_matches_whole_quads_byte_for_byte_and_shades_fewer_pixe
 
 #[test]
 fn a_floating_button_keeps_its_picture_when_specialization_arrives() {
-    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+    request_glass_general();
+    let Ok((_lock, renderer)) = support::headless_renderer_parts_compiling_in_background() else {
         eprintln!("skipping floating glass parity: no headless renderer");
         return;
     };
     let mut shell = card_shell(renderer, true);
-    let (first, first_stats) = capture_card_frame(&mut shell).expect("first capture");
+    support::wait_for_background_compiler_idle();
+    let (first, first_stats) = first_drawn_frame(&mut shell);
     assert!(first_stats.shader_pipeline_fallback_draws > 0);
     support::wait_for_background_compiler_idle();
     let (settled, settled_stats) = capture_card_frame(&mut shell).expect("settled capture");

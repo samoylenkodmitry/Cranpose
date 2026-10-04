@@ -148,6 +148,9 @@ pub struct FrameStatsSnapshot {
     pub shader_pipeline_fallback_draws: u32,
     /// Runtime shader draws using a completed specialized pipeline.
     pub shader_specialized_draws: u32,
+    /// Effects drawn as their placeholder, or left out, because no pipeline
+    /// they need had compiled yet.
+    pub placeholder_draws: u32,
     pub image_passes: u32,
     pub text_passes: u32,
     /// Shape, image, glyph and composite draws recorded this frame. The
@@ -401,6 +404,7 @@ pub(crate) struct FrameStats {
     pub depth_passes: Cell<u32>,
     pub shader_pipeline_fallback_draws: Cell<u32>,
     pub shader_specialized_draws: Cell<u32>,
+    pub placeholder_draws: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
     pub draw_calls: Cell<u32>,
@@ -785,6 +789,7 @@ impl FrameStats {
             pipelines_created: crate::render::pipelines_created(),
             shader_pipeline_fallback_draws: self.shader_pipeline_fallback_draws.get(),
             shader_specialized_draws: self.shader_specialized_draws.get(),
+            placeholder_draws: self.placeholder_draws.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
             draw_calls: self.draw_calls.get(),
@@ -860,6 +865,7 @@ impl FrameStats {
         self.depth_passes.set(0);
         self.shader_pipeline_fallback_draws.set(0);
         self.shader_specialized_draws.set(0);
+        self.placeholder_draws.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);
         self.draw_calls.set(0);

@@ -16,6 +16,7 @@ use cranpose_app_shell::{
     AppShell, FramePacingMode, FrameUpdateResult, RootId, SurfaceMut, default_root_key,
 };
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
+use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 use winit::{
     application::ApplicationHandler,
@@ -28,8 +29,8 @@ use winit::{
 
 #[cfg(feature = "robot")]
 use crate::robot::{
-    Robot, RobotChannel, RobotCommand, RobotResponse, RobotScreenshot, RobotTimelineAction,
-    char_to_key_code, extract_semantics, find_button_in_app, find_text_in_app,
+    Robot, RobotChannel, RobotCommand, RobotIdlePending, RobotResponse, RobotScreenshot,
+    RobotTimelineAction, char_to_key_code, extract_semantics, find_button_in_app, find_text_in_app,
     panic_payload_message, robot_key_code_and_text, robot_wait_for_idle_animation_loop_only,
 };
 use crate::{
@@ -6690,10 +6691,13 @@ impl ApplicationHandler for App {
                     && controller
                         .waiting_for_present_generation
                         .is_some_and(|target| self.presented_frame_generation < target);
-                let frame_only = needs_frame
-                    && !needs_update
-                    && !has_transient_frame_callbacks
-                    && !waiting_for_present;
+                let pending = RobotIdlePending {
+                    needs_frame,
+                    needs_update,
+                    transient_frame_callbacks: has_transient_frame_callbacks,
+                    waiting_for_present,
+                    awaits_pipelines: app.renderer().awaits_pipelines(),
+                };
                 let animation_loop_only = robot_wait_for_idle_animation_loop_only(
                     has_active_animations,
                     has_transient_frame_callbacks,
@@ -6701,11 +6705,11 @@ impl ApplicationHandler for App {
                     controller.idle_iterations,
                     controller.idle_structure_clean_frames,
                 );
-                if frame_only || animation_loop_only {
+                if pending.frame_only() || animation_loop_only {
                     controller.finish_idle_wait();
                     self.robot_visible_surface_dirty = false;
                     let _ = controller.tx.send(RobotResponse::Ok);
-                } else if !needs_frame && !has_transient_frame_callbacks && !waiting_for_present {
+                } else if pending.quiet() {
                     let mut finish_idle = true;
                     if needs_update {
                         let update_result = update_app_with_native_window_registry(app, &registry);
@@ -7083,16 +7087,46 @@ pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
     std::process::exit(0)
 }
 
+/// How long a robot screenshot waits for the pipelines its effects need.
+#[cfg(feature = "robot")]
+const ROBOT_PIPELINE_WAIT: Duration = Duration::from_secs(30);
+
+/// Captures the scene at `scale`, again until the capture draws no
+/// placeholder: a robot screenshot is the final picture, drawn once the
+/// pipelines its effects wait for have landed.
+#[cfg(feature = "robot")]
+fn capture_final_frame(
+    app: &mut AppShell<WgpuRenderer>,
+    width: u32,
+    height: u32,
+    scale: f32,
+) -> Result<cranpose_render_wgpu::CapturedFrame, String> {
+    let deadline = Instant::now() + ROBOT_PIPELINE_WAIT;
+    loop {
+        let captured = app
+            .renderer()
+            .capture_frame_with_scale(width, height, scale)
+            .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
+        let drew_placeholders = app
+            .renderer()
+            .last_frame_stats()
+            .is_some_and(|stats| stats.placeholder_draws > 0);
+        if !drew_placeholders || Instant::now() >= deadline {
+            return Ok(captured);
+        }
+        while app.renderer().awaits_pipelines() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
 #[cfg(feature = "robot")]
 fn capture_screenshot(app: &mut AppShell<WgpuRenderer>) -> Result<RobotScreenshot, String> {
     let logical_size = app.viewport_size();
     let (width, height, capture_scale) =
         resolve_robot_screenshot_params(app.buffer_size(), Some(logical_size));
 
-    let captured = app
-        .renderer()
-        .capture_frame_with_scale(width, height, capture_scale)
-        .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
+    let captured = capture_final_frame(app, width, height, capture_scale)?;
 
     let (logical_width, logical_height) = logical_size;
 
@@ -7114,10 +7148,7 @@ fn capture_screenshot_with_scale(
     let width = (logical_width * scale).ceil().max(1.0) as u32;
     let height = (logical_height * scale).ceil().max(1.0) as u32;
 
-    let captured = app
-        .renderer()
-        .capture_frame_with_scale(width, height, scale)
-        .map_err(|err| format!("Failed to capture GPU screenshot: {err:?}"))?;
+    let captured = capture_final_frame(app, width, height, scale)?;
 
     Ok(RobotScreenshot {
         width: captured.width,

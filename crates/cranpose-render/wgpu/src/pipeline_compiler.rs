@@ -1,9 +1,75 @@
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{
-    Arc, Mutex, PoisonError,
-    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock, PoisonError,
+    atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc::{self, Receiver, Sender},
 };
+
+/// Tells a renderer that drew a placeholder when a pipeline lands, so it
+/// draws again with the pipeline instead of the placeholder.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+pub(crate) struct Landing {
+    queued: AtomicU64,
+    built: AtomicU64,
+    awaited: AtomicBool,
+    landed: AtomicBool,
+    wake: OnceLock<Box<dyn Fn() + Send + Sync>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Landing {
+    /// The pipelines the background threads have built.
+    pub(crate) fn built(&self) -> u64 {
+        self.built.load(Ordering::Acquire)
+    }
+
+    /// Whether a queued pipeline has not been built yet.
+    pub(crate) fn in_flight(&self) -> bool {
+        self.queued.load(Ordering::Acquire) != self.built()
+    }
+
+    /// Waits for the next pipeline to land: a frame drew a placeholder.
+    /// One built since `since`, a count of [`Self::built`] the frame read
+    /// when it started, has landed already.
+    pub(crate) fn await_since(&self, since: u64) {
+        self.awaited.store(true, Ordering::Release);
+        if self.built() != since && self.awaited.swap(false, Ordering::AcqRel) {
+            self.landed.store(true, Ordering::Release);
+        }
+    }
+
+    /// Whether a pipeline landed since a frame drew a placeholder; reading
+    /// it clears it.
+    pub(crate) fn take_landed(&self) -> bool {
+        self.landed.swap(false, Ordering::AcqRel)
+    }
+
+    /// Calls `wake` when an awaited pipeline lands, from the thread that
+    /// built it. Only the first call installs.
+    pub(crate) fn wake_with(&self, wake: Box<dyn Fn() + Send + Sync>) {
+        let _ = self.wake.set(wake);
+    }
+
+    /// Whether a pipeline landed since a frame drew a placeholder.
+    pub(crate) fn landed(&self) -> bool {
+        self.landed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn has_wake(&self) -> bool {
+        self.wake.get().is_some()
+    }
+
+    fn after_build(&self) {
+        self.built.fetch_add(1, Ordering::AcqRel);
+        if self.awaited.swap(false, Ordering::AcqRel) {
+            self.landed.store(true, Ordering::Release);
+            if let Some(wake) = self.wake.get() {
+                wake();
+            }
+        }
+    }
+}
 
 /// How long the last handle waits for a lane to finish the pipeline it is
 /// building. A process that exits while a thread is inside the driver's
@@ -82,6 +148,7 @@ struct Workers {
     /// the handle is `Sync`; the last handle reads it without locking.
     finished: Mutex<Receiver<()>>,
     threads: usize,
+    landing: Arc<Landing>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -114,6 +181,7 @@ fn spawn_lane(
     threads: usize,
     stopped: &Arc<AtomicBool>,
     finished: &Sender<()>,
+    landing: &Arc<Landing>,
 ) -> std::io::Result<Sender<Job>> {
     let (jobs, queued) = mpsc::channel::<Job>();
     let queued = Arc::new(Mutex::new(queued));
@@ -121,6 +189,7 @@ fn spawn_lane(
         let queued = Arc::clone(&queued);
         let stopped = Arc::clone(stopped);
         let finished = finished.clone();
+        let landing = Arc::clone(landing);
         std::thread::Builder::new()
             .name(name.into())
             .spawn(move || {
@@ -134,6 +203,7 @@ fn spawn_lane(
                         break;
                     }
                     job();
+                    landing.after_build();
                 }
                 let _ = finished.send(());
             })?;
@@ -176,10 +246,17 @@ impl PipelineCompiler {
             let stopped = Arc::new(AtomicBool::new(false));
             let (finished_tx, finished) = mpsc::channel();
             let warm_up_threads = warm_up_threads();
-            let lanes =
-                spawn_lane("cranpose-pipelines", 1, &stopped, &finished_tx).and_then(|demanded| {
-                    spawn_lane("cranpose-warm-up", warm_up_threads, &stopped, &finished_tx)
-                        .map(|warm_up| (demanded, warm_up))
+            let landing = Arc::new(Landing::default());
+            let lanes = spawn_lane("cranpose-pipelines", 1, &stopped, &finished_tx, &landing)
+                .and_then(|demanded| {
+                    spawn_lane(
+                        "cranpose-warm-up",
+                        warm_up_threads,
+                        &stopped,
+                        &finished_tx,
+                        &landing,
+                    )
+                    .map(|warm_up| (demanded, warm_up))
                 });
             match lanes {
                 Ok((demanded, warm_up)) => Self {
@@ -189,6 +266,7 @@ impl PipelineCompiler {
                         stopped,
                         finished: Mutex::new(finished),
                         threads: 1 + warm_up_threads,
+                        landing,
                     })),
                 },
                 Err(error) => {
@@ -201,6 +279,15 @@ impl PipelineCompiler {
         {
             Self::inactive()
         }
+    }
+
+    /// Where the background threads say a pipeline landed; none for an
+    /// inactive compiler, whose pipelines build where they are needed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn landing(&self) -> Option<Arc<Landing>> {
+        self.workers
+            .as_ref()
+            .map(|workers| Arc::clone(&workers.landing))
     }
 
     pub(crate) fn is_active(&self) -> bool {
@@ -224,6 +311,7 @@ impl PipelineCompiler {
                 CompileLane::Demanded => workers.demanded.as_ref(),
                 CompileLane::WarmUp => workers.warm_up.as_ref(),
             };
+            workers.landing.queued.fetch_add(1, Ordering::AcqRel);
             if jobs.is_none_or(|jobs| jobs.send(Box::new(job)).is_err()) {
                 log::error!("[gpu-pipeline] background compiler stopped unexpectedly");
             }

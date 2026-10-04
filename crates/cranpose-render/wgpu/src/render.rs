@@ -2921,6 +2921,17 @@ pub struct GpuRenderer {
     recent_after_update: Option<Arc<crate::pipeline_records::PipelineRecords>>,
     /// What this renderer draws with, for the next launches.
     recorder: crate::pipeline_recorder::PipelineRecorder,
+    /// Where the background compiler says a pipeline a placeholder waited
+    /// for landed.
+    #[cfg(not(target_arch = "wasm32"))]
+    landing: Option<Arc<crate::pipeline_compiler::Landing>>,
+    /// The pipelines the background threads had built when this frame
+    /// started.
+    #[cfg(not(target_arch = "wasm32"))]
+    built_at_frame_start: u64,
+    /// Whether this frame drew a placeholder in place of an effect whose
+    /// pipelines were compiling.
+    pub(crate) drew_placeholder: bool,
     shape_pipelines: ShapePipelines,
     /// Image and glyph pipelines for passes without and with a depth buffer.
     image_pipeline: [FixedPipeline; 4],
@@ -3147,8 +3158,7 @@ impl GpuRenderer {
 
         let effects_started = Instant::now();
         let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
-        #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
-        let mut effect_renderer = EffectRenderer::new(
+        let effect_renderer = EffectRenderer::new(
             &device,
             pipeline_compiler.clone(),
             pipeline_cache.clone(),
@@ -3198,14 +3208,6 @@ impl GpuRenderer {
                 .filter_map(ShapePipelineKey::from_bits),
             recorder.clone(),
         );
-        #[cfg(not(target_arch = "wasm32"))]
-        effect_renderer.warm_recorded_shaders(
-            records
-                .shaders
-                .iter()
-                .filter(|shader| shader.first_screen)
-                .map(|shader| &shader.entry),
-        );
         let image_layouts = [
             Some(&uniform_bind_group_layout),
             Some(&image_bind_group_layout),
@@ -3243,6 +3245,11 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             recent_after_update: updated.then(|| Arc::clone(&records)),
             recorder,
+            #[cfg(not(target_arch = "wasm32"))]
+            landing: pipeline_compiler.landing(),
+            #[cfg(not(target_arch = "wasm32"))]
+            built_at_frame_start: 0,
+            drew_placeholder: false,
             shape_pipelines,
             image_pipeline: [
                 FixedPipeline::new("image/src-over"),
@@ -3324,14 +3331,9 @@ impl GpuRenderer {
             frame_count: 0,
             shader_warm_ups_queued: 0,
         };
-        renderer.warm_requested_shaders();
         #[cfg(not(target_arch = "wasm32"))]
-        renderer.warm_fixed_pipelines(&|label| {
-            records
-                .fixed
-                .iter()
-                .any(|fixed| fixed.first_screen && fixed.entry == label)
-        });
+        renderer.warm_first_screen(&records, updated);
+        renderer.warm_requested_shaders();
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms)",
             adapter_backend,
@@ -3339,6 +3341,35 @@ impl GpuRenderer {
             effects_ms,
         );
         renderer
+    }
+
+    /// Prepares the first screen the last launches recorded. The first frame
+    /// waits for its shapes and fixed pipelines, but draws placeholders for
+    /// runtime shaders that have not compiled: those queue behind, since a
+    /// Mali driver compiles largely one pipeline at a time. The driver cache
+    /// this build wrote holds what its launches drew, so those draw from it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn warm_first_screen(
+        &mut self,
+        records: &crate::pipeline_records::PipelineRecords,
+        updated: bool,
+    ) {
+        self.warm_fixed_pipelines(&|label| {
+            records
+                .fixed
+                .iter()
+                .any(|fixed| fixed.first_screen && fixed.entry == label)
+        });
+        if !updated && self.pipeline_cache.is_some() {
+            self.effect_renderer.trust_cached(records);
+        }
+        self.effect_renderer.warm_first_screen_shaders(
+            records
+                .shaders
+                .iter()
+                .filter(|shader| shader.first_screen)
+                .map(|shader| &shader.entry),
+        );
     }
 
     fn ensure_shape_pipeline(&mut self, key: ShapePipelineKey, vertices: u64) {
@@ -3848,6 +3879,8 @@ impl GpuRenderer {
         self.warm_requested_shaders();
         self.shape_pipelines.begin_frame();
         self.recorder.begin_frame();
+        self.effect_renderer.shader_cache.begin_frame();
+        self.begin_placeholder_frame();
         self.viewport_uniforms.begin_frame();
         self.run_store.begin_frame(gpu_stats_enabled());
         self.begin_text_glyph_run_frame();
@@ -3964,7 +3997,71 @@ impl GpuRenderer {
     }
 
     pub fn needs_frame_warmup(&self) -> bool {
-        self.pending_frame_warmup_frames > 0
+        self.pending_frame_warmup_frames > 0 || self.placeholder_awaits_frame()
+    }
+
+    /// Whether a frame must follow to replace a placeholder: a pipeline it
+    /// waited for landed, or, with nothing to wake the app when one does,
+    /// this frame drew one.
+    fn placeholder_awaits_frame(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(landing) = &self.landing {
+            return landing.landed() || (self.drew_placeholder && !landing.has_wake());
+        }
+        self.drew_placeholder
+    }
+
+    /// Starts a frame: once a pipeline a placeholder waited for has landed,
+    /// the retained layers, which may hold that placeholder, are dropped.
+    fn begin_placeholder_frame(&mut self) {
+        self.drew_placeholder = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(landing) = &self.landing {
+            self.built_at_frame_start = landing.built();
+            if landing.take_landed() {
+                self.layer_cache.clear();
+            }
+        }
+    }
+
+    /// Notes an effect drawn as its placeholder, or left out, while its
+    /// pipelines compile, and waits for the next one to land.
+    pub(crate) fn note_placeholder(&mut self) {
+        self.drew_placeholder = true;
+        self.recorder.hold_first_screen();
+        self.frame_stats
+            .placeholder_draws
+            .set(self.frame_stats.placeholder_draws.get() + 1);
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(landing) = &self.landing {
+            landing.await_since(self.built_at_frame_start);
+        }
+    }
+
+    /// Whether the last frame drew a placeholder and pipelines are still
+    /// compiling, so its picture is not final yet.
+    pub(crate) fn awaits_pipelines(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(landing) = &self.landing {
+            return self.drew_placeholder && landing.in_flight();
+        }
+        self.drew_placeholder
+    }
+
+    /// The compiler's account of the pipelines it builds, for a runtime that
+    /// reads it off the present thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn landing(&self) -> Option<Arc<crate::pipeline_compiler::Landing>> {
+        self.landing.clone()
+    }
+
+    /// Calls `wake` from the compiling thread when a pipeline a placeholder
+    /// waited for lands, so an app with nothing else to draw draws again.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn wake_on_landing(&self, wake: Box<dyn Fn() + Send + Sync>) {
+        if let Some(landing) = &self.landing {
+            landing.wake_with(wake);
+        }
     }
 
     pub fn debug_cpu_allocation_stats(&self) -> DebugCpuAllocationStats {
@@ -4237,6 +4334,7 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         if submitted {
             self.recorder.note_frame_drawn();
+            self.effect_renderer.warm_after_first_frame();
             if let Some(records) = self.recent_after_update.take() {
                 self.warm_recent(&records);
             }
@@ -4339,6 +4437,17 @@ impl GpuRenderer {
         });
         if let Some(entry) = key.and_then(|key| self.shadow_surface_cache.get(&key)) {
             return Some((Rc::clone(&entry.target), true, content));
+        }
+        // A shadow whose blur compiles is left out until the blur lands.
+        if !self.effect_renderer.blur_draws_now(
+            &self.device,
+            TileMode::Decal,
+            (source_device.width, source_device.height),
+            pixel_radius,
+            pixel_radius,
+        ) {
+            self.note_placeholder();
+            return None;
         }
         if !shape_only {
             self.frame_stats.record_shadow_text_blur_fallback();

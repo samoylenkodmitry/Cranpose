@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use arrayvec::ArrayVec;
 
-use crate::{LayerShape, Rect};
+use crate::{Color, LayerShape, Rect};
 
 const RUNTIME_SHADER_INLINE_UNIFORMS: usize = 16;
 
@@ -132,6 +132,28 @@ pub struct RuntimeShader {
     position_independent: bool,
     preserves_transparency: bool,
     domains: Option<Box<ShaderDomains>>,
+    placeholder: Option<ShaderPlaceholder>,
+}
+
+/// What a renderer draws in place of a shader's effect while the shader's
+/// pipelines compile, so no frame waits for them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShaderPlaceholder {
+    /// The premultiplied colour of the fill.
+    pub color: Color,
+    /// The rounded rectangle the fill covers; `None` fills the layer's own
+    /// shape.
+    pub shape: Option<PlaceholderShape>,
+}
+
+/// A rounded rectangle within a layer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaceholderShape {
+    /// The rectangle, in fractions of the layer's width and height.
+    pub bounds: Rect,
+    /// The corner radius in the layer's units, kept within half the
+    /// rectangle's shorter side: `f32::MAX` makes a capsule.
+    pub corner_radius: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -152,9 +174,7 @@ impl ShaderSpecialization {
         *self.overrides_hash.get_or_init(|| {
             #[cfg(test)]
             OVERRIDE_HASH_COMPUTATIONS.with(|count| count.set(count.get() + 1));
-            hash_shader_bytes(self.overrides.iter().flat_map(|(name, value)| {
-                name.bytes().chain([0]).chain(value.to_bits().to_le_bytes())
-            }))
+            runtime_shader_overrides_hash(self.overrides.iter().copied())
         })
     }
 }
@@ -458,6 +478,7 @@ impl RuntimeShader {
             position_independent: false,
             preserves_transparency: false,
             domains: None,
+            placeholder: None,
         }
     }
 
@@ -759,6 +780,20 @@ impl RuntimeShader {
         self.preserves_transparency
     }
 
+    /// Declares what a renderer draws in place of a backdrop drawn by this
+    /// shader, or of a layer the shader is all of, while the shader's
+    /// pipelines compile. Without one, such an effect draws nothing until
+    /// they are ready; an effect over a layer's content draws the content
+    /// without the effect.
+    pub fn set_placeholder(&mut self, placeholder: Option<ShaderPlaceholder>) {
+        self.placeholder = placeholder;
+    }
+
+    /// What the effect draws while its pipelines compile.
+    pub fn placeholder(&self) -> Option<ShaderPlaceholder> {
+        self.placeholder
+    }
+
     /// Declares the low-frequency copies of its source the shader reads
     /// through the reserved substrate region slots, in slot order. Only a
     /// batched shader packed with its stage is handed them; a shader
@@ -915,6 +950,7 @@ impl PartialEq for RuntimeShader {
             && self.substrates() == other.substrates()
             && self.draw_split() == other.draw_split()
             && self.domains == other.domains
+            && self.placeholder == other.placeholder
     }
 }
 
@@ -922,6 +958,18 @@ impl PartialEq for RuntimeShader {
 /// `source`.
 pub fn runtime_shader_source_hash(source: &str) -> u64 {
     hash_shader_bytes(source.bytes())
+}
+
+/// The hash [`DrawSpecialization::overrides_hash`] gives a non-empty
+/// override set, its overrides in name order.
+pub fn runtime_shader_overrides_hash<'a>(
+    overrides: impl IntoIterator<Item = (&'a str, f64)>,
+) -> u64 {
+    hash_shader_bytes(
+        overrides
+            .into_iter()
+            .flat_map(|(name, value)| name.bytes().chain([0]).chain(value.to_bits().to_le_bytes())),
+    )
 }
 
 fn hash_shader_bytes(bytes: impl IntoIterator<Item = u8>) -> u64 {
@@ -1069,6 +1117,16 @@ pub enum RenderEffect {
 }
 
 impl RenderEffect {
+    /// What the effect draws while its pipelines compile: the placeholder
+    /// of the shader that draws last, if it has one.
+    pub fn placeholder(&self) -> Option<ShaderPlaceholder> {
+        match self {
+            RenderEffect::Shader { shader } => shader.placeholder(),
+            RenderEffect::Chain { second, .. } => second.placeholder(),
+            _ => None,
+        }
+    }
+
     /// Create a blur effect with equal radius in both directions.
     pub fn blur(radius: f32) -> Self {
         Self::blur_with_edge_treatment(radius, TileMode::default())

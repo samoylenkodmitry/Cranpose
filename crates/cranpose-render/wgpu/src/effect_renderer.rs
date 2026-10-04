@@ -639,7 +639,7 @@ impl ReservedShaderUniforms {
 /// The device pixels of the layer an effect draws, however much of it the
 /// target clips: it picks the draw's specialization, which must not flip
 /// while the layer scrolls across the target's edge.
-fn layer_pixels(layer_pixel_rect: [f32; 4]) -> u64 {
+pub(crate) fn layer_pixels(layer_pixel_rect: [f32; 4]) -> u64 {
     let [_, _, width, height] = layer_pixel_rect;
     (width.max(0.0).round() as u64).saturating_mul(height.max(0.0).round() as u64)
 }
@@ -969,6 +969,15 @@ fn dst_out_blend_state() -> wgpu::BlendState {
 /// it reads so the background compiler can run it as well as the frame.
 #[cfg(not(target_arch = "wasm32"))]
 type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + Send + 'static>;
+
+/// The framework's own runtime shader sources, which recorded pipelines are
+/// rebuilt from.
+#[cfg(not(target_arch = "wasm32"))]
+fn framework_shader_sources() -> impl Iterator<Item = &'static str> {
+    cranpose_ui_graphics::BUILTIN_RUNTIME_SHADER_SOURCES
+        .into_iter()
+        .chain([crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER])
+}
 #[cfg(target_arch = "wasm32")]
 type FixedPipelineJob = Box<dyn FnOnce() -> wgpu::RenderPipeline + 'static>;
 
@@ -1267,19 +1276,183 @@ impl EffectRenderer {
         }
     }
 
-    /// Queues the runtime shader pipelines the last launch drew its first
-    /// screen with, those of the framework's own shaders.
+    /// Queues the recorded runtime shader pipelines of the framework's own
+    /// shaders.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_recorded_shaders<'a>(
         &mut self,
         records: impl IntoIterator<Item = &'a crate::pipeline_records::ShaderPipelineRecord>,
     ) {
-        self.shader_cache.warm_recorded(
-            records,
-            cranpose_ui_graphics::BUILTIN_RUNTIME_SHADER_SOURCES
-                .into_iter()
-                .chain([crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER]),
-        );
+        self.shader_cache
+            .warm_recorded(records, framework_shader_sources());
+    }
+
+    /// Queues the runtime shader pipelines the last launch drew its first
+    /// screen with, behind the stand-ins they share.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_first_screen_shaders<'a>(
+        &mut self,
+        records: impl IntoIterator<Item = &'a crate::pipeline_records::ShaderPipelineRecord>,
+    ) {
+        self.shader_cache
+            .warm_first_screen(records, framework_shader_sources());
+    }
+
+    /// Whether `effect` over a `source_size` source draws now without
+    /// waiting for a pipeline to compile: its shaders' pipelines (its last
+    /// one `composited` over what is beneath, else drawn in a pass of its
+    /// own), and the blur pipelines its blurs and substrates draw with. What
+    /// is missing is queued, so a later frame finds it.
+    pub(crate) fn effect_ready(
+        &mut self,
+        device: &wgpu::Device,
+        effect: &RenderEffect,
+        layer_pixels: u64,
+        source_size: (u32, u32),
+        composited: bool,
+    ) -> bool {
+        match effect {
+            RenderEffect::Shader { shader } => {
+                let specialization = shader.draw_specialization(layer_pixels);
+                let (mode, variants) = if composited {
+                    (
+                        RuntimeShaderPipelineMode::PremultipliedSrcOver,
+                        shader_draw_variants(specialization),
+                    )
+                } else {
+                    (RuntimeShaderPipelineMode::Replace, WHOLE_DRAW)
+                };
+                let mut ready = true;
+                for &variant in variants {
+                    ready &= self
+                        .shader_cache
+                        .ready_to_draw(shader, specialization, mode, variant);
+                }
+                for &substrate in shader.substrates() {
+                    ready &= self.substrate_ready(device, substrate, source_size);
+                }
+                ready
+            }
+            RenderEffect::Blur {
+                radius_x,
+                radius_y,
+                edge_treatment,
+            } => self.blur_draws_now(device, *edge_treatment, source_size, *radius_x, *radius_y),
+            RenderEffect::Offset { .. } => {
+                self.offset_pipeline
+                    .ready_or_queue(&self.compiler, self.adapter_backend, || {
+                        self.offset_pipeline_job(device)
+                    })
+            }
+            RenderEffect::Chain { first, second } => {
+                let first = self.effect_ready(device, first, layer_pixels, source_size, false);
+                let second =
+                    self.effect_ready(device, second, layer_pixels, source_size, composited);
+                first & second
+            }
+        }
+    }
+
+    /// Whether a blur by `radius_x` and `radius_y` of a `source_size` source
+    /// draws now; what it misses is queued.
+    pub(crate) fn blur_draws_now(
+        &self,
+        device: &wgpu::Device,
+        edge_treatment: TileMode,
+        source_size: (u32, u32),
+        radius_x: f32,
+        radius_y: f32,
+    ) -> bool {
+        if radius_x <= 0.0 && radius_y <= 0.0 {
+            return true;
+        }
+        let tile_mode = BLUR_TILE_MODES
+            .iter()
+            .position(|mode| *mode == edge_treatment)
+            .unwrap_or(0);
+        let (width, height) = source_size;
+        let scratch = blur_scratch_size(radius_x, radius_y, width, height);
+        self.blur_pipelines_ready(device, tile_mode, source_size, scratch)
+    }
+
+    /// Whether the substrate `spec` of a `source_size` source draws now.
+    fn substrate_ready(
+        &self,
+        device: &wgpu::Device,
+        spec: SubstrateSpec,
+        source_size: (u32, u32),
+    ) -> bool {
+        let clamp = 0;
+        match spec {
+            SubstrateSpec::Mean => self.blur_ready(device, BlurPipeline::Mean),
+            SubstrateSpec::Average { block } => {
+                block <= 1
+                    || self.blur_ready(
+                        device,
+                        BlurPipeline::Downsample {
+                            block,
+                            tile_mode: clamp,
+                        },
+                    )
+            }
+            SubstrateSpec::Blur { radius_px } => {
+                let (width, height) = source_size;
+                let scratch = substrate_scratch_size(radius_px, width, height);
+                self.blur_pipelines_ready(device, clamp, source_size, scratch)
+            }
+        }
+    }
+
+    /// Whether a blur from a `source_size` source into `scratch` draws now:
+    /// its kernel, and the downsample of its block when the scratch is
+    /// coarser than the source.
+    fn blur_pipelines_ready(
+        &self,
+        device: &wgpu::Device,
+        tile_mode: usize,
+        (width, height): (u32, u32),
+        (scratch_width, scratch_height): (u32, u32),
+    ) -> bool {
+        let block = blur_block((0, 0, width, height), (0, 0, scratch_width, scratch_height));
+        let kernel = self.blur_ready(device, BlurPipeline::Kernel { tile_mode });
+        let downsample =
+            block <= 1 || self.blur_ready(device, BlurPipeline::Downsample { block, tile_mode });
+        kernel & downsample
+    }
+
+    fn blur_ready(&self, device: &wgpu::Device, pipeline: BlurPipeline) -> bool {
+        self.blur_resource(pipeline)
+            .ready_or_queue(&self.compiler, self.adapter_backend, || {
+                self.blur_job(device, pipeline)
+            })
+    }
+
+    /// Queues the recorded pipelines a stand-in drew the first frame for.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn warm_after_first_frame(&mut self) {
+        self.shader_cache.queue_after_first_frame();
+    }
+
+    /// Trusts the loaded driver cache with the pipelines `records` names,
+    /// which this build's launches drew: a frame needing one builds it as a
+    /// cache hit instead of drawing a placeholder.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn trust_cached(&mut self, records: &crate::pipeline_records::PipelineRecords) {
+        self.shader_cache
+            .trust_cached(records.shaders.iter().map(|shader| &shader.entry));
+        let blurs = (0..BLUR_TILE_MODES.len())
+            .flat_map(blur_family)
+            .chain([BlurPipeline::Mean])
+            .map(|blur| self.blur_resource(blur));
+        for pipeline in blurs.chain([&self.offset_pipeline]) {
+            if records
+                .fixed
+                .iter()
+                .any(|fixed| fixed.entry == pipeline.label())
+            {
+                pipeline.trust_cached();
+            }
+        }
     }
 
     /// Queues the fixed pipelines whose labels `wanted` accepts.

@@ -438,20 +438,28 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
     runtime.pump();
     assert_eq!(renderer.drain_present_returns(), 1);
 
+    // The shadow waits for its blur, or misses the shadow cache when the
+    // blur was built: either asks for another frame, the first from the
+    // compiling thread once the blur lands.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !renderer.needs_frame_warmup() {
+        assert!(
+            Instant::now() < deadline,
+            "the shadow's first frame must ask for the frame after it"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
     let (atomic_warmup, _, _) = renderer
         .present_status_snapshot_for_tests()
         .expect("threaded mode must expose the status snapshot");
-    assert!(
-        atomic_warmup,
-        "the first shadow frame's cache miss must raise the warmup snapshot"
-    );
+    assert!(atomic_warmup);
     assert_eq!(
         renderer.needs_frame_warmup(),
         atomic_warmup,
         "the producer trait read must be exactly the atomic"
     );
 
-    for _ in 0..4 {
+    for _ in 0..6 {
         if !renderer.needs_frame_warmup() {
             break;
         }
