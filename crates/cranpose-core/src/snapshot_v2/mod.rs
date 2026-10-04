@@ -231,7 +231,7 @@ impl AnySnapshot {
             AnySnapshot::Mutable(s) => AnySnapshot::Mutable(s.root_mutable()),
             AnySnapshot::NestedReadonly(s) => AnySnapshot::NestedReadonly(s.root_nested_readonly()),
             AnySnapshot::NestedMutable(s) => AnySnapshot::Mutable(s.root_mutable()),
-            AnySnapshot::Global(s) => AnySnapshot::Global(s.root_global()),
+            AnySnapshot::Global(_) => AnySnapshot::Global(GlobalSnapshot::get_or_create()),
             AnySnapshot::TransparentMutable(s) => {
                 AnySnapshot::TransparentMutable(s.root_transparent_mutable())
             }

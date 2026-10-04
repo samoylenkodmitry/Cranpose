@@ -1,6 +1,18 @@
 #![doc = include_str!("../README.md")]
 
 /// Host-provided accessibility preferences shared by animation and rendering.
+///
+/// ```
+/// use cranpose_ui_graphics::accessibility::{
+///     AccessibilityOptions, platform_accessibility_options, set_platform_accessibility_options,
+/// };
+///
+/// set_platform_accessibility_options(AccessibilityOptions {
+///     reduce_motion: true,
+///     ..AccessibilityOptions::default()
+/// });
+/// assert!(platform_accessibility_options().reduce_motion);
+/// ```
 pub mod accessibility;
 
 // A framework shader as the build script wrote it: `shaders/NAME` without

@@ -86,12 +86,8 @@ impl GlobalSnapshot {
         false
     }
 
-    pub fn root_global(&self) -> Rc<Self> {
-        GlobalSnapshot::get_or_create()
-    }
-
     pub fn enter<T>(&self, f: impl FnOnce() -> T) -> T {
-        enter_snapshot_scope(AnySnapshot::Global(self.root_global()), f)
+        enter_snapshot_scope(AnySnapshot::Global(Self::get_or_create()), f)
     }
 
     pub fn take_nested_snapshot(
@@ -164,7 +160,10 @@ impl GlobalSnapshot {
         self.nested_count.set(self.nested_count.get() + 1);
         self.state.add_pending_child(new_id);
 
-        child.set_on_dispose(clear_nested_child_on_dispose(&self.root_global(), new_id));
+        child.set_on_dispose(clear_nested_child_on_dispose(
+            &Self::get_or_create(),
+            new_id,
+        ));
 
         child
     }
