@@ -1180,6 +1180,64 @@ fn record_presented_frame(
     }
 }
 
+/// Keeps the driver's compiled pipelines in the app's data directory,
+/// `data_path`, unless a directory is named already.
+pub(crate) fn keep_pipeline_cache_in(data_path: &std::path::Path) {
+    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
+        let cache_dir = data_path.join("cranpose_gpu");
+        cranpose_render_wgpu::set_debug_toggle_os(
+            "CRANPOSE_PIPELINE_CACHE_DIR",
+            Some(cache_dir.as_os_str()),
+        );
+    }
+}
+
+/// Names the pipeline cache file for the GPU and driver `adapter_info`
+/// describes in the cache directory, unless a file is named already: a
+/// driver update leaves the old driver's pipelines behind.
+pub(crate) fn name_pipeline_cache_file(adapter_info: &wgpu::AdapterInfo) {
+    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_some() {
+        return;
+    }
+    let Some(cache_dir) = cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR")
+    else {
+        return;
+    };
+    let mut driver_hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in adapter_info
+        .driver
+        .bytes()
+        .chain(adapter_info.driver_info.bytes())
+    {
+        driver_hash ^= u64::from(byte);
+        driver_hash = driver_hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let file_name = format!(
+        "pipeline_cache_v1_{:04x}_{:04x}_{driver_hash:016x}.bin",
+        adapter_info.vendor, adapter_info.device,
+    );
+    let file_path = std::path::Path::new(&cache_dir).join(file_name);
+    cranpose_render_wgpu::set_debug_toggle_os(
+        "CRANPOSE_PIPELINE_CACHE_FILE",
+        Some(file_path.as_os_str()),
+    );
+}
+
+/// The device Cranpose asks an Android adapter for.
+pub(crate) fn android_device(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+    wgpu::DeviceDescriptor {
+        label: Some("Android Device"),
+        // Display timing lets the frame pacer see when frames reach the
+        // screen; see `android_display_timing`.
+        required_features: cranpose_render_wgpu::optional_device_features(adapter)
+            | (adapter.features() & wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING),
+        required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
+        experimental_features: wgpu::ExperimentalFeatures::disabled(),
+        memory_hints: crate::gpu_limits::mobile_memory_hints(),
+        trace: wgpu::Trace::Off,
+    }
+}
+
 struct AndroidGpuSetup {
     resources: GpuResources,
     surface: Option<wgpu::Surface<'static>>,
@@ -1526,41 +1584,8 @@ fn create_android_gpu_resources(
     log::info!("Found adapter: {:?}", adapter_info.backend);
     let adapter = Arc::new(adapter);
 
-    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_none()
-        && let Some(cache_dir) =
-            cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR")
-    {
-        let mut driver_hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in adapter_info
-            .driver
-            .bytes()
-            .chain(adapter_info.driver_info.bytes())
-        {
-            driver_hash ^= u64::from(byte);
-            driver_hash = driver_hash.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        let file_name = format!(
-            "pipeline_cache_v1_{:04x}_{:04x}_{driver_hash:016x}.bin",
-            adapter_info.vendor, adapter_info.device,
-        );
-        let file_path = std::path::Path::new(&cache_dir).join(file_name);
-        cranpose_render_wgpu::set_debug_toggle_os(
-            "CRANPOSE_PIPELINE_CACHE_FILE",
-            Some(file_path.as_os_str()),
-        );
-    }
-
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("Android Device"),
-        // Display timing lets the frame pacer see when frames reach the
-        // screen; see `android_display_timing`.
-        required_features: cranpose_render_wgpu::optional_device_features(&adapter)
-            | (adapter.features() & wgpu::Features::VULKAN_GOOGLE_DISPLAY_TIMING),
-        required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: crate::gpu_limits::mobile_memory_hints(),
-        trace: wgpu::Trace::Off,
-    }))?;
+    name_pipeline_cache_file(&adapter_info);
+    let (device, queue) = pollster::block_on(adapter.request_device(&android_device(&adapter)))?;
 
     let device = Arc::new(device);
     let queue = Arc::new(queue);
@@ -1888,20 +1913,14 @@ fn set_android_window_layout_px(
     })
 }
 
-const DEFAULT_LOG_TAG: &str = "Cranpose";
+pub(crate) const DEFAULT_LOG_TAG: &str = "Cranpose";
 
-/// **Note:** Applications should use `AppLauncher` instead of calling this directly.
-pub fn run(
-    app: android_activity::AndroidApp,
-    settings: AppSettings,
-    content: impl FnMut() + 'static,
-) {
-    use android_activity::{MainEvent, PollEvent};
-
+/// Sends the process's logs to logcat under `tag`, once.
+pub(crate) fn init_logging(tag: &str) {
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
-            .with_tag(settings.log_tag.as_deref().unwrap_or(DEFAULT_LOG_TAG))
+            .with_tag(tag)
             .with_filter(
                 android_logger::FilterBuilder::new()
                     .filter_level(log::LevelFilter::Info)
@@ -1912,6 +1931,17 @@ pub fn run(
                     .build(),
             ),
     );
+}
+
+/// **Note:** Applications should use `AppLauncher` instead of calling this directly.
+pub fn run(
+    app: android_activity::AndroidApp,
+    settings: AppSettings,
+    content: impl FnMut() + 'static,
+) {
+    use android_activity::{MainEvent, PollEvent};
+
+    init_logging(settings.log_tag.as_deref().unwrap_or(DEFAULT_LOG_TAG));
 
     crate::android_frame_telemetry::seed_env_from_system_properties();
 
@@ -1920,14 +1950,8 @@ pub fn run(
 
     cranpose_render_wgpu::pin_current_thread_to_fast_cores("producer");
 
-    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none()
-        && let Some(data_path) = app.internal_data_path()
-    {
-        let cache_dir = data_path.join("cranpose_gpu");
-        cranpose_render_wgpu::set_debug_toggle_os(
-            "CRANPOSE_PIPELINE_CACHE_DIR",
-            Some(cache_dir.as_os_str()),
-        );
+    if let Some(data_path) = app.internal_data_path() {
+        keep_pipeline_cache_in(&data_path);
     }
 
     let present_thread = crate::android_present_thread::android_uses_present_thread(
