@@ -50,10 +50,12 @@ snap
 ) > "$LATENCY_LOG" &
 POLLER=$!
 i=0
+read_node() { cat "$1" 2>/dev/null || echo -; }
 while [ $i -lt $SAMPLES ]; do
   sleep $INTERVAL
-  # Current clocks, then the caps thermal management applies to them.
-  echo "F $(cat /sys/class/devfreq/gpufreq/cur_freq) $(cat /sys/class/devfreq/ddrfreq/cur_freq) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq) $(cat /sys/devices/system/cpu/cpu6/cpufreq/scaling_cur_freq) $(cat /sys/class/devfreq/gpufreq/max_freq) $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq) $(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq) $(cat /sys/devices/system/cpu/cpu6/cpufreq/scaling_max_freq)"
+  # Current clocks, then the caps thermal management applies to them; a
+  # node the shell cannot read (the CPU caps, after some reboots) is "-".
+  echo "F $(read_node /sys/class/devfreq/gpufreq/cur_freq) $(read_node /sys/class/devfreq/ddrfreq/cur_freq) $(read_node /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) $(read_node /sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq) $(read_node /sys/devices/system/cpu/cpu6/cpufreq/scaling_cur_freq) $(read_node /sys/class/devfreq/gpufreq/max_freq) $(read_node /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq) $(read_node /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq) $(read_node /sys/devices/system/cpu/cpu6/cpufreq/scaling_max_freq)"
   if [ -r "$MALI_CLOCK" ]; then echo "G $(cat $MALI_CLOCK)"; fi
   i=$((i+1))
   if [ $((i % 4)) = 0 ]; then thermal; fi
