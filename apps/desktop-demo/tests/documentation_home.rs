@@ -20,24 +20,32 @@ fn semantic_bounds(root: &cranpose_testing::PlacedSemanticsNode, label: &str) ->
     found.expect("named surface in accessibility tree")
 }
 
-fn click_control_unsettled(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
-    robot.shell_mut().set_semantics_enabled(true);
-    robot.wait_for_idle();
-    let tree = cranpose_testing::placed_semantics_from_shell(robot.shell_mut())
-        .expect("control semantics");
-    let (_, height) = robot.viewport_size();
+fn semantics_target_bounds(
+    tree: &cranpose_testing::PlacedSemanticsNode,
+    label: &str,
+    max_y: f32,
+) -> Option<cranpose_ui::Rect> {
     let mut target = None;
     tree.visit(&mut |node| {
         let bounds = node.target_bounds();
         if node.clickable
             && node.label.as_deref() == Some(label)
             && bounds.y >= 0.0
-            && bounds.y + bounds.height <= height as f32
+            && bounds.y + bounds.height <= max_y
         {
             target = Some(bounds);
         }
     });
-    let Some(bounds) = target else {
+    target
+}
+
+fn click_control_unsettled(robot: &mut RobotTestRule<TestRenderer>, label: &str) -> bool {
+    robot.shell_mut().set_semantics_enabled(true);
+    robot.wait_for_idle();
+    let tree = cranpose_testing::placed_semantics_from_shell(robot.shell_mut())
+        .expect("control semantics");
+    let (_, height) = robot.viewport_size();
+    let Some(bounds) = semantics_target_bounds(&tree, label, height as f32) else {
         return false;
     };
     robot.click_at(
@@ -499,15 +507,148 @@ fn guide_pixel_shell(
     width: u32,
     height: u32,
 ) -> Option<cranpose_app_shell::AppShell<cranpose_render_wgpu::WgpuRenderer>> {
+    guide_pixel_shell_at_density(width, height, 1.0)
+}
+
+fn guide_pixel_shell_at_density(
+    width: u32,
+    height: u32,
+    density: f32,
+) -> Option<cranpose_app_shell::AppShell<cranpose_render_wgpu::WgpuRenderer>> {
     let renderer = crate::liquid_page_support::headless_renderer("Guide visual regression")?;
+    let physical_width = crate::liquid_page_support::physical(width, density);
+    let physical_height = crate::liquid_page_support::physical(height, density);
     Some(cranpose_app_shell::AppShell::new_with_size_and_density(
         renderer,
         cranpose_core::location_key(file!(), line!(), column!()),
         || combined_app_with_initial_tab(Some(DemoTab::Guide)),
-        (width, height),
+        (physical_width, physical_height),
         (width as f32, height as f32),
-        1.0,
+        density,
     ))
+}
+
+fn save_guide_capture(frame: &cranpose_render_wgpu::CapturedFrame, label: &str) {
+    let Some(directory) = std::env::var_os("CRANPOSE_GUIDE_CAPTURE_DIR") else {
+        return;
+    };
+    let directory = std::path::PathBuf::from(directory);
+    std::fs::create_dir_all(&directory).expect("guide capture directory");
+    image::save_buffer(
+        directory.join(format!("{label}.png")),
+        &frame.pixels,
+        frame.width,
+        frame.height,
+        image::ColorType::Rgba8,
+    )
+    .expect("guide capture");
+}
+
+fn capture_guide_diagnostic_frame(
+    shell: &mut cranpose_app_shell::AppShell<cranpose_render_wgpu::WgpuRenderer>,
+    logical_size: (u32, u32),
+    density: f32,
+    label: Option<&str>,
+) {
+    shell.update();
+    let width = crate::liquid_page_support::physical(logical_size.0, density);
+    let height = crate::liquid_page_support::physical(logical_size.1, density);
+    let frame = shell
+        .renderer()
+        .capture_frame_with_scale(width, height, density)
+        .expect("guide diagnostic frame");
+    let renderer = shell.renderer();
+    let stats = renderer
+        .last_frame_stats()
+        .expect("guide diagnostic renderer stats");
+    let nodes = renderer.debug_cpu_allocation_stats().scene_graph_node_count;
+    if let Some(label) = label {
+        eprintln!("[guide-render-work] {label}: nodes={nodes} stats={stats:?}");
+        for layer in stats.top_isolated_layers.iter().flatten() {
+            eprintln!(
+                "[guide-render-work]   isolated {}x{} at {:?}",
+                layer.width, layer.height, layer.logical_rect
+            );
+        }
+        save_guide_capture(&frame, &format!("guide-{label}"));
+    }
+}
+
+fn click_guide_control(
+    shell: &mut cranpose_app_shell::AppShell<cranpose_render_wgpu::WgpuRenderer>,
+    label: &str,
+) -> bool {
+    shell.set_semantics_enabled(true);
+    shell.update();
+    let Some(tree) = cranpose_testing::placed_semantics_from_shell(shell) else {
+        return false;
+    };
+    let Some(bounds) = semantics_target_bounds(&tree, label, f32::INFINITY) else {
+        return false;
+    };
+    shell.set_semantics_enabled(false);
+    shell.set_cursor(
+        bounds.x + bounds.width * 0.5,
+        bounds.y + bounds.height * 0.5,
+    );
+    shell.pointer_pressed();
+    shell.pointer_released();
+    shell.update();
+    true
+}
+
+#[test]
+#[ignore = "offline Guide render-work inventory; uses a headless WGPU adapter"]
+fn compact_guide_render_work_during_wheel_and_reader_scroll() {
+    const LOGICAL_SIZE: (u32, u32) = (393, 816);
+    const DENSITY: f32 = 2.75;
+
+    let Some(mut shell) = guide_pixel_shell_at_density(LOGICAL_SIZE.0, LOGICAL_SIZE.1, DENSITY)
+    else {
+        eprintln!("skipping Guide render-work inventory: no headless GPU");
+        return;
+    };
+
+    for _ in 0..8 {
+        capture_guide_diagnostic_frame(&mut shell, LOGICAL_SIZE, DENSITY, None);
+    }
+    capture_guide_diagnostic_frame(&mut shell, LOGICAL_SIZE, DENSITY, Some("wheel-rest"));
+
+    shell.set_cursor(80.0, 500.0);
+    assert!(
+        shell.pointer_scrolled(0.0, -120.0),
+        "Guide wheel scroll input"
+    );
+    capture_guide_diagnostic_frame(&mut shell, LOGICAL_SIZE, DENSITY, Some("wheel-scroll"));
+    capture_guide_diagnostic_frame(
+        &mut shell,
+        LOGICAL_SIZE,
+        DENSITY,
+        Some("wheel-scroll-next-frame"),
+    );
+
+    assert!(
+        click_guide_control(&mut shell, "Open guide"),
+        "open the Guide reader"
+    );
+    capture_guide_diagnostic_frame(&mut shell, LOGICAL_SIZE, DENSITY, Some("reader-initial"));
+    for _ in 0..4 {
+        capture_guide_diagnostic_frame(&mut shell, LOGICAL_SIZE, DENSITY, None);
+    }
+    capture_guide_diagnostic_frame(&mut shell, LOGICAL_SIZE, DENSITY, Some("reader-rest"));
+
+    shell.set_cursor(320.0, 620.0);
+    assert!(
+        shell.pointer_scrolled(0.0, -36.0),
+        "Guide reader scroll input"
+    );
+    capture_guide_diagnostic_frame(&mut shell, LOGICAL_SIZE, DENSITY, Some("reader-scroll"));
+    capture_guide_diagnostic_frame(
+        &mut shell,
+        LOGICAL_SIZE,
+        DENSITY,
+        Some("reader-scroll-next-frame"),
+    );
 }
 
 #[test]
@@ -531,18 +672,7 @@ fn mobile_wheel_ring_remains_visible_after_rotation() {
             .renderer()
             .capture_frame(390, 780)
             .expect("wheel pixels");
-        if let Some(directory) = std::env::var_os("CRANPOSE_GUIDE_CAPTURE_DIR") {
-            let directory = std::path::PathBuf::from(directory);
-            std::fs::create_dir_all(&directory).expect("guide capture directory");
-            image::save_buffer(
-                directory.join(format!("mobile-wheel-{step}.png")),
-                &frame.pixels,
-                390,
-                780,
-                image::ColorType::Rgba8,
-            )
-            .expect("guide capture");
-        }
+        save_guide_capture(&frame, &format!("mobile-wheel-{step}"));
         let rows = (130..480)
             .filter(|y| {
                 (150..390).any(|x| {

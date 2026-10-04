@@ -1722,25 +1722,6 @@ impl StageLayout {
                 .collect(),
         })
     }
-
-    fn restrict(&self, indices: &[usize]) -> Self {
-        Self {
-            atlas_sizes: self.atlas_sizes.clone(),
-            placements: indices
-                .iter()
-                .map(|index| self.placements[*index])
-                .collect(),
-            substrates: indices
-                .iter()
-                .map(|index| self.substrates[*index].clone())
-                .collect(),
-            side_sizes: self.side_sizes.clone(),
-            side: indices
-                .iter()
-                .map(|index| self.side[*index].clone())
-                .collect(),
-        }
-    }
 }
 
 /// What a stage renders beside its capture atlas: the texture holding the
@@ -2944,26 +2925,20 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         while start < pending.len() {
             let stage = pending[start].stage;
             let end = start + pending[start..].partition_point(|item| item.stage == stage);
-            pass.blockers = pending[start..]
-                .iter()
-                .map(|item| Blocker {
+            pass.blockers.clear();
+            pass.blockers
+                .extend(pending[start..].iter().map(|item| Blocker {
                     z: item.z,
                     rect: item.capture_rect,
-                })
-                .collect();
-            let layout = {
-                let stage_items: Vec<&PendingBackdrop<'_>> = pending[start..end].iter().collect();
-                self.plan_stage(&stage_items, pass.target_rect().pixel_size().0)
-            };
-            let (items, indices) = self.take_uncached(pass, &mut pending[start..end], &layout);
+                }));
+            let mut layout =
+                self.plan_stage(&pending[start..end], pass.target_rect().pixel_size().0);
+            let items = self.take_uncached(pass, &mut pending[start..end], &mut layout);
             if !items.is_empty() {
                 if diagnose {
                     log_stage(stage, &items);
                 }
-                let restricted =
-                    (indices.len() != layout.placements.len()).then(|| layout.restrict(&indices));
-                let mut outputs =
-                    self.run_stage(pass, &items, restricted.as_ref().unwrap_or(&layout))?;
+                let mut outputs = self.run_stage(pass, &items, &layout)?;
                 self.admit_backdrops(&items, &mut outputs);
                 pass.pending.extend(outputs);
             }
@@ -2977,23 +2952,31 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         &mut self,
         pass: &mut LayerPass<'_>,
         items: &'a mut [PendingBackdrop<'scene>],
-        layout: &StageLayout,
-    ) -> (Vec<&'a PendingBackdrop<'scene>>, Vec<usize>) {
-        let mut kept = Vec::with_capacity(items.len());
-        let mut indices = Vec::with_capacity(items.len());
-        let mut hits = Vec::new();
+        layout: &mut StageLayout,
+    ) -> Vec<&'a PendingBackdrop<'scene>> {
         for (index, item) in items.iter_mut().enumerate() {
             item.key = self.backdrop_cache_key(pass, item, layout.signature(index));
+        }
+        let mut kept = Vec::new();
+        for (index, item) in items.iter().enumerate() {
             match self.cached_backdrop(item) {
-                Some(composite) => hits.push(composite),
+                Some(composite) => pass.pending.push(composite),
                 None => {
-                    kept.push(&*item);
-                    indices.push(index);
+                    let destination = kept.len();
+                    if destination == 0 {
+                        kept.reserve(items.len() - index);
+                    }
+                    layout.placements.swap(destination, index);
+                    layout.substrates.swap(destination, index);
+                    layout.side.swap(destination, index);
+                    kept.push(item);
                 }
             }
         }
-        pass.pending.extend(hits);
-        (kept, indices)
+        layout.placements.truncate(kept.len());
+        layout.substrates.truncate(kept.len());
+        layout.side.truncate(kept.len());
+        kept
     }
 
     fn backdrop_cache_key(
@@ -3260,8 +3243,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .batched
             .is_some_and(|effect| !effect.substrates().is_empty())
         {
-            let items = [&item];
-            let layout = self.plan_stage(&items, pass.target_rect().pixel_size().0);
+            let layout = self.plan_stage(
+                std::slice::from_ref(&item),
+                pass.target_rect().pixel_size().0,
+            );
             if layout.placements[0].is_some() {
                 item.key = self.backdrop_cache_key(pass, &item, layout.signature(0));
                 if let Some(cached) = self.cached_backdrop(&item) {
@@ -3300,7 +3285,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     /// times what its captures cover.
     fn pack_stage(
         &self,
-        items: &[&PendingBackdrop<'_>],
+        items: &[PendingBackdrop<'_>],
         shelf_width: u32,
     ) -> (
         AtlasPacker,
@@ -3351,7 +3336,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         (packer, placements, substrates)
     }
 
-    fn plan_stage(&self, items: &[&PendingBackdrop<'_>], shelf_width: u32) -> StageLayout {
+    fn plan_stage(&self, items: &[PendingBackdrop<'_>], shelf_width: u32) -> StageLayout {
         let (packer, placements, substrates) = self.pack_stage(items, shelf_width);
         let limit = self.renderer.max_texture_dim().min(MAX_ATLAS_DIM);
         let atlas_sizes: Vec<(u32, u32)> = packer
