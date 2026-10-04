@@ -911,7 +911,9 @@ impl PartialEq for RuntimeShader {
     }
 }
 
-fn hash_shader_source(source: &str) -> u64 {
+/// The hash [`RuntimeShader::source_hash`] gives a shader built from
+/// `source`.
+pub fn runtime_shader_source_hash(source: &str) -> u64 {
     hash_shader_bytes(source.bytes())
 }
 
@@ -965,7 +967,7 @@ fn cached_shared_shader_source_hash(source: &Arc<str>) -> u64 {
         return entry.source_hash;
     }
 
-    let source_hash = hash_shader_source(source);
+    let source_hash = runtime_shader_source_hash(source);
     cache.push(CachedSharedShaderSourceHash {
         byte_ptr,
         len,
@@ -994,13 +996,13 @@ fn cached_shader_source(
         if entry.source.as_ref() == source {
             return (entry.source.clone(), entry.source_hash);
         }
-        let source_hash = hash_shader_source(source);
+        let source_hash = runtime_shader_source_hash(source);
         entry.source_hash = source_hash;
         entry.source = Arc::<str>::from(source);
         return (entry.source.clone(), entry.source_hash);
     }
 
-    let source_hash = hash_shader_source(source);
+    let source_hash = runtime_shader_source_hash(source);
     let shared = Arc::<str>::from(source);
     cache.push(CachedShaderSource {
         callsite,

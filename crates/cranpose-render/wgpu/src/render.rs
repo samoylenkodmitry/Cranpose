@@ -3066,6 +3066,7 @@ impl GpuRenderer {
         let crate::pipeline_disk_cache::Loaded {
             cache: pipeline_cache,
             first_screen,
+            first_screen_shaders,
         } = crate::pipeline_disk_cache::load(&device);
         #[cfg(target_arch = "wasm32")]
         let (pipeline_cache, first_screen): (Option<wgpu::PipelineCache>, Vec<u64>) =
@@ -3076,7 +3077,8 @@ impl GpuRenderer {
 
         let effects_started = Instant::now();
         let pipeline_compiler = PipelineCompiler::for_compilation(pipeline_compilation);
-        let effect_renderer = EffectRenderer::new(
+        #[cfg_attr(target_arch = "wasm32", expect(unused_mut))]
+        let mut effect_renderer = EffectRenderer::new(
             &device,
             pipeline_compiler.clone(),
             pipeline_cache.clone(),
@@ -3123,6 +3125,8 @@ impl GpuRenderer {
                 .filter(|&bits| bits != crate::arc_trig_fill::FIRST_SCREEN_KEY)
                 .filter_map(ShapePipelineKey::from_bits),
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        effect_renderer.warm_recorded_shaders(&first_screen_shaders);
         let image_layouts = [
             Some(&uniform_bind_group_layout),
             Some(&image_bind_group_layout),

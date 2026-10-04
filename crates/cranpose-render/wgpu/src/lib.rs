@@ -43,6 +43,8 @@ mod run_geometry;
 mod run_store;
 mod scene;
 mod shader_cache;
+#[cfg(not(target_arch = "wasm32"))]
+mod shader_records;
 mod shaders;
 mod shape_pipelines;
 mod shared_shader;
