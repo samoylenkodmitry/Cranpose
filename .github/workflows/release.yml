@@ -159,6 +159,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     env:
       XWIN_INCLUDE_ATL: "true"
+      XWIN_INCLUDE_DEBUG_SYMBOLS: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -176,7 +177,10 @@ jobs:
           scripts/ci/rustup_locked.sh target add x86_64-pc-windows-msvc
 
       - name: Provision Windows cross-build tooling
+        env:
+          XWIN_CACHE_DIR: ${{ runner.tool_cache }}/cranpose-xwin-atl-symbols
         run: |
+          echo "XWIN_CACHE_DIR=$XWIN_CACHE_DIR" >> "$GITHUB_ENV"
           command -v zip
           cargo install cargo-xwin --locked --version 0.23.1
           cargo xwin cache xwin --update
