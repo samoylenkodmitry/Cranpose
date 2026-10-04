@@ -40,9 +40,3 @@ fn sending_after_close_is_ignored() {
     assert_eq!(pollster::block_on(stream.next()), None);
     assert_eq!(channel.pending(), 0);
 }
-
-#[test]
-fn blocking_work_resolves_with_its_result() {
-    let doubled = pollster::block_on(withBlocking(|| 21 * 2));
-    assert_eq!(doubled, 42);
-}

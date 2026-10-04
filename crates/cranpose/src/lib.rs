@@ -225,15 +225,19 @@ pub use cranpose_audio::{AudioEngine, install as install_audio};
 /// Declare app services, permissions and required hardware in the build script.
 /// [`app_capabilities!`](crate::app_capabilities) includes the generated values.
 pub use cranpose_capabilities as capabilities;
-pub use cranpose_core::{
-    CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
-    LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MovableContent, MutableState,
-    SnapshotStateList, SnapshotStateMap, State, delay, forget_movable, interval, key,
-    launchBlocking, movable, movableContentOf, mutableStateList, mutableStateListOf,
-    mutableStateMap, mutableStateMapOf, mutableStateOf, mutableStateOfNeverEqual, produceState,
-    remember, rememberCoroutineScope, rememberKeyed, rememberMovableContentOf,
-    rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
-};
+mod composition_api {
+    pub use cranpose_core::{
+        BlockingError, BlockingExecutor, BlockingExecutorConfig, BlockingTask, CoroutineScope,
+        DisposableEffect, DisposableEffectResult, DisposableEffectScope, LaunchedEffect,
+        LaunchedEffectAsync, LaunchedEffectScope, MovableContent, MutableState, SnapshotStateList,
+        SnapshotStateMap, State, TaskHandle, delay, forget_movable, interval, key, launchBlocking,
+        movable, movableContentOf, mutableStateList, mutableStateListOf, mutableStateMap,
+        mutableStateMapOf, mutableStateOf, mutableStateOfNeverEqual, produceState, remember,
+        rememberCoroutineScope, rememberKeyed, rememberMovableContentOf, rememberMutableStateOf,
+        rememberMutableStateOfNeverEqual, rememberUpdatedState, withBlocking,
+    };
+}
+pub use composition_api::*;
 /// Glass controls, themes and motion for Cranpose apps.
 /// Import common components with `use cranpose::liquid::prelude::*;`.
 pub use cranpose_liquid as liquid;
@@ -385,15 +389,6 @@ pub mod _docs;
 
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
-    pub use cranpose_core::{
-        CoroutineScope, DisposableEffect, DisposableEffectResult, DisposableEffectScope,
-        LaunchedEffect, LaunchedEffectAsync, LaunchedEffectScope, MovableContent, MutableState,
-        SnapshotStateList, SnapshotStateMap, State, delay, forget_movable, interval, key,
-        launchBlocking, movable, movableContentOf, mutableStateList, mutableStateListOf,
-        mutableStateMap, mutableStateMapOf, mutableStateOf, mutableStateOfNeverEqual, produceState,
-        remember, rememberCoroutineScope, rememberKeyed, rememberMovableContentOf,
-        rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
-    };
     pub use cranpose_services::*;
     pub use cranpose_ui::*;
 
@@ -404,8 +399,8 @@ pub mod prelude {
     };
     pub use crate::{
         AndroidOverlayWindowOptions, AppFonts, AppLauncher, AppSettings, WebView, WebViewEvent,
-        WindowConfig, WindowModifierExt, WindowResizeDirection, WindowState, rememberWindowState,
-        rememberWindowStateAt,
+        WindowConfig, WindowModifierExt, WindowResizeDirection, WindowState, composition_api::*,
+        rememberWindowState, rememberWindowStateAt,
     };
 }
 

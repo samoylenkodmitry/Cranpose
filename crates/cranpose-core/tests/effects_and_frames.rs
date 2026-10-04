@@ -369,8 +369,9 @@ fn blocking_work_runs_off_the_ui_thread_and_reports_back_on_it() {
                             Some(std::thread::current().id());
                         21u32 * 2
                     },
-                    move |answer| ui_sink.set(answer),
-                );
+                    move |answer| ui_sink.set(answer.expect("blocking work succeeds")),
+                )
+                .expect("blocking work admitted");
             })
             .with(|()| ());
         })

@@ -1286,6 +1286,8 @@ dependencies = [
  "log",
  "pollster",
  "smallvec",
+ "stats_alloc",
+ "thiserror 2.0.21",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
