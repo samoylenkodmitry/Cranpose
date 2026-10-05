@@ -1767,6 +1767,11 @@ pub trait Node: Any {
     fn layout_dirty(&self) -> bool {
         self.needs_measure() || self.needs_layout() || self.descendant_needs_layout()
     }
+    /// Whether the node lays out nothing itself and its parent lays out its
+    /// children, so a change of its own is a change of its parent's.
+    fn is_virtual(&self) -> bool {
+        false
+    }
     /// Mark this node as needing semantics recomputation.
     fn mark_needs_semantics(&self) {}
     /// Mark that the semantics tree has to read this node again while its
@@ -2191,7 +2196,8 @@ impl DirtyBubble {
 
     /// Visits each node once for all the flags. The walk goes on past an
     /// ancestor that is already dirty: a scoped layout repass can leave a
-    /// dirty node under a clean ancestor.
+    /// dirty node under a clean ancestor. A virtual start node passes its
+    /// own flags to its parent.
     fn walk(self, applier: &mut dyn Applier, first: Option<NodeId>, mut start: bool) {
         let mut next = first;
         while let Some(id) = next {
@@ -2200,7 +2206,7 @@ impl DirtyBubble {
             };
             self.mark(node, start);
             next = node.parent();
-            start = false;
+            start = start && node.is_virtual();
         }
     }
 

@@ -1,6 +1,6 @@
 use cranpose_core::{Applier, MemoryApplier, NodeError, NodeId};
 
-use super::{LayoutNode, read_live_layout_node};
+use super::read_live_layout_node;
 
 /// Proves that revealing `target` cannot scroll any ancestor in `root`'s surface.
 ///
@@ -40,11 +40,8 @@ pub fn can_skip_scroll_reveal_from_applier(
             return Ok(false);
         };
         let parent = match applier.get_mut(parent) {
-            Ok(node) => node
-                .as_any_mut()
-                .downcast_mut::<LayoutNode>()
-                .filter(|node| node.is_virtual())
-                .map_or(Some(parent), |node| node.parent()),
+            Ok(node) if node.is_virtual() => node.parent(),
+            Ok(_) => Some(parent),
             Err(NodeError::Missing { .. }) => None,
             Err(error) => return Err(error),
         };

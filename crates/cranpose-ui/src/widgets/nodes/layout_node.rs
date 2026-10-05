@@ -290,6 +290,8 @@ struct NodeCacheState {
     epoch: u64,
     measurement: Option<MeasurementCacheEntry>,
     intrinsics: Vec<(IntrinsicKind, f32)>,
+    /// Whether a parent read intrinsic sizes since the cache was cleared.
+    intrinsics_read: bool,
 }
 
 #[derive(Default)]
@@ -316,6 +318,7 @@ impl LayoutNodeCacheHandles {
         let mut state = self.state.borrow_mut();
         state.measurement = None;
         state.intrinsics.clear();
+        state.intrinsics_read = false;
         state.epoch = 0;
     }
 
@@ -324,8 +327,16 @@ impl LayoutNodeCacheHandles {
         if state.epoch != epoch {
             state.measurement = None;
             state.intrinsics.clear();
+            state.intrinsics_read = false;
             state.epoch = epoch;
         }
+    }
+
+    /// Drops the intrinsic sizes, which depend on every node below: one of
+    /// them changed. A parent's earlier read still counts for
+    /// [`Self::has_intrinsics`].
+    pub(crate) fn forget_intrinsics(&self) {
+        self.state.borrow_mut().intrinsics.clear();
     }
 
     pub(crate) fn epoch(&self) -> u64 {
@@ -352,7 +363,7 @@ impl LayoutNodeCacheHandles {
 
     /// Whether a parent read intrinsic sizes from this cache.
     pub(crate) fn has_intrinsics(&self) -> bool {
-        !self.state.borrow().intrinsics.is_empty()
+        self.state.borrow().intrinsics_read
     }
 
     pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {
@@ -373,6 +384,7 @@ impl LayoutNodeCacheHandles {
 
     pub(crate) fn store_intrinsic(&self, kind: IntrinsicKind, value: f32) {
         let mut state = self.state.borrow_mut();
+        state.intrinsics_read = true;
         if let Some((_, existing)) = state
             .intrinsics
             .iter_mut()
@@ -859,11 +871,6 @@ impl LayoutNode {
         self.folded_parent.get()
     }
 
-    /// Returns true if this is a virtual node (transparent container for subcomposition).
-    pub fn is_virtual(&self) -> bool {
-        self.is_virtual
-    }
-
     pub(crate) fn cache_handles(&self) -> &LayoutNodeCacheHandles {
         &self.cache
     }
@@ -1209,10 +1216,17 @@ impl Node for LayoutNode {
     fn mark_descendant_needs_layout(&self, measure: bool) {
         self.descendant_dirt
             .set(self.descendant_dirt.get().marked(measure));
+        if measure {
+            self.cache.forget_intrinsics();
+        }
     }
 
     fn descendant_needs_layout(&self) -> bool {
         self.descendant_dirt.get().layout
+    }
+
+    fn is_virtual(&self) -> bool {
+        self.is_virtual
     }
 
     fn descendant_needs_measure(&self) -> bool {

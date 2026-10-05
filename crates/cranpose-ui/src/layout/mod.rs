@@ -1484,6 +1484,7 @@ enum LayoutNodeVisit<'a> {
 }
 
 /// What keeping a node's measurement needs to know of one child that changed.
+#[derive(Clone, Copy)]
 struct ChangedChild {
     /// The child's place among the kept measurement's children.
     index: usize,
@@ -1575,7 +1576,10 @@ impl LayoutBuilderState {
             return Ok(("subcompose kept", kept));
         }
         Ok(match self.try_measure_subcompose(node_id, constraints)? {
-            Some(measured) => ("subcompose", measured),
+            Some(measured) => {
+                self.store_child_measurement(node_id, constraints, &measured);
+                ("subcompose", measured)
+            }
             None => (
                 "fallback",
                 Rc::new(MeasuredNode::new(
@@ -1627,7 +1631,9 @@ impl LayoutBuilderState {
         let Some(changed) = self.changed_subcompose_children(cached)? else {
             return Ok(None);
         };
-        let Some(kept) = self.remeasure_changed_children(cached, changed)? else {
+        let kept = self.remeasure_changed_children(cached, &changed)?;
+        self.mark_measured_without_policy(&changed);
+        let Some(kept) = kept else {
             return Ok(None);
         };
         self.with_applier_result(|applier| {
@@ -1673,6 +1679,20 @@ impl LayoutBuilderState {
             });
         }
         Ok(Some(changed))
+    }
+
+    /// Marks children a subcompose node measured again without its policy,
+    /// so the policy checks them when it next runs: it may keep measurements
+    /// of its own, as a lazy list keeps its items'.
+    fn mark_measured_without_policy(&self, children: &[ChangedChild]) {
+        let Ok(mut applier) = self.applier.try_borrow_typed() else {
+            return;
+        };
+        for child in children {
+            if let Ok(node) = applier.get_mut(child.node_id) {
+                node.mark_descendant_needs_layout(true);
+            }
+        }
     }
 
     fn clear_subcompose_placed(&self, node_id: NodeId) {
@@ -2110,7 +2130,7 @@ impl LayoutBuilderState {
         let Some(changed) = self.changed_children(node_id, cached)? else {
             return Ok(None);
         };
-        let Some(kept) = self.remeasure_changed_children(cached, changed)? else {
+        let Some(kept) = self.remeasure_changed_children(cached, &changed)? else {
             return Ok(None);
         };
         self.with_applier_result(|applier| {
@@ -2129,10 +2149,10 @@ impl LayoutBuilderState {
     fn remeasure_changed_children(
         self: &Rc<Self>,
         cached: &Rc<MeasuredNode>,
-        changed: smallvec::SmallVec<[ChangedChild; 4]>,
+        changed: &[ChangedChild],
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         let mut replaced = smallvec::SmallVec::<[(usize, Rc<MeasuredNode>); 4]>::new();
-        for child in changed {
+        for &child in changed {
             let measured = self.measure_node(child.node_id, child.constraints)?;
             self.store_child_measurement(child.node_id, child.constraints, &measured);
             let Some(previous) = cached.children.get(child.index) else {
@@ -2197,8 +2217,8 @@ impl LayoutBuilderState {
         Ok(Some(changed))
     }
 
-    /// Stores a child's new measurement in its cache, as a parent's measure
-    /// does: a subcompose node does not store its own.
+    /// Stores a node's new measurement in its cache. A layout node stores its
+    /// own; a subcompose node's measure leaves it to this.
     fn store_child_measurement(
         &self,
         child_id: NodeId,

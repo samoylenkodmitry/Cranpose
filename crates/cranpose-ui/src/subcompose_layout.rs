@@ -1314,6 +1314,9 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
     fn mark_descendant_needs_layout(&self, measure: bool) {
         self.descendant_dirt
             .set(self.descendant_dirt.get().marked(measure));
+        if measure {
+            self.cache_handles.forget_intrinsics();
+        }
     }
 
     fn descendant_needs_layout(&self) -> bool {
