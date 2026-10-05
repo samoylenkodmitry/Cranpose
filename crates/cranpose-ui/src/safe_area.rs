@@ -5,6 +5,46 @@ use cranpose_ui_graphics::EdgeInsets;
 
 use crate::Modifier;
 
+pub(crate) struct InsetsObserver {
+    observer: cranpose_core::SnapshotStateObserver,
+    app: crate::render_state::AppContextId,
+}
+
+impl InsetsObserver {
+    pub(crate) fn new() -> Self {
+        let runtime = cranpose_core::current_runtime_handle();
+        let observer = cranpose_core::SnapshotStateObserver::new(move |callback| {
+            if let Some(runtime) = &runtime {
+                runtime.enqueue_ui_task(callback);
+            } else {
+                callback();
+            }
+        });
+        observer.start();
+        Self {
+            observer,
+            app: crate::render_state::current_app_context_id(),
+        }
+    }
+
+    pub(crate) fn observe<R>(&self, node: cranpose_core::NodeId, read: impl FnOnce() -> R) -> R {
+        let app = self.app;
+        self.observer.observe_reads(
+            node,
+            move |node| {
+                let _ = crate::render_state::enter_app_context_by_id(app, || {
+                    crate::schedule_measure_repass(*node);
+                });
+            },
+            read,
+        )
+    }
+
+    pub(crate) fn clear(&self) {
+        self.observer.clear_all();
+    }
+}
+
 /// Insets needed to keep content clear of system UI and the on-screen keyboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct WindowInsets {
@@ -79,8 +119,19 @@ impl Modifier {
     }
 
     /// Adds padding for system bars, display cutouts, and rounded display edges.
+    /// Insets are read during measurement, so changes request layout without
+    /// recomposing the component that creates this modifier.
     pub fn safe_area_padding(self) -> Self {
-        self.window_insets_padding(local_safe_area_insets().current())
+        self.then(Self::with_element(
+            crate::modifier_nodes::InsetsPaddingElement(local_safe_area_insets().reader()),
+        ))
+    }
+
+    /// Adds padding for the on-screen keyboard, reading its insets during layout.
+    pub fn ime_padding(self) -> Self {
+        self.then(Self::with_element(
+            crate::modifier_nodes::InsetsPaddingElement(local_ime_insets().reader()),
+        ))
     }
 }
 

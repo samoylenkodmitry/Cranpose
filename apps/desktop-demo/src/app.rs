@@ -867,6 +867,10 @@ pub fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
 
 #[composable]
 pub fn combined_app_with_startup(startup: StartupSelection) {
+    if cranpose::launch_args().string("test_screen") == Some("insets_robot") {
+        crate::test_screens::insets_robot::InsetsRobotScreen();
+        return;
+    }
     if cranpose::launch_args().string("test_screen") == Some("accessibility_robot") {
         crate::test_screens::accessibility_robot::AccessibilityRobotScreen();
         return;

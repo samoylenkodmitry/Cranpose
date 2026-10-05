@@ -56,8 +56,9 @@ pub use composer::{BranchGroupGuard, CapturedCompositionContext, Composer, Value
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
-    CompositionLocal, CompositionLocalProvider, ProvidedValue, StaticCompositionLocal,
-    compositionLocalOf, compositionLocalOfWithPolicy, staticCompositionLocalOf,
+    CompositionLocal, CompositionLocalProvider, CompositionLocalReader, ProvidedValue,
+    StaticCompositionLocal, compositionLocalOf, compositionLocalOfWithPolicy,
+    staticCompositionLocalOf,
 };
 pub(crate) use composition_locals::{LocalStateEntry, StaticLocalEntry};
 pub use concurrency::{

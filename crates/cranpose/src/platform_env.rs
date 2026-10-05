@@ -1,5 +1,9 @@
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
+use cranpose_core::{CompositionLocal, OwnedMutableState, ProvidedValue, RuntimeHandle};
 use cranpose_services::{SystemTheme, set_platform_system_theme};
 use cranpose_ui::{EdgeInsets, composable, local_ime_insets, local_safe_area_insets};
 
@@ -13,8 +17,47 @@ pub(crate) struct PlatformEnvironment {
     languages: Rc<languages::SystemLanguagesState>,
     #[cfg(feature = "webview")]
     pub(crate) native_views: crate::native_view::NativeViewHost,
-    safe_area: Cell<EdgeInsets>,
-    ime_insets: Cell<EdgeInsets>,
+    safe_area: PlatformInsets,
+    ime_insets: PlatformInsets,
+}
+
+#[derive(Default)]
+struct PlatformInsets {
+    value: Cell<EdgeInsets>,
+    state: RefCell<Option<(RuntimeHandle, OwnedMutableState<EdgeInsets>)>>,
+}
+
+impl PlatformInsets {
+    fn set(&self, value: EdgeInsets) -> bool {
+        if self.value.replace(value) == value {
+            return false;
+        }
+        if let Some((_, state)) = self.state.borrow().as_ref() {
+            state.set(value);
+        }
+        true
+    }
+
+    fn provide(
+        &self,
+        local: CompositionLocal<EdgeInsets>,
+        runtime: &RuntimeHandle,
+    ) -> ProvidedValue {
+        let mut binding = self.state.borrow_mut();
+        if binding
+            .as_ref()
+            .is_none_or(|(owner, _)| owner.id() != runtime.id())
+        {
+            *binding = Some((
+                runtime.clone(),
+                OwnedMutableState::with_runtime_structural_eq(self.value.get(), runtime.clone()),
+            ));
+        }
+        let (_, state) = binding
+            .as_ref()
+            .expect("insets initialized for this runtime");
+        local.provides_state(state.clone())
+    }
 }
 
 impl PlatformEnvironment {
@@ -29,16 +72,12 @@ impl PlatformEnvironment {
 
     #[cfg_attr(not(any(target_os = "android", target_os = "ios")), expect(dead_code))]
     pub(crate) fn set_safe_area(&self, insets: EdgeInsets) -> bool {
-        let changed = self.safe_area.get() != insets;
-        self.safe_area.set(insets);
-        changed
+        self.safe_area.set(insets)
     }
 
     #[cfg_attr(not(any(target_os = "android", target_os = "ios")), expect(dead_code))]
     pub(crate) fn set_ime_insets(&self, insets: EdgeInsets) -> bool {
-        let changed = self.ime_insets.get() != insets;
-        self.ime_insets.set(insets);
-        changed
+        self.ime_insets.set(insets)
     }
 
     pub(crate) fn set_system_theme(&self, theme: SystemTheme) -> bool {
@@ -50,10 +89,11 @@ impl PlatformEnvironment {
     pub(crate) fn compose_root(&self, content: impl FnOnce()) {
         let theme = cranpose_services::default_system_theme();
         let launch_args = cranpose_services::launch_args();
+        let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
         cranpose_core::CompositionLocalProvider(
             [
-                local_safe_area_insets().provides(self.safe_area.get()),
-                local_ime_insets().provides(self.ime_insets.get()),
+                self.safe_area.provide(local_safe_area_insets(), &runtime),
+                self.ime_insets.provide(local_ime_insets(), &runtime),
                 cranpose_services::local_system_theme().provides(theme),
                 cranpose_services::local_launch_args().provides(launch_args),
             ],

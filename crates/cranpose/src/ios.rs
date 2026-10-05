@@ -131,7 +131,8 @@ impl<F: FnMut() + 'static> IosApp<F> {
     }
 
     fn refresh_environment(&mut self, window: &Arc<dyn Window>) {
-        let mut changed = self.platform_env.set_safe_area(safe_area_insets(window));
+        self.platform_env.set_safe_area(safe_area_insets(window));
+        let mut changed = false;
         if let Some(theme) = window.theme() {
             changed |= self.platform_env.set_system_theme(match theme {
                 winit::window::Theme::Dark => cranpose_services::SystemTheme::Dark,
@@ -172,7 +173,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
     fn render(&mut self) {
         #[cfg(feature = "webview")]
         self.webviews.dispatch(&self.platform_env.native_views);
-        let mut ime_changed = false;
         if crate::ios_keyboard::keyboard_poll_active() {
             if let Some(bottom) = crate::ios_keyboard::poll_keyboard_bottom_inset()
                 && (self.last_keyboard_bottom - bottom).abs() > 0.5
@@ -182,7 +182,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
                     bottom,
                     ..EdgeInsets::default()
                 });
-                ime_changed = true;
             }
             self.event_proxy.wake_up();
         }
@@ -204,9 +203,6 @@ impl<F: FnMut() + 'static> IosApp<F> {
         let (Some(gpu), Some(shell)) = (self.gpu.as_mut(), self.shell.as_mut()) else {
             return;
         };
-        if ime_changed {
-            shell.request_root_render();
-        }
 
         for op in crate::ios_keyboard::take_ime_ops() {
             match op {

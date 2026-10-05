@@ -1,4 +1,11 @@
-use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
+use std::{
+    any::Any,
+    cell::RefCell,
+    fmt,
+    hash::{Hash, Hasher},
+    rc::Rc,
+    sync::Arc,
+};
 
 use crate::{
     Composer, LocalKey, RuntimeHandle, composer_context,
@@ -44,7 +51,13 @@ pub fn CompositionLocalProvider(
 }
 
 pub(crate) struct LocalStateEntry<T: Clone + 'static> {
-    state: OwnedMutableState<T>,
+    state: OwnedMutableState<LocalValue<T>>,
+}
+
+#[derive(Clone)]
+enum LocalValue<T: Clone + 'static> {
+    Value(T),
+    State(OwnedMutableState<T>),
 }
 
 type LocalEquivalentFn<T> = dyn Fn(&T, &T) -> bool + Send + Sync + 'static;
@@ -53,14 +66,22 @@ struct LocalValuePolicy<T: Clone + 'static> {
     equivalent: Arc<LocalEquivalentFn<T>>,
 }
 
-impl<T: Clone + 'static> MutationPolicy<T> for LocalValuePolicy<T> {
-    fn equivalent(&self, a: &T, b: &T) -> bool {
-        (self.equivalent)(a, b)
+impl<T: Clone + 'static> MutationPolicy<LocalValue<T>> for LocalValuePolicy<T> {
+    fn equivalent(&self, a: &LocalValue<T>, b: &LocalValue<T>) -> bool {
+        match (a, b) {
+            (LocalValue::Value(a), LocalValue::Value(b)) => (self.equivalent)(a, b),
+            (LocalValue::State(a), LocalValue::State(b)) => a.handle() == b.handle(),
+            _ => false,
+        }
     }
 }
 
 impl<T: Clone + 'static> LocalStateEntry<T> {
-    fn new(initial: T, runtime: RuntimeHandle, equivalent: Arc<LocalEquivalentFn<T>>) -> Self {
+    fn new(
+        initial: LocalValue<T>,
+        runtime: RuntimeHandle,
+        equivalent: Arc<LocalEquivalentFn<T>>,
+    ) -> Self {
         Self {
             state: OwnedMutableState::with_runtime_and_policy(
                 initial,
@@ -70,12 +91,64 @@ impl<T: Clone + 'static> LocalStateEntry<T> {
         }
     }
 
-    fn set(&self, value: T) {
+    fn set(&self, value: LocalValue<T>) {
         self.state.replace(value);
     }
 
     pub(crate) fn value(&self) -> T {
-        self.state.value()
+        self.state.read(|value| match value {
+            LocalValue::Value(value) => value.clone(),
+            LocalValue::State(state) => state.value(),
+        })
+    }
+}
+
+/// A retained local binding whose value is read in the phase that consumes it.
+///
+/// Capturing a reader does not subscribe the current composition. A deferred
+/// consumer reads it inside a [`crate::SnapshotStateObserver`] to invalidate
+/// its own layout or drawing work. The reader retains its provider and follows
+/// changes to its value or source while the provider's runtime is alive.
+#[derive(Clone)]
+pub struct CompositionLocalReader<T: Clone + 'static> {
+    pub(crate) local: CompositionLocal<T>,
+    pub(crate) entry: Option<Rc<LocalStateEntry<T>>>,
+}
+
+impl<T: Clone + 'static> CompositionLocalReader<T> {
+    /// Reads the current value, subscribing the current composition scope and
+    /// recording the read for any enclosing snapshot observer.
+    pub fn value(&self) -> T {
+        self.entry
+            .as_ref()
+            .map_or_else(|| self.local.default_value(), |entry| entry.value())
+    }
+}
+
+impl<T: Clone + 'static> PartialEq for CompositionLocalReader<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.local == other.local
+            && match (&self.entry, &other.entry) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl<T: Clone + 'static> Eq for CompositionLocalReader<T> {}
+
+impl<T: Clone + 'static> Hash for CompositionLocalReader<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.local.key.hash(state);
+        self.entry.as_ref().map(Rc::as_ptr).hash(state);
+    }
+}
+
+impl<T: Clone + 'static> fmt::Debug for CompositionLocalReader<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompositionLocalReader")
+            .finish_non_exhaustive()
     }
 }
 
@@ -117,6 +190,26 @@ impl<T: Clone + 'static> Eq for CompositionLocal<T> {}
 impl<T: Clone + 'static> CompositionLocal<T> {
     #[track_caller]
     pub fn provides(&self, value: T) -> ProvidedValue {
+        self.provide_source(LocalValue::Value(value))
+    }
+
+    /// Provides a live state without subscribing the provider's composition.
+    ///
+    /// State changes invalidate only readers of this local. The source state's
+    /// mutation policy governs its updates; replacing the source at this
+    /// provider also invalidates readers, including retained layout readers.
+    #[track_caller]
+    pub fn provides_state(&self, state: OwnedMutableState<T>) -> ProvidedValue {
+        self.provide_source(LocalValue::State(state))
+    }
+
+    /// Captures the current provider without reading or subscribing to its value.
+    pub fn reader(&self) -> CompositionLocalReader<T> {
+        composer_context::with_composer(|composer| composer.composition_local_reader(self))
+    }
+
+    #[track_caller]
+    fn provide_source(&self, value: LocalValue<T>) -> ProvidedValue {
         let key = self.key.clone();
         let entry_source = provider_entry_source(&key, crate::caller_location_key());
         let equivalent = Arc::clone(&self.equivalent);

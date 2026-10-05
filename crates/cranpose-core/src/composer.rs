@@ -1784,6 +1784,16 @@ impl Composer {
             .map_or_else(|| local.default_value(), |entry| entry.value())
     }
 
+    pub(crate) fn composition_local_reader<T: Clone + 'static>(
+        &self,
+        local: &CompositionLocal<T>,
+    ) -> crate::CompositionLocalReader<T> {
+        crate::CompositionLocalReader {
+            local: local.clone(),
+            entry: self.provided_local::<LocalStateEntry<T>>(&local.key),
+        }
+    }
+
     pub fn read_static_composition_local<T: Clone + 'static>(
         &self,
         local: &StaticCompositionLocal<T>,
