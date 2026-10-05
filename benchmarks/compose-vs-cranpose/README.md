@@ -3,7 +3,9 @@
 Two apps with the same UI, element for element: `cranpose-app` (Rust, Cranpose
 from this repository) and `compose-app` (Kotlin, Jetpack Compose from BOM
 2026.09.00, foundation 1.12). `measure.py` runs them alternately on one Android
-device and measures both from outside either framework.
+device and measures both from outside either framework. The gauntlet also runs
+in `views-app` (Android Views, RecyclerView 1.4) and `flutter-app` (Flutter
+3.47, which picks Impeller on OpenGL ES on the Mate).
 
 ## Scenarios
 
@@ -71,7 +73,12 @@ line. Compose uses `LazyVerticalGrid` with full-span clusters, reads the
 width in `Modifier.layout`, and isolates every per-frame read in its own small
 composable or draw lambda. Cranpose uses `LazyColumn` rows (it has no lazy
 grid yet, #1165), reads the width at the screen root above one argument-stable
-call, and isolates the same reads.
+call, and isolates the same reads. Views uses a `RecyclerView` of card rows
+and clusters, measures the width in a parent `onMeasure`, and redraws bars and
+sparklines in `onDraw`. Flutter uses a `ListView` of rows, lays the width out
+in a `SingleChildLayoutDelegate` that relayouts on the frame, rebuilds only the
+changing texts in `ValueListenableBuilder`s, and paints in `CustomPainter`s
+that repaint on the frame.
 
 | Tier | Columns | Scale | Ticker tiles | Cluster depth |
 | --- | ---: | ---: | ---: | ---: |
@@ -84,23 +91,37 @@ call, and isolates the same reads.
 | 7 | 4 | 0.4 | 44 | 20 |
 | 8 | 5 | 0.35 | 56 | 24 |
 
-Calibration fixes one tier per device: the Huawei Mate 20 X runs tier 5,
-where Cranpose drew 52.8 fps and Compose 26.5 on 2026-10-05. Raising a
-device's tier starts a new series rather than changing an old one.
+Calibration fixes one tier per device: the Huawei Mate 20 X runs tier 5. On
+2026-10-05 Cranpose drew 52.8 fps there, Views 52 to 54, Flutter 29.5 and
+Compose 26.5. Raising a device's tier starts a new series rather than changing
+an old one.
 
-`parity.py` launches both apps frozen on the same frame and compares the two
-captures the way the eye does: softened, cut into tiles, each tile matched at
-the best offset within 8 pixels. A tile that still differs on average is
-changed. Any difference for the same composable code is a Cranpose bug. On
-2026-10-05 the gauntlet at tier 5 differed in 1.55% of tiles. The remaining
-differences come from Compose laying out in whole pixels (#1215).
+`parity.py` launches two apps frozen on the same frame and compares the two
+captures the way the eye does: softened and cut into tiles. Each band of tiles
+is found in the other capture up to 160 pixels higher or lower. Each tile is
+then matched at the best offset within 8 pixels of its band's, quarter by
+quarter of the neighbouring bands' where they drifted differently. A tile
+that still differs on average is changed; a band that has drifted past the
+other capture's edge is left out. The
+bands absorb drift: the frameworks put lines of text on different pixel grids,
+so a list scrolled 720 dp shows its rows a few dozen pixels apart without
+looking any different. Flutter rounds each line to whole logical pixels and
+Compose rounds it up to whole device pixels. Any difference for the same
+composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
+
+| App | Changed tiles | What differs |
+| --- | ---: | --- |
+| Cranpose | 1.24% | Compose lays out in whole pixels (#1215) |
+| Flutter | 0.22% | Its unhinted text is about 2% wider, so a few lines break a word earlier |
+| Views | 3.93% | Text rounded to other pixels |
 
 ## Parity rules
 
-- **Data:** `data.rs` and `Data.kt` implement the same xorshift generator, so
-  every post, comment, quote and particle is identical.
-- **Fonts:** both apps load `/system/fonts/Roboto-Regular.ttf` and
-  `Roboto-Bold.ttf` from the device and set a 1.4 em line height. The bundled
+- **Data:** `data.rs`, `shared-kotlin/dev/perfcompare/shared/PerfData.kt` (the
+  Compose and Views apps) and `flutter-app/lib/data.dart` implement the same
+  xorshift generator, so every post, comment, quote and particle is identical.
+- **Fonts:** every app loads `/system/fonts/Roboto-Regular.ttf` and
+  `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. The bundled
   Noto Sans Merged declares 2.1 em of ascent plus descent, which Compose honors
   and Cranpose does not, so it cannot be compared. The workspace also loads
   `Roboto-Medium.ttf` and follows GPUI's 1.618034 em line height, including the
@@ -290,6 +311,8 @@ and a 15 s window. Failed runs are kept in the report.
 ```bash
 (cd benchmarks/compose-vs-cranpose/cranpose-app/android && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/compose-app && ./gradlew :app:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/views-app && ./gradlew :app:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/flutter-app && flutter build apk --release --target-platform android-arm64)
 python3 benchmarks/compose-vs-cranpose/measure.py --serial SERIAL --output benchmarks/compose-vs-cranpose/results/RUN --install --reps 2 --screenshots
 python3 benchmarks/compose-vs-cranpose/summarize.py benchmarks/compose-vs-cranpose/results/RUN/report.json
 ```

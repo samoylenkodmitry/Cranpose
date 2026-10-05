@@ -14,6 +14,7 @@ both apps, and temperature is recorded as a result in its own right.
 import argparse
 import json
 import re
+import shlex
 import statistics
 import subprocess
 import sys
@@ -33,6 +34,20 @@ APPS = {
         'package': 'dev.perfcompare.compose',
         'activity': 'dev.perfcompare.compose/.MainActivity',
         'apk': HERE / 'compose-app/app/build/outputs/apk/release/app-release.apk',
+    },
+    # Android Views: the gauntlet only.
+    'views': {
+        'package': 'dev.perfcompare.views',
+        'activity': 'dev.perfcompare.views/.MainActivity',
+        'apk': HERE / 'views-app/app/build/outputs/apk/release/app-release.apk',
+    },
+    # Flutter: the gauntlet only. Its frames reach the screen through the
+    # SurfaceView above the window, `SurfaceView - package/activity#N`.
+    'flutter': {
+        'package': 'dev.perfcompare.flutter',
+        'activity': 'dev.perfcompare.flutter/.MainActivity',
+        'apk': HERE / 'flutter-app/build/app/outputs/flutter-apk/app-release.apk',
+        'layer': 'SurfaceView - ',
     },
     # The Cranpose app built from the latest release, beside main's
     # (`-PperfCompareSuffix=.release`).
@@ -76,7 +91,9 @@ class Device:
         return result.stdout
 
     def shell(self, *args, timeout=120, check=True):
-        return self.adb('shell', *args, timeout=timeout, check=check)
+        # `adb shell` joins its arguments into one command line for the
+        # device's shell: quote each, so a layer name with spaces stays one.
+        return self.adb('shell', *(shlex.quote(arg) for arg in args), timeout=timeout, check=check)
 
     def pid(self, package):
         deadline = time.monotonic() + 10
@@ -152,16 +169,24 @@ PENDING = 9223372036854775807
 LAYER_STATE = 'RequestedLayerState{'
 
 
-def app_layer(device, package):
-    """The app window's buffer layer: `package/activity#N`, without a handle
-    prefix. Newer Android lists each layer as `RequestedLayerState{name ...}`
-    and gives the window's buffers to its `VRI-package/activity#N` layer."""
+def app_layer(device, app):
+    """The app's buffer layer: the window's `package/activity#N`, without a
+    handle prefix, or the layer named with the app's `layer` prefix when it
+    draws into a SurfaceView. Newer Android lists each layer as
+    `RequestedLayerState{name ...}` and gives the window's buffers to its
+    `VRI-package/activity#N` layer."""
+    package = APPS[app]['package']
+    prefix = APPS[app].get('layer')
     layers = []
     for line in device.shell('dumpsys', 'SurfaceFlinger', '--list').splitlines():
         name = line.strip()
         if name.startswith(LAYER_STATE):
             name = name[len(LAYER_STATE):].split(' parentId=')[0]
-        if ' ' not in name and (name.startswith(package + '/') or name.startswith(f'VRI-{package}/')):
+        if prefix:
+            found = name.startswith(f'{prefix}{package}/')
+        else:
+            found = ' ' not in name and (name.startswith(package + '/') or name.startswith(f'VRI-{package}/'))
+        if found:
             layers.append(name)
     if len(layers) != 1:
         raise ValueError(f'expected one buffer layer for {package}: {layers}')
@@ -353,7 +378,7 @@ def measure_run(device, app, scenario, args, destination):
     run['launch'], pid = launch(device, app, scenario, extras.split())
     run['started_s'] = round(time.monotonic() - args.started, 1)
     time.sleep(args.warmup)
-    layer = app_layer(device, package)
+    layer = app_layer(device, app)
     samples = int(args.window / args.interval)
     output = device.shell('sh', REMOTE_WINDOW, str(pid), package, layer, str(samples),
                           str(args.interval), '1' if app == 'compose' else '0',

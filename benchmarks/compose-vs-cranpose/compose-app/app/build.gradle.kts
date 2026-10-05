@@ -35,9 +35,20 @@ android {
         compose = true
     }
 
+    sourceSets.named("main") {
+        // The data generator the Android apps share.
+        kotlin.directories += "../../shared-kotlin"
+    }
+
     sourceSets.named("androidTest") {
         kotlin.directories += "tests/android"
     }
+}
+
+// The shared generator is plain Kotlin; its classes are immutable, as their
+// `@Immutable` annotations said before they moved.
+composeCompiler {
+    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose_stability.conf"))
 }
 
 dependencies {

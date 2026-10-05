@@ -1,5 +1,6 @@
 package dev.perfcompare.compose
 
+import dev.perfcompare.shared.*
 import android.graphics.Bitmap
 import android.util.Log
 import androidx.compose.foundation.Image
