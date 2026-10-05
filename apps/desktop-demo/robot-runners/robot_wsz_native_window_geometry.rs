@@ -12,11 +12,11 @@ use cranpose_testing::find_button_in_semantics;
 use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
 
-const WINDOW_TITLE: &str = "Robot Winamp Native Geometry";
-const MAIN_TITLE: &str = "Winamp";
-const EQUALIZER_TITLE: &str = "Winamp Equalizer";
-const PLAYLIST_TITLE: &str = "Winamp Playlist";
-const WINAMP_TITLES: [&str; 3] = [MAIN_TITLE, EQUALIZER_TITLE, PLAYLIST_TITLE];
+const WINDOW_TITLE: &str = "Robot WSZ Native Geometry";
+const MAIN_TITLE: &str = "WSZ";
+const EQUALIZER_TITLE: &str = "WSZ Equalizer";
+const PLAYLIST_TITLE: &str = "WSZ Playlist";
+const WSZ_TITLES: [&str; 3] = [MAIN_TITLE, EQUALIZER_TITLE, PLAYLIST_TITLE];
 const MOVE_STEPS: usize = 12;
 const MOVE_DX: i32 = 13;
 const MOVE_DY: i32 = 7;
@@ -57,7 +57,7 @@ const FIND_WINDOW_TIMEOUT: Duration = Duration::from_millis(12_000);
 const SETUP_POSITION_TIMEOUT: Duration = Duration::from_millis(1200);
 const CACHED_RESTORE_TIMEOUT: Duration = Duration::from_millis(1_000);
 const TRANSPORT_CLICK_SETTLE: Duration = Duration::from_millis(160);
-const WINAMP_MAIN_SKIN_WIDTH: f32 = 275.0;
+const WSZ_MAIN_SKIN_WIDTH: f32 = 275.0;
 const MAIN_SKIN_HEIGHT: f32 = 116.0;
 const EQUALIZER_SKIN_HEIGHT: f32 = 116.0;
 const PLAYLIST_SKIN_HEIGHT: f32 = 203.0;
@@ -127,7 +127,7 @@ impl Pane {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Winamp {
+struct Wsz {
     pid: u32,
     stack: u64,
     scale: f32,
@@ -146,7 +146,7 @@ struct DragTraceSample {
     elapsed: Duration,
 }
 
-impl Winamp {
+impl Wsz {
     fn px(self, skin: f32) -> i32 {
         (skin * self.scale).round() as i32
     }
@@ -171,7 +171,7 @@ impl Winamp {
 
 pub(crate) fn main() {
     env_logger::init();
-    println!("=== Robot Winamp Native Window Geometry ===");
+    println!("=== Robot WSZ Native Window Geometry ===");
 
     AppLauncher::new()
         .with_title(WINDOW_TITLE)
@@ -198,10 +198,10 @@ pub(crate) fn main() {
             robot.wait_for_idle().expect("host window positioned");
 
             let appeared_at = Instant::now();
-            click_button_now(&robot, "Winamp");
+            click_button_now(&robot, "WSZ");
             let stack = find_visible_window(pid, MAIN_TITLE);
             let appearance_elapsed = appeared_at.elapsed();
-            robot.wait_for_idle().expect("initial Winamp idle");
+            robot.wait_for_idle().expect("initial WSZ idle");
             std::thread::sleep(Duration::from_millis(500));
             robot
                 .wait_for_idle()
@@ -211,89 +211,89 @@ pub(crate) fn main() {
                 "the stack window appeared in {}ms: id={stack} {appeared:?}",
                 appearance_elapsed.as_millis()
             );
-            let winamp = Winamp {
+            let wsz = Wsz {
                 pid,
                 stack,
-                scale: appeared.width as f32 / WINAMP_MAIN_SKIN_WIDTH,
+                scale: appeared.width as f32 / WSZ_MAIN_SKIN_WIDTH,
             };
             let all_docked = [Pane::Equalizer, Pane::Playlist];
-            assert_stack_holds("appeared", winamp, &all_docked);
-            assert_panes_not_torn("appeared", winamp, &all_docked);
+            assert_stack_holds("appeared", wsz, &all_docked);
+            assert_panes_not_torn("appeared", wsz, &all_docked);
 
-            let origin = arrange_origin(winamp);
+            let origin = arrange_origin(wsz);
             place_window_for_setup("place-stack", stack, origin.x, origin.y);
             drag_stack_and_assert_it_follows(
                 "drag-main",
-                winamp,
+                wsz,
                 &all_docked,
                 (MOVE_STEPS, MOVE_DX, MOVE_DY),
             );
             place_window_for_setup("place-stack", stack, origin.x + 10, origin.y + 5);
-            drag_main_one_pixel_trace_and_assert_continuity("drag-main-pixel-trace", winamp);
+            drag_main_one_pixel_trace_and_assert_continuity("drag-main-pixel-trace", wsz);
             place_window_for_setup("place-stack", stack, origin.x + 20, origin.y + 10);
             drag_stack_and_assert_it_follows(
                 "drag-main-fast",
-                winamp,
+                wsz,
                 &all_docked,
                 (FAST_MOVE_STEPS, FAST_MOVE_DX, FAST_MOVE_DY),
             );
             place_window_for_setup("place-stack", stack, origin.x + 30, origin.y + 15);
             drag_main_long_continuous_trace_and_assert_sync(
                 "drag-main-long-trace",
-                winamp,
+                wsz,
                 &all_docked,
             );
 
             place_window_for_setup("place-stack", stack, origin.x, origin.y);
-            let equalizer = tear_pane("tear-equalizer", winamp, Pane::Equalizer, &all_docked);
-            place_torn_panes(winamp, &[equalizer]);
+            let equalizer = tear_pane("tear-equalizer", wsz, Pane::Equalizer, &all_docked);
+            place_torn_panes(wsz, &[equalizer]);
             let equalizer_picture = capture_x11_window_image(
                 equalizer.window,
                 &diagnostic_png("tear-equalizer", "torn"),
             );
-            let playlist = tear_pane("tear-playlist", winamp, Pane::Playlist, &[Pane::Playlist]);
+            let playlist = tear_pane("tear-playlist", wsz, Pane::Playlist, &[Pane::Playlist]);
             let torn = [equalizer, playlist];
 
-            place_torn_panes(winamp, &torn);
-            drag_main_over_torn_panes_and_assert_they_stay("drag-main-over-torn", winamp, &torn);
+            place_torn_panes(wsz, &torn);
+            drag_main_over_torn_panes_and_assert_they_stay("drag-main-over-torn", wsz, &torn);
             place_window_for_setup("place-stack", stack, origin.x, origin.y);
-            place_torn_panes(winamp, &torn);
-            drag_torn_pane_alone("drag-equalizer", winamp, equalizer, &torn);
-            place_torn_panes(winamp, &torn);
-            drag_torn_pane_alone("drag-playlist", winamp, playlist, &torn);
-            place_torn_panes(winamp, &torn);
-            move_stack_with_window_manager_and_assert_panes_stay("wm-move-main", winamp, &torn);
-            place_torn_panes(winamp, &torn);
-            stretch_playlist_and_back("stretch-torn-playlist", winamp, playlist.window);
+            place_torn_panes(wsz, &torn);
+            drag_torn_pane_alone("drag-equalizer", wsz, equalizer, &torn);
+            place_torn_panes(wsz, &torn);
+            drag_torn_pane_alone("drag-playlist", wsz, playlist, &torn);
+            place_torn_panes(wsz, &torn);
+            move_stack_with_window_manager_and_assert_panes_stay("wm-move-main", wsz, &torn);
+            place_torn_panes(wsz, &torn);
+            stretch_playlist_and_back("stretch-torn-playlist", wsz, playlist.window);
 
             place_window_for_setup("place-stack", stack, origin.x, origin.y);
-            place_torn_panes(winamp, &torn);
-            dock_pane("dock-equalizer", winamp, equalizer, &[], &[Pane::Equalizer]);
+            place_torn_panes(wsz, &torn);
+            dock_pane("dock-equalizer", wsz, equalizer, &[], &[Pane::Equalizer]);
             assert_docked_pane_draws_in_its_slot(
                 "dock-equalizer",
-                winamp,
+                wsz,
                 Pane::Equalizer,
                 &[Pane::Equalizer],
                 &equalizer_picture,
             );
 
-            dock_and_undock_and_assert_windows_restored(&robot, winamp, playlist);
+            dock_and_undock_and_assert_windows_restored(&robot, wsz, playlist);
 
             place_window_for_setup("place-stack", stack, origin.x, origin.y);
-            place_torn_panes(winamp, &[playlist]);
+            place_torn_panes(wsz, &[playlist]);
             dock_pane(
                 "dock-playlist",
-                winamp,
+                wsz,
                 playlist,
                 &[Pane::Equalizer],
                 &all_docked,
             );
-            assert_panes_not_torn("docked-again", winamp, &all_docked);
-            stretch_playlist_and_back("stretch-docked-playlist", winamp, stack);
+            assert_panes_not_torn("docked-again", wsz, &all_docked);
+            stretch_playlist_and_back("stretch-docked-playlist", wsz, stack);
 
-            hold_transport_button_and_assert_pressed_until_release("transport-button-hold", winamp);
-            click_transport_buttons_and_assert_stack_remains("transport-buttons", winamp);
-            drag_volume_to_zero_and_assert_stack_remains("volume-zero", winamp);
+            hold_transport_button_and_assert_pressed_until_release("transport-button-hold", wsz);
+            click_transport_buttons_and_assert_stack_remains("transport-buttons", wsz);
+            drag_volume_to_zero_and_assert_stack_remains("volume-zero", wsz);
 
             robot
                 .invoke_app_hook("set-tab", "xkcd")
@@ -306,8 +306,8 @@ pub(crate) fn main() {
         .run(|| app::combined_app_with_initial_tab(Some(DemoTab::Counter)));
 }
 
-fn arrange_origin(winamp: Winamp) -> WindowGeometry {
-    let stack = window_geometry(winamp.stack);
+fn arrange_origin(wsz: Wsz) -> WindowGeometry {
+    let stack = window_geometry(wsz.stack);
     let long_drag_travel_x = (LONG_DRAG_DX * LONG_DRAG_TRACE_STEPS as i32).max(0);
     let long_drag_travel_y = (LONG_DRAG_DY * LONG_DRAG_TRACE_STEPS as i32).max(0);
     let torn_panes_width = TORN_PANE_GAP + stack.width;
@@ -384,7 +384,7 @@ fn visible_window_obstacles() -> Vec<WindowGeometry> {
             if matches!(
                 title,
                 Some("Desktop" | "xfdesktop" | "Xfwm4" | WINDOW_TITLE)
-            ) || title.is_some_and(|title| WINAMP_TITLES.contains(&title))
+            ) || title.is_some_and(|title| WSZ_TITLES.contains(&title))
             {
                 return None;
             }
@@ -603,7 +603,7 @@ fn parse_monitor_rect(line: &str) -> Option<WindowGeometry> {
 
 fn assert_windows_absent(pid: u32, label: &str) {
     for _ in 0..20 {
-        if WINAMP_TITLES
+        if WSZ_TITLES
             .iter()
             .all(|title| find_window_ids(pid, title).is_empty())
         {
@@ -613,7 +613,7 @@ fn assert_windows_absent(pid: u32, label: &str) {
         std::thread::sleep(Duration::from_millis(100));
     }
 
-    let visible: Vec<_> = WINAMP_TITLES
+    let visible: Vec<_> = WSZ_TITLES
         .iter()
         .flat_map(|title| {
             find_window_ids(pid, title)
@@ -621,16 +621,16 @@ fn assert_windows_absent(pid: u32, label: &str) {
                 .map(move |id| (*title, id, window_geometry(id)))
         })
         .collect();
-    panic!("{label}: native Winamp windows are still visible for pid {pid}: {visible:?}");
+    panic!("{label}: native WSZ windows are still visible for pid {pid}: {visible:?}");
 }
 
-fn assert_stack_holds(label: &str, winamp: Winamp, docked: &[Pane]) -> WindowGeometry {
-    let expected_width = winamp.px(WINAMP_MAIN_SKIN_WIDTH);
-    let expected_height = winamp.stack_height(docked);
+fn assert_stack_holds(label: &str, wsz: Wsz, docked: &[Pane]) -> WindowGeometry {
+    let expected_width = wsz.px(WSZ_MAIN_SKIN_WIDTH);
+    let expected_height = wsz.stack_height(docked);
     let deadline = Instant::now() + DOCK_TIMEOUT;
-    let mut stack = window_geometry(winamp.stack);
+    let mut stack = window_geometry(wsz.stack);
     while Instant::now() < deadline {
-        stack = window_geometry(winamp.stack);
+        stack = window_geometry(wsz.stack);
         if (stack.width - expected_width).abs() <= 1 && (stack.height - expected_height).abs() <= 1
         {
             println!("{label}: the stack holds {docked:?} at {stack:?}");
@@ -644,18 +644,18 @@ fn assert_stack_holds(label: &str, winamp: Winamp, docked: &[Pane]) -> WindowGeo
     );
 }
 
-fn assert_panes_not_torn(label: &str, winamp: Winamp, docked: &[Pane]) {
+fn assert_panes_not_torn(label: &str, wsz: Wsz, docked: &[Pane]) {
     for pane in docked {
         assert_eq!(
-            winamp.pane_window(*pane),
+            wsz.pane_window(*pane),
             None,
             "{label}: the docked {pane:?} has a window of its own"
         );
     }
 }
 
-fn place_torn_panes(winamp: Winamp, torn: &[TornPane]) {
-    let stack = window_geometry(winamp.stack);
+fn place_torn_panes(wsz: Wsz, torn: &[TornPane]) {
+    let stack = window_geometry(wsz.stack);
     let x = stack.right() + TORN_PANE_GAP;
     let mut y = stack.y;
     for torn_pane in torn {
@@ -721,12 +721,12 @@ fn release_pointer(settle: Duration) {
 
 fn drag_stack_and_assert_it_follows(
     label: &str,
-    winamp: Winamp,
+    wsz: Wsz,
     docked: &[Pane],
     (steps, dx, dy): (usize, i32, i32),
 ) {
-    let initial = assert_stack_holds(label, winamp, docked);
-    let pressed = press_in_window(label, winamp.stack, MAIN_GRIP);
+    let initial = assert_stack_holds(label, wsz, docked);
+    let pressed = press_in_window(label, wsz.stack, MAIN_GRIP);
 
     for step in 1..=steps {
         let moved_at = Instant::now();
@@ -734,7 +734,7 @@ fn drag_stack_and_assert_it_follows(
         let current = wait_for_window_under_pointer(
             label,
             step,
-            winamp.stack,
+            wsz.stack,
             (pressed.x - initial.x, pressed.y - initial.y),
         );
         assert_eq!(
@@ -750,9 +750,9 @@ fn drag_stack_and_assert_it_follows(
     }
 
     release_pointer(Duration::from_millis(120));
-    let final_stack = window_geometry(winamp.stack);
+    let final_stack = window_geometry(wsz.stack);
     assert_window_moved(label, initial, final_stack);
-    assert_windows_stop_after_release(label, &[winamp.stack]);
+    assert_windows_stop_after_release(label, &[wsz.stack]);
 }
 
 fn wait_for_window_under_pointer(
@@ -783,40 +783,40 @@ fn origin_close(actual: (i32, i32), expected: (i32, i32)) -> bool {
         && (actual.1 - expected.1).abs() <= OFFSET_EPSILON
 }
 
-fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, winamp: Winamp) {
-    press_in_window(label, winamp.stack, MAIN_GRIP);
+fn drag_main_one_pixel_trace_and_assert_continuity(label: &str, wsz: Wsz) {
+    press_in_window(label, wsz.stack, MAIN_GRIP);
 
     let mut trace = Vec::with_capacity(PIXEL_TRACE_STEPS + 1);
     trace.push(DragTraceSample {
         pointer: pointer_location(),
-        stack: window_geometry(winamp.stack),
+        stack: window_geometry(wsz.stack),
         elapsed: Duration::ZERO,
     });
 
     for step in 1..=PIXEL_TRACE_STEPS {
         let previous = *trace.last().expect("previous trace sample");
         mousemove_absolute(previous.pointer.x + 1, previous.pointer.y);
-        trace.push(wait_for_one_pixel_drag_step(label, step, winamp, previous));
+        trace.push(wait_for_one_pixel_drag_step(label, step, wsz, previous));
         std::thread::sleep(Duration::from_millis(8));
     }
 
     release_pointer(Duration::from_millis(120));
     print_drag_trace(label, &trace);
     assert_pixel_drag_trace_continuity(label, &trace);
-    assert_windows_stop_after_release(label, &[winamp.stack]);
+    assert_windows_stop_after_release(label, &[wsz.stack]);
 }
 
 fn wait_for_one_pixel_drag_step(
     label: &str,
     step: usize,
-    winamp: Winamp,
+    wsz: Wsz,
     previous: DragTraceSample,
 ) -> DragTraceSample {
     let started = Instant::now();
     loop {
         let sample = DragTraceSample {
             pointer: pointer_location(),
-            stack: window_geometry(winamp.stack),
+            stack: window_geometry(wsz.stack),
             elapsed: started.elapsed(),
         };
         let pointer_dx = sample.pointer.x - previous.pointer.x;
@@ -903,16 +903,16 @@ fn assert_pixel_drag_trace_continuity(label: &str, trace: &[DragTraceSample]) {
     );
 }
 
-fn drag_main_long_continuous_trace_and_assert_sync(label: &str, winamp: Winamp, docked: &[Pane]) {
-    let initial = assert_stack_holds(label, winamp, docked);
-    press_in_window(label, winamp.stack, MAIN_GRIP);
+fn drag_main_long_continuous_trace_and_assert_sync(label: &str, wsz: Wsz, docked: &[Pane]) {
+    let initial = assert_stack_holds(label, wsz, docked);
+    press_in_window(label, wsz.stack, MAIN_GRIP);
 
     let origin_pointer = pointer_location();
     let started = Instant::now();
     let mut trace = Vec::with_capacity(LONG_DRAG_TRACE_STEPS + 2);
     trace.push(DragTraceSample {
         pointer: origin_pointer,
-        stack: window_geometry(winamp.stack),
+        stack: window_geometry(wsz.stack),
         elapsed: Duration::ZERO,
     });
 
@@ -924,7 +924,7 @@ fn drag_main_long_continuous_trace_and_assert_sync(label: &str, winamp: Winamp, 
         std::thread::sleep(LONG_DRAG_STEP_DELAY);
         trace.push(DragTraceSample {
             pointer: pointer_location(),
-            stack: window_geometry(winamp.stack),
+            stack: window_geometry(wsz.stack),
             elapsed: started.elapsed(),
         });
     }
@@ -932,13 +932,13 @@ fn drag_main_long_continuous_trace_and_assert_sync(label: &str, winamp: Winamp, 
     std::thread::sleep(Duration::from_millis(80));
     trace.push(DragTraceSample {
         pointer: pointer_location(),
-        stack: window_geometry(winamp.stack),
+        stack: window_geometry(wsz.stack),
         elapsed: started.elapsed(),
     });
     release_pointer(Duration::from_millis(160));
 
     assert_long_drag_trace_sync(label, initial, &trace);
-    assert_windows_stop_after_release(label, &[winamp.stack]);
+    assert_windows_stop_after_release(label, &[wsz.stack]);
 }
 
 fn assert_long_drag_trace_sync(label: &str, initial: WindowGeometry, trace: &[DragTraceSample]) {
@@ -996,21 +996,21 @@ fn assert_long_drag_trace_sync(label: &str, initial: WindowGeometry, trace: &[Dr
     println!("{label}: max pointer/window drift=({max_drift_x},{max_drift_y})");
 }
 
-fn tear_pane(label: &str, winamp: Winamp, pane: Pane, docked: &[Pane]) -> TornPane {
-    let before = assert_stack_holds(label, winamp, docked);
-    let offset = winamp.pane_offset(pane, docked);
-    let pressed = press_in_window(label, winamp.stack, (PANE_GRIP.0, offset + PANE_GRIP.1));
+fn tear_pane(label: &str, wsz: Wsz, pane: Pane, docked: &[Pane]) -> TornPane {
+    let before = assert_stack_holds(label, wsz, docked);
+    let offset = wsz.pane_offset(pane, docked);
+    let pressed = press_in_window(label, wsz.stack, (PANE_GRIP.0, offset + PANE_GRIP.1));
     let grab = (pressed.x - before.x, pressed.y - (before.y + offset));
 
     drag_pointer_by(SHORT_OF_TEAR_DX, SHORT_OF_TEAR_DY);
     std::thread::sleep(Duration::from_millis(160));
     assert_eq!(
-        winamp.pane_window(pane),
+        wsz.pane_window(pane),
         None,
         "{label}: a press that wandered ({SHORT_OF_TEAR_DX},{SHORT_OF_TEAR_DY}) tore the {pane:?} off"
     );
     assert_eq!(
-        window_geometry(winamp.stack),
+        window_geometry(wsz.stack),
         before,
         "{label}: a press on a docked pane's title moved or resized the stack"
     );
@@ -1020,7 +1020,7 @@ fn tear_pane(label: &str, winamp: Winamp, pane: Pane, docked: &[Pane]) -> TornPa
         drag_pointer_by(TEAR_DX, TEAR_DY);
         let torn = match window {
             Some(torn) => torn,
-            None => wait_for_torn_window(label, winamp, pane),
+            None => wait_for_torn_window(label, wsz, pane),
         };
         window = Some(torn);
         let current = wait_for_window_under_pointer(label, step, torn, grab);
@@ -1034,20 +1034,20 @@ fn tear_pane(label: &str, winamp: Winamp, pane: Pane, docked: &[Pane]) -> TornPa
         .copied()
         .filter(|held| *held != pane)
         .collect();
-    let after = assert_stack_holds(label, winamp, &remaining);
+    let after = assert_stack_holds(label, wsz, &remaining);
     assert_eq!(
         after.origin(),
         before.origin(),
         "{label}: tearing a pane off moved the stack"
     );
-    assert_windows_stop_after_release(label, &[winamp.stack, window]);
+    assert_windows_stop_after_release(label, &[wsz.stack, window]);
     TornPane { pane, window }
 }
 
-fn wait_for_torn_window(label: &str, winamp: Winamp, pane: Pane) -> u64 {
+fn wait_for_torn_window(label: &str, wsz: Wsz, pane: Pane) -> u64 {
     let deadline = Instant::now() + TORN_WINDOW_TIMEOUT;
     while Instant::now() < deadline {
-        if let Some(window) = winamp.pane_window(pane) {
+        if let Some(window) = wsz.pane_window(pane) {
             return window;
         }
         std::thread::sleep(FIND_WINDOW_POLL);
@@ -1059,26 +1059,26 @@ fn wait_for_torn_window(label: &str, winamp: Winamp, pane: Pane) -> u64 {
     );
 }
 
-fn drag_main_over_torn_panes_and_assert_they_stay(label: &str, winamp: Winamp, torn: &[TornPane]) {
-    let initial = window_geometry(winamp.stack);
+fn drag_main_over_torn_panes_and_assert_they_stay(label: &str, wsz: Wsz, torn: &[TornPane]) {
+    let initial = window_geometry(wsz.stack);
     let panes: Vec<_> = torn
         .iter()
         .map(|torn_pane| window_geometry(torn_pane.window))
         .collect();
-    let pressed = press_in_window(label, winamp.stack, MAIN_GRIP);
+    let pressed = press_in_window(label, wsz.stack, MAIN_GRIP);
     let grab = (pressed.x - initial.x, pressed.y - initial.y);
 
     for step in 1..=OVERFLIGHT_STEPS {
         drag_pointer_by(OVERFLIGHT_DX, 0);
-        let current = wait_for_window_under_pointer(label, step, winamp.stack, grab);
+        let current = wait_for_window_under_pointer(label, step, wsz.stack, grab);
         println!("{label} step {step}: {current:?}");
         assert_torn_panes_unmoved(label, step, torn, &panes);
     }
 
     release_pointer(Duration::from_millis(160));
     assert_torn_panes_unmoved(label, OVERFLIGHT_STEPS + 1, torn, &panes);
-    assert_window_moved(label, initial, window_geometry(winamp.stack));
-    let mut windows = vec![winamp.stack];
+    assert_window_moved(label, initial, window_geometry(wsz.stack));
+    let mut windows = vec![wsz.stack];
     windows.extend(torn.iter().map(|torn_pane| torn_pane.window));
     assert_windows_stop_after_release(label, &windows);
 }
@@ -1099,9 +1099,9 @@ fn assert_torn_panes_unmoved(
     }
 }
 
-fn drag_torn_pane_alone(label: &str, winamp: Winamp, dragged: TornPane, torn: &[TornPane]) {
+fn drag_torn_pane_alone(label: &str, wsz: Wsz, dragged: TornPane, torn: &[TornPane]) {
     let initial = window_geometry(dragged.window);
-    let stack = window_geometry(winamp.stack);
+    let stack = window_geometry(wsz.stack);
     let others: Vec<TornPane> = torn
         .iter()
         .copied()
@@ -1119,7 +1119,7 @@ fn drag_torn_pane_alone(label: &str, winamp: Winamp, dragged: TornPane, torn: &[
         let current = wait_for_window_under_pointer(label, step, dragged.window, grab);
         println!("{label} step {step}: {current:?}");
         assert_eq!(
-            window_geometry(winamp.stack),
+            window_geometry(wsz.stack),
             stack,
             "{label} step {step}: the stack moved with a torn pane"
         );
@@ -1130,18 +1130,18 @@ fn drag_torn_pane_alone(label: &str, winamp: Winamp, dragged: TornPane, torn: &[
     let released = window_geometry(dragged.window);
     assert_window_moved(label, initial, released);
     assert_eq!(
-        winamp.pane_window(dragged.pane),
+        wsz.pane_window(dragged.pane),
         Some(dragged.window),
         "{label}: a torn pane let go away from the stack went back into it"
     );
-    let mut windows = vec![winamp.stack];
+    let mut windows = vec![wsz.stack];
     windows.extend(torn.iter().map(|torn_pane| torn_pane.window));
     assert_windows_stop_after_release(label, &windows);
 }
 
 fn move_stack_with_window_manager_and_assert_panes_stay(
     label: &str,
-    winamp: Winamp,
+    wsz: Wsz,
     torn: &[TornPane],
 ) {
     if !window_manager_supports_net_active_window() {
@@ -1149,19 +1149,19 @@ fn move_stack_with_window_manager_and_assert_panes_stay(
         return;
     }
 
-    let initial = window_geometry(winamp.stack);
+    let initial = window_geometry(wsz.stack);
     let panes: Vec<_> = torn
         .iter()
         .map(|torn_pane| window_geometry(torn_pane.window))
         .collect();
     let target = (initial.x + 31, initial.y + 19);
-    move_window(winamp.stack, target.0, target.1);
+    move_window(wsz.stack, target.0, target.1);
 
     let deadline = Instant::now() + SETUP_POSITION_TIMEOUT;
-    let mut current = window_geometry(winamp.stack);
+    let mut current = window_geometry(wsz.stack);
     while Instant::now() < deadline && !origin_close(current.origin(), target) {
         std::thread::sleep(Duration::from_millis(8));
-        current = window_geometry(winamp.stack);
+        current = window_geometry(wsz.stack);
     }
     println!("{label}: {current:?}");
     assert!(
@@ -1169,7 +1169,7 @@ fn move_stack_with_window_manager_and_assert_panes_stay(
         "{label}: the window manager did not move the stack target={target:?} actual={current:?}"
     );
     assert_torn_panes_unmoved(label, 1, torn, &panes);
-    let mut windows = vec![winamp.stack];
+    let mut windows = vec![wsz.stack];
     windows.extend(torn.iter().map(|torn_pane| torn_pane.window));
     assert_windows_stop_after_release(label, &windows);
 }
@@ -1190,12 +1190,12 @@ fn window_manager_supports_net_active_window() -> bool {
 
 fn dock_pane(
     label: &str,
-    winamp: Winamp,
+    wsz: Wsz,
     torn: TornPane,
     docked_before: &[Pane],
     docked_after: &[Pane],
 ) {
-    let stack = assert_stack_holds(label, winamp, docked_before);
+    let stack = assert_stack_holds(label, wsz, docked_before);
     let initial = window_geometry(torn.window);
     let pressed = press_in_window(label, torn.window, PANE_GRIP);
     let grab = (pressed.x - initial.x, pressed.y - initial.y);
@@ -1219,35 +1219,35 @@ fn dock_pane(
     release_pointer(Duration::from_millis(60));
 
     let deadline = Instant::now() + DOCK_TIMEOUT;
-    while Instant::now() < deadline && winamp.pane_window(torn.pane).is_some() {
+    while Instant::now() < deadline && wsz.pane_window(torn.pane).is_some() {
         std::thread::sleep(Duration::from_millis(8));
     }
     assert_eq!(
-        winamp.pane_window(torn.pane),
+        wsz.pane_window(torn.pane),
         None,
         "{label}: the {:?} let go on the stack's bottom edge kept its own window",
         torn.pane
     );
-    let after = assert_stack_holds(label, winamp, docked_after);
+    let after = assert_stack_holds(label, wsz, docked_after);
     assert_eq!(
         after.origin(),
         stack.origin(),
         "{label}: docking a pane moved the stack"
     );
-    assert_windows_stop_after_release(label, &[winamp.stack]);
+    assert_windows_stop_after_release(label, &[wsz.stack]);
 }
 
 fn assert_docked_pane_draws_in_its_slot(
     label: &str,
-    winamp: Winamp,
+    wsz: Wsz,
     pane: Pane,
     docked: &[Pane],
     torn_picture: &RgbaImage,
 ) {
-    activate_window(winamp.stack);
+    activate_window(wsz.stack);
     std::thread::sleep(Duration::from_millis(120));
-    let stack = capture_x11_window_image(winamp.stack, &diagnostic_png(label, "stack"));
-    let offset = u32::try_from(winamp.pane_offset(pane, docked)).expect("pane offset");
+    let stack = capture_x11_window_image(wsz.stack, &diagnostic_png(label, "stack"));
+    let offset = u32::try_from(wsz.pane_offset(pane, docked)).expect("pane offset");
     assert!(
         stack.width() >= torn_picture.width() && stack.height() >= offset + torn_picture.height(),
         "{label}: the stack {}x{} has no room for the {pane:?} at {offset}",
@@ -1273,9 +1273,9 @@ fn assert_docked_pane_draws_in_its_slot(
     );
 }
 
-fn stretch_playlist_and_back(label: &str, winamp: Winamp, window_id: u64) {
+fn stretch_playlist_and_back(label: &str, wsz: Wsz, window_id: u64) {
     let initial = window_geometry(window_id);
-    let stretch = (winamp.px(PLAYLIST_STRETCH.0), winamp.px(PLAYLIST_STRETCH.1));
+    let stretch = (wsz.px(PLAYLIST_STRETCH.0), wsz.px(PLAYLIST_STRETCH.1));
     drag_playlist_corner(label, window_id, stretch);
     let stretched = wait_for_window_size(
         label,
@@ -1335,21 +1335,21 @@ fn wait_for_window_size(label: &str, window_id: u64, size: (i32, i32)) -> Window
 
 fn dock_and_undock_and_assert_windows_restored(
     robot: &cranpose::Robot,
-    winamp: Winamp,
+    wsz: Wsz,
     playlist: TornPane,
 ) {
     let label = "dock-undock";
     let docked = [Pane::Equalizer];
-    let stack = assert_stack_holds(label, winamp, &docked);
+    let stack = assert_stack_holds(label, wsz, &docked);
     let torn = window_geometry(playlist.window);
 
     click_button(robot, "Dock");
-    assert_windows_absent(winamp.pid, "after Dock");
+    assert_windows_absent(wsz.pid, "after Dock");
 
     let restore_started = Instant::now();
     click_button_now(robot, "Undock");
-    let restored_stack = find_visible_window(winamp.pid, MAIN_TITLE);
-    let restored_playlist = find_visible_window(winamp.pid, PLAYLIST_TITLE);
+    let restored_stack = find_visible_window(wsz.pid, MAIN_TITLE);
+    let restored_playlist = find_visible_window(wsz.pid, PLAYLIST_TITLE);
     let restore_elapsed = restore_started.elapsed();
     println!(
         "{label}: native windows restored after Undock in {}ms: stack={restored_stack} playlist={restored_playlist}",
@@ -1357,7 +1357,7 @@ fn dock_and_undock_and_assert_windows_restored(
     );
     assert_eq!(
         (restored_stack, restored_playlist),
-        (winamp.stack, playlist.window),
+        (wsz.stack, playlist.window),
         "{label}: Undock made new native windows instead of showing the ones Dock put away"
     );
     assert!(
@@ -1367,7 +1367,7 @@ fn dock_and_undock_and_assert_windows_restored(
         CACHED_RESTORE_TIMEOUT.as_millis()
     );
     robot.wait_for_idle().expect("Undock idle");
-    let restored = assert_stack_holds(label, winamp, &docked);
+    let restored = assert_stack_holds(label, wsz, &docked);
     assert!(
         origin_close(restored.origin(), stack.origin()),
         "{label}: the stack came back somewhere else before={stack:?} after={restored:?}"
@@ -1377,16 +1377,16 @@ fn dock_and_undock_and_assert_windows_restored(
         origin_close(restored_torn.origin(), torn.origin()),
         "{label}: the torn playlist came back somewhere else before={torn:?} after={restored_torn:?}"
     );
-    assert_panes_not_torn(label, winamp, &docked);
+    assert_panes_not_torn(label, wsz, &docked);
 }
 
-fn drag_volume_to_zero_and_assert_stack_remains(label: &str, winamp: Winamp) {
-    let initial = window_geometry(winamp.stack);
-    let start_x = initial.x + winamp.px(107.0 + 54.0);
-    let end_x = initial.x + winamp.px(107.0);
-    let y = initial.y + winamp.px(57.0 + 5.0);
+fn drag_volume_to_zero_and_assert_stack_remains(label: &str, wsz: Wsz) {
+    let initial = window_geometry(wsz.stack);
+    let start_x = initial.x + wsz.px(107.0 + 54.0);
+    let end_x = initial.x + wsz.px(107.0);
+    let y = initial.y + wsz.px(57.0 + 5.0);
 
-    activate_window(winamp.stack);
+    activate_window(wsz.stack);
     mousemove_absolute(start_x, y);
     std::thread::sleep(Duration::from_millis(80));
     xdotool(["mousedown", "1"]);
@@ -1396,14 +1396,14 @@ fn drag_volume_to_zero_and_assert_stack_remains(label: &str, winamp: Winamp) {
     release_pointer(Duration::from_millis(180));
 
     assert_eq!(
-        window_geometry(winamp.stack),
+        window_geometry(wsz.stack),
         initial,
         "{label}: volume drag moved, resized or hid the stack"
     );
 }
 
-fn click_transport_buttons_and_assert_stack_remains(label: &str, winamp: Winamp) {
-    let initial = window_geometry(winamp.stack);
+fn click_transport_buttons_and_assert_stack_remains(label: &str, wsz: Wsz) {
+    let initial = window_geometry(wsz.stack);
     let sequence = [
         ("play", PLAY_X),
         ("pause", PAUSE_X),
@@ -1415,39 +1415,39 @@ fn click_transport_buttons_and_assert_stack_remains(label: &str, winamp: Winamp)
         ("stop", STOP_X),
     ];
 
-    activate_window(winamp.stack);
+    activate_window(wsz.stack);
     for (index, (button, x)) in sequence.into_iter().enumerate() {
-        click_winamp_main_button(label, winamp, button, x, TRANSPORT_Y);
+        click_wsz_main_button(label, wsz, button, x, TRANSPORT_Y);
         std::thread::sleep(TRANSPORT_CLICK_SETTLE);
         assert_eq!(
-            window_geometry(winamp.stack),
+            window_geometry(wsz.stack),
             initial,
             "{label} click {index} ({button}): the stack moved, resized or disappeared"
         );
     }
 }
 
-fn hold_transport_button_and_assert_pressed_until_release(label: &str, winamp: Winamp) {
-    let initial = window_geometry(winamp.stack);
-    activate_window(winamp.stack);
+fn hold_transport_button_and_assert_pressed_until_release(label: &str, wsz: Wsz) {
+    let initial = window_geometry(wsz.stack);
+    activate_window(wsz.stack);
 
-    let baseline = capture_winamp_button_crop(label, winamp, "baseline", PLAY_X, TRANSPORT_Y);
-    let (screen_x, screen_y) = winamp_button_center(winamp, PLAY_X, TRANSPORT_Y);
+    let baseline = capture_wsz_button_crop(label, wsz, "baseline", PLAY_X, TRANSPORT_Y);
+    let (screen_x, screen_y) = wsz_button_center(wsz, PLAY_X, TRANSPORT_Y);
     println!(
         "{label}: hold play window={} screen=({screen_x},{screen_y})",
-        winamp.stack
+        wsz.stack
     );
     mousemove_absolute(screen_x, screen_y);
     std::thread::sleep(Duration::from_millis(60));
     xdotool(["mousedown", "1"]);
     std::thread::sleep(BUTTON_HOLD_SETTLE);
-    let pressed = capture_winamp_button_crop(label, winamp, "pressed", PLAY_X, TRANSPORT_Y);
+    let pressed = capture_wsz_button_crop(label, wsz, "pressed", PLAY_X, TRANSPORT_Y);
 
     mousemove_absolute(screen_x + 1, screen_y);
     std::thread::sleep(BUTTON_HOLD_SAMPLE_DELAY);
-    let held = capture_winamp_button_crop(label, winamp, "held", PLAY_X, TRANSPORT_Y);
+    let held = capture_wsz_button_crop(label, wsz, "held", PLAY_X, TRANSPORT_Y);
     release_pointer(Duration::from_millis(180));
-    let released = capture_winamp_button_crop(label, winamp, "released", PLAY_X, TRANSPORT_Y);
+    let released = capture_wsz_button_crop(label, wsz, "released", PLAY_X, TRANSPORT_Y);
 
     let press_delta = image_changed_pixels(&baseline, &pressed, 8);
     let held_from_baseline = image_changed_pixels(&baseline, &held, 8);
@@ -1475,47 +1475,47 @@ fn hold_transport_button_and_assert_pressed_until_release(label: &str, winamp: W
     );
 
     assert_eq!(
-        window_geometry(winamp.stack),
+        window_geometry(wsz.stack),
         initial,
         "{label}: the stack moved or resized"
     );
 }
 
-fn click_winamp_main_button(label: &str, winamp: Winamp, button: &str, x: f32, y: f32) {
-    let (screen_x, screen_y) = winamp_button_center(winamp, x, y);
+fn click_wsz_main_button(label: &str, wsz: Wsz, button: &str, x: f32, y: f32) {
+    let (screen_x, screen_y) = wsz_button_center(wsz, x, y);
     println!(
         "{label}: click {button} window={} screen=({screen_x},{screen_y})",
-        winamp.stack
+        wsz.stack
     );
     mousemove_absolute(screen_x, screen_y);
     std::thread::sleep(Duration::from_millis(40));
     xdotool(["click", "1"]);
 }
 
-fn winamp_button_center(winamp: Winamp, x: f32, y: f32) -> (i32, i32) {
-    let geometry = window_geometry(winamp.stack);
+fn wsz_button_center(wsz: Wsz, x: f32, y: f32) -> (i32, i32) {
+    let geometry = window_geometry(wsz.stack);
     (
-        geometry.x + winamp.px(x + TRANSPORT_BUTTON_WIDTH * 0.5),
-        geometry.y + winamp.px(y + TRANSPORT_BUTTON_HEIGHT * 0.5),
+        geometry.x + wsz.px(x + TRANSPORT_BUTTON_WIDTH * 0.5),
+        geometry.y + wsz.px(y + TRANSPORT_BUTTON_HEIGHT * 0.5),
     )
 }
 
 fn diagnostic_png(label: &str, phase: &str) -> std::path::PathBuf {
     output_paths::diagnostic_path(&format!(
-        "cranpose-winamp-{label}-{phase}-{}.png",
+        "cranpose-wsz-{label}-{phase}-{}.png",
         std::process::id()
     ))
 }
 
-fn capture_winamp_button_crop(
+fn capture_wsz_button_crop(
     label: &str,
-    winamp: Winamp,
+    wsz: Wsz,
     phase: &str,
     x: f32,
     y: f32,
 ) -> RgbaImage {
-    let image = capture_x11_window_image(winamp.stack, &diagnostic_png(label, phase));
-    crop_winamp_button(&image, winamp, x, y)
+    let image = capture_x11_window_image(wsz.stack, &diagnostic_png(label, phase));
+    crop_wsz_button(&image, wsz, x, y)
 }
 
 fn capture_x11_window_image(window_id: u64, path: &std::path::Path) -> RgbaImage {
@@ -1539,16 +1539,16 @@ fn capture_x11_window_image(window_id: u64, path: &std::path::Path) -> RgbaImage
         .to_rgba8()
 }
 
-fn crop_winamp_button(image: &RgbaImage, winamp: Winamp, x: f32, y: f32) -> RgbaImage {
-    let crop_x = (x * winamp.scale).floor().max(0.0) as u32;
-    let crop_y = (y * winamp.scale).floor().max(0.0) as u32;
-    let crop_w = (TRANSPORT_BUTTON_WIDTH * winamp.scale).ceil().max(1.0) as u32;
-    let crop_h = (TRANSPORT_BUTTON_HEIGHT * winamp.scale).ceil().max(1.0) as u32;
+fn crop_wsz_button(image: &RgbaImage, wsz: Wsz, x: f32, y: f32) -> RgbaImage {
+    let crop_x = (x * wsz.scale).floor().max(0.0) as u32;
+    let crop_y = (y * wsz.scale).floor().max(0.0) as u32;
+    let crop_w = (TRANSPORT_BUTTON_WIDTH * wsz.scale).ceil().max(1.0) as u32;
+    let crop_h = (TRANSPORT_BUTTON_HEIGHT * wsz.scale).ceil().max(1.0) as u32;
     let crop_w = crop_w.min(image.width().saturating_sub(crop_x));
     let crop_h = crop_h.min(image.height().saturating_sub(crop_y));
     assert!(
         crop_w > 0 && crop_h > 0,
-        "Winamp button crop outside captured image: image={}x{} crop=({}, {}, {}, {})",
+        "WSZ button crop outside captured image: image={}x{} crop=({}, {}, {}, {})",
         image.width(),
         image.height(),
         crop_x,

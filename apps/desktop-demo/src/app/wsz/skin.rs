@@ -1,13 +1,10 @@
-use std::{
-    collections::HashMap,
-    io::{Cursor, Read},
-};
+use std::io::{Cursor, Read};
 
 use anyhow::{Context, Result};
 use cranpose_ui::ImageBitmap;
 
 #[derive(Clone, PartialEq)]
-pub struct WinampSkin {
+pub struct WszSkin {
     pub main: ImageBitmap,
     pub titlebar: ImageBitmap,
     pub cbuttons: ImageBitmap,
@@ -22,30 +19,30 @@ pub struct WinampSkin {
     pub pledit: ImageBitmap,
 }
 
-pub fn load_skin(wsz_bytes: &[u8]) -> Result<WinampSkin> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(wsz_bytes))
-        .context("failed to open winamp .wsz archive")?;
-
-    let mut files: HashMap<String, Vec<u8>> = HashMap::new();
-    for idx in 0..archive.len() {
-        let mut file = archive.by_index(idx).context("failed to read zip entry")?;
-        if file.is_dir() {
-            continue;
-        }
-        let mut data = Vec::new();
-        file.read_to_end(&mut data)
-            .with_context(|| format!("failed to read entry {}", file.name()))?;
-        files.insert(normalize_name(file.name()), data);
-    }
-
-    let decode = |name: &str| -> Result<ImageBitmap> {
-        let bytes = files
-            .get(name)
+pub fn load_skin(wsz_bytes: &[u8]) -> Result<WszSkin> {
+    let mut archive =
+        zip::ZipArchive::new(Cursor::new(wsz_bytes)).context("failed to open WSZ archive")?;
+    let mut bytes = Vec::new();
+    let mut decode = |name: &str| -> Result<ImageBitmap> {
+        let index = archive
+            .file_names()
+            .position(|entry| {
+                entry
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .is_some_and(|basename| basename.trim().eq_ignore_ascii_case(name))
+            })
             .with_context(|| format!("missing required skin entry: {name}"))?;
-        decode_bmp(bytes).with_context(|| format!("failed to decode {name}"))
+        let mut file = archive
+            .by_index(index)
+            .context("failed to read zip entry")?;
+        bytes.clear();
+        file.read_to_end(&mut bytes)
+            .with_context(|| format!("failed to read entry {name}"))?;
+        decode_bmp(&bytes).with_context(|| format!("failed to decode {name}"))
     };
 
-    Ok(WinampSkin {
+    Ok(WszSkin {
         main: decode("main.bmp")?,
         titlebar: decode("titlebar.bmp")?,
         cbuttons: decode("cbuttons.bmp")?,
@@ -61,18 +58,9 @@ pub fn load_skin(wsz_bytes: &[u8]) -> Result<WinampSkin> {
     })
 }
 
-fn normalize_name(name: &str) -> String {
-    name.replace('\\', "/")
-        .rsplit('/')
-        .next()
-        .unwrap_or(name)
-        .trim()
-        .to_ascii_lowercase()
-}
-
 fn decode_bmp(bytes: &[u8]) -> Result<ImageBitmap> {
     let dynamic = image::load_from_memory(bytes).context("image decode")?;
-    let mut rgba = dynamic.to_rgba8();
+    let mut rgba = dynamic.into_rgba8();
 
     for pixel in rgba.pixels_mut() {
         if pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 255 {

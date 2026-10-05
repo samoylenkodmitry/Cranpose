@@ -616,12 +616,12 @@ fn tab_source_paths_point_at_files_that_exist() {
 
 #[test]
 fn an_inline_playlist_falls_back_to_the_size_the_skin_draws() {
-    let size = crate::app::winamp::playlist_window_size(None);
+    let size = crate::app::wsz::playlist_window_size(None);
     assert_eq!(
         (size.width, size.height),
         (
-            crate::app::winamp::sprites::PLAYLIST_WIDTH,
-            crate::app::winamp::sprites::PLAYLIST_HEIGHT
+            crate::app::wsz::sprites::PLAYLIST_WIDTH,
+            crate::app::wsz::sprites::PLAYLIST_HEIGHT
         ),
         "a playlist that is not in a window of its own is the size the skin draws"
     );

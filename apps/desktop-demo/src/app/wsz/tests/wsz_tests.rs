@@ -23,7 +23,7 @@ fn vertical_slider_helpers_clamp_values() {
 }
 
 #[test]
-fn winamp_debug_env_flags_are_not_process_cached() {
+fn wsz_debug_env_flags_are_not_process_cached() {
     let source = include_str!("../mod.rs");
     let once_lock_bool = ["Once", "Lock<bool>"].concat();
     let cached_env = ["get_or_init(|| ", "std::env::var_os"].concat();
