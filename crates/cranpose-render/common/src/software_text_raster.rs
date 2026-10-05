@@ -870,7 +870,7 @@ impl SoftwareTextMetricsCache {
             (
                 font_size.to_bits(),
                 style.measurement_hash(),
-                text.span_styles_hash(),
+                text.span_measurement_hash(),
                 range.start,
             ),
         );
@@ -1244,13 +1244,6 @@ impl TextMeasurer for SoftwareTextMeasurer {
             measured_break_char,
         )
     }
-}
-
-pub fn software_text_content_hash(text: &cranpose_ui::text::AnnotatedString) -> u64 {
-    let mut state = default_hash::new();
-    text.text.hash(&mut state);
-    text.span_styles_hash().hash(&mut state);
-    state.finish()
 }
 
 #[derive(Clone, Copy)]
