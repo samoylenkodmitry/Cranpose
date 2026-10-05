@@ -17,7 +17,7 @@ import android_benchmark as benchmark
 import android_benchmark_artifacts as artifacts
 import android_benchmark_support as support
 from android_benchmark_device import AndroidDevice, surface_frames, verify_route_window
-from android_benchmark_build import build, native_artifact
+from android_benchmark_build import build, native_artifact, validate_framework_resolution
 from android_benchmark import run_leg, sequence, validate_pair, validate_route
 from android_benchmark_video import AndroidRecording, ScrcpyRecording, inspect_recording
 
@@ -280,11 +280,36 @@ class BenchmarkContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'warnings'):
             native_artifact(exported.parent, package, 'arm64-v8a', b'warning: build warning\n')
 
+    def test_registry_resolution_cannot_vacuously_satisfy_archived_framework_selection(self):
+        framework = self.root / 'framework/crates/benchmark-fixture'
+        expected = {'benchmark-fixture': {'path': framework, 'version': '1.0.1'}}
+        metadata = {'packages': [{
+            'name': 'benchmark-fixture',
+            'version': '1.0.0',
+            'source': 'registry+https://github.com/rust-lang/crates.io-index',
+            'manifest_path': str(self.root / 'registry/benchmark-fixture-1.0.0/Cargo.toml'),
+        }]}
+        with self.assertRaisesRegex(ValueError, 'does not resolve the archived framework package'):
+            validate_framework_resolution(metadata, expected, {'benchmark-fixture'})
+
+        metadata['packages'] = [{
+            'name': 'benchmark-fixture',
+            'version': '1.0.1',
+            'source': None,
+            'manifest_path': str(framework / 'Cargo.toml'),
+        }]
+        self.assertEqual(
+            validate_framework_resolution(metadata, expected, {'benchmark-fixture'}),
+            {'benchmark-fixture': str((framework / 'Cargo.toml').resolve())},
+        )
+
     def test_build_resolves_archived_framework_before_reading_unavailable_host_paths(self):
         framework = self.root / 'framework'
+        framework.mkdir()
+        (framework / 'Cargo.toml').write_text('[workspace]\nmembers=["crates/benchmark-fixture"]\n[workspace.package]\nversion="1.0.0"\n')
         package = framework / 'crates/benchmark-fixture'
         package.mkdir(parents=True)
-        (package / 'Cargo.toml').write_text('[package]\nname="benchmark-fixture"\nversion="1.0.0"\nedition="2021"\n[lib]\npath="lib.rs"\n')
+        (package / 'Cargo.toml').write_text('[package]\nname="benchmark-fixture"\nversion.workspace=true\nedition="2021"\n[lib]\npath="lib.rs"\n')
         (package / 'lib.rs').write_text('pub fn value() -> u32 { 1 }\n')
         app = self.root / 'app'
         (app / '.cargo').mkdir(parents=True)
