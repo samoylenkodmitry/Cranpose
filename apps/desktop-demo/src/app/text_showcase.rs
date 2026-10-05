@@ -219,7 +219,7 @@ pub(crate) fn TextShowcaseTab() {
                                                     "en-US,ja-JP",
                                                 )),
                                                 font_feature_settings: Some(
-                                                    "'liga' 1, 'kern' 1".to_string(),
+                                                    "'liga' 1, 'kern' 1".into(),
                                                 ),
                                                 ..Default::default()
                                             },
