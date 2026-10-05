@@ -135,6 +135,217 @@ fn subpixel_scene(edge_x: f32, alpha: f32) -> RenderGraph {
     })
 }
 
+fn inspector_glass(cache_policy: CachePolicy) -> RenderGraph {
+    let bounds = Rect {
+        x: 16.0,
+        y: 12.0,
+        width: 56.0,
+        height: 48.0,
+    };
+    RenderGraph::new(LayerNode {
+        local_bounds: CONTENT,
+        children: vec![RenderNode::Layer(Box::new(LayerNode {
+            node_id: Some(71),
+            local_bounds: bounds,
+            graphics_layer: GraphicsLayer {
+                backdrop_effect: Some(RenderEffect::blur(6.0)),
+                ..GraphicsLayer::default()
+            }
+            .into(),
+            cache_policy,
+            children: vec![support::solid_rect(bounds, Color(1.0, 1.0, 1.0, 0.35))],
+            ..LayerNode::default()
+        }))],
+        ..LayerNode::default()
+    })
+}
+
+fn painted_page(color: Color) -> RenderGraph {
+    RenderGraph::new(LayerNode {
+        local_bounds: CONTENT,
+        children: vec![support::solid_rect(CONTENT, color)],
+        ..LayerNode::default()
+    })
+}
+
+fn nested_backdrop_scene(
+    page_color: Color,
+    composite_color: Color,
+    root_color: Color,
+    composite_cache: CachePolicy,
+    backdrop_cache: CachePolicy,
+) -> RenderGraph {
+    let backdrop_bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 16.0,
+        height: 16.0,
+    };
+    let backdrop = LayerNode {
+        node_id: Some(42),
+        local_bounds: backdrop_bounds,
+        transform_to_parent: ProjectiveTransform::translation(4.0, 4.0),
+        graphics_layer: GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::blur(6.0)),
+            ..GraphicsLayer::default()
+        }
+        .into(),
+        cache_policy: backdrop_cache,
+        children: vec![support::solid_rect(
+            backdrop_bounds,
+            Color(1.0, 1.0, 1.0, 0.35),
+        )],
+        ..LayerNode::default()
+    };
+    let nested = LayerNode {
+        node_id: Some(43),
+        local_bounds: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 28.0,
+        },
+        transform_to_parent: ProjectiveTransform::translation(4.0, 4.0),
+        graphics_layer: GraphicsLayer {
+            alpha: 0.5,
+            ..GraphicsLayer::default()
+        }
+        .into(),
+        children: vec![RenderNode::Layer(Box::new(backdrop))],
+        ..LayerNode::default()
+    };
+    let composite_bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 20.0,
+        height: 16.0,
+    };
+    let composite = LayerNode {
+        node_id: Some(44),
+        local_bounds: composite_bounds,
+        transform_to_parent: ProjectiveTransform::translation(7.0, 6.0),
+        graphics_layer: GraphicsLayer {
+            alpha: 0.5,
+            ..GraphicsLayer::default()
+        }
+        .into(),
+        cache_policy: composite_cache,
+        children: vec![support::solid_rect(composite_bounds, composite_color)],
+        ..LayerNode::default()
+    };
+    let parent_bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 48.0,
+        height: 36.0,
+    };
+    let parent = LayerNode {
+        node_id: Some(41),
+        local_bounds: parent_bounds,
+        transform_to_parent: ProjectiveTransform::uniform_scale(2.0)
+            .then(ProjectiveTransform::translation(20.0, 8.0)),
+        children: vec![
+            support::solid_rect(parent_bounds, page_color),
+            RenderNode::Layer(Box::new(composite)),
+            RenderNode::Layer(Box::new(nested)),
+        ],
+        ..LayerNode::default()
+    };
+    RenderGraph::new(LayerNode {
+        node_id: Some(40),
+        local_bounds: CONTENT,
+        children: vec![
+            support::solid_rect(CONTENT, root_color),
+            RenderNode::Layer(Box::new(parent)),
+        ],
+        ..LayerNode::default()
+    })
+}
+
+fn verify_nested_backdrop_page_provenance(composite_cache: CachePolicy) {
+    let Some(mut cached) = renderer() else {
+        return;
+    };
+    let mut fresh = support::LockedRenderer::beside_locked().expect("reference renderer");
+    let backdrop_region = Rect {
+        x: 36.0,
+        y: 24.0,
+        width: 32.0,
+        height: 32.0,
+    };
+    let scene = |page_color, composite_color, root_color, backdrop_cache| {
+        nested_backdrop_scene(
+            page_color,
+            composite_color,
+            root_color,
+            composite_cache,
+            backdrop_cache,
+        )
+    };
+    let mut warm = capture(
+        &mut cached,
+        scene(Color::BLACK, Color::RED, Color::RED, CachePolicy::Auto),
+    );
+    for _ in 1..3 {
+        warm = capture(
+            &mut cached,
+            scene(Color::BLACK, Color::RED, Color::RED, CachePolicy::Auto),
+        );
+    }
+    let ancestor_changed = capture(
+        &mut cached,
+        scene(Color::BLACK, Color::RED, Color::BLUE, CachePolicy::Auto),
+    );
+    support::assert_same_bytes(
+        "unrelated ancestor pixels do not change the nested backdrop",
+        32,
+        &support::region_pixels(&warm, backdrop_region),
+        &support::region_pixels(&ancestor_changed, backdrop_region),
+    );
+
+    let page_changed = capture(
+        &mut cached,
+        scene(Color::BLUE, Color::RED, Color::BLUE, CachePolicy::Auto),
+    );
+    let page_reference = capture(
+        &mut fresh,
+        scene(Color::BLUE, Color::RED, Color::BLUE, CachePolicy::None),
+    );
+    let page_pixels = support::region_pixels(&page_changed, backdrop_region);
+    let page_reference_pixels = support::region_pixels(&page_reference, backdrop_region);
+    assert!(
+        support::region_pixels(&ancestor_changed, backdrop_region) != page_pixels,
+        "changing the immediate source page must change the nested backdrop"
+    );
+    support::assert_same_bytes(
+        "nested backdrop after immediate source page changes",
+        32,
+        &page_pixels,
+        &page_reference_pixels,
+    );
+
+    let composite_changed = capture(
+        &mut cached,
+        scene(Color::BLUE, Color::GREEN, Color::BLUE, CachePolicy::Auto),
+    );
+    let composite_reference = capture(
+        &mut fresh,
+        scene(Color::BLUE, Color::GREEN, Color::BLUE, CachePolicy::None),
+    );
+    let composite_pixels = support::region_pixels(&composite_changed, backdrop_region);
+    let composite_reference_pixels = support::region_pixels(&composite_reference, backdrop_region);
+    assert!(
+        page_pixels != composite_pixels,
+        "changing a retained ancestor composite must change the nested backdrop"
+    );
+    support::assert_same_bytes(
+        "nested backdrop after retained ancestor composite changes",
+        32,
+        &composite_pixels,
+        &composite_reference_pixels,
+    );
+}
+
 fn capture(renderer: &mut support::LockedRenderer, graph: RenderGraph) -> CapturedFrame {
     renderer.scene_mut().graph = Some(graph);
     renderer
@@ -227,4 +438,53 @@ fn opaque_rectangle_subpixel_motion_updates_its_backdrop() {
 #[test]
 fn translucent_rectangle_subpixel_motion_updates_its_backdrop() {
     assert_unanchored_motion_updates_backdrop(0.55);
+}
+
+#[test]
+fn overlay_backdrop_tracks_the_root_page_after_cache_warmup() {
+    let Some(mut cached) = renderer() else {
+        return;
+    };
+    cached.set_inspector_overlay(Some(inspector_glass(CachePolicy::Auto)));
+    let warm = capture(&mut cached, painted_page(Color::RED));
+    let _ = capture(&mut cached, painted_page(Color::RED));
+    let updated = capture(&mut cached, painted_page(Color::BLUE));
+
+    cached.set_inspector_overlay(None);
+    let plain_blue = capture(&mut cached, painted_page(Color::BLUE));
+    let mut fresh = support::LockedRenderer::beside_locked().expect("reference renderer");
+    fresh.set_inspector_overlay(Some(inspector_glass(CachePolicy::None)));
+    let reference = capture(&mut fresh, painted_page(Color::BLUE));
+    let overlay_bounds = Rect {
+        x: 16.0,
+        y: 12.0,
+        width: 56.0,
+        height: 48.0,
+    };
+    assert_ne!(
+        support::region_pixels(&reference, overlay_bounds),
+        support::region_pixels(&plain_blue, overlay_bounds),
+        "the overlay must visibly composite its backdrop over the page"
+    );
+    assert_ne!(
+        support::region_pixels(&warm, overlay_bounds),
+        support::region_pixels(&reference, overlay_bounds),
+        "the changed root page must alter the overlay's visible backdrop"
+    );
+    support::assert_same_bytes(
+        "overlay backdrop after root page changes",
+        WIDTH,
+        &updated.pixels,
+        &reference.pixels,
+    );
+}
+
+#[test]
+fn nested_backdrop_tracks_immediate_page_and_retained_composite_inputs() {
+    verify_nested_backdrop_page_provenance(CachePolicy::Auto);
+}
+
+#[test]
+fn nested_backdrop_tracks_transient_composite_inputs() {
+    verify_nested_backdrop_page_provenance(CachePolicy::None);
 }

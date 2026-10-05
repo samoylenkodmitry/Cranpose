@@ -147,14 +147,10 @@ impl DeviceRect {
     }
 }
 
-/// What a layer's captures read beneath the layer's own pixels: the base its
-/// page starts from, the parent's page under it when it is an isolated child
-/// reading its backdrop, and a description of that parent content for the
-/// backdrop result cache's key.
 struct Beneath<'a> {
     base: wgpu::LoadOp<wgpu::Color>,
     page: Option<PageBase>,
-    described: Vec<BeneathSegment<'a>>,
+    source: Option<BeneathSegment<'a>>,
 }
 
 impl Beneath<'_> {
@@ -162,22 +158,17 @@ impl Beneath<'_> {
         Self {
             base,
             page: None,
-            described: Vec::new(),
+            source: None,
         }
     }
 }
 
-/// One ancestor scene's content beneath a layer, as the backdrop result
-/// cache hashes it: the ops below `z_end` outside `excluded`, the composites
-/// already drawn and still pending below it, and where the scene's device
-/// origin sits in the layer's device space.
-#[derive(Clone, Copy)]
 struct BeneathSegment<'a> {
+    base: wgpu::LoadOp<wgpu::Color>,
     scene: &'a CompositorScene,
     z_end: usize,
     drawn: &'a [ResolvedComposite],
     pending: &'a [ResolvedComposite],
-    excluded: &'a [(usize, usize)],
     placement: [f32; 2],
 }
 
@@ -499,6 +490,12 @@ fn composite_z(composite: &ResolvedComposite) -> usize {
 
 fn backdrop_cache_keys_use_pending(pass: &LayerPass<'_>) -> bool {
     !NO_BACKDROP_CACHE.flag()
+        && matches!(pass.beneath.base, wgpu::LoadOp::Clear(_))
+        && pass
+            .beneath
+            .source
+            .as_ref()
+            .is_none_or(|source| matches!(source.base, wgpu::LoadOp::Clear(_)))
         && !matches!(
             pass.beneath.page,
             Some(PageBase {
@@ -3241,8 +3238,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let scale = pass.scale;
         let mut hasher = capture_hasher();
         hash_base(pass.beneath.base, &mut hasher);
-        for segment in &pass.beneath.described {
-            let ops = filtered_ops(&segment.scene.draw_ops, segment.z_end, segment.excluded);
+        if let Some(segment) = pass.beneath.source.as_ref() {
+            hash_base(segment.base, &mut hasher);
+            let ops = filtered_ops(&segment.scene.draw_ops, segment.z_end, &[]);
             let window = capture_window(
                 item.capture_rect
                     .translated(Point::new(-segment.placement[0], -segment.placement[1])),
@@ -4971,30 +4969,18 @@ fn beneath_for_child<'a>(
     let pending = &pass.pending[..pass
         .pending
         .partition_point(|composite| composite.z_index <= z)];
-    let mut described: Vec<BeneathSegment<'a>> = pass
-        .beneath
-        .described
-        .iter()
-        .map(|segment| BeneathSegment {
-            placement: [
-                segment.placement[0] - shift.x,
-                segment.placement[1] - shift.y,
-            ],
-            ..*segment
-        })
-        .collect();
-    described.push(BeneathSegment {
+    let source = Some(BeneathSegment {
+        base: pass.beneath.base,
         scene,
         z_end: z + 1,
         drawn,
         pending,
-        excluded: &[],
         placement: [-shift.x, -shift.y],
     });
     Ok(Beneath {
         base: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         page,
-        described,
+        source,
     })
 }
 
