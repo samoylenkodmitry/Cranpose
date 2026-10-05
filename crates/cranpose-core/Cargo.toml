@@ -87,3 +87,7 @@ harness = false
 [[bench]]
 name = "group_cost"
 harness = false
+
+[[bench]]
+name = "child_sync"
+harness = false
