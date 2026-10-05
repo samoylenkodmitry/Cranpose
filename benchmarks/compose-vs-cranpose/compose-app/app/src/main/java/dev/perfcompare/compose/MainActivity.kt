@@ -23,7 +23,10 @@ enum class Scenario(val title: String) {
     GridLayer("Compose · grid + layers"),
     Deep("Compose · deep"),
     DeepLayer("Compose · deep + layers"),
-    Workspace("Compose · trading workspace");
+    Workspace("Compose · trading workspace"),
+
+    // Both apps title it alike: the two pictures are compared.
+    Gauntlet("Gauntlet");
 
     companion object {
         fun fromName(name: String?): Scenario = when (name) {
@@ -35,6 +38,7 @@ enum class Scenario(val title: String) {
             "deep" -> Deep
             "deep_layer" -> DeepLayer
             "workspace" -> Workspace
+            "gauntlet" -> Gauntlet
             else -> Feed
         }
     }
@@ -54,6 +58,7 @@ data class Launch(
     val depth: Int,
     val chips: Int,
     val workspace: WorkspaceMode,
+    val gauntlet: GauntletLoad,
     val still: Boolean = false,
 )
 
@@ -80,6 +85,10 @@ class MainActivity : ComponentActivity() {
             depth = intent.getIntExtra("depth", 40),
             chips = intent.getIntExtra("chips", 6),
             workspace = WorkspaceMode.fromName(intent.getStringExtra("mode")),
+            gauntlet = GauntletLoad(
+                tier = intent.getIntExtra("tier", 5),
+                freeze = intent.getIntExtra("freeze", 0),
+            ),
             still = intent.getBooleanExtra("still", false),
         )
         setContent { PerfCompareApp(launch) }
@@ -111,6 +120,7 @@ fun PerfCompareApp(launch: Launch) {
             Scenario.Deep, Scenario.DeepLayer ->
                 DeepScreen(launch.scenario == Scenario.DeepLayer, launch.depth, launch.chips)
             Scenario.Workspace -> WorkspaceFrame(launch.workspace, launch.still)
+            Scenario.Gauntlet -> GauntletScreen(launch.gauntlet)
         }
     }
 }

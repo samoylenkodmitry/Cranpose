@@ -1,4 +1,5 @@
 pub mod feed;
+pub mod gauntlet;
 pub mod heavy;
 pub mod layers;
 pub mod particles;

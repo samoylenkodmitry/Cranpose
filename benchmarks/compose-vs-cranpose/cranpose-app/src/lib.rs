@@ -22,6 +22,7 @@ pub enum Scenario {
     Deep,
     DeepLayer,
     Workspace,
+    Gauntlet,
 }
 
 impl Scenario {
@@ -35,6 +36,7 @@ impl Scenario {
             "deep" => Self::Deep,
             "deep_layer" => Self::DeepLayer,
             "workspace" => Self::Workspace,
+            "gauntlet" => Self::Gauntlet,
             _ => Self::Feed,
         }
     }
@@ -50,6 +52,8 @@ impl Scenario {
             Self::Deep => "Cranpose · deep",
             Self::DeepLayer => "Cranpose · deep + layers",
             Self::Workspace => "Cranpose · trading workspace",
+            // Both apps title it alike: the two pictures are compared.
+            Self::Gauntlet => "Gauntlet",
         }
     }
 }
@@ -116,6 +120,7 @@ struct Launch {
     depth: usize,
     chips: usize,
     workspace: screens::workspace::WorkspaceMode,
+    gauntlet: screens::gauntlet::GauntletLoad,
     still: bool,
 }
 
@@ -151,6 +156,10 @@ impl Launch {
             workspace: screens::workspace::WorkspaceMode::from_name(
                 args.string("mode").unwrap_or("quotes"),
             ),
+            gauntlet: screens::gauntlet::GauntletLoad {
+                tier: count("tier", 5),
+                freeze: u32::try_from(count("freeze", 0)).unwrap_or(u32::MAX),
+            },
             still: args.boolean("still").unwrap_or(false),
         }
     }
@@ -200,6 +209,7 @@ pub fn PerfCompareApp() {
                 Scenario::Workspace => {
                     screens::workspace::WorkspaceFrame(launch.workspace, launch.still)
                 }
+                Scenario::Gauntlet => screens::gauntlet::GauntletScreen(launch.gauntlet),
             }
         },
     );

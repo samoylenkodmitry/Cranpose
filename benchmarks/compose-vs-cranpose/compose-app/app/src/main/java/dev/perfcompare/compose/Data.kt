@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.math.sin
 
 // Deterministic benchmark data. `cranpose-app/src/data.rs` implements the same
 // generator bit for bit, so both apps draw identical content.
@@ -181,3 +182,134 @@ fun particles(count: Int): Particles {
 
 /** Wraps [value] into `[0, 1)`. */
 fun wrapUnit(value: Float): Float = value - floor(value)
+
+// ------------------------------------------------------------------ gauntlet
+//
+// Everything the gauntlet shows each frame is a function of the frame index,
+// in integer arithmetic wherever a value is printed, so both apps show the
+// same digits on the same frame.
+
+/** What one load tier puts on screen; `../README.md` lists the tiers. */
+@Immutable
+data class GauntletTier(val columns: Int, val scale: Float, val tickers: Int, val depth: Int)
+
+val GAUNTLET_TIERS = listOf(
+    GauntletTier(columns = 1, scale = 1.0f, tickers = 8, depth = 6),
+    GauntletTier(columns = 2, scale = 0.85f, tickers = 12, depth = 8),
+    GauntletTier(columns = 2, scale = 0.7f, tickers = 16, depth = 10),
+    GauntletTier(columns = 3, scale = 0.6f, tickers = 20, depth = 12),
+    GauntletTier(columns = 3, scale = 0.5f, tickers = 28, depth = 14),
+    GauntletTier(columns = 4, scale = 0.45f, tickers = 36, depth = 16),
+    GauntletTier(columns = 4, scale = 0.4f, tickers = 44, depth = 20),
+    GauntletTier(columns = 5, scale = 0.35f, tickers = 56, depth = 24),
+)
+
+/** Tier `1..8`; anything else is clamped into that range. */
+fun gauntletTier(tier: Int): GauntletTier = GAUNTLET_TIERS[tier.coerceIn(1, GAUNTLET_TIERS.size) - 1]
+
+/** Card rows between two deep clusters in the list. */
+const val CARD_ROWS_PER_CLUSTER = 5
+const val AVATAR_COUNT = 8
+const val AVATAR_SIZE = 64
+const val GAUNTLET_SPARK_POINTS = 48
+
+@Immutable
+class Ticker(val symbol: String, val baseCents: Int, val swingCents: Int, val step: Int, val phase: Int)
+
+fun tickers(count: Int): List<Ticker> {
+    val rng = Rng(31_337)
+    return List(count) {
+        val length = 3 + rng.below(2)
+        val symbol = buildString { repeat(length) { append('A' + rng.below(26)) } }
+        Ticker(
+            symbol = symbol,
+            baseCents = 1_000 + rng.below(99_000),
+            swingCents = 50 + rng.below(950),
+            step = 1 + rng.below(9),
+            phase = rng.below(2_000),
+        )
+    }
+}
+
+/** A triangle wave over [period]: 0 at the ends, `period / 2` in the middle. */
+private fun triangle(value: Int, period: Int): Int {
+    val position = Math.floorMod(value, period)
+    return period / 2 - abs(position - period / 2)
+}
+
+/** The quote's price on [frame], in cents. */
+fun tickerCents(ticker: Ticker, frame: Int): Int {
+    val wave = triangle(frame * ticker.step + ticker.phase, 2_000)
+    return ticker.baseCents + ticker.swingCents * (wave - 500) / 500
+}
+
+/** `1234` → `12.34`. */
+fun centsText(cents: Int): String {
+    val sign = if (cents < 0) "-" else ""
+    val value = abs(cents)
+    val fraction = value % 100
+    return "$sign${value / 100}.${if (fraction < 10) "0" else ""}$fraction"
+}
+
+/** The change from the base price as a signed percent: `+1.25%`. */
+fun changeText(ticker: Ticker, cents: Int): String {
+    val basisPoints = (cents - ticker.baseCents) * 10_000 / ticker.baseCents
+    val sign = if (basisPoints < 0) "-" else "+"
+    val value = abs(basisPoints)
+    val fraction = value % 100
+    return "$sign${value / 100}.${if (fraction < 10) "0" else ""}$fraction%"
+}
+
+/** A card's progress on [frame], in thousandths. */
+fun progressPermille(card: Int, frame: Int): Int = (frame * 3 + card * 37) % 1_000
+
+/** The tilt of a card's badge on [frame], in degrees: -5 to 5. */
+fun badgeDegrees(card: Int, frame: Int): Float = triangle(frame * 2 + card * 30, 40) * 0.5f - 5f
+
+/** The content's share of the screen width on [frame]: 0.92 to 1. */
+fun widthFraction(frame: Int): Float = 0.92f + 0.08f * triangle(frame * 3, 200).toFloat() / 100f
+
+/** The sparkline's height at [point], as a fraction of the chart, on [frame]. */
+fun sparkValue(card: Int, point: Int, frame: Int): Float {
+    val phase = (frame.toFloat() + card.toFloat() * 7f) * 0.11f
+    return 0.5f + 0.38f * sin(point.toFloat() * 0.32f + phase) +
+        0.08f * sin(point.toFloat() * 1.7f + card.toFloat())
+}
+
+/** The two ends of each avatar's gradient, as RGB bytes. */
+private val AVATAR_COLORS = arrayOf(
+    intArrayOf(0xEF, 0x44, 0x44, 0x7F, 0x1D, 0x1D),
+    intArrayOf(0xF9, 0x73, 0x16, 0x7C, 0x2D, 0x12),
+    intArrayOf(0xEA, 0xB3, 0x08, 0x71, 0x3F, 0x12),
+    intArrayOf(0x22, 0xC5, 0x5E, 0x14, 0x53, 0x2D),
+    intArrayOf(0x14, 0xB8, 0xA6, 0x13, 0x4E, 0x4A),
+    intArrayOf(0x3B, 0x82, 0xF6, 0x1E, 0x3A, 0x8A),
+    intArrayOf(0x8B, 0x5C, 0xF6, 0x4C, 0x1D, 0x95),
+    intArrayOf(0xEC, 0x48, 0x99, 0x83, 0x18, 0x43),
+)
+
+/**
+ * Avatar [index] as ARGB pixels: a radial gradient crossed by diagonal
+ * stripes, so a misplaced or mis-scaled image is visible.
+ */
+fun avatarArgb(index: Int): IntArray {
+    val colors = AVATAR_COLORS[index % AVATAR_COUNT]
+    val size = AVATAR_SIZE
+    val pixels = IntArray(size * size)
+    for (y in 0 until size) {
+        for (x in 0 until size) {
+            val dx = x - size / 2
+            val dy = y - size * 3 / 8
+            val t = minOf(255, (dx * dx + dy * dy) * 255 / (40 * 40))
+            val stripe = ((x + y + index * 3) / 6) % 2 == 0
+            var argb = 0xFF shl 24
+            for (channel in 0 until 3) {
+                var value = (colors[channel] * (255 - t) + colors[channel + 3] * t) / 255
+                if (stripe) value += (255 - value) / 6
+                argb = argb or (value shl (16 - 8 * channel))
+            }
+            pixels[y * size + x] = argb
+        }
+    }
+    return pixels
+}

@@ -331,3 +331,181 @@ pub fn particles(count: usize) -> Vec<Particle> {
 pub fn wrap_unit(value: f32) -> f32 {
     value - value.floor()
 }
+
+// ------------------------------------------------------------------ gauntlet
+//
+// Everything the gauntlet shows each frame is a function of the frame index,
+// in integer arithmetic wherever a value is printed, so both apps show the
+// same digits on the same frame.
+
+/// What one load tier puts on screen; `../README.md` lists the tiers.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct GauntletTier {
+    /// Cards side by side in each list row.
+    pub columns: usize,
+    /// Multiplies every size and text size: below 1 fits more on screen.
+    pub scale: f32,
+    /// Quote tiles in the ticker strip.
+    pub tickers: usize,
+    /// Nested levels in each deep cluster.
+    pub depth: usize,
+}
+
+pub const GAUNTLET_TIERS: [GauntletTier; 8] = [
+    GauntletTier { columns: 1, scale: 1.0, tickers: 8, depth: 6 },
+    GauntletTier { columns: 2, scale: 0.85, tickers: 12, depth: 8 },
+    GauntletTier { columns: 2, scale: 0.7, tickers: 16, depth: 10 },
+    GauntletTier { columns: 3, scale: 0.6, tickers: 20, depth: 12 },
+    GauntletTier { columns: 3, scale: 0.5, tickers: 28, depth: 14 },
+    GauntletTier { columns: 4, scale: 0.45, tickers: 36, depth: 16 },
+    GauntletTier { columns: 4, scale: 0.4, tickers: 44, depth: 20 },
+    GauntletTier { columns: 5, scale: 0.35, tickers: 56, depth: 24 },
+];
+
+/// Tier `1..=8`; anything else is clamped into that range.
+pub fn gauntlet_tier(tier: usize) -> GauntletTier {
+    GAUNTLET_TIERS[tier.clamp(1, GAUNTLET_TIERS.len()) - 1]
+}
+
+/// Card rows between two deep clusters in the list.
+pub const CARD_ROWS_PER_CLUSTER: usize = 5;
+/// Avatars the cards cycle through.
+pub const AVATAR_COUNT: usize = 8;
+/// Side of an avatar bitmap in pixels.
+pub const AVATAR_SIZE: u32 = 64;
+/// Points in a card's sparkline.
+pub const GAUNTLET_SPARK_POINTS: usize = 48;
+
+/// What a list row holds: a row of cards, or every sixth row a deep cluster.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum GauntletRow {
+    /// The first card index of the row.
+    Cards(usize),
+    /// The cluster's index.
+    Cluster(usize),
+}
+
+pub fn gauntlet_row(row: usize, columns: usize) -> GauntletRow {
+    let block = row / (CARD_ROWS_PER_CLUSTER + 1);
+    let within = row % (CARD_ROWS_PER_CLUSTER + 1);
+    if within == CARD_ROWS_PER_CLUSTER {
+        GauntletRow::Cluster(block)
+    } else {
+        GauntletRow::Cards((block * CARD_ROWS_PER_CLUSTER + within) * columns)
+    }
+}
+
+#[derive(PartialEq)]
+pub struct Ticker {
+    pub symbol: String,
+    pub base_cents: i32,
+    pub swing_cents: i32,
+    pub step: i32,
+    pub phase: i32,
+}
+
+pub fn tickers(count: usize) -> Vec<Ticker> {
+    let mut rng = Rng::new(31_337);
+    (0..count)
+        .map(|_| {
+            let length = 3 + rng.below(2);
+            let symbol = (0..length)
+                .map(|_| char::from(b'A' + rng.below(26) as u8))
+                .collect();
+            Ticker {
+                symbol,
+                base_cents: 1_000 + rng.below(99_000) as i32,
+                swing_cents: 50 + rng.below(950) as i32,
+                step: 1 + rng.below(9) as i32,
+                phase: rng.below(2_000) as i32,
+            }
+        })
+        .collect()
+}
+
+/// A triangle wave over `period`: 0 at the ends, `period / 2` in the middle.
+fn triangle(value: i32, period: i32) -> i32 {
+    let position = value.rem_euclid(period);
+    (period / 2) - (position - period / 2).abs()
+}
+
+/// The quote's price on `frame`, in cents.
+pub fn ticker_cents(ticker: &Ticker, frame: u32) -> i32 {
+    let wave = triangle(frame as i32 * ticker.step + ticker.phase, 2_000);
+    ticker.base_cents + ticker.swing_cents * (wave - 500) / 500
+}
+
+/// `1234` → `12.34`.
+pub fn cents_text(cents: i32) -> String {
+    let sign = if cents < 0 { "-" } else { "" };
+    let cents = cents.abs();
+    format!("{sign}{}.{:02}", cents / 100, cents % 100)
+}
+
+/// The change from the base price as a signed percent: `+1.25%`.
+pub fn change_text(ticker: &Ticker, cents: i32) -> String {
+    let basis_points = (cents - ticker.base_cents) * 10_000 / ticker.base_cents;
+    let sign = if basis_points < 0 { "-" } else { "+" };
+    let basis_points = basis_points.abs();
+    format!("{sign}{}.{:02}%", basis_points / 100, basis_points % 100)
+}
+
+/// A card's progress on `frame`, in thousandths.
+pub fn progress_permille(card: usize, frame: u32) -> u32 {
+    (frame * 3 + card as u32 * 37) % 1_000
+}
+
+/// The tilt of a card's badge on `frame`, in degrees: -5 to 5.
+pub fn badge_degrees(card: usize, frame: u32) -> f32 {
+    triangle((frame * 2 + card as u32 * 30) as i32, 40) as f32 * 0.5 - 5.0
+}
+
+/// The content's share of the screen width on `frame`: 0.92 to 1.
+pub fn width_fraction(frame: u32) -> f32 {
+    0.92 + 0.08 * triangle((frame * 3) as i32, 200) as f32 / 100.0
+}
+
+/// The sparkline's height at `point`, as a fraction of the chart, on `frame`.
+pub fn spark_value(card: usize, point: usize, frame: u32) -> f32 {
+    let phase = (frame as f32 + card as f32 * 7.0) * 0.11;
+    0.5 + 0.38 * (point as f32 * 0.32 + phase).sin() + 0.08 * (point as f32 * 1.7 + card as f32).sin()
+}
+
+/// The two ends of each avatar's gradient, as RGB bytes.
+const AVATAR_COLORS: [[u8; 6]; AVATAR_COUNT] = [
+    [0xEF, 0x44, 0x44, 0x7F, 0x1D, 0x1D],
+    [0xF9, 0x73, 0x16, 0x7C, 0x2D, 0x12],
+    [0xEA, 0xB3, 0x08, 0x71, 0x3F, 0x12],
+    [0x22, 0xC5, 0x5E, 0x14, 0x53, 0x2D],
+    [0x14, 0xB8, 0xA6, 0x13, 0x4E, 0x4A],
+    [0x3B, 0x82, 0xF6, 0x1E, 0x3A, 0x8A],
+    [0x8B, 0x5C, 0xF6, 0x4C, 0x1D, 0x95],
+    [0xEC, 0x48, 0x99, 0x83, 0x18, 0x43],
+];
+
+/// Avatar `index` as tightly packed RGBA: a radial gradient crossed by
+/// diagonal stripes, so a misplaced or mis-scaled image is visible.
+pub fn avatar_rgba(index: usize) -> Vec<u8> {
+    let colors = AVATAR_COLORS[index % AVATAR_COUNT];
+    let size = AVATAR_SIZE as i32;
+    let mut pixels = Vec::with_capacity((AVATAR_SIZE * AVATAR_SIZE * 4) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x - size / 2;
+            let dy = y - size * 3 / 8;
+            let t = ((dx * dx + dy * dy) * 255 / (40 * 40)).min(255);
+            let stripe = ((x + y + index as i32 * 3) / 6) % 2 == 0;
+            for channel in 0..3 {
+                let near = i32::from(colors[channel]);
+                let far = i32::from(colors[channel + 3]);
+                let mut value = (near * (255 - t) + far * t) / 255;
+                if stripe {
+                    value += (255 - value) / 6;
+                }
+                pixels.push(value as u8);
+            }
+            pixels.push(0xFF);
+        }
+    }
+    pixels
+}
