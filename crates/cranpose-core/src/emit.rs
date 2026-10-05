@@ -435,7 +435,7 @@ impl Composer {
     /// This is useful during measure-time subcomposition to ensure newly created
     /// nodes are available for measurement before the full composition is committed.
     pub fn apply_pending_commands(&self) -> Result<(), NodeError> {
-        let commands = self.take_commands();
+        let mut commands = self.take_commands();
         let runtime_handle = self.runtime_handle();
         let result = {
             let mut applier = self.borrow_applier();
@@ -450,6 +450,12 @@ impl Composer {
             }
             result
         };
+        // The pass goes on queueing: hand it back the storage just applied.
+        let mut queued = self.commands_mut();
+        if queued.len() == 0 {
+            std::mem::swap(&mut *queued, &mut commands);
+        }
+        drop(queued);
         if result.is_err() {
             let host = self.active_slots_host();
             if !host.has_active_pass() {

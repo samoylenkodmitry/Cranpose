@@ -162,6 +162,41 @@ pub(crate) struct ComposerRuntimeState {
     applier_host: RefCell<Option<std::rc::Weak<dyn ApplierHost>>>,
 }
 
+/// How many applied command queues a thread keeps for its passes.
+const SPARE_COMMAND_QUEUES: usize = 8;
+
+/// The most commands a kept queue has room for. A larger one grew in a
+/// spike such as the first composition, and keeping it would hold its memory.
+const SPARE_COMMAND_CAPACITY: usize = 1024;
+
+thread_local! {
+    /// Applied command queues for the next passes' composers to fill. A
+    /// composer takes the last one kept; nested passes finish first, so each
+    /// pass gets back the storage a pass at its depth grew.
+    static SPARE_COMMANDS: RefCell<Vec<CommandQueue>> = const { RefCell::new(Vec::new()) };
+}
+
+fn spare_commands() -> CommandQueue {
+    SPARE_COMMANDS
+        .try_with(|spare| spare.borrow_mut().pop())
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Keeps an applied, empty command queue for the next pass on this thread.
+pub(crate) fn recycle_commands(commands: CommandQueue) {
+    if commands.capacity() > SPARE_COMMAND_CAPACITY {
+        return;
+    }
+    let _ = SPARE_COMMANDS.try_with(|spare| {
+        let mut spare = spare.borrow_mut();
+        if spare.len() < SPARE_COMMAND_QUEUES {
+            spare.push(commands);
+        }
+    });
+}
+
 impl Default for ComposerRuntimeState {
     fn default() -> Self {
         Self {
@@ -659,6 +694,17 @@ impl Drop for SubcomposeStackGuard {
     }
 }
 
+impl Drop for ComposerCore {
+    /// A pass that queued nothing never takes its queue: hand its storage
+    /// back for the next pass.
+    fn drop(&mut self) {
+        let commands = std::mem::take(self.commands.get_mut());
+        if commands.len() == 0 && commands.capacity() > 0 {
+            recycle_commands(commands);
+        }
+    }
+}
+
 impl ComposerCore {
     pub(crate) fn open_branch_fold(&self, key: Key) -> BranchGroupGuard {
         let hosts = self.slot_hosts.borrow();
@@ -691,6 +737,7 @@ impl ComposerCore {
             Vec::new()
         };
 
+        let commands = spare_commands();
         Self {
             shared_state,
             slots,
@@ -700,7 +747,7 @@ impl ComposerCore {
             parent_stack: RefCell::new(parent_stack),
             subcompose_stack: RefCell::new(Vec::new()),
             root: Cell::new(root),
-            commands: RefCell::new(CommandQueue::default()),
+            commands: RefCell::new(commands),
             scope_stack: RefCell::new(Vec::new()),
             subcomposition_owner_scope: RefCell::new(None),
             local_stack: RefCell::new(None),
@@ -1903,7 +1950,7 @@ impl Composer {
 
     fn flush_subcompose_pass(
         &self,
-        commands: CommandQueue,
+        mut commands: CommandQueue,
         runtime_handle: &RuntimeHandle,
         compact_applier: bool,
         side_effects: Vec<Box<dyn FnOnce()>>,
@@ -1915,6 +1962,7 @@ impl Composer {
                 update.apply(&mut *applier)?;
             }
         }
+        recycle_commands(commands);
         if compact_applier {
             self.core.applier.compact();
             self.core.applier.borrow_dyn().clear_recycled_nodes();

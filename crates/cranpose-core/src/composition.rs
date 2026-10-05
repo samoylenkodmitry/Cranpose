@@ -168,7 +168,7 @@ impl<A: Applier + 'static> Composition<A> {
         &mut self,
         host: &Rc<SlotsHost>,
         runtime_handle: &RuntimeHandle,
-        commands: CommandQueue,
+        mut commands: CommandQueue,
     ) -> Result<(), NodeError> {
         let result = {
             let mut applier = self.applier.borrow_dyn();
@@ -183,6 +183,7 @@ impl<A: Applier + 'static> Composition<A> {
             }
             result
         };
+        crate::composer::recycle_commands(commands);
         if result.is_err() {
             self.abandon_host_after_apply_failure(host);
         }

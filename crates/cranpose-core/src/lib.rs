@@ -2330,11 +2330,16 @@ impl DeferredChildCleanupQueue {
             .retain(|cleanup| cleanup.child_id != child_id || cleanup.generation != generation);
     }
 
-    fn flush(self, applier: &mut dyn Applier) -> Result<(), NodeError> {
-        for cleanup in self.pending {
+    fn flush(&mut self, applier: &mut dyn Applier) -> Result<(), NodeError> {
+        for cleanup in self.pending.drain(..) {
             cleanup_detached_child(applier, cleanup)?;
         }
         Ok(())
+    }
+
+    fn clear(&mut self) {
+        self.pending.clear();
+        self.preserved.clear();
     }
 }
 
@@ -2456,8 +2461,7 @@ impl Command {
     }
 }
 
-const COMMAND_CHUNK_CAPACITY: usize = 1024;
-const COMMAND_FLUSH_THRESHOLD: usize = COMMAND_CHUNK_CAPACITY * 4;
+const COMMAND_FLUSH_THRESHOLD: usize = 4096;
 type ChildList = SmallVec<[NodeId; 4]>;
 const SMALL_CHILD_SYNC_LINEAR_THRESHOLD: usize = 8;
 
@@ -2549,10 +2553,12 @@ struct SyncChildrenCommand {
     child_len: usize,
 }
 
+/// The commands a composition pass queued for the applier, in order. Kept
+/// across passes once applied, so a frame's commands reuse the storage the
+/// last frame's grew.
 #[derive(Default)]
-struct CommandQueue {
-    chunks: Vec<Vec<CommandTag>>,
-    len: usize,
+pub(crate) struct CommandQueue {
+    tags: Vec<CommandTag>,
     bubble_dirty: Vec<BubbleDirtyCommand>,
     update_typed_nodes: Vec<UpdateTypedNodeCommand>,
     remove_nodes: Vec<NodeId>,
@@ -2565,21 +2571,12 @@ struct CommandQueue {
     sync_children: Vec<SyncChildrenCommand>,
     sync_child_ids: Vec<NodeId>,
     callbacks: Vec<CommandCallback>,
+    cleanup: DeferredChildCleanupQueue,
 }
 
 impl CommandQueue {
     fn push_tag(&mut self, tag: CommandTag) {
-        let needs_chunk = self
-            .chunks
-            .last()
-            .is_none_or(|chunk| chunk.len() == chunk.capacity());
-        if needs_chunk {
-            self.chunks.push(Vec::with_capacity(COMMAND_CHUNK_CAPACITY));
-        }
-        if let Some(chunk) = self.chunks.last_mut() {
-            chunk.push(tag);
-            self.len += 1;
-        }
+        self.tags.push(tag);
     }
 
     fn push(&mut self, command: Command) {
@@ -2688,11 +2685,11 @@ impl CommandQueue {
     }
 
     fn len(&self) -> usize {
-        self.len
+        self.tags.len()
     }
 
     fn capacity(&self) -> usize {
-        self.chunks.iter().map(Vec::capacity).sum()
+        self.tags.capacity()
     }
 
     fn payload_len_bytes(&self) -> usize {
@@ -2817,155 +2814,264 @@ impl CommandQueue {
             )
     }
 
-    fn apply(self, applier: &mut dyn Applier) -> Result<(), NodeError> {
-        let mut bubble_dirty = self.bubble_dirty.into_iter();
-        let mut update_typed_nodes = self.update_typed_nodes.into_iter();
-        let mut remove_nodes = self.remove_nodes.into_iter();
-        let mut mount_nodes = self.mount_nodes.into_iter();
-        let mut attach_children = self.attach_children.into_iter();
-        let mut insert_children = self.insert_children.into_iter();
-        let mut move_children = self.move_children.into_iter();
-        let mut remove_children = self.remove_children.into_iter();
-        let mut detach_children = self.detach_children.into_iter();
-        let mut sync_children_commands = self.sync_children.into_iter();
-        let sync_child_ids = self.sync_child_ids;
-        let mut callbacks = self.callbacks.into_iter();
-        let mut deferred_cleanup = DeferredChildCleanupQueue::default();
+    /// Applies the queued commands in order and empties the queue, keeping
+    /// its storage. A failed command leaves the queue empty too.
+    pub(crate) fn apply(&mut self, applier: &mut dyn Applier) -> Result<(), NodeError> {
+        let result = self.apply_in_order(applier);
+        self.clear();
+        result
+    }
 
-        for chunk in self.chunks {
-            for tag in chunk {
-                match tag {
-                    CommandTag::BubbleDirty => {
-                        let BubbleDirtyCommand { node_id, bubble } =
-                            next_command_payload(&mut bubble_dirty, tag)?;
-                        Command::BubbleDirty { node_id, bubble }
-                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                    CommandTag::UpdateTypedNode => {
-                        let UpdateTypedNodeCommand { id, updater } =
-                            next_command_payload(&mut update_typed_nodes, tag)?;
-                        Command::UpdateTypedNode { id, updater }
-                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                    CommandTag::RemoveNode => {
-                        let id = next_command_payload(&mut remove_nodes, tag)?;
-                        Command::RemoveNode { id }
-                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                    CommandTag::MountNode => {
-                        let id = next_command_payload(&mut mount_nodes, tag)?;
-                        Command::MountNode { id }
-                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                    CommandTag::AttachChild => {
-                        let AttachChildCommand {
-                            parent_id,
-                            child_id,
-                            insert_index,
-                            bubble,
-                        } = next_command_payload(&mut attach_children, tag)?;
-                        Command::AttachChild {
-                            parent_id,
-                            child_id,
-                            insert_index,
-                            bubble,
-                        }
-                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                    CommandTag::InsertChild => {
-                        let InsertChildCommand {
-                            parent_id,
-                            child_id,
-                            appended_index,
-                            insert_index,
-                            bubble,
-                        } = next_command_payload(&mut insert_children, tag)?;
-                        Command::InsertChild {
-                            parent_id,
-                            child_id,
-                            appended_index,
-                            insert_index,
-                            bubble,
-                        }
-                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                    CommandTag::MoveChild => {
-                        let MoveChildCommand {
-                            parent_id,
-                            from_index,
-                            to_index,
-                            bubble,
-                        } = next_command_payload(&mut move_children, tag)?;
-                        Command::MoveChild {
-                            parent_id,
-                            from_index,
-                            to_index,
-                            bubble,
-                        }
-                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                    CommandTag::RemoveChild => {
-                        let RemoveChildCommand {
-                            parent_id,
-                            child_id,
-                        } = next_command_payload(&mut remove_children, tag)?;
-                        Command::RemoveChild {
-                            parent_id,
-                            child_id,
-                        }
-                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                    CommandTag::DetachChild => {
-                        let DetachChildCommand {
-                            parent_id,
-                            child_id,
-                        } = next_command_payload(&mut detach_children, tag)?;
-                        Command::DetachChild {
-                            parent_id,
-                            child_id,
-                        }
-                        .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                    CommandTag::SyncChildren => {
-                        let SyncChildrenCommand {
-                            parent_id,
-                            child_start,
-                            child_len,
-                        } = next_command_payload(&mut sync_children_commands, tag)?;
-                        let child_end = child_start
-                            .checked_add(child_len)
-                            .ok_or_else(|| command_payload_error(tag))?;
-                        let expected_children = sync_child_ids
-                            .get(child_start..child_end)
-                            .ok_or_else(|| command_payload_error(tag))?;
-                        sync_children(
-                            applier,
-                            parent_id,
-                            expected_children,
-                            &mut deferred_cleanup,
-                        )?;
-                    }
-                    CommandTag::Callback => {
-                        let callback = next_command_payload(&mut callbacks, tag)?;
-                        Command::Callback(callback)
-                            .apply_with_cleanup(applier, &mut deferred_cleanup)?;
-                    }
-                }
-            }
+    fn clear(&mut self) {
+        let Self {
+            tags,
+            bubble_dirty,
+            update_typed_nodes,
+            remove_nodes,
+            mount_nodes,
+            attach_children,
+            insert_children,
+            move_children,
+            remove_children,
+            detach_children,
+            sync_children,
+            sync_child_ids,
+            callbacks,
+            cleanup,
+        } = self;
+        tags.clear();
+        bubble_dirty.clear();
+        update_typed_nodes.clear();
+        remove_nodes.clear();
+        mount_nodes.clear();
+        attach_children.clear();
+        insert_children.clear();
+        move_children.clear();
+        remove_children.clear();
+        detach_children.clear();
+        sync_children.clear();
+        sync_child_ids.clear();
+        callbacks.clear();
+        cleanup.clear();
+    }
+
+    fn apply_in_order(&mut self, applier: &mut dyn Applier) -> Result<(), NodeError> {
+        let mut payloads = CommandPayloads {
+            bubble_dirty: self.bubble_dirty.drain(..),
+            update_typed_nodes: self.update_typed_nodes.drain(..),
+            remove_nodes: self.remove_nodes.drain(..),
+            mount_nodes: self.mount_nodes.drain(..),
+            attach_children: self.attach_children.drain(..),
+            insert_children: self.insert_children.drain(..),
+            move_children: self.move_children.drain(..),
+            remove_children: self.remove_children.drain(..),
+            detach_children: self.detach_children.drain(..),
+            sync_children: self.sync_children.drain(..),
+            sync_child_ids: &self.sync_child_ids,
+            callbacks: self.callbacks.drain(..),
+        };
+        for &tag in &self.tags {
+            payloads.apply(tag, applier, &mut self.cleanup)?;
         }
+        payloads.assert_all_taken();
+        self.cleanup.flush(applier)
+    }
+}
 
-        debug_assert!(bubble_dirty.next().is_none());
-        debug_assert!(update_typed_nodes.next().is_none());
-        debug_assert!(remove_nodes.next().is_none());
-        debug_assert!(mount_nodes.next().is_none());
-        debug_assert!(attach_children.next().is_none());
-        debug_assert!(insert_children.next().is_none());
-        debug_assert!(move_children.next().is_none());
-        debug_assert!(remove_children.next().is_none());
-        debug_assert!(detach_children.next().is_none());
-        debug_assert!(sync_children_commands.next().is_none());
-        debug_assert!(callbacks.next().is_none());
-        deferred_cleanup.flush(applier)
+/// The payloads of a queue being applied, taken in the order its tags name
+/// them.
+struct CommandPayloads<'a> {
+    bubble_dirty: std::vec::Drain<'a, BubbleDirtyCommand>,
+    update_typed_nodes: std::vec::Drain<'a, UpdateTypedNodeCommand>,
+    remove_nodes: std::vec::Drain<'a, NodeId>,
+    mount_nodes: std::vec::Drain<'a, NodeId>,
+    attach_children: std::vec::Drain<'a, AttachChildCommand>,
+    insert_children: std::vec::Drain<'a, InsertChildCommand>,
+    move_children: std::vec::Drain<'a, MoveChildCommand>,
+    remove_children: std::vec::Drain<'a, RemoveChildCommand>,
+    detach_children: std::vec::Drain<'a, DetachChildCommand>,
+    sync_children: std::vec::Drain<'a, SyncChildrenCommand>,
+    sync_child_ids: &'a [NodeId],
+    callbacks: std::vec::Drain<'a, CommandCallback>,
+}
+
+impl CommandPayloads<'_> {
+    fn apply(
+        &mut self,
+        tag: CommandTag,
+        applier: &mut dyn Applier,
+        cleanup: &mut DeferredChildCleanupQueue,
+    ) -> Result<(), NodeError> {
+        match tag {
+            CommandTag::BubbleDirty
+            | CommandTag::UpdateTypedNode
+            | CommandTag::RemoveNode
+            | CommandTag::MountNode
+            | CommandTag::Callback => self.apply_node_command(tag, applier, cleanup),
+            CommandTag::AttachChild
+            | CommandTag::InsertChild
+            | CommandTag::MoveChild
+            | CommandTag::RemoveChild
+            | CommandTag::DetachChild
+            | CommandTag::SyncChildren => self.apply_child_command(tag, applier, cleanup),
+        }
+    }
+
+    fn apply_node_command(
+        &mut self,
+        tag: CommandTag,
+        applier: &mut dyn Applier,
+        cleanup: &mut DeferredChildCleanupQueue,
+    ) -> Result<(), NodeError> {
+        match tag {
+            CommandTag::BubbleDirty => {
+                let BubbleDirtyCommand { node_id, bubble } =
+                    next_command_payload(&mut self.bubble_dirty, tag)?;
+                Command::BubbleDirty { node_id, bubble }.apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::UpdateTypedNode => {
+                let UpdateTypedNodeCommand { id, updater } =
+                    next_command_payload(&mut self.update_typed_nodes, tag)?;
+                Command::UpdateTypedNode { id, updater }.apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::RemoveNode => {
+                let id = next_command_payload(&mut self.remove_nodes, tag)?;
+                Command::RemoveNode { id }.apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::MountNode => {
+                let id = next_command_payload(&mut self.mount_nodes, tag)?;
+                Command::MountNode { id }.apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::Callback => {
+                let callback = next_command_payload(&mut self.callbacks, tag)?;
+                Command::Callback(callback).apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::AttachChild
+            | CommandTag::InsertChild
+            | CommandTag::MoveChild
+            | CommandTag::RemoveChild
+            | CommandTag::DetachChild
+            | CommandTag::SyncChildren => return Err(command_payload_error(tag)),
+        }
+        Ok(())
+    }
+
+    fn apply_child_command(
+        &mut self,
+        tag: CommandTag,
+        applier: &mut dyn Applier,
+        cleanup: &mut DeferredChildCleanupQueue,
+    ) -> Result<(), NodeError> {
+        match tag {
+            CommandTag::AttachChild => {
+                let AttachChildCommand {
+                    parent_id,
+                    child_id,
+                    insert_index,
+                    bubble,
+                } = next_command_payload(&mut self.attach_children, tag)?;
+                Command::AttachChild {
+                    parent_id,
+                    child_id,
+                    insert_index,
+                    bubble,
+                }
+                .apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::InsertChild => {
+                let InsertChildCommand {
+                    parent_id,
+                    child_id,
+                    appended_index,
+                    insert_index,
+                    bubble,
+                } = next_command_payload(&mut self.insert_children, tag)?;
+                Command::InsertChild {
+                    parent_id,
+                    child_id,
+                    appended_index,
+                    insert_index,
+                    bubble,
+                }
+                .apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::MoveChild => {
+                let MoveChildCommand {
+                    parent_id,
+                    from_index,
+                    to_index,
+                    bubble,
+                } = next_command_payload(&mut self.move_children, tag)?;
+                Command::MoveChild {
+                    parent_id,
+                    from_index,
+                    to_index,
+                    bubble,
+                }
+                .apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::RemoveChild => {
+                let RemoveChildCommand {
+                    parent_id,
+                    child_id,
+                } = next_command_payload(&mut self.remove_children, tag)?;
+                Command::RemoveChild {
+                    parent_id,
+                    child_id,
+                }
+                .apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::DetachChild => {
+                let DetachChildCommand {
+                    parent_id,
+                    child_id,
+                } = next_command_payload(&mut self.detach_children, tag)?;
+                Command::DetachChild {
+                    parent_id,
+                    child_id,
+                }
+                .apply_with_cleanup(applier, cleanup)?;
+            }
+            CommandTag::SyncChildren => self.sync_children(applier, cleanup)?,
+            CommandTag::BubbleDirty
+            | CommandTag::UpdateTypedNode
+            | CommandTag::RemoveNode
+            | CommandTag::MountNode
+            | CommandTag::Callback => return Err(command_payload_error(tag)),
+        }
+        Ok(())
+    }
+
+    fn sync_children(
+        &mut self,
+        applier: &mut dyn Applier,
+        cleanup: &mut DeferredChildCleanupQueue,
+    ) -> Result<(), NodeError> {
+        let tag = CommandTag::SyncChildren;
+        let SyncChildrenCommand {
+            parent_id,
+            child_start,
+            child_len,
+        } = next_command_payload(&mut self.sync_children, tag)?;
+        let expected_children = child_start
+            .checked_add(child_len)
+            .and_then(|child_end| self.sync_child_ids.get(child_start..child_end))
+            .ok_or_else(|| command_payload_error(tag))?;
+        sync_children(applier, parent_id, expected_children, cleanup)
+    }
+
+    fn assert_all_taken(&mut self) {
+        debug_assert!(self.bubble_dirty.next().is_none());
+        debug_assert!(self.update_typed_nodes.next().is_none());
+        debug_assert!(self.remove_nodes.next().is_none());
+        debug_assert!(self.mount_nodes.next().is_none());
+        debug_assert!(self.attach_children.next().is_none());
+        debug_assert!(self.insert_children.next().is_none());
+        debug_assert!(self.move_children.next().is_none());
+        debug_assert!(self.remove_children.next().is_none());
+        debug_assert!(self.detach_children.next().is_none());
+        debug_assert!(self.sync_children.next().is_none());
+        debug_assert!(self.callbacks.next().is_none());
     }
 }
 
