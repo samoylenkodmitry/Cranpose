@@ -294,7 +294,9 @@ fn materials_with_different_uniforms_share_one_pipeline_without_folds() {
     };
     support::wait_for_background_compiler_idle();
     cranpose_ui_graphics::set_glass_material_folds(false);
-    let _ = capture_settled(&mut renderer, page(&materials[..1]));
+    // Two glasses build the stage's capture pass, which one glass's copy
+    // does without.
+    let _ = capture_settled(&mut renderer, page(&materials[..2]));
     let built = built_total();
     let _ = capture_settled(&mut renderer, page(&materials));
     let plain = built_total() - built;
@@ -306,7 +308,7 @@ fn materials_with_different_uniforms_share_one_pipeline_without_folds() {
 
     assert_eq!(
         plain, 0,
-        "six materials compiled {plain} pipelines beyond the first one's; a material must \
+        "six materials compiled {plain} pipelines beyond the first two's; a material must \
          change uniforms, not shaders"
     );
     assert!(
