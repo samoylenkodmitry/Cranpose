@@ -9,7 +9,7 @@
 //! extension methods are defined in `modifier/scroll.rs`.
 
 use std::{
-    cell::{Cell, OnceCell, RefCell},
+    cell::{Cell, RefCell},
     collections::HashMap,
     hash::{DefaultHasher, Hash, Hasher},
     rc::{Rc, Weak},
@@ -480,12 +480,6 @@ struct ScrollMotionContextInner {
     invalidate_callbacks: InvalidationCallbacks,
     pending_invalidation: Cell<bool>,
     overscroll: OverscrollEffect,
-    reveal: OnceCell<ScrollReveal>,
-}
-
-pub(crate) struct ScrollReveal {
-    pub(crate) viewport: Rc<Cell<cranpose_ui_graphics::WindowCoordinates>>,
-    pub(crate) responder: crate::BringIntoViewResponder,
 }
 
 pub(crate) struct ScrollMotionContextStore {
@@ -541,7 +535,6 @@ impl ScrollMotionContext {
                 invalidate_callbacks: InvalidationCallbacks::new(),
                 pending_invalidation: Cell::new(false),
                 overscroll: OverscrollEffect::new(),
-                reveal: OnceCell::new(),
             }),
         }
     }
@@ -560,31 +553,6 @@ impl ScrollMotionContext {
 
     pub(crate) fn overscroll(&self) -> OverscrollEffect {
         self.inner.overscroll.clone()
-    }
-
-    pub(crate) fn reveal(&self, state: ScrollState, reverse: bool) -> &ScrollReveal {
-        self.inner.reveal.get_or_init(|| {
-            let viewport = Rc::new(Cell::new(cranpose_ui_graphics::WindowCoordinates::default()));
-            let observed = Rc::clone(&viewport);
-            let responder =
-                crate::BringIntoViewResponder::in_window(move |caret, ime, window_height| {
-                    let coordinates = observed.get();
-                    if coordinates.size.height <= 0.0 {
-                        return;
-                    }
-                    let delta = crate::bring_into_view::local_scroll_delta_to_reveal(
-                        caret,
-                        coordinates,
-                        ime,
-                        window_height,
-                    );
-                    state.dispatch_raw_delta(if reverse { -delta } else { delta });
-                });
-            ScrollReveal {
-                viewport,
-                responder,
-            }
-        })
     }
 
     pub(crate) fn set_active(&self, active: bool) {
@@ -656,7 +624,6 @@ pub struct ScrollElement {
     overscroll: OverscrollEffect,
     is_vertical: bool,
     reverse_scrolling: bool,
-    responder: Option<crate::BringIntoViewResponder>,
 }
 
 impl ScrollElement {
@@ -671,13 +638,7 @@ impl ScrollElement {
             overscroll,
             is_vertical,
             reverse_scrolling,
-            responder: None,
         }
-    }
-
-    pub(crate) fn with_responder(mut self, responder: crate::BringIntoViewResponder) -> Self {
-        self.responder = Some(responder);
-        self
     }
 }
 
@@ -744,12 +705,6 @@ impl ModifierNodeElement for ScrollElement {
 
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::LAYOUT
-    }
-
-    fn provided_composition_locals(&self) -> Vec<cranpose_core::ProvidedValue> {
-        self.responder.as_ref().map_or_else(Vec::new, |responder| {
-            vec![crate::local_bring_into_view_responder().provides(Some(responder.clone()))]
-        })
     }
 }
 
