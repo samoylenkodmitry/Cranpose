@@ -655,6 +655,14 @@ struct CaptureRegion {
     origin: [f32; 2],
 }
 
+/// What maps the page's pixels onto `region`'s place in its capture.
+fn region_offset(region: &CaptureRegion) -> [f32; 2] {
+    [
+        region.rect.x - region.origin[0],
+        region.rect.y - region.origin[1],
+    ]
+}
+
 #[derive(Clone, Copy)]
 struct BlurSpec {
     radius_x: f32,
@@ -3806,15 +3814,13 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(texture)
     }
 
-    /// Reads what every region's backdrop sees into its place in `texture`.
-    /// A region of the layer's own page is copied texel for texel; what is
-    /// below the region's z and not on the page (the ops since the last
-    /// flush, the deferred ops and the pending composites) that reaches into
-    /// it is then drawn over the copies in one pass loading them, scissored
-    /// to each region's texels and recorded only when some region has such a
-    /// fix-up. Under a parent's page, or when a region cannot be copied, the
-    /// pass starts from transparent and draws the parent's page, the layer's
-    /// own page and the fix-ups for every region.
+    /// Reads what every region's backdrop sees into its place in `texture`,
+    /// in one pass scissored to each region's texels: the parent's page under
+    /// the layer, the layer's own page, and what is below the region's z and
+    /// not on the page yet (the ops since the last flush, the deferred ops and
+    /// the pending composites). A lone region that needs nothing but the
+    /// layer's own page is copied texel for texel instead. A tiled GPU runs
+    /// each copy as a job of its own, so several regions share the pass.
     fn capture_regions(
         &mut self,
         pass: &mut LayerPass<'_>,
@@ -3823,25 +3829,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         label: &'static str,
     ) -> Result<(), String> {
         let scale = pass.scale;
-        let copied = self.copy_regions(pass, regions, texture);
-        let beneath = pass.beneath;
-        let bases: Vec<Vec<ResolvedComposite>> = if copied {
-            Vec::new()
-        } else {
-            let page_untouched = pass.page_untouched();
-            regions
-                .iter()
-                .map(|region| {
-                    beneath
-                        .page
-                        .as_ref()
-                        .and_then(|base| base.under(region.rect))
-                        .into_iter()
-                        .chain(pass.page.blit(region.rect).filter(|_| !page_untouched))
-                        .collect()
-                })
-                .collect()
-        };
         ensure_sorted_by_key(&mut pass.pending, composite_z);
         let fixups: Vec<Cow<'_, [DrawOp]>> = regions
             .iter()
@@ -3852,100 +3839,104 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             width: texture.width,
             height: texture.height,
         };
-        let mut segments: Vec<PassSegment<'_>> = Vec::with_capacity(regions.len() * 2);
-        for (index, (region, fixup)) in regions.iter().zip(&fixups).enumerate() {
-            let offset = [
-                region.rect.x - region.origin[0],
-                region.rect.y - region.origin[1],
-            ];
-            let (region_width, region_height) = region.rect.pixel_size();
-            let scissor = Some((
-                region.origin[0] as u32,
-                region.origin[1] as u32,
-                region_width,
-                region_height,
-            ));
-            if !copied {
-                segments.push(PassSegment {
-                    scene: &self.empty_scene,
-                    ops: &[],
-                    composites: &bases[index],
+        let own_segments: Vec<Option<PassSegment<'_>>> = regions
+            .iter()
+            .zip(&fixups)
+            .map(|(region, fixup)| {
+                let offset = region_offset(region);
+                let own_end = pass
+                    .pending
+                    .partition_point(|composite| composite.z_index < region.z);
+                let own = region.rect.intersect(pass.target_rect())?;
+                Some(PassSegment {
+                    scene: &pass.layer.scene,
+                    ops: fixup,
+                    composites: &pass.pending[..own_end],
                     offset,
-                    scissor,
+                    scissor: Some((
+                        (own.x - offset[0]) as u32,
+                        (own.y - offset[1]) as u32,
+                        own.width as u32,
+                        own.height as u32,
+                    )),
                     first_run_window: None,
                     transform: SegmentTransform::IDENTITY,
                     scale,
-                });
-            }
-            let own_end = pass
-                .pending
-                .partition_point(|composite| composite.z_index < region.z);
-            let Some(own) = region.rect.intersect(pass.target_rect()) else {
-                continue;
-            };
-            let scissor = Some((
-                (own.x - offset[0]) as u32,
-                (own.y - offset[1]) as u32,
-                own.width as u32,
-                own.height as u32,
-            ));
-            let segment = PassSegment {
-                scene: &pass.layer.scene,
-                ops: fixup,
-                composites: &pass.pending[..own_end],
-                offset,
-                scissor,
+                })
+            })
+            .collect();
+        let fixes_up = own_segments
+            .iter()
+            .flatten()
+            .any(|segment| segment_draws_anything(target, segment));
+        if let ([region], false) = (regions, fixes_up)
+            && self.copy_region(pass, region, texture)
+        {
+            return Ok(());
+        }
+        if fixes_up {
+            self.renderer.frame_stats.record_capture_fixup_pass();
+        }
+        let page_untouched = pass.page_untouched();
+        let bases: Vec<Vec<ResolvedComposite>> = regions
+            .iter()
+            .map(|region| {
+                pass.beneath
+                    .page
+                    .as_ref()
+                    .and_then(|base| base.under(region.rect))
+                    .into_iter()
+                    .chain(pass.page.blit(region.rect).filter(|_| !page_untouched))
+                    .collect()
+            })
+            .collect();
+        let mut segments: Vec<PassSegment<'_>> = Vec::with_capacity(regions.len() * 2);
+        for ((region, base), own) in regions.iter().zip(&bases).zip(own_segments) {
+            let (region_width, region_height) = region.rect.pixel_size();
+            segments.push(PassSegment {
+                scene: &self.empty_scene,
+                ops: &[],
+                composites: base,
+                offset: region_offset(region),
+                scissor: Some((
+                    region.origin[0] as u32,
+                    region.origin[1] as u32,
+                    region_width,
+                    region_height,
+                )),
                 first_run_window: None,
                 transform: SegmentTransform::IDENTITY,
                 scale,
-            };
-            if !copied || segment_draws_anything(target, &segment) {
-                segments.push(segment);
-            }
+            });
+            segments.extend(own);
         }
-        if copied && segments.is_empty() {
-            return Ok(());
-        }
-        let load_op = if copied {
-            wgpu::LoadOp::Load
-        } else {
-            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-        };
-        self.renderer
-            .encode_pass(self.recorder, target, &segments, load_op, label)?;
-        if copied {
-            self.renderer.frame_stats.record_capture_fixup_pass();
-        }
+        self.renderer.encode_pass(
+            self.recorder,
+            target,
+            &segments,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+            label,
+        )?;
         Ok(())
     }
 
-    /// Copies every region of the layer's own page into its place in
-    /// `texture` and reports whether it did: only when the layer reads no
-    /// parent page, the two formats are copy-compatible and every region is
-    /// a whole-texel rect inside the page.
-    fn copy_regions(
+    /// Copies `region` of the layer's own page into its place in `texture`
+    /// and reports whether it did: only when the layer reads no parent page,
+    /// the two formats are copy-compatible and the region is a whole-texel
+    /// rect inside the page.
+    fn copy_region(
         &mut self,
         pass: &LayerPass<'_>,
-        regions: &[CaptureRegion],
+        region: &CaptureRegion,
         texture: &OffscreenTarget,
     ) -> bool {
         if pass.beneath.page.is_some() || !copy_compatible(&pass.page.texture, texture) {
             return false;
         }
-        if !regions.iter().all(|region| {
-            pass.page
-                .copy(region.rect, texture, region.origin)
-                .is_some()
-        }) {
+        let Some(copy) = pass.page.copy(region.rect, texture, region.origin) else {
             return false;
-        }
-        for region in regions {
-            let copy = pass
-                .page
-                .copy(region.rect, texture, region.origin)
-                .expect("capture regions were validated before recording copies");
-            self.recorder.copy_texture_region(copy);
-        }
+        };
+        self.recorder.copy_texture_region(copy);
         true
     }
 
