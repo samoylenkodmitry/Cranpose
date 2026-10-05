@@ -1135,7 +1135,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
         0.0
     } else {
         visible_lines
-            .iter()
+            .iter_mut()
             .map(|line| line.measure_width(measurer, node_id, text, style))
             .fold(0.0_f32, f32::max)
     };
@@ -1518,14 +1518,15 @@ impl DisplayLine {
         }
     }
 
+    /// The line's width, measured once and kept.
     fn measure_width<M: TextMeasurer + ?Sized>(
-        &self,
+        &mut self,
         measurer: &M,
         node_id: Option<NodeId>,
         source: &crate::text::AnnotatedString,
         style: &TextStyle,
     ) -> f32 {
-        self.measured_width.unwrap_or_else(|| match &self.text {
+        *self.measured_width.get_or_insert_with(|| match &self.text {
             DisplayLineText::Source => {
                 measurer
                     .measure_subsequence_for_node(node_id, source, self.source_range.clone(), style)
@@ -2396,7 +2397,6 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
             measured_width: None,
         };
         let width = line.measure_width(measurer, node_id, source, style);
-        line.measured_width = Some(width);
         (width <= width_limit + WRAP_EPSILON).then_some(line)
     };
     if placement != EllipsisPlacement::End
