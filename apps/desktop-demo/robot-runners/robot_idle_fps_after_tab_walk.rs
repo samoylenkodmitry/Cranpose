@@ -22,7 +22,7 @@ pub(crate) fn main() {
             let _ = robot.wait_for_idle();
 
             for tab in [
-                "Winamp",
+                "WSZ",
                 "Shaders",
                 "Shader Rect",
                 "Markdown",

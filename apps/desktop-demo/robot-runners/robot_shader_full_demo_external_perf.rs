@@ -67,7 +67,7 @@ fn run_external_driver(robot: Robot, records: Arc<Mutex<Vec<FrameTelemetryRecord
     let _ = robot.wait_for_idle();
     let mut failures = Vec::new();
 
-    for label in ["Images", "Text", "Winamp", "XKCD", "Shader Rect"] {
+    for label in ["Images", "Text", "WSZ", "XKCD", "Shader Rect"] {
         click_tab(&robot, label);
     }
 

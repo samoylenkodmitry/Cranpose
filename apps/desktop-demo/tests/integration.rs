@@ -31,4 +31,4 @@ mod tab_switch_regression_support;
 mod text_wrap_repro_tests;
 mod variable_font_instancing;
 mod web_release_bundle;
-mod winamp_tab_integration_test;
+mod wsz_tab_integration_test;

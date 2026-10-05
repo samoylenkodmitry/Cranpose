@@ -3058,6 +3058,41 @@ mod gate_diff {
     pub(crate) type HunkSpans = BTreeMap<String, Vec<(Option<Span>, Option<Span>)>>;
     pub(crate) type RangesByFile = BTreeMap<String, Vec<Span>>;
 
+    pub(crate) fn renamed_paths_from_status(status: &str) -> BTreeMap<String, String> {
+        status
+            .lines()
+            .filter_map(|line| {
+                let mut columns = line.split('\t');
+                let kind = columns.next()?;
+                if !kind.starts_with('R') {
+                    return None;
+                }
+                let old = columns.next()?;
+                let new = columns.next()?;
+                Some((new.to_owned(), old.to_owned()))
+            })
+            .collect()
+    }
+
+    pub(crate) fn renamed_paths(
+        root: &Path,
+        base: &str,
+        pathspecs: &[String],
+    ) -> Result<BTreeMap<String, String>, String> {
+        let output = Command::new("git")
+            .args(["diff", "--name-status", "--find-renames=40%", base, "--"])
+            .args(pathspecs)
+            .current_dir(root)
+            .output()
+            .map_err(|error| format!("gate_diff: failed to find renamed paths: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        }
+        Ok(renamed_paths_from_status(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
+    }
+
     pub(crate) fn ensure_ref(root: &Path, base: &str) -> Result<(), String> {
         if let Some(branch) = base.strip_prefix("origin/") {
             let _ = Command::new("git")
@@ -3525,9 +3560,15 @@ mod gate_diff {
         pathspec: &str,
     ) -> Result<RangesByFile, String> {
         let base_sha = merge_base(root, base)?;
+        let old_paths = renamed_paths(
+            root,
+            &base_sha,
+            &[pathspec.to_owned(), FORKS_PATHSPEC.to_owned()],
+        )?;
         let output = Command::new("git")
             .args([
                 "diff",
+                "--find-renames=40%",
                 "--unified=0",
                 "--no-prefix",
                 &base_sha,
@@ -3547,8 +3588,9 @@ mod gate_diff {
         let read_new =
             |file: &str| -> String { fs::read_to_string(root.join(file)).unwrap_or_default() };
         let read_old = |file: &str| -> String {
+            let old_path = old_paths.get(file).map_or(file, String::as_str);
             let blob = Command::new("git")
-                .args(["show", &format!("{base_sha}:{file}")])
+                .args(["show", &format!("{base_sha}:{old_path}")])
                 .current_dir(root)
                 .output();
             match blob {
@@ -3568,10 +3610,15 @@ mod gate_diff {
         files: &[String],
         dest_root: &Path,
     ) -> Result<Vec<String>, String> {
+        // A pathspec containing only the renamed destination can make Git omit
+        // the old name. Compare rename status across the tree, then reuse only
+        // mappings that match the files being analyzed.
+        let old_paths = renamed_paths(root, base_sha, &[])?;
         let mut written = Vec::new();
         for file in files {
+            let old_path = old_paths.get(file).map_or(file.as_str(), String::as_str);
             let blob = Command::new("git")
-                .args(["show", &format!("{base_sha}:{file}")])
+                .args(["show", &format!("{base_sha}:{old_path}")])
                 .current_dir(root)
                 .output()
                 .map_err(|error| format!("gate_diff: failed to run git show: {error}"))?;

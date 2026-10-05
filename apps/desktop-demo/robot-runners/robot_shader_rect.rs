@@ -157,7 +157,7 @@ pub(crate) fn main() {
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(600));
 
-            for label in ["Images", "Text", "Winamp", "XKCD", "Shaders", "Shader Rect"] {
+            for label in ["Images", "Text", "WSZ", "XKCD", "Shaders", "Shader Rect"] {
                 click_tab(&robot, label);
             }
             std::thread::sleep(Duration::from_millis(300));
