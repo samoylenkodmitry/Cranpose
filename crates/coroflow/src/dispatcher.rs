@@ -1,12 +1,8 @@
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::{
-    Condvar,
-    atomic::{AtomicBool, Ordering},
-};
 use std::{
     cell::RefCell,
     collections::VecDeque,
     marker::PhantomData,
+    panic::{AssertUnwindSafe, catch_unwind},
     rc::Rc,
     sync::{Arc, Mutex, OnceLock},
     thread::{self, ThreadId},
@@ -14,6 +10,7 @@ use std::{
 
 use crate::{
     clock::{Clock, SystemClock},
+    dispatcher_pool::{DispatcherPool, DispatcherPoolConfig},
     sync::lock,
 };
 
@@ -47,6 +44,10 @@ impl Runnable {
     /// Runs the step on the current thread.
     pub fn run(self) {
         self.task.run();
+    }
+
+    pub(crate) fn run_guarded(self) {
+        let _ = catch_unwind(AssertUnwindSafe(|| self.run()));
     }
 }
 
@@ -160,7 +161,7 @@ impl Schedule for LimitedWorker {
             let Some(runnable) = next else {
                 return;
             };
-            runnable.run();
+            runnable.run_guarded();
         }
         let target = self.limited.target.clone();
         target.dispatch(Runnable::new(self));
@@ -249,18 +250,16 @@ impl ConfinedDispatcher {
 pub struct Dispatchers;
 
 impl Dispatchers {
-    /// A pool sized to the machine's parallelism, for CPU-bound work.
+    /// The CPU dispatcher of the shared [`DispatcherPool`]. Native workers
+    /// start on demand and retire after 30 idle seconds.
     pub fn default_pool() -> Dispatcher {
-        static POOL: OnceLock<Dispatcher> = OnceLock::new();
-        POOL.get_or_init(|| pool("coroflow-default", parallelism()))
-            .clone()
+        shared_pool().cpu()
     }
 
-    /// A larger pool for work that blocks on I/O.
+    /// The I/O dispatcher of the shared [`DispatcherPool`]. Its concurrency
+    /// budget is separate from CPU work so blocked I/O leaves CPU capacity.
     pub fn io() -> Dispatcher {
-        static POOL: OnceLock<Dispatcher> = OnceLock::new();
-        POOL.get_or_init(|| pool("coroflow-io", parallelism().max(IO_POOL_MIN_THREADS)))
-            .clone()
+        shared_pool().io()
     }
 
     /// The main-thread dispatcher the UI framework registered with
@@ -281,10 +280,11 @@ impl Dispatchers {
     }
 
     /// A dispatcher with one thread of its own, named `name` — Kotlin's
-    /// `newSingleThreadContext`. The thread ends once nothing uses the
-    /// dispatcher any more. In the browser it is the page's event loop.
+    /// `newSingleThreadContext`. The thread starts on first use, keeps the
+    /// same identity while the dispatcher is alive, and ends once nothing
+    /// uses the dispatcher any more. In the browser it is the page's event loop.
     pub fn single_thread(name: &str) -> Dispatcher {
-        pool(name, 1)
+        crate::dispatcher_pool::single_thread(name)
     }
 
     /// Runs a coroutine step at once on whichever thread resumes it —
@@ -298,102 +298,9 @@ impl Dispatchers {
     }
 }
 
-/// The smallest number of threads [`Dispatchers::io`] starts with.
-pub const IO_POOL_MIN_THREADS: usize = 16;
-
-fn parallelism() -> usize {
-    thread::available_parallelism().map_or(1, std::num::NonZero::get)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn pool(name: &str, threads: usize) -> Dispatcher {
-    ThreadPool::start(name, threads)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn pool(_name: &str, _threads: usize) -> Dispatcher {
-    Dispatcher::new(EventLoopExecutor, SystemClock::shared())
-}
-
-#[cfg(target_arch = "wasm32")]
-struct EventLoopExecutor;
-
-#[cfg(target_arch = "wasm32")]
-impl Dispatch for EventLoopExecutor {
-    fn dispatch(&self, runnable: Runnable) {
-        wasm_bindgen_futures::spawn_local(async move { runnable.run() });
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-struct ThreadPool {
-    queue: Mutex<VecDeque<Runnable>>,
-    available: Condvar,
-    closed: AtomicBool,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl ThreadPool {
-    fn start(name: &str, threads: usize) -> Dispatcher {
-        let pool = Arc::new(ThreadPool {
-            queue: Mutex::new(VecDeque::new()),
-            available: Condvar::new(),
-            closed: AtomicBool::new(false),
-        });
-        for index in 0..threads {
-            let worker = Arc::clone(&pool);
-            let spawned = thread::Builder::new()
-                .name(format!("{name}-{index}"))
-                .spawn(move || worker.work());
-            if let Err(error) = spawned {
-                log::error!("coroflow: worker {name}-{index} could not start: {error}");
-            }
-        }
-        Dispatcher::new(PoolExecutor { pool }, SystemClock::shared())
-    }
-
-    fn work(&self) {
-        loop {
-            let runnable = {
-                let mut queue = lock(&self.queue);
-                loop {
-                    if let Some(runnable) = queue.pop_front() {
-                        break runnable;
-                    }
-                    if self.closed.load(Ordering::Acquire) {
-                        return;
-                    }
-                    queue = match self.available.wait(queue) {
-                        Ok(queue) => queue,
-                        Err(poisoned) => poisoned.into_inner(),
-                    };
-                }
-            };
-            runnable.run();
-        }
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-struct PoolExecutor {
-    pool: Arc<ThreadPool>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Dispatch for PoolExecutor {
-    fn dispatch(&self, runnable: Runnable) {
-        lock(&self.pool.queue).push_back(runnable);
-        self.pool.available.notify_one();
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Drop for PoolExecutor {
-    fn drop(&mut self) {
-        let _queue = lock(&self.pool.queue);
-        self.pool.closed.store(true, Ordering::Release);
-        self.pool.available.notify_all();
-    }
+fn shared_pool() -> &'static DispatcherPool {
+    static POOL: OnceLock<DispatcherPool> = OnceLock::new();
+    POOL.get_or_init(|| DispatcherPool::new(DispatcherPoolConfig::default()))
 }
 
 thread_local! {

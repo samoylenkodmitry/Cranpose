@@ -1071,6 +1071,7 @@ dependencies = [
 name = "coroflow"
 version = "0.9.7"
 dependencies = [
+ "cranpose-core",
  "criterion",
  "futures-core",
  "futures-util",

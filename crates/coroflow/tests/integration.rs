@@ -7,6 +7,7 @@ mod jobs;
 mod kotlin_operators;
 mod more_operators;
 mod operators;
+mod pools;
 mod scopes;
 mod send_inference;
 mod sharing;

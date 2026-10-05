@@ -27,6 +27,7 @@ web-sys = { version = "0.3", features = ["Window"] }
 workspace = true
 
 [dev-dependencies]
+cranpose-core = { path = "../cranpose-core" }
 criterion = "0.8.2"
 futures-util = "0.3.34"
 pollster = "0.4.0"
@@ -35,6 +36,14 @@ tokio = { version = "1.53.2", features = ["rt", "sync"] }
 
 [[bench]]
 name = "comparisons"
+harness = false
+
+[[bench]]
+name = "workers"
+harness = false
+
+[[bench]]
+name = "worker_allocations"
 harness = false
 
 [[test]]
