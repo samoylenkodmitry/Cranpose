@@ -376,7 +376,9 @@ fn dispatch_android_ime_event(shell: &mut AppShell<WgpuRenderer>, event: Android
             }
         }
         AndroidImeEvent::ImeInsetsChanged { bottom_px } => {
-            set_android_ime_bottom_px(bottom_px);
+            if set_android_ime_bottom_px(bottom_px) {
+                shell.request_root_render();
+            }
         }
     }
 }
