@@ -1558,28 +1558,26 @@ impl LayoutBuilderState {
         Ok(measured)
     }
 
+    /// The measurement `node_id` cached for `constraints` in layout cache
+    /// epoch `current_epoch`, the one the app context holds.
     fn cached_measure_node_with_applier(
         applier: &mut MemoryApplier,
         node_id: NodeId,
         constraints: Constraints,
+        current_epoch: u64,
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
-        fn served(
-            cache: &LayoutNodeCacheHandles,
-            dirty: bool,
-            constraints: Constraints,
-        ) -> Option<Rc<MeasuredNode>> {
+        let served = |cache: &LayoutNodeCacheHandles, dirty: bool| {
             let epoch = cache.epoch();
-            if dirty || epoch == 0 || epoch != crate::render_state::current_layout_cache_epoch() {
+            if dirty || epoch == 0 || epoch != current_epoch {
                 return None;
             }
             cache.get_measurement(constraints)
-        }
+        };
 
         match applier.with_node::<LayoutNode, _>(node_id, |node| {
             let measured = served(
                 node.cache_handles(),
                 node.needs_measure() || node.needs_layout(),
-                constraints,
             )?;
             node.set_measured_size(measured.size);
             Some(measured)
@@ -1590,7 +1588,6 @@ impl LayoutBuilderState {
                     let measured = served(
                         node.cache_handles(),
                         node.needs_measure() || node.needs_layout(),
-                        constraints,
                     )?;
                     node.set_measured_size(measured.size);
                     Some(measured)
@@ -1712,11 +1709,13 @@ impl LayoutBuilderState {
                         };
 
                         let mut measured_children = measured_children.borrow_mut();
+                        let current_epoch = crate::render_state::current_layout_cache_epoch();
                         for (index, &child_id) in child_ids.iter().enumerate() {
                             match Self::cached_measure_node_with_applier(
                                 &mut applier,
                                 child_id,
                                 child_constraints,
+                                current_epoch,
                             ) {
                                 Ok(Some(measured)) => {
                                     out[index] = Some(measured.size);

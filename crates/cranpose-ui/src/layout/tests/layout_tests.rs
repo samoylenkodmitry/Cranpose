@@ -3007,9 +3007,13 @@ fn the_cached_measure_gate_rejects_a_child_that_owes_a_layout_repass() {
         })
         .expect("node available");
 
-    let served =
-        LayoutBuilderState::cached_measure_node_with_applier(&mut applier, id, constraints)
-            .expect("gate must not error");
+    let served = LayoutBuilderState::cached_measure_node_with_applier(
+        &mut applier,
+        id,
+        constraints,
+        crate::render_state::current_layout_cache_epoch(),
+    )
+    .expect("gate must not error");
     assert!(
         served.is_none(),
         "a child that owes a placement-only repass (needs_layout without \
@@ -3061,9 +3065,13 @@ fn the_cached_measure_gate_rejects_a_measurement_from_a_superseded_epoch() {
 
     crate::layout::invalidate_all_layout_caches();
 
-    let served =
-        LayoutBuilderState::cached_measure_node_with_applier(&mut applier, id, constraints)
-            .expect("gate must not error");
+    let served = LayoutBuilderState::cached_measure_node_with_applier(
+        &mut applier,
+        id,
+        constraints,
+        crate::render_state::current_layout_cache_epoch(),
+    )
+    .expect("gate must not error");
     assert!(
         served.is_none(),
         "invalidate_all_layout_caches advanced the global epoch, so every \
