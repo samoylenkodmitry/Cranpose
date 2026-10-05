@@ -223,7 +223,7 @@ fn begin_unkeyed(
     restored: Option<DetachedSubtree>,
 ) -> GroupStart<ActiveGroupId> {
     let group_key = session.preview_group_key(GroupKeySeed::unkeyed(key));
-    session.begin_group(group_key, restored, None)
+    session.begin_group(group_key, restored.map(Box::new), None)
 }
 
 fn begin_keyed(
@@ -233,7 +233,7 @@ fn begin_keyed(
     restored: Option<DetachedSubtree>,
 ) -> GroupStart<ActiveGroupId> {
     let group_key = session.preview_group_key(GroupKeySeed::keyed(static_key, explicit_key));
-    session.begin_group(group_key, restored, None)
+    session.begin_group(group_key, restored.map(Box::new), None)
 }
 
 fn composed_parent_child_table(
