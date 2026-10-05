@@ -21,7 +21,10 @@ use cranpose_ui::{
     },
     text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult},
 };
-use cranpose_ui_graphics::{Color, ImageBitmap, Point, Rect};
+use cranpose_ui_graphics::{
+    Color, ImageBitmap, Point, Rect,
+    brush_sampling::{color_to_rgba, sample_brush_rgba},
+};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -35,7 +38,6 @@ use crate::{
         AnnotatedBrushExtent, AnnotatedTextLayout, AnnotatedTextSegment, FontResolver,
     },
     ascii_glyphs::{ASCII_COUNT, ascii_slot},
-    brush_sampling::{color_to_rgba, sample_brush_rgba},
     direct_mapped_cache::DirectMappedCache,
     font_layout::{
         GlyphPixelBounds, align_glyph_to_pixel_grid, line_advance_width,

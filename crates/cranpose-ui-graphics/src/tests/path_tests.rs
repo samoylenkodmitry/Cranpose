@@ -1,5 +1,7 @@
 use super::*;
-use crate::{BlendMode, Brush, Color, DrawPrimitive, DrawScope, DrawScopeDefault, Size};
+use crate::{
+    BlendMode, Brush, Color, DrawPrimitive, DrawScope, DrawScopeDefault, ImagePixelFormat, Size,
+};
 
 fn stroke(width: f32, cap: StrokeCap, join: StrokeJoin) -> Stroke {
     Stroke { width, cap, join }
@@ -286,4 +288,48 @@ fn a_drawn_path_strokes_as_lines_and_fills_as_an_image() {
         6,
         "72 units of edge in 12-unit periods: six dashes, three on each edge"
     );
+}
+
+/// The red channel and alpha the filled path's image draws at scope point
+/// `(x, y)`.
+fn fill_pixel(filled: &[DrawPrimitive], x: f32, y: f32) -> (u8, u8) {
+    let [DrawPrimitive::Image { image, rect, .. }] = filled else {
+        panic!("a fill draws one image");
+    };
+    let column = ((x - rect.x) / rect.width * image.width() as f32) as usize;
+    let row = ((y - rect.y) / rect.height * image.height() as f32) as usize;
+    let index = row * image.width() as usize + column;
+    match image.format() {
+        ImagePixelFormat::Rgba8 => (image.pixels()[index * 4], image.pixels()[index * 4 + 3]),
+        ImagePixelFormat::Alpha8 { color } => (color[0], image.pixels()[index]),
+    }
+}
+
+#[test]
+fn a_gradient_filled_path_takes_each_color_where_the_gradient_puts_it() {
+    let mut path = Path::new();
+    path.move_to(Point::new(0.0, 0.0));
+    path.line_to(Point::new(64.0, 0.0));
+    path.line_to(Point::new(64.0, 64.0));
+    path.line_to(Point::new(0.0, 64.0));
+    // Half-transparent red at the top of the scope, fully transparent at its
+    // bottom, as a chart's area fill fades.
+    let brush = Brush::vertical_gradient(
+        vec![Color(1.0, 0.0, 0.0, 0.5), Color(1.0, 0.0, 0.0, 0.0)],
+        0.0,
+        64.0,
+    );
+    let filled = primitives(|scope| scope.draw_path(&path, brush, DrawStyle::Fill));
+    for (y, expected) in [
+        (8.0, 0.5 * (1.0 - 8.0 / 64.0)),
+        (32.0, 0.25),
+        (56.0, 0.5 * (1.0 - 56.0 / 64.0)),
+    ] {
+        let (red, alpha) = fill_pixel(&filled, 32.0, y);
+        assert_eq!(red, 255, "the fill stays red at y {y}");
+        assert!(
+            (f32::from(alpha) / 255.0 - expected).abs() < 0.03,
+            "alpha at y {y} is {alpha}, the gradient's {expected:.3}"
+        );
+    }
 }

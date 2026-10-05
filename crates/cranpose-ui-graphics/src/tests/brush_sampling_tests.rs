@@ -1,6 +1,5 @@
-use cranpose_ui_graphics::Point;
-
 use super::*;
+use crate::Point;
 
 fn sample_rect() -> Rect {
     Rect {

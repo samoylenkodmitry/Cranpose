@@ -1,4 +1,4 @@
-use cranpose_ui_graphics::{Brush, Color, Point, Rect, TileMode};
+use crate::{Brush, Color, Point, Rect, TileMode};
 
 const TRANSPARENT: Color = Color(0.0, 0.0, 0.0, 0.0);
 

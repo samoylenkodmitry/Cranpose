@@ -10,7 +10,6 @@ mod direct_mapped_cache;
 /// surfaces display this as rgb(75, 75, 86)). One definition so backends
 /// cannot drift.
 pub const FRAME_CLEAR_COLOR: [f32; 4] = [18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0];
-pub mod brush_sampling;
 mod font_features;
 pub mod font_layout;
 pub mod font_source;

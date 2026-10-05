@@ -4,12 +4,13 @@ use cranpose_render_common::text_measure::{
     fallback_text_metrics,
 };
 use cranpose_render_common::{
-    brush_sampling::sample_brush_rgba, graph_scene::RenderDiagnostics, shape_sdf,
+    graph_scene::RenderDiagnostics, shape_sdf,
     software_text_raster::rasterize_annotated_text_region, text_measure::SoftwareTextResources,
 };
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, ColorFilter, CornerRadii, LineGeometry, Point, Rect, StrokeJoin,
+    brush_sampling::sample_brush_rgba,
 };
 
 use crate::{

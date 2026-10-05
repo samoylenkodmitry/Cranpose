@@ -1,5 +1,4 @@
 use cranpose_render_common::{
-    brush_sampling::sample_brush_rgba,
     font_source::SoftwareTextFontRegistry,
     software_text_raster::{
         SoftwareGlyphRasterCache, SoftwareTextFontSet, SoftwareTextMeasurer,
@@ -10,7 +9,7 @@ use cranpose_ui::text::{
     AnnotatedString, FontFamily, FontStyle, FontWeight, RangeStyle, SpanStyle, TextMeasurer,
     TextStyle, TextUnit,
 };
-use cranpose_ui_graphics::{Brush, Color, Point, Rect};
+use cranpose_ui_graphics::{Brush, Color, Point, Rect, brush_sampling::sample_brush_rgba};
 
 const REGULAR: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
 const BOLD: &[u8] = include_bytes!("../assets/NotoSansBold.ttf");
