@@ -2489,8 +2489,6 @@ pub(crate) enum GlyphQuads {
 }
 
 impl GlyphQuads {
-    const ALL: [Self; 3] = [Self::Plain, Self::Aligned, Self::Turned];
-
     fn turned(self) -> bool {
         self == Self::Turned
     }
@@ -3493,7 +3491,7 @@ impl GpuRenderer {
                     );
                 }
             }
-            for quads in GlyphQuads::ALL {
+            for quads in [GlyphQuads::Plain, GlyphQuads::Aligned, GlyphQuads::Turned] {
                 warm(self.glyph_atlas_pipeline_resource(depth, quads), &|| {
                     Box::new(self.glyph_atlas_pipeline_job(depth, quads))
                 });
