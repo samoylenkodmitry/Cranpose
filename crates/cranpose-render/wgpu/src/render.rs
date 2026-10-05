@@ -57,7 +57,7 @@ use crate::{
     glyph_run_arena::{GlyphRunArena, GlyphRunSpan},
     gpu_stats::{self, gpu_stats_enabled},
     layer_cache::LayerCache,
-    offscreen::{OffscreenTarget, composition_bytes_per_pixel},
+    offscreen::{COMPOSITION_BYTES_PER_PIXEL, OffscreenTarget},
     output_conversion::OutputConverter,
     pipeline_compiler::{CompilerSend, PipelineCompilation, PipelineCompiler},
     record_columns::record_vertex_layouts,
@@ -3064,8 +3064,7 @@ impl GpuRenderer {
             let sentry = Arc::clone(&device_errors);
             device.on_uncaptured_error(Arc::new(move |error| sentry.record(&error)));
         }
-        let composition_format =
-            crate::offscreen::settle_composition_format(&device, adapter_backend);
+        let composition_format = crate::offscreen::composition_format(display_format);
         device.set_device_lost_callback(|reason, message| {
             log::error!("[gpu-device] device lost ({reason:?}): {message}");
         });
@@ -3937,7 +3936,7 @@ impl GpuRenderer {
                 .saturating_add(self.composition_target.as_ref().map_or(0, |target| {
                     u64::from(target.target.width)
                         .saturating_mul(u64::from(target.target.height))
-                        .saturating_mul(composition_bytes_per_pixel())
+                        .saturating_mul(COMPOSITION_BYTES_PER_PIXEL)
                 })),
         );
         self.frame_stats

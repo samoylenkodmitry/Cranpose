@@ -142,6 +142,10 @@ fn in_a_corner(x: u32, y: u32) -> bool {
     near(x, CLIP.width) && near(y, CLIP.height) && x > -1.0 && y > -1.0
 }
 
+/// A surface holds its layer in 8 bits before it is composited, so an
+/// edge pixel drawn through one is rounded once more than drawn in place.
+const SURFACE_ROUNDING: u8 = 1;
+
 #[test]
 fn a_fill_reaching_a_rounded_clips_corners_draws_in_place_as_its_surface_would() {
     let Some((frames, isolated)) = both_ways(vec![solid_rect(CLIP, Color(0.85, 0.15, 0.2, 1.0))])
@@ -149,7 +153,8 @@ fn a_fill_reaching_a_rounded_clips_corners_draws_in_place_as_its_surface_would()
         return;
     };
     assert_eq!(isolated, [0, 1], "in place, then through a surface");
-    let differing = support::differing_pixels(WIDTH, &frames[0], &frames[1]);
+    let differing =
+        support::pixels_differing_beyond(WIDTH, &frames[0], &frames[1], SURFACE_ROUNDING);
     assert!(
         differing.is_empty(),
         "one fill takes the clip's coverage as the surface's mask does: {}",
@@ -472,7 +477,7 @@ fn shadows_clear_of_rounded_corners_draw_in_place_at_fractional_scale() {
                     width,
                     &frames[0],
                     &frames[1],
-                    u8::from(root_scale != 1.0),
+                    SURFACE_ROUNDING,
                 );
             }
         }
