@@ -224,6 +224,10 @@ pub struct LayerNode {
     /// every ancestor of one, a fresh number; `0` promises nothing and is
     /// never reused.
     pub content_revision: u64,
+    /// How many render nodes this layer's subtree holds below it, so a
+    /// renderer may weigh what reusing its work for the subtree saves. Scene
+    /// building keeps it current; `0` promises nothing.
+    pub subtree_nodes: u32,
     pub children: Vec<RenderNode>,
 }
 
@@ -263,6 +267,7 @@ impl Default for LayerNode {
             cache_hashes: LayerRasterCacheHashes::default(),
             cache_hashes_valid: false,
             content_revision: 0,
+            subtree_nodes: 0,
             children: Vec::new(),
         }
     }
@@ -308,6 +313,13 @@ impl LayerNode {
                 RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             });
         self.draws_within_bounds = self.content_draws_within_bounds();
+        self.subtree_nodes = self.children.iter().fold(0u32, |nodes, child| {
+            let below = match child {
+                RenderNode::Layer(child_layer) => child_layer.subtree_nodes,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => 0,
+            };
+            nodes.saturating_add(below).saturating_add(1)
+        });
     }
 
     /// Whether this layer, drawn as a child, puts nothing outside `bounds`:

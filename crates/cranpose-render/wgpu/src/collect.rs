@@ -1,3 +1,5 @@
+use std::hash::Hasher;
+
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::{
     geometry::{blur_reach, blur_reach_for_minimum_scale},
@@ -185,7 +187,7 @@ impl ChildLayer {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy)]
 pub(crate) struct WalkContext {
     offset: Point,
     visual_clip: Option<Rect>,
@@ -205,7 +207,67 @@ pub(crate) struct WalkContext {
     reuse_draws: bool,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+impl WalkContext {
+    /// Hashes everything the walk hands a child that its draws depend on,
+    /// for [`crate::collect_cache::SegmentKey`].
+    pub(crate) fn hash_placement(&self, state: &mut impl Hasher) {
+        let Self {
+            offset,
+            visual_clip,
+            clip_radius,
+            snap_anchor,
+            translated,
+            raster_scale,
+            light,
+            wants_pixel_sensitive,
+            reuse_draws,
+        } = *self;
+        let mut write = |value: f32| state.write_u32(value.to_bits());
+        write(offset.x);
+        write(offset.y);
+        let clip = visual_clip.unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        });
+        [clip.x, clip.y, clip.width, clip.height, clip_radius]
+            .into_iter()
+            .for_each(&mut write);
+        let anchor = snap_anchor.map_or([0.0; 3], |anchor| {
+            [anchor.origin.x, anchor.origin.y, anchor.device_pixel_step]
+        });
+        anchor.into_iter().for_each(&mut write);
+        let (scale_is_minimum, scale) = match raster_scale {
+            RasterScale::Exact(scale) => (false, scale),
+            RasterScale::Minimum(scale) => (true, scale),
+        };
+        let ShadowLight {
+            x,
+            y,
+            z,
+            radius,
+            pixels_per_unit,
+        } = light;
+        [scale, x, y, z, radius, pixels_per_unit]
+            .into_iter()
+            .for_each(&mut write);
+        let flags = [
+            visual_clip.is_some(),
+            snap_anchor.is_some(),
+            scale_is_minimum,
+            translated,
+            wants_pixel_sensitive,
+            reuse_draws,
+        ]
+        .into_iter()
+        .enumerate()
+        .fold(0u32, |flags, (bit, set)| flags | u32::from(set) << bit);
+        state.write_u32(flags);
+    }
+}
+
+#[derive(Clone, Copy)]
 enum RasterScale {
     Exact(f32),
     Minimum(f32),
@@ -1394,7 +1456,7 @@ fn plan_direct_child(
 ) -> DirectPlan {
     let Some((node, key)) = context
         .reuse_draws
-        .then(|| SegmentKey::of(child, context))
+        .then(|| SegmentKey::of(child, &context))
         .flatten()
     else {
         return DirectPlan::Collect {
