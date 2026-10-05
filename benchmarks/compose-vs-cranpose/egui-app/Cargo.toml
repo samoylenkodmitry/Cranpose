@@ -1,0 +1,32 @@
+[package]
+name = "perf-compare-egui"
+version = "0.1.0"
+edition = "2024"
+description = "The gauntlet of the framework comparison in egui"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[lib]
+name = "perf_egui"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# egui's own native shell with its default renderer (glow) and fonts.
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "android-native-activity"] }
+log = "0.4"
+perf-data = { path = "../perf-data" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+winit = { version = "0.30.13", default-features = false }
+
+# Its own workspace, like a real application, built as the Cranpose app is.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = 0

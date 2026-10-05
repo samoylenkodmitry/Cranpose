@@ -6,8 +6,11 @@ from this repository) and `compose-app` (Kotlin, Jetpack Compose from BOM
 device and measures both from outside either framework. The gauntlet also runs
 in `views-app` (Android Views, RecyclerView 1.4), `flutter-app` (Flutter 3.47,
 which picks Impeller on OpenGL ES on the Mate), `rn-app` (React Native 0.87 on
-the New Architecture with Hermes) and `maui-app` (.NET MAUI 10, fully
-AOT-compiled).
+the New Architecture with Hermes), `maui-app` (.NET MAUI 10, fully
+AOT-compiled), `egui-app` (egui 0.36 in eframe on OpenGL ES) and `slint-app`
+(Slint 1.18 on Skia). The Rust apps share `perf-data`, and `rust-android`
+packages them: each crate's folder is its Android module, behind one launch
+activity that hands the native side the `am start` extras.
 
 ## Scenarios
 
@@ -89,7 +92,15 @@ frame on its animation ticker; views on screen set only what changed, the
 list is a CollectionView of rows scrolled through its RecyclerView (MAUI
 scrolls to items, not offsets), sparklines and bars are GraphicsView
 drawables, and the footer is a Grid whose row is as tall as its tallest
-cell.
+cell. egui lays out and paints the whole screen every frame, as immediate
+mode does: boxes reserve their background and paint it once their content is
+laid out, fixed-size pieces allocate their size and paint, and the list lays
+out only the rows on screen from an anchor that moves as rows scroll off.
+Slint declares the screen in compiled `.slint` markup: every per-frame value
+is a binding on a `Clock.frame` global, flow rows are `FlexboxLayout`s, rows
+come from a Rust `Model` as the `ListView` shows them, and a pure Rust
+callback draws the sparkline paths; Slint components cannot contain
+themselves, so a cluster's levels are boxes stacked from the outermost in.
 
 | Tier | Columns | Scale | Ticker tiles | Cluster depth |
 | --- | ---: | ---: | ---: | ---: |
@@ -101,11 +112,29 @@ cell.
 | 6 | 4 | 0.45 | 36 | 16 |
 | 7 | 4 | 0.4 | 44 | 20 |
 | 8 | 5 | 0.35 | 56 | 24 |
+| 9 | 6 | 0.3 | 72 | 28 |
+| 10 | 7 | 0.27 | 96 | 32 |
+| 11 | 8 | 0.25 | 120 | 40 |
+| 12 | 10 | 0.2 | 160 | 48 |
 
-Calibration fixes one tier per device: the Huawei Mate 20 X runs tier 5. On
-2026-10-05 Cranpose drew 52.8 fps there, Views 52 to 54, Flutter 29.5,
-Compose 26.5, React Native 8.4 and MAUI 6.0. Raising a device's tier starts a
-new series rather than changing an old one.
+Calibration fixes one tier per device: the heaviest every framework draws
+below 60 fps. The Huawei Mate 20 X runs tier 12, since egui held 60 fps there
+up to tier 11. On 2026-10-05 (`frameworks.py`, 380 s):
+
+| App | fps | CPU ms per frame |
+| --- | ---: | ---: |
+| egui | 51.6 | 19 |
+| Flutter | 19.8 | 70 |
+| Views | 13.2 | 123 |
+| Slint | 11.8 | 87 |
+| Cranpose | 8.6 | 172 |
+| Compose | 4.7 | 293 |
+| React Native | 1.7 | 1232 |
+| MAUI | 1.0 | 1204 |
+
+At tier 5 Cranpose drew 52.8 fps, Views 52 to 54, Flutter 29.5, Compose 26.5,
+React Native 8.4 and MAUI 6.0, while egui held 60. Raising a device's tier
+starts a new series rather than changing an old one.
 
 `parity.py` launches two apps frozen on frame 120 and compares the two
 captures the way the eye does: softened and cut into tiles. On frame 120 a
@@ -130,13 +159,16 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
 | Flutter | 0.93% | Its unhinted text is about 2% wider, so a few lines break a word earlier |
 | React Native | 0.85% | Paragraph lines keep their leading above the first line and below the last |
 | MAUI | 0.10% | Lines of text a pixel apart |
+| Slint | 1.11% | Its unhinted text is a little wider, so one ticker tile wraps a row later |
+| egui | 4.55% | Its renderer filters textures in linear light, so the striped avatars average lighter; its unhinted text breaks a few titles a word earlier |
 
 ## Parity rules
 
 - **Data:** `data.rs`, `shared-kotlin/dev/perfcompare/shared/PerfData.kt` (the
   Compose and Views apps), `flutter-app/lib/data.dart`, `rn-app/src/data.ts`
   and `maui-app/PerfData.cs` implement the same xorshift generator, so every
-  post, comment, quote and particle is identical.
+  post, comment, quote and particle is identical. `data.rs` is `perf-data`,
+  which the Cranpose, egui and Slint apps share.
 - **Fonts:** every app loads `/system/fonts/Roboto-Regular.ttf` and
   `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. React
   Native registers them with its font manager and MAUI serves them from its
@@ -239,7 +271,17 @@ python3 benchmarks/compose-vs-cranpose/ab.py --serial SERIAL --a cranpose-releas
 ```
 
 `cranpose-release` is the Cranpose app built with `-PperfCompareSuffix=.release`,
-so a second build installs beside the first.
+so a second build installs beside the first. A build too slow to draw 40 frames
+in 5 seconds gets a longer window, up to 30 seconds, sized from its previous
+launch.
+
+`frameworks.py` measures every framework's app on the gauntlet for the
+dashboard: each launched once unmeasured, then two rounds of one leg each,
+the order reversed in the second.
+
+```bash
+python3 benchmarks/compose-vs-cranpose/frameworks.py --serial SERIAL --output OUTPUT
+```
 
 ### Long comparisons
 
@@ -334,6 +376,7 @@ and a 15 s window. Failed runs are kept in the report.
 (cd benchmarks/compose-vs-cranpose/flutter-app && flutter build apk --release --target-platform android-arm64)
 (cd benchmarks/compose-vs-cranpose/rn-app && npm ci && cd android && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/maui-app && dotnet publish -c Release -f net10.0-android)
+(cd benchmarks/compose-vs-cranpose/rust-android && ./gradlew :egui:assembleRelease :slint:assembleRelease)
 python3 benchmarks/compose-vs-cranpose/measure.py --serial SERIAL --output benchmarks/compose-vs-cranpose/results/RUN --install --reps 2 --screenshots
 python3 benchmarks/compose-vs-cranpose/summarize.py benchmarks/compose-vs-cranpose/results/RUN/report.json
 ```

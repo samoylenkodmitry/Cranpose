@@ -108,12 +108,18 @@ def compare(first, second, top, shift, tile, tile_delta, drift):
     places = [(shift, shift + drift + row * tile) for row in range(rows)]
     found = [band_drift(band, coarse, x, y, drift) if drift else (0, 0.0)
              for band, (x, y) in zip(bands, places)]
-    still = [y for (_, y), (offset, mean) in zip(places, found) if abs(offset) <= shift and mean <= tile_delta]
+    # Still content: the bands from the top down that match where they are,
+    # such as a toolbar and a panel above a list.
+    still = []
+    for (_, y), (offset, mean) in zip(places, found):
+        if abs(offset) > shift or mean > tile_delta:
+            break
+        still.append(y)
 
     def hidden(row):
         """Whether the other capture cannot show this band where the nearest
-        matched band above or below puts it: past its edge, or where it shows
-        still content instead."""
+        matched band above or below puts it: past its edge, or, moved there,
+        where it shows still content instead."""
         y = places[row][1]
         for step in (-1, 1):
             near = row + step
@@ -124,7 +130,7 @@ def compare(first, second, top, shift, tile, tile_delta, drift):
             target = y + found[near][0]
             if target < drift or target + tile > drift + second.height:
                 return True
-            if any(abs(place - target) < tile for place in still if place != y):
+            if abs(target - y) > shift and any(abs(place - target) < tile for place in still):
                 return True
         return False
 

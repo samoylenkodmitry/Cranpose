@@ -55,7 +55,9 @@ def data_tree(tree):
     if not (tree / '.git').exists():
         git('worktree', 'add', '-q', '--force', '--detach', str(tree), 'HEAD', cwd=REPO)
     if fetched:
-        git('checkout', '-q', '-B', DATA_BRANCH, f'origin/{DATA_BRANCH}', cwd=tree)
+        # Detached at the data branch's head: the branch may be checked out in
+        # another worktree, and the push names it.
+        git('checkout', '-q', '--detach', f'origin/{DATA_BRANCH}', cwd=tree)
     else:
         git('checkout', '-q', '--orphan', DATA_BRANCH, cwd=tree)
         git('rm', '-q', '-r', '-f', '.', cwd=tree)
@@ -86,8 +88,11 @@ def main():
     index['runs'].sort(key=lambda entry: entry['started_at'])
     (tree / 'index.json').write_text(json.dumps(index, indent=1) + '\n')
     git('add', 'index.json', file, cwd=tree)
-    git('commit', '-q', '-m', f"{run['kind']} {stamp}: {run.get('release')} against main "
-        f"{(run.get('main') or '')[:9]} on {device}", cwd=tree)
+    if run.get('release'):
+        what = f"{run['release']} against main {(run.get('main') or '')[:9]}"
+    else:
+        what = ', '.join(subject['name'] for subject in run['subjects'])
+    git('commit', '-q', '-m', f"{run['kind']} {stamp}: {what} on {device}", cwd=tree)
     if not args.no_push:
         git('push', '-q', 'origin', f'HEAD:{DATA_BRANCH}', cwd=tree)
     print('published', file)

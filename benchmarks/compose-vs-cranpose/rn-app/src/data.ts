@@ -136,9 +136,13 @@ const TIERS: GauntletTier[] = [
   { columns: 4, scale: 0.45, tickers: 36, depth: 16 },
   { columns: 4, scale: 0.4, tickers: 44, depth: 20 },
   { columns: 5, scale: 0.35, tickers: 56, depth: 24 },
+  { columns: 6, scale: 0.3, tickers: 72, depth: 28 },
+  { columns: 7, scale: 0.27, tickers: 96, depth: 32 },
+  { columns: 8, scale: 0.25, tickers: 120, depth: 40 },
+  { columns: 10, scale: 0.2, tickers: 160, depth: 48 },
 ];
 
-/** Tier `1..8`; anything else is clamped into that range. */
+/** Tier `1..12`; anything else is clamped into that range. */
 export function gauntletTier(tier: number): GauntletTier {
   return TIERS[Math.min(Math.max(tier, 1), TIERS.length) - 1];
 }

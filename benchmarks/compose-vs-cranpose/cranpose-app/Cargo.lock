@@ -605,7 +605,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -627,6 +627,7 @@ dependencies = [
  "cranpose-render-wgpu",
  "cranpose-services",
  "cranpose-ui",
+ "cranpose-ui-graphics",
  "cranpose-ui-layout",
  "cranpose-wgpu",
  "jni",
@@ -652,16 +653,15 @@ dependencies = [
 
 [[package]]
 name = "cranpose-animation"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-core",
- "cranpose-services",
  "cranpose-ui-graphics",
 ]
 
 [[package]]
 name = "cranpose-app-shell"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "arboard",
  "cranpose-core",
@@ -676,19 +676,21 @@ dependencies = [
 
 [[package]]
 name = "cranpose-capabilities"
-version = "0.9.5"
+version = "0.9.7"
 
 [[package]]
 name = "cranpose-core"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "dispatch2",
+ "event-listener",
  "foldhash",
  "futures-task",
  "hashbrown 0.17.1",
  "log",
  "pollster",
  "smallvec",
+ "thiserror 2.0.21",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -697,7 +699,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-foundation"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
@@ -710,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-liquid"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -726,7 +728,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-macros"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -736,14 +738,14 @@ dependencies = [
 
 [[package]]
 name = "cranpose-platform-android"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-ui-graphics",
 ]
 
 [[package]]
 name = "cranpose-platform-desktop-winit"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-foundation",
  "cranpose-ui-graphics",
@@ -752,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-common"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "ab_glyph",
  "cranpose-core",
@@ -764,11 +766,12 @@ dependencies = [
  "thiserror 2.0.21",
  "tiny-skia",
  "ttf-parser",
+ "unicode-segmentation",
 ]
 
 [[package]]
 name = "cranpose-render-pixels"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-core",
  "cranpose-foundation",
@@ -781,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-render-wgpu"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "bytemuck",
  "cranpose-core",
@@ -800,7 +803,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-runtime-std"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-core",
  "web-time",
@@ -808,10 +811,11 @@ dependencies = [
 
 [[package]]
 name = "cranpose-services"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-core",
  "cranpose-macros",
+ "cranpose-ui-graphics",
  "directories",
  "log",
  "open",
@@ -820,6 +824,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror 2.0.21",
  "web-time",
  "webbrowser",
@@ -827,7 +832,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-testing"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose",
  "cranpose-app-shell",
@@ -840,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-animation",
  "cranpose-core",
@@ -858,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-graphics"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -869,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "cranpose-ui-layout"
-version = "0.9.5"
+version = "0.9.7"
 dependencies = [
  "cranpose-core",
  "cranpose-ui-graphics",
@@ -2220,7 +2225,12 @@ dependencies = [
  "cranpose-testing",
  "cranpose-ui",
  "log",
+ "perf-data",
 ]
+
+[[package]]
+name = "perf-data"
+version = "0.1.0"
 
 [[package]]
 name = "phf"

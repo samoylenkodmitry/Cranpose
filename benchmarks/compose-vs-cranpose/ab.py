@@ -20,7 +20,9 @@ The scenario stops once every deciding metric is settled. After
 threshold is the same whatever its spread; anything else still open is
 inconclusive.
 Before measuring, each build is launched once unmeasured so both start from a
-written pipeline cache.
+written pipeline cache. A leg's window is 5 seconds, or longer for a build too
+slow to draw `--min-frames` frames in that, up to `--max-window`: sized from
+the unmeasured launch, then from the build's previous leg in the scenario.
 
 Writes `ab.json` in the dashboard's run format: device, subjects, every leg,
 per-subject medians and per-metric verdicts.
@@ -34,7 +36,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from measure import APPS, HEAVY, REMOTE_WINDOW, HERE, Device, device_lock, launch, measure_run
+from measure import APPS, HEAVY, REMOTE_WINDOW, HERE, Device, device_lock, frame_rate, launch, measure_run
 
 # Metric: (threshold, whether the threshold is relative, whether more is better).
 DECIDING = {
@@ -74,6 +76,8 @@ def leg_record(run, subject, order):
         'subject': subject,
         'order': order,
         'fps': run['fps'],
+        'frames': run['frames'],
+        'window_s': run['window_s'],
         'janky_pct': run['janky_pct'],
         'interval_p99_ms': run['interval_p99_ms'],
         'cpu_ms_per_frame': run['cpu_ms_per_frame'],
@@ -91,7 +95,8 @@ def compare_scenario(device, scenario, subjects, args):
     for pair in range(args.max_pairs):
         order = subjects if pair % 2 == 0 else subjects[::-1]
         for subject in order:
-            run = measure_run(device, subject, scenario, args, args.output)
+            run = measure_run(device, subject, scenario, args, args.output, args.windows.get((subject, scenario)))
+            size_window(args, subject, scenario, run['fps'])
             legs.append(leg_record(run, subject, len(legs)))
             print(f'{scenario:10} {subject:16} fps {run["fps"]:5.1f} cpu/f {run["cpu_ms_per_frame"]:5.2f} '
                   f'present {run.get("desired_to_present_p50_ms") or 0:5.1f}', flush=True)
@@ -118,9 +123,20 @@ def compare_scenario(device, scenario, subjects, args):
     }
 
 
+def size_window(args, subject, scenario, rate):
+    """The window for the build's next leg in the scenario: long enough for
+    `--min-frames` frames at `rate`, within `--window` and `--max-window`
+    seconds."""
+    wanted = args.min_frames / rate if rate > 0 else args.max_window
+    args.windows[(subject, scenario)] = min(args.max_window, max(args.window, wanted))
+
+
 def prime(device, subject, scenario, args):
+    """Launches the build once unmeasured, and sizes its first window from the
+    frame rate it reached."""
     launch(device, subject, scenario, (HEAVY.get(scenario, '') + ' ' + args.extra).split())
     time.sleep(args.prime)
+    size_window(args, subject, scenario, frame_rate(device, subject))
     device.shell('am', 'force-stop', APPS[subject]['package'])
 
 
@@ -136,6 +152,9 @@ def main():
     parser.add_argument('--scenarios', default='gauntlet')
     parser.add_argument('--warmup', type=float, default=2.0)
     parser.add_argument('--window', type=float, default=5.0)
+    parser.add_argument('--min-frames', type=int, default=40,
+                        help='frames a window holds at least, when the build is slow enough to need longer')
+    parser.add_argument('--max-window', type=float, default=30.0)
     parser.add_argument('--prime', type=float, default=3.0,
                         help='seconds of the unmeasured launch each build gets first')
     parser.add_argument('--max-pairs', type=int, default=4)
@@ -150,6 +169,7 @@ def main():
 def compare_builds(args):
     """Runs the whole comparison: the caller holds the device lock."""
     args.load, args.screenshots = 'heavy', False
+    args.windows = {}
     args.started = time.monotonic()
     args.output.mkdir(parents=True, exist_ok=True)
     device = Device(args.serial)
@@ -165,7 +185,8 @@ def compare_builds(args):
                    ['ro.product.model', 'ro.build.version.release', 'ro.hardware']},
         'subjects': [{'name': name, 'package': APPS[name]['package'], 'label': label}
                      for name, label in ((args.a, args.label_a), (args.b, args.label_b))],
-        'protocol': {'warmup_s': args.warmup, 'window_s': args.window, 'max_pairs': args.max_pairs,
+        'protocol': {'warmup_s': args.warmup, 'window_s': args.window, 'min_frames': args.min_frames,
+                     'max_window_s': args.max_window, 'max_pairs': args.max_pairs,
                      'deciding': {metric: rule[0] for metric, rule in DECIDING.items()}},
         'scenarios': [],
     }

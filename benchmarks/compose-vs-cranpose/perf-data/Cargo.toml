@@ -1,0 +1,10 @@
+[package]
+name = "perf-data"
+version = "0.1.0"
+edition = "2024"
+description = "Deterministic data the Rust apps of the framework comparison draw"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+# Its own workspace, beside the apps that use it.
+[workspace]

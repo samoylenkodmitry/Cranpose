@@ -63,6 +63,17 @@ APPS = {
         'activity': 'dev.perfcompare.maui/.MainActivity',
         'apk': HERE / 'maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk',
     },
+    # Rust frameworks, packaged by `rust-android`: the gauntlet only.
+    'egui': {
+        'package': 'dev.perfcompare.egui',
+        'activity': 'dev.perfcompare.egui/dev.perfcompare.launch.LaunchActivity',
+        'apk': HERE / 'egui-app/build/outputs/apk/release/egui-release.apk',
+    },
+    'slint': {
+        'package': 'dev.perfcompare.slint',
+        'activity': 'dev.perfcompare.slint/dev.perfcompare.launch.LaunchActivity',
+        'apk': HERE / 'slint-app/build/outputs/apk/release/slint-release.apk',
+    },
     # The Cranpose app built from the latest release, beside main's
     # (`-PperfCompareSuffix=.release`).
     'cranpose-release': {
@@ -88,7 +99,7 @@ HEAVY = {
     # gpui-fast's trading workspace, 16 quotes every 16 ms.
     'workspace': '--es mode quotes',
     # Every stage at once; the tier is calibrated per device (README).
-    'gauntlet': '--ei tier 5',
+    'gauntlet': '--ei tier 12',
 }
 
 
@@ -389,7 +400,23 @@ def clock_summary(freqs):
     return summary
 
 
-def measure_run(device, app, scenario, args, destination):
+def frame_rate(device, app):
+    """The app's recent frame rate, from the presents SurfaceFlinger keeps for
+    its layer; 0 when it has presented fewer than two frames."""
+    presents = sorted(
+        int(fields[1]) for fields in (line.split() for line in
+                                      device.shell('dumpsys', 'SurfaceFlinger', '--latency', app_layer(device, app))
+                                      .splitlines()[1:])
+        if len(fields) == 3 and 0 < int(fields[1]) < PENDING)
+    if len(presents) < 2:
+        return 0.0
+    return (len(presents) - 1) / ((presents[-1] - presents[0]) / 1e9)
+
+
+def measure_run(device, app, scenario, args, destination, window=None):
+    """One cold launch measured over `window` seconds after the warm-up
+    (`args.window` unless given)."""
+    window = window or args.window
     package = APPS[app]['package']
     run = {'app': app, 'scenario': scenario, 'temperature_before': device.temperatures()}
     extras = (HEAVY.get(scenario, '') if args.load == 'heavy' else '') + ' ' + args.extra
@@ -398,10 +425,10 @@ def measure_run(device, app, scenario, args, destination):
     run['started_s'] = round(time.monotonic() - args.started, 1)
     time.sleep(args.warmup)
     layer = app_layer(device, app)
-    samples = int(args.window / args.interval)
+    samples = int(window / args.interval)
     output = device.shell('sh', REMOTE_WINDOW, str(pid), package, layer, str(samples),
                           str(args.interval), '1' if app == 'compose' else '0',
-                          timeout=args.window + 60)
+                          timeout=window + 60)
     (destination / f'{app}-{scenario}-{int(time.time())}.txt').write_text(output)
     lines = output.splitlines()
     if any(line.strip() == 'STAT' for line in lines):
