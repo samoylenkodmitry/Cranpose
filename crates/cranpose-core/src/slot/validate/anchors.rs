@@ -10,7 +10,11 @@ pub(super) fn validate_active_group_anchor(
     group: &GroupRecord,
 ) -> Result<(), SlotInvariantError> {
     match table.anchors.state(group.anchor) {
-        Some(AnchorState::Active(actual)) if actual as usize == group_index => Ok(()),
+        Some(AnchorState::Active(stored))
+            if table.resolve_group_index(stored as usize, group.anchor) == Some(group_index) =>
+        {
+            Ok(())
+        }
         actual => Err(SlotInvariantError::AnchorMismatch {
             anchor: group.anchor,
             expected: group_index,
@@ -41,7 +45,8 @@ pub(super) fn validate_anchor_registry_integrity(
 pub(super) fn validate_active_group_anchor_entries(
     table: &SlotTable,
 ) -> Result<(), SlotInvariantError> {
-    for (anchor, group_index) in table.anchors.active_entries() {
+    for (anchor, stored) in table.anchors.active_entries() {
+        let group_index = table.resolve_group_index(stored, anchor).unwrap_or(stored);
         let actual = table.groups.get(group_index).map(|group| group.anchor);
         if actual == Some(anchor) {
             continue;

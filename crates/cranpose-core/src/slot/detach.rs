@@ -109,6 +109,7 @@ impl SlotTable {
         root_index: usize,
         refresh_indexes: bool,
     ) -> DetachedSubtree {
+        self.flush_stale_group_indexes();
         let root_parent_anchor = self.groups[root_index].parent_anchor;
         let Some(removed_group_range) = self.group_subtree_range_at_index(root_index) else {
             log::error!(
@@ -216,6 +217,7 @@ impl SlotTable {
         if !self.subtree_restore_ready(cursor, key, &subtree) {
             return Err(subtree);
         }
+        self.flush_stale_group_indexes();
         let insert_index = cursor.index();
         let parent_anchor = cursor.parent();
         let restored_group_count = subtree.groups.len();

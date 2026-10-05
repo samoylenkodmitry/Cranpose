@@ -27,6 +27,7 @@ impl SlotWriteSession<'_> {
             self.end_group();
         }
         self.flush_payload_location_refreshes();
+        self.table.flush_stale_group_indexes();
         #[cfg(any(test, debug_assertions))]
         self.state
             .debug_assert_no_pending_payload_location_refreshes("finalize_pass");

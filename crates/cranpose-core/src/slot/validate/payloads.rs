@@ -88,7 +88,7 @@ pub(super) fn validate_payload_anchor_registry(
     table: &SlotTable,
 ) -> Result<(), SlotInvariantError> {
     for (payload_anchor, (owner, payload_index)) in table.payload_anchors.active_entries() {
-        let Some(group_index) = table.anchors.active_index(owner) else {
+        let Some(group_index) = table.active_group_index(owner) else {
             return Err(SlotInvariantError::PayloadAnchorRegistryTargetMismatch {
                 payload_anchor,
                 expected_owner: owner,
