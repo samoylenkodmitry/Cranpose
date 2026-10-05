@@ -874,6 +874,17 @@ impl SubcomposeLayoutNode {
         }
     }
 
+    /// Updates relative modifier placement for this node's composition scope.
+    pub fn set_layout_direction(&mut self, direction: crate::LayoutDirection) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.modifier_chain.set_layout_direction(direction) {
+            inner.resolved_modifiers = inner.modifier_chain.resolved_modifiers();
+            drop(inner);
+            self.modifier_slices_dirty.set(true);
+            self.mark_needs_measure();
+        }
+    }
+
     /// The grid the composition provided, which the chain's lengths land on.
     pub(crate) fn density(&self) -> crate::density::Density {
         self.inner.borrow().density

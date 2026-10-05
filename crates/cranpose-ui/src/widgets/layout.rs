@@ -77,10 +77,12 @@ where
         )
     });
     let provided = modifier.provided_composition_locals();
+    let direction = crate::layout_direction();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut LayoutNode| {
         node.set_modifier(modifier);
         node.set_measure_policy(policy);
         node.set_density(composed_density);
+        node.set_layout_direction(direction);
     }) {
         debug_assert!(false, "failed to update Layout node: {err}");
     }
@@ -138,11 +140,13 @@ pub fn SubcomposeLayout(
     let captured_context =
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
     let composed_density = crate::density::density();
+    let direction = crate::layout_direction();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut SubcomposeLayoutNode| {
         node.set_modifier(modifier);
         node.set_measure_policy(policy);
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
+        node.set_layout_direction(direction);
         if policy_captures_changed {
             node.invalidate_subcomposition();
         }

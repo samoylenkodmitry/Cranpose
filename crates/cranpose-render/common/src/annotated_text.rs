@@ -3,6 +3,11 @@ use std::ops::Range;
 use cranpose_ui::text::{FontExtent, LineBox, TextMetrics, TextStyle, line_box};
 use cranpose_ui_graphics::{Brush, Point, Rect};
 use smallvec::SmallVec;
+#[cfg(feature = "text-shaping")]
+use {
+    unicode_script::{Script, UnicodeScript},
+    unicode_segmentation::UnicodeSegmentation,
+};
 
 use crate::software_text_raster::{
     SoftwareTextFont, SoftwareTextFontSet, StyledTextRef, asked_line_height,
@@ -14,6 +19,71 @@ pub(crate) struct AnnotatedBrushExtent {
     pub style_index: usize,
     pub line_index: usize,
     pub rect: Rect,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FontResolver<'a> {
+    Single(&'a SoftwareTextFont),
+    Set(&'a SoftwareTextFontSet),
+}
+
+impl<'a> From<&'a SoftwareTextFont> for FontResolver<'a> {
+    fn from(font: &'a SoftwareTextFont) -> Self {
+        Self::Single(font)
+    }
+}
+
+impl<'a> From<&'a SoftwareTextFontSet> for FontResolver<'a> {
+    fn from(fonts: &'a SoftwareTextFontSet) -> Self {
+        Self::Set(fonts)
+    }
+}
+
+impl<'a> FontResolver<'a> {
+    fn resolve(self, style: &TextStyle) -> Option<&'a SoftwareTextFont> {
+        match self {
+            Self::Single(font) => Some(font),
+            Self::Set(fonts) => fonts.resolve(style),
+        }
+    }
+
+    pub(crate) fn single_font_for_text(
+        self,
+        text: &str,
+        style: &TextStyle,
+    ) -> Option<&'a SoftwareTextFont> {
+        match self {
+            Self::Single(font) => Some(font),
+            Self::Set(fonts) => fonts.single_font_for_text(text, style),
+        }
+    }
+
+    fn visit_font_runs(
+        self,
+        text: &'a str,
+        style: &TextStyle,
+        mut visit: impl FnMut(Range<usize>, &'a SoftwareTextFont),
+    ) -> Option<()> {
+        #[cfg(feature = "text-shaping")]
+        let shaped = crate::text_shaping::required(text, style);
+        #[cfg(feature = "text-shaping")]
+        let mut visit = |range: Range<usize>, font: &'a SoftwareTextFont| {
+            if shaped {
+                visit_script_runs(text, range, |range| visit(range, font));
+            } else {
+                visit(range, font);
+            }
+        };
+        match self {
+            Self::Single(font) => {
+                if !text.is_empty() {
+                    visit(0..text.len(), font);
+                }
+                Some(())
+            }
+            Self::Set(fonts) => fonts.visit_font_runs(text, style, visit),
+        }
+    }
 }
 
 struct ResolvedSpan<'a> {
@@ -51,6 +121,8 @@ pub(crate) struct AnnotatedTextLayout<'a> {
     styles: SmallVec<[Option<TextStyle>; 2]>,
     spans: SmallVec<[ResolvedSpan<'a>; 2]>,
     pub lines: SmallVec<[ResolvedLine; 4]>,
+    #[cfg(feature = "text-shaping")]
+    bidi: Option<(usize, unicode_bidi::BidiInfo<'a>)>,
 }
 
 impl<'a> AnnotatedTextLayout<'a> {
@@ -60,15 +132,39 @@ impl<'a> AnnotatedTextLayout<'a> {
         font_size: f32,
         scale: f32,
         grid: f32,
-        fonts: &'a SoftwareTextFontSet,
+        fonts: impl Into<FontResolver<'a>>,
     ) -> Option<Self> {
+        Self::new_range(
+            text,
+            0..text.text.len(),
+            style,
+            font_size,
+            scale,
+            grid,
+            fonts,
+        )
+    }
+
+    pub fn new_range(
+        text: StyledTextRef<'a>,
+        range: Range<usize>,
+        style: &'a TextStyle,
+        font_size: f32,
+        scale: f32,
+        grid: f32,
+        fonts: impl Into<FontResolver<'a>>,
+    ) -> Option<Self> {
+        text.text.get(range.clone())?;
+        #[cfg(feature = "text-shaping")]
+        let content = &text.text[range.clone()];
+        let fonts = fonts.into();
         let base_font = fonts.resolve(style)?;
         let base_extent = font_extent(base_font, font_size * scale);
         let mut styles: SmallVec<[Option<TextStyle>; 2]> = SmallVec::new();
         let mut spans = SmallVec::new();
-        for range in text.span_boundaries().windows(2) {
-            let (start, end) = (range[0], range[1]);
-            if start == end {
+        for boundary in text.span_boundaries().windows(2) {
+            let (start, end) = (boundary[0].max(range.start), boundary[1].min(range.end));
+            if start >= end {
                 continue;
             }
             let resolved_style = if text.span_styles.is_empty() {
@@ -112,19 +208,37 @@ impl<'a> AnnotatedTextLayout<'a> {
             styles,
             spans,
             lines: SmallVec::new(),
+            #[cfg(feature = "text-shaping")]
+            bidi: crate::text_shaping::required(content, style).then(|| {
+                let level = match style.paragraph_style.text_direction.resolve(content) {
+                    cranpose_ui::text::ResolvedTextDirection::Ltr => unicode_bidi::Level::ltr(),
+                    cranpose_ui::text::ResolvedTextDirection::Rtl => unicode_bidi::Level::rtl(),
+                };
+                (
+                    range.start,
+                    unicode_bidi::BidiInfo::new(content, Some(level)),
+                )
+            }),
         };
-        layout.resolve_lines(style, scale, grid, base_extent);
+        layout.resolve_lines(range, style, scale, grid, base_extent);
         Some(layout)
     }
 
-    fn resolve_lines(&mut self, style: &TextStyle, scale: f32, grid: f32, base: FontExtent) {
-        let mut start = 0;
+    fn resolve_lines(
+        &mut self,
+        range: Range<usize>,
+        style: &TextStyle,
+        scale: f32,
+        grid: f32,
+        base: FontExtent,
+    ) {
+        let mut start = range.start;
         let mut first_span = 0;
         let mut top = 0.0;
         let mut fixed_line_box = None;
-        for content in self.text.split('\n') {
+        for content in self.text[range.clone()].split('\n') {
             let end = start + content.len();
-            let extent_end = (end + 1).min(self.text.len());
+            let extent_end = (end + 1).min(range.end);
             while self
                 .spans
                 .get(first_span)
@@ -194,29 +308,85 @@ impl<'a> AnnotatedTextLayout<'a> {
     ) -> Option<f32> {
         let line = self.lines.get(line_index)?;
         let mut x = offset;
+        #[cfg(feature = "text-shaping")]
+        if let Some((bidi_offset, bidi)) = &self.bidi
+            && let Some(paragraph) = bidi.paragraphs.iter().find(|paragraph| {
+                paragraph.range.start + bidi_offset <= line.range.start
+                    && paragraph.range.end + bidi_offset >= line.range.end
+            })
+        {
+            let (levels, runs) = bidi.visual_runs(
+                paragraph,
+                line.range.start - bidi_offset..line.range.end - bidi_offset,
+            );
+            for run in runs {
+                let rtl = levels[run.start].is_rtl();
+                let run = run.start + bidi_offset..run.end + bidi_offset;
+                let spans = &self.spans[line.spans.clone()];
+                for index in 0..spans.len() {
+                    let span = &spans[if rtl { spans.len() - index - 1 } else { index }];
+                    let range = span.range.start.max(run.start)..span.range.end.min(run.end);
+                    if range.start >= range.end {
+                        continue;
+                    }
+                    let mut style = self.style(span.style_index).clone();
+                    style.paragraph_style.text_direction = if rtl {
+                        cranpose_ui::text::TextDirection::Rtl
+                    } else {
+                        cranpose_ui::text::TextDirection::Ltr
+                    };
+                    style
+                        .paragraph_style
+                        .platform_style
+                        .get_or_insert_default()
+                        .shaping = Some(cranpose_ui::text::TextShaping::Advanced);
+                    x += visit(self.segment(line, line_index, span, range, &style, x))?;
+                }
+            }
+            return Some(x - offset);
+        }
         for span in &self.spans[line.spans.clone()] {
             let start = span.range.start.max(line.range.start);
             let end = span.range.end.min(line.range.end);
             if start >= end {
                 continue;
             }
-            x += visit(AnnotatedTextSegment {
-                text: &self.text[start..end],
-                range: start..end,
-                style_index: span.style_index,
-                style: self.style(span.style_index),
-                font: span.font,
-                font_size: span.font_size,
-                origin: Point::new(
-                    x,
-                    line.top + line.line_box.baseline - span.line_box.first_baseline(),
-                ),
+            x += visit(self.segment(
+                line,
                 line_index,
-                line_top: line.top,
-                line_height: line.line_box.height,
-            })?;
+                span,
+                start..end,
+                self.style(span.style_index),
+                x,
+            ))?;
         }
         Some(x - offset)
+    }
+
+    fn segment<'s>(
+        &'s self,
+        line: &ResolvedLine,
+        line_index: usize,
+        span: &'s ResolvedSpan<'_>,
+        range: Range<usize>,
+        style: &'s TextStyle,
+        x: f32,
+    ) -> AnnotatedTextSegment<'s> {
+        AnnotatedTextSegment {
+            text: &self.text[range.clone()],
+            range,
+            style_index: span.style_index,
+            style,
+            font: span.font,
+            font_size: span.font_size,
+            origin: Point::new(
+                x,
+                line.top + line.line_box.baseline - span.line_box.first_baseline(),
+            ),
+            line_index,
+            line_top: line.top,
+            line_height: line.line_box.height,
+        }
     }
 
     pub fn all_styles(&self, matches: impl Fn(&TextStyle) -> bool) -> bool {
@@ -312,6 +482,28 @@ impl<'a> AnnotatedTextLayout<'a> {
                 .fold(0.0, f32::max),
             line_count: self.lines.len(),
         }
+    }
+}
+
+#[cfg(feature = "text-shaping")]
+fn visit_script_runs(text: &str, range: Range<usize>, mut visit: impl FnMut(Range<usize>)) {
+    let mut previous_script = Script::Common;
+    let mut run_start = range.start;
+    for (offset, cluster) in text[range.clone()].grapheme_indices(true) {
+        let script = cluster
+            .chars()
+            .map(|ch| ch.script())
+            .find(|script| !matches!(script, Script::Common | Script::Inherited))
+            .unwrap_or(previous_script);
+        let start = range.start + offset;
+        if start > run_start && script != previous_script {
+            visit(run_start..start);
+            run_start = start;
+        }
+        previous_script = script;
+    }
+    if run_start < range.end {
+        visit(run_start..range.end);
     }
 }
 

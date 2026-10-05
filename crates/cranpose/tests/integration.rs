@@ -4,6 +4,8 @@ mod platform_scheduling_static;
 mod prelude_surface;
 #[cfg(feature = "preview")]
 mod recomposition_inspection;
+#[cfg(feature = "localization")]
+mod system_languages;
 #[cfg(feature = "watchos")]
 mod watchos;
 

@@ -31,6 +31,8 @@ const MIN_IDLE_WARM_BEYOND_BOUNDS_ITEMS: usize = 4;
 pub struct LazyListMeasureConfig {
     /// Whether the list is vertical (true) or horizontal (false).
     pub is_vertical: bool,
+    /// Whether horizontal placement resolves start from the right edge.
+    pub is_rtl: bool,
 
     /// Whether layout is reversed (items laid out from bottom/right to top/left).
     ///
@@ -64,6 +66,7 @@ impl Default for LazyListMeasureConfig {
     fn default() -> Self {
         Self {
             is_vertical: true,
+            is_rtl: false,
             reverse_layout: false,
             before_content_padding: 0.0,
             after_content_padding: 0.0,

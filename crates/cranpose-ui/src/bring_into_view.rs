@@ -12,10 +12,7 @@
 //! through [`Modifier::report_window_rect`]) and how to apply a scroll delta to
 //! its own scroll state.
 
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{CompositionLocal, compositionLocalOf};
 use cranpose_ui_graphics::{Point, Rect, WindowCoordinates};
@@ -151,15 +148,10 @@ impl std::fmt::Debug for BringIntoViewResponder {
 /// `current()` to request that its caret be scrolled above the keyboard. Like the
 /// safe-area locals, the same instance is returned per thread.
 pub fn local_bring_into_view_responder() -> CompositionLocal<Option<BringIntoViewResponder>> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<Option<BringIntoViewResponder>>>> =
-            const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| compositionLocalOf(|| None))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.bring_into_view,
+        || compositionLocalOf(|| None),
+    )
 }
 
 impl Modifier {

@@ -64,6 +64,7 @@ pub fn Box<F>(modifier: Modifier, spec: BoxSpec, content: F) -> NodeId
 where
     F: FnMut() + 'static,
 {
-    let policy = BoxMeasurePolicy::new(spec.content_alignment, spec.propagate_min_constraints);
+    let mut policy = BoxMeasurePolicy::new(spec.content_alignment, spec.propagate_min_constraints);
+    policy.layout_direction = crate::layout_direction();
     compose_layout(modifier, policy, crate::density::density(), content)
 }

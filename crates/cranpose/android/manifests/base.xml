@@ -21,7 +21,7 @@
             android:launchMode="singleTask"
             android:label="${cranposeLabel}"
             android:theme="${cranposeTheme}"
-            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode|layoutDirection|fontScale|density">
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode|locale|layoutDirection|fontScale|density">
             <meta-data
                 android:name="android.app.lib_name"
                 android:value="${cranposeLibName}" />

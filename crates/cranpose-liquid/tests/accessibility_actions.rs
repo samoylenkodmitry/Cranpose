@@ -83,7 +83,7 @@ fn text_button_sizes_preserve_accessible_activation_and_increase_the_touch_targe
                     Modifier::empty(),
                     spec.clone(),
                     move || recorded.set(recorded.get() + 1),
-                    move || GlassButtonLabel("Continue", spec.clone()),
+                    move || GlassButtonLabel("Continue".into(), spec.clone()),
                 );
             });
         });
@@ -123,7 +123,7 @@ fn reader_activates_a_glass_button_beyond_the_scroll_viewport() {
                         Modifier::empty().fill_max_width(),
                         GlassButtonSpec::glass(),
                         move || recorded.set(recorded.get() + 1),
-                        || GlassButtonLabel("Edit more fields", GlassButtonSpec::glass()),
+                        || GlassButtonLabel("Edit more fields".into(), GlassButtonSpec::glass()),
                     );
                 },
             );
@@ -341,10 +341,10 @@ fn an_action_chip_is_a_plain_button_whatever_its_look() {
                 Modifier::empty(),
                 true,
                 move || save.set(save.get() + 1),
-                "Save",
+                "Save".into(),
             );
-            LiquidActionChip(Modifier::empty(), false, || {}, "Cancel");
-            LiquidChip(Modifier::empty(), false, || {}, "Receipts");
+            LiquidActionChip(Modifier::empty(), false, || {}, "Cancel".into());
+            LiquidChip(Modifier::empty(), false, || {}, "Receipts".into());
         });
     });
     robot.shell_mut().set_semantics_enabled(true);

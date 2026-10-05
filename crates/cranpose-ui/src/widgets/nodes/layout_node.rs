@@ -650,6 +650,15 @@ impl LayoutNode {
         }
     }
 
+    /// Updates relative modifier placement for this node's composition scope.
+    pub fn set_layout_direction(&mut self, direction: crate::LayoutDirection) {
+        if self.modifier_chain.set_layout_direction(direction) {
+            self.cache.clear();
+            self.modifier_slices_dirty.set(true);
+            self.mark_needs_measure();
+        }
+    }
+
     pub fn set_measure_policy(&mut self, policy: Rc<dyn MeasurePolicy>) {
         if !Rc::ptr_eq(&self.measure_policy, &policy) {
             self.measure_policy = policy;
@@ -1027,7 +1036,9 @@ impl Clone for LayoutNode {
             #[cfg(feature = "inspection")]
             source_trace: self.source_trace.clone(),
             modifier: self.modifier.clone(),
-            modifier_chain: ModifierChainHandle::new(),
+            modifier_chain: ModifierChainHandle::for_layout_direction(
+                self.modifier_chain.layout_direction(),
+            ),
             measure_policy: self.measure_policy.clone(),
             density: self.density,
             children: self.children.clone(),

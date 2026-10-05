@@ -43,6 +43,7 @@ fn lazy_list_placements_reuse_output_storage() {
     item.child_offsets.push(5.0);
     let config = LazyListMeasureConfig {
         is_vertical: true,
+        is_rtl: false,
         reverse_layout: false,
         before_content_padding: 0.0,
         after_content_padding: 0.0,
@@ -54,7 +55,7 @@ fn lazy_list_placements_reuse_output_storage() {
     let mut placements = Vec::with_capacity(8);
     let original_capacity = placements.capacity();
 
-    push_lazy_list_placements(&mut placements, 1.0, &[item], 1, true, 100.0, &config);
+    push_lazy_list_placements(&mut placements, 1.0, &[item], 1, true, 100.0, &config, 50.0);
 
     assert_eq!(placements.len(), 2);
     assert_eq!(placements[0].node_id, 101);
@@ -78,6 +79,7 @@ fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
 
     let config = LazyListMeasureConfig {
         is_vertical: true,
+        is_rtl: false,
         reverse_layout: false,
         before_content_padding: 0.0,
         after_content_padding: 0.0,
@@ -96,6 +98,7 @@ fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
         true,
         100.0,
         &config,
+        50.0,
     );
 
     assert_eq!(placements.len(), 2);
@@ -124,6 +127,7 @@ fn lazy_list_placements_retain_after_viewport_prefetch_items_for_renderer_prewar
 
     let config = LazyListMeasureConfig {
         is_vertical: true,
+        is_rtl: false,
         reverse_layout: false,
         before_content_padding: 0.0,
         after_content_padding: 0.0,
@@ -142,6 +146,7 @@ fn lazy_list_placements_retain_after_viewport_prefetch_items_for_renderer_prewar
         true,
         100.0,
         &config,
+        50.0,
     );
 
     let placed_nodes = placements.iter().map(|p| p.node_id).collect::<Vec<_>>();

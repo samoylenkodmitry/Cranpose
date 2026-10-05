@@ -2076,7 +2076,10 @@ pub fn LiquidUiTab() {
                                             GlassButtonSpec::glass(),
                                             move || clicks_a.set(clicks_a.get() + 1),
                                             || {
-                                                GlassButtonLabel("Glass", GlassButtonSpec::glass());
+                                                GlassButtonLabel(
+                                                    "Glass".into(),
+                                                    GlassButtonSpec::glass(),
+                                                );
                                             },
                                         );
                                         Box(
@@ -2091,7 +2094,7 @@ pub fn LiquidUiTab() {
                                             move || clicks_b.set(clicks_b.get() + 1),
                                             || {
                                                 GlassButtonLabel(
-                                                    "Prominent",
+                                                    "Prominent".into(),
                                                     GlassButtonSpec::prominent(),
                                                 );
                                             },
@@ -2220,7 +2223,7 @@ pub fn LiquidUiTab() {
                                             Modifier::empty().padding_each(0.0, 0.0, 8.0, 0.0),
                                             chip_state.get() == index,
                                             move || chip_state2.set(index),
-                                            *label,
+                                            (*label).into(),
                                         );
                                     }
                                     let dark2 = dark_for_chip;
@@ -2228,7 +2231,7 @@ pub fn LiquidUiTab() {
                                         Modifier::empty(),
                                         dark_for_chip.get(),
                                         move || dark2.set(!dark2.get()),
-                                        "Dark mode",
+                                        "Dark mode".into(),
                                     );
                                 }
                             });

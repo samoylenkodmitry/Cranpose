@@ -34,6 +34,7 @@ web-time = { workspace = true }
 log = "0.4"
 tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"], optional = true }
 thiserror = "2.0.21"
+cranpose-localization = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -42,6 +43,8 @@ inspection = ["cranpose-core/inspection"]
 # Enable test helpers like last_fling_velocity() for robot test verification.
 # This adds global state for cross-thread test access, so only enable in test builds.
 test-helpers = []
+localization = ["dep:cranpose-localization", "cranpose-macros/localization"]
+localization-formatting = ["localization", "cranpose-localization/formatting"]
 
 [dev-dependencies]
 criterion = "0.8"
@@ -50,6 +53,11 @@ stats_alloc = "0.1.10"
 [[bench]]
 name = "pipeline"
 harness = false
+
+[[bench]]
+name = "localization"
+harness = false
+required-features = ["localization"]
 
 [[bench]]
 name = "skip_recomposition"

@@ -233,18 +233,11 @@ impl PopupRegistry {
     }
 }
 
-/// The [`CompositionLocal`](cranpose_core::CompositionLocal) carrying the active
-/// [`PopupRegistry`] down the tree. One shared static local per thread.
 fn local_popup_registry() -> StaticCompositionLocal<PopupRegistry> {
-    thread_local! {
-        static LOCAL: RefCell<Option<StaticCompositionLocal<PopupRegistry>>> =
-            const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| staticCompositionLocalOf(PopupRegistry::detached))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.popup_registry,
+        || staticCompositionLocalOf(PopupRegistry::detached),
+    )
 }
 
 /// The [`PopupHost`]'s live measured viewport size (logical px), published on
@@ -253,18 +246,10 @@ fn local_popup_registry() -> StaticCompositionLocal<PopupRegistry> {
 /// `Size::ZERO` means "not measured yet" (or no host) — treat as unclamped.
 pub fn local_popup_viewport()
 -> StaticCompositionLocal<OwnedMutableState<cranpose_ui_graphics::Size>> {
-    type ViewportState = OwnedMutableState<cranpose_ui_graphics::Size>;
-    thread_local! {
-        static LOCAL: RefCell<Option<StaticCompositionLocal<ViewportState>>> =
-            const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| {
-                staticCompositionLocalOf(|| ownedMutableStateOf(cranpose_ui_graphics::Size::ZERO))
-            })
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.popup_viewport,
+        || staticCompositionLocalOf(|| ownedMutableStateOf(cranpose_ui_graphics::Size::ZERO)),
+    )
 }
 
 /// Installs the top-level overlay layer and composes `content` beneath it.

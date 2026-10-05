@@ -9,6 +9,8 @@ mod control_material;
 mod control_motion;
 mod floating_button;
 mod glass_surface;
+#[cfg(feature = "localization")]
+mod language_picker;
 mod lens_motion;
 mod menu;
 mod nav_bar;
@@ -31,6 +33,8 @@ pub use button::{
 pub use card::{Card, LiquidCard, LiquidListRow, LiquidListRowSpec, LiquidListSection, Surface};
 pub use chip::{LiquidActionChip, LiquidChip};
 pub use glass_surface::GlassSurface;
+#[cfg(feature = "localization")]
+pub use language_picker::LiquidLanguagePicker;
 pub use menu::{
     LiquidDropdownMenu, LiquidDropdownMenuSpec, LiquidMenu, LiquidMenuAbsorbedIconButton,
     LiquidMenuAbsorbedSource, LiquidMenuGesture, LiquidMenuIconButton, LiquidMenuItem,

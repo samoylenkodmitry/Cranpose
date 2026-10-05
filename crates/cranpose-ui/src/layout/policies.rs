@@ -13,6 +13,8 @@ use crate::layout::core::{
 pub struct BoxMeasurePolicy {
     pub content_alignment: Alignment,
     pub propagate_min_constraints: bool,
+    /// Direction used to resolve start and end alignment.
+    pub layout_direction: crate::LayoutDirection,
 }
 
 impl BoxMeasurePolicy {
@@ -20,6 +22,7 @@ impl BoxMeasurePolicy {
         Self {
             content_alignment,
             propagate_min_constraints,
+            layout_direction: crate::LayoutDirection::Ltr,
         }
     }
 }
@@ -82,6 +85,7 @@ impl MeasurePolicy for BoxMeasurePolicy {
             let x = alignment
                 .horizontal
                 .align(width, child_width, scope.density());
+            let x = self.layout_direction.place_x(x, width, child_width);
             let y = alignment
                 .vertical
                 .align(height, child_height, scope.density());
@@ -170,6 +174,8 @@ pub struct FlexMeasurePolicy {
     /// The device pixel grid children are spaced and placed on, the
     /// composition's density.
     pub density: f32,
+    /// Direction used to resolve horizontal order and start/end alignment.
+    pub layout_direction: crate::LayoutDirection,
 }
 
 /// Compose's weight distribution in whole device pixels: each weighted
@@ -278,6 +284,7 @@ impl FlexMeasurePolicy {
             main_axis_arrangement,
             cross_axis_alignment,
             density,
+            layout_direction: crate::LayoutDirection::Ltr,
         }
     }
 
@@ -409,6 +416,39 @@ impl FlexMeasurePolicy {
         self.main_axis_arrangement.spacing(self.density)
     }
 
+    fn measure_weighted_children(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        weighted_children: &[(usize, ParentData)],
+        (max_main, max_cross): (f32, f32),
+        (fixed_space, spacing): (f32, f32),
+        placeables: &mut [Option<cranpose_ui_layout::Placeable>],
+    ) -> f32 {
+        let remaining_main =
+            (max_main - fixed_space - spacing * weighted_children.len().saturating_sub(1) as f32)
+                .max(0.0);
+        let mut shares = WeightShares::new(
+            remaining_main,
+            weighted_children.iter().map(|(_, data)| data.weight),
+            self.density,
+        );
+        let mut max_cross_size = 0.0_f32;
+        for &(idx, data) in weighted_children {
+            let constraints = if max_main.is_finite() {
+                let allocated = shares.next_share(data.weight);
+                let minimum = if data.fill { allocated } else { 0.0 };
+                self.make_constraints(minimum, allocated, 0.0, max_cross)
+            } else {
+                self.make_constraints(0.0, max_main, 0.0, max_cross)
+            };
+            let placeable = measurables[idx].measure(constraints);
+            max_cross_size =
+                max_cross_size.max(self.get_cross_axis_size(placeable.width(), placeable.height()));
+            placeables[idx] = Some(placeable);
+        }
+        max_cross_size
+    }
+
     fn measured_extents(
         &self,
         placeables: &[cranpose_ui_layout::Placeable],
@@ -482,7 +522,6 @@ impl MeasurePolicy for FlexMeasurePolicy {
         }
 
         let (min_main, max_main, min_cross, max_cross) = self.get_axis_constraints(constraints);
-        let main_axis_bounded = max_main.is_finite();
         let spacing = self.get_spacing();
 
         let mut fixed_children: SmallVec<[usize; 8]> = SmallVec::new();
@@ -519,44 +558,13 @@ impl MeasurePolicy for FlexMeasurePolicy {
             0.0
         };
 
-        if !weighted_children.is_empty() {
-            if main_axis_bounded {
-                let weighted_spacing = spacing * (weighted_children.len() - 1) as f32;
-                let remaining_main = (max_main - fixed_space - weighted_spacing).max(0.0);
-
-                let mut shares = WeightShares::new(
-                    remaining_main,
-                    weighted_children.iter().map(|(_, data)| data.weight),
-                    self.density,
-                );
-
-                for &(idx, parent_data) in &weighted_children {
-                    let measurable = &measurables[idx];
-                    let allocated = shares.next_share(parent_data.weight);
-
-                    let weighted_constraints = if parent_data.fill {
-                        self.make_constraints(allocated, allocated, 0.0, max_cross)
-                    } else {
-                        self.make_constraints(0.0, allocated, 0.0, max_cross)
-                    };
-
-                    let placeable = measurable.measure(weighted_constraints);
-                    let cross_size =
-                        self.get_cross_axis_size(placeable.width(), placeable.height());
-                    max_cross_size = max_cross_size.max(cross_size);
-                    placeables[idx] = Some(placeable);
-                }
-            } else {
-                for &(idx, _) in &weighted_children {
-                    let measurable = &measurables[idx];
-                    let placeable = measurable.measure(child_constraints);
-                    let cross_size =
-                        self.get_cross_axis_size(placeable.width(), placeable.height());
-                    max_cross_size = max_cross_size.max(cross_size);
-                    placeables[idx] = Some(placeable);
-                }
-            }
-        }
+        max_cross_size = max_cross_size.max(self.measure_weighted_children(
+            measurables,
+            &weighted_children,
+            (max_main, max_cross),
+            (fixed_space, spacing),
+            &mut placeables,
+        ));
 
         let placeables: SmallVec<[cranpose_ui_layout::Placeable; 8]> = placeables
             .into_iter()
@@ -609,6 +617,11 @@ impl MeasurePolicy for FlexMeasurePolicy {
                 Axis::Horizontal => (main_pos, cross_pos),
                 Axis::Vertical => (cross_pos, main_pos),
             };
+            let width = match self.axis {
+                Axis::Horizontal => container_main,
+                Axis::Vertical => container_cross,
+            };
+            let x = self.layout_direction.place_x(x, width, placeable.width());
 
             placeable.place(x, y);
             placements.push(Placement::new(placeable.node_id(), x, y, 0));
@@ -733,6 +746,8 @@ pub struct FlowRowMeasurePolicy {
     pub main_axis_spacing: f32,
     /// Vertical gap between consecutive lines, in dp.
     pub cross_axis_spacing: f32,
+    /// Direction used to place items within each wrapped row.
+    pub layout_direction: crate::LayoutDirection,
 }
 
 impl FlowRowMeasurePolicy {
@@ -740,6 +755,7 @@ impl FlowRowMeasurePolicy {
         Self {
             main_axis_spacing: main_axis_spacing.max(0.0),
             cross_axis_spacing: cross_axis_spacing.max(0.0),
+            layout_direction: crate::LayoutDirection::Ltr,
         }
     }
 
@@ -821,7 +837,7 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
         let mut max_line_width = 0.0_f32;
 
         placements.reserve(placeables.len());
-        for placeable in placeables {
+        for placeable in &placeables {
             let child_width = placeable.width();
             let child_height = placeable.height();
 
@@ -839,7 +855,9 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
             } else {
                 0.0
             };
-            placeable.place(x, line_top);
+            if !self.layout_direction.is_rtl() {
+                placeable.place(x, line_top);
+            }
             placements.push(Placement::new(placeable.node_id(), x, line_top, 0));
 
             cursor_x = x + child_width;
@@ -848,6 +866,14 @@ impl MeasurePolicy for FlowRowMeasurePolicy {
         max_line_width = max_line_width.max(cursor_x);
 
         let width = max_line_width.clamp(constraints.min_width, constraints.max_width);
+        if self.layout_direction.is_rtl() {
+            for (placement, placeable) in placements.iter_mut().zip(&placeables) {
+                placement.x = self
+                    .layout_direction
+                    .place_x(placement.x, width, placeable.width());
+                placeable.place(placement.x, placement.y);
+            }
+        }
         let height = (line_top + line_height).clamp(constraints.min_height, constraints.max_height);
         crate::modifier::Size { width, height }.into()
     }

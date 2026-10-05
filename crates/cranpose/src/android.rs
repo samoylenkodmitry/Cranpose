@@ -1983,6 +1983,29 @@ fn set_android_window_layout_px(
 
 pub(crate) const DEFAULT_LOG_TAG: &str = "Cranpose";
 
+fn refresh_android_configuration(
+    app: &android_activity::AndroidApp,
+    shell: &mut Option<AppShell<WgpuRenderer>>,
+) {
+    #[cfg(feature = "localization")]
+    if android_platform_env().refresh_languages()
+        && let Some(shell) = shell
+    {
+        shell.request_root_render();
+    }
+    let theme = system_theme_from_android(app.config().ui_mode_night());
+    if android_platform_env().set_system_theme(theme)
+        && let Some(shell) = shell
+    {
+        shell.request_root_render();
+    }
+    if crate::android_font_scale::refresh_font_scale(app)
+        && let Some(shell) = shell
+    {
+        shell.set_font_scale_curve(crate::android_font_scale::font_scale_curve());
+    }
+}
+
 /// Sends the process's logs to logcat under `tag`, once.
 pub(crate) fn init_logging(tag: &str) {
     android_logger::init_once(
@@ -2475,17 +2498,7 @@ pub fn run(
                         );
                     }
                     MainEvent::ConfigChanged { .. } => {
-                        let theme = system_theme_from_android(app.config().ui_mode_night());
-                        if android_platform_env().set_system_theme(theme)
-                            && let Some(shell) = &mut app_shell {
-                                shell.request_root_render();
-                            }
-                        if crate::android_font_scale::refresh_font_scale(&app)
-                            && let Some(shell) = &mut app_shell {
-                                shell.set_font_scale_curve(
-                                    crate::android_font_scale::font_scale_curve(),
-                                );
-                            }
+                        refresh_android_configuration(&app, &mut app_shell);
                     }
                     _ => {}
                 }

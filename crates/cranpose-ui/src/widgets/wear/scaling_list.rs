@@ -1283,6 +1283,7 @@ pub fn WearScalingLazyColumnNode(
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
         node.set_density(composed_density);
+        node.set_layout_direction(crate::layout_direction());
         if inputs_changed {
             node.invalidate_subcomposition();
         }

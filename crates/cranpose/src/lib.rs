@@ -1,6 +1,15 @@
 #![deny(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+extern crate self as cranpose;
+
+#[cfg(feature = "localization")]
+mod system_languages;
+#[cfg(feature = "localization")]
+pub use system_languages::{
+    ProvideApplicationLocalization, local_system_languages, system_languages,
+};
+
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_file_picker;
 #[cfg(any(
@@ -166,6 +175,18 @@ pub use app_launcher::{
     AndroidGpuBackend, AndroidOverlayWindowOptions, AppFonts, AppLauncher, AppSettings,
     CustomCursorSize, DefaultFont, LauncherFonts,
 };
+#[cfg(feature = "localized-arabic")]
+pub use cranpose_fonts::ARABIC as ARABIC_FONT_PACK;
+#[cfg(feature = "localized-cjk")]
+pub use cranpose_fonts::CJK as CJK_FONT_PACK;
+#[cfg(feature = "localized-devanagari")]
+pub use cranpose_fonts::DEVANAGARI as DEVANAGARI_FONT_PACK;
+#[cfg(any(
+    feature = "localized-arabic",
+    feature = "localized-devanagari",
+    feature = "localized-cjk"
+))]
+pub use cranpose_fonts::FontPack;
 pub use cranpose_render_common::font_source::{
     ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, SoftwareTextFontRegistry,
 };

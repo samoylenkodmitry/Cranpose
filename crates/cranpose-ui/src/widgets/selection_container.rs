@@ -23,15 +23,10 @@ use crate::{
 /// The container the `Text` composed here selects in: set by
 /// [`SelectionContainer`], cleared by [`DisableSelection`].
 pub fn local_selection_registrar() -> CompositionLocal<Option<SelectionRegistrar>> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<Option<SelectionRegistrar>>>> =
-            const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| cranpose_core::compositionLocalOf(|| None))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.selection_registrar,
+        || cranpose_core::compositionLocalOf(|| None),
+    )
 }
 
 /// Lets users select and copy text across the content. A mouse drag selects a
@@ -131,11 +126,13 @@ fn selection_menu(registrar: &SelectionRegistrar, gesture: &Rc<SelectionGesture>
     let copy = Rc::clone(gesture);
     let everything = registrar.clone();
     let items = vec![
-        TextMenuItem::new("Copy", move || {
+        TextMenuItem::new(crate::UiString::Copy.resolve(), move || {
             copy.copy();
             copy.dismiss();
         }),
-        TextMenuItem::new("Select all", move || everything.select_all()),
+        TextMenuItem::new(crate::UiString::SelectAll.resolve(), move || {
+            everything.select_all();
+        }),
     ];
     let anchor = MenuAnchor {
         center_x: line.x + line.width * 0.5,

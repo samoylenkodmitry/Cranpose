@@ -19,6 +19,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 [lints]
 workspace = true
 
+[features]
+default = []
+localization = ["cranpose-ui/localization"]
+
 [dependencies]
 cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }
@@ -32,6 +36,7 @@ log = "0.4"
 thiserror = "2.0.21"
 
 [dev-dependencies]
+cranpose-render-common = { path = "../cranpose-render/common", features = ["text-shaping"] }
 # Path-only (no version): cargo strips path-only dev-deps from the published
 # manifest, breaking the liquid -> testing -> cranpose -> liquid publish cycle.
 cranpose-testing = { path = "../cranpose-testing" }

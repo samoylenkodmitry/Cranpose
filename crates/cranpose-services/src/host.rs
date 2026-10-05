@@ -78,6 +78,12 @@ pub trait HostController: Send + Sync {
     fn exit(&self);
     /// Requests that the app move to the background.
     fn background(&self);
+    /// Ordered BCP 47 language preferences supplied by an embedded or native host.
+    /// An empty list lets the application use the operating system's default query.
+    #[cfg(feature = "localization")]
+    fn preferred_languages(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// How long this host will wait for durable saves before it suspends the
     /// app. Android's `onPause` and iOS's background transition each allow a
     /// short, platform-defined budget; work that overruns it keeps running

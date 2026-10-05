@@ -2,7 +2,7 @@
 //! provided to the subtree through composition locals — the analogue of
 //! `MaterialTheme`.
 
-use std::cell::RefCell;
+use std::cell::OnceCell;
 
 use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
@@ -235,38 +235,44 @@ impl Default for LiquidThemeSpec {
     }
 }
 
-fn theme_local<T: Clone + PartialEq + 'static>(
-    cell: &RefCell<Option<CompositionLocal<T>>>,
-    default: fn() -> T,
-) -> CompositionLocal<T> {
-    cell.borrow_mut()
-        .get_or_insert_with(|| compositionLocalOf(default))
-        .clone()
+struct ThemeLocals {
+    colors: OnceCell<CompositionLocal<LiquidColors>>,
+    typography: OnceCell<CompositionLocal<LiquidTypography>>,
+    glass_tint: OnceCell<CompositionLocal<GlassTintAmount>>,
 }
 
-fn local_liquid_colors() -> CompositionLocal<LiquidColors> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<LiquidColors>>> = const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        theme_local(cell, || {
-            LiquidColors::light(LiquidThemeSpec::default().accent)
-        })
+thread_local! {
+    static LOCALS: ThemeLocals = const { ThemeLocals {
+        colors: OnceCell::new(),
+        typography: OnceCell::new(),
+        glass_tint: OnceCell::new(),
+    } };
+}
+
+fn theme_local<T: Clone + PartialEq + 'static>(
+    cell: impl FnOnce(&ThemeLocals) -> &OnceCell<CompositionLocal<T>>,
+    default: fn() -> T,
+) -> CompositionLocal<T> {
+    LOCALS.with(|locals| {
+        cell(locals)
+            .get_or_init(|| compositionLocalOf(default))
+            .clone()
     })
 }
 
+fn local_liquid_colors() -> CompositionLocal<LiquidColors> {
+    theme_local(
+        |locals| &locals.colors,
+        || LiquidColors::light(LiquidThemeSpec::default().accent),
+    )
+}
+
 fn local_liquid_typography() -> CompositionLocal<LiquidTypography> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<LiquidTypography>>> = const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| theme_local(cell, LiquidTypography::default))
+    theme_local(|locals| &locals.typography, LiquidTypography::default)
 }
 
 fn local_liquid_glass_tint_amount() -> CompositionLocal<GlassTintAmount> {
-    thread_local! {
-        static LOCAL: RefCell<Option<CompositionLocal<GlassTintAmount>>> = const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| theme_local(cell, GlassTintAmount::default))
+    theme_local(|locals| &locals.glass_tint, GlassTintAmount::default)
 }
 
 /// The active navigation surface tint amount, defaulting to 25 percent.

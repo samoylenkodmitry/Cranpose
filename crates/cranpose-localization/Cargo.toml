@@ -1,0 +1,46 @@
+[package]
+name = "cranpose-localization"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Scoped Fluent catalogs and localization tooling for Cranpose"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[features]
+default = []
+tooling = ["dep:syn", "dep:quote", "dep:proc-macro2", "dep:anyhow", "dep:toml", "dep:serde_json"]
+formatting = ["dep:icu_calendar", "dep:icu_datetime", "dep:icu_decimal", "dep:icu_locale", "dep:icu_experimental"]
+
+[[bin]]
+name = "cranpose-l10n"
+path = "src/bin/cranpose-l10n.rs"
+required-features = ["tooling"]
+
+[dependencies]
+anyhow = { version = "1.0.104", optional = true }
+fluent-bundle = "0.16.0"
+fluent-langneg = { version = "0.13.1", features = ["cldr"] }
+fluent-syntax = "0.12.0"
+icu_calendar = { version = "2.3", default-features = false, optional = true, features = ["compiled_data"] }
+icu_datetime = { version = "2.3", default-features = false, optional = true, features = ["compiled_data"] }
+icu_decimal = { version = "2.3", default-features = false, optional = true, features = ["compiled_data", "ryu"] }
+icu_experimental = { version = "0.6", default-features = false, optional = true, features = ["compiled_data"] }
+icu_locale = { version = "2.3", default-features = false, optional = true, features = ["compiled_data"] }
+proc-macro2 = { version = "1.0.107", optional = true, features = ["span-locations"] }
+quote = { version = "1.0.47", optional = true }
+serde_json = { version = "1.0.151", optional = true }
+syn = { version = "3.0.6", features = ["full", "visit"], optional = true }
+thiserror = "2.0.21"
+toml = { version = "1.1.6", optional = true }
+unic-langid = { version = "0.9.6", features = ["likelysubtags"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

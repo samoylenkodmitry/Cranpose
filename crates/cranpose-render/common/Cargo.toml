@@ -32,6 +32,9 @@ thiserror = "2.0.21"
 ttf-parser = "0.25.1"
 smallvec = "1.16.2"
 unicode-segmentation = "1.13.3"
+rustybuzz = { version = "0.20.1", optional = true }
+unicode-bidi = { version = "0.3.18", optional = true }
+unicode-script = { version = "0.5.8", optional = true }
 
 [dev-dependencies]
 stats_alloc = "0.1.10"
@@ -44,6 +47,7 @@ default = ["embedded-default-font"]
 embedded-default-font = []
 text-hyphenation = ["dep:hyphenation"]
 text-hyphenation-embedded = ["text-hyphenation", "hyphenation/embed_all"]
+text-shaping = ["dep:rustybuzz", "dep:unicode-bidi", "dep:unicode-script"]
 
 [[test]]
 name = "integration"

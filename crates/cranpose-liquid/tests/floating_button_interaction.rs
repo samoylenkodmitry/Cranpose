@@ -18,7 +18,7 @@ fn button() -> (RobotTestRule<TestRenderer>, Rc<Cell<usize>>) {
                     .size_points(100.0, 44.0),
                 GlassButtonSpec::glass(),
                 move || recorded.set(recorded.get() + 1),
-                || GlassButtonLabel("Continue", GlassButtonSpec::glass()),
+                || GlassButtonLabel("Continue".into(), GlassButtonSpec::glass()),
             );
         });
     });
@@ -80,7 +80,7 @@ fn chip_selection_is_immediate_and_keeps_one_accessible_label_during_transition(
                     state.set(!state.get());
                     observed.set(state.get());
                 },
-                "Unread",
+                "Unread".into(),
             );
         });
     });
@@ -142,7 +142,7 @@ fn pointer_activation_uses_the_callback_from_the_latest_composition() {
                     recorded.set(current);
                     generation.set(current + 1);
                 },
-                || GlassButtonLabel("Continue", GlassButtonSpec::glass()),
+                || GlassButtonLabel("Continue".into(), GlassButtonSpec::glass()),
             );
         });
     });
@@ -174,7 +174,7 @@ fn scrolling_from_a_floating_button_cancels_its_activation() {
                         Modifier::empty().size_points(100.0, 44.0),
                         GlassButtonSpec::glass(),
                         move || recorded.set(recorded.get() + 1),
-                        || GlassButtonLabel("Continue", GlassButtonSpec::glass()),
+                        || GlassButtonLabel("Continue".into(), GlassButtonSpec::glass()),
                     );
                     cranpose_ui::Spacer(Modifier::empty().height(600.0));
                 },

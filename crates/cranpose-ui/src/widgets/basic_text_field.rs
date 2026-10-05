@@ -344,6 +344,11 @@ fn TextFieldNode(
     options: BasicTextFieldOptions,
     decorator: Option<TextFieldRefs>,
 ) -> NodeId {
+    #[cfg(feature = "localization")]
+    let options = BasicTextFieldOptions {
+        text_style: crate::localization::apply_text_locale(options.text_style),
+        ..options
+    };
     let _text = state.text();
     let _selection = state.selection();
 

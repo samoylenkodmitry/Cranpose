@@ -198,16 +198,10 @@ impl ClipboardManager {
 /// returned on every call (cached per thread), matching `local_uri_handler` and
 /// the insets locals.
 pub fn local_clipboard() -> cranpose_core::CompositionLocal<ClipboardManager> {
-    thread_local! {
-        static LOCAL_CLIPBOARD: RefCell<Option<cranpose_core::CompositionLocal<ClipboardManager>>> =
-            const { RefCell::new(None) };
-    }
-
-    LOCAL_CLIPBOARD.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| cranpose_core::compositionLocalOf(ClipboardManager::default))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.clipboard,
+        || cranpose_core::compositionLocalOf(ClipboardManager::default),
+    )
 }
 
 #[cfg(test)]

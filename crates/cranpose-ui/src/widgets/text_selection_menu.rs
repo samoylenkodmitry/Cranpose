@@ -60,16 +60,10 @@ const MENU_FONT_SP: f32 = 15.0;
 /// it from its scheme; without a theme it is `false` (a dark surface), and a
 /// light screen provides `true`.
 pub fn local_on_light_surface() -> cranpose_core::CompositionLocal<bool> {
-    use std::cell::RefCell;
-    thread_local! {
-        static LOCAL: RefCell<Option<cranpose_core::CompositionLocal<bool>>> =
-            const { RefCell::new(None) };
-    }
-    LOCAL.with(|cell| {
-        cell.borrow_mut()
-            .get_or_insert_with(|| cranpose_core::compositionLocalOf(|| false))
-            .clone()
-    })
+    crate::environment_locals::cached_local(
+        |locals| &locals.on_light_surface,
+        || cranpose_core::compositionLocalOf(|| false),
+    )
 }
 
 /// Label ink: near-white over a dark surface, near-black over a light one.
@@ -623,14 +617,30 @@ pub fn TextSelectionMenu(
     on_select_all: impl Fn() + 'static,
 ) {
     let mut items = vec![
-        TextMenuItem::new("Copy", on_copy),
-        TextMenuItem::new("Cut", on_cut),
+        TextMenuItem::new(crate::UiString::Copy.resolve(), on_copy),
+        TextMenuItem::new(crate::UiString::Cut.resolve(), on_cut),
     ];
-    if can_paste {
-        items.push(TextMenuItem::new("Paste", on_paste));
-    }
-    items.push(TextMenuItem::new("Select all", on_select_all));
+    append_edit_actions(&mut items, can_paste, on_paste, on_select_all);
     LiquidTextMenu(anchor, visible, live_point, items);
+}
+
+#[track_caller]
+fn append_edit_actions(
+    items: &mut Vec<TextMenuItem>,
+    can_paste: bool,
+    on_paste: impl Fn() + 'static,
+    on_select_all: impl Fn() + 'static,
+) {
+    if can_paste {
+        items.push(TextMenuItem::new(
+            crate::UiString::Paste.resolve(),
+            on_paste,
+        ));
+    }
+    items.push(TextMenuItem::new(
+        crate::UiString::SelectAll.resolve(),
+        on_select_all,
+    ));
 }
 
 /// A floating Paste / Select all / Undo / Redo menu shown near the collapsed
@@ -653,15 +663,12 @@ pub fn CaretActionMenu(
     on_redo: impl Fn() + 'static,
 ) {
     let mut items = Vec::new();
-    if can_paste {
-        items.push(TextMenuItem::new("Paste", on_paste));
-    }
-    items.push(TextMenuItem::new("Select all", on_select_all));
+    append_edit_actions(&mut items, can_paste, on_paste, on_select_all);
     if can_undo {
-        items.push(TextMenuItem::new("Undo", on_undo));
+        items.push(TextMenuItem::new(crate::UiString::Undo.resolve(), on_undo));
     }
     if can_redo {
-        items.push(TextMenuItem::new("Redo", on_redo));
+        items.push(TextMenuItem::new(crate::UiString::Redo.resolve(), on_redo));
     }
     LiquidTextMenu(anchor, visible, None, items);
 }

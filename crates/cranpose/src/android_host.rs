@@ -58,6 +58,62 @@ impl HostController for AndroidHost {
         });
     }
 
+    #[cfg(feature = "localization")]
+    fn preferred_languages(&self) -> Vec<String> {
+        let result = with_android_activity_env(&self.app, |env, activity| {
+            let query = |env: &mut jni::Env<'_>| -> jni::errors::Result<String> {
+                let resources = env
+                    .call_method(
+                        &activity,
+                        jni_str!("getResources"),
+                        jni_sig!("()Landroid/content/res/Resources;"),
+                        &[],
+                    )?
+                    .l()?;
+                let config = env
+                    .call_method(
+                        &resources,
+                        jni_str!("getConfiguration"),
+                        jni_sig!("()Landroid/content/res/Configuration;"),
+                        &[],
+                    )?
+                    .l()?;
+                let locales = env
+                    .call_method(
+                        &config,
+                        jni_str!("getLocales"),
+                        jni_sig!("()Landroid/os/LocaleList;"),
+                        &[],
+                    )?
+                    .l()?;
+                let tags = env
+                    .call_method(
+                        &locales,
+                        jni_str!("toLanguageTags"),
+                        jni_sig!("()Ljava/lang/String;"),
+                        &[],
+                    )?
+                    .l()?;
+                jni::objects::JString::cast_local(env, tags)?.try_to_string(env)
+            };
+            query(env).map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+        });
+        match result {
+            Ok(tags) => tags
+                .split(',')
+                .filter(|tag| !tag.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            Err(error) => {
+                log::warn!("could not read Android language preferences: {error}");
+                Vec::new()
+            }
+        }
+    }
+
     fn durable_save_deadline(&self) -> std::time::Duration {
         std::time::Duration::from_secs(2)
     }

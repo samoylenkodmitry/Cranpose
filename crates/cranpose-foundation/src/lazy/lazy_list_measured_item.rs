@@ -43,6 +43,8 @@ pub struct LazyListMeasuredItem {
     /// Each entry corresponds to the same index in `node_ids`.
     /// Uses SmallVec to avoid heap allocation for typical items with 1-4 root nodes.
     pub child_offsets: SmallOffsetVec,
+    /// Measured cross-axis extent of each root, in the order of `node_ids`.
+    pub child_cross_axis_sizes: SmallOffsetVec,
 }
 
 impl LazyListMeasuredItem {
@@ -63,6 +65,7 @@ impl LazyListMeasuredItem {
             offset: 0.0,
             node_ids: SmallVec::new(),
             child_offsets: SmallVec::new(),
+            child_cross_axis_sizes: SmallVec::new(),
         }
     }
 

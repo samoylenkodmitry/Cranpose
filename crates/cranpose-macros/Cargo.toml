@@ -19,6 +19,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 # Development builds that hot-patch code: group keys follow source structure
 # rather than line numbers. Never enable in release builds.
 hot-reload = []
+localization = ["dep:cranpose-localization"]
 
 [lints]
 workspace = true
@@ -27,6 +28,7 @@ workspace = true
 proc-macro = true
 
 [dependencies]
+cranpose-localization = { workspace = true, features = ["tooling"], optional = true }
 proc-macro-crate = "3.5.0"
 proc-macro2 = "1"
 quote = "1"

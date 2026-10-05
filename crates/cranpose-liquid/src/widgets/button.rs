@@ -453,11 +453,11 @@ pub(crate) fn GlassButtonWithFeedback(
 
 /// Convenience text label styled for the enclosing button.
 #[composable]
-pub fn GlassButtonLabel(text: impl Into<String>, spec: GlassButtonSpec) {
+pub fn GlassButtonLabel(text: cranpose_ui::SharedText, spec: GlassButtonSpec) {
     let mut style = spec.size.label_style(liquid_typography());
     let color = spec.content_color(&liquid_colors());
     style.span_style.color = Some(color);
-    Text(text.into(), Modifier::empty(), style);
+    Text(text, Modifier::empty(), style);
 }
 
 #[composable]

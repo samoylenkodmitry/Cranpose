@@ -3,8 +3,14 @@ use std::{cell::Cell, rc::Rc};
 use cranpose_services::{SystemTheme, set_platform_system_theme};
 use cranpose_ui::{EdgeInsets, composable, local_ime_insets, local_safe_area_insets};
 
+#[cfg(feature = "localization")]
+#[path = "platform_languages.rs"]
+mod languages;
+
 #[derive(Default)]
 pub(crate) struct PlatformEnvironment {
+    #[cfg(feature = "localization")]
+    languages: Rc<languages::SystemLanguagesState>,
     #[cfg(feature = "webview")]
     pub(crate) native_views: crate::native_view::NativeViewHost,
     safe_area: Cell<EdgeInsets>,
@@ -14,6 +20,11 @@ pub(crate) struct PlatformEnvironment {
 impl PlatformEnvironment {
     pub(crate) fn new() -> Rc<Self> {
         Rc::new(Self::default())
+    }
+
+    #[cfg(all(feature = "localization", feature = "android", target_os = "android"))]
+    pub(crate) fn refresh_languages(&self) -> bool {
+        self.languages.refresh()
     }
 
     #[cfg_attr(not(any(target_os = "android", target_os = "ios")), expect(dead_code))]
@@ -48,9 +59,15 @@ impl PlatformEnvironment {
             ],
             || {
                 RootBackHandler();
-                #[cfg(feature = "webview")]
-                self.native_views.provide(content);
-                #[cfg(not(feature = "webview"))]
+                let content = || {
+                    #[cfg(feature = "webview")]
+                    self.native_views.provide(content);
+                    #[cfg(not(feature = "webview"))]
+                    content();
+                };
+                #[cfg(feature = "localization")]
+                languages::ProvideSystemLanguages(self.languages.clone(), content);
+                #[cfg(not(feature = "localization"))]
                 content();
             },
         );

@@ -766,6 +766,70 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
         launcher
     }
 
+    /// Register one variable font family at the requested OpenType weights.
+    ///
+    /// The same process-lifetime bytes back every instance. Each requested
+    /// weight is instantiated once during startup and then selected by text
+    /// styles for the lifetime of the app. Each number is an OpenType `wght`
+    /// coordinate; a weight the font cannot provide is skipped and reported.
+    ///
+    /// ```no_run
+    /// use cranpose::{AppLauncher, text::FontFamily};
+    ///
+    /// # fn configure(font: &'static [u8]) {
+    /// let _launcher = AppLauncher::new().with_variable_font_family_bytes(
+    ///     &FontFamily::named("My Variable Font"),
+    ///     font,
+    ///     &[400, 500, 700],
+    /// );
+    /// # }
+    /// ```
+    pub fn with_variable_font_family_bytes(
+        self,
+        family: &FontFamily,
+        bytes: &'static [u8],
+        weights: &[u16],
+    ) -> AppLauncher<AppFonts> {
+        let mut launcher = self.supplying_fonts();
+        let mut first_error = None;
+        for &weight in weights {
+            if let Err(error) = launcher.settings.font_registry.register_face_bytes(
+                family,
+                FontWeight(weight),
+                FontStyle::Normal,
+                FontBytes::from(bytes),
+            ) {
+                first_error.get_or_insert(error);
+            }
+        }
+        if let Some(error) = first_error {
+            log::warn!("variable font family could not be loaded: {error}");
+        }
+        launcher
+    }
+
+    /// Register a multilingual font pack enabled through a `localized-*`
+    /// Cranpose feature.
+    ///
+    /// The pack supplies its family name, static bytes, and requested weights.
+    /// ```no_run
+    /// use cranpose::{ARABIC_FONT_PACK, AppLauncher};
+    ///
+    /// let launcher = AppLauncher::new().with_font_pack(&ARABIC_FONT_PACK);
+    /// ```
+    #[cfg(any(
+        feature = "localized-arabic",
+        feature = "localized-devanagari",
+        feature = "localized-cjk"
+    ))]
+    pub fn with_font_pack(self, pack: &cranpose_fonts::FontPack) -> AppLauncher<AppFonts> {
+        self.with_variable_font_family_bytes(
+            &FontFamily::named(pack.family_name()),
+            pack.bytes(),
+            pack.weights(),
+        )
+    }
+
     /// Register a font face shipped in the APK's `assets/` directory.
     ///
     /// APK entries are not filesystem paths, so `with_font_family` cannot reach

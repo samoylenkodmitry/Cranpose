@@ -64,10 +64,11 @@ where
     F: FnMut() + 'static,
 {
     let density = crate::density::density();
-    let policy = FlexMeasurePolicy::row(
+    let mut policy = FlexMeasurePolicy::row(
         spec.horizontal_arrangement,
         spec.vertical_alignment,
         density.density(),
     );
+    policy.layout_direction = crate::layout_direction();
     compose_layout(modifier, policy, density, content)
 }
