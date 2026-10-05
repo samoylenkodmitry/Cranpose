@@ -63,6 +63,14 @@ APPS = {
         'activity': 'dev.perfcompare.maui/.MainActivity',
         'apk': HERE / 'maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk',
     },
+    # Avalonia 12 on Skia, fully AOT-compiled: the gauntlet only. Its frames
+    # reach the screen through a SurfaceView, as Flutter's do.
+    'avalonia': {
+        'package': 'dev.perfcompare.avalonia',
+        'activity': 'dev.perfcompare.avalonia/.MainActivity',
+        'apk': HERE / 'avalonia-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.avalonia-Signed.apk',
+        'layer': 'SurfaceView - ',
+    },
     # The web platform (Chromium's Android WebView) in Capacitor: the gauntlet only.
     'web': {
         'package': 'dev.perfcompare.web',

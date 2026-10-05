@@ -8,7 +8,8 @@
 
 using Microsoft.Maui.Controls.Shapes;
 using Microsoft.Maui.Layouts;
-using static PerfMaui.PerfData;
+using PerfCompare;
+using static PerfCompare.PerfData;
 
 namespace PerfMaui;
 

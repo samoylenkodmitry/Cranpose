@@ -53,3 +53,5 @@ abd = "abd"
 # Apple's Core Audio Format container, one of the audio extensions CranAmp
 # lists.
 caf = "caf"
+# Avalonia names its bitmap class `WriteableBitmap`.
+Writeable = "Writeable"

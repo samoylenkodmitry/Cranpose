@@ -7,7 +7,7 @@ device and measures both from outside either framework. The gauntlet also runs
 in `views-app` (Android Views, RecyclerView 1.4), `flutter-app` (Flutter 3.47,
 which picks Impeller on OpenGL ES on the Mate), `rn-app` (React Native 0.87 on
 the New Architecture with Hermes), `maui-app` (.NET MAUI 10, fully
-AOT-compiled), `egui-app` (egui 0.36 in eframe on OpenGL ES, in a GameActivity), `slint-app`
+AOT-compiled), `avalonia-app` (Avalonia 12 on Skia, fully AOT-compiled), `egui-app` (egui 0.36 in eframe on OpenGL ES, in a GameActivity), `slint-app`
 (Slint 1.18 on Skia) and `web-app` (a web page in Capacitor 8, on the device's
 Chromium WebView 153: the stack Ionic, Tauri and Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
 packages them: each crate's folder is its Android module, behind one launch
@@ -93,7 +93,12 @@ frame on its animation ticker; views on screen set only what changed, the
 list is a CollectionView of rows scrolled through its RecyclerView (MAUI
 scrolls to items, not offsets), sparklines and bars are GraphicsView
 drawables, and the footer is a Grid whose row is as tall as its tallest
-cell. egui lays out and paints the whole screen every frame, as immediate
+cell. Avalonia advances the frame on the top level's animation frame
+callback; controls on screen set only what changed, the list is an
+ItemsControl over a VirtualizingStackPanel whose card rows and clusters each
+recycle only their own kind, flow rows are WrapPanels, cards are Borders with
+a box shadow, and bars and sparklines are controls that draw themselves.
+egui lays out and paints the whole screen every frame, as immediate
 mode does: boxes reserve their background and paint it once their content is
 laid out, fixed-size pieces allocate their size and paint, and the list lays
 out only the rows on screen from an anchor that moves as rows scroll off.
@@ -136,11 +141,13 @@ up to tier 11. On 2026-10-05 (`frameworks.py`, 380 s):
 | Compose | 4.7 | 293 |
 | React Native | 1.7 | 1232 |
 | MAUI | 1.0 | 1204 |
+| Avalonia | 4.0* | 418* |
 | Web | 16.8 | 52* |
 
 \* The web view renders in a sandboxed process of its own, which the CPU
-count leaves out. The web row and the egui row, with AccessKit (below), were
-measured with `ab.py`; egui drew 51.6 fps at 19 ms a frame without it.
+count leaves out. The web, egui and Avalonia rows were measured beside
+Compose with `ab.py`; egui drew 51.6 fps at 19 ms a frame without AccessKit
+(below).
 
 At tier 5 Cranpose drew 52.8 fps, Views 52 to 54, Flutter 29.5, Compose 26.5,
 React Native 8.4 and MAUI 6.0, while egui held 60. Raising a device's tier
@@ -169,6 +176,7 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
 | Flutter | 0.93% | Its text is about 2% wider, so a few lines break a word earlier |
 | React Native | 0.85% | Paragraph lines keep their leading above the first line and below the last |
 | MAUI | 0.10% | Lines of text a pixel apart |
+| Avalonia | 1.16% | A few bold titles break a word earlier |
 | Web | 1.24% | Lines of text a pixel apart |
 | Slint | 1.11% | Its text is a little wider, so one ticker tile wraps a row later |
 | egui | 3.31% | Its renderer filters textures in linear light, so the striped avatars average lighter; it puts each glyph on a whole pixel, so a few titles break a word earlier |
@@ -177,14 +185,15 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
 
 - **Data:** `data.rs`, `shared-kotlin/dev/perfcompare/shared/PerfData.kt` (the
   Compose and Views apps), `flutter-app/lib/data.dart`, `rn-app/src/data.ts`
-  and `maui-app/PerfData.cs` implement the same xorshift generator, so every
+  and `shared-cs/PerfData.cs` implement the same xorshift generator, so every
   post, comment, quote and particle is identical. `data.rs` is `perf-data`,
   which the Cranpose, egui and Slint apps share; React Native and the web page
-  share `shared-ts/data.ts`.
+  share `shared-ts/data.ts`, and MAUI and Avalonia share `shared-cs`.
 - **Fonts:** every app loads `/system/fonts/Roboto-Regular.ttf` and
   `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. React
-  Native registers them with its font manager and MAUI serves them from its
-  own `IFontManager`; the Huawei system font is wider. The bundled
+  Native registers them with its font manager, MAUI serves them from its
+  own `IFontManager` and Avalonia from a font collection; the Huawei system
+  font is wider. The bundled
   Noto Sans Merged declares 2.1 em of ascent plus descent, which Compose honors
   and Cranpose does not, so it cannot be compared. The workspace also loads
   `Roboto-Medium.ttf` and follows GPUI's 1.618034 em line height, including the
@@ -201,7 +210,8 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
   as their toolkits do by default. egui builds AccessKit's tree every frame
   with a label for each text. Its Android adapter attaches to GameActivity's
   view, which R8 must keep, and needs `accesskit_winit`'s `accesskit_android`
-  feature, which egui-winit leaves off. Slint's Android backend has no
+  feature, which egui-winit leaves off. Avalonia serves its tree by default:
+  uiautomator reads 765 nodes at tier 5. Slint's Android backend has no
   accessibility support, so the Slint app does none of this work.
 - **Release builds:**
   - Compose: R8 with resource shrinking, not debuggable, and fully
@@ -399,6 +409,7 @@ and a 15 s window. Failed runs are kept in the report.
 (cd benchmarks/compose-vs-cranpose/flutter-app && flutter build apk --release --target-platform android-arm64)
 (cd benchmarks/compose-vs-cranpose/rn-app && npm ci && cd android && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/maui-app && dotnet publish -c Release -f net10.0-android)
+(cd benchmarks/compose-vs-cranpose/avalonia-app && dotnet publish -c Release -f net10.0-android)
 (cd benchmarks/compose-vs-cranpose/rust-android && ./gradlew :egui:assembleRelease :slint:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/web-app && npm ci && npm run build && cd android && ./gradlew :app:assembleRelease)
 python3 benchmarks/compose-vs-cranpose/measure.py --serial SERIAL --output benchmarks/compose-vs-cranpose/results/RUN --install --reps 2 --screenshots

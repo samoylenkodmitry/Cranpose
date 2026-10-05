@@ -1,8 +1,9 @@
 // Deterministic benchmark data: `shared-kotlin/dev/perfcompare/shared/PerfData.kt`
-// and `cranpose-app/src/data.rs` implement the same generator bit for bit, so
-// every app draws identical content. Only what the gauntlet shows is kept.
+// and `perf-data/src/lib.rs` implement the same generator bit for bit, so every
+// app draws identical content. Only what the gauntlet shows is kept. The MAUI
+// and Avalonia apps compile this file.
 
-namespace PerfMaui;
+namespace PerfCompare;
 
 public static class PerfData
 {
