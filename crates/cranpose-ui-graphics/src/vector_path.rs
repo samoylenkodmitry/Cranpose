@@ -152,9 +152,16 @@ impl VectorPath {
     }
 
     /// Rasterizes the fill into an anti-aliased 8-bit coverage mask of
-    /// `width x height` pixels. A path point `p` maps to the pixel-space
-    /// position `(p - origin) * scale`.
-    pub fn coverage_mask(&self, width: usize, height: usize, origin: Point, scale: f32) -> Vec<u8> {
+    /// `width x height` pixels, each value scaled by `opacity`. A path point
+    /// `p` maps to the pixel-space position `(p - origin) * scale`.
+    pub fn coverage_mask(
+        &self,
+        width: usize,
+        height: usize,
+        origin: Point,
+        scale: f32,
+        opacity: f32,
+    ) -> Vec<u8> {
         let mut mask = vec![0u8; width * height];
         if width == 0 || height == 0 || scale <= 0.0 {
             return mask;
@@ -168,17 +175,25 @@ impl VectorPath {
         let mut row_coverage = vec![0.0f32; width];
         let subsample_weight = 1.0 / SUBSAMPLES as f32;
         for (row, mask_row) in mask.chunks_exact_mut(width).enumerate() {
-            row_coverage.fill(0.0);
-            let mut row_touched = false;
+            // The pixels some span reached; the others keep their zeros.
+            let mut touched = width..0;
             for sub in 0..SUBSAMPLES {
                 let sample_y = row as f32 + (sub as f32 + 0.5) * subsample_weight;
                 let crossings = scanner.crossings_at(sample_y);
-                row_touched |= self.fill_rule.for_each_span(crossings, |x0, x1| {
-                    accumulate_span(&mut row_coverage, x0, x1, subsample_weight, width)
+                self.fill_rule.for_each_span(crossings, |x0, x1| {
+                    if let Some(span) =
+                        accumulate_span(&mut row_coverage, x0, x1, subsample_weight, width)
+                    {
+                        touched.start = touched.start.min(span.start);
+                        touched.end = touched.end.max(span.end);
+                    }
                 });
             }
-            if row_touched {
-                add_row_coverage(mask_row, &row_coverage);
+            if let (Some(mask_span), Some(coverage)) = (
+                mask_row.get_mut(touched.clone()),
+                row_coverage.get_mut(touched),
+            ) {
+                write_row_coverage(mask_span, coverage, opacity);
             }
         }
         mask
@@ -195,16 +210,8 @@ impl VectorPath {
                 subpath.iter().zip(next).filter_map(move |(a, b)| {
                     let (a, b) = (map(a), map(b));
                     match a.y.total_cmp(&b.y) {
-                        std::cmp::Ordering::Less => Some(Edge {
-                            top: a,
-                            bottom: b,
-                            winding: 1,
-                        }),
-                        std::cmp::Ordering::Greater => Some(Edge {
-                            top: b,
-                            bottom: a,
-                            winding: -1,
-                        }),
+                        std::cmp::Ordering::Less => Some(Edge::new(a, b, 1)),
+                        std::cmp::Ordering::Greater => Some(Edge::new(b, a, -1)),
                         std::cmp::Ordering::Equal => None,
                     }
                 })
@@ -218,7 +225,20 @@ impl VectorPath {
 struct Edge {
     top: Point,
     bottom: Point,
+    /// `bottom - top`.
+    delta: Point,
     winding: i32,
+}
+
+impl Edge {
+    fn new(top: Point, bottom: Point, winding: i32) -> Self {
+        Self {
+            top,
+            bottom,
+            delta: Point::new(bottom.x - top.x, bottom.y - top.y),
+            winding,
+        }
+    }
 }
 
 /// Walks sample lines down a path's edges sorted by their tops, keeping the
@@ -229,7 +249,6 @@ struct EdgeScanner<'a> {
     next: usize,
     /// The edges the current line crosses, each with where it crosses.
     active: Vec<(f32, &'a Edge)>,
-    crossings: Vec<(f32, i32)>,
 }
 
 impl<'a> EdgeScanner<'a> {
@@ -238,13 +257,12 @@ impl<'a> EdgeScanner<'a> {
             edges,
             next: 0,
             active: Vec::new(),
-            crossings: Vec::new(),
         }
     }
 
     /// Where the edges cross the line at `sample_y`, left to right, each
-    /// with its winding direction.
-    fn crossings_at(&mut self, sample_y: f32) -> &[(f32, i32)] {
+    /// with its edge.
+    fn crossings_at(&mut self, sample_y: f32) -> &[(f32, &'a Edge)] {
         while let Some(edge) = self
             .edges
             .get(self.next)
@@ -255,73 +273,67 @@ impl<'a> EdgeScanner<'a> {
         }
         self.active.retain(|(_, edge)| sample_y < edge.bottom.y);
         for (x, edge) in &mut self.active {
-            let t = (sample_y - edge.top.y) / (edge.bottom.y - edge.top.y);
-            *x = edge.top.x + t * (edge.bottom.x - edge.top.x);
+            let t = (sample_y - edge.top.y) / edge.delta.y;
+            *x = edge.top.x + t * edge.delta.x;
         }
         // Each crossing is computed once, then sorted: the order barely
         // changes from one sample line to the next, which the sort finds in
         // one pass. Crossings at the same x bound an empty span either way.
         self.active
             .sort_unstable_by(|(a, _), (b, _)| a.total_cmp(b));
-        self.crossings.clear();
-        self.crossings
-            .extend(self.active.iter().map(|(x, edge)| (*x, edge.winding)));
-        &self.crossings
+        &self.active
     }
 }
 
 impl PathFillRule {
     /// Hands `span` each run of a sample line that lies inside the fill,
-    /// from `crossings` sorted left to right; whether any span touched a
-    /// pixel.
-    fn for_each_span(
-        self,
-        crossings: &[(f32, i32)],
-        mut span: impl FnMut(f32, f32) -> bool,
-    ) -> bool {
-        if crossings.len() < 2 {
-            return false;
-        }
+    /// from `crossings` sorted left to right.
+    fn for_each_span(self, crossings: &[(f32, &Edge)], mut span: impl FnMut(f32, f32)) {
         let inside = |winding: i32| match self {
             Self::NonZero => winding != 0,
             Self::EvenOdd => winding % 2 != 0,
         };
-        let mut touched = false;
         let mut winding = 0i32;
         let mut span_start = 0.0f32;
-        for &(x, direction) in crossings {
+        for &(x, edge) in crossings {
             let was_inside = inside(winding);
             winding += match self {
-                Self::NonZero => direction,
+                Self::NonZero => edge.winding,
                 Self::EvenOdd => 1,
             };
             match (was_inside, inside(winding)) {
                 (false, true) => span_start = x,
-                (true, false) => touched |= span(span_start, x),
+                (true, false) => span(span_start, x),
                 _ => {}
             }
         }
-        touched
     }
 }
 
-/// Adds a row's summed coverage onto its row of the 8-bit mask.
-fn add_row_coverage(mask_row: &mut [u8], row_coverage: &[f32]) {
-    for (dst, coverage) in mask_row.iter_mut().zip(row_coverage) {
-        let existing = *dst as f32 / 255.0;
-        let combined = (existing + coverage).min(1.0);
-        *dst = (combined * 255.0 + 0.5) as u8;
+/// Writes a row's summed coverage, scaled by `opacity`, into its row of the
+/// 8-bit mask, and clears the sums for the next row.
+fn write_row_coverage(mask_row: &mut [u8], row_coverage: &mut [f32], opacity: f32) {
+    for (value, coverage) in mask_row.iter_mut().zip(row_coverage) {
+        let full = (coverage.min(1.0) * 255.0 + 0.5) as u8;
+        *value = (opacity * full as f32 + 0.5) as u8;
+        *coverage = 0.0;
     }
 }
 
 /// Adds one horizontal span `[x0, x1)` of one sub-scanline into the row
-/// coverage accumulator, handling fractional span ends. Returns whether any
-/// pixel was touched.
-fn accumulate_span(row_coverage: &mut [f32], x0: f32, x1: f32, weight: f32, width: usize) -> bool {
+/// coverage accumulator, handling fractional span ends. Returns the pixels
+/// it touched.
+fn accumulate_span(
+    row_coverage: &mut [f32],
+    x0: f32,
+    x1: f32,
+    weight: f32,
+    width: usize,
+) -> Option<std::ops::Range<usize>> {
     let x0 = x0.max(0.0);
     let x1 = x1.min(width as f32);
     if x1 <= x0 {
-        return false;
+        return None;
     }
 
     // Pixels the span covers whole take the weight as it is; only the
@@ -332,10 +344,7 @@ fn accumulate_span(row_coverage: &mut [f32], x0: f32, x1: f32, weight: f32, widt
         let pixel_start = pixel as f32;
         (x1.min(pixel_start + 1.0) - x0.max(pixel_start)).max(0.0) * weight
     };
-    let Some(span) = row_coverage.get_mut(first..last) else {
-        return false;
-    };
-    match span {
+    match row_coverage.get_mut(first..last)? {
         [] => {}
         [only] => *only += partial(first),
         [head, interior @ .., tail] => {
@@ -346,7 +355,7 @@ fn accumulate_span(row_coverage: &mut [f32], x0: f32, x1: f32, weight: f32, widt
             *tail += partial(last - 1);
         }
     }
-    true
+    Some(first..last)
 }
 
 struct PathLexer<'a> {

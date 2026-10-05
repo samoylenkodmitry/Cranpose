@@ -1350,10 +1350,7 @@ impl DrawScopeDefault {
         let image = match cached {
             Some(image) => image,
             None => {
-                let mut mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE);
-                for coverage in &mut mask {
-                    *coverage = (alpha * *coverage as f32 + 0.5) as u8;
-                }
+                let mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE, alpha);
                 let Ok(image) = ImageBitmap::from_alpha8(
                     mask_width as u32,
                     mask_height as u32,

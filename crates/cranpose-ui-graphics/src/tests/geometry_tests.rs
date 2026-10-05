@@ -214,6 +214,7 @@ fn vector_mask_pixels_preserve_quantized_color_and_coverage() {
             image.height() as usize,
             Point::new(rect.x, rect.y),
             2.0,
+            1.0,
         );
         assert_eq!(image.pixels().len(), mask.len());
         assert!(mask.iter().any(|coverage| *coverage > 0 && *coverage < 255));
