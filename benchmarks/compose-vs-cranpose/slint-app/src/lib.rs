@@ -2,17 +2,16 @@
 //! the deterministic data, the sparkline paths and the frame clock. The
 //! benchmark's README describes it.
 
-use std::fmt::Write;
-use std::rc::Rc;
+use std::{fmt::Write, rc::Rc};
 
 use perf_data::{
-    AVATAR_COUNT, AVATAR_SIZE, CARD_ROWS_PER_CLUSTER, CHIP_BACKGROUND_RGB, GAUNTLET_SPARK_POINTS, GRADIENT_END_RGB,
-    GauntletRow, Launch, PALETTE_RGB, POST_COUNT, Post, avatar_rgba, gauntlet_row, gauntlet_tier, posts, spark_value,
-    tickers,
+    AVATAR_COUNT, AVATAR_SIZE, CARD_ROWS_PER_CLUSTER, CHIP_BACKGROUND_RGB, GAUNTLET_SPARK_POINTS,
+    GRADIENT_END_RGB, GauntletRow, Launch, PALETTE_RGB, POST_COUNT, Post, avatar_rgba,
+    gauntlet_row, gauntlet_tier, posts, spark_value, tickers,
 };
 use slint::{
-    Color, ComponentHandle, Image, Model, ModelRc, ModelTracker, PlatformError, RenderingState, Rgba8Pixel,
-    SharedPixelBuffer, SharedString, VecModel,
+    Color, ComponentHandle, Image, Model, ModelRc, ModelTracker, PlatformError, RenderingState,
+    Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
 };
 
 slint::include_modules!();
@@ -75,10 +74,18 @@ impl Model for Rows {
             return None;
         }
         Some(match gauntlet_row(row, self.columns) {
-            GauntletRow::Cluster(cluster) => RowData { cluster: cluster as i32, cards: ModelRc::default() },
+            GauntletRow::Cluster(cluster) => RowData {
+                cluster: cluster as i32,
+                cards: ModelRc::default(),
+            },
             GauntletRow::Cards(first) => {
-                let cards: Vec<CardData> = (first..first + self.columns).map(|card| self.card(card)).collect();
-                RowData { cluster: -1, cards: ModelRc::new(VecModel::from(cards)) }
+                let cards: Vec<CardData> = (first..first + self.columns)
+                    .map(|card| self.card(card))
+                    .collect();
+                RowData {
+                    cluster: -1,
+                    cards: ModelRc::new(VecModel::from(cards)),
+                }
             }
         })
     }
@@ -116,7 +123,9 @@ pub fn run(launch: Launch) -> Result<(), PlatformError> {
     let gauntlet = window.global::<Gauntlet>();
     gauntlet.set_s(tier.scale);
     gauntlet.set_depth(tier.depth as i32);
-    gauntlet.set_palette(ModelRc::new(VecModel::from(PALETTE_RGB.map(color).to_vec())));
+    gauntlet.set_palette(ModelRc::new(VecModel::from(
+        PALETTE_RGB.map(color).to_vec(),
+    )));
     gauntlet.on_spark_path(spark_path);
     let quotes: Vec<TickerData> = tickers(tier.tickers)
         .iter()
@@ -134,10 +143,18 @@ pub fn run(launch: Launch) -> Result<(), PlatformError> {
     let avatars = (0..AVATAR_COUNT)
         .map(|index| {
             let size = AVATAR_SIZE;
-            Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(&avatar_rgba(index), size, size))
+            Image::from_rgba8(SharedPixelBuffer::<Rgba8Pixel>::clone_from_slice(
+                &avatar_rgba(index),
+                size,
+                size,
+            ))
         })
         .collect();
-    window.set_rows(ModelRc::new(Rows { columns: tier.columns, posts: Rc::new(posts()), avatars: Rc::new(avatars) }));
+    window.set_rows(ModelRc::new(Rows {
+        columns: tier.columns,
+        posts: Rc::new(posts()),
+        avatars: Rc::new(avatars),
+    }));
 
     let weak = window.as_weak();
     let mut first_frame_logged = false;
@@ -169,23 +186,21 @@ pub fn run(launch: Launch) -> Result<(), PlatformError> {
     window.run()
 }
 
-/// The launch activity writes the extras to `launch.txt` in the app's files
-/// before the native side starts.
+/// Runs the gauntlet the launch activity asked for.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: slint::android::AndroidApp) {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Info).with_tag("PerfCompare"),
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("PerfCompare"),
     );
-    let launch = app
-        .internal_data_path()
-        .and_then(|files| std::fs::read_to_string(files.join("launch.txt")).ok())
-        .unwrap_or_default();
+    let launch = Launch::read(app.internal_data_path());
     if let Err(error) = slint::android::init(app) {
         log::error!("no Slint platform: {error}");
         return;
     }
-    if let Err(error) = run(Launch::parse(&launch)) {
+    if let Err(error) = run(launch) {
         log::error!("Slint stopped: {error}");
     }
 }

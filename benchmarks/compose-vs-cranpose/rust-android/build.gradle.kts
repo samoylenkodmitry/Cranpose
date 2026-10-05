@@ -5,12 +5,16 @@ plugins {
     id("com.android.application") apply false
 }
 
+/** The activity each app's framework runs in: `game` or `native`. */
+val activities = mapOf("egui" to "game", "slint" to "native")
+
 // Every Rust app the same way: its crate built for arm64 in release by
-// cargo-ndk, loaded by a NativeActivity whose launch activity hands the
-// native side the `am start` extras.
+// cargo-ndk, loaded by the activity its framework runs in, whose launch
+// activity hands the native side the `am start` extras.
 subprojects {
     apply(plugin = "com.android.application")
     val app = name
+    val activity = activities.getValue(app)
     val rust = layout.buildDirectory.dir("rust")
     extensions.configure<ApplicationExtension> {
         namespace = "dev.perfcompare.$app"
@@ -24,11 +28,14 @@ subprojects {
             versionName = "1.0"
             manifestPlaceholders["libName"] = "perf_$app"
             manifestPlaceholders["label"] = "Perf $app"
+            manifestPlaceholders["theme"] =
+                if (activity == "game") "@style/LaunchTheme" else "@android:style/Theme.NoTitleBar.Fullscreen"
         }
         buildTypes {
             getByName("release") {
                 isMinifyEnabled = true
                 proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+                if (activity == "game") proguardFiles(rootProject.file("src/game/proguard-rules.pro"))
                 signingConfig = signingConfigs.getByName("debug")
             }
         }
@@ -39,6 +46,8 @@ subprojects {
         sourceSets.named("main") {
             manifest.srcFile(rootProject.file("src/main/AndroidManifest.xml"))
             kotlin.directories += rootProject.file("src/main/java").path
+            kotlin.directories += rootProject.file("src/$activity/java").path
+            res.directories += rootProject.file("src/$activity/res").path
             jniLibs.directories += rust.get().asFile.path
         }
     }
@@ -56,4 +65,9 @@ subprojects {
         )
     }
     tasks.named("preBuild") { dependsOn(cargoNdk) }
+    if (activity == "game") {
+        // The GameActivity release android-activity 0.6 is written against.
+        dependencies.add("implementation", "androidx.games:games-activity:4.4.0")
+        dependencies.add("implementation", "androidx.appcompat:appcompat:1.7.1")
+    }
 }

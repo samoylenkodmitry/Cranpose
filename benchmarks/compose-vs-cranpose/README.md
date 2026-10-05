@@ -7,7 +7,7 @@ device and measures both from outside either framework. The gauntlet also runs
 in `views-app` (Android Views, RecyclerView 1.4), `flutter-app` (Flutter 3.47,
 which picks Impeller on OpenGL ES on the Mate), `rn-app` (React Native 0.87 on
 the New Architecture with Hermes), `maui-app` (.NET MAUI 10, fully
-AOT-compiled), `egui-app` (egui 0.36 in eframe on OpenGL ES), `slint-app`
+AOT-compiled), `egui-app` (egui 0.36 in eframe on OpenGL ES, in a GameActivity), `slint-app`
 (Slint 1.18 on Skia) and `web-app` (a web page in Capacitor 8, on the device's
 Chromium WebView 153: the stack Ionic, Tauri and Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
 packages them: each crate's folder is its Android module, behind one launch
@@ -128,7 +128,7 @@ up to tier 11. On 2026-10-05 (`frameworks.py`, 380 s):
 
 | App | fps | CPU ms per frame |
 | --- | ---: | ---: |
-| egui | 51.6 | 19 |
+| egui | 48.0* | 21* |
 | Flutter | 19.8 | 70 |
 | Views | 13.2 | 123 |
 | Slint | 11.8 | 87 |
@@ -139,7 +139,8 @@ up to tier 11. On 2026-10-05 (`frameworks.py`, 380 s):
 | Web | 16.8 | 52* |
 
 \* The web view renders in a sandboxed process of its own, which the CPU
-count leaves out; the web row was measured beside Compose with `ab.py`.
+count leaves out. The web row and the egui row, with AccessKit (below), were
+measured with `ab.py`; egui drew 51.6 fps at 19 ms a frame without it.
 
 At tier 5 Cranpose drew 52.8 fps, Views 52 to 54, Flutter 29.5, Compose 26.5,
 React Native 8.4 and MAUI 6.0, while egui held 60. Raising a device's tier
@@ -165,12 +166,12 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
 | --- | ---: | --- |
 | Cranpose | 1.34% | Compose lays out in whole pixels (#1215) |
 | Views | 0.10% | Lines of text a pixel apart |
-| Flutter | 0.93% | Its unhinted text is about 2% wider, so a few lines break a word earlier |
+| Flutter | 0.93% | Its text is about 2% wider, so a few lines break a word earlier |
 | React Native | 0.85% | Paragraph lines keep their leading above the first line and below the last |
 | MAUI | 0.10% | Lines of text a pixel apart |
 | Web | 1.24% | Lines of text a pixel apart |
-| Slint | 1.11% | Its unhinted text is a little wider, so one ticker tile wraps a row later |
-| egui | 4.55% | Its renderer filters textures in linear light, so the striped avatars average lighter; its unhinted text breaks a few titles a word earlier |
+| Slint | 1.11% | Its text is a little wider, so one ticker tile wraps a row later |
+| egui | 3.31% | Its renderer filters textures in linear light, so the striped avatars average lighter; it puts each glyph on a whole pixel, so a few titles break a word earlier |
 
 ## Parity rules
 
@@ -191,6 +192,17 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
   height, `Trim.None` and `includeFontPadding = false` for that contract.
 - **Window:** the same fullscreen theme, `singleTask` and `configChanges`, and
   one arm64 build each.
+- **Shadows:** egui has no elevation, so its cards draw Android's two
+  elevation shadows themselves: the ambient one and the spot one cast from
+  the light above the window's top centre, with Android's alphas, offsets and
+  blur widths. egui's text uses its light theme, which blends glyph coverage
+  as the other apps do.
+- **Accessibility:** the apps keep the tree that accessibility services read,
+  as their toolkits do by default. egui builds AccessKit's tree every frame
+  with a label for each text. Its Android adapter attaches to GameActivity's
+  view, which R8 must keep, and needs `accesskit_winit`'s `accesskit_android`
+  feature, which egui-winit leaves off. Slint's Android backend has no
+  accessibility support, so the Slint app does none of this work.
 - **Release builds:**
   - Compose: R8 with resource shrinking, not debuggable, and fully
     AOT-compiled with `cmd package compile -m speed -f`. That is Compose's best

@@ -69,11 +69,13 @@ APPS = {
         'activity': 'dev.perfcompare.web/.MainActivity',
         'apk': HERE / 'web-app/android/app/build/outputs/apk/release/app-release.apk',
     },
-    # Rust frameworks, packaged by `rust-android`: the gauntlet only.
+    # Rust frameworks, packaged by `rust-android`: the gauntlet only. egui runs
+    # in a GameActivity, which draws into a SurfaceView, as Flutter does.
     'egui': {
         'package': 'dev.perfcompare.egui',
         'activity': 'dev.perfcompare.egui/dev.perfcompare.launch.LaunchActivity',
         'apk': HERE / 'egui-app/build/outputs/apk/release/egui-release.apk',
+        'layer': 'SurfaceView - ',
     },
     'slint': {
         'package': 'dev.perfcompare.slint',

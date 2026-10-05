@@ -12,16 +12,17 @@
 
 use std::rc::Rc;
 
-use cranpose::LazyItems;
-use cranpose::prelude::*;
+use cranpose::{LazyItems, prelude::*};
 use cranpose_foundation::lazy::rememberLazyListState;
-use cranpose_ui::text::{AnnotatedString, FontWeight, SpanStyle};
-use cranpose_ui::widgets::{FlowRow, FlowRowSpec};
+use cranpose_ui::{
+    text::{AnnotatedString, FontWeight, SpanStyle},
+    widgets::{FlowRow, FlowRowSpec},
+};
 
 use super::{clamped_text_options, text_style};
 use crate::data::{
-    self, AVATAR_COUNT, AVATAR_SIZE, CHIP_BACKGROUND, GRADIENT_END,
-    GauntletRow, GauntletTier, PALETTE, Post, GAUNTLET_SPARK_POINTS, Ticker,
+    self, AVATAR_COUNT, AVATAR_SIZE, CHIP_BACKGROUND, GAUNTLET_SPARK_POINTS, GRADIENT_END,
+    GauntletRow, GauntletTier, PALETTE, Post, Ticker,
 };
 
 const INK: Color = Color::from_rgb_u8(0x11, 0x18, 0x27);
@@ -115,35 +116,39 @@ pub fn GauntletScreen(load: GauntletLoad) {
 #[composable]
 fn GauntletBody(shared: Shared, list_state: LazyListState) {
     let s = shared.tier.scale;
-    Column(Modifier::empty().fill_max_size(), ColumnSpec::default(), move || {
-        TickerPanel(shared.clone());
-        let rows = shared.clone();
-        LazyColumn(
-            Modifier::empty().fill_max_width().weight(1.0),
-            list_state,
-            LazyColumnSpec::new()
-                .vertical_arrangement(LinearArrangement::spaced_by(8.0 * s))
-                .content_padding_all(8.0 * s),
-            move |scope| {
-                let rows = rows.clone();
-                let columns = rows.tier.columns;
-                scope.items(
-                    LazyItems::new(ROWS)
-                        .key(|index| index as u64)
-                        .content_type(move |index| match data::gauntlet_row(index, columns) {
-                            GauntletRow::Cards(_) => 0,
-                            GauntletRow::Cluster(_) => 1,
-                        }),
-                    move |row| match data::gauntlet_row(row, columns) {
-                        GauntletRow::Cards(first) => CardRow(rows.clone(), first),
-                        GauntletRow::Cluster(cluster) => {
-                            DeepCluster(cluster, rows.tier.depth, rows.tier.scale)
-                        }
-                    },
-                );
-            },
-        );
-    });
+    Column(
+        Modifier::empty().fill_max_size(),
+        ColumnSpec::default(),
+        move || {
+            TickerPanel(shared.clone());
+            let rows = shared.clone();
+            LazyColumn(
+                Modifier::empty().fill_max_width().weight(1.0),
+                list_state,
+                LazyColumnSpec::new()
+                    .vertical_arrangement(LinearArrangement::spaced_by(8.0 * s))
+                    .content_padding_all(8.0 * s),
+                move |scope| {
+                    let rows = rows.clone();
+                    let columns = rows.tier.columns;
+                    scope.items(
+                        LazyItems::new(ROWS)
+                            .key(|index| index as u64)
+                            .content_type(move |index| match data::gauntlet_row(index, columns) {
+                                GauntletRow::Cards(_) => 0,
+                                GauntletRow::Cluster(_) => 1,
+                            }),
+                        move |row| match data::gauntlet_row(row, columns) {
+                            GauntletRow::Cards(first) => CardRow(rows.clone(), first),
+                            GauntletRow::Cluster(cluster) => {
+                                DeepCluster(cluster, rows.tier.depth, rows.tier.scale)
+                            }
+                        },
+                    );
+                },
+            );
+        },
+    );
 }
 
 #[composable]
@@ -235,7 +240,11 @@ fn TickerChange(tickers: Rc<[Ticker]>, index: usize, frame: MutableState<u32>, s
     Text(
         data::change_text(ticker, cents),
         Modifier::empty(),
-        text_style(10.0 * s, if cents >= ticker.base_cents { UP } else { DOWN }, false),
+        text_style(
+            10.0 * s,
+            if cents >= ticker.base_cents { UP } else { DOWN },
+            false,
+        ),
     );
 }
 
@@ -262,36 +271,46 @@ fn Card(shared: Shared, card: usize) {
     let s = shared.tier.scale;
     let post = shared.posts[card % shared.posts.len()].clone();
     let shape = RoundedCornerShape::uniform(12.0 * s);
-    Box(Modifier::empty().weight(1.0), BoxSpec::default(), move || {
-        let post = post.clone();
-        let shared = shared.clone();
-        Column(
-            Modifier::empty()
-                .fill_max_width()
-                .shadow_with(3.0 * s, LayerShape::Rounded(shape), true, Color::BLACK, Color::BLACK)
-                .background(Color::WHITE)
-                .rounded_corners(12.0 * s)
-                .border(1.0, HAIRLINE, shape)
-                .padding(10.0 * s),
-            ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(6.0 * s)),
-            move || {
-                CardHeader(post.clone(), shared.avatars[card % AVATAR_COUNT].clone(), s);
-                TextWithOptions(
-                    post.body.clone(),
-                    Modifier::empty(),
-                    text_style(12.0 * s, BODY, false),
-                    clamped_text_options(4),
-                );
-                Progress(card, shared.frame, s);
-                Sparkline(card, post.color, shared.frame, s);
-                Chips(post.clone(), s);
-                Footer(post.clone(), s);
-            },
-        );
-        if card.is_multiple_of(5) {
-            Badge(card, shared.frame, s);
-        }
-    });
+    Box(
+        Modifier::empty().weight(1.0),
+        BoxSpec::default(),
+        move || {
+            let post = post.clone();
+            let shared = shared.clone();
+            Column(
+                Modifier::empty()
+                    .fill_max_width()
+                    .shadow_with(
+                        3.0 * s,
+                        LayerShape::Rounded(shape),
+                        true,
+                        Color::BLACK,
+                        Color::BLACK,
+                    )
+                    .background(Color::WHITE)
+                    .rounded_corners(12.0 * s)
+                    .border(1.0, HAIRLINE, shape)
+                    .padding(10.0 * s),
+                ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(6.0 * s)),
+                move || {
+                    CardHeader(post.clone(), shared.avatars[card % AVATAR_COUNT].clone(), s);
+                    TextWithOptions(
+                        post.body.clone(),
+                        Modifier::empty(),
+                        text_style(12.0 * s, BODY, false),
+                        clamped_text_options(4),
+                    );
+                    Progress(card, shared.frame, s);
+                    Sparkline(card, post.color, shared.frame, s);
+                    Chips(post.clone(), s);
+                    Footer(post.clone(), s);
+                },
+            );
+            if card.is_multiple_of(5) {
+                Badge(card, shared.frame, s);
+            }
+        },
+    );
 }
 
 #[composable]
@@ -303,13 +322,13 @@ fn CardHeader(post: Rc<Post>, avatar: Option<ImageBitmap>, s: f32) {
             .horizontal_arrangement(LinearArrangement::spaced_by(8.0 * s))
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            let circle = Modifier::empty().size_points(32.0 * s, 32.0 * s).graphics_layer_value(
-                GraphicsLayer {
+            let circle = Modifier::empty()
+                .size_points(32.0 * s, 32.0 * s)
+                .graphics_layer_value(GraphicsLayer {
                     shape: LayerShape::Rounded(RoundedCornerShape::uniform(16.0 * s)),
                     clip: true,
                     ..Default::default()
-                },
-            );
+                });
             match avatar.clone() {
                 Some(bitmap) => {
                     Image(
@@ -323,25 +342,33 @@ fn CardHeader(post: Rc<Post>, avatar: Option<ImageBitmap>, s: f32) {
                     );
                 }
                 None => {
-                    Box(circle.background(PALETTE[post.color]), BoxSpec::default(), || {});
+                    Box(
+                        circle.background(PALETTE[post.color]),
+                        BoxSpec::default(),
+                        || {},
+                    );
                 }
             }
             let post = post.clone();
             let subtitle = subtitle.clone();
-            Column(Modifier::empty().weight(1.0), ColumnSpec::default(), move || {
-                TextWithOptions(
-                    post.title.clone(),
-                    Modifier::empty(),
-                    text_style(13.0 * s, INK, true),
-                    clamped_text_options(2),
-                );
-                TextWithOptions(
-                    subtitle.clone(),
-                    Modifier::empty(),
-                    text_style(11.0 * s, MUTED, false),
-                    clamped_text_options(1),
-                );
-            });
+            Column(
+                Modifier::empty().weight(1.0),
+                ColumnSpec::default(),
+                move || {
+                    TextWithOptions(
+                        post.title.clone(),
+                        Modifier::empty(),
+                        text_style(13.0 * s, INK, true),
+                        clamped_text_options(2),
+                    );
+                    TextWithOptions(
+                        subtitle.clone(),
+                        Modifier::empty(),
+                        text_style(11.0 * s, MUTED, false),
+                        clamped_text_options(1),
+                    );
+                },
+            );
         },
     );
 }
@@ -435,11 +462,17 @@ fn Sparkline(card: usize, color: usize, frame: MutableState<u32>, s: f32) {
                 y: size.height * (1.0 - data::spark_value(card, index, k)),
             };
             let mut area = Path::new();
-            area.move_to(Point { x: 0.0, y: size.height });
+            area.move_to(Point {
+                x: 0.0,
+                y: size.height,
+            });
             for index in 0..GAUNTLET_SPARK_POINTS {
                 area.line_to(point(index));
             }
-            area.line_to(Point { x: size.width, y: size.height });
+            area.line_to(Point {
+                x: size.width,
+                y: size.height,
+            });
             area.close();
             scope.draw_path(&area, fill.clone(), DrawStyle::Fill);
             let mut stroke = Path::new();
@@ -447,7 +480,11 @@ fn Sparkline(card: usize, color: usize, frame: MutableState<u32>, s: f32) {
             for index in 1..GAUNTLET_SPARK_POINTS {
                 stroke.line_to(point(index));
             }
-            scope.draw_path(&stroke, Brush::solid(line), DrawStyle::Stroke(Stroke::new(1.5 * s)));
+            scope.draw_path(
+                &stroke,
+                Brush::solid(line),
+                DrawStyle::Stroke(Stroke::new(1.5 * s)),
+            );
         },
     );
 }
@@ -500,7 +537,11 @@ fn Footer(post: Rc<Post>, s: f32) {
                     Modifier::empty().weight(1.0),
                     ColumnSpec::new().horizontal_alignment(HorizontalAlignment::CenterHorizontally),
                     move || {
-                        Text(value.clone(), Modifier::empty(), text_style(12.0 * s, INK, true));
+                        Text(
+                            value.clone(),
+                            Modifier::empty(),
+                            text_style(12.0 * s, INK, true),
+                        );
                         Text(label, Modifier::empty(), text_style(9.0 * s, MUTED, false));
                     },
                 );

@@ -11,12 +11,17 @@ name = "perf_egui"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# egui's own native shell with its default renderer (glow) and fonts.
-eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "android-native-activity"] }
+# egui's own native shell with its default renderer (glow) and fonts, and
+# AccessKit for accessibility services, as the Android toolkits serve them.
+# AccessKit's Android adapter attaches to GameActivity's view.
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "accesskit", "android-game-activity"] }
 log = "0.4"
 perf-data = { path = "../perf-data" }
 
 [target.'cfg(target_os = "android")'.dependencies]
+# egui-winit leaves AccessKit's Android adapter out, so Android would get the
+# adapter that drops every tree; this feature turns the real one on.
+accesskit_winit = { version = "0.32.2", default-features = false, features = ["accesskit_android"] }
 android_logger = "0.15"
 winit = { version = "0.30.13", default-features = false }
 

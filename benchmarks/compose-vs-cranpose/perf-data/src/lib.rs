@@ -40,7 +40,6 @@ pub const GRADIENT_END_RGB: [[u8; 3]; 8] = [
     [0x83, 0x18, 0x43],
 ];
 
-
 const WORDS: [&str; 46] = [
     "lorem",
     "ipsum",
@@ -124,7 +123,7 @@ impl Rng {
         Self(if state == 0 { 1 } else { state })
     }
 
-    pub fn next(&mut self) -> u32 {
+    pub fn next_u32(&mut self) -> u32 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 17;
@@ -134,11 +133,11 @@ impl Rng {
     }
 
     pub fn below(&mut self, bound: u32) -> u32 {
-        self.next() % bound
+        self.next_u32() % bound
     }
 
     pub fn unit(&mut self) -> f32 {
-        (self.next() >> 8) as f32 / 16_777_216.0
+        (self.next_u32() >> 8) as f32 / 16_777_216.0
     }
 }
 
@@ -353,18 +352,78 @@ pub struct GauntletTier {
 }
 
 pub const GAUNTLET_TIERS: [GauntletTier; 12] = [
-    GauntletTier { columns: 1, scale: 1.0, tickers: 8, depth: 6 },
-    GauntletTier { columns: 2, scale: 0.85, tickers: 12, depth: 8 },
-    GauntletTier { columns: 2, scale: 0.7, tickers: 16, depth: 10 },
-    GauntletTier { columns: 3, scale: 0.6, tickers: 20, depth: 12 },
-    GauntletTier { columns: 3, scale: 0.5, tickers: 28, depth: 14 },
-    GauntletTier { columns: 4, scale: 0.45, tickers: 36, depth: 16 },
-    GauntletTier { columns: 4, scale: 0.4, tickers: 44, depth: 20 },
-    GauntletTier { columns: 5, scale: 0.35, tickers: 56, depth: 24 },
-    GauntletTier { columns: 6, scale: 0.3, tickers: 72, depth: 28 },
-    GauntletTier { columns: 7, scale: 0.27, tickers: 96, depth: 32 },
-    GauntletTier { columns: 8, scale: 0.25, tickers: 120, depth: 40 },
-    GauntletTier { columns: 10, scale: 0.2, tickers: 160, depth: 48 },
+    GauntletTier {
+        columns: 1,
+        scale: 1.0,
+        tickers: 8,
+        depth: 6,
+    },
+    GauntletTier {
+        columns: 2,
+        scale: 0.85,
+        tickers: 12,
+        depth: 8,
+    },
+    GauntletTier {
+        columns: 2,
+        scale: 0.7,
+        tickers: 16,
+        depth: 10,
+    },
+    GauntletTier {
+        columns: 3,
+        scale: 0.6,
+        tickers: 20,
+        depth: 12,
+    },
+    GauntletTier {
+        columns: 3,
+        scale: 0.5,
+        tickers: 28,
+        depth: 14,
+    },
+    GauntletTier {
+        columns: 4,
+        scale: 0.45,
+        tickers: 36,
+        depth: 16,
+    },
+    GauntletTier {
+        columns: 4,
+        scale: 0.4,
+        tickers: 44,
+        depth: 20,
+    },
+    GauntletTier {
+        columns: 5,
+        scale: 0.35,
+        tickers: 56,
+        depth: 24,
+    },
+    GauntletTier {
+        columns: 6,
+        scale: 0.3,
+        tickers: 72,
+        depth: 28,
+    },
+    GauntletTier {
+        columns: 7,
+        scale: 0.27,
+        tickers: 96,
+        depth: 32,
+    },
+    GauntletTier {
+        columns: 8,
+        scale: 0.25,
+        tickers: 120,
+        depth: 40,
+    },
+    GauntletTier {
+        columns: 10,
+        scale: 0.2,
+        tickers: 160,
+        depth: 48,
+    },
 ];
 
 /// What `am start` asked of the gauntlet in an app without its own
@@ -384,6 +443,13 @@ impl Launch {
         let tier = fields.next().and_then(Result::ok).unwrap_or(5) as usize;
         let freeze = fields.next().and_then(Result::ok).unwrap_or(0);
         Self { tier, freeze }
+    }
+
+    /// The launch the launch activity wrote to `launch.txt` in the app's
+    /// `files` folder before the native side started.
+    pub fn read(files: Option<std::path::PathBuf>) -> Self {
+        let text = files.and_then(|files| std::fs::read_to_string(files.join("launch.txt")).ok());
+        Self::parse(text.as_deref().unwrap_or_default())
     }
 }
 
@@ -493,7 +559,8 @@ pub fn width_fraction(frame: u32) -> f32 {
 /// The sparkline's height at `point`, as a fraction of the chart, on `frame`.
 pub fn spark_value(card: usize, point: usize, frame: u32) -> f32 {
     let phase = (frame as f32 + card as f32 * 7.0) * 0.11;
-    0.5 + 0.38 * (point as f32 * 0.32 + phase).sin() + 0.08 * (point as f32 * 1.7 + card as f32).sin()
+    0.5 + 0.38 * (point as f32 * 0.32 + phase).sin()
+        + 0.08 * (point as f32 * 1.7 + card as f32).sin()
 }
 
 /// The two ends of each avatar's gradient, as RGB bytes.

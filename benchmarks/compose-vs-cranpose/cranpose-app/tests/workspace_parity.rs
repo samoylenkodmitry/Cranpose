@@ -78,7 +78,8 @@ impl WorkspaceHarness {
 
     fn assert_search_text(&mut self, expected: &str) {
         let tree = self.semantics();
-        let field = find(tree.root(), &|node| node.details().editable_text).expect("editable search");
+        let field =
+            find(tree.root(), &|node| node.details().editable_text).expect("editable search");
         assert_eq!(field.text.as_deref(), Some(expected));
     }
 }

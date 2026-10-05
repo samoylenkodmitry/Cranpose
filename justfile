@@ -46,15 +46,23 @@ toolchains:
 # rustfmt.toml sets unstable import options, so formatting is the one gate that
 # runs on nightly rather than on the pinned stable.
 
-# Format the workspace.
+# Format the workspace and the benchmark apps, each its own workspace.
 fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --manifest-path apps/isolated-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/slint-app/Cargo.toml
 
 # Verify formatting without touching the tree. This is the CI gate.
 fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check --manifest-path apps/isolated-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/slint-app/Cargo.toml
 
 # --- lint ------------------------------------------------------------------
 
