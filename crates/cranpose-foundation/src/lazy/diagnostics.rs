@@ -1,5 +1,5 @@
 pub(super) fn telemetry_enabled() -> bool {
-    std::env::var_os("CRANPOSE_LAZY_MEASURE_TELEMETRY").is_some()
+    cranpose_core::env_flag!("CRANPOSE_LAZY_MEASURE_TELEMETRY")
 }
 
 #[cfg(test)]
