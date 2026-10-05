@@ -9,7 +9,7 @@ use cranpose_render_common::{
     graph_scene::RenderDiagnostics,
     hit_graph::collect_hits_from_graph,
     layer_composition::local_content_layer,
-    layer_shadow::layer_shadow_geometry,
+    layer_shadow::{ShadowLight, layer_shadow_geometry},
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
         DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
@@ -99,6 +99,9 @@ struct RasterTraversalContext<'a> {
     inherited_translated_snap_anchor: Option<Point>,
     inherited_translated_content_context: bool,
     diagnostics: &'a RenderDiagnostics,
+    /// The window's shadow light in device pixels, the space the raster
+    /// scene is drawn in.
+    light: ShadowLight,
 }
 
 fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
@@ -308,8 +311,9 @@ fn push_layer_shadow(
     layer_bounds: RasterLayerBounds,
     transformed_bounds: Rect,
     clip: Option<Rect>,
+    light: ShadowLight,
 ) {
-    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds);
+    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds, light);
     let scale = layer_uniform_scale(layer).max(0.1);
     let resolved_shape = match layer.shape {
         LayerShape::Rectangle => None,
@@ -324,56 +328,21 @@ fn push_layer_shadow(
         }
     };
 
-    fn shadow_shape(
-        rect: Rect,
-        color: Color,
-        shape: Option<RoundedCornerShape>,
-    ) -> crate::scene::DrawShape {
-        crate::scene::DrawShape {
-            rect,
+    for (pass, color) in shadow_geometry.passes(layer) {
+        let shape = crate::scene::DrawShape {
+            rect: pass.rect,
             snap_anchor: None,
             snap_to_pixel_grid: false,
             brush: Brush::solid(color),
-            shape,
+            shape: Some(pass.corners(resolved_shape)),
             stroke: None,
             arc: None,
             line: None,
             z_index: 0,
             clip: None,
             blend_mode: BlendMode::SrcOver,
-        }
-    }
-
-    if let Some(ambient_pass) = shadow_geometry.ambient {
-        let ambient = Color(
-            layer.ambient_shadow_color.r(),
-            layer.ambient_shadow_color.g(),
-            layer.ambient_shadow_color.b(),
-            ambient_pass.alpha,
-        );
-        push_blurred_shape_samples(
-            scene,
-            &shadow_shape(ambient_pass.rect, ambient, resolved_shape),
-            BlendMode::SrcOver,
-            clip,
-            ambient_pass.blur_radius,
-        );
-    }
-
-    if let Some(spot_pass) = shadow_geometry.spot {
-        let spot = Color(
-            layer.spot_shadow_color.r(),
-            layer.spot_shadow_color.g(),
-            layer.spot_shadow_color.b(),
-            spot_pass.alpha,
-        );
-        push_blurred_shape_samples(
-            scene,
-            &shadow_shape(spot_pass.rect, spot, resolved_shape),
-            BlendMode::SrcOver,
-            clip,
-            spot_pass.blur_radius,
-        );
+        };
+        push_blurred_shape_samples(scene, &shape, BlendMode::SrcOver, clip, pass.blur_radius);
     }
 }
 
@@ -629,6 +598,12 @@ pub(crate) fn build_raster_scene(
             inherited_translated_snap_anchor: None,
             inherited_translated_content_context: false,
             diagnostics,
+            light: ShadowLight::for_window(
+                graph.root.local_bounds.width * scale,
+                graph.root.local_bounds.height * scale,
+                scale,
+                1.0,
+            ),
         },
     );
     scene
@@ -710,6 +685,7 @@ fn raster_layer_mapping(
         ..GraphicsLayer::default()
     };
     let shadow_layer = GraphicsLayer {
+        alpha: layer.graphics_layer.alpha,
         scale_x,
         scale_y,
         transform_origin: TransformOrigin::new(0.0, 0.0),
@@ -797,6 +773,7 @@ fn populate_draws_from_graph(
         mapping.layer_bounds,
         mapping.transformed_bounds,
         shadow_clip,
+        context.light,
     );
 
     let mut deferred_draws: Vec<&RenderNode> = Vec::new();
@@ -845,6 +822,7 @@ fn populate_draws_from_graph(
                         inherited_translated_snap_anchor: translated_snap_anchor,
                         inherited_translated_content_context: effective_translated_content_context,
                         diagnostics,
+                        light: context.light,
                     },
                 );
             }

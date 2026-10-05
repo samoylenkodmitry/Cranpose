@@ -3,7 +3,7 @@ use crate::RecomposeScope;
 
 impl SlotTable {
     pub(crate) fn active_group_for_scope(&self, scope: &RecomposeScope) -> Option<ActiveGroupId> {
-        let group_index = self.anchors.active_index(scope.group_anchor())?;
+        let group_index = self.active_group_index(scope.group_anchor())?;
         let Some(group) = self.groups.get(group_index) else {
             log::error!(
                 "scope {} points to active group index {group_index}, but the slot table has only {} active groups",

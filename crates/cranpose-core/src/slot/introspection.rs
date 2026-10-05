@@ -90,9 +90,9 @@ impl SlotTable {
         let mut anchors = self
             .anchors
             .active_entries()
-            .map(|(anchor, group_index)| SlotDebugAnchor {
+            .map(|(anchor, stored)| SlotDebugAnchor {
                 anchor,
-                group_index,
+                group_index: self.resolve_group_index(stored, anchor).unwrap_or(stored),
             })
             .collect::<Vec<_>>();
         anchors.sort_by_key(|entry| entry.group_index);

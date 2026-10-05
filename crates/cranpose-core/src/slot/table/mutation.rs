@@ -134,7 +134,8 @@ impl SlotTable {
                 scope: None,
             },
         );
-        self.refresh_group_indexes_from(insert_index);
+        self.anchors.move_active(anchor, insert_index);
+        self.note_group_insert(insert_index);
         self.movables.note_group(key, anchor);
         self.adjust_ancestor_group_spans(parent_anchor, 1, 0);
         anchor
@@ -153,6 +154,7 @@ impl SlotTable {
             );
             return;
         }
+        self.flush_stale_group_indexes();
         let anchor = root.anchor();
         let Some(from_index) = self.active_group_index(anchor) else {
             log::error!("slot table ignored keyed sibling move for stale root anchor {anchor:?}");

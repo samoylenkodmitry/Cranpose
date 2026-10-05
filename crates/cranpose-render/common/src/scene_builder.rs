@@ -1,6 +1,9 @@
 use std::{any::Any, cell::Cell, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId, collections::map::HashMap};
+use cranpose_core::{
+    MemoryApplier, NodeId,
+    collections::map::{HashMap, HashSet},
+};
 use cranpose_ui::{
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, PreparedTextLayout, Rect, Size,
     SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, text::TextStyle,
@@ -237,11 +240,15 @@ fn update_graph_from_applier_report_inner(
             }
             let inherited = graph.root.translated_content_context;
             let root_children = AbsOrigin::ROOT.children_of(&graph.root);
+            let ancestry = dirty_ancestry(applier, &remaining_dirty_nodes);
             let walked = replace_dirty_layers_from_applier(
                 applier,
                 &mut graph.root,
                 root_children,
-                &mut remaining_dirty_nodes,
+                DirtyWalk {
+                    nodes: &mut remaining_dirty_nodes,
+                    ancestry: &ancestry,
+                },
                 inherited,
                 false,
             );
@@ -270,11 +277,15 @@ fn update_graph_from_applier_report_inner(
 
     let inherited_translated_content_context = graph.root.translated_content_context;
     let root_children = AbsOrigin::ROOT.children_of(&graph.root);
+    let ancestry = dirty_ancestry(applier, &remaining_dirty_nodes);
     let Some(report) = replace_dirty_layers_from_applier(
         applier,
         &mut graph.root,
         root_children,
-        &mut remaining_dirty_nodes,
+        DirtyWalk {
+            nodes: &mut remaining_dirty_nodes,
+            ancestry: &ancestry,
+        },
         inherited_translated_content_context,
         false,
     ) else {
@@ -314,15 +325,57 @@ struct ReplaceDirtyLayersReport {
     hit_graph_dirty: bool,
 }
 
+/// The dirty nodes a scene update has yet to find, and every node above
+/// them in the applier: a layer is lowered from its node's subtree, so a
+/// layer whose node is in neither holds no dirty layer.
+struct DirtyWalk<'a> {
+    nodes: &'a mut HashMap<NodeId, NodeUpdate>,
+    ancestry: &'a HashSet<NodeId>,
+}
+
+impl DirtyWalk<'_> {
+    fn reborrow(&mut self) -> DirtyWalk<'_> {
+        DirtyWalk {
+            nodes: self.nodes,
+            ancestry: self.ancestry,
+        }
+    }
+
+    /// Whether the subtree of a layer with `identity` may hold a dirty
+    /// layer: always for a layer without a node.
+    fn may_hold(&self, identity: Option<NodeId>) -> bool {
+        identity.is_none_or(|id| self.ancestry.contains(&id))
+    }
+}
+
+/// The applier ancestors of every node in `dirty`.
+fn dirty_ancestry(applier: &MemoryApplier, dirty: &HashMap<NodeId, NodeUpdate>) -> HashSet<NodeId> {
+    let mut ancestry = HashSet::default();
+    for &node in dirty.keys() {
+        let mut current = node;
+        while let Some(parent) = applier
+            .get_ref(current)
+            .ok()
+            .and_then(cranpose_core::Node::parent)
+        {
+            if !ancestry.insert(parent) {
+                break;
+            }
+            current = parent;
+        }
+    }
+    ancestry
+}
+
 fn replace_dirty_layers_from_applier(
     applier: &MemoryApplier,
     parent: &mut LayerNode,
     parent_children: AbsOrigin,
-    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+    mut dirty: DirtyWalk<'_>,
     inherited_translated_content_context: bool,
     ancestor_hashed: bool,
 ) -> Option<ReplaceDirtyLayersReport> {
-    if dirty_nodes.is_empty() {
+    if dirty.nodes.is_empty() {
         return Some(ReplaceDirtyLayersReport::default());
     }
 
@@ -333,15 +386,19 @@ fn replace_dirty_layers_from_applier(
     let mut report = ReplaceDirtyLayersReport::default();
 
     for child in &mut parent.children {
+        if dirty.nodes.is_empty() {
+            break;
+        }
         let RenderNode::Layer(child_layer) = child else {
             continue;
         };
 
-        if let Some(kind) = layer_identity(child_layer).and_then(|id| dirty_nodes.remove(&id)) {
+        let identity = layer_identity(child_layer);
+        if let Some(kind) = identity.and_then(|id| dirty.nodes.remove(&id)) {
             if let Some(hit_graph_dirty) = try_update_retained_layer(
                 applier,
                 child_layer,
-                dirty_nodes,
+                dirty.nodes,
                 kind,
                 false,
                 TranslateAncestorContext {
@@ -360,7 +417,7 @@ fn replace_dirty_layers_from_applier(
                     applier,
                     child_layer,
                     child_children,
-                    dirty_nodes,
+                    dirty.reborrow(),
                     child_inherited_translated_content_context,
                     child_ancestor_hashed,
                 )?;
@@ -373,7 +430,7 @@ fn replace_dirty_layers_from_applier(
             // Nodes that leave this subtree are gone from the scene: nothing
             // remains to update for them, and a dirty one would otherwise go
             // unmatched and rebuild the whole scene.
-            remove_dirty_descendants(child_layer, dirty_nodes);
+            remove_dirty_descendants(child_layer, dirty.nodes);
             release_for_rebuild(child_layer);
             let context = LowerContext {
                 inherited_motion_context_animated: parent.motion_context_animated,
@@ -385,7 +442,7 @@ fn replace_dirty_layers_from_applier(
                 write_node_layer(applier, node_id, data, context, child_layer);
             })?;
             report.hit_graph_dirty |= previous.dirty_against(&HitGraphState::of(child_layer));
-            remove_dirty_descendants(child_layer, dirty_nodes);
+            remove_dirty_descendants(child_layer, dirty.nodes);
 
             crate::graph_hash::recompute_layer_raster_cache_hashes_under(
                 child_layer,
@@ -395,12 +452,15 @@ fn replace_dirty_layers_from_applier(
             continue;
         }
 
+        if !dirty.may_hold(identity) {
+            continue;
+        }
         let child_children = parent_children.children_of(child_layer);
         let child_report = replace_dirty_layers_from_applier(
             applier,
             child_layer,
             child_children,
-            dirty_nodes,
+            dirty.reborrow(),
             child_inherited_translated_content_context,
             child_ancestor_hashed,
         )?;

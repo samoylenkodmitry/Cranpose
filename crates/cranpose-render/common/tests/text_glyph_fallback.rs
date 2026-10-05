@@ -1,3 +1,4 @@
+use ab_glyph::{Font, FontRef};
 use cranpose_render_common::{
     brush_sampling::sample_brush_rgba,
     font_source::SoftwareTextFontRegistry,
@@ -352,4 +353,34 @@ fn plain_bold_fallback_keeps_one_gradient_extent_across_font_runs() {
         ..Default::default()
     };
     assert_global_gradient_at_scales(&actual, &base_style, &fonts);
+}
+
+#[test]
+fn ascii_text_falls_back_for_letters_the_requested_face_lacks() {
+    const EMOJI: &[u8] = include_bytes!("../assets/TwemojiMozilla.ttf");
+    let emoji_face = FontRef::try_from_slice(EMOJI).expect("emoji test font");
+    assert_eq!(emoji_face.glyph_id('H').0, 0, "the emoji face has no H");
+    let latin = FontFamily::named("Latin");
+    let emoji = FontFamily::named("Emoji only");
+    let mut registry = SoftwareTextFontRegistry::new();
+    registry
+        .register_face_bytes(&latin, FontWeight::NORMAL, FontStyle::Normal, REGULAR)
+        .expect("Latin test font");
+    registry
+        .register_face_bytes(&emoji, FontWeight::NORMAL, FontStyle::Normal, EMOJI)
+        .expect("emoji test font");
+    let fonts = registry.into_font_set(&[]);
+    let text = AnnotatedString::from("Hi");
+    let glyphs = |family: &FontFamily| {
+        let style = TextStyle {
+            span_style: style(family, FontWeight::NORMAL),
+            ..Default::default()
+        };
+        atlas_placements(&text, &style, &fonts)
+            .into_iter()
+            .map(|(font_hash, glyph_id, ..)| (font_hash, glyph_id))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(glyphs(&emoji), glyphs(&latin));
 }

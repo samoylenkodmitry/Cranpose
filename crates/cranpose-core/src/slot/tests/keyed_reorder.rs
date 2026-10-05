@@ -235,7 +235,10 @@ fn debug_stats_report_subtree_move_work_spans() {
         after.group_index_refresh_group_count - before.group_index_refresh_group_count,
         3
     );
-    assert_eq!(after.group_index_refresh_max_span, 3);
+    assert_eq!(
+        after.group_index_refresh_max_span,
+        before.group_index_refresh_max_span.max(3)
+    );
     assert!(
         after.segment_range_update_count > before.segment_range_update_count,
         "subtree moves with payloads and nodes must report segment range maintenance"
@@ -756,4 +759,88 @@ fn duplicate_explicit_keys_are_rejected_during_writer_traversal() {
     }
 
     assert_eq!(table.validate(), Ok(()));
+}
+
+#[test]
+fn rows_inserted_before_existing_rows_leave_their_anchors_and_values_resolvable() {
+    const PARENT_KEY: Key = 420;
+    const ROW_KEY: Key = 421;
+    const ROWS: Key = 10;
+    const NEW_ROWS: Key = 1_000;
+
+    // Below and above the insert count at which stale indexes are rewritten.
+    for inserted in [3, 40] {
+        let mut harness = SlotHarness::new();
+        harness.begin_pass(SlotPassMode::Compose);
+        let rows = harness.session(|session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+            let rows = (0..ROWS)
+                .map(|row| {
+                    let started = begin_keyed(session, ROW_KEY, row, None);
+                    let slot = session.value_slot_with_kind(
+                        PayloadKind::Internal,
+                        crate::slot::BRANCH_PATH_ROOT,
+                        || 0_i32,
+                    );
+                    assert!(session.finish_group_body().detached_children.is_empty());
+                    session.end_group();
+                    (started.anchor, slot)
+                })
+                .collect::<Vec<_>>();
+            assert!(session.finish_group_body().detached_children.is_empty());
+            session.end_group();
+            rows
+        });
+        harness.finish_pass();
+        for (row, (_, slot)) in rows.iter().enumerate() {
+            harness.table.write_value(*slot, row as i32 * 10);
+        }
+
+        harness.begin_pass(SlotPassMode::Compose);
+        let reused = harness.session(|session| {
+            begin_unkeyed(session, PARENT_KEY, None);
+            for row in 0..inserted {
+                begin_keyed(session, ROW_KEY, NEW_ROWS + row, None);
+                let _ = session.value_slot_with_kind(
+                    PayloadKind::Internal,
+                    crate::slot::BRANCH_PATH_ROOT,
+                    || -1_i32,
+                );
+                assert!(session.finish_group_body().detached_children.is_empty());
+                session.end_group();
+            }
+            let reused = (0..ROWS)
+                .map(|row| {
+                    let started = begin_keyed(session, ROW_KEY, row, None);
+                    assert_eq!(
+                        session.table.current_group_index(started.anchor),
+                        (1 + inserted + row) as usize,
+                        "row {row} after {inserted} inserted rows"
+                    );
+                    let slot = session.value_slot_with_kind(
+                        PayloadKind::Internal,
+                        crate::slot::BRANCH_PATH_ROOT,
+                        || 0_i32,
+                    );
+                    assert!(session.finish_group_body().detached_children.is_empty());
+                    session.end_group();
+                    (started.anchor, slot)
+                })
+                .collect::<Vec<_>>();
+            assert!(session.finish_group_body().detached_children.is_empty());
+            session.end_group();
+            reused
+        });
+        harness.finish_pass();
+
+        assert_eq!(reused.len(), rows.len());
+        for (row, ((anchor, slot), (original, _))) in reused.iter().zip(&rows).enumerate() {
+            assert_eq!(anchor, original, "row {row} keeps its group");
+            assert_eq!(*harness.table.read_value::<i32>(*slot), row as i32 * 10);
+            assert_eq!(
+                harness.table.current_group_index(*anchor),
+                1 + inserted as usize + row
+            );
+        }
+    }
 }
