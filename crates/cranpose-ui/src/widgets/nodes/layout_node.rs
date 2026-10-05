@@ -436,14 +436,7 @@ impl LayoutNode {
         shell.owner_context_id.set(None);
         shell.debug_modifiers.set(false);
         shell.virtual_children_count.set(0);
-        shell.cache = LayoutNodeCacheHandles::default();
-        shell.modifier_slices_snapshot = RefCell::new(Rc::default());
         shell.modifier_slices_dirty = Cell::new(true);
-        shell.layout_state = Rc::new(RefCell::new(LayoutState::default()));
-        shell.layout_runtime_state = Rc::new(RefCell::new(LayoutRuntimeState::new(Rc::clone(
-            &shell.measure_policy,
-        ))));
-        shell.coordinator_geometry = Rc::default();
         shell
     }
 
