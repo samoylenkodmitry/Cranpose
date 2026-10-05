@@ -113,7 +113,7 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
 | --- | ---: | --- |
 | Cranpose | 1.24% | Compose lays out in whole pixels (#1215) |
 | Flutter | 0.22% | Its unhinted text is about 2% wider, so a few lines break a word earlier |
-| Views | 3.93% | Text rounded to other pixels |
+| Views | 0.21% | Lines of text a pixel apart |
 
 ## Parity rules
 

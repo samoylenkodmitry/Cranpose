@@ -317,8 +317,11 @@ private class CardView(private val state: GauntletState) {
                 addView(LinearLayout(context).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER_HORIZONTAL
-                    addView(stats[index])
-                    addView(state.text(9f, MUTED, false).apply { text = label })
+                    // Each text as wide as itself, centered: a vertical
+                    // layout otherwise stretches it and it draws from the start.
+                    val wrap = { LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT) }
+                    addView(stats[index], wrap())
+                    addView(state.text(9f, MUTED, false).apply { text = label }, wrap())
                 }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             }
         })
