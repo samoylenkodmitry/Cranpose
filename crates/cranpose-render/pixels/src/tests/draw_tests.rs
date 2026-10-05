@@ -1,14 +1,11 @@
 use std::rc::Rc;
 
-use cranpose_render_common::{
-    brush_sampling::normalize_gradient_t,
-    graph::{
-        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
-        RenderNode,
-    },
+use cranpose_render_common::graph::{
+    DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, RenderGraph,
+    RenderNode,
 };
 use cranpose_ui::Brush;
-use cranpose_ui_graphics::{Color, TileMode};
+use cranpose_ui_graphics::{Color, TileMode, brush_sampling::normalize_gradient_t};
 
 use super::*;
 

@@ -14,6 +14,7 @@
 /// assert!(platform_accessibility_options().reduce_motion);
 /// ```
 pub mod accessibility;
+pub mod brush_sampling;
 
 // A framework shader as the build script wrote it: `shaders/NAME` without
 // its comments.
