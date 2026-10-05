@@ -6,6 +6,7 @@ use web_time::Instant;
 use crate::{
     TextSystemState,
     collect::{LayerMotion, LayerSceneRecycler, collect_overlay, collect_root},
+    collect_cache::CollectCache,
     frame_packet::{FramePacket, MAX_FRAMES_IN_FLIGHT, RenderReturns},
     render::{frame_clear_color, instant_ms, should_log_wgpu_render_stage},
     scene::{Scene, SceneCapacityHint},
@@ -34,6 +35,7 @@ pub(crate) struct RendererFrontend {
     scene_recyclers: [LayerSceneRecycler; MAX_FRAMES_IN_FLIGHT],
     returned_scenes: usize,
     pub(crate) layer_motion: LayerMotion,
+    collect_cache: CollectCache,
     pub(crate) frame_sequence: u64,
     pub(crate) transparent_background: bool,
 }
@@ -75,6 +77,7 @@ impl RendererFrontend {
             scene_recyclers: std::array::from_fn(|_| LayerSceneRecycler::default()),
             returned_scenes: 0,
             layer_motion: LayerMotion::default(),
+            collect_cache: CollectCache::default(),
             frame_sequence: 0,
             transparent_background: false,
         }
@@ -142,6 +145,7 @@ impl RendererFrontend {
             &graph.root,
             &mut self.text_state,
             &mut self.layer_motion,
+            &mut self.collect_cache,
             self.root_scene_capacity,
             root_scale,
             recycler,
@@ -169,6 +173,7 @@ impl RendererFrontend {
             root,
             overlay,
             text_cache_len: self.text_state.text_cache_len(),
+            reused_draw_segments: self.collect_cache.reused(),
             clear: frame_clear_color(self.transparent_background),
         };
         let after_build = Instant::now();

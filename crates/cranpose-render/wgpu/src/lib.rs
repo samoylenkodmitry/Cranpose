@@ -10,6 +10,7 @@ mod ablation;
 mod arc_trig_fill;
 mod capture_hash;
 mod collect;
+mod collect_cache;
 mod draw_pass;
 mod effect_renderer;
 mod fast_cores;

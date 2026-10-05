@@ -333,7 +333,7 @@ fn create_background_compiling_renderer() -> Result<WgpuRenderer, String> {
     Ok(renderer)
 }
 
-fn create_headless_renderer() -> Result<WgpuRenderer, String> {
+pub fn create_headless_renderer() -> Result<WgpuRenderer, String> {
     create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
 }
 

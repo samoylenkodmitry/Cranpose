@@ -2,6 +2,7 @@ use std::{
     mem::size_of,
     ops::{Deref, DerefMut, Range},
     rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use cranpose_core::{NodeId, collections::map::HashSet};
@@ -217,7 +218,19 @@ pub struct LayerNode {
     pub cache_policy: CachePolicy,
     pub cache_hashes: LayerRasterCacheHashes,
     pub cache_hashes_valid: bool,
+    /// A number that changes whenever this layer or anything under it
+    /// changes, so a renderer may reuse what it built from the subtree while
+    /// the number stands. Scene building gives each layer it writes, and
+    /// every ancestor of one, a fresh number; `0` promises nothing and is
+    /// never reused.
+    pub content_revision: u64,
     pub children: Vec<RenderNode>,
+}
+
+/// A [`LayerNode::content_revision`] no layer has had before.
+pub fn next_layer_revision() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 impl Default for LayerNode {
@@ -249,6 +262,7 @@ impl Default for LayerNode {
             cache_policy: CachePolicy::None,
             cache_hashes: LayerRasterCacheHashes::default(),
             cache_hashes_valid: false,
+            content_revision: 0,
             children: Vec::new(),
         }
     }
@@ -283,7 +297,11 @@ impl LayerNode {
         })
     }
 
+    /// Refreshes what the layer keeps about its children, and gives it a new
+    /// [`LayerNode::content_revision`]: scene building calls it on every
+    /// layer it writes and on each ancestor of one.
     pub(crate) fn refresh_child_facts(&mut self) {
+        self.content_revision = next_layer_revision();
         self.has_hit_targets = self.hit_test.is_some()
             || self.children.iter().any(|child| match child {
                 RenderNode::Layer(child_layer) => child_layer.has_hit_targets,

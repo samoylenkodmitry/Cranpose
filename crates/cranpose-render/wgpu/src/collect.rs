@@ -18,6 +18,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
+    collect_cache::{CollectCache, SegmentKey, Visit},
     pipeline::{TextLayoutResolver, push_draw_primitive, push_layer_shadow, push_text_style_draws},
     scene::{
         BackdropLayer, CompositorScene, LayerRoundedClip, Placement as RunPlacement, RunDraw,
@@ -184,8 +185,8 @@ impl ChildLayer {
     }
 }
 
-#[derive(Clone, Copy)]
-struct WalkContext {
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct WalkContext {
     offset: Point,
     visual_clip: Option<Rect>,
     /// The corner radius `visual_clip` is rounded with; `0.0` for a rect.
@@ -199,9 +200,12 @@ struct WalkContext {
     /// walk finds text or an image. Only then does a subtree that draws
     /// nothing have to be searched for them.
     wants_pixel_sensitive: bool,
+    /// Whether children may reuse the draws they made in earlier frames.
+    /// Off under a child that moved, since everything under it moved too.
+    reuse_draws: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum RasterScale {
     Exact(f32),
     Minimum(f32),
@@ -834,6 +838,7 @@ pub(crate) fn collect_root(
     root: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
+    segments: &mut CollectCache,
     capacity: SceneCapacityHint,
     root_scale: f32,
     recycler: &mut LayerSceneRecycler,
@@ -853,8 +858,19 @@ pub(crate) fn collect_root(
             root_scale,
         ),
         wants_pixel_sensitive: false,
+        reuse_draws: true,
     };
-    collect_child(root, text_layout, motion, context, &mut out, recycler);
+    segments.begin_frame();
+    collect_child(
+        root,
+        text_layout,
+        motion,
+        segments,
+        context,
+        &mut out,
+        recycler,
+    );
+    segments.end_frame();
     out.scene.flush_loose();
     out.refresh_backdrop_summary();
     motion.end_frame();
@@ -871,6 +887,7 @@ pub(crate) fn collect_overlay(
         root,
         text_layout,
         &mut LayerMotion::default(),
+        &mut CollectCache::default(),
         SceneCapacityHint::default(),
         root_scale,
         recycler,
@@ -935,6 +952,7 @@ fn isolated_child(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
+    segments: &mut CollectCache,
     context: WalkContext,
     parent_scene: &mut CompositorScene,
     recycler: &mut LayerSceneRecycler,
@@ -962,12 +980,14 @@ fn isolated_child(
         light: light_in_layer(layer, &context),
         wants_pixel_sensitive: context.wants_pixel_sensitive
             || (!context.translated && context.snap_anchor.is_none()),
+        reuse_draws: context.reuse_draws,
     };
     let mut content = recycler.take(SceneCapacityHint::default());
     let has_pixel_sensitive_subtree = collect_into(
         layer,
         text_layout,
         motion,
+        segments,
         content_context,
         &mut content,
         recycler,
@@ -1104,6 +1124,7 @@ fn collect_into(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
+    segments: &mut CollectCache,
     context: WalkContext,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
@@ -1168,11 +1189,13 @@ fn collect_into(
                     raster_scale: context.raster_scale,
                     light: context.light,
                     wants_pixel_sensitive: context.wants_pixel_sensitive,
+                    reuse_draws: context.reuse_draws,
                 };
                 has_pixel_sensitive_subtree |= collect_child(
                     child_layer,
                     text_layout,
                     motion,
+                    segments,
                     child_context,
                     out,
                     recycler,
@@ -1235,6 +1258,7 @@ fn collect_child(
     child: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
+    segments: &mut CollectCache,
     context: WalkContext,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
@@ -1245,63 +1269,59 @@ fn collect_child(
     }
     match placement_in(child, &context) {
         placement @ (Placement::Direct(translation) | Placement::DirectRounded(translation, _)) => {
-            let child_offset = Point::new(
-                context.offset.x + translation.x,
-                context.offset.y + translation.y,
-            );
-            let child_bounds = child.local_bounds.translate(child_offset.x, child_offset.y);
-            if clipped_away(child, child_bounds, context.visual_clip) {
-                return context.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
-            }
-            let child_local_layer = local_content_layer_for(&child.graphics_layer);
-            let child_anchor = context.snap_anchor.or_else(|| {
-                context
-                    .translated
-                    .then(|| rigid_snap_anchor(child_bounds, &child_local_layer))
-                    .flatten()
-            });
-            let shadow_clip = resolve_clip(
-                context.visual_clip,
-                child
-                    .shadow_clip
-                    .map(|clip| clip.translate(child_offset.x, child_offset.y)),
-            );
-            let shadows_before = out.scene.shadow_draws.len();
-            push_layer_shadow(
-                &mut out.scene,
-                &child.graphics_layer,
-                child_bounds,
-                child_bounds,
-                shadow_clip,
-                context.light,
-            );
-            assign_shadow_anchor(&mut out.scene, shadows_before, child_anchor);
-            let (visual_clip, clip_radius) = match placement {
-                Placement::DirectRounded(_, radius) => (
-                    resolve_clip(
-                        context.visual_clip,
-                        child
-                            .visual_clip_rect()
-                            .map(|clip| clip.translate(child_offset.x, child_offset.y)),
-                    ),
-                    radius,
-                ),
-                _ => (context.visual_clip, context.clip_radius),
+            let direct = DirectChild {
+                layer: child,
+                placement,
+                translation,
             };
-            let child_context = WalkContext {
-                offset: child_offset,
-                visual_clip,
-                clip_radius,
-                snap_anchor: child_anchor,
-                translated: context.translated,
-                raster_scale: context.raster_scale,
-                light: context.light,
-                wants_pixel_sensitive: context.wants_pixel_sensitive,
+            let (context, keep) = match plan_direct_child(child, context, segments, &mut out.scene)
+            {
+                #[cfg(not(debug_assertions))]
+                DirectPlan::Reused(pixel_sensitive) => return pixel_sensitive,
+                DirectPlan::Collect { context, keep } => (context, keep),
+                #[cfg(debug_assertions)]
+                DirectPlan::Check {
+                    node,
+                    draws,
+                    pixel_sensitive,
+                } => {
+                    let mark = out.scene.mark();
+                    let fresh_pixel_sensitive = collect_direct_child(
+                        direct,
+                        text_layout,
+                        motion,
+                        segments,
+                        context,
+                        out,
+                        recycler,
+                    );
+                    let fresh = out.scene.segment_since(mark);
+                    assert!(
+                        draws.draws_as(&fresh) && pixel_sensitive == fresh_pixel_sensitive,
+                        "layer {node} would reuse draws its subtree no longer makes"
+                    );
+                    out.scene.rewind(mark);
+                    out.scene.append_segment(&draws);
+                    return pixel_sensitive;
+                }
             };
-            if child.backdrop().is_some() {
-                push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
+            let mark = keep.map(|_| (out.scene.mark(), out.children.len()));
+            let pixel_sensitive = collect_direct_child(
+                direct,
+                text_layout,
+                motion,
+                segments,
+                context,
+                out,
+                recycler,
+            );
+            if let (Some(node), Some((mark, children))) = (keep, mark)
+                && out.children.len() == children
+                && out.scene.only_draws_since(mark)
+            {
+                segments.keep(node, out.scene.segment_since(mark), pixel_sensitive);
             }
-            collect_into(child, text_layout, motion, child_context, out, recycler)
+            pixel_sensitive
         }
         Placement::Isolated => {
             let transform = child
@@ -1330,6 +1350,7 @@ fn collect_child(
                 child,
                 text_layout,
                 motion,
+                segments,
                 context,
                 &mut out.scene,
                 recycler,
@@ -1342,6 +1363,163 @@ fn collect_child(
             direct_translation(child.transform_to_parent).is_some() && has_pixel_sensitive_subtree
         }
     }
+}
+
+/// What the collect cache decided for a direct child before it is collected.
+enum DirectPlan {
+    /// Its draws from an earlier frame are appended; whether it holds text
+    /// or an image.
+    #[cfg(not(debug_assertions))]
+    Reused(bool),
+    /// Collect it under `context`, keeping a copy of its draws for `keep`.
+    Collect {
+        context: WalkContext,
+        keep: Option<NodeId>,
+    },
+    /// Debug builds collect a reusable child anyway and check its draws.
+    #[cfg(debug_assertions)]
+    Check {
+        node: NodeId,
+        draws: crate::scene::SceneSegment,
+        pixel_sensitive: bool,
+    },
+}
+
+#[inline(always)]
+fn plan_direct_child(
+    child: &LayerNode,
+    context: WalkContext,
+    segments: &mut CollectCache,
+    scene: &mut CompositorScene,
+) -> DirectPlan {
+    let Some((node, key)) = context
+        .reuse_draws
+        .then(|| SegmentKey::of(child, context))
+        .flatten()
+    else {
+        return DirectPlan::Collect {
+            context,
+            keep: None,
+        };
+    };
+    match segments.visit(node, &key) {
+        Visit::Collect { keep } => DirectPlan::Collect {
+            context,
+            keep: keep.then_some(node),
+        },
+        Visit::Moved => DirectPlan::Collect {
+            context: WalkContext {
+                reuse_draws: false,
+                ..context
+            },
+            keep: None,
+        },
+        #[cfg(not(debug_assertions))]
+        Visit::Reuse(draws, pixel_sensitive) => {
+            scene.append_segment(draws);
+            DirectPlan::Reused(pixel_sensitive)
+        }
+        #[cfg(debug_assertions)]
+        Visit::Reuse(draws, pixel_sensitive) => {
+            let _ = scene;
+            DirectPlan::Check {
+                node,
+                draws: draws.clone(),
+                pixel_sensitive,
+            }
+        }
+    }
+}
+
+/// A child drawn in place under its parent: the layer and where it goes.
+#[derive(Clone, Copy)]
+struct DirectChild<'a> {
+    layer: &'a LayerNode,
+    placement: Placement,
+    translation: Point,
+}
+
+#[inline(always)]
+fn collect_direct_child(
+    direct: DirectChild<'_>,
+    text_layout: &mut impl TextLayoutResolver,
+    motion: &mut LayerMotion,
+    segments: &mut CollectCache,
+    context: WalkContext,
+    out: &mut LayerScene,
+    recycler: &mut LayerSceneRecycler,
+) -> bool {
+    let DirectChild {
+        layer: child,
+        placement,
+        translation,
+    } = direct;
+    let child_offset = Point::new(
+        context.offset.x + translation.x,
+        context.offset.y + translation.y,
+    );
+    let child_bounds = child.local_bounds.translate(child_offset.x, child_offset.y);
+    if clipped_away(child, child_bounds, context.visual_clip) {
+        return context.wants_pixel_sensitive && layer_has_pixel_sensitive_subtree(child);
+    }
+    let child_local_layer = local_content_layer_for(&child.graphics_layer);
+    let child_anchor = context.snap_anchor.or_else(|| {
+        context
+            .translated
+            .then(|| rigid_snap_anchor(child_bounds, &child_local_layer))
+            .flatten()
+    });
+    let shadow_clip = resolve_clip(
+        context.visual_clip,
+        child
+            .shadow_clip
+            .map(|clip| clip.translate(child_offset.x, child_offset.y)),
+    );
+    let shadows_before = out.scene.shadow_draws.len();
+    push_layer_shadow(
+        &mut out.scene,
+        &child.graphics_layer,
+        child_bounds,
+        child_bounds,
+        shadow_clip,
+        context.light,
+    );
+    assign_shadow_anchor(&mut out.scene, shadows_before, child_anchor);
+    let (visual_clip, clip_radius) = match placement {
+        Placement::DirectRounded(_, radius) => (
+            resolve_clip(
+                context.visual_clip,
+                child
+                    .visual_clip_rect()
+                    .map(|clip| clip.translate(child_offset.x, child_offset.y)),
+            ),
+            radius,
+        ),
+        _ => (context.visual_clip, context.clip_radius),
+    };
+    let child_context = WalkContext {
+        offset: child_offset,
+        visual_clip,
+        clip_radius,
+        snap_anchor: child_anchor,
+        translated: context.translated,
+        raster_scale: context.raster_scale,
+        light: context.light,
+        wants_pixel_sensitive: context.wants_pixel_sensitive,
+        reuse_draws: context.reuse_draws,
+    };
+    if child.backdrop().is_some() {
+        push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
+    }
+    collect_into(
+        child,
+        text_layout,
+        motion,
+        segments,
+        child_context,
+        out,
+        recycler,
+    )
 }
 
 /// Whether nothing `child`, placed at `bounds`, draws can show inside

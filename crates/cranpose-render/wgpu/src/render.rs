@@ -3957,6 +3957,7 @@ impl GpuRenderer {
         self.begin_text_glyph_run_frame();
 
         let text_cache_len = packet.text_cache_len;
+        let reused_draw_segments = packet.reused_draw_segments;
         let reads_page = packet.root.contains_backdrop()
             || packet
                 .overlay
@@ -4016,6 +4017,9 @@ impl GpuRenderer {
             .image_cache_size
             .set(self.image_texture_cache.len() as u32);
         self.frame_stats.text_cache_size.set(text_cache_len as u32);
+        self.frame_stats
+            .reused_draw_segments
+            .set(reused_draw_segments);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
         self.frame_graph_executor.reset_upload_allocators();

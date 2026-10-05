@@ -57,6 +57,8 @@ pub(crate) struct FramePacket {
     pub(crate) root: LayerScene,
     pub(crate) overlay: Option<LayerScene>,
     pub(crate) text_cache_len: usize,
+    /// Direct children whose draws the collection reused.
+    pub(crate) reused_draw_segments: u32,
     pub(crate) clear: wgpu::Color,
 }
 

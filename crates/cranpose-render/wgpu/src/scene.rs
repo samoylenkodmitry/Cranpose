@@ -603,6 +603,209 @@ impl CompositorScene {
     }
 }
 
+/// Where a scene's lists stood when a span of pushes began.
+#[derive(Clone, Copy)]
+pub(crate) struct SceneMark {
+    runs: usize,
+    images: usize,
+    texts: usize,
+    shadows: usize,
+    ops: usize,
+    effects: usize,
+    backdrops: usize,
+    z: usize,
+}
+
+/// The draws a span of pushes appended, with their z and list indices counted
+/// from the span's start, so the span can be appended again at another z.
+#[derive(Clone)]
+pub(crate) struct SceneSegment {
+    runs: Vec<RunDraw>,
+    images: Vec<ImageDraw>,
+    texts: Vec<TextDraw>,
+    shadows: Vec<ShadowDraw>,
+    ops: Vec<DrawOp>,
+    z_count: usize,
+}
+
+impl DrawOpKind {
+    fn with_index(self, index: impl Fn(usize, usize) -> usize, mark: &SceneMark) -> Self {
+        match self {
+            Self::Run(at) => Self::Run(index(at, mark.runs)),
+            Self::Image(at) => Self::Image(index(at, mark.images)),
+            Self::Text(at) => Self::Text(index(at, mark.texts)),
+            Self::Shadow(at) => Self::Shadow(index(at, mark.shadows)),
+        }
+    }
+
+    /// The index counted from where `mark`'s list stood.
+    fn since(self, mark: &SceneMark) -> Self {
+        self.with_index(|at, from| at - from, mark)
+    }
+
+    /// The index of a segment's draw appended where `mark`'s list stands.
+    fn after(self, mark: &SceneMark) -> Self {
+        self.with_index(|at, from| at + from, mark)
+    }
+}
+
+impl CompositorScene {
+    /// Closes the open loose run, so nothing pushed later joins one begun
+    /// before, and marks where the next pushes begin.
+    pub(crate) fn mark(&mut self) -> SceneMark {
+        self.flush_loose();
+        SceneMark {
+            runs: self.runs.len(),
+            images: self.images.len(),
+            texts: self.texts.len(),
+            shadows: self.shadow_draws.len(),
+            ops: self.draw_ops.len(),
+            effects: self.effect_layers.len(),
+            backdrops: self.backdrop_layers.len(),
+            z: self.next_z,
+        }
+    }
+
+    /// Whether the pushes since `mark` added draws only, no effect or
+    /// backdrop layers.
+    pub(crate) fn only_draws_since(&self, mark: SceneMark) -> bool {
+        self.effect_layers.len() == mark.effects && self.backdrop_layers.len() == mark.backdrops
+    }
+
+    /// The draws pushed since `mark`, after closing the open loose run.
+    pub(crate) fn segment_since(&mut self, mark: SceneMark) -> SceneSegment {
+        self.flush_loose();
+        SceneSegment {
+            runs: self.runs[mark.runs..].to_vec(),
+            images: self.images[mark.images..].to_vec(),
+            texts: self.texts[mark.texts..].to_vec(),
+            shadows: self.shadow_draws[mark.shadows..]
+                .iter()
+                .map(|shadow| ShadowDraw {
+                    z_index: shadow.z_index - mark.z,
+                    ..shadow.clone()
+                })
+                .collect(),
+            ops: self.draw_ops[mark.ops..]
+                .iter()
+                .map(|op| DrawOp {
+                    z_index: op.z_index - mark.z,
+                    kind: op.kind.since(&mark),
+                })
+                .collect(),
+            z_count: self.next_z - mark.z,
+        }
+    }
+
+    /// Drops the draws pushed since `mark`.
+    #[cfg(debug_assertions)]
+    pub(crate) fn rewind(&mut self, mark: SceneMark) {
+        self.flush_loose();
+        self.runs.truncate(mark.runs);
+        self.images.truncate(mark.images);
+        self.texts.truncate(mark.texts);
+        self.shadow_draws.truncate(mark.shadows);
+        self.draw_ops.truncate(mark.ops);
+        self.next_z = mark.z;
+    }
+
+    /// Appends `segment`'s draws above everything pushed so far.
+    pub(crate) fn append_segment(&mut self, segment: &SceneSegment) {
+        let mark = self.mark();
+        self.runs.extend_from_slice(&segment.runs);
+        self.images.extend_from_slice(&segment.images);
+        self.texts.extend_from_slice(&segment.texts);
+        self.shadow_draws
+            .extend(segment.shadows.iter().map(|shadow| ShadowDraw {
+                z_index: shadow.z_index + mark.z,
+                ..shadow.clone()
+            }));
+        self.draw_ops.extend(segment.ops.iter().map(|op| DrawOp {
+            z_index: op.z_index + mark.z,
+            kind: op.kind.after(&mark),
+        }));
+        self.next_z += segment.z_count;
+    }
+}
+
+#[cfg(debug_assertions)]
+impl SceneSegment {
+    /// Whether `other` draws what this segment draws: the check a reused
+    /// segment gets against a fresh collection in debug builds.
+    pub(crate) fn draws_as(&self, other: &Self) -> bool {
+        self.z_count == other.z_count
+            && self.ops == other.ops
+            && same_all(&self.runs, &other.runs, same_run)
+            && same_all(&self.images, &other.images, same_image)
+            && same_all(&self.texts, &other.texts, same_text)
+            && same_all(&self.shadows, &other.shadows, same_shadow)
+    }
+}
+
+#[cfg(debug_assertions)]
+fn same_all<T>(a: &[T], b: &[T], same: impl Fn(&T, &T) -> bool) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same(a, b))
+}
+
+#[cfg(debug_assertions)]
+fn same_run(a: &RunDraw, b: &RunDraw) -> bool {
+    a.recorder.fingerprint() == b.recorder.fingerprint()
+        && a.command == b.command
+        && a.segments == b.segments
+        && a.placement == b.placement
+        && a.bounds == b.bounds
+}
+
+#[cfg(debug_assertions)]
+fn same_optional_run(a: &Option<RunDraw>, b: &Option<RunDraw>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => same_run(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+#[cfg(debug_assertions)]
+fn same_text(a: &TextDraw, b: &TextDraw) -> bool {
+    a.node_id == b.node_id
+        && a.rect == b.rect
+        && a.snap_anchor == b.snap_anchor
+        && *a.text == *b.text
+        && a.color == b.color
+        && *a.text_style == *b.text_style
+        && a.font_size == b.font_size
+        && a.scale == b.scale
+        && a.layout_options == b.layout_options
+        && a.clip == b.clip
+}
+
+#[cfg(debug_assertions)]
+fn same_image(a: &ImageDraw, b: &ImageDraw) -> bool {
+    a.rect == b.rect
+        && a.quad == b.quad
+        && a.snap_anchor == b.snap_anchor
+        && a.image.id() == b.image.id()
+        && a.alpha == b.alpha
+        && a.color_filter == b.color_filter
+        && a.sampling == b.sampling
+        && a.clip == b.clip
+        && a.blend_mode == b.blend_mode
+        && a.src_rect == b.src_rect
+        && a.motion_context_animated == b.motion_context_animated
+}
+
+#[cfg(debug_assertions)]
+fn same_shadow(a: &ShadowDraw, b: &ShadowDraw) -> bool {
+    same_optional_run(&a.shapes, &b.shapes)
+        && same_optional_run(&a.post_blur_cutouts, &b.post_blur_cutouts)
+        && same_all(&a.texts, &b.texts, same_text)
+        && a.blur_radius == b.blur_radius
+        && a.clip == b.clip
+        && a.rounded_clip == b.rounded_clip
+        && a.occluder == b.occluder
+        && a.z_index == b.z_index
+}
+
 impl Default for CompositorScene {
     fn default() -> Self {
         Self::new()

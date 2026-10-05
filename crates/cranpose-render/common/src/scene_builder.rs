@@ -1380,6 +1380,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
         cache_policy,
         cache_hashes,
         cache_hashes_valid,
+        content_revision: _,
         children,
     } = layer;
     *node_id = head.node_id;

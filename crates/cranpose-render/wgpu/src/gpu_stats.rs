@@ -175,6 +175,9 @@ pub struct FrameStatsSnapshot {
     pub layer_cache_bytes: u64,
     pub image_cache_size: u32,
     pub text_cache_size: u32,
+    /// Direct children whose draws collection appended from an earlier
+    /// frame instead of collecting them again.
+    pub reused_draw_segments: u32,
     pub top_isolated_layers: [Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT],
     pub top_isolated_layer_count: usize,
 }
@@ -423,6 +426,7 @@ pub(crate) struct FrameStats {
     pub layer_cache_bytes: Cell<u64>,
     pub image_cache_size: Cell<u32>,
     pub text_cache_size: Cell<u32>,
+    pub reused_draw_segments: Cell<u32>,
     top_isolated_layers: RefCell<[Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT]>,
     top_isolated_layer_count: Cell<usize>,
     shadow_shape_cache_miss_log_count: Cell<u32>,
@@ -808,6 +812,7 @@ impl FrameStats {
             layer_cache_bytes: self.layer_cache_bytes.get(),
             image_cache_size: self.image_cache_size.get(),
             text_cache_size: self.text_cache_size.get(),
+            reused_draw_segments: self.reused_draw_segments.get(),
             top_isolated_layers: *self.top_isolated_layers.borrow(),
             top_isolated_layer_count: self.top_isolated_layer_count.get(),
         }
