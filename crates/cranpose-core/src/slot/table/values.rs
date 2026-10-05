@@ -170,17 +170,27 @@ impl SlotTable {
             .unwrap_or_else(|error| panic!("{error}"))
     }
 
-    pub(crate) fn try_read_value_mut<T: 'static>(
+    /// The slot's value, read from `record_index` when the slot's payload
+    /// record sits there, else found through the slot's anchor.
+    fn try_value_at_mut<T: 'static>(
         &mut self,
         slot: ValueSlotId,
+        record_index: Option<usize>,
     ) -> Result<&mut T, ValueSlotError> {
-        let (checked, _) = self.checked_value_slot(slot)?;
-        let record = self
-            .payloads
-            .get_mut(checked.absolute_payload_index)
-            .ok_or_else(|| ValueSlotError::InactiveAnchor {
-                anchor: slot.anchor(),
-            })?;
+        let record_index = match record_index.filter(|&index| {
+            self.payloads
+                .get(index)
+                .is_some_and(|record| record.anchor == slot.anchor())
+        }) {
+            Some(index) => index,
+            None => self.checked_value_slot(slot)?.0.absolute_payload_index,
+        };
+        let record =
+            self.payloads
+                .get_mut(record_index)
+                .ok_or_else(|| ValueSlotError::InactiveAnchor {
+                    anchor: slot.anchor(),
+                })?;
         record
             .value
             .downcast_mut::<T>()
@@ -192,7 +202,15 @@ impl SlotTable {
     }
 
     pub(crate) fn read_value_mut<T: 'static>(&mut self, slot: ValueSlotId) -> &mut T {
-        self.try_read_value_mut(slot)
+        self.value_at_mut(slot, None)
+    }
+
+    pub(crate) fn value_at_mut<T: 'static>(
+        &mut self,
+        slot: ValueSlotId,
+        record_index: Option<usize>,
+    ) -> &mut T {
+        self.try_value_at_mut(slot, record_index)
             .unwrap_or_else(|error| panic!("{error}"))
     }
 

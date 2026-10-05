@@ -200,17 +200,19 @@ impl PackedParams<'_> {
             self.params.iter().enumerate().map(|(index, (ident, ty))| {
                 param_field_refresh(core_path, &stored, ident, ty, index)
             });
-        let slot_stmt = self.slot_stmt(core_path, composer);
         setup.insert(
             0,
             quote! {
-                #slot_stmt
-                if #composer.with_slot_value_mut::<#state, _>(#slot, |#param_state| {
-                    #param_state.update_fields(
-                        || (#(::core::clone::Clone::clone(&#idents),)*),
-                        |#stored| false #(| #refreshes)*,
-                    )
-                }) {
+                let (_, #slot) = #composer.__update_param_slot(
+                    || <#state>::default(),
+                    |#param_state: &mut #state| {
+                        #param_state.update_fields(
+                            || (#(::core::clone::Clone::clone(&#idents),)*),
+                            |#stored| false #(| #refreshes)*,
+                        )
+                    },
+                );
+                if #slot {
                     __changed = true;
                 }
             },
@@ -702,11 +704,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! { holder.update(#ident); }
                     };
                     quote! {
-                        let #slot_ident = #composer_ident
-                            .__use_param_slot(|| #core_path::CallbackHolder::new());
-                        #composer_ident.with_slot_value::<#core_path::CallbackHolder, _>(
-                            #slot_ident,
-                            |holder| {
+                        let (#slot_ident, ()) = #composer_ident.__update_param_slot(
+                            || #core_path::CallbackHolder::new(),
+                            |holder: &mut #core_path::CallbackHolder| {
                                 #update
                             },
                         );

@@ -19,6 +19,26 @@ impl SlotWriteSession<'_> {
         source: crate::Key,
         init: impl FnOnce() -> T,
     ) -> ValueSlotId {
+        self.located_value_slot(kind, source, init).0
+    }
+
+    /// The value slot at the cursor and its value, found by one lookup.
+    pub(crate) fn value_slot_and_value<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        source: crate::Key,
+        init: impl FnOnce() -> T,
+    ) -> (ValueSlotId, &mut T) {
+        let (slot, record_index) = self.located_value_slot(kind, source, init);
+        (slot, self.table.value_at_mut(slot, record_index))
+    }
+
+    fn located_value_slot<T: 'static>(
+        &mut self,
+        kind: PayloadKind,
+        source: crate::Key,
+        init: impl FnOnce() -> T,
+    ) -> (ValueSlotId, Option<usize>) {
         let mut init = Some(init);
         let mut make = move || -> Box<dyn std::any::Any> {
             Box::new(init.take().expect("payload init must run at most once")())
@@ -27,55 +47,47 @@ impl SlotWriteSession<'_> {
         self.value_slot_with_kind_dyn(kind, &mut init)
     }
 
+    /// The value slot at the cursor, and the index of its payload record
+    /// when it has one.
     #[inline(never)]
     fn value_slot_with_kind_dyn(
         &mut self,
         kind: PayloadKind,
         init: &mut PayloadInit<'_>,
-    ) -> ValueSlotId {
+    ) -> (ValueSlotId, Option<usize>) {
         init.mix_source(self.state.branch_fold());
-        self.discard_stale_value_slot_frames();
-        let Some(frame) = self.state.group_stack.last() else {
-            return self.recover_value_slot_with_kind(kind, init);
+        let Some((group_anchor, group_index, payload_cursor)) = self.live_value_slot_frame() else {
+            return (self.recover_value_slot_with_kind(kind, init), None);
         };
-        let (group_anchor, payload_cursor) = { (frame.group_anchor, frame.payload_cursor) };
-        self.value_slot_in_active_group(group_anchor, payload_cursor, kind, init)
+        self.value_slot_in_group(group_anchor, group_index, payload_cursor, kind, init)
     }
 
-    fn discard_stale_value_slot_frames(&mut self) {
-        while let Some(group_anchor) = self
-            .state
-            .group_stack
-            .last()
-            .map(|frame| frame.group_anchor)
-        {
-            if self.table.active_group_index(group_anchor).is_some() {
-                return;
+    /// The top frame's group, its index and payload cursor, after dropping
+    /// frames whose group no longer resolves.
+    fn live_value_slot_frame(&mut self) -> Option<(crate::AnchorId, usize, usize)> {
+        loop {
+            let frame = self.state.group_stack.last()?;
+            let (group_anchor, payload_cursor) = (frame.group_anchor, frame.payload_cursor);
+            if let Some(group_index) = self.table.open_group_index(group_anchor, frame.group_index)
+            {
+                return Some((group_anchor, group_index, payload_cursor));
             }
             log::error!(
                 "slot writer discarded stale value-slot group frame for anchor {group_anchor:?}"
             );
-            if self.state.pop_group_frame().is_none() {
-                return;
-            }
+            self.state.pop_group_frame()?;
         }
     }
 
-    fn value_slot_in_active_group(
+    fn value_slot_in_group(
         &mut self,
         group_anchor: crate::AnchorId,
+        group_index: usize,
         payload_cursor: usize,
         kind: PayloadKind,
         init: &mut PayloadInit<'_>,
-    ) -> ValueSlotId {
-        let Some(group_index) = self.table.active_group_index(group_anchor) else {
-            log::error!(
-                "slot writer recovered value-slot request for stale owner anchor {group_anchor:?}"
-            );
-            self.discard_stale_value_slot_frames();
-            return self.recover_value_slot_with_kind(kind, init);
-        };
-        let (slot, location_refresh) = self.table.use_value_payload_at_cursor(
+    ) -> (ValueSlotId, Option<usize>) {
+        let (slot, record_index, location_refresh) = self.table.use_value_payload_at_cursor(
             group_anchor,
             group_index,
             payload_cursor,
@@ -90,14 +102,14 @@ impl SlotWriteSession<'_> {
             log::error!(
                 "slot writer returned an invalid value slot after payload allocation failed"
             );
-            return slot;
+            return (slot, None);
         }
         if let Some(frame) = self.state.group_stack.last_mut() {
             frame.advance_payload_cursor();
         } else {
             log::error!("slot writer value-slot group frame disappeared before cursor advance");
         }
-        slot
+        (slot, record_index)
     }
 
     fn recover_value_slot_with_kind(
@@ -112,8 +124,17 @@ impl SlotWriteSession<'_> {
         // rewrite them all from the groups before inserting more.
         self.table.rewrite_group_indexes();
         let key = self.preview_group_key(GroupKeySeed::unkeyed(RECOVERY_VALUE_SLOT_STATIC_KEY));
-        let started = self.begin_group(key, None, None);
-        let slot = self.value_slot_in_active_group(started.anchor, 0, kind, init);
+        self.begin_group(key, None, None);
+        let slot = match self.live_value_slot_frame() {
+            Some((group_anchor, group_index, payload_cursor)) => {
+                self.value_slot_in_group(group_anchor, group_index, payload_cursor, kind, init)
+                    .0
+            }
+            None => {
+                log::error!("slot writer could not open a recovery group for a value slot");
+                ValueSlotId::new_for_table(PayloadAnchor::INVALID, self.table.storage_id())
+            }
+        };
         let result = self.finish_group_body();
         if !result.detached_children.is_empty()
             || !result.direct_nodes.is_empty()
@@ -141,8 +162,10 @@ impl SlotWriteSession<'_> {
             Box::new(Owned::new(T::default()))
         };
         let mut init = PayloadInit::new_effect::<T>(source, &mut make);
-        let slot = self.value_slot_with_kind_dyn(PayloadKind::Effect, &mut init);
-        self.table.read_value::<Owned<T>>(slot).clone()
+        let (slot, record_index) = self.value_slot_with_kind_dyn(PayloadKind::Effect, &mut init);
+        self.table
+            .value_at_mut::<Owned<T>>(slot, record_index)
+            .clone()
     }
 
     pub(crate) fn remember_with_kind<T: 'static>(
@@ -151,7 +174,7 @@ impl SlotWriteSession<'_> {
         source: crate::Key,
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
-        let slot = self.value_slot_with_kind(kind, source, || {
+        let (slot, record_index) = self.located_value_slot(kind, source, || {
             let (value, states) = crate::runtime::collecting_states(init);
             Owned::with_states(value, states)
         });
@@ -162,6 +185,8 @@ impl SlotWriteSession<'_> {
                 .is_some(),
             "remember must only read a value slot with an active payload anchor"
         );
-        self.table.read_value::<Owned<T>>(slot).clone()
+        self.table
+            .value_at_mut::<Owned<T>>(slot, record_index)
+            .clone()
     }
 }

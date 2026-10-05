@@ -9,6 +9,10 @@ impl SlotTable {
             );
             return &[];
         };
+        self.subtree_node_records_at(group_index)
+    }
+
+    fn subtree_node_records_at(&self, group_index: usize) -> &[NodeRecord] {
         let group = &self.groups[group_index];
         let start = group.node_start as usize;
         let records = start
@@ -22,11 +26,11 @@ impl SlotTable {
         })
     }
 
-    pub(in crate::slot) fn collect_subtree_root_node_ids(
-        &self,
-        group_anchor: AnchorId,
-    ) -> RootNodeIds {
-        let records = self.subtree_node_records(group_anchor);
+    pub(in crate::slot) fn subtree_root_node_ids_at(&self, group_index: usize) -> RootNodeIds {
+        Self::root_node_ids(self.subtree_node_records_at(group_index))
+    }
+
+    fn root_node_ids(records: &[NodeRecord]) -> RootNodeIds {
         let parent = records.first().map(|record| record.parent_id);
         let roots: RootNodeIds = records
             .iter()
@@ -48,17 +52,13 @@ impl SlotTable {
         &self,
         group_anchor: AnchorId,
     ) -> Option<NodeId> {
-        let first = self
-            .subtree_node_records(group_anchor)
-            .first()
-            .map(|record| record.id);
+        let records = self.subtree_node_records(group_anchor);
+        let first = records.first().map(|record| record.id);
         #[cfg(any(test, debug_assertions))]
         if crate::slot_validation_diagnostics_enabled() {
             assert_eq!(
                 first,
-                self.collect_subtree_root_node_ids(group_anchor)
-                    .first()
-                    .copied(),
+                Self::root_node_ids(records).first().copied(),
                 "the first record of a group subtree must be one of its roots"
             );
         }

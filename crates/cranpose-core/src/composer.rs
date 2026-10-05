@@ -1762,6 +1762,22 @@ impl Composer {
         ValueSlotHandle::new(slot)
     }
 
+    /// Finds the call's next parameter slot and runs `update` on its value,
+    /// with one slot lookup for both.
+    #[doc(hidden)]
+    #[track_caller]
+    pub fn __update_param_slot<T: 'static, R>(
+        &self,
+        init: impl FnOnce() -> T,
+        update: impl FnOnce(&mut T) -> R,
+    ) -> (ValueSlotHandle<'_, T>, R) {
+        let source = crate::caller_location_key();
+        self.with_slot_session_mut(|slots| {
+            let (slot, value) = slots.value_slot_and_value(PayloadKind::Param, source, init);
+            (ValueSlotHandle::new(slot), update(value))
+        })
+    }
+
     #[doc(hidden)]
     #[track_caller]
     pub fn __use_return_slot<T: 'static>(
