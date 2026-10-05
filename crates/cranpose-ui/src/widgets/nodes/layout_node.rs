@@ -99,6 +99,22 @@ pub(crate) fn placement_pass_with_unplaced_nodes() -> Option<u64> {
 /// This mirrors Jetpack Compose's approach where each node stores its own
 /// measured size and placed position, eliminating the need for per-frame
 /// LayoutTree reconstruction.
+/// What a node below a node needs: layout, and measure when `measure` is set.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct DescendantDirt {
+    pub(crate) layout: bool,
+    pub(crate) measure: bool,
+}
+
+impl DescendantDirt {
+    pub(crate) fn marked(self, measure: bool) -> Self {
+        Self {
+            layout: true,
+            measure: self.measure || measure,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LayoutState {
     size: Size,
@@ -325,6 +341,20 @@ impl LayoutNodeCacheHandles {
             .map(|entry| Rc::clone(&entry.measured))
     }
 
+    /// The constraints of the measurement the cache holds.
+    pub(crate) fn measured_constraints(&self) -> Option<Constraints> {
+        self.state
+            .borrow()
+            .measurement
+            .as_ref()
+            .map(|entry| entry.constraints)
+    }
+
+    /// Whether a parent read intrinsic sizes from this cache.
+    pub(crate) fn has_intrinsics(&self) -> bool {
+        !self.state.borrow().intrinsics.is_empty()
+    }
+
     pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {
         self.state.borrow_mut().measurement = Some(MeasurementCacheEntry {
             constraints,
@@ -368,6 +398,8 @@ pub struct LayoutNode {
     cache: LayoutNodeCacheHandles,
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
+    /// A node below this one needs layout or measure.
+    descendant_dirt: Cell<DescendantDirt>,
     needs_semantics: Cell<bool>,
     /// The semantics tree has to read this node again, though its own
     /// semantics are unchanged: a node below it changed, or its placement
@@ -459,6 +491,7 @@ impl LayoutNode {
             cache: LayoutNodeCacheHandles::default(),
             needs_measure: Cell::new(true),
             needs_layout: Cell::new(true),
+            descendant_dirt: Cell::default(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),
             semantics_reach: Cell::new(None),
@@ -740,8 +773,11 @@ impl LayoutNode {
         self.needs_measure.set(false);
     }
 
+    /// Clears the node's layout flag and its descendants': a layout pass
+    /// visited them.
     pub(crate) fn clear_needs_layout(&self) {
         self.needs_layout.set(false);
+        self.descendant_dirt.set(DescendantDirt::default());
     }
 
     /// Marks this node as needing a fresh pointer-input pass.
@@ -1038,6 +1074,7 @@ impl Clone for LayoutNode {
             cache: self.cache.clone(),
             needs_measure: Cell::new(self.needs_measure.get()),
             needs_layout: Cell::new(self.needs_layout.get()),
+            descendant_dirt: Cell::new(self.descendant_dirt.get()),
             needs_semantics: Cell::new(self.needs_semantics.get()),
             descendant_needs_semantics: Cell::new(self.descendant_needs_semantics.get()),
             semantics_reach: Cell::new(None),
@@ -1167,6 +1204,19 @@ impl Node for LayoutNode {
 
     fn needs_measure(&self) -> bool {
         self.needs_measure.get()
+    }
+
+    fn mark_descendant_needs_layout(&self, measure: bool) {
+        self.descendant_dirt
+            .set(self.descendant_dirt.get().marked(measure));
+    }
+
+    fn descendant_needs_layout(&self) -> bool {
+        self.descendant_dirt.get().layout
+    }
+
+    fn descendant_needs_measure(&self) -> bool {
+        self.descendant_dirt.get().measure
     }
 
     fn mark_needs_semantics(&self) {
