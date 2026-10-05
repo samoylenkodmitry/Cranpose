@@ -125,7 +125,7 @@ pub struct SpanStyle {
     pub font_style: Option<FontStyle>,
     pub font_synthesis: Option<FontSynthesis>,
     pub font_family: Option<FontFamily>,
-    pub font_feature_settings: Option<String>,
+    pub font_feature_settings: Option<std::sync::Arc<str>>,
     pub letter_spacing: TextUnit,
     pub baseline_shift: Option<BaselineShift>,
     pub text_geometric_transform: Option<TextGeometricTransform>,

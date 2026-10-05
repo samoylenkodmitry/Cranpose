@@ -132,7 +132,7 @@ fn style(size: f32, color: Color, weight: Option<FontWeight>) -> TextStyle {
             color: Some(color),
             font_size: TextUnit::Sp(size),
             font_weight: weight,
-            font_feature_settings: Some("tnum".to_string()),
+            font_feature_settings: Some("tnum".into()),
             ..Default::default()
         },
         paragraph_style: ParagraphStyle {

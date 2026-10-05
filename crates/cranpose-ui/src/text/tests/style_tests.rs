@@ -291,7 +291,7 @@ fn measurement_hash_includes_platform_paragraph_shaping() {
 #[test]
 fn font_feature_settings_reach_every_text_cache_hash() {
     let featured = |settings: &str| SpanStyle {
-        font_feature_settings: Some(settings.to_owned()),
+        font_feature_settings: Some(settings.into()),
         ..Default::default()
     };
     let plain = SpanStyle::default();

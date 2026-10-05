@@ -12,7 +12,7 @@ fn font() -> SoftwareTextFont {
 
 fn featured(settings: Option<&str>) -> TextStyle {
     TextStyle::from_span_style(SpanStyle {
-        font_feature_settings: settings.map(str::to_owned),
+        font_feature_settings: settings.map(Into::into),
         ..Default::default()
     })
 }
@@ -240,7 +240,7 @@ fn a_span_shapes_only_its_own_range() {
         text: "0000".to_owned(),
         span_styles: vec![RangeStyle {
             item: SpanStyle {
-                font_feature_settings: Some("zero".to_owned()),
+                font_feature_settings: Some("zero".into()),
                 ..Default::default()
             },
             range: 0..2,
