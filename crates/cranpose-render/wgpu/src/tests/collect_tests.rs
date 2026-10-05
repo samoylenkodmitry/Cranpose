@@ -217,6 +217,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     snap_anchor: None,
                     translated,
                     raster_scale: RasterScale::Exact(1.0),
+                    light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
                     wants_pixel_sensitive: false,
                 },
                 &mut CompositorScene::new(),
@@ -345,6 +346,7 @@ fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() 
         snap_anchor: None,
         translated: false,
         raster_scale: RasterScale::Exact(1.0),
+        light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
         wants_pixel_sensitive: false,
     };
     assert!(matches!(
@@ -385,6 +387,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         snap_anchor: None,
         translated: false,
         raster_scale: RasterScale::Exact(1.0),
+        light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
         wants_pixel_sensitive: false,
     };
     assert!(matches!(
