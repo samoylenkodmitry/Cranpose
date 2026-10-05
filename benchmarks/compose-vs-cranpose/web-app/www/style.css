@@ -1,15 +1,16 @@
 /* The gauntlet's layout, in CSS. `--s` is the tier's scale: every size below
    is a multiple of it, as in the other apps. */
 
-/* The device's Roboto, the files the other apps load. */
+/* The device's Roboto, the files the other apps load; in a desktop browser,
+   the files `desktop.py` serves beside the page. */
 @font-face {
   font-family: PerfRoboto;
-  src: local("Roboto"), local("Roboto-Regular");
+  src: local("Roboto"), local("Roboto-Regular"), url("fonts/Roboto-Regular.ttf");
   font-weight: 400;
 }
 @font-face {
   font-family: PerfRoboto;
-  src: local("Roboto Bold"), local("Roboto-Bold");
+  src: local("Roboto Bold"), local("Roboto-Bold"), url("fonts/Roboto-Bold.ttf");
   font-weight: 700;
 }
 

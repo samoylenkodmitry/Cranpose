@@ -41,6 +41,16 @@ const _roboto = 'PerfRoboto';
 /// Carries `PERF` lines to the platform log, under the other apps' tag.
 const _log = MethodChannel('perfcompare/log');
 
+/// Writes a `PERF` line: to Android's log, or on a desktop to standard
+/// output, where `desktop.py` reads it.
+void _perf(String line) {
+  if (Platform.isAndroid) {
+    _log.invokeMethod<void>('log', line);
+  } else {
+    stdout.writeln(line);
+  }
+}
+
 /// What `am start` asked of the gauntlet: tier and freeze frame, as arguments.
 class GauntletLoad {
   /// Load tier, 1 to 12.
@@ -65,11 +75,23 @@ Future<void> main(List<String> args) async {
     ..addFont(_systemFont('Roboto-Bold.ttf'));
   final avatars = Future.wait(List.generate(avatarCount, _avatar));
   await fonts.load();
-  runApp(GauntletApp(GauntletLoad.parse(args), posts(), await avatars));
+  // On a desktop `desktop.py` asks in `PERF_TIER` and `PERF_FREEZE`.
+  final environment = Platform.environment;
+  final load = Platform.isAndroid
+      ? GauntletLoad.parse(args)
+      : GauntletLoad.parse([environment['PERF_TIER'] ?? '', environment['PERF_FREEZE'] ?? '']);
+  runApp(GauntletApp(load, posts(), await avatars));
+  if (!Platform.isAndroid) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _perf('PERF first_frame'));
+  }
 }
 
-Future<ByteData> _systemFont(String file) async =>
-    ByteData.sublistView(await File('/system/fonts/$file').readAsBytes());
+/// A Roboto file: the device's own on Android, elsewhere the one in the
+/// folder `PERF_FONTS` names, which every desktop app loads.
+Future<ByteData> _systemFont(String file) async {
+  final folder = Platform.isAndroid ? '/system/fonts' : Platform.environment['PERF_FONTS'] ?? 'fonts';
+  return ByteData.sublistView(await File('$folder/$file').readAsBytes());
+}
 
 Future<ui.Image> _avatar(int index) {
   final image = Completer<ui.Image>();
@@ -156,7 +178,7 @@ class _GauntletState extends State<Gauntlet> with SingleTickerProviderStateMixin
     final freeze = widget.load.freeze;
     if (freeze > 0 && index >= freeze) {
       _ticker.stop();
-      _log.invokeMethod<void>('log', 'PERF frozen frame=$index');
+      _perf('PERF frozen frame=$index');
     }
   }
 

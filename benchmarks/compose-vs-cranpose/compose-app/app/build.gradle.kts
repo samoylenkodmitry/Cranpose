@@ -36,8 +36,10 @@ android {
     }
 
     sourceSets.named("main") {
-        // The data generator the Android apps share.
+        // The data generator the Android apps share, and the gauntlet the
+        // desktop app draws too.
         kotlin.directories += "../../shared-kotlin"
+        kotlin.directories += "../../shared-compose"
     }
 
     sourceSets.named("androidTest") {

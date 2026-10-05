@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media;
 using Avalonia.Media.Fonts;
@@ -22,6 +23,10 @@ public static class Launch
 
 public sealed class App : Avalonia.Application
 {
+    /// <summary>The window every desktop app opens for the gauntlet, in logical points.</summary>
+    const double DesktopWidth = 1280;
+    const double DesktopHeight = 820;
+
     public override void Initialize()
     {
         RequestedThemeVariant = ThemeVariant.Light;
@@ -35,11 +40,25 @@ public sealed class App : Avalonia.Application
         {
             activity.MainViewFactory = () => new GauntletView(Launch.Tier, Launch.Freeze);
         }
+        else if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            desktop.MainWindow = new Window
+            {
+                Title = "Gauntlet",
+                Width = DesktopWidth,
+                Height = DesktopHeight,
+                CanResize = false,
+                Content = new GauntletView(Launch.Tier, Launch.Freeze),
+            };
+        }
         base.OnFrameworkInitializationCompleted();
     }
 }
 
-/// <summary>The device's Roboto, the files the other apps load.</summary>
+/// <summary>
+/// Roboto from the files the other apps load: the device's own on Android,
+/// elsewhere the ones in the folder `PERF_FONTS` names.
+/// </summary>
 sealed class DeviceRoboto : FontCollectionBase
 {
     public const string Family = "fonts:Device#Roboto";
@@ -50,9 +69,13 @@ sealed class DeviceRoboto : FontCollectionBase
         foreach (var file in new[] { "Roboto-Regular.ttf", "Roboto-Bold.ttf" })
         {
             // The typeface reads its stream for as long as it lives.
-            TryAddGlyphTypeface(new MemoryStream(File.ReadAllBytes($"/system/fonts/{file}")), out _);
+            TryAddGlyphTypeface(new MemoryStream(File.ReadAllBytes(Path.Combine(Folder, file))), out _);
         }
     }
+
+    static string Folder => OperatingSystem.IsAndroid()
+        ? "/system/fonts"
+        : Environment.GetEnvironmentVariable("PERF_FONTS") ?? "fonts";
 
     public override Uri Key => Source;
 }

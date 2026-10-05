@@ -1,7 +1,9 @@
 //! Deterministic benchmark data the Rust apps share. `shared-kotlin/.../PerfData.kt`,
-//! `flutter-app/lib/data.dart`, `rn-app/src/data.ts` and `maui-app/PerfData.cs`
+//! `flutter-app/lib/data.dart`, `shared-ts/data.ts` and `shared-cs/PerfData.cs`
 //! implement the same generator bit for bit, so every app draws identical
 //! content.
+
+use std::path::PathBuf;
 
 pub const POST_COUNT: usize = 5000;
 pub const BAR_COUNT: usize = 24;
@@ -426,8 +428,12 @@ pub const GAUNTLET_TIERS: [GauntletTier; 12] = [
     },
 ];
 
+/// The window every desktop app opens for the gauntlet, in logical points.
+pub const DESKTOP_WINDOW: (u32, u32) = (1280, 820);
+
 /// What `am start` asked of the gauntlet in an app without its own
-/// activity code: the launch activity writes `tier freeze` to a file.
+/// activity code: the launch activity writes `tier freeze` to a file. On a
+/// desktop, `desktop.py` sets `PERF_TIER` and `PERF_FREEZE`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Launch {
     /// Load tier, 1 to 12.
@@ -450,6 +456,53 @@ impl Launch {
     pub fn read(files: Option<std::path::PathBuf>) -> Self {
         let text = files.and_then(|files| std::fs::read_to_string(files.join("launch.txt")).ok());
         Self::parse(text.as_deref().unwrap_or_default())
+    }
+
+    /// The launch `desktop.py` asked for in `PERF_TIER` and `PERF_FREEZE`.
+    pub fn from_env() -> Self {
+        let var = |name: &str, default: u32| {
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(default)
+        };
+        Self {
+            tier: var("PERF_TIER", 5) as usize,
+            freeze: var("PERF_FREEZE", 0),
+        }
+    }
+}
+
+/// A Roboto file: the device's own on Android, elsewhere the one in the
+/// folder `PERF_FONTS` names (`fonts` by default), which every desktop app
+/// loads.
+pub fn font_path(file: &str) -> PathBuf {
+    let folder = if cfg!(target_os = "android") {
+        PathBuf::from("/system/fonts")
+    } else {
+        std::env::var_os("PERF_FONTS").map_or_else(|| PathBuf::from("fonts"), PathBuf::from)
+    };
+    folder.join(file)
+}
+
+/// Prints `log` lines on standard output, where `desktop.py` reads the
+/// `PERF` lines.
+pub fn log_to_stdout() {
+    struct Stdout;
+    impl log::Log for Stdout {
+        fn enabled(&self, metadata: &log::Metadata) -> bool {
+            metadata.level() <= log::Level::Info
+        }
+        fn log(&self, record: &log::Record) {
+            if self.enabled(record.metadata()) {
+                println!("{}", record.args());
+            }
+        }
+        fn flush(&self) {}
+    }
+    static STDOUT: Stdout = Stdout;
+    if log::set_logger(&STDOUT).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
     }
 }
 

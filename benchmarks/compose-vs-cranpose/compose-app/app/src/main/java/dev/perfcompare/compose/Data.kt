@@ -2,16 +2,11 @@ package dev.perfcompare.compose
 
 import dev.perfcompare.shared.*
 import androidx.compose.runtime.Immutable
-import androidx.compose.ui.graphics.Color
 import kotlin.math.abs
 import kotlin.math.floor
 
 // Deterministic benchmark data. `cranpose-app/src/data.rs` implements the same
 // generator bit for bit, so both apps draw identical content.
-
-val PALETTE = PALETTE_ARGB.map { Color(it) }.toTypedArray()
-val CHIP_BACKGROUND = CHIP_BACKGROUND_ARGB.map { Color(it) }.toTypedArray()
-val GRADIENT_END = GRADIENT_END_ARGB.map { Color(it) }.toTypedArray()
 
 @Immutable
 data class Quote(val symbol: String, val base: Float, val speed: Float, val phase: Float)

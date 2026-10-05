@@ -19,12 +19,7 @@ use eframe::egui::{
     text::{LayoutJob, TextFormat, TextWrapping},
     vec2,
 };
-use perf_data::{
-    AVATAR_COUNT, AVATAR_SIZE, CARD_ROWS_PER_CLUSTER, CHIP_BACKGROUND_RGB, GAUNTLET_SPARK_POINTS,
-    GRADIENT_END_RGB, GauntletRow, GauntletTier, Launch, PALETTE_RGB, POST_COUNT, Post, Ticker,
-    avatar_rgba, badge_degrees, cents_text, change_text, gauntlet_row, gauntlet_tier, posts,
-    progress_permille, spark_value, ticker_cents, tickers, width_fraction,
-};
+use perf_data::*;
 
 /// Blocks of five card rows and a cluster: no measurement window reaches the end.
 const ROWS: usize = 2000 * (CARD_ROWS_PER_CLUSTER + 1);
@@ -73,7 +68,7 @@ pub fn roboto() -> FontDefinitions {
         ("roboto", "Roboto-Regular.ttf", FontFamily::Proportional),
         ("roboto-bold", "Roboto-Bold.ttf", bold()),
     ] {
-        match std::fs::read(format!("/system/fonts/{file}")) {
+        match std::fs::read(perf_data::font_path(file)) {
             Ok(bytes) => {
                 fonts
                     .font_data
@@ -763,6 +758,18 @@ impl eframe::App for Gauntlet {
     }
 }
 
+/// Runs the gauntlet in eframe's window with `options`.
+pub fn run(options: eframe::NativeOptions, load: Launch) {
+    let result = eframe::run_native(
+        "Gauntlet",
+        options,
+        Box::new(move |creation| Ok(Box::new(Gauntlet::new(&creation.egui_ctx, load)))),
+    );
+    if let Err(error) = result {
+        log::error!("eframe stopped: {error}");
+    }
+}
+
 /// Runs the gauntlet the launch activity asked for.
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
@@ -773,16 +780,11 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
             .with_tag("PerfCompare"),
     );
     let load = Launch::read(app.internal_data_path());
-    let options = eframe::NativeOptions {
-        android_app: Some(app),
-        ..Default::default()
-    };
-    let result = eframe::run_native(
-        "Gauntlet",
-        options,
-        Box::new(move |creation| Ok(Box::new(Gauntlet::new(&creation.egui_ctx, load)))),
+    run(
+        eframe::NativeOptions {
+            android_app: Some(app),
+            ..Default::default()
+        },
+        load,
     );
-    if let Err(error) = result {
-        log::error!("eframe stopped: {error}");
-    }
 }

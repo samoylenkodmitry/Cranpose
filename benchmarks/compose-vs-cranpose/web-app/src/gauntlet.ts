@@ -245,7 +245,11 @@ interface Row {
 
 async function main() {
   const plugin = window.Capacitor?.Plugins.Launch;
-  const launch = plugin ? await plugin.get() : { tier: 5, freeze: 0 };
+  // In a desktop browser `desktop.py` asks for the tier in the page's address.
+  const query = new URLSearchParams(location.search);
+  const launch = plugin
+    ? await plugin.get()
+    : { tier: Number(query.get('tier') ?? 5), freeze: Number(query.get('freeze') ?? 0) };
   const log = (message: string) => (plugin ? plugin.log({ message }) : Promise.resolve(console.log(message)));
   const tier = gauntletTier(launch.tier);
   document.documentElement.style.setProperty('--s', String(tier.scale));
@@ -346,6 +350,10 @@ async function main() {
   };
   fill(0, 0);
   requestAnimationFrame(tick);
+  if (!plugin) {
+    // In a desktop browser nothing else reports the first frame.
+    requestAnimationFrame(() => log('PERF first_frame'));
+  }
 }
 
 main();

@@ -59,9 +59,10 @@ subprojects {
             // Build scripts that compile Java, such as Slint's, use the app's platform.
             environment("ANDROID_JAR", sdk.bootClasspath.get().first().asFile.path)
         }
+        // The library alone: each crate's binary is its desktop app.
         commandLine(
             "cargo", "ndk", "--platform", "28", "-t", "arm64-v8a",
-            "-o", rust.get().asFile.path, "build", "--release",
+            "-o", rust.get().asFile.path, "build", "--release", "--lib",
         )
     }
     tasks.named("preBuild") { dependsOn(cargoNdk) }

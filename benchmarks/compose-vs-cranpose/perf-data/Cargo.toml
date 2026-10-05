@@ -6,5 +6,8 @@ description = "Deterministic data the Rust apps of the framework comparison draw
 license = "Apache-2.0 OR MIT"
 publish = false
 
+[dependencies]
+log = "0.4"
+
 # Its own workspace, beside the apps that use it.
 [workspace]

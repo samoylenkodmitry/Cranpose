@@ -1,8 +1,6 @@
 package dev.perfcompare.compose
 
 import dev.perfcompare.shared.*
-import android.graphics.Bitmap
-import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -47,7 +45,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -70,6 +67,9 @@ import kotlinx.coroutines.isActive
 //
 // Every frame advances a frame index and everything follows from it, never
 // from wall time, so both frameworks do the same work per frame.
+//
+// The Android app and the desktop app compile this file; each brings its own
+// `Roboto`, `perfLog` and `avatarBitmap`.
 
 private val Ink = Color(0xFF111827)
 private val Body = Color(0xFF374151)
@@ -101,12 +101,7 @@ fun ColumnScope.GauntletScreen(load: GauntletLoad) {
     val frame = remember { mutableIntStateOf(0) }
     val state = rememberLazyGridState()
     val posts = remember { posts() }
-    val avatars = remember {
-        List(AVATAR_COUNT) {
-            Bitmap.createBitmap(avatarArgb(it), AVATAR_SIZE, AVATAR_SIZE, Bitmap.Config.ARGB_8888)
-                .asImageBitmap()
-        }
-    }
+    val avatars = remember { List(AVATAR_COUNT) { avatarBitmap(it) } }
     val tickers = remember(tier) { tickers(tier.tickers) }
     val scrollPx = with(LocalDensity.current) { SCROLL_PER_FRAME.dp.toPx() }
 
@@ -118,7 +113,7 @@ fun ColumnScope.GauntletScreen(load: GauntletLoad) {
             frame.intValue = index
             state.dispatchRawDelta(scrollPx)
             if (load.freeze in 1..index) {
-                Log.i(TAG, "PERF frozen frame=$index")
+                perfLog("PERF frozen frame=$index")
                 break
             }
         }

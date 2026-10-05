@@ -1,11 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+	<!-- One project for both heads: the Android app, and the desktop app
+	     `desktop.py` runs. -->
 	<PropertyGroup>
-		<TargetFramework>net10.0-android</TargetFramework>
+		<TargetFrameworks>net10.0-android;net10.0</TargetFrameworks>
 		<OutputType>Exe</OutputType>
 		<RootNamespace>PerfAvalonia</RootNamespace>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
 		<ApplicationId>dev.perfcompare.avalonia</ApplicationId>
 		<ApplicationVersion>1</ApplicationVersion>
 		<ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
@@ -16,20 +21,28 @@
 	</PropertyGroup>
 
 	<!-- What ships, at its best: trimmed, and fully AOT-compiled as the
-	     Compose and MAUI apps are, rather than the profiled default. -->
-	<PropertyGroup Condition="'$(Configuration)' == 'Release'">
+	     Compose and MAUI apps are, rather than the profiled default; on a
+	     desktop, Native AOT. -->
+	<PropertyGroup Condition="'$(Configuration)' == 'Release' And '$(TargetFramework)' == 'net10.0-android'">
 		<AndroidPackageFormat>apk</AndroidPackageFormat>
 		<RunAOTCompilation>true</RunAOTCompilation>
 		<AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
 	</PropertyGroup>
+	<PropertyGroup Condition="'$(TargetFramework)' == 'net10.0'">
+		<PublishAot>true</PublishAot>
+	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Avalonia.Android" Version="12.1.3" />
 		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
-	</ItemGroup>
-
-	<ItemGroup>
 		<Compile Include="../shared-cs/PerfData.cs" Link="PerfData.cs" />
+	</ItemGroup>
+	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0-android'">
+		<PackageReference Include="Avalonia.Android" Version="12.1.3" />
+		<Compile Remove="Desktop/**" />
+	</ItemGroup>
+	<ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+		<PackageReference Include="Avalonia.Desktop" Version="12.1.3" />
+		<Compile Remove="Android/**" />
 	</ItemGroup>
 
 </Project>

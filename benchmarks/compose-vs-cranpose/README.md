@@ -429,6 +429,70 @@ adb -s emulator-5680 shell settings put system min_refresh_rate 120.0
 python3 benchmarks/compose-vs-cranpose/measure.py --serial emulator-5680 --output benchmarks/compose-vs-cranpose/results/RUN --reps 2 --interval 0.25
 ```
 
+### On a Mac desktop
+
+`desktop.py` runs the gauntlet's desktop apps on a Mac, one at a time, each in
+a window of 1280 x 820 points (`perf-data`'s `DESKTOP_WINDOW`). Each app reads
+the tier from `PERF_TIER`, the frame to freeze on from `PERF_FREEZE` and the
+Roboto files from `PERF_FONTS`; Cranpose takes `--tier=N` arguments and the
+web page reads its address. `framecount/FrameCount.app` counts the frames the
+window presents through ScreenCaptureKit, as SurfaceFlinger counts a phone
+app's, and takes the pictures `--parity` compares. `ps` counts the CPU time
+of the app and every process it started. Desktop numbers feed the dashboard
+only; merges are judged on the slowest phone.
+
+| App | Stack |
+| --- | --- |
+| `cranpose` | `cranpose-app`'s desktop binary |
+| `compose` | `compose-desktop-app`: Compose Multiplatform 1.12 on the JVM, drawing the composables `compose-app` draws, from `shared-compose` |
+| `egui`, `slint` | the Android crates' desktop binaries |
+| `iced` | `iced-app`: iced 0.14 on wgpu |
+| `gpui` | `gpui-app`: Zed's GPUI as `gpui-pre` 0.3.8 publishes it |
+| `avalonia` | `avalonia-app`'s desktop head, Native AOT |
+| `swiftui` | `swiftui-app`: SwiftUI on macOS 15 |
+| `flutter` | `flutter-app`'s macOS runner, on Impeller |
+| `web` | the web page in a Chrome app window, the engine Electron apps ship |
+
+What each framework lacks and how its app does without:
+
+- iced text has no line limit or ellipsis: a box as tall as the lines clips
+  the paragraph. iced has no list that lays out only the rows on screen: the
+  app keeps the first row on screen and its top, and sensors around the rows
+  report their heights.
+- GPUI draws text only upright: the badge's text is Roboto Bold's outlines,
+  drawn as paths. Nested flex columns made GPUI's layout engine measure each
+  cluster level again for its parent, so the levels stack in block layout.
+  GPUI slows a window that is not in front to 30 fps; the app turns that off.
+- Slint's Skia renderer draws through wgpu on macOS and tells the rendering
+  notifier that a frame was drawn only with the `unstable-wgpu-30` feature.
+- The JVM opens no window outside the login session, so `desktop.py` starts
+  every app bundle through `open`. macOS then asks the user before such an
+  app reads a removable volume, so the fonts and Chrome's profile sit in a
+  temporary folder.
+
+FrameCount needs the Screen Recording permission once: `framecount/build.sh`
+signs it with a requirement on its bundle identifier, so rebuilds keep it.
+
+```bash
+sh benchmarks/compose-vs-cranpose/framecount/build.sh
+mkdir -p benchmarks/compose-vs-cranpose/fonts
+adb pull /system/fonts/Roboto-Regular.ttf benchmarks/compose-vs-cranpose/fonts/
+adb pull /system/fonts/Roboto-Medium.ttf benchmarks/compose-vs-cranpose/fonts/
+adb pull /system/fonts/Roboto-Bold.ttf benchmarks/compose-vs-cranpose/fonts/
+(cd benchmarks/compose-vs-cranpose/cranpose-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/egui-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/slint-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/iced-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/gpui-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/avalonia-app && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64)
+(cd benchmarks/compose-vs-cranpose/swiftui-app && ./build.sh)
+(cd benchmarks/compose-vs-cranpose/flutter-app && flutter build macos --release)
+(cd benchmarks/compose-vs-cranpose/compose-desktop-app && ./gradlew createDistributable)
+(cd benchmarks/compose-vs-cranpose/web-app && npm ci && npx tsc -p tsconfig.json)
+python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 12
+python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
+```
+
 ## Findings
 
 Historical baseline findings on a Huawei Mate 20 X (Kirin 980, Android 10)

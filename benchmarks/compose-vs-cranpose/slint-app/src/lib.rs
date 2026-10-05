@@ -116,10 +116,14 @@ fn spark_path(card: i32, frame: i32, width: f32, height: f32, area: bool) -> Sha
     path.into()
 }
 
-/// Shows the gauntlet and advances its frame after every frame drawn.
-pub fn run(launch: Launch) -> Result<(), PlatformError> {
+/// Shows the gauntlet, in a window of `size` where the platform has
+/// windows, and advances its frame after every frame drawn.
+pub fn run(launch: Launch, size: Option<slint::LogicalSize>) -> Result<(), PlatformError> {
     let tier = gauntlet_tier(launch.tier);
     let window = GauntletWindow::new()?;
+    if let Some(size) = size {
+        window.window().set_size(size);
+    }
     let gauntlet = window.global::<Gauntlet>();
     gauntlet.set_s(tier.scale);
     gauntlet.set_depth(tier.depth as i32);
@@ -200,7 +204,34 @@ fn android_main(app: slint::android::AndroidApp) {
         log::error!("no Slint platform: {error}");
         return;
     }
-    if let Err(error) = run(launch) {
+    if let Err(error) = run(launch, None) {
         log::error!("Slint stopped: {error}");
+    }
+}
+
+/// Runs the gauntlet in a desktop window, as `desktop.py` asks for it.
+#[cfg(not(target_os = "android"))]
+pub fn run_desktop(launch: Launch) -> Result<(), PlatformError> {
+    register_roboto();
+    let (width, height) = perf_data::DESKTOP_WINDOW;
+    run(
+        launch,
+        Some(slint::LogicalSize::new(width as f32, height as f32)),
+    )
+}
+
+/// Roboto is no desktop system font: the app registers the files every
+/// desktop app loads, which the markup's `Roboto` family then finds.
+#[cfg(not(target_os = "android"))]
+fn register_roboto() {
+    use slint::fontique_011::fontique;
+    let mut collection = slint::fontique_011::shared_collection();
+    for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
+        match std::fs::read(perf_data::font_path(file)) {
+            Ok(bytes) => {
+                collection.register_fonts(fontique::Blob::new(std::sync::Arc::new(bytes)), None);
+            }
+            Err(error) => log::warn!("no {file}: {error}"),
+        }
     }
 }

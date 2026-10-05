@@ -19,6 +19,13 @@ slint = { version = "1.18.1", default-features = false, features = ["std", "comp
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.15"
 
+# On a desktop: winit's window, the same Skia renderer, and fontique's
+# collection to register the Roboto files the other desktop apps load. Skia
+# draws through wgpu there, and Slint tells the rendering notifier a frame
+# was drawn only with wgpu's API exposed.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "unstable-fontique-011", "unstable-wgpu-30"] }
+
 [build-dependencies]
 slint-build = "1.18.1"
 
