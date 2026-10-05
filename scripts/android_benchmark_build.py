@@ -11,11 +11,19 @@ from android_benchmark_support import checked_command, digest, interrupted, run_
 
 
 def framework_packages(root):
+    workspace = tomllib.loads((root / 'Cargo.toml').read_text())
+    workspace_version = workspace.get('workspace', {}).get('package', {}).get('version')
     packages = {}
     for manifest in (root / 'crates').rglob('Cargo.toml'):
-        name = tomllib.loads(manifest.read_text()).get('package', {}).get('name')
+        package = tomllib.loads(manifest.read_text()).get('package', {})
+        name = package.get('name')
         if name:
-            packages[name] = manifest.parent
+            version = package.get('version')
+            if isinstance(version, dict) and version.get('workspace'):
+                version = workspace_version
+            if not isinstance(version, str):
+                raise ValueError('Framework package has no resolved version: ' + str(manifest))
+            packages[name] = {'path': manifest.parent, 'version': version}
     return packages
 
 
@@ -50,8 +58,30 @@ def build_settings(args, environment):
 
 def write_framework_overrides(destination, packages, selected):
     destination.write_text('[patch.crates-io]\n' + ''.join(
-        json.dumps(name) + ' = { path = ' + json.dumps(str(packages[name])) + ' }\n'
+        json.dumps(name) + ' = { path = ' + json.dumps(str(packages[name]['path'])) + ' }\n'
         for name in sorted(selected)))
+
+
+def validate_framework_resolution(metadata, packages, selected):
+    resolved = {}
+    for package in metadata['packages']:
+        name = package['name']
+        if name not in selected:
+            continue
+        expected = packages[name]
+        manifest = Path(package['manifest_path']).resolve()
+        if (package.get('source') is not None or package['version'] != expected['version']
+                or manifest != (expected['path'] / 'Cargo.toml').resolve()):
+            raise ValueError('Application does not resolve the archived framework package '
+                             + name + ': ' + str(package))
+        if name in resolved:
+            raise ValueError('Application resolves multiple archived framework packages named ' + name)
+        resolved[name] = str(manifest)
+    missing = selected - resolved.keys()
+    if missing:
+        raise ValueError('Application does not resolve archived framework packages: '
+                         + ', '.join(sorted(missing)))
+    return resolved
 
 
 def build(args, report):
@@ -80,21 +110,24 @@ def build(args, report):
         metadata_command.remove('--locked')
     initial_metadata = json.loads(checked_command(metadata_command, cwd=app, env=environment,
                                                  output=args.output / 'initial-metadata.log'))
-    selected |= {package['name'] for package in initial_metadata['packages']} & packages.keys()
+    selected = {package['name'] for package in initial_metadata['packages']} & packages.keys()
     if not selected:
         raise ValueError('Application resolves no framework packages')
     write_framework_overrides(overrides, packages, selected)
-    if '--locked' in metadata_command:
-        metadata_command.remove('--locked')
-    metadata_command.append('--offline')
+    for name in sorted(selected):
+        update_command = ['cargo', 'update', '--offline', '--config', str(overrides),
+                          '--package', name, '--precise', packages[name]['version']]
+        checked_command(update_command, cwd=app, env=environment,
+                        output=args.output / ('update-' + name + '.log'))
+    metadata_command = ['cargo', 'metadata', '--format-version=1', *common,
+                        '--offline', '--config', str(overrides)]
     metadata = json.loads(checked_command(metadata_command, cwd=app, env=environment,
                                           output=args.output / 'resolved-metadata.log'))
     resolved = {package['name']: package['manifest_path'] for package in metadata['packages']
                 if package['source'] is None}
     if any(not Path(path).is_relative_to(cache) for path in resolved.values()):
         raise ValueError('Application resolves source outside its immutable snapshot: ' + str(resolved))
-    if any(Path(resolved[name]).parent != packages[name] for name in selected & resolved.keys()):
-        raise ValueError('Application does not resolve the archived framework')
+    validate_framework_resolution(metadata, packages, selected)
     app_archive = args.output / 'app.tar.gz'
     sources['app'] = {'archive': app_archive.name, 'sha256': snapshot_source(app, app_archive),
                       'inventory': source_inventory(app)}
