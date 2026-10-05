@@ -1,0 +1,71 @@
+name: perf nightly
+
+# The latest release's benchmark app against main's on the Huawei Mate 20 X
+# attached to the runner labelled mate-20x: benchmarks/compose-vs-cranpose
+# README, "Short A/B comparisons". Results go to the perf-data branch the
+# desktop demo's Performance tab reads; a regression found twice in a row
+# opens a perf-regression issue.
+
+on:
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: perf-nightly
+  cancel-in-progress: false
+
+jobs:
+  android-ab:
+    name: release against main (Mate 20 X)
+    runs-on: [self-hosted, macOS, ARM64, mate-20x]
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    env:
+      PERF_SERIAL: LKN5T19419001735
+      PERF_OUTPUT: ${{ runner.temp }}/perf-nightly-${{ github.run_id }}
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          # The release tags, to find the newest one main contains.
+          fetch-depth: 0
+
+      - name: Configure machine-local SDK and cache paths
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+          RUNNER_OS: ${{ runner.os }}
+        run: scripts/ci/android_env.sh
+
+      - name: Provision toolchains
+        run: |
+          scripts/ci/install_toolchains.sh
+          scripts/ci/rustup_locked.sh target add aarch64-linux-android
+          command -v just >/dev/null || cargo install just --locked
+          command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+
+      - name: Build both apps and compare them
+        run: just perf-nightly "$PERF_SERIAL" "$PERF_OUTPUT"
+
+      - name: Publish the run
+        run: just perf-publish "$PERF_OUTPUT/run.json"
+
+      - name: Report confirmed regressions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: just perf-report "$PERF_OUTPUT/run.json"
+
+      - name: Keep the run
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-nightly
+          path: ${{ env.PERF_OUTPUT }}/**/*.json
+          retention-days: 30

@@ -16,10 +16,13 @@ import json
 import re
 import statistics
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent.parent / 'scripts'))
+from android_robot_device import device_lock  # noqa: E402  (the shared per-device lock)
 APPS = {
     'cranpose': {
         'package': 'dev.perfcompare.cranpose',
@@ -31,9 +34,16 @@ APPS = {
         'activity': 'dev.perfcompare.compose/.MainActivity',
         'apk': HERE / 'compose-app/app/build/outputs/apk/release/app-release.apk',
     },
+    # The Cranpose app built from the latest release, beside main's
+    # (`-PperfCompareSuffix=.release`).
+    'cranpose-release': {
+        'package': 'dev.perfcompare.cranpose.release',
+        'activity': 'dev.perfcompare.cranpose.release/dev.cranpose.android.CranposeActivity',
+        'apk': HERE / 'cranpose-app/android/app/build/outputs/apk/release/app-release.apk',
+    },
 }
 SCENARIOS = ['feed', 'ticker', 'particles', 'layers', 'grid', 'grid_layer', 'deep', 'deep_layer',
-             'workspace']
+             'workspace', 'gauntlet']
 REMOTE_WINDOW = '/data/local/tmp/perf_window.sh'
 # Loads that keep Jetpack Compose itself below 60 fps on the Huawei Mate 20 X:
 # a test both frameworks pass at 60 fps cannot tell them apart.
@@ -48,6 +58,8 @@ HEAVY = {
     'deep_layer': '--ei depth 40 --ei chips 6',
     # gpui-fast's trading workspace, 16 quotes every 16 ms.
     'workspace': '--es mode quotes',
+    # Every stage at once; the tier is calibrated per device (README).
+    'gauntlet': '--ei tier 5',
 }
 
 
@@ -262,8 +274,8 @@ def meminfo(device, package):
 
 
 def launch(device, app, scenario, extra=()):
-    device.shell('am', 'force-stop', APPS['cranpose']['package'])
-    device.shell('am', 'force-stop', APPS['compose']['package'])
+    for spec in APPS.values():
+        device.shell('am', 'force-stop', spec['package'])
     time.sleep(1.0)
     device.shell('input', 'keyevent', 'KEYCODE_WAKEUP')
     device.adb('logcat', '-c')
@@ -441,13 +453,20 @@ def main():
     parser.add_argument('--load', choices=['heavy', 'default'], default='heavy',
                         help='heavy: the per-scenario loads in HEAVY; default: the apps\' own sizes')
     args = parser.parse_args()
+    with device_lock(args.serial):
+        compare(args)
+
+
+def compare(args):
+    """Runs the whole comparison: the caller holds the device lock."""
     args.started = time.monotonic()
     args.output.mkdir(parents=True, exist_ok=True)
     device = Device(args.serial)
     report = {'device': {key: device.shell('getprop', key).strip() for key in
                          ['ro.product.model', 'ro.build.version.release', 'ro.hardware']},
               'runs': [], 'startup': {'cranpose': [], 'compose': []}, 'failures': []}
-    for app, spec in APPS.items():
+    for app in args.apps.split(','):
+        spec = APPS[app]
         report[app + '_apk_bytes'] = spec['apk'].stat().st_size
         if args.install:
             device.adb('install', '-r', '-d', str(spec['apk']), timeout=300)

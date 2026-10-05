@@ -29,6 +29,7 @@ model with every comparison because frame capacity varies by device.
 | `deep` | The same width animation over 40 levels nested inside one another, each with a row of wrapping chips. | 40 levels × 6 chips | Deep relayout |
 | `deep_layer` | `deep`, with every level in a static rotated graphics layer. | 40 levels × 6 chips | Relayout under nested layers |
 | `workspace` | GPUI trading workspace: quote subscriptions, watchlist, chart, order book, trades and statistics. | 200 symbols, 16 hidden subscriptions | Text updates, clipping, scrolling and hover |
+| `gauntlet` | Every stage at once (below). Advances a frame index each frame, never wall time. | tier 5 | Composition, layout, intrinsics, text, images, paths, shadows, layers |
 
 Knobs:
 
@@ -41,7 +42,58 @@ Knobs:
 - `deep` and `deep_layer`: `--ei depth` and `--ei chips`;
 - `workspace`: `--es mode quotes`, `scroll` or `hover` (default `quotes`);
 - `--ez still true` holds the feed still, or starts the workspace at tick zero
-  with its stream, automatic scrolling and synthetic hover stopped.
+  with its stream, automatic scrolling and synthetic hover stopped;
+- `gauntlet`: `--ei tier` (1 to 8) and `--ei freeze K`, which stops on frame K
+  for picture comparisons.
+
+### Gauntlet
+
+One screen heavy enough that no framework holds 60 fps on the device it runs
+on, so every framework's frame rate shows its per-frame cost. Every frame
+advances a frame index `k`, and everything follows from `k`, so each framework
+does the same work per frame. Printed values are integer arithmetic of `k`,
+so both apps show the same digits on the same frame.
+
+- **Ticker strip:** quote tiles in a flow row whose price and change text and
+  bar change every frame: recomposition, text shaping and reflow.
+- **Card grid:** a lazy grid scrolling 3 dp a frame. Each card has an elevation
+  shadow and a border, a circle-clipped avatar bitmap, a two-line title, an
+  annotated subtitle, four lines of body text, a progress bar and percent,
+  a 48-point sparkline with a gradient fill, a chip flow row, and a footer of
+  counters split by dividers in an `IntrinsicSize.Min` row. Every fifth card
+  carries a translucent badge tilting in its graphics layer.
+- **Deep clusters:** after every five card rows, a cluster of nested levels.
+- **Width:** the whole content's width follows `k` between 92% and 100%, so
+  every visible node is measured again each frame.
+
+Each app is written in its own framework's best idiom, not translated line by
+line. Compose uses `LazyVerticalGrid` with full-span clusters, reads the
+width in `Modifier.layout`, and isolates every per-frame read in its own small
+composable or draw lambda. Cranpose uses `LazyColumn` rows (it has no lazy
+grid yet, #1165), reads the width at the screen root above one argument-stable
+call, and isolates the same reads.
+
+| Tier | Columns | Scale | Ticker tiles | Cluster depth |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 1 | 1.0 | 8 | 6 |
+| 2 | 2 | 0.85 | 12 | 8 |
+| 3 | 2 | 0.7 | 16 | 10 |
+| 4 | 3 | 0.6 | 20 | 12 |
+| 5 | 3 | 0.5 | 28 | 14 |
+| 6 | 4 | 0.45 | 36 | 16 |
+| 7 | 4 | 0.4 | 44 | 20 |
+| 8 | 5 | 0.35 | 56 | 24 |
+
+Calibration fixes one tier per device: the Huawei Mate 20 X runs tier 5,
+where Cranpose drew 52.8 fps and Compose 26.5 on 2026-10-05. Raising a
+device's tier starts a new series rather than changing an old one.
+
+`parity.py` launches both apps frozen on the same frame and compares the two
+captures the way the eye does: softened, cut into tiles, each tile matched at
+the best offset within 8 pixels. A tile that still differs on average is
+changed. Any difference for the same composable code is a Cranpose bug. On
+2026-10-05 the gauntlet at tier 5 differed in 1.55% of tiles. The remaining
+differences come from Compose laying out in whole pixels (#1215).
 
 ## Parity rules
 
@@ -122,6 +174,34 @@ off before the first tick, light theme and those same three Roboto files;
 preserve the original reference checkout and benchmark executable.
 
 ## Measurement
+
+### Short A/B comparisons
+
+`ab.py` compares two installed builds as briefly as the evidence allows. It
+holds the device lock throughout and launches each build once unmeasured.
+Then it measures legs of 2 s warm-up plus a 5 s window, in pairs, A B then
+B A. From the second pair on, it stops a scenario once fps, CPU per frame and
+desired → present are each settled:
+- **Same:** medians within half the threshold, and each build's own range
+  narrower than the threshold.
+- **Different:** ranges apart, with medians apart by the threshold times
+  three with two legs a side, two with three, one with four.
+
+The thresholds are 3% of fps, 3% of CPU per frame and 2 ms. After four pairs
+anything still open is inconclusive. On the Mate, a same-build A/A comparison
+settles in 4 legs for 60 fps scenes and runs 8 legs for the gauntlet, whose
+launch-to-launch noise is about 3%. Cranpose against Compose on the gauntlet
+took 99 s.
+
+```bash
+python3 benchmarks/compose-vs-cranpose/ab.py --serial SERIAL --a cranpose-release --b cranpose \
+  --scenarios gauntlet,feed,grid --output OUTPUT
+```
+
+`cranpose-release` is the Cranpose app built with `-PperfCompareSuffix=.release`,
+so a second build installs beside the first.
+
+### Long comparisons
 
 Check the animation clock before comparing frame-driven workloads:
 

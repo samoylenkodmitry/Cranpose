@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Adds a comparison run to the perf-data branch the dashboard reads.
+
+The run goes under `runs/`. `index.json` gains one entry per run, holding
+each scenario's medians and verdicts, so the dashboard draws its trends from
+the index and opens a run's file only for its legs. A run that was skipped
+publishes nothing.
+Usage: publish.py --run RUN_JSON [--tree DIR] [--no-push]
+"""
+
+import argparse
+import json
+import subprocess
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+DATA_BRANCH = 'perf-data'
+SUMMARY_METRICS = ['fps', 'cpu_ms_per_frame', 'desired_to_present_p50_ms', 'janky_pct', 'pss_mb']
+
+
+def git(*args, cwd):
+    return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def index_entry(run, file):
+    """What the dashboard needs of a run without opening it."""
+    names = [subject['name'] for subject in run['subjects']]
+    return {
+        'file': file,
+        'kind': run['kind'],
+        'started_at': run['started_at'],
+        'device': run['device']['ro.product.model'],
+        'main': run.get('main'),
+        'release': run.get('release'),
+        'subjects': [{'name': subject['name'], 'label': subject['label']} for subject in run['subjects']],
+        'duration_s': run.get('duration_s'),
+        'scenarios': {
+            scenario['scenario']: {
+                'legs': len(scenario['legs']),
+                'summary': {name: {metric: scenario['summary'][name][metric]
+                                   for metric in SUMMARY_METRICS if metric in scenario['summary'][name]}
+                            for name in names},
+                'verdicts': scenario['verdicts'],
+            }
+            for scenario in run['scenarios']
+        },
+        'confirmed_regressions': run.get('confirmed_regressions', {}),
+    }
+
+
+def data_tree(tree):
+    """A worktree on the data branch, starting the branch when it is new."""
+    fetched = subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=REPO).returncode == 0
+    if not (tree / '.git').exists():
+        git('worktree', 'add', '-q', '--force', '--detach', str(tree), 'HEAD', cwd=REPO)
+    if fetched:
+        git('checkout', '-q', '-B', DATA_BRANCH, f'origin/{DATA_BRANCH}', cwd=tree)
+    else:
+        git('checkout', '-q', '--orphan', DATA_BRANCH, cwd=tree)
+        git('rm', '-q', '-r', '-f', '.', cwd=tree)
+        (tree / 'index.json').write_text(json.dumps({'runs': []}, indent=1) + '\n')
+    return tree
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--run', required=True, type=Path)
+    parser.add_argument('--tree', type=Path, default=Path.home() / 'perf-nightly' / 'data-tree')
+    parser.add_argument('--no-push', action='store_true')
+    args = parser.parse_args()
+    run = json.loads(args.run.read_text())
+    if run.get('skipped'):
+        print('nothing to publish:', run['skipped'])
+        return
+    tree = data_tree(args.tree)
+    stamp = run['started_at'][:10]
+    device = run['device']['ro.product.model'].replace(' ', '-')
+    file = f"runs/{stamp}-{run['kind']}-{(run.get('main') or 'manual')[:9]}-{device}.json"
+    (tree / file).parent.mkdir(parents=True, exist_ok=True)
+    (tree / file).write_text(json.dumps(run, indent=1) + '\n')
+    index = json.loads((tree / 'index.json').read_text())
+    index['runs'] = [entry for entry in index['runs'] if entry['file'] != file]
+    index['runs'].append(index_entry(run, file))
+    index['runs'].sort(key=lambda entry: entry['started_at'])
+    (tree / 'index.json').write_text(json.dumps(index, indent=1) + '\n')
+    git('add', 'index.json', file, cwd=tree)
+    git('commit', '-q', '-m', f"{run['kind']} {stamp}: {run.get('release')} against main "
+        f"{(run.get('main') or '')[:9]} on {device}", cwd=tree)
+    if not args.no_push:
+        git('push', '-q', 'origin', f'HEAD:{DATA_BRANCH}', cwd=tree)
+    print('published', file)
+
+
+if __name__ == '__main__':
+    main()

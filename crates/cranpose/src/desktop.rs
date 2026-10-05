@@ -16,6 +16,7 @@ use cranpose_app_shell::{
     AppShell, FramePacingMode, FrameUpdateResult, RootId, SurfaceMut, default_root_key,
 };
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
+#[cfg(feature = "robot")]
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 use winit::{
