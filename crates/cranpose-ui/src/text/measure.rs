@@ -1370,19 +1370,18 @@ fn scale_annotated_font_sizes(
 
     let mut scaled = text.clone();
     for span in &mut scaled.span_styles {
-        span.item = scale_span_style_font_sizes(&span.item, curve, None);
+        scale_span_style_font_sizes(&mut span.item, curve, None);
     }
     Cow::Owned(scaled)
 }
 
-fn scale_text_style_font_sizes(style: &TextStyle, curve: FontScaleCurve) -> TextStyle {
+fn scale_text_style_font_sizes(style: &TextStyle, curve: FontScaleCurve) -> Cow<'_, TextStyle> {
     if curve.is_identity() {
-        return style.clone();
+        return Cow::Borrowed(style);
     }
 
     let mut scaled = style.clone();
-    scaled.span_style =
-        scale_span_style_font_sizes(&style.span_style, curve, Some(DEFAULT_FONT_SIZE_SP));
+    scale_span_style_font_sizes(&mut scaled.span_style, curve, Some(DEFAULT_FONT_SIZE_SP));
     scaled.paragraph_style.line_height =
         scale_text_unit_sp(scaled.paragraph_style.line_height, curve);
     if let Some(mut indent) = scaled.paragraph_style.text_indent {
@@ -1390,7 +1389,7 @@ fn scale_text_style_font_sizes(style: &TextStyle, curve: FontScaleCurve) -> Text
         indent.rest_line = scale_text_unit_sp(indent.rest_line, curve);
         scaled.paragraph_style.text_indent = Some(indent);
     }
-    scaled
+    Cow::Owned(scaled)
 }
 
 fn with_system_font_scale<R>(
@@ -1404,14 +1403,14 @@ fn with_system_font_scale<R>(
     block(visual_text.as_ref(), &visual_style)
 }
 
+/// Scales `scaled`'s sizes in place by `curve`.
 fn scale_span_style_font_sizes(
-    style: &crate::text::SpanStyle,
+    scaled: &mut crate::text::SpanStyle,
     curve: FontScaleCurve,
     default_font_size_sp: Option<f32>,
-) -> crate::text::SpanStyle {
+) {
     let factor = curve.scale();
-    let mut scaled = style.clone();
-    scaled.font_size = match (style.font_size, default_font_size_sp) {
+    scaled.font_size = match (scaled.font_size, default_font_size_sp) {
         (crate::text::TextUnit::Unspecified, Some(default_size)) => {
             crate::text::TextUnit::Sp(curve.sp_to_dp(default_size))
         }
@@ -1430,7 +1429,6 @@ fn scale_span_style_font_sizes(
             width: width * factor,
         });
     }
-    scaled
 }
 
 fn annotated_text_needs_scaling(text: &crate::text::AnnotatedString) -> bool {
