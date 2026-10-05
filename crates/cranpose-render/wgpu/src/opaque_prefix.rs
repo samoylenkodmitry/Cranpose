@@ -31,7 +31,6 @@ pub(crate) struct PrefixContext<'a> {
     pub(crate) page_offset: [f32; 2],
     pub(crate) page_size: (u32, u32),
     pub(crate) scale: f32,
-    pub(crate) format: wgpu::TextureFormat,
 }
 
 struct Candidate<'a> {
@@ -239,7 +238,6 @@ fn prefix_hash(
         }
         _ => 0u8.hash(&mut hasher),
     }
-    std::mem::discriminant(&context.format).hash(&mut hasher);
     let [page_x, page_y] = context.page_offset;
     for value in [
         edges.left,
@@ -296,12 +294,7 @@ pub(crate) fn page_fill_color(
         && edges.top <= page_y
         && edges.right >= page_x + context.page_size.0 as f32
         && edges.bottom >= page_y + context.page_size.1 as f32;
-    let stored = |channel: f32| match context.format {
-        wgpu::TextureFormat::Rgba16Float => nearest_half(channel),
-        _ => Some(channel),
-    };
-    let [r, g, b, a] = candidate.record.color;
-    let [r, g, b, a] = [stored(r)?, stored(g)?, stored(b)?, stored(a)?].map(f64::from);
+    let [r, g, b, a] = candidate.record.color.map(f64::from);
     covers.then_some((wgpu::Color { r, g, b, a }, op.z_index))
 }
 
@@ -348,33 +341,6 @@ pub(crate) fn capture_solid_rect(
         device.intersect(capture).unwrap_or(device)
     });
     Some((candidate.record.color, painted, clip))
-}
-
-/// `value` rounded to the nearest half float, ties to even, as a shader's
-/// write to a half-float target stores it: a clear value is converted by
-/// the driver, which may round otherwise. `None` below the half floats'
-/// normal range, where the rounding differs, unless it is zero.
-fn nearest_half(value: f32) -> Option<f32> {
-    const DROPPED_BITS: u32 = 13;
-    const SMALLEST_NORMAL_HALF: f32 = 6.103_515_6e-5;
-    if value == 0.0 {
-        return Some(value);
-    }
-    if !value.is_finite() || value.abs() < SMALLEST_NORMAL_HALF {
-        return None;
-    }
-    let bits = value.to_bits();
-    let mask = (1u32 << DROPPED_BITS) - 1;
-    let halfway = 1u32 << (DROPPED_BITS - 1);
-    let dropped = bits & mask;
-    let kept = bits & !mask;
-    let odd = (kept >> DROPPED_BITS) & 1 == 1;
-    let rounded = if dropped > halfway || (dropped == halfway && odd) {
-        kept + (1 << DROPPED_BITS)
-    } else {
-        kept
-    };
-    Some(f32::from_bits(rounded))
 }
 
 pub(crate) fn opaque_prefix(context: &PrefixContext<'_>, ops: &[DrawOp]) -> Option<OpaquePrefix> {

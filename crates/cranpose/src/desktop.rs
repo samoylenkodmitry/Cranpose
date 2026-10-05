@@ -3900,7 +3900,7 @@ fn surface_config_for_window(
     frame_latency: u32,
 ) -> Result<wgpu::SurfaceConfiguration, LaunchError> {
     Ok(wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: cranpose_render_wgpu::presentable_root_usages(surface_caps.usages),
         format: surface_format,
         width,
         height,

@@ -108,12 +108,25 @@ fn output_peak(path: &std::path::Path, balance: f32, gain_db: f32) -> [f32; 2] {
     assert_eq!(samples.channels, 2);
     assert!(samples.samples.iter().any(|value| value.abs() > 0.05));
     assert!(player.set_balance(-balance));
-    output
-        .lock()
-        .expect("capture lock")
-        .as_mut()
-        .expect("renderer")
-        .render(&mut block);
+    // The decode thread may not have refilled the queue for the next block
+    // yet, which then plays silence: render until a block carries sound.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        output
+            .lock()
+            .expect("capture lock")
+            .as_mut()
+            .expect("renderer")
+            .render(&mut block);
+        if block.iter().any(|sample| sample.abs() > 0.05) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no PCM after the balance flipped"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
     if balance != 0.0 {
         let muted_channel = usize::from(balance > 0.0);
         assert!(

@@ -457,7 +457,7 @@ fn animations_to_other_tabs_preserve_tab_content_markers() {
         (DemoTab::HackerNews, "Hacker News"),
         (DemoTab::Images, "Chessboard Image Demo"),
         (DemoTab::Text, "Text Rendering Feature Showcase"),
-        (DemoTab::Winamp, "Stopped | pos"),
+        (DemoTab::Wsz, "Stopped | pos"),
         (DemoTab::Xkcd, "XKCD Random Comic"),
         (DemoTab::Shaders, "Shaders & Effects"),
         (DemoTab::ShaderRect, "Fire Shader"),

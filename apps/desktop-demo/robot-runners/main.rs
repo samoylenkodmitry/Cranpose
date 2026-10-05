@@ -228,7 +228,7 @@ runners! {
     robot_underline_screenshot,
     robot_viewport_uniform_growth,
     robot_wear_watch_fps,
-    robot_winamp_native_window_geometry,
+    robot_wsz_native_window_geometry,
     robot_xwayland_display_backend,
 }
 

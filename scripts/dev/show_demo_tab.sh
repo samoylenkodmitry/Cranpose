@@ -4,7 +4,7 @@
 #   scripts/dev/show_demo_tab.sh <tab> [seconds-to-settle]
 #
 # The tab is the demo's own startup argument, for example `windows` or
-# `winamp`. The demo runs with its traces on and its own HOME, so a run
+# `wsz`. The demo runs with its traces on and its own HOME, so a run
 # leaves nothing in the real one. Pair it with `drag_window.sh shotwindow`
 # to picture a single window rather than the whole screen.
 set -u

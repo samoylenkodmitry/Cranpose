@@ -1,63 +1,47 @@
 use super::*;
 
 #[test]
-fn android_composites_in_eight_bits_and_the_rest_in_float() {
-    assert_eq!(
-        resolve_composition_format(None, true),
-        wgpu::TextureFormat::Rgba8Unorm
-    );
-    assert_eq!(
-        resolve_composition_format(None, false),
-        wgpu::TextureFormat::Rgba16Float
-    );
+fn a_renderer_composites_in_its_display_images_own_eight_bit_format() {
+    for (display, composition) in [
+        (
+            wgpu::TextureFormat::Bgra8Unorm,
+            wgpu::TextureFormat::Bgra8Unorm,
+        ),
+        (
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Bgra8Unorm,
+        ),
+        (
+            wgpu::TextureFormat::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba8Unorm,
+        ),
+        (
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureFormat::Rgba8Unorm,
+        ),
+    ] {
+        assert_eq!(composition_format(display), composition, "{display:?}");
+    }
 }
 
 #[test]
-fn the_override_wins_in_both_directions_on_any_platform() {
-    assert_eq!(
-        resolve_composition_format(Some("0"), true),
-        wgpu::TextureFormat::Rgba16Float
-    );
-    assert_eq!(
-        resolve_composition_format(Some(" yes "), false),
-        wgpu::TextureFormat::Rgba8Unorm
-    );
-}
-
-#[test]
-fn an_unparsable_override_falls_back_to_the_platform_default() {
-    assert_eq!(
-        resolve_composition_format(Some("half"), true),
-        wgpu::TextureFormat::Rgba8Unorm
-    );
-    assert_eq!(
-        resolve_composition_format(Some(""), false),
-        wgpu::TextureFormat::Rgba16Float
-    );
-}
-
-#[test]
-fn a_device_is_asked_whether_it_can_draw_into_a_format() {
-    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    assert!(renders_into(&device, wgpu::TextureFormat::Rgba8Unorm));
-    assert!(
-        !renders_into(&device, wgpu::TextureFormat::Rgb9e5Ufloat),
-        "no device draws into a shared-exponent format"
-    );
-}
-
-#[test]
-fn a_device_that_draws_into_the_float_format_keeps_it() {
-    let (_lock, device, _queue) = crate::frame_graph::upload_test_device();
-    let backend = device.adapter_info().backend;
-    let preferred = composition_format();
-    assert_eq!(settle_composition_format(&device, backend), preferred);
+fn any_other_display_format_composites_in_rgba8() {
+    for display in [
+        wgpu::TextureFormat::Rgb10a2Unorm,
+        wgpu::TextureFormat::Rgba16Float,
+    ] {
+        assert_eq!(
+            composition_format(display),
+            wgpu::TextureFormat::Rgba8Unorm,
+            "{display:?}"
+        );
+    }
 }
 
 #[test]
 fn a_frame_worth_of_small_surfaces_stays_pooled() {
     let bytes: u64 = (0..20)
-        .map(|_| target_bytes(132, 132, composition_bytes_per_pixel()))
+        .map(|_| target_bytes(132, 132, COMPOSITION_BYTES_PER_PIXEL))
         .sum();
     assert!(
         bytes < MAX_POOLED_BYTES,
@@ -67,13 +51,13 @@ fn a_frame_worth_of_small_surfaces_stays_pooled() {
 }
 
 #[test]
-fn the_byte_budget_bounds_full_screen_float_surfaces() {
-    let pool = OffscreenPool::new_with_limit(wgpu::TextureFormat::Rgba16Float, 4096);
+fn the_byte_budget_bounds_full_screen_surfaces() {
+    let pool = OffscreenPool::new_with_limit(wgpu::TextureFormat::Rgba8Unorm, 4096);
     let full_screen = target_bytes(1080, 2244, pool.bytes_per_pixel());
     let held = MAX_POOLED_BYTES / full_screen;
     assert!(
-        (2..=8).contains(&held),
-        "the budget should hold a few full-screen surfaces, not dozens: {held}"
+        (2..=16).contains(&held),
+        "the budget should hold some full-screen surfaces, not dozens: {held}"
     );
 }
 

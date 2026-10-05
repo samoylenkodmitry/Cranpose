@@ -256,9 +256,9 @@ fn leetcodedaily_robot_image_cache_is_not_process_global() {
 }
 
 #[test]
-fn winamp_robot_monitor_cache_is_not_process_global() {
+fn wsz_robot_monitor_cache_is_not_process_global() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let source_path = root.join("robot-runners/robot_winamp_native_window_geometry.rs");
+    let source_path = root.join("robot-runners/robot_wsz_native_window_geometry.rs");
     let source = fs::read_to_string(&source_path)
         .unwrap_or_else(|err| panic!("failed to read {source_path:?}: {err}"));
 

@@ -46,10 +46,6 @@ const PROPERTY_BACKED_ENV_VARS: &[(&str, &str)] = &[
         "CRANPOSE_GPU_FENCE_PROFILE",
     ),
     ("debug.cranpose.pass_timing", "CRANPOSE_GPU_PASS_TIMING"),
-    (
-        "debug.cranpose.composition_8bit",
-        "CRANPOSE_COMPOSITION_8BIT",
-    ),
     ("debug.cranpose.skip_shadows", "CRANPOSE_SKIP_SHADOWS"),
     ("debug.cranpose.no_fill_cache", "CRANPOSE_NO_FILL_CACHE"),
     ("debug.cranpose.ablate", "CRANPOSE_ABLATE"),
