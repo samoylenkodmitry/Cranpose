@@ -63,7 +63,9 @@ impl SlotTable {
 
     /// The group index `anchor` holds, checked against the group there.
     /// Between inserts and their flush, a stale index lies at most the
-    /// pending insert count before its group.
+    /// pending insert count before its group. A group the inserts did not
+    /// pass is at its index, and one they all passed is that count later,
+    /// so those two places are checked first.
     pub(in crate::slot) fn resolve_group_index(
         &self,
         stored: usize,
@@ -73,14 +75,19 @@ impl SlotTable {
         if stale.inserts == 0 || stored < stale.from {
             return Some(stored);
         }
-        let end = stored
-            .saturating_add(stale.inserts + 1)
-            .min(self.groups.len());
-        self.groups
-            .get(stored..end)?
-            .iter()
-            .position(|group| group.anchor == anchor)
-            .map(|offset| stored + offset)
+        let holds = |index: usize| {
+            self.groups
+                .get(index)
+                .is_some_and(|group| group.anchor == anchor)
+        };
+        let passed_by_all = stored + stale.inserts;
+        if holds(stored) {
+            return Some(stored);
+        }
+        if holds(passed_by_all) {
+            return Some(passed_by_all);
+        }
+        (stored + 1..passed_by_all).find(|&index| holds(index))
     }
 
     fn write_group_indexes(&mut self, start: usize, end: usize) {
