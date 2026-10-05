@@ -3415,27 +3415,37 @@ fn sync_children_small(
     Ok(())
 }
 
+/// Attaches the expected children that do not name the parent. An unchanged
+/// child list is the parent's own: a child that tracks its parent already
+/// names it, and one that does not track it cannot be repaired, so only a
+/// changed list visits its children.
 fn reconcile_children(
     applier: &mut dyn Applier,
     parent_id: NodeId,
     expected_children: &[NodeId],
-    needs_dirty_check: bool,
+    children_unchanged: bool,
 ) -> Result<(), NodeError> {
     let mut repaired = false;
-    for &child_id in expected_children {
-        let needs_attach = if let Ok(node) = applier.get_mut(child_id) {
-            node.parent() != Some(parent_id)
-        } else {
-            false
-        };
-
-        if needs_attach {
-            insert_child_with_reparenting(applier, parent_id, child_id);
-            repaired = true;
+    if children_unchanged {
+        debug_assert!(
+            expected_children.iter().all(|&child_id| applier
+                .get_mut(child_id)
+                .map_or(true, |node| node.parent().is_none_or(|p| p == parent_id))),
+            "the children a parent holds must name no other parent"
+        );
+    } else {
+        for &child_id in expected_children {
+            let needs_attach = applier
+                .get_mut(child_id)
+                .is_ok_and(|node| node.parent() != Some(parent_id));
+            if needs_attach {
+                insert_child_with_reparenting(applier, parent_id, child_id);
+                repaired = true;
+            }
         }
     }
 
-    let is_dirty = if needs_dirty_check {
+    let is_dirty = if children_unchanged {
         if let Ok(node) = applier.get_mut(parent_id) {
             node.needs_layout()
         } else {

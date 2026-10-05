@@ -259,12 +259,22 @@ impl Composer {
                 if parent_id == id {
                     return true;
                 }
+                // A child where the parent held it before is already attached
+                // to the parent: its node needs no visit.
+                let attached_before = frame.previous.get(frame.new_children.len()) == Some(&id);
                 if matches!(attach_mode, ParentAttachMode::DeferredSync) {
                     frame.new_children.push(id);
                 }
                 drop(parent_stack);
 
-                {
+                if attached_before {
+                    debug_assert!(
+                        self.borrow_applier()
+                            .get_mut(id)
+                            .map_or(true, |node| node.parent().is_none_or(|p| p == parent_id)),
+                        "a parent's previous child must name no other parent"
+                    );
+                } else {
                     let mut applier = self.borrow_applier();
                     if let Ok(child_node) = applier.get_mut(id) {
                         child_node.set_parent_for_bubbling(parent_id);
