@@ -81,7 +81,8 @@ fn bind_slots_host_to_runtime_state(
 
 struct GroupEntry {
     key: crate::slot::GroupKey,
-    restored: Option<crate::slot::DetachedSubtree>,
+    /// Boxed: a restore is rare, and the entry moves on every call.
+    restored: Option<Box<crate::slot::DetachedSubtree>>,
     placeholder_for: Option<crate::slot::GroupKey>,
 }
 
@@ -1250,7 +1251,8 @@ impl Composer {
             .take_retained(host, retain_key, |subtree| {
                 host.with_write_session(|slots| slots.retained_restore_ready(key, subtree))
             })
-            .or_else(|| self.take_movable_from_another_table(host, retain_key, key));
+            .or_else(|| self.take_movable_from_another_table(host, retain_key, key))
+            .map(Box::new);
         if restored.is_some() || !key.is_movable() {
             return GroupEntry {
                 key,
@@ -1410,13 +1412,14 @@ impl Composer {
 
         impl Drop for GroupGuard<'_> {
             fn drop(&mut self) {
-                self.composer.close_group_body(self.host, &self.scope);
+                let result = self.host.with_write_session(|slots| {
+                    let result = slots.finish_group_body();
+                    slots.end_group();
+                    result
+                });
+                self.composer
+                    .close_finished_group(self.host, &self.scope, result);
                 self.scope.mark_recomposed();
-                #[expect(
-                    clippy::redundant_closure_for_method_calls,
-                    reason = "the method path is not general over the session lifetime"
-                )]
-                self.host.with_write_session(|slots| slots.end_group());
                 if let Err(err) = self.composer.flush_pending_commands_if_large() {
                     log::error!("mid-composition command flush failed: {err}");
                 }
@@ -1697,6 +1700,15 @@ impl Composer {
             reason = "the method path is not general over the session lifetime"
         )]
         let result = host.with_write_session(|slots| slots.finish_group_body());
+        self.close_finished_group(host, scope, result);
+    }
+
+    fn close_finished_group(
+        &self,
+        host: &Rc<SlotsHost>,
+        scope: &RecomposeScope,
+        result: FinishGroupResult,
+    ) {
         self.handle_finished_group_result(host, Some(scope.id()), result);
         if let Some(popped) = self.scope_stack().pop() {
             debug_assert_eq!(
@@ -1771,9 +1783,40 @@ impl Composer {
         init: impl FnOnce() -> T,
         update: impl FnOnce(&mut T) -> R,
     ) -> (ValueSlotHandle<'_, T>, R) {
-        let source = crate::caller_location_key();
+        self.update_value_slot(
+            PayloadKind::Param,
+            crate::caller_location_key(),
+            init,
+            update,
+        )
+    }
+
+    /// Finds the call's return slot and runs `read` on its value, with one
+    /// slot lookup for both.
+    #[doc(hidden)]
+    #[track_caller]
+    pub fn __update_return_slot<T: 'static, R>(
+        &self,
+        init: impl FnOnce() -> T,
+        read: impl FnOnce(&mut T) -> R,
+    ) -> (ValueSlotHandle<'_, T>, R) {
+        self.update_value_slot(
+            PayloadKind::Return,
+            crate::caller_location_key(),
+            init,
+            read,
+        )
+    }
+
+    fn update_value_slot<T: 'static, R>(
+        &self,
+        kind: PayloadKind,
+        source: Key,
+        init: impl FnOnce() -> T,
+        update: impl FnOnce(&mut T) -> R,
+    ) -> (ValueSlotHandle<'_, T>, R) {
         self.with_slot_session_mut(|slots| {
-            let (slot, value) = slots.value_slot_and_value(PayloadKind::Param, source, init);
+            let (slot, value) = slots.value_slot_and_value(kind, source, init);
             (ValueSlotHandle::new(slot), update(value))
         })
     }

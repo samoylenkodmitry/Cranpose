@@ -264,7 +264,7 @@ impl SlotWriteSession<'_> {
     pub(crate) fn begin_group(
         &mut self,
         key: GroupKey,
-        restored: Option<DetachedSubtree>,
+        restored: Option<Box<DetachedSubtree>>,
         parent_node: Option<NodeId>,
     ) -> GroupStart<ActiveGroupId> {
         self.flush_payload_location_refreshes();
@@ -283,7 +283,7 @@ impl SlotWriteSession<'_> {
         self.state.consume_group_key(key);
 
         if let Some(restored) = restored
-            && let Some(started) = self.restore_started_group(key, restored, parent_node)
+            && let Some(started) = self.restore_started_group(key, *restored, parent_node)
         {
             return started;
         }
