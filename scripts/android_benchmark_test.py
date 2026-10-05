@@ -306,10 +306,10 @@ class BenchmarkContracts(unittest.TestCase):
     def test_build_resolves_archived_framework_before_reading_unavailable_host_paths(self):
         framework = self.root / 'framework'
         framework.mkdir()
-        (framework / 'Cargo.toml').write_text('[workspace.package]\nversion="1.0.0"\n')
+        (framework / 'Cargo.toml').write_text('[workspace]\nmembers=["crates/benchmark-fixture"]\n[workspace.package]\nversion="1.0.0"\n')
         package = framework / 'crates/benchmark-fixture'
         package.mkdir(parents=True)
-        (package / 'Cargo.toml').write_text('[package]\nname="benchmark-fixture"\nversion="1.0.0"\nedition="2021"\n[lib]\npath="lib.rs"\n')
+        (package / 'Cargo.toml').write_text('[package]\nname="benchmark-fixture"\nversion.workspace=true\nedition="2021"\n[lib]\npath="lib.rs"\n')
         (package / 'lib.rs').write_text('pub fn value() -> u32 { 1 }\n')
         app = self.root / 'app'
         (app / '.cargo').mkdir(parents=True)
