@@ -34,7 +34,7 @@ fn deferred_reparenting_removes_the_node_from_its_previous_container() {
     composer.push_parent(second);
     composer.attach_to_parent(control);
     composer.pop_parent();
-    let commands = composer.take_commands();
+    let mut commands = composer.take_commands();
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
     commands.apply(&mut applier).expect("apply parent change");
@@ -461,7 +461,7 @@ fn slot_pass_finalization_error_returns_from_try_pass() {
                 },
             )
             .expect("initial slot pass should finalize");
-        let commands = composer.take_commands();
+        let mut commands = composer.take_commands();
         drop(composer);
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
         commands
@@ -507,7 +507,7 @@ fn slot_pass_wrapper_returns_body_result_after_finalization_error() {
                 },
             )
             .expect("initial slot pass should finalize");
-        let commands = composer.take_commands();
+        let mut commands = composer.take_commands();
         drop(composer);
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
         commands
@@ -982,7 +982,7 @@ fn emitted_node_replacement_removes_displaced_node() {
                 })
             },
         );
-        let commands = composer.take_commands();
+        let mut commands = composer.take_commands();
         drop(composer);
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
         commands
@@ -1004,7 +1004,7 @@ fn emitted_node_replacement_removes_displaced_node() {
                 })
             },
         );
-        let commands = composer.take_commands();
+        let mut commands = composer.take_commands();
         drop(composer);
         teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
         commands
@@ -1132,7 +1132,7 @@ fn recyclable_emit_discards_mismatched_recycled_shell() {
             })
         },
     );
-    let commands = composer.take_commands();
+    let mut commands = composer.take_commands();
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
     commands
@@ -1201,7 +1201,7 @@ fn recyclable_emit_creates_fresh_id_when_recycled_stable_id_is_live() {
             })
         },
     );
-    let commands = composer.take_commands();
+    let mut commands = composer.take_commands();
     drop(composer);
     teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
     commands

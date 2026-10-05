@@ -362,7 +362,7 @@ fn apply_child_diff(
         frame.new_children = new_children.into();
     }
     composer.pop_parent();
-    let commands = composer.take_commands();
+    let mut commands = composer.take_commands();
     drop(composer);
     teardown_composer(slots, applier, slots_host, applier_host);
     commands.apply(applier).expect("apply diff command");
