@@ -535,23 +535,39 @@ pub const GLASS_ADAPTIVE_NEIGHBOURHOOD_DP: f32 = 16.0;
 
 /// Wraps a fully configured `liquid_glass.wgsl` shader as a render effect,
 /// specialized to the features its uniforms enable. Edge lenses render the
-/// outer warp, inner warp, and chromatic lighting in three successive images.
+/// outer warp, inner warp, and chromatic lighting, omitting an identity outer warp.
 /// Content masks and other refraction modes use one image.
 pub fn liquid_glass_runtime_effect(shader: RuntimeShader) -> RenderEffect {
     if (1.5..2.5).contains(&slot(shader.uniforms(), GLASS_REFRACTION_MODE_UNIFORM))
         && slot(shader.uniforms(), 112) <= 0.5
         && slot(shader.uniforms(), GLASS_OPTICAL_STAGE_UNIFORM) == 0.0
     {
+        let uniforms = shader.uniforms();
+        let projection = [
+            slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM),
+            slot(uniforms, GLASS_OPTICAL_PROJECTION_UNIFORM + 1),
+        ];
+        let identity_outer = slot(uniforms, GLASS_ACTIVITY_UNIFORM) > 0.0
+            && slot(uniforms, GLASS_EDGE_REFRACTION_REACH_UNIFORM) <= 0.0
+            && projection == [1.0, 1.0];
         let stage = |index: u8| {
             let mut pass = shader.clone();
             pass.set_float(GLASS_OPTICAL_STAGE_UNIFORM, f32::from(index));
+            if identity_outer && index == 2 {
+                pass.set_input_padding(shader.input_padding() * 2.0);
+            }
             if index < 3 {
                 pass.set_output_support(None);
                 pass.set_output_padding(0.0);
             }
             glass_shader_effect(pass)
         };
-        stage(1).then(stage(2)).then(stage(3))
+        let warp = if identity_outer {
+            stage(2)
+        } else {
+            stage(1).then(stage(2))
+        };
+        warp.then(stage(3))
     } else {
         glass_shader_effect(shader)
     }
