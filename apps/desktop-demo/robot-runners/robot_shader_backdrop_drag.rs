@@ -382,9 +382,11 @@ fn assert_effect_drag_performance(
             render_stats.submit_count, 1,
             "{label}: presented shader drag frame must submit once before screenshot readback: {render_stats:?}"
         );
-        assert_eq!(
-            render_stats.encoder_count, 1,
-            "{label}: presented shader drag frame must use one command encoder before screenshot readback: {render_stats:?}"
+        assert!(
+            render_stats.encoder_count <= 1 + u32::from(render_stats.upload_bytes > 0),
+            "{label}: presented shader drag frame must use one frame command encoder, plus one \
+             for the buffer uploads that run before its passes, before screenshot readback: \
+             {render_stats:?}"
         );
     }
 }

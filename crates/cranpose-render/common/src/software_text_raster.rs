@@ -308,6 +308,22 @@ impl SoftwareTextFont {
         }
     }
 
+    /// Whether `text` is ASCII and this face supports each of its graphemes
+    /// as [`font_supports_grapheme`] decides: each character is a control
+    /// character or has a glyph. An ASCII grapheme is one character, or
+    /// `\r\n`, two control characters. The face's glyph table answers each
+    /// character with one load, so no grapheme split or cmap search runs.
+    fn takes_ascii(&self, text: &str) -> bool {
+        text.is_ascii()
+            && text.bytes().map(char::from).all(|ch| {
+                ch.is_ascii_control()
+                    || self
+                        .font
+                        .ascii_glyph(ch)
+                        .is_some_and(|(glyph, _)| glyph.0 != 0)
+            })
+    }
+
     fn raster_ref(&self) -> RasterFontRef<'_, KernedFont> {
         RasterFontRef {
             font: &self.font,
@@ -467,7 +483,7 @@ impl SoftwareTextFontSet {
     ) -> Option<()> {
         let request = FontSelectionRequest::resolve(style, &self.registered_families);
         let primary = self.resolve_for_request(request)?;
-        if self.fonts.len() == 1 {
+        if self.fonts.len() == 1 || primary.takes_ascii(text) {
             if !text.is_empty() {
                 visit(0..text.len(), primary);
             }
@@ -503,7 +519,7 @@ impl SoftwareTextFontSet {
     ) -> Option<&SoftwareTextFont> {
         let request = FontSelectionRequest::resolve(style, &self.registered_families);
         let primary = self.resolve_for_request(request)?;
-        if self.fonts.len() == 1 {
+        if self.fonts.len() == 1 || primary.takes_ascii(text) {
             return Some(primary);
         }
         for grapheme in text.graphemes(true) {

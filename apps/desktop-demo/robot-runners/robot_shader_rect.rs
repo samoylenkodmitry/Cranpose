@@ -105,9 +105,10 @@ fn assert_shader_rect_performance(robot: &cranpose::Robot, label: &str) {
             render_stats.submit_count, 1,
             "{label}: Shader Rect must submit once per presented frame: {render_stats:?}"
         );
-        assert_eq!(
-            render_stats.encoder_count, 1,
-            "{label}: Shader Rect must encode through one frame command encoder: {render_stats:?}"
+        assert!(
+            render_stats.encoder_count <= 1 + u32::from(render_stats.upload_bytes > 0),
+            "{label}: Shader Rect must encode through one frame command encoder, plus one for \
+             the buffer uploads that run before its passes: {render_stats:?}"
         );
         assert!(
             render_stats.pass_count <= MAX_SHADER_RECT_PASSES,
