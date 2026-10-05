@@ -1,0 +1,313 @@
+/* The gauntlet's layout, in CSS. `--s` is the tier's scale: every size below
+   is a multiple of it, as in the other apps. */
+
+/* The device's Roboto, the files the other apps load. */
+@font-face {
+  font-family: PerfRoboto;
+  src: local("Roboto"), local("Roboto-Regular");
+  font-weight: 400;
+}
+@font-face {
+  font-family: PerfRoboto;
+  src: local("Roboto Bold"), local("Roboto-Bold");
+  font-weight: 700;
+}
+
+:root {
+  --s: 0.5;
+  --ink: #111827;
+  --body: #374151;
+  --muted: #6B7280;
+  --hairline: #E5E7EB;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #EEF0F5;
+  font-family: PerfRoboto;
+  line-height: normal;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+.top-bar {
+  flex: none;
+  height: 56px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  background: #1E2A4A;
+  color: white;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* Its width follows the frame. */
+.content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: calc(4px * var(--s));
+  padding: calc(6px * var(--s));
+  background: #E2E8F0;
+}
+
+.tile {
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--s));
+  padding: calc(3px * var(--s)) calc(6px * var(--s));
+  border-radius: calc(6px * var(--s));
+  background: white;
+  font-size: calc(10px * var(--s));
+  white-space: nowrap;
+  color: var(--body);
+}
+
+.symbol {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.up {
+  color: #16A34A;
+}
+
+.down {
+  color: #DC2626;
+}
+
+/* A rounded track and its fill, sized to a share of it. */
+.track {
+  background: var(--hairline);
+}
+
+.fill {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.tile .track {
+  width: calc(20px * var(--s));
+  height: calc(4px * var(--s));
+  border-radius: calc(2px * var(--s));
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: scroll;
+  scrollbar-width: none;
+}
+
+.list-inner {
+  position: relative;
+  padding: calc(8px * var(--s));
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(8px * var(--s));
+  margin-bottom: calc(8px * var(--s));
+}
+
+.row > .card,
+.row > .level {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The border is a shadow inside the box, so it takes no space: Compose draws
+   its border over the padding. */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: calc(6px * var(--s));
+  padding: calc(10px * var(--s));
+  border-radius: calc(12px * var(--s));
+  background: white;
+  box-shadow:
+    inset 0 0 0 1px var(--hairline),
+    0 calc(1px * var(--s)) calc(3px * var(--s)) rgb(0 0 0 / 0.24);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: calc(8px * var(--s));
+}
+
+.avatar {
+  flex: none;
+  width: calc(32px * var(--s));
+  height: calc(32px * var(--s));
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.head-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Paragraphs: lines 1.4 em apart, without leading above the first line or
+   below the last, as Compose's default line height style trims it. */
+.paragraph {
+  line-height: 1.4;
+  text-box: trim-both text;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.title {
+  font-size: calc(13px * var(--s));
+  font-weight: 700;
+  color: var(--ink);
+  -webkit-line-clamp: 2;
+}
+
+.subtitle {
+  font-size: calc(11px * var(--s));
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.body {
+  font-size: calc(12px * var(--s));
+  color: var(--body);
+  -webkit-line-clamp: 4;
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: calc(6px * var(--s));
+}
+
+.progress .track {
+  flex: 1;
+  height: calc(6px * var(--s));
+  border-radius: calc(3px * var(--s));
+}
+
+.percent {
+  font-size: calc(10px * var(--s));
+  color: var(--muted);
+}
+
+.sparkline {
+  display: block;
+  width: 100%;
+  height: calc(36px * var(--s));
+}
+
+.sparkline .line {
+  fill: none;
+  stroke-width: calc(1.5px * var(--s));
+  vector-effect: non-scaling-stroke;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(4px * var(--s));
+}
+
+.chip {
+  padding: calc(3px * var(--s)) calc(8px * var(--s));
+  border-radius: calc(10px * var(--s));
+  font-size: calc(10px * var(--s));
+}
+
+/* Three counters split by dividers as tall as the row: a flex row stretches
+   its items to its height. */
+.footer {
+  display: flex;
+}
+
+.counter {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.stat {
+  font-size: calc(12px * var(--s));
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.label {
+  font-size: calc(9px * var(--s));
+  color: var(--muted);
+}
+
+.divider {
+  width: 1px;
+  background: var(--hairline);
+}
+
+/* A translucent tag tilting with the frame: transformed, never laid out
+   again. */
+.badge {
+  position: absolute;
+  top: calc(6px * var(--s));
+  right: calc(6px * var(--s));
+  padding: calc(2px * var(--s)) calc(6px * var(--s));
+  border-radius: calc(8px * var(--s));
+  background: #EF4444;
+  color: white;
+  font-size: calc(9px * var(--s));
+  font-weight: 700;
+  opacity: 0.9;
+}
+
+/* Levels nested inside one another, each a row of three labels above the
+   next level. */
+.level {
+  display: flex;
+  flex-direction: column;
+  gap: calc(1px * var(--s));
+  padding: calc(1px * var(--s)) calc(1px * var(--s)) calc(1px * var(--s)) calc(3px * var(--s));
+  border-radius: calc(4px * var(--s));
+}
+
+.level-row {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(2px * var(--s));
+}
+
+.level-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: calc(2px * var(--s));
+  color: white;
+  font-size: calc(9px * var(--s));
+}
+
+.gradients {
+  position: absolute;
+  width: 0;
+  height: 0;
+}

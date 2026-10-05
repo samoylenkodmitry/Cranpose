@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- BridgeActivity is an AppCompatActivity: an AppCompat theme, fullscreen
+         like the other apps, with the screen's background. -->
+    <style name="AppTheme" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">@color/background</item>
+    </style>
+    <color name="background">#FFEEF0F5</color>
+</resources>

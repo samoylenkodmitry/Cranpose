@@ -1,0 +1,17 @@
+{
+  "name": "perf-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The gauntlet benchmark as a web page in a Capacitor app, beside the native apps.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.2",
+    "@capacitor/core": "8.5.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2",
+    "typescript": "^6.0.3"
+  }
+}

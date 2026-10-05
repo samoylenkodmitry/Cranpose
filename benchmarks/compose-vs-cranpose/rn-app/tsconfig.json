@@ -3,6 +3,6 @@
   "compilerOptions": {
     "types": []
   },
-  "include": ["**/*.ts", "**/*.tsx"],
+  "include": ["**/*.ts", "**/*.tsx", "../shared-ts/**/*.ts"],
   "exclude": ["**/node_modules"]
 }

@@ -1,0 +1,10 @@
+{
+  "appId": "dev.perfcompare.web",
+  "appName": "Perf Web",
+  "webDir": "www",
+  "plugins": {
+    "SystemBars": {
+      "hidden": true
+    }
+  }
+}

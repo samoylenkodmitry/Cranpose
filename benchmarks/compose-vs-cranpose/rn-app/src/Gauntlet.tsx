@@ -44,7 +44,7 @@ import {
   tickerCents,
   tickers,
   widthFraction,
-} from './data';
+} from '../../shared-ts/data';
 import { pngDataUri } from './png';
 
 const INK = '#111827';

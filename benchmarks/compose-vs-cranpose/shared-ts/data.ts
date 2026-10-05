@@ -1,6 +1,7 @@
-// Deterministic benchmark data: `shared-kotlin/dev/perfcompare/shared/PerfData.kt`
-// and `cranpose-app/src/data.rs` implement the same generator bit for bit, so
-// every app draws identical content. Only what the gauntlet shows is kept.
+// Deterministic benchmark data the TypeScript apps (React Native and the web
+// app) share: `shared-kotlin/dev/perfcompare/shared/PerfData.kt` and
+// `perf-data/src/lib.rs` implement the same generator bit for bit, so every
+// app draws identical content. Only what the gauntlet shows is kept.
 
 export const POST_COUNT = 5000;
 export const BAR_COUNT = 24;

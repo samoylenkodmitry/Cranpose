@@ -20,7 +20,7 @@ from pathlib import Path
 from ab import DECIDING, REPORTED, leg_record, metric_values, prime, size_window
 from measure import APPS, HEAVY, HERE, REMOTE_WINDOW, Device, device_lock, measure_run
 
-DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,maui,egui,slint'
+DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,maui,egui,slint,web'
 
 
 def measure_frameworks(args):

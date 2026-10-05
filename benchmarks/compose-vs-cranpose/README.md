@@ -7,8 +7,9 @@ device and measures both from outside either framework. The gauntlet also runs
 in `views-app` (Android Views, RecyclerView 1.4), `flutter-app` (Flutter 3.47,
 which picks Impeller on OpenGL ES on the Mate), `rn-app` (React Native 0.87 on
 the New Architecture with Hermes), `maui-app` (.NET MAUI 10, fully
-AOT-compiled), `egui-app` (egui 0.36 in eframe on OpenGL ES) and `slint-app`
-(Slint 1.18 on Skia). The Rust apps share `perf-data`, and `rust-android`
+AOT-compiled), `egui-app` (egui 0.36 in eframe on OpenGL ES), `slint-app`
+(Slint 1.18 on Skia) and `web-app` (a web page in Capacitor 8, on the device's
+Chromium WebView 153: the stack Ionic, Tauri and Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
 packages them: each crate's folder is its Android module, behind one launch
 activity that hands the native side the `am start` extras.
 
@@ -101,6 +102,10 @@ is a binding on a `Clock.frame` global, flow rows are `FlexboxLayout`s, rows
 come from a Rust `Model` as the `ListView` shows them, and a pure Rust
 callback draws the sparkline paths; Slint components cannot contain
 themselves, so a cluster's levels are boxes stacked from the outermost in.
+The web page lays everything out in CSS, trims paragraph leading with
+`text-box`, keeps only the rows on screen in the DOM, recycling rows that
+scroll off behind a spacer as tall, and sets only what changed each
+animation frame; sparklines are SVG paths in a box CSS stretches.
 
 | Tier | Columns | Scale | Ticker tiles | Cluster depth |
 | --- | ---: | ---: | ---: | ---: |
@@ -131,6 +136,10 @@ up to tier 11. On 2026-10-05 (`frameworks.py`, 380 s):
 | Compose | 4.7 | 293 |
 | React Native | 1.7 | 1232 |
 | MAUI | 1.0 | 1204 |
+| Web | 16.8 | 52* |
+
+\* The web view renders in a sandboxed process of its own, which the CPU
+count leaves out; the web row was measured beside Compose with `ab.py`.
 
 At tier 5 Cranpose drew 52.8 fps, Views 52 to 54, Flutter 29.5, Compose 26.5,
 React Native 8.4 and MAUI 6.0, while egui held 60. Raising a device's tier
@@ -159,6 +168,7 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
 | Flutter | 0.93% | Its unhinted text is about 2% wider, so a few lines break a word earlier |
 | React Native | 0.85% | Paragraph lines keep their leading above the first line and below the last |
 | MAUI | 0.10% | Lines of text a pixel apart |
+| Web | 1.24% | Lines of text a pixel apart |
 | Slint | 1.11% | Its unhinted text is a little wider, so one ticker tile wraps a row later |
 | egui | 4.55% | Its renderer filters textures in linear light, so the striped avatars average lighter; its unhinted text breaks a few titles a word earlier |
 
@@ -168,7 +178,8 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
   Compose and Views apps), `flutter-app/lib/data.dart`, `rn-app/src/data.ts`
   and `maui-app/PerfData.cs` implement the same xorshift generator, so every
   post, comment, quote and particle is identical. `data.rs` is `perf-data`,
-  which the Cranpose, egui and Slint apps share.
+  which the Cranpose, egui and Slint apps share; React Native and the web page
+  share `shared-ts/data.ts`.
 - **Fonts:** every app loads `/system/fonts/Roboto-Regular.ttf` and
   `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. React
   Native registers them with its font manager and MAUI serves them from its
@@ -377,6 +388,7 @@ and a 15 s window. Failed runs are kept in the report.
 (cd benchmarks/compose-vs-cranpose/rn-app && npm ci && cd android && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/maui-app && dotnet publish -c Release -f net10.0-android)
 (cd benchmarks/compose-vs-cranpose/rust-android && ./gradlew :egui:assembleRelease :slint:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/web-app && npm ci && npm run build && cd android && ./gradlew :app:assembleRelease)
 python3 benchmarks/compose-vs-cranpose/measure.py --serial SERIAL --output benchmarks/compose-vs-cranpose/results/RUN --install --reps 2 --screenshots
 python3 benchmarks/compose-vs-cranpose/summarize.py benchmarks/compose-vs-cranpose/results/RUN/report.json
 ```

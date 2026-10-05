@@ -63,6 +63,12 @@ APPS = {
         'activity': 'dev.perfcompare.maui/.MainActivity',
         'apk': HERE / 'maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk',
     },
+    # The web platform (Chromium's Android WebView) in Capacitor: the gauntlet only.
+    'web': {
+        'package': 'dev.perfcompare.web',
+        'activity': 'dev.perfcompare.web/.MainActivity',
+        'apk': HERE / 'web-app/android/app/build/outputs/apk/release/app-release.apk',
+    },
     # Rust frameworks, packaged by `rust-android`: the gauntlet only.
     'egui': {
         'package': 'dev.perfcompare.egui',
