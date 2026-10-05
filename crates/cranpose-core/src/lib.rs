@@ -2059,8 +2059,14 @@ pub struct RecycledNode {
 }
 
 impl RecycledNode {
-    fn new(stable_id: NodeId, node: Box<dyn Node>, warm_origin: bool) -> Self {
-        let node = node.rehouse_for_recycle().unwrap_or(node);
+    /// A removed node as a pool shell: the fresh box it rehouses into, or
+    /// the node itself cleared in place when it offers none. A rehoused
+    /// node is dropped as it is, so it is not cleared first.
+    fn new(stable_id: NodeId, mut node: Box<dyn Node>, warm_origin: bool) -> Self {
+        let node = node.rehouse_for_recycle().unwrap_or_else(|| {
+            node.prepare_for_recycle();
+            node
+        });
         Self {
             stable_id,
             node,
@@ -4164,7 +4170,7 @@ impl MemoryApplier {
     fn remove_node_storage(&mut self, node_id: NodeId) -> Result<(), NodeError> {
         self.virtual_node_ids.remove(&node_id);
         if self.high_id_nodes.contains_key(&node_id) {
-            if let Some(mut node) = self.high_id_nodes.remove(&node_id)
+            if let Some(node) = self.high_id_nodes.remove(&node_id)
                 && let Some(key) = node.recycle_key()
             {
                 let recycle_pool_limit = node.recycle_pool_limit();
@@ -4172,7 +4178,6 @@ impl MemoryApplier {
                     .high_id_warm_recycled_origins
                     .remove(&node_id)
                     .unwrap_or(false);
-                node.prepare_for_recycle();
                 self.push_recycled_node(
                     key,
                     recycle_pool_limit,
@@ -4187,7 +4192,7 @@ impl MemoryApplier {
         let physical_id = self
             .resolve_node_index(node_id)
             .ok_or(NodeError::Missing { id: node_id })?;
-        if let Some(mut node) = self.nodes[physical_id].take()
+        if let Some(node) = self.nodes[physical_id].take()
             && let Some(key) = node.recycle_key()
         {
             let recycle_pool_limit = node.recycle_pool_limit();
@@ -4195,7 +4200,6 @@ impl MemoryApplier {
                 .physical_warm_recycled_origins
                 .get_mut(physical_id)
                 .is_some_and(std::mem::take);
-            node.prepare_for_recycle();
             self.push_recycled_node(
                 key,
                 recycle_pool_limit,
