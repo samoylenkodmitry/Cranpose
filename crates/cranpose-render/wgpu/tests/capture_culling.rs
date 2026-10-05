@@ -537,18 +537,21 @@ fn a_capture_of_the_page_is_a_copy_that_records_no_pass() {
 }
 
 #[test]
-fn a_fix_up_draws_over_the_copies_in_one_loaded_pass() {
+fn a_fix_up_draws_with_its_page_region_in_one_pass() {
     let Ok(mut renderer) = support::headless_renderer() else {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
     let (plain_passes, _) = passes_and_copies(&mut renderer, staged_page(false));
     let (staged_passes, staged_copies) = passes_and_copies(&mut renderer, staged_page(true));
-    assert_eq!(staged_copies, 2, "both glasses of the stage copy the page");
+    assert_eq!(
+        staged_copies, 1,
+        "the glass with nothing to fix up copies the page; the other reads it in its fix-up pass"
+    );
     assert_eq!(
         staged_passes,
         plain_passes + 2,
-        "the stripe under the later glass is drawn over the copies in one pass, \
+        "the stripe under the later glass is drawn with its page region in one pass, \
          and the glasses draw in one more stratum"
     );
 }
