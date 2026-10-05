@@ -45,6 +45,114 @@
     }
    },
    "confirmed_regressions": {}
+  },
+  {
+   "file": "runs/2026-10-05-frameworks-manual-EVR-AL00.json",
+   "kind": "frameworks",
+   "started_at": "2026-10-05T17:03:11+00:00",
+   "device": "EVR-AL00",
+   "main": null,
+   "release": null,
+   "subjects": [
+    {
+     "name": "compose",
+     "label": "compose"
+    },
+    {
+     "name": "cranpose",
+     "label": "cranpose"
+    },
+    {
+     "name": "views",
+     "label": "views"
+    },
+    {
+     "name": "flutter",
+     "label": "flutter"
+    },
+    {
+     "name": "rn",
+     "label": "rn"
+    },
+    {
+     "name": "maui",
+     "label": "maui"
+    },
+    {
+     "name": "egui",
+     "label": "egui"
+    },
+    {
+     "name": "slint",
+     "label": "slint"
+    }
+   ],
+   "duration_s": 380,
+   "scenarios": {
+    "gauntlet": {
+     "legs": 16,
+     "summary": {
+      "compose": {
+       "fps": 4.739558038514929,
+       "cpu_ms_per_frame": 293.54166666666663,
+       "desired_to_present_p50_ms": 31.701562,
+       "janky_pct": 100.0,
+       "pss_mb": 140.3623046875
+      },
+      "cranpose": {
+       "fps": 8.575786538838457,
+       "cpu_ms_per_frame": 171.57070707070707,
+       "desired_to_present_p50_ms": 28.6132815,
+       "janky_pct": 100.0,
+       "pss_mb": 780.4599609375
+      },
+      "views": {
+       "fps": 13.25,
+       "cpu_ms_per_frame": 122.92497625830958,
+       "desired_to_present_p50_ms": 31.4942705,
+       "janky_pct": 100.0,
+       "pss_mb": 163.19384765625
+      },
+      "flutter": {
+       "fps": 19.75913457036364,
+       "cpu_ms_per_frame": 70.03765160602426,
+       "desired_to_present_p50_ms": 26.307551500000002,
+       "janky_pct": 99.58677685950414,
+       "pss_mb": 187.1533203125
+      },
+      "rn": {
+       "fps": 1.6549697592141588,
+       "cpu_ms_per_frame": 1232.3599726775956,
+       "desired_to_present_p50_ms": 37.301823,
+       "janky_pct": 99.16666666666666,
+       "pss_mb": 628.72900390625
+      },
+      "maui": {
+       "fps": 0.9918478860913902,
+       "cpu_ms_per_frame": 1204.2956592956593,
+       "desired_to_present_p50_ms": 24.1156245,
+       "janky_pct": 100.0,
+       "pss_mb": 824.7841796875
+      },
+      "egui": {
+       "fps": 51.607963246563564,
+       "cpu_ms_per_frame": 19.050524795717102,
+       "desired_to_present_p50_ms": 24.0822915,
+       "janky_pct": 15.475441782186987,
+       "pss_mb": 88.689453125
+      },
+      "slint": {
+       "fps": 11.764778561812058,
+       "cpu_ms_per_frame": 87.25352112676056,
+       "desired_to_present_p50_ms": 36.45625,
+       "janky_pct": 100.0,
+       "pss_mb": 451.67041015625
+      }
+     },
+     "verdicts": {}
+    }
+   },
+   "confirmed_regressions": {}
   }
  ]
 }
