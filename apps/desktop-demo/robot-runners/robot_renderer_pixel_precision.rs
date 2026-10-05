@@ -47,7 +47,16 @@ pub(crate) fn main() {
                     }
                 }
             }
-            assert_eq!(fractional, [39, 139, 203]);
+            // The 82% source over the background is 39.26 red. Blending into
+            // an 8-bit target rounds that in the driver's own arithmetic:
+            // Metal stores 39, llvmpipe's fixed-point blend 40.
+            assert!(
+                fractional
+                    .iter()
+                    .zip([39u8, 139, 203])
+                    .all(|(actual, exact)| actual.abs_diff(exact) <= 1),
+                "the fractional pixel must stay within a level of [39, 139, 203]: {fractional:?}"
+            );
             assert_eq!(faded, 0);
             assert!(opaque > 100_000);
             assert_eq!(opaque_bounds, [179, 68, 595, 386]);
