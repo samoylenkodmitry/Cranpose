@@ -354,11 +354,13 @@ fn assert_matches_reference(
 ) {
     let frozen = capture(renderer, graph(REFERENCE_WGSL), root_scale);
     let current = capture(renderer, graph(LIQUID_GLASS_WGSL), root_scale);
-    // A step of rounding is not a picture change: Vulkan drivers compile the
-    // two shaders' equal arithmetic in different orders, and one channel of
-    // one pixel came out a step apart on Intel and NVIDIA (#859).
+    // A step of rounding is not a picture change: drivers compile the two
+    // shaders' equal arithmetic in different orders, and one channel of one
+    // pixel came out a step apart on Intel and NVIDIA (#859). A lens lands in
+    // an 8-bit stage target and then on the 8-bit page, so each rounding can
+    // split the two by a step.
     let differing =
-        support::pixels_differing_beyond(FRAME_WIDTH, &frozen.pixels, &current.pixels, 1);
+        support::pixels_differing_beyond(FRAME_WIDTH, &frozen.pixels, &current.pixels, 2);
     assert!(
         differing.is_empty(),
         "{label}: the shipped glass shader renders differently from tests/fixtures/liquid_glass_reference.wgsl; a deliberate picture change re-freezes that file in the same commit: {}",

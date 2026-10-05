@@ -603,7 +603,7 @@ fn ios_surface_config(
         .ok_or(LaunchError::NoSurfaceAlphaMode)?;
     let present_mode = crate::present_mode::select_present_mode(&caps);
     Ok(wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: cranpose_render_wgpu::presentable_root_usages(caps.usages),
         format,
         width,
         height,

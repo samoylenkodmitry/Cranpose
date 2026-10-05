@@ -36,3 +36,7 @@ Read the matching workflow before the operation; do not load all references at s
 - Bug fixes and optimization: [bugs and performance](docs/agent-workflows.md#bugs-and-performance); failing regression first, measured work, exact pictures.
 - Device UI, dragging or Compose comparisons: [UI/platform references](docs/agent-workflows.md#ui-and-platform-references).
 - Releases or new lessons: [release and lessons](docs/agent-workflows.md#release-and-lessons). Keep notes short and remove resolved/duplicate incidents.
+
+## Simple speech
+
+Never leave prepositions trailing at the ends of clauses (e.g., use "the version by which..." instead of "the version... by"), and keep modifiers close to the words they modify. Use simple words in their original meaning. no poetic, no jargon. No contrastive sentences. No special symbols. No Trailing Participial Phrases. NO for any of these: Overused Buzzwords, Empty Transition Openers, unnecessary adjectives that try to sell an ordinary fact, list things in triples (e.g., "fast, efficient, and reliable" or "streamline, optimize, and scale")., Not only... but also..., wrap-up summaries that don't add actual data. | **No sales pitch or hype:** Adopt a neutral, engineering-first tone. Never use marketing fluff, exclamation points for enthusiasm, or words designed to "sell" a feature (e.g., *effortless, supercharge, magical, lightning-fast*). State facts and mechanics directly.

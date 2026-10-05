@@ -332,7 +332,7 @@ pub async fn run(
 
     let present_mode = crate::present_mode::select_present_mode(&surface_caps);
     let surface_config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: cranpose_render_wgpu::presentable_root_usages(surface_caps.usages),
         format: surface_format,
         width: buffer_width,
         height: buffer_height,

@@ -4,7 +4,7 @@ pub(crate) use cranpose_render_common::debug_toggles;
 pub use debug_toggles::{
     DebugToggle, debug_toggle, debug_toggle_os, set_debug_toggle, set_debug_toggle_os,
 };
-pub use offscreen::composition_bytes_per_pixel;
+pub use offscreen::COMPOSITION_BYTES_PER_PIXEL;
 pub use render::presentable_root_usages;
 mod ablation;
 mod arc_trig_fill;

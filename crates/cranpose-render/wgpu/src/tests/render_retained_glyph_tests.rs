@@ -2,7 +2,6 @@ use cranpose_ui::text::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::Color;
 
 use super::*;
-use crate::offscreen::composition_format;
 
 fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
     let (lock, device, queue) = crate::frame_graph::upload_test_device();
@@ -10,7 +9,7 @@ fn test_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
     let renderer = GpuRenderer::new(GpuRendererInit {
         device: Arc::new(device),
         queue: Arc::new(queue),
-        surface_format: composition_format(),
+        surface_format: wgpu::TextureFormat::Rgba8Unorm,
         adapter_backend: backend,
         adapter_downlevel: wgpu::DownlevelFlags::empty(),
         text_fonts: SoftwareTextFontSet::empty(),
@@ -114,7 +113,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
     let (device, queue) = (Arc::clone(&renderer.device), Arc::clone(&renderer.queue));
     let target = crate::offscreen::create_2d_texture(
         &renderer.device,
-        composition_format(),
+        renderer.composition_format,
         8,
         8,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
@@ -176,11 +175,7 @@ fn assert_white_columns(
 ) {
     let pixels = crate::frame_graph::read_test_texture(&renderer.device, &renderer.queue, target);
     assert_eq!(renderer.device_error_count(), 0);
-    let white: &[u8] = if composition_format() == wgpu::TextureFormat::Rgba8Unorm {
-        &[255; 4]
-    } else {
-        &[0, 60, 0, 60, 0, 60, 0, 60]
-    };
+    let white: &[u8] = &[255; 4];
     for y in 0..2 {
         for x in 0..8 {
             let offset = (y * 8 + x) * white.len();
@@ -532,7 +527,7 @@ fn fonted_renderer() -> (std::sync::MutexGuard<'static, ()>, GpuRenderer) {
     let renderer = GpuRenderer::new(GpuRendererInit {
         device: Arc::new(device),
         queue: Arc::new(queue),
-        surface_format: composition_format(),
+        surface_format: wgpu::TextureFormat::Rgba8Unorm,
         adapter_backend: backend,
         adapter_downlevel: wgpu::DownlevelFlags::empty(),
         text_fonts: SoftwareTextFontSet::from_font(font),
@@ -592,7 +587,7 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
 fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, u32) {
     let target = crate::offscreen::create_2d_texture(
         &renderer.device,
-        composition_format(),
+        renderer.composition_format,
         128,
         32,
         wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
@@ -641,9 +636,7 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
 }
 
 fn pixel_at(pixels: &[u8], x: usize, y: usize) -> &[u8] {
-    let bytes = composition_format()
-        .block_copy_size(None)
-        .expect("a sized format") as usize;
+    let bytes = COMPOSITION_BYTES_PER_PIXEL as usize;
     let offset = (y * 128 + x) * bytes;
     &pixels[offset..offset + bytes]
 }
