@@ -89,7 +89,7 @@ impl PlatformEnvironment {
     pub(crate) fn compose_root(&self, content: impl FnOnce()) {
         let theme = cranpose_services::default_system_theme();
         let launch_args = cranpose_services::launch_args();
-        let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
+        let runtime = cranpose_core::with_current_composer(cranpose_core::Composer::runtime_handle);
         cranpose_core::CompositionLocalProvider(
             [
                 self.safe_area.provide(local_safe_area_insets(), &runtime),
