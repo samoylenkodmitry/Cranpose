@@ -32,13 +32,35 @@ impl SlotTable {
         self.write_group_indexes(from, self.groups.len());
     }
 
+    /// Writes every group's index into its anchor again.
+    pub(in crate::slot) fn rewrite_group_indexes(&mut self) {
+        self.stale_group_indexes = StaleGroupIndexes::default();
+        self.write_group_indexes(0, self.groups.len());
+    }
+
+    /// Whether an anchor holding `stored` may trail its group.
+    #[inline]
+    pub(in crate::slot) fn group_index_may_be_stale(&self, stored: usize) -> bool {
+        let stale = self.stale_group_indexes;
+        stale.inserts > 0 && stored >= stale.from
+    }
+
     /// How many inserts the stale indexes trail by.
     pub(in crate::slot) fn stale_group_inserts(&self) -> usize {
         self.stale_group_indexes.inserts
     }
 
-    /// Notes a group inserted at `index`, whose anchor already holds it.
+    /// Notes a group inserted at `index`, whose anchor already holds it. A
+    /// group appended at the end moves no other group, so it leaves no index
+    /// stale.
+    #[inline]
     pub(in crate::slot) fn note_group_insert(&mut self, index: usize) {
+        if index + 1 < self.groups.len() {
+            self.note_group_inserted_before_others(index);
+        }
+    }
+
+    fn note_group_inserted_before_others(&mut self, index: usize) {
         let stale = &mut self.stale_group_indexes;
         stale.from = if stale.inserts == 0 {
             index
@@ -53,11 +75,11 @@ impl SlotTable {
 
     /// Writes the indexes inserts left stale, before any other change moves
     /// groups.
+    #[inline]
     pub(in crate::slot) fn flush_stale_group_indexes(&mut self) {
         if self.stale_group_indexes.inserts > 0 {
             let from = self.stale_group_indexes.from;
-            self.stale_group_indexes = StaleGroupIndexes::default();
-            self.write_group_indexes(from, self.groups.len());
+            self.refresh_group_indexes_from(from);
         }
     }
 

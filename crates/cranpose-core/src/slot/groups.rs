@@ -30,8 +30,18 @@ impl SlotTable {
         self.groups.len()
     }
 
+    #[inline]
     pub(in crate::slot) fn active_group_index(&self, anchor: AnchorId) -> Option<usize> {
         let stored = self.anchors.active_index(anchor)?;
+        if stored < self.groups.len() && !self.group_index_may_be_stale(stored) {
+            return Some(stored);
+        }
+        self.locate_stale_group_index(stored, anchor)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn locate_stale_group_index(&self, stored: usize, anchor: AnchorId) -> Option<usize> {
         if stored >= self.groups.len() {
             log::error!(
                 "group anchor {anchor:?} points to active group index {stored}, but the slot table has only {} active groups",
