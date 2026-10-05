@@ -147,14 +147,10 @@ impl DeviceRect {
     }
 }
 
-/// What a layer's captures read beneath the layer's own pixels: the base its
-/// page starts from, the parent's page under it when it is an isolated child
-/// reading its backdrop, and a description of that parent content for the
-/// backdrop result cache's key.
 struct Beneath<'a> {
     base: wgpu::LoadOp<wgpu::Color>,
     page: Option<PageBase>,
-    described: Vec<BeneathSegment<'a>>,
+    source: Option<BeneathSegment<'a>>,
 }
 
 impl Beneath<'_> {
@@ -162,22 +158,17 @@ impl Beneath<'_> {
         Self {
             base,
             page: None,
-            described: Vec::new(),
+            source: None,
         }
     }
 }
 
-/// One ancestor scene's content beneath a layer, as the backdrop result
-/// cache hashes it: the ops below `z_end` outside `excluded`, the composites
-/// already drawn and still pending below it, and where the scene's device
-/// origin sits in the layer's device space.
-#[derive(Clone, Copy)]
 struct BeneathSegment<'a> {
+    base: wgpu::LoadOp<wgpu::Color>,
     scene: &'a CompositorScene,
     z_end: usize,
     drawn: &'a [ResolvedComposite],
     pending: &'a [ResolvedComposite],
-    excluded: &'a [(usize, usize)],
     placement: [f32; 2],
 }
 
@@ -499,6 +490,12 @@ fn composite_z(composite: &ResolvedComposite) -> usize {
 
 fn backdrop_cache_keys_use_pending(pass: &LayerPass<'_>) -> bool {
     !NO_BACKDROP_CACHE.flag()
+        && matches!(pass.beneath.base, wgpu::LoadOp::Clear(_))
+        && pass
+            .beneath
+            .source
+            .as_ref()
+            .is_none_or(|source| matches!(source.base, wgpu::LoadOp::Clear(_)))
         && !matches!(
             pass.beneath.page,
             Some(PageBase {
@@ -1542,8 +1539,9 @@ fn stage_blur_regions(
     view: &AtlasView<'_>,
     scale: f32,
     sinks: &mut SideRegionSinks<'_>,
-) -> Result<Vec<Option<TexelRect>>, String> {
-    let mut slots = vec![None; members.len()];
+    slots: &mut Vec<Option<TexelRect>>,
+) -> Result<(), String> {
+    slots.resize(members.len(), None);
     for (member, blur) in blurred {
         let (index, placement) = members[*member];
         let (width, height) = items[index].capture_rect.pixel_size();
@@ -1562,7 +1560,7 @@ fn stage_blur_regions(
             read: member_read_texels(items[index], placement, scale),
         });
     }
-    Ok(slots)
+    Ok(())
 }
 
 fn mean_capture_rect(item: &PendingBackdrop<'_>) -> DeviceRect {
@@ -1590,14 +1588,15 @@ fn stage_substrate_regions(
     scale: f32,
     ablate: bool,
     sinks: SideRegionSinks<'_>,
-) -> Result<Vec<SubstrateRegions>, String> {
+    member_regions: &mut Vec<SubstrateRegions>,
+) -> Result<(), String> {
     let SideRegionSinks {
         regions,
         region_slots,
         averaged,
         average_slots,
     } = sinks;
-    let mut member_regions = vec![[None; MAX_SUBSTRATES]; members.len()];
+    member_regions.resize(members.len(), [None; MAX_SUBSTRATES]);
     for (member, (index, placement)) in members.iter().enumerate() {
         let (source_width, source_height) = items[*index].capture_rect.pixel_size();
         let source = (placement.x, placement.y, source_width, source_height);
@@ -1652,7 +1651,7 @@ fn stage_substrate_regions(
             }));
         }
     }
-    Ok(member_regions)
+    Ok(())
 }
 
 /// Points every blur and mean at its atlas slot when each has one and no
@@ -1682,48 +1681,41 @@ fn direct_side_slots(
     direct
 }
 
-/// The copies of side results from `result` into their atlas slots.
-fn side_result_copies<'a>(
-    result: &'a OffscreenTarget,
-    atlas: &'a OffscreenTarget,
+fn record_side_result_copies(
+    recorder: &mut impl FrameCommandRecorder,
+    result: &OffscreenTarget,
+    atlas: &OffscreenTarget,
     regions: &[BlurRegion],
     region_slots: &[Option<[u32; 2]>],
     averaged: &[SubstrateRegion],
     average_slots: &[Option<[u32; 2]>],
-) -> Vec<TextureRegionCopy<'a>> {
-    let blur_copies = regions.iter().zip(region_slots).map(|(region, slot)| {
-        (
-            (
-                region.scratch.0,
-                region.scratch.1,
-                region.scratch.2,
-                region.scratch.3,
-            ),
-            *slot,
-        )
-    });
-    let average_copies = averaged.iter().zip(average_slots).map(|(substrate, slot)| {
-        let (width, height) = match substrate.average {
-            SubstrateAverage::Mean => (1, 1),
-            SubstrateAverage::Block(_) => (substrate.scratch.2, substrate.scratch.3),
-        };
-        (
-            (substrate.scratch.0, substrate.scratch.1, width, height),
-            *slot,
-        )
-    });
-    blur_copies
-        .chain(average_copies)
-        .filter_map(|((x, y, width, height), slot)| {
-            Some(TextureRegionCopy {
+) {
+    for (region, slot) in regions.iter().zip(region_slots) {
+        if let Some(dest_origin) = slot {
+            recorder.copy_texture_region(TextureRegionCopy {
                 source: result,
-                source_origin: [x, y],
+                source_origin: [region.scratch.0, region.scratch.1],
                 dest: atlas,
-                dest_origin: slot?,
-                size: [width, height],
-            })
-        })
-        .collect()
+                dest_origin: *dest_origin,
+                size: [region.scratch.2, region.scratch.3],
+            });
+        }
+    }
+    for (substrate, slot) in averaged.iter().zip(average_slots) {
+        if let Some(dest_origin) = slot {
+            let size = match substrate.average {
+                SubstrateAverage::Mean => [1, 1],
+                SubstrateAverage::Block(_) => [substrate.scratch.2, substrate.scratch.3],
+            };
+            recorder.copy_texture_region(TextureRegionCopy {
+                source: result,
+                source_origin: [substrate.scratch.0, substrate.scratch.1],
+                dest: atlas,
+                dest_origin: *dest_origin,
+                size,
+            });
+        }
+    }
 }
 
 fn region_tuple((x, y, width, height): TexelRect) -> (f32, f32, f32, f32) {
@@ -1847,15 +1839,38 @@ impl StageLayout {
 /// What a stage renders beside its capture atlas: the texture holding the
 /// blurred regions, per atlas member the downscaled slot its blur wrote,
 /// and per member the regions of its substrates in the texture it reads.
-struct StageSideRegions {
+struct StageSideRegions<'a> {
     result: Rc<OffscreenTarget>,
-    blurred: Vec<Option<TexelRect>>,
-    substrates: Vec<SubstrateRegions>,
+    blurred: &'a [Option<TexelRect>],
+    substrates: &'a [SubstrateRegions],
 }
 
-impl StageSideRegions {
+impl StageSideRegions<'_> {
     fn blurred_slot(&self, member: usize) -> Option<(&Rc<OffscreenTarget>, TexelRect)> {
         self.blurred[member].map(|slot| (&self.result, slot))
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct StageSideScratch {
+    blurred: Vec<(usize, BlurSpec)>,
+    regions: Vec<BlurRegion>,
+    region_slots: Vec<Option<[u32; 2]>>,
+    averaged: Vec<SubstrateRegion>,
+    average_slots: Vec<Option<[u32; 2]>>,
+    slots: Vec<Option<TexelRect>>,
+    member_regions: Vec<SubstrateRegions>,
+}
+
+impl StageSideScratch {
+    fn clear(&mut self) {
+        self.blurred.clear();
+        self.regions.clear();
+        self.region_slots.clear();
+        self.averaged.clear();
+        self.average_slots.clear();
+        self.slots.clear();
+        self.member_regions.clear();
     }
 }
 
@@ -3230,8 +3245,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let scale = pass.scale;
         let mut hasher = capture_hasher();
         hash_base(pass.beneath.base, &mut hasher);
-        for segment in &pass.beneath.described {
-            let ops = filtered_ops(&segment.scene.draw_ops, segment.z_end, segment.excluded);
+        if let Some(segment) = pass.beneath.source.as_ref() {
+            hash_base(segment.base, &mut hasher);
+            let ops = filtered_ops(&segment.scene.draw_ops, segment.z_end, &[]);
             let window = capture_window(
                 item.capture_rect
                     .translated(Point::new(-segment.placement[0], -segment.placement[1])),
@@ -3387,49 +3403,54 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         items: &[&PendingBackdrop<'_>],
         layout: &StageLayout,
     ) -> Result<Vec<ResolvedComposite>, String> {
-        let scale = pass.scale;
-        let placements = &layout.placements;
-        let mut singles: Vec<Option<Rc<OffscreenTarget>>> = vec![None; items.len()];
-        let stage_end = items.iter().map(|item| item.z).max().unwrap_or(0);
-        self.flush_page(pass, stage_end)?;
-        for (index, item) in items.iter().enumerate() {
-            if placements[index].is_none() {
-                singles[index] =
-                    Some(self.capture(pass, item.z, item.capture_rect, "Backdrop Capture")?);
+        let mut scratch = std::mem::take(&mut self.renderer.stage_side_scratch);
+        let result = (|| {
+            let scale = pass.scale;
+            let placements = &layout.placements;
+            let mut singles: Vec<Option<Rc<OffscreenTarget>>> = vec![None; items.len()];
+            let stage_end = items.iter().map(|item| item.z).max().unwrap_or(0);
+            self.flush_page(pass, stage_end)?;
+            for (index, item) in items.iter().enumerate() {
+                if placements[index].is_none() {
+                    singles[index] =
+                        Some(self.capture(pass, item.z, item.capture_rect, "Backdrop Capture")?);
+                }
             }
-        }
-        let mut outputs = Vec::with_capacity(items.len());
-        for view in layout.atlas_views() {
-            if view.members.is_empty() {
-                continue;
+            let mut outputs = Vec::with_capacity(items.len());
+            for view in layout.atlas_views() {
+                if view.members.is_empty() {
+                    continue;
+                }
+                let (width, height) = view.size();
+                let texture = &self.acquire_transient("Backdrop Capture Atlas", width, height);
+                let regions: Vec<CaptureRegion> = view
+                    .members
+                    .iter()
+                    .map(|(index, placement)| CaptureRegion {
+                        z: items[*index].z,
+                        rect: items[*index].capture_rect,
+                        origin: [placement.x as f32, placement.y as f32],
+                    })
+                    .collect();
+                self.capture_regions(pass, &regions, texture, "Backdrop Capture Atlas Pass")?;
+                let side = self.stage_side_regions(&mut scratch, texture, items, &view, scale)?;
+                outputs.extend(stage_composites(
+                    texture,
+                    side.as_ref(),
+                    items,
+                    &view.members,
+                    self.renderer.ablation.glass,
+                ));
             }
-            let (width, height) = view.size();
-            let texture = &self.acquire_transient("Backdrop Capture Atlas", width, height);
-            let regions: Vec<CaptureRegion> = view
-                .members
-                .iter()
-                .map(|(index, placement)| CaptureRegion {
-                    z: items[*index].z,
-                    rect: items[*index].capture_rect,
-                    origin: [placement.x as f32, placement.y as f32],
-                })
-                .collect();
-            self.capture_regions(pass, &regions, texture, "Backdrop Capture Atlas Pass")?;
-            let side = self.stage_side_regions(texture, items, &view, scale)?;
-            outputs.extend(stage_composites(
-                texture,
-                side.as_ref(),
-                items,
-                &view.members,
-                self.renderer.ablation.glass,
-            ));
-        }
-        for (index, item) in items.iter().enumerate() {
-            if let Some(capture) = singles[index].take() {
-                outputs.push(self.resolve_captured_backdrop(item, capture, scale)?);
+            for (index, item) in items.iter().enumerate() {
+                if let Some(capture) = singles[index].take() {
+                    outputs.push(self.resolve_captured_backdrop(item, capture, scale)?);
+                }
             }
-        }
-        Ok(outputs)
+            Ok(outputs)
+        })();
+        self.renderer.stage_side_scratch = scratch;
+        result
     }
 
     fn resolve_child_backdrop(
@@ -3627,60 +3648,72 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         }
     }
 
-    fn stage_side_regions(
+    fn stage_side_regions<'s>(
         &mut self,
+        side_scratch: &'s mut StageSideScratch,
         atlas: &Rc<OffscreenTarget>,
         items: &[&PendingBackdrop<'_>],
         view: &AtlasView<'_>,
         scale: f32,
-    ) -> Result<Option<StageSideRegions>, String> {
+    ) -> Result<Option<StageSideRegions<'s>>, String> {
+        side_scratch.clear();
         let members = &view.members;
-        let blurred: Vec<(usize, BlurSpec)> = members
-            .iter()
-            .enumerate()
-            .filter_map(|(member, (index, _))| Some((member, items[*index].batched?.blur()?)))
-            .collect();
-        let blurred = if self.renderer.ablation.blur {
-            Vec::new()
-        } else {
-            blurred
-        };
-        if blurred.is_empty()
+        if !self.renderer.ablation.blur {
+            side_scratch.blurred.extend(
+                members
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(member, (index, _))| {
+                        Some((member, items[*index].batched?.blur()?))
+                    }),
+            );
+        }
+        if side_scratch.blurred.is_empty()
             && members
                 .iter()
                 .all(|(index, _)| view.substrates(*index).is_empty())
         {
             return Ok(None);
         }
-        let mut regions = Vec::with_capacity(blurred.len());
-        let mut region_slots = Vec::with_capacity(blurred.len());
-        let mut averaged = Vec::new();
-        let mut average_slots = Vec::new();
         let mut sinks = SideRegionSinks {
-            regions: &mut regions,
-            region_slots: &mut region_slots,
-            averaged: &mut averaged,
-            average_slots: &mut average_slots,
+            regions: &mut side_scratch.regions,
+            region_slots: &mut side_scratch.region_slots,
+            averaged: &mut side_scratch.averaged,
+            average_slots: &mut side_scratch.average_slots,
         };
-        let slots = stage_blur_regions(&blurred, members, items, view, scale, &mut sinks)?;
-        let member_regions = stage_substrate_regions(
+        stage_blur_regions(
+            &side_scratch.blurred,
+            members,
+            items,
+            view,
+            scale,
+            &mut sinks,
+            &mut side_scratch.slots,
+        )?;
+        stage_substrate_regions(
             members,
             items,
             view,
             scale,
             self.renderer.ablation.substrates,
             sinks,
+            &mut side_scratch.member_regions,
         )?;
-        if regions.is_empty() && averaged.is_empty() {
+        if side_scratch.regions.is_empty() && side_scratch.averaged.is_empty() {
             return Ok(Some(StageSideRegions {
                 result: Rc::clone(atlas),
-                blurred: slots,
-                substrates: member_regions,
+                blurred: &side_scratch.slots,
+                substrates: &side_scratch.member_regions,
             }));
         }
         let (width, height) = view.side_size();
-        let direct = direct_side_slots(&mut regions, &region_slots, &mut averaged, &average_slots);
-        let scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
+        let direct = direct_side_slots(
+            &mut side_scratch.regions,
+            &side_scratch.region_slots,
+            &mut side_scratch.averaged,
+            &side_scratch.average_slots,
+        );
+        let blur_scratch = self.acquire_transient("Backdrop Blur Scratch", width, height);
         let result = self.acquire_transient("Backdrop Blur Result", width, height);
         let device = self.renderer.device.clone();
         self.renderer.effect_renderer.record_substrates(
@@ -3693,31 +3726,29 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             self.recorder,
             &device,
             atlas,
-            &scratch,
+            &blur_scratch,
             &result,
             AtlasSideWork {
-                blurs: &regions,
-                averages: &averaged,
+                blurs: &side_scratch.regions,
+                averages: &side_scratch.averaged,
                 blur_output: direct.then_some(atlas),
             },
         );
         if !direct {
-            let copies = side_result_copies(
+            record_side_result_copies(
+                self.recorder,
                 &result,
                 atlas,
-                &regions,
-                &region_slots,
-                &averaged,
-                &average_slots,
+                &side_scratch.regions,
+                &side_scratch.region_slots,
+                &side_scratch.averaged,
+                &side_scratch.average_slots,
             );
-            for copy in copies {
-                self.recorder.copy_texture_region(copy);
-            }
         }
         Ok(Some(StageSideRegions {
             result,
-            blurred: slots,
-            substrates: member_regions,
+            blurred: &side_scratch.slots,
+            substrates: &side_scratch.member_regions,
         }))
     }
 
@@ -4928,30 +4959,18 @@ fn beneath_for_child<'a>(
     let pending = &pass.pending[..pass
         .pending
         .partition_point(|composite| composite.z_index <= z)];
-    let mut described: Vec<BeneathSegment<'a>> = pass
-        .beneath
-        .described
-        .iter()
-        .map(|segment| BeneathSegment {
-            placement: [
-                segment.placement[0] - shift.x,
-                segment.placement[1] - shift.y,
-            ],
-            ..*segment
-        })
-        .collect();
-    described.push(BeneathSegment {
+    let source = Some(BeneathSegment {
+        base: pass.beneath.base,
         scene,
         z_end: z + 1,
         drawn,
         pending,
-        excluded: &[],
         placement: [-shift.x, -shift.y],
     });
     Ok(Beneath {
         base: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         page,
-        described,
+        source,
     })
 }
 

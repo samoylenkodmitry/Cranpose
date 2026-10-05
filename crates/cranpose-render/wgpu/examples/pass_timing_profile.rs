@@ -8,7 +8,7 @@ use cranpose_ui::{
     widgets::{Box, BoxSpec, LazyColumn, LazyColumnSpec, Text},
 };
 use cranpose_ui_graphics::{LiquidGlassRect, LiquidGlassSpec, TileMode, liquid_glass_effect};
-use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
+use stats_alloc::{INSTRUMENTED_SYSTEM, Region, Stats, StatsAlloc};
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
@@ -24,6 +24,15 @@ fn measured_frames() -> usize {
         .unwrap_or(240)
 }
 const SCROLL_DELTA_PER_FRAME: f32 = -30.0;
+
+fn add_stats(total: &mut Stats, delta: Stats) {
+    total.allocations += delta.allocations;
+    total.deallocations += delta.deallocations;
+    total.reallocations += delta.reallocations;
+    total.bytes_allocated += delta.bytes_allocated;
+    total.bytes_deallocated += delta.bytes_deallocated;
+    total.bytes_reallocated += delta.bytes_reallocated;
+}
 
 #[composable]
 fn CardRow(index: usize) {
@@ -165,7 +174,7 @@ fn main() {
     let mut renderer = cranpose_render_wgpu::WgpuRenderer::new(&[
         cranpose_render_common::software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
     ]);
-    renderer.init_gpu(
+    renderer.init_gpu_compiling_inline_for_tests(
         std::sync::Arc::new(device),
         std::sync::Arc::new(queue),
         wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -223,24 +232,30 @@ fn main() {
     }
     let measured_frames = measured_frames();
     let region = Region::new(GLOBAL);
+    let mut renderer_allocations = Stats::default();
     let start = std::time::Instant::now();
     for _ in 0..measured_frames {
         scroll(&mut shell);
         shell.update();
+        let render_region = Region::new(GLOBAL);
         shell
             .renderer()
             .render(&target, &view, FRAME_WIDTH, FRAME_HEIGHT)
             .expect("frame render");
+        add_stats(&mut renderer_allocations, render_region.change());
     }
     let elapsed = start.elapsed().as_secs_f64();
     let allocations = region.change();
 
     println!(
-        "{{\"frames\":{measured_frames},\"elapsed_ns\":{},\"allocations\":{},\"reallocations\":{},\"bytes_allocated\":{}}}",
+        "{{\"frames\":{measured_frames},\"elapsed_ns\":{},\"allocations\":{},\"reallocations\":{},\"bytes_allocated\":{},\"renderer_allocations\":{},\"renderer_reallocations\":{},\"renderer_bytes_allocated\":{}}}",
         (elapsed * 1_000_000_000.0) as u128,
         allocations.allocations,
         allocations.reallocations,
         allocations.bytes_allocated,
+        renderer_allocations.allocations,
+        renderer_allocations.reallocations,
+        renderer_allocations.bytes_allocated,
     );
 
     let report = shell.renderer().gpu_pass_timings();
