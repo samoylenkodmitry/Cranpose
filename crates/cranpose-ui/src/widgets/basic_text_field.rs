@@ -395,6 +395,15 @@ fn caret_window_rect(
     caret_window_geometry(text, style, metrics, offset, LineAffinity::Upstream).1
 }
 
+/// Consumer half of bug 2: while the field is focused, asks the nearest scroll
+/// container (via [`local_bring_into_view_responder`]) to scroll the caret clear
+/// of the on-screen keyboard ([`local_ime_insets`]).
+///
+/// The request is triggered only by focus, caret movement, or a change in the
+/// keyboard inset — never by scrolling — so the user is never yanked back while
+/// deliberately scrolling the field out of view. The caret rect handed to the
+/// responder is always recomputed from the live metrics, so the scroll delta is
+/// correct even as the keyboard animates in.
 #[composable]
 fn BringCaretIntoView(
     state: TextFieldState,
@@ -407,13 +416,16 @@ fn BringCaretIntoView(
     let ime_bottom = local_ime_insets().current().bottom;
     let responder = local_bring_into_view_responder().current();
 
+    let previous: Rc<Cell<Option<(usize, usize, i64)>>> =
+        remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
+
     if !metrics.focused {
+        previous.set(None);
         return;
     }
     let Some(responder) = responder else {
         return;
     };
-    let window_height = super::popup::local_popup_viewport().current().get().height;
 
     let text = state.text();
     let selection = state.selection();
@@ -422,20 +434,17 @@ fn BringCaretIntoView(
         selection.start,
         selection.end,
         (ime_bottom * 4.0).round() as i64,
-        (window_height * 4.0).round() as i64,
     );
-    let clock =
-        cranpose_core::with_current_composer(cranpose_core::Composer::runtime_handle).frame_clock();
-    cranpose_core::DisposableEffect(key, move |scope| {
-        let registration = clock.with_frame_nanos(move |_| {
-            let Some(metrics) = controller.metrics_now().filter(|metrics| metrics.focused) else {
-                return;
-            };
-            let caret = caret_window_rect(&text, &style, &metrics, selection.start);
-            responder.reveal_in_window(caret, ime_bottom, window_height);
-        });
-        crate::request_render_invalidation();
-        scope.on_dispose(move || drop(registration))
+    SideEffect(move || {
+        if previous.get() == Some(key) {
+            return;
+        }
+        previous.set(Some(key));
+        let Some(metrics) = controller.metrics_now() else {
+            return;
+        };
+        let caret = caret_window_rect(&text, &style, &metrics, selection.start);
+        responder.bring_into_view(caret, ime_bottom);
     });
 }
 

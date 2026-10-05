@@ -266,16 +266,14 @@ public final class CranposeTextInput {
      */
     private static void attachKeyboardListener(SessionState state, final ViewGroup content) {
         final View root = content.getRootView();
-        final Rect frame = new Rect();
-        final int[] location = new int[2];
         ViewTreeObserver.OnGlobalLayoutListener listener = () -> {
             if (state.disposed) {
                 return;
             }
+            Rect frame = new Rect();
             root.getWindowVisibleDisplayFrame(frame);
-            root.getLocationOnScreen(location);
             int windowHeight = root.getHeight();
-            int covered = location[1] + windowHeight - frame.bottom;
+            int covered = windowHeight - frame.bottom;
             // Ignore small margins (navigation bar / rounding) that are not the
             // keyboard, so a hidden keyboard reports zero.
             int keyboardHeight = covered > windowHeight / 6 ? covered : 0;
