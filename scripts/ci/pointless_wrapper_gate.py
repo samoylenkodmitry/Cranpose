@@ -14,7 +14,7 @@ and names nothing new; it puts a second name in front of a call the caller
 could have written, and a reader who meets the name has to go and look at it
 to learn it meant nothing:
 
-    fn winamp_window_modifier_for(config: WindowConfig) -> Modifier {
+    fn wsz_window_modifier_for(config: WindowConfig) -> Modifier {
         Modifier::empty().window(config)
     }
 

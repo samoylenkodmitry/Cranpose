@@ -28,9 +28,9 @@ exact versions.
 | `miniz_oxide` | `flate2` and `png` |
 | `objc2`, `objc2-app-kit`, `objc2-foundation` | AccessKit's macOS adapter and winit's AppKit backend |
 | `syn` | Procedural macro dependencies on different major versions |
-| `windows-sys`, `windows-targets`, `windows_x86_64_msvc` | Platform verifier, temporary files, clipboard and window/runtime dependencies |
+| `windows-sys` | Platform verifier, temporary files, clipboard and window/runtime dependencies |
 | `env_filter` (all features) | Android and desktop loggers |
-| `rustc-hash` (all features) | UniFFI/Askama binding generation and the shader stack |
+| `rustc-hash` | Fluent localization and the shader stack; UniFFI's all-features bindings also enable Askama |
 
 Remove locally resolvable splits. Reserve the debt list for upstream constraints.
 Inspect the current dependency requirements before each upgrade.

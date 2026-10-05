@@ -1863,6 +1863,14 @@ fn parse_hunk_spans_multiple_hunks_and_files() {
 }
 
 #[test]
+fn renamed_paths_from_status_maps_the_new_path_to_its_old_path() {
+    assert_eq!(
+        gate_diff::renamed_paths_from_status("R083\tsrc/old.rs\tsrc/new.rs\nM\tsrc/kept.rs\n"),
+        BTreeMap::from([("src/new.rs".to_owned(), "src/old.rs".to_owned())])
+    );
+}
+
+#[test]
 fn code_tokens_plain_code_line() {
     assert_eq!(
         gate_diff::code_tokens_by_line("let x = 1;"),
@@ -2663,6 +2671,41 @@ fn changed_ranges_reformatting_a_line_while_also_changing_it_still_touches_it() 
         gate_diff::any_intersect(touched, (1, 13)),
         "a real value change bundled with a reformat must not be normalized away, got {touched:?}"
     );
+}
+
+#[test]
+fn changed_ranges_and_old_blobs_follow_a_renamed_source_file() {
+    let tmp = unique_temp_dir();
+    let repo = tmp.join("repo");
+    init_repo_with_base_commit(&repo);
+
+    let old_path = repo.join("src/lib.rs");
+    let new_path = repo.join("src/renamed.rs");
+    fs::rename(&old_path, &new_path).expect("rename source file");
+    let source = fs::read_to_string(&new_path)
+        .expect("read renamed source")
+        .replace(
+            "fn deeply_branching(x: i32) -> i32 {",
+            "fn deeply_branching(x: i32) -> i32 {\n    let unused = 0;\n    let _ = unused;",
+        );
+    fs::write(&new_path, source).expect("write renamed source");
+    git_ok(&["add", "."], &repo);
+    git_ok(
+        &["commit", "--quiet", "-m", "rename and edit source"],
+        &repo,
+    );
+
+    let changed = gate_diff::changed_ranges(&repo, "HEAD~1", "*.rs")
+        .expect("changed_ranges follows a rename");
+    assert!(changed.contains_key("src/renamed.rs"));
+
+    let old_blobs = tmp.join("old-blobs");
+    fs::create_dir(&old_blobs).expect("create old blob directory");
+    let written =
+        gate_diff::write_old_blobs(&repo, "HEAD~1", &["src/renamed.rs".to_owned()], &old_blobs)
+            .expect("write old blob for renamed source");
+    assert_eq!(written, ["src/renamed.rs"]);
+    assert!(old_blobs.join("src/renamed.rs").is_file());
 }
 
 fn func_space(

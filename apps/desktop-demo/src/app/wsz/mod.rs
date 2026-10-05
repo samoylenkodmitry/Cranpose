@@ -11,21 +11,21 @@ use cranpose_ui::{
     ColumnSpec, Modifier, Point, PointerEventKind, PointerInputScope, Size, Text, TextStyle,
 };
 use cranpose_ui_graphics::{ImageBitmap, Rect};
-use skin::{load_skin, WinampSkin};
+use skin::{load_skin, WszSkin};
 use sprites::*;
 
-fn winamp_press_debug_enabled() -> bool {
-    std::env::var_os("WINAMP_PRESS_DEBUG").is_some()
+fn wsz_press_debug_enabled() -> bool {
+    std::env::var_os("WSZ_PRESS_DEBUG").is_some()
 }
 
-fn winamp_native_trace_enabled() -> bool {
+fn wsz_native_trace_enabled() -> bool {
     std::env::var_os("CRANPOSE_NATIVE_TRACE").is_some()
 }
 
-fn trace_winamp_state(action: &str, state: &WinampState) {
-    if winamp_native_trace_enabled() {
+fn trace_wsz_state(action: &str, state: &WszState) {
+    if wsz_native_trace_enabled() {
         println!(
-            "winamp trace: action={action} closed={} playback={:?} eq_visible={} playlist_visible={} volume={:.3} status={:?}",
+            "wsz trace: action={action} closed={} playback={:?} eq_visible={} playlist_visible={} volume={:.3} status={:?}",
             state.closed,
             state.playback,
             state.eq_visible,
@@ -44,7 +44,7 @@ enum PlaybackState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct WinampState {
+struct WszState {
     closed: bool,
     playback: PlaybackState,
     shuffle: bool,
@@ -61,7 +61,7 @@ struct WinampState {
     status: String,
 }
 
-impl Default for WinampState {
+impl Default for WszState {
     fn default() -> Self {
         Self {
             closed: false,
@@ -83,14 +83,14 @@ impl Default for WinampState {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum WinampDragTarget {
+enum WszDragTarget {
     Inline(MutableState<Point>),
     Native,
-    Tearable(WinampStackPane),
-    Dockable(WinampStackPane),
+    Tearable(WszStackPane),
+    Dockable(WszStackPane),
 }
 
-impl WinampDragTarget {
+impl WszDragTarget {
     fn pane_window(self) -> Option<WindowState> {
         match self {
             Self::Tearable(stacked) | Self::Dockable(stacked) => Some(stacked.state),
@@ -100,53 +100,53 @@ impl WinampDragTarget {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct WinampStackPane {
-    pane: WinampPane,
-    dock: MutableState<WinampDock>,
+struct WszStackPane {
+    pane: WszPane,
+    dock: MutableState<WszDock>,
     offset: Point,
     main_window: WindowState,
     state: WindowState,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum WinampPane {
+enum WszPane {
     Equalizer,
     Playlist,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
-struct WinampDock {
-    torn: Vec<WinampPane>,
+struct WszDock {
+    torn: Vec<WszPane>,
 }
 
-impl WinampDock {
-    fn docked(&self, pane: WinampPane) -> bool {
+impl WszDock {
+    fn docked(&self, pane: WszPane) -> bool {
         !self.torn.contains(&pane)
     }
 
-    fn tear(&mut self, pane: WinampPane) {
+    fn tear(&mut self, pane: WszPane) {
         if self.docked(pane) {
             self.torn.push(pane);
         }
     }
 
-    fn dock(&mut self, pane: WinampPane) {
+    fn dock(&mut self, pane: WszPane) {
         self.torn.retain(|held| *held != pane);
     }
 }
 
-const WINAMP_TEAR_REACH: f32 = 18.0;
-const WINAMP_DOCK_REACH: f32 = 24.0;
+const WSZ_TEAR_REACH: f32 = 18.0;
+const WSZ_DOCK_REACH: f32 = 24.0;
 
 fn pane_left_the_stack(travel: Point) -> bool {
-    travel.x.abs() > WINAMP_TEAR_REACH || travel.y.abs() > WINAMP_TEAR_REACH
+    travel.x.abs() > WSZ_TEAR_REACH || travel.y.abs() > WSZ_TEAR_REACH
 }
 
 fn pane_came_back_to_its_slot(origin: Point, slot: Point) -> bool {
-    (origin.y - slot.y).abs() <= WINAMP_DOCK_REACH && (origin.x - slot.x).abs() <= MAIN_WIDTH / 2.0
+    (origin.y - slot.y).abs() <= WSZ_DOCK_REACH && (origin.x - slot.x).abs() <= MAIN_WIDTH / 2.0
 }
 
-fn dock_a_pane_let_go_on_the_stack(torn: WinampStackPane) {
+fn dock_a_pane_let_go_on_the_stack(torn: WszStackPane) {
     let Some(origin) = torn.state.position_non_reactive() else {
         return;
     };
@@ -160,40 +160,36 @@ fn dock_a_pane_let_go_on_the_stack(torn: WinampStackPane) {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-struct WinampPaneSlot {
+struct WszPaneSlot {
     docked: bool,
     offset: Point,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-struct WinampStackLayout {
-    equalizer: Option<WinampPaneSlot>,
-    playlist: Option<WinampPaneSlot>,
+struct WszStackLayout {
+    equalizer: Option<WszPaneSlot>,
+    playlist: Option<WszPaneSlot>,
     size: Size,
 }
 
-fn winamp_stack_layout(
-    snapshot: &WinampState,
-    dock: &WinampDock,
-    playlist: Size,
-) -> WinampStackLayout {
+fn wsz_stack_layout(snapshot: &WszState, dock: &WszDock, playlist: Size) -> WszStackLayout {
     let mut size = Size::new(MAIN_WIDTH, MAIN_HEIGHT);
-    let equalizer = snapshot.eq_visible.then_some(WinampPaneSlot {
-        docked: dock.docked(WinampPane::Equalizer),
+    let equalizer = snapshot.eq_visible.then_some(WszPaneSlot {
+        docked: dock.docked(WszPane::Equalizer),
         offset: Point::new(0.0, size.height),
     });
     if equalizer.is_some_and(|slot| slot.docked) {
         size.height += EQ_HEIGHT;
     }
-    let playlist_slot = snapshot.playlist_visible.then_some(WinampPaneSlot {
-        docked: dock.docked(WinampPane::Playlist),
+    let playlist_slot = snapshot.playlist_visible.then_some(WszPaneSlot {
+        docked: dock.docked(WszPane::Playlist),
         offset: Point::new(0.0, size.height),
     });
     if playlist_slot.is_some_and(|slot| slot.docked) {
         size.width = size.width.max(playlist.width);
         size.height += playlist.height;
     }
-    WinampStackLayout {
+    WszStackLayout {
         equalizer,
         playlist: playlist_slot,
         size,
@@ -201,94 +197,94 @@ fn winamp_stack_layout(
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum WinampCloseAction {
+enum WszCloseAction {
     SetStatus,
     CloseApp,
 }
 
 const MAIN_TITLE_DRAG_HIT_AREA: SpriteRect = (16.0, 0.0, 228.0, 14.0);
 const EQ_TITLE_DRAG_HIT_AREA: SpriteRect = (0.0, 0.0, 264.0, 14.0);
-const WINAMP_MAIN_TITLE: &str = "Winamp";
-const WINAMP_EQUALIZER_TITLE: &str = "Winamp Equalizer";
-const WINAMP_PLAYLIST_TITLE: &str = "Winamp Playlist";
+const WSZ_MAIN_TITLE: &str = "WSZ";
+const WSZ_EQUALIZER_TITLE: &str = "WSZ Equalizer";
+const WSZ_PLAYLIST_TITLE: &str = "WSZ Playlist";
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub(crate) struct WinampTabState {
-    player: MutableState<WinampState>,
+pub(crate) struct WszTabState {
+    player: MutableState<WszState>,
     detached: MutableState<bool>,
-    dock: MutableState<WinampDock>,
-    inline_windows: WinampInlineWindowStates,
-    peer_windows: WinampPeerWindowStates,
+    dock: MutableState<WszDock>,
+    inline_windows: WszInlineWindowStates,
+    peer_windows: WszPeerWindowStates,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-struct WinampInlineWindowStates {
+struct WszInlineWindowStates {
     main: MutableState<Point>,
     equalizer: MutableState<Point>,
     playlist: MutableState<Point>,
 }
 
-impl WinampInlineWindowStates {
-    fn of(self, pane: WinampPane) -> MutableState<Point> {
+impl WszInlineWindowStates {
+    fn of(self, pane: WszPane) -> MutableState<Point> {
         match pane {
-            WinampPane::Equalizer => self.equalizer,
-            WinampPane::Playlist => self.playlist,
+            WszPane::Equalizer => self.equalizer,
+            WszPane::Playlist => self.playlist,
         }
     }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-struct WinampPeerWindowStates {
+struct WszPeerWindowStates {
     main: WindowState,
     equalizer: WindowState,
     playlist: WindowState,
 }
 
-impl WinampPeerWindowStates {
-    fn of(self, pane: WinampPane) -> WindowState {
+impl WszPeerWindowStates {
+    fn of(self, pane: WszPane) -> WindowState {
         match pane {
-            WinampPane::Equalizer => self.equalizer,
-            WinampPane::Playlist => self.playlist,
+            WszPane::Equalizer => self.equalizer,
+            WszPane::Playlist => self.playlist,
         }
     }
 }
 
 #[derive(Clone, Copy)]
-struct WinampWindowPlacement {
+struct WszWindowPlacement {
     title: &'static str,
-    initial_position: WinampInitialWindowPosition,
+    initial_position: WszInitialWindowPosition,
     state: WindowState,
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum WinampInitialWindowPosition {
+enum WszInitialWindowPosition {
     Host(Point),
     Screen(Point),
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct WinampWindowPlaces {
-    main: WinampInitialWindowPosition,
-    equalizer: WinampInitialWindowPosition,
-    playlist: WinampInitialWindowPosition,
+struct WszWindowPlaces {
+    main: WszInitialWindowPosition,
+    equalizer: WszInitialWindowPosition,
+    playlist: WszInitialWindowPosition,
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct WinampNativeWindows {
-    peers: WinampPeerWindowStates,
-    places: WinampWindowPlaces,
+struct WszNativeWindows {
+    peers: WszPeerWindowStates,
+    places: WszWindowPlaces,
 }
 
-impl WinampNativeWindows {
-    fn pane_config(self, pane: WinampPane, scale: f32) -> WindowConfig {
+impl WszNativeWindows {
+    fn pane_config(self, pane: WszPane, scale: f32) -> WindowConfig {
         match pane {
-            WinampPane::Equalizer => winamp_window_config(WinampWindowPlacement {
-                title: WINAMP_EQUALIZER_TITLE,
+            WszPane::Equalizer => wsz_window_config(WszWindowPlacement {
+                title: WSZ_EQUALIZER_TITLE,
                 initial_position: self.places.equalizer,
                 state: self.peers.equalizer,
             }),
-            WinampPane::Playlist => winamp_window_config(WinampWindowPlacement {
-                title: WINAMP_PLAYLIST_TITLE,
+            WszPane::Playlist => wsz_window_config(WszWindowPlacement {
+                title: WSZ_PLAYLIST_TITLE,
                 initial_position: self.places.playlist,
                 state: self.peers.playlist,
             })
@@ -301,19 +297,19 @@ impl WinampNativeWindows {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum WinampStageWindows {
-    Inline(WinampInlineWindowStates),
-    Native(WinampNativeWindows),
+enum WszStageWindows {
+    Inline(WszInlineWindowStates),
+    Native(WszNativeWindows),
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct WinampPanePlace {
-    pane: WinampPane,
-    slot: WinampPaneSlot,
-    dock: MutableState<WinampDock>,
+struct WszPanePlace {
+    pane: WszPane,
+    slot: WszPaneSlot,
+    dock: MutableState<WszDock>,
 }
 
-impl WinampStageWindows {
+impl WszStageWindows {
     fn playlist_window(self) -> Option<WindowState> {
         match self {
             Self::Inline(_) => None,
@@ -329,8 +325,8 @@ impl WinampStageWindows {
                 .background(Color(0.02, 0.02, 0.03, 1.0))
                 .rounded_corners(8.0),
             Self::Native(native) => {
-                Modifier::empty().window(winamp_window_config(WinampWindowPlacement {
-                    title: WINAMP_MAIN_TITLE,
+                Modifier::empty().window(wsz_window_config(WszWindowPlacement {
+                    title: WSZ_MAIN_TITLE,
                     initial_position: native.places.main,
                     state: native.peers.main,
                 }))
@@ -338,14 +334,14 @@ impl WinampStageWindows {
         }
     }
 
-    fn main_drag_target(self) -> WinampDragTarget {
+    fn main_drag_target(self) -> WszDragTarget {
         match self {
-            Self::Inline(inline) => WinampDragTarget::Inline(inline.main),
-            Self::Native(_) => WinampDragTarget::Native,
+            Self::Inline(inline) => WszDragTarget::Inline(inline.main),
+            Self::Native(_) => WszDragTarget::Native,
         }
     }
 
-    fn pane_modifier(self, place: WinampPanePlace, scale: f32) -> Modifier {
+    fn pane_modifier(self, place: WszPanePlace, scale: f32) -> Modifier {
         match self {
             Self::Native(native) if !place.slot.docked => {
                 Modifier::empty().window(native.pane_config(place.pane, scale))
@@ -354,12 +350,12 @@ impl WinampStageWindows {
         }
     }
 
-    fn pane_drag_target(self, place: WinampPanePlace) -> WinampDragTarget {
+    fn pane_drag_target(self, place: WszPanePlace) -> WszDragTarget {
         let native = match self {
-            Self::Inline(inline) => return WinampDragTarget::Inline(inline.of(place.pane)),
+            Self::Inline(inline) => return WszDragTarget::Inline(inline.of(place.pane)),
             Self::Native(native) => native,
         };
-        let stacked = WinampStackPane {
+        let stacked = WszStackPane {
             pane: place.pane,
             dock: place.dock,
             offset: place.slot.offset,
@@ -367,35 +363,35 @@ impl WinampStageWindows {
             state: native.peers.of(place.pane),
         };
         if place.slot.docked {
-            WinampDragTarget::Tearable(stacked)
+            WszDragTarget::Tearable(stacked)
         } else {
-            WinampDragTarget::Dockable(stacked)
+            WszDragTarget::Dockable(stacked)
         }
     }
 }
 
 #[derive(Clone, PartialEq)]
-struct WinampStageSpec {
-    skin: WinampSkin,
-    state: MutableState<WinampState>,
-    dock: MutableState<WinampDock>,
-    windows: WinampStageWindows,
-    close: WinampCloseAction,
+struct WszStageSpec {
+    skin: WszSkin,
+    state: MutableState<WszState>,
+    dock: MutableState<WszDock>,
+    windows: WszStageWindows,
+    close: WszCloseAction,
     scale: f32,
 }
 
 #[composable]
-pub(crate) fn remember_winamp_tab_state() -> WinampTabState {
-    cranpose_core::remember(|| WinampTabState {
-        player: cranpose_core::mutableStateOf(WinampState::default()),
-        detached: cranpose_core::mutableStateOf(native_winamp_windows_available()),
-        dock: cranpose_core::mutableStateOf(WinampDock::default()),
-        inline_windows: WinampInlineWindowStates {
+pub(crate) fn remember_wsz_tab_state() -> WszTabState {
+    cranpose_core::remember(|| WszTabState {
+        player: cranpose_core::mutableStateOf(WszState::default()),
+        detached: cranpose_core::mutableStateOf(native_wsz_windows_available()),
+        dock: cranpose_core::mutableStateOf(WszDock::default()),
+        inline_windows: WszInlineWindowStates {
             main: cranpose_core::mutableStateOf(Point::new(26.0, 22.0)),
             equalizer: cranpose_core::mutableStateOf(Point::new(26.0, 142.0)),
             playlist: cranpose_core::mutableStateOf(Point::new(336.0, 22.0)),
         },
-        peer_windows: WinampPeerWindowStates {
+        peer_windows: WszPeerWindowStates {
             main: WindowState::new(MAIN_WIDTH, MAIN_HEIGHT),
             equalizer: WindowState::new(EQ_WIDTH, EQ_HEIGHT),
             playlist: WindowState::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
@@ -405,31 +401,31 @@ pub(crate) fn remember_winamp_tab_state() -> WinampTabState {
 }
 
 #[composable]
-pub(crate) fn WinampTab(tab_state: WinampTabState) {
+pub(crate) fn WszTab(tab_state: WszTabState) {
     let scale = ui_scale();
     let state = tab_state.player;
-    let native_available = native_winamp_windows_available();
+    let native_available = native_wsz_windows_available();
     let detached = native_available && tab_state.detached.get();
     let snapshot = state.get();
-    let skin = match remember_winamp_skin() {
+    let skin = match remember_wsz_skin() {
         Ok(skin) => skin,
         Err(error) => {
-            WinampSkinError(error);
+            WszSkinError(error);
             return;
         }
     };
     let inline = tab_state.inline_windows;
     let windows = if detached {
-        WinampStageWindows::Native(WinampNativeWindows {
+        WszStageWindows::Native(WszNativeWindows {
             peers: tab_state.peer_windows,
-            places: WinampWindowPlaces {
-                main: WinampInitialWindowPosition::Host(inline.main.get()),
-                equalizer: WinampInitialWindowPosition::Host(inline.equalizer.get()),
-                playlist: WinampInitialWindowPosition::Host(inline.playlist.get()),
+            places: WszWindowPlaces {
+                main: WszInitialWindowPosition::Host(inline.main.get()),
+                equalizer: WszInitialWindowPosition::Host(inline.equalizer.get()),
+                playlist: WszInitialWindowPosition::Host(inline.playlist.get()),
             },
         })
     } else {
-        WinampStageWindows::Inline(inline)
+        WszStageWindows::Inline(inline)
     };
 
     Column(
@@ -456,34 +452,34 @@ pub(crate) fn WinampTab(tab_state: WinampTabState) {
                 DockToggleButton(tab_state.detached, detached);
             }
 
-            WinampStage(WinampStageSpec {
+            WszStage(WszStageSpec {
                 skin: skin.clone(),
                 state,
                 dock: tab_state.dock,
                 windows,
-                close: WinampCloseAction::SetStatus,
+                close: WszCloseAction::SetStatus,
                 scale,
             });
         },
     );
 }
 
-fn remember_winamp_skin() -> Result<WinampSkin, String> {
+fn remember_wsz_skin() -> Result<WszSkin, String> {
     cranpose_core::remember(|| {
-        let wsz = include_bytes!("../../../assets/winamp.wsz");
+        let wsz = include_bytes!("../../../assets/catamp-silverplay.wsz");
         load_skin(wsz).map_err(|err| format!("{err:#}"))
     })
     .with(Clone::clone)
 }
 
 #[composable]
-fn WinampSkinError(error: String) {
+fn WszSkinError(error: String) {
     Column(
         Modifier::empty().padding(16.0),
         ColumnSpec::default(),
         move || {
             Text(
-                "Failed to load Winamp skin",
+                "Failed to load WSZ skin",
                 Modifier::empty(),
                 TextStyle::default(),
             );
@@ -515,8 +511,8 @@ fn DockToggleButton(detached_state: MutableState<bool>, detached: bool) {
 }
 
 #[composable]
-fn WinampStage(spec: WinampStageSpec) {
-    let WinampStageSpec {
+fn WszStage(spec: WszStageSpec) {
+    let WszStageSpec {
         skin,
         state,
         dock,
@@ -526,8 +522,8 @@ fn WinampStage(spec: WinampStageSpec) {
     } = spec;
     let snapshot = state.get();
     let playlist_size = playlist_skin_size(playlist_window_size(windows.playlist_window()), scale);
-    let layout = winamp_stack_layout(&snapshot, &dock.get(), playlist_size);
-    if let WinampStageWindows::Native(native) = windows {
+    let layout = wsz_stack_layout(&snapshot, &dock.get(), playlist_size);
+    if let WszStageWindows::Native(native) = windows {
         let size = Size::new(
             scaled(layout.size.width, scale),
             scaled(layout.size.height, scale),
@@ -546,8 +542,8 @@ fn WinampStage(spec: WinampStageSpec) {
             scale,
         );
         if let Some(slot) = layout.equalizer {
-            let place = WinampPanePlace {
-                pane: WinampPane::Equalizer,
+            let place = WszPanePlace {
+                pane: WszPane::Equalizer,
                 slot,
                 dock,
             };
@@ -561,8 +557,8 @@ fn WinampStage(spec: WinampStageSpec) {
             );
         }
         if let Some(slot) = layout.playlist {
-            let place = WinampPanePlace {
-                pane: WinampPane::Playlist,
+            let place = WszPanePlace {
+                pane: WszPane::Playlist,
                 slot,
                 dock,
             };
@@ -585,10 +581,10 @@ fn WinampStage(spec: WinampStageSpec) {
 }
 
 #[composable]
-pub fn WinampStandaloneApp() {
-    let state = cranpose_core::rememberMutableStateOf(WinampState::default);
-    let dock = cranpose_core::rememberMutableStateOf(WinampDock::default);
-    let peers = WinampPeerWindowStates {
+pub fn WszStandaloneApp() {
+    let state = cranpose_core::rememberMutableStateOf(WszState::default);
+    let dock = cranpose_core::rememberMutableStateOf(WszDock::default);
+    let peers = WszPeerWindowStates {
         main: rememberWindowState(MAIN_WIDTH, MAIN_HEIGHT),
         equalizer: rememberWindowState(EQ_WIDTH, EQ_HEIGHT),
         playlist: rememberWindowState(PLAYLIST_WIDTH, PLAYLIST_HEIGHT),
@@ -596,49 +592,46 @@ pub fn WinampStandaloneApp() {
     if state.get().closed {
         return;
     }
-    let skin = match remember_winamp_skin() {
+    let skin = match remember_wsz_skin() {
         Ok(skin) => skin,
         Err(error) => {
-            WinampSkinError(error);
+            WszSkinError(error);
             return;
         }
     };
 
-    WinampStage(WinampStageSpec {
+    WszStage(WszStageSpec {
         skin,
         state,
         dock,
-        windows: WinampStageWindows::Native(WinampNativeWindows {
+        windows: WszStageWindows::Native(WszNativeWindows {
             peers,
-            places: WinampWindowPlaces {
-                main: WinampInitialWindowPosition::Screen(Point::new(140.0, 120.0)),
-                equalizer: WinampInitialWindowPosition::Screen(Point::new(
-                    140.0,
-                    120.0 + MAIN_HEIGHT,
-                )),
-                playlist: WinampInitialWindowPosition::Screen(Point::new(
+            places: WszWindowPlaces {
+                main: WszInitialWindowPosition::Screen(Point::new(140.0, 120.0)),
+                equalizer: WszInitialWindowPosition::Screen(Point::new(140.0, 120.0 + MAIN_HEIGHT)),
+                playlist: WszInitialWindowPosition::Screen(Point::new(
                     140.0 + EQ_WIDTH,
                     120.0 + MAIN_HEIGHT,
                 )),
             },
         }),
-        close: WinampCloseAction::CloseApp,
+        close: WszCloseAction::CloseApp,
         scale: ui_scale(),
     });
 }
 
 #[composable]
 fn MainWindow(
-    skin: WinampSkin,
-    state: MutableState<WinampState>,
-    drag_target: WinampDragTarget,
-    close_action: WinampCloseAction,
+    skin: WszSkin,
+    state: MutableState<WszState>,
+    drag_target: WszDragTarget,
+    close_action: WszCloseAction,
     scale: f32,
 ) {
     let snapshot = state.get();
 
     Box(
-        winamp_window_modifier(MAIN_WIDTH, MAIN_HEIGHT, scale, drag_target),
+        wsz_window_modifier(MAIN_WIDTH, MAIN_HEIGHT, scale, drag_target),
         BoxSpec::default(),
         move || {
             Sprite(skin.main.clone(), MAIN_WINDOW, 0.0, 0.0, scale);
@@ -705,14 +698,14 @@ fn MainWindow(
                     scale,
                     move || {
                         state_click.update(|s| match close_action {
-                            WinampCloseAction::SetStatus => {
+                            WszCloseAction::SetStatus => {
                                 s.status = "Close".to_string();
-                                trace_winamp_state("main-close-status", s);
+                                trace_wsz_state("main-close-status", s);
                             }
-                            WinampCloseAction::CloseApp => {
+                            WszCloseAction::CloseApp => {
                                 s.closed = true;
                                 s.status = "Closed".to_string();
-                                trace_winamp_state("main-close-app", s);
+                                trace_wsz_state("main-close-app", s);
                             }
                         });
                     },
@@ -822,7 +815,7 @@ fn MainWindow(
                     move |fraction| {
                         state_drag.update(|s| {
                             s.volume = fraction;
-                            trace_winamp_state("volume", s);
+                            trace_wsz_state("volume", s);
                         });
                     },
                 );
@@ -955,7 +948,7 @@ fn MainWindow(
                             } else {
                                 "Equalizer Hidden".to_string()
                             };
-                            trace_winamp_state("main-eq-toggle", s);
+                            trace_wsz_state("main-eq-toggle", s);
                         });
                     },
                 );
@@ -988,7 +981,7 @@ fn MainWindow(
                             } else {
                                 "Playlist Hidden".to_string()
                             };
-                            trace_winamp_state("main-playlist-toggle", s);
+                            trace_wsz_state("main-playlist-toggle", s);
                         });
                     },
                 );
@@ -999,15 +992,15 @@ fn MainWindow(
 
 #[composable]
 fn EqualizerWindow(
-    skin: WinampSkin,
-    state: MutableState<WinampState>,
-    drag_target: WinampDragTarget,
+    skin: WszSkin,
+    state: MutableState<WszState>,
+    drag_target: WszDragTarget,
     scale: f32,
 ) {
     let snapshot = state.get();
 
     Box(
-        winamp_window_modifier(EQ_WIDTH, EQ_HEIGHT, scale, drag_target),
+        wsz_window_modifier(EQ_WIDTH, EQ_HEIGHT, scale, drag_target),
         BoxSpec::default(),
         move || {
             Sprite(skin.eqmain.clone(), EQ_WINDOW, 0.0, 0.0, scale);
@@ -1042,7 +1035,7 @@ fn EqualizerWindow(
                         state_click.update(|s| {
                             s.eq_visible = false;
                             s.status = "Equalizer Hidden".to_string();
-                            trace_winamp_state("eq-close", s);
+                            trace_wsz_state("eq-close", s);
                         });
                     },
                 );
@@ -1173,8 +1166,8 @@ fn EqualizerWindow(
 #[composable]
 fn PlaylistWindow(
     pledit: ImageBitmap,
-    state: MutableState<WinampState>,
-    drag_target: WinampDragTarget,
+    state: MutableState<WszState>,
+    drag_target: WszDragTarget,
     size: Size,
     scale: f32,
 ) {
@@ -1190,7 +1183,7 @@ fn PlaylistWindow(
     let scroll_track_x = width - 15.0;
 
     Box(
-        winamp_window_modifier(width, height, scale, drag_target),
+        wsz_window_modifier(width, height, scale, drag_target),
         BoxSpec::default(),
         move || {
             Box(
@@ -1360,9 +1353,9 @@ fn PressableSprite(
     let on_click = Rc::new(on_click);
 
     let current = if is_pressed.get() { pressed } else { normal };
-    if winamp_press_debug_enabled() {
+    if wsz_press_debug_enabled() {
         eprintln!(
-            "[WINAMP_PRESS_DEBUG] compose button at ({:.1},{:.1}) pressed={} sprite=({:.1},{:.1},{:.1},{:.1})",
+            "[WSZ_PRESS_DEBUG] compose button at ({:.1},{:.1}) pressed={} sprite=({:.1},{:.1},{:.1},{:.1})",
             x,
             y,
             is_pressed.get(),
@@ -1389,9 +1382,9 @@ fn PressableSprite(
                                     let event = await_scope.await_pointer_event().await;
                                     match event.kind {
                                         PointerEventKind::Down => {
-                                            if winamp_press_debug_enabled() {
+                                            if wsz_press_debug_enabled() {
                                                 eprintln!(
-                                                    "[WINAMP_PRESS_DEBUG] down button ({:.1},{:.1}) local=({:.2},{:.2})",
+                                                    "[WSZ_PRESS_DEBUG] down button ({:.1},{:.1}) local=({:.2},{:.2})",
                                                     x, y, event.position.x, event.position.y
                                                 );
                                             }
@@ -1402,9 +1395,9 @@ fn PressableSprite(
                                             if is_pressed.get()
                                                 && !event.buttons.contains(PointerButton::Primary)
                                             {
-                                                if winamp_press_debug_enabled() {
+                                                if wsz_press_debug_enabled() {
                                                     eprintln!(
-                                                        "[WINAMP_PRESS_DEBUG] move-clears button ({x:.1},{y:.1})"
+                                                        "[WSZ_PRESS_DEBUG] move-clears button ({x:.1},{y:.1})"
                                                     );
                                                 }
                                                 is_pressed.set(false);
@@ -1417,16 +1410,16 @@ fn PressableSprite(
                                                 && event.position.x <= w
                                                 && event.position.y >= 0.0
                                                 && event.position.y <= h;
-                                            if winamp_press_debug_enabled() {
+                                            if wsz_press_debug_enabled() {
                                                 eprintln!(
-                                                    "[WINAMP_PRESS_DEBUG] up button ({:.1},{:.1}) was_pressed={} inside={} local=({:.2},{:.2})",
+                                                    "[WSZ_PRESS_DEBUG] up button ({:.1},{:.1}) was_pressed={} inside={} local=({:.2},{:.2})",
                                                     x, y, was_pressed, inside, event.position.x, event.position.y
                                                 );
                                             }
                                             if was_pressed && inside {
-                                                if winamp_press_debug_enabled() {
+                                                if wsz_press_debug_enabled() {
                                                     eprintln!(
-                                                        "[WINAMP_PRESS_DEBUG] click fired button ({x:.1},{y:.1})"
+                                                        "[WSZ_PRESS_DEBUG] click fired button ({x:.1},{y:.1})"
                                                     );
                                                 }
                                                 on_click();
@@ -1434,9 +1427,9 @@ fn PressableSprite(
                                             event.consume();
                                         }
                                         PointerEventKind::Cancel => {
-                                            if winamp_press_debug_enabled() {
+                                            if wsz_press_debug_enabled() {
                                                 eprintln!(
-                                                    "[WINAMP_PRESS_DEBUG] cancel button ({x:.1},{y:.1})"
+                                                    "[WSZ_PRESS_DEBUG] cancel button ({x:.1},{y:.1})"
                                                 );
                                             }
                                             is_pressed.set(false);
@@ -1576,22 +1569,22 @@ fn VerticalDragSlider(
 }
 
 #[composable]
-fn WindowDragHandle(drag_target: WinampDragTarget, area: SpriteRect, scale: f32) {
+fn WindowDragHandle(drag_target: WszDragTarget, area: SpriteRect, scale: f32) {
     let modifier = Modifier::empty()
         .size_points(scaled(area.2, scale), scaled(area.3, scale))
         .absolute_offset(scaled(area.0, scale), scaled(area.1, scale));
     let modifier = match drag_target {
-        WinampDragTarget::Native => modifier.window_drag_area(|| {}, || {}),
-        WinampDragTarget::Dockable(stacked) => {
+        WszDragTarget::Native => modifier.window_drag_area(|| {}, || {}),
+        WszDragTarget::Dockable(stacked) => {
             modifier.window_drag_area(|| {}, move || dock_a_pane_let_go_on_the_stack(stacked))
         }
-        WinampDragTarget::Tearable(stacked) => tear_grip(modifier, stacked, scale),
-        WinampDragTarget::Inline(window_position) => inline_drag(modifier, window_position),
+        WszDragTarget::Tearable(stacked) => tear_grip(modifier, stacked, scale),
+        WszDragTarget::Inline(window_position) => inline_drag(modifier, window_position),
     };
     Box(modifier, BoxSpec::default(), || {});
 }
 
-fn tear_grip(modifier: Modifier, stacked: WinampStackPane, scale: f32) -> Modifier {
+fn tear_grip(modifier: Modifier, stacked: WszStackPane, scale: f32) -> Modifier {
     let key = (
         stacked.pane,
         stacked.offset.x.to_bits(),
@@ -1630,7 +1623,7 @@ fn tear_grip(modifier: Modifier, stacked: WinampStackPane, scale: f32) -> Modifi
     })
 }
 
-fn tear_out(stacked: WinampStackPane, travel: Point, scale: f32) {
+fn tear_out(stacked: WszStackPane, travel: Point, scale: f32) {
     let home = stacked
         .main_window
         .position_non_reactive()
@@ -1681,7 +1674,7 @@ fn inline_drag(modifier: Modifier, window_position: MutableState<Point>) -> Modi
 }
 
 #[composable]
-fn PlaylistResizeHandle(drag_target: WinampDragTarget, area: SpriteRect, scale: f32) {
+fn PlaylistResizeHandle(drag_target: WszDragTarget, area: SpriteRect, scale: f32) {
     let Some(window) = drag_target.pane_window() else {
         return;
     };
@@ -1735,7 +1728,7 @@ fn stretched_playlist(held: Size, travel: Point, scale: f32) -> Size {
 }
 
 #[composable]
-fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, scale: f32) {
+fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WszState>, scale: f32) {
     {
         let state_click = state;
         PressableSprite(
@@ -1764,7 +1757,7 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| {
                     s.playback = PlaybackState::Playing;
                     s.status = "Play".to_string();
-                    trace_winamp_state("play", s);
+                    trace_wsz_state("play", s);
                 });
             },
         );
@@ -1783,7 +1776,7 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| {
                     s.playback = PlaybackState::Paused;
                     s.status = "Pause".to_string();
-                    trace_winamp_state("pause", s);
+                    trace_wsz_state("pause", s);
                 });
             },
         );
@@ -1802,7 +1795,7 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
                 state_click.update(|s| {
                     s.playback = PlaybackState::Stopped;
                     s.status = "Stop".to_string();
-                    trace_winamp_state("stop", s);
+                    trace_wsz_state("stop", s);
                 });
             },
         );
@@ -1839,17 +1832,17 @@ fn TransportButtons(cbuttons: ImageBitmap, state: MutableState<WinampState>, sca
     }
 }
 
-const WINAMP_NATIVE_HOST_OFFSET_X: f32 = 640.0;
-const WINAMP_NATIVE_HOST_OFFSET_Y: f32 = 118.0;
+const WSZ_NATIVE_HOST_OFFSET_X: f32 = 640.0;
+const WSZ_NATIVE_HOST_OFFSET_Y: f32 = 118.0;
 
-fn native_winamp_windows_available() -> bool {
+fn native_wsz_windows_available() -> bool {
     #[cfg(all(
         not(target_arch = "wasm32"),
         not(target_os = "android"),
         not(target_os = "ios")
     ))]
     {
-        std::env::var_os("CRANPOSE_WINAMP_INLINE").is_none()
+        std::env::var_os("CRANPOSE_WSZ_INLINE").is_none()
     }
 
     #[cfg(any(target_arch = "wasm32", target_os = "android", target_os = "ios"))]
@@ -1858,15 +1851,15 @@ fn native_winamp_windows_available() -> bool {
     }
 }
 
-fn base_winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
+fn base_wsz_window_config(placement: WszWindowPlacement) -> WindowConfig {
     let state_size = placement.state.size();
     let config = WindowConfig::borderless(placement.title, state_size.width, state_size.height);
     let config = match placement.initial_position {
-        WinampInitialWindowPosition::Host(position) => config.with_host_window_position(
-            snap_to_pixel(position.x + WINAMP_NATIVE_HOST_OFFSET_X),
-            snap_to_pixel(position.y + WINAMP_NATIVE_HOST_OFFSET_Y),
+        WszInitialWindowPosition::Host(position) => config.with_host_window_position(
+            snap_to_pixel(position.x + WSZ_NATIVE_HOST_OFFSET_X),
+            snap_to_pixel(position.y + WSZ_NATIVE_HOST_OFFSET_Y),
         ),
-        WinampInitialWindowPosition::Screen(position) => {
+        WszInitialWindowPosition::Screen(position) => {
             config.with_position(snap_to_pixel(position.x), snap_to_pixel(position.y))
         }
     };
@@ -1876,9 +1869,9 @@ fn base_winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
         .with_visible(true)
 }
 
-fn winamp_window_config(placement: WinampWindowPlacement) -> WindowConfig {
+fn wsz_window_config(placement: WszWindowPlacement) -> WindowConfig {
     let state = placement.state;
-    base_winamp_window_config(placement).with_state(state)
+    base_wsz_window_config(placement).with_state(state)
 }
 
 pub(crate) fn playlist_window_size(window: Option<WindowState>) -> Size {
@@ -1896,20 +1889,20 @@ fn playlist_skin_size(window_size: Size, scale: f32) -> Size {
     )
 }
 
-fn winamp_window_modifier(
+fn wsz_window_modifier(
     width: f32,
     height: f32,
     scale: f32,
-    drag_target: WinampDragTarget,
+    drag_target: WszDragTarget,
 ) -> Modifier {
     let modifier = Modifier::empty().size_points(scaled(width, scale), scaled(height, scale));
     match drag_target {
-        WinampDragTarget::Inline(position) => {
+        WszDragTarget::Inline(position) => {
             let position = position.get();
             modifier.offset(snap_to_pixel(position.x), snap_to_pixel(position.y))
         }
-        WinampDragTarget::Native | WinampDragTarget::Dockable(_) => modifier,
-        WinampDragTarget::Tearable(stacked) => modifier.offset(
+        WszDragTarget::Native | WszDragTarget::Dockable(_) => modifier,
+        WszDragTarget::Tearable(stacked) => modifier.offset(
             scaled(stacked.offset.x, scale),
             scaled(stacked.offset.y, scale),
         ),
@@ -1970,7 +1963,7 @@ fn time_digits(position: f32) -> [u8; 4] {
 }
 
 #[cfg(test)]
-#[path = "tests/winamp_tests.rs"]
+#[path = "tests/wsz_tests.rs"]
 mod tests;
 
 #[cfg(test)]

@@ -483,10 +483,9 @@ fn visible_native_window_does_not_schedule_idle_position_poll() {
 
 #[test]
 fn native_window_position_only_options_change_does_not_require_content_sync() {
-    let previous =
-        NativeWindowOptions::borderless("Winamp", 275.0, 116.0).with_position(10.0, 20.0);
-    let moved = NativeWindowOptions::borderless("Winamp", 275.0, 116.0).with_position(42.0, 48.0);
-    let resized = NativeWindowOptions::borderless("Winamp", 280.0, 116.0).with_position(42.0, 48.0);
+    let previous = NativeWindowOptions::borderless("WSZ", 275.0, 116.0).with_position(10.0, 20.0);
+    let moved = NativeWindowOptions::borderless("WSZ", 275.0, 116.0).with_position(42.0, 48.0);
+    let resized = NativeWindowOptions::borderless("WSZ", 280.0, 116.0).with_position(42.0, 48.0);
     let retitled =
         NativeWindowOptions::borderless("Player", 275.0, 116.0).with_position(42.0, 48.0);
 

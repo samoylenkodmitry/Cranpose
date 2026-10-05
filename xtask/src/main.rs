@@ -497,25 +497,15 @@ const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
         reason: "rustls-platform-verifier 0.7.1 and tempfile 3.27 require windows-sys 0.52; arboard 3.6.1 requires 0.60; winit-win32 and tokio require 0.61",
     },
     DuplicateDebt {
-        family: "windows-targets",
-        reason: "windows-sys 0.52 and 0.60 require windows-targets 0.52 and 0.53 respectively",
-    },
-    DuplicateDebt {
-        family: "windows_x86_64_msvc",
-        reason: "Follows the windows-targets 0.52/0.53 split on the shipped Windows target",
+        family: "rustc-hash",
+        reason: "fluent-bundle 0.16.0 and type-map 0.5.1 require rustc-hash 2.x (Askama 0.16 in UniFFI's all-features graph also requires 2.x), while wgpu-core 30.0.2, naga 30.0.1, and naga-types 30.0.1 require 1.1.x; unifying these incompatible major-version constraints would require changing upstream dependencies",
     },
 ];
 
-const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[
-    DuplicateDebt {
-        family: "env_filter",
-        reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
-    },
-    DuplicateDebt {
-        family: "rustc-hash",
-        reason: "UniFFI 0.32.2 binding generation uses Askama 0.16 with rustc-hash ^2; naga, naga-types and wgpu-core 30.0.1 require ^1.1. The split is confined to the bindings tool feature",
-    },
-];
+const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[DuplicateDebt {
+    family: "env_filter",
+    reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
+}];
 
 /// Upstream wgpu and Cranpose's fork of it (forks/README.md) alike.
 const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] = &[
@@ -3068,6 +3058,41 @@ mod gate_diff {
     pub(crate) type HunkSpans = BTreeMap<String, Vec<(Option<Span>, Option<Span>)>>;
     pub(crate) type RangesByFile = BTreeMap<String, Vec<Span>>;
 
+    pub(crate) fn renamed_paths_from_status(status: &str) -> BTreeMap<String, String> {
+        status
+            .lines()
+            .filter_map(|line| {
+                let mut columns = line.split('\t');
+                let kind = columns.next()?;
+                if !kind.starts_with('R') {
+                    return None;
+                }
+                let old = columns.next()?;
+                let new = columns.next()?;
+                Some((new.to_owned(), old.to_owned()))
+            })
+            .collect()
+    }
+
+    pub(crate) fn renamed_paths(
+        root: &Path,
+        base: &str,
+        pathspecs: &[String],
+    ) -> Result<BTreeMap<String, String>, String> {
+        let output = Command::new("git")
+            .args(["diff", "--name-status", "--find-renames=40%", base, "--"])
+            .args(pathspecs)
+            .current_dir(root)
+            .output()
+            .map_err(|error| format!("gate_diff: failed to find renamed paths: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        }
+        Ok(renamed_paths_from_status(&String::from_utf8_lossy(
+            &output.stdout,
+        )))
+    }
+
     pub(crate) fn ensure_ref(root: &Path, base: &str) -> Result<(), String> {
         if let Some(branch) = base.strip_prefix("origin/") {
             let _ = Command::new("git")
@@ -3535,9 +3560,15 @@ mod gate_diff {
         pathspec: &str,
     ) -> Result<RangesByFile, String> {
         let base_sha = merge_base(root, base)?;
+        let old_paths = renamed_paths(
+            root,
+            &base_sha,
+            &[pathspec.to_owned(), FORKS_PATHSPEC.to_owned()],
+        )?;
         let output = Command::new("git")
             .args([
                 "diff",
+                "--find-renames=40%",
                 "--unified=0",
                 "--no-prefix",
                 &base_sha,
@@ -3557,8 +3588,9 @@ mod gate_diff {
         let read_new =
             |file: &str| -> String { fs::read_to_string(root.join(file)).unwrap_or_default() };
         let read_old = |file: &str| -> String {
+            let old_path = old_paths.get(file).map_or(file, String::as_str);
             let blob = Command::new("git")
-                .args(["show", &format!("{base_sha}:{file}")])
+                .args(["show", &format!("{base_sha}:{old_path}")])
                 .current_dir(root)
                 .output();
             match blob {
@@ -3578,10 +3610,15 @@ mod gate_diff {
         files: &[String],
         dest_root: &Path,
     ) -> Result<Vec<String>, String> {
+        // A pathspec containing only the renamed destination can make Git omit
+        // the old name. Compare rename status across the tree, then reuse only
+        // mappings that match the files being analyzed.
+        let old_paths = renamed_paths(root, base_sha, &[])?;
         let mut written = Vec::new();
         for file in files {
+            let old_path = old_paths.get(file).map_or(file.as_str(), String::as_str);
             let blob = Command::new("git")
-                .args(["show", &format!("{base_sha}:{file}")])
+                .args(["show", &format!("{base_sha}:{old_path}")])
                 .current_dir(root)
                 .output()
                 .map_err(|error| format!("gate_diff: failed to run git show: {error}"))?;
