@@ -75,7 +75,7 @@ pub struct FrameStatsSnapshot {
     pub isolated_layer_renders: u32,
     pub isolated_layer_pixels: u64,
     pub layer_cache_hits: u32,
-    /// Passes that drew fix-ups over copied capture regions.
+    /// Capture passes that replayed ops not yet on the page.
     pub capture_fixup_passes: u32,
     pub layer_cache_misses: u32,
     pub layer_cache_hit_pixels: u64,

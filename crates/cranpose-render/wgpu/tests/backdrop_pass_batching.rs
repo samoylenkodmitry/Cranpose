@@ -235,7 +235,7 @@ fn scrolled_pass_counts_with_rows(glass_count: usize, shadowed_rows: bool) -> Ve
 /// the rest after the stage resolved.
 const FRAME_PASSES: u32 = 2;
 /// One resolve stage: the blur pass pair shared by every blurred glass in
-/// the stage; its captures are copies of the page, not passes.
+/// the stage. A lone glass copies the page; several read it in one pass.
 const STAGE_PASSES: u32 = 2;
 
 #[test]
@@ -260,10 +260,10 @@ fn every_fixed_glass_shares_one_capture_atlas_and_one_blur_pair() {
     );
     assert_eq!(
         triple_steady,
-        (single_steady.0, 3),
-        "extra fixed glasses that read the same content join the same stage and add a copy \
-         each, no pass; their shader tails draw in the frame's final pass: single={single:?} \
-         triple={triple:?}"
+        (single_steady.0 + 1, 0),
+        "extra fixed glasses that read the same content join the same stage, whose captures \
+         share one pass instead of a copy each; their shader tails draw in the frame's final \
+         pass: single={single:?} triple={triple:?}"
     );
 }
 
