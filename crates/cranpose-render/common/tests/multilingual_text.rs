@@ -157,7 +157,7 @@ fn shaped_line_and_subsequence_measurements_preserve_span_styles_and_ranges() {
     text.span_styles.push(RangeStyle {
         item: SpanStyle {
             font_size: TextUnit::Sp(36.0),
-            font_feature_settings: Some("smcp".to_owned()),
+            font_feature_settings: Some("smcp".into()),
             ..Default::default()
         },
         range: second..second + "ééé".len(),

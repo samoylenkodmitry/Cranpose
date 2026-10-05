@@ -433,13 +433,18 @@ impl ModifierNodeElement for TextModifierElement {
             || current.style != self.style
             || current.options != self.options
         {
-            node.layout = Rc::new(TextPreparedLayoutOwner::new(
+            let owner = TextPreparedLayoutOwner::new(
                 self.text.clone(),
                 self.style.clone(),
                 self.options,
                 current.node_id(),
                 current.measured_max_width.get(),
-            ));
+            );
+            // A layout no handle still reads keeps its allocation.
+            match Rc::get_mut(&mut node.layout) {
+                Some(layout) => *layout = owner,
+                None => node.layout = Rc::new(owner),
+            }
         }
     }
 
