@@ -115,24 +115,26 @@ struct Segment {
 struct CachedChild {
     key: SegmentKey,
     frame: u32,
-    /// Kept once the subtree has stood [`STORE_AFTER_FRAMES`] frames, so a
-    /// subtree that keeps changing is not copied each time.
+    /// How many frames the key has stood since the frame it last changed in.
+    stood: u32,
+    /// Kept once the key has stood [`STORE_AFTER_FRAMES`] frames, so a child
+    /// that keeps changing or moving is not copied each time.
     segment: Option<Box<Segment>>,
 }
 
-/// How many frames a subtree stands unchanged before its draws are kept.
-const STORE_AFTER_FRAMES: usize = 3;
+/// How many frames a child's key stands after the frame it changed in
+/// before its draws are kept.
+const STORE_AFTER_FRAMES: u32 = 2;
 
 /// The draws of the direct children collected in recent frames, by node.
 #[derive(Default)]
 pub(crate) struct CollectCache {
     children: HashMap<NodeId, CachedChild>,
     frame: u32,
-    /// [`upcoming_layer_revision`] when each of the last
-    /// [`STORE_AFTER_FRAMES`] collections began, oldest first: a subtree whose
-    /// revision is below the first has stood unchanged through all of them,
-    /// whether or not the walk reached it.
-    revision_marks: [u64; STORE_AFTER_FRAMES],
+    /// [`upcoming_layer_revision`] when each of the last collections began,
+    /// oldest first: a subtree whose revision is below the first has stood
+    /// unchanged through all of them, whether or not the walk reached it.
+    revision_marks: [u64; STORE_AFTER_FRAMES as usize + 1],
     /// Children whose draws this frame reused.
     reused: u32,
 }
@@ -165,38 +167,50 @@ impl CollectCache {
 
     /// What to do with `node`, collected under `key` this frame: reuse the
     /// draws it produced under the same key before, or collect it, keeping a
-    /// copy once its subtree has stood [`STORE_AFTER_FRAMES`] frames.
+    /// copy once the key has stood [`STORE_AFTER_FRAMES`] frames.
+    ///
+    /// A frame the walk did not reach a child counts as one its key stood:
+    /// an ancestor's draws were reused, so nothing under it changed. A child
+    /// never reached before has stood since its revision, when that is older
+    /// than the collections the count spans.
     pub(crate) fn visit(&mut self, node: NodeId, key: &SegmentKey) -> Visit<'_> {
         let frame = self.frame;
-        let keep = key.revision < self.revision_marks[0];
         let child = match self.children.entry(node) {
             MapEntry::Vacant(vacant) => {
                 vacant.insert(CachedChild {
                     key: *key,
                     frame,
+                    stood: 0,
                     segment: None,
                 });
-                return Visit::Collect { keep };
+                return Visit::Collect {
+                    keep: key.revision < self.revision_marks[0],
+                };
             }
             MapEntry::Occupied(occupied) => occupied.into_mut(),
         };
+        let since = frame.wrapping_sub(child.frame);
         child.frame = frame;
         if child.key != *key {
             let moved = child.key.placement != key.placement;
             child.key = *key;
+            child.stood = 0;
             child.segment = None;
             return if moved {
                 Visit::Moved
             } else {
-                Visit::Collect { keep }
+                Visit::Collect { keep: false }
             };
         }
+        child.stood = child.stood.saturating_add(since);
         match &child.segment {
             Some(segment) => {
                 self.reused += 1;
                 Visit::Reuse(&segment.draws, segment.pixel_sensitive)
             }
-            None => Visit::Collect { keep },
+            None => Visit::Collect {
+                keep: child.stood >= STORE_AFTER_FRAMES,
+            },
         }
     }
 
