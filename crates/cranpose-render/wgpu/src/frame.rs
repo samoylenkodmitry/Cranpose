@@ -497,6 +497,17 @@ fn composite_z(composite: &ResolvedComposite) -> usize {
     composite.z_index
 }
 
+fn backdrop_cache_keys_use_pending(pass: &LayerPass<'_>) -> bool {
+    !NO_BACKDROP_CACHE.flag()
+        && !matches!(
+            pass.beneath.page,
+            Some(PageBase {
+                placement: PagePlacement::Projected { .. },
+                ..
+            })
+        )
+}
+
 impl<'scene> LayerPass<'scene> {
     fn target_rect(&self) -> DeviceRect {
         self.page.rect()
@@ -3159,8 +3170,21 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         items: &'a mut [PendingBackdrop<'scene>],
         layout: &mut StageLayout,
     ) -> Vec<&'a PendingBackdrop<'scene>> {
+        let cache_keys_use_pending = backdrop_cache_keys_use_pending(pass);
+        if cache_keys_use_pending
+            && items
+                .iter()
+                .any(|item| item.node_id.is_some() && item.batched.is_some())
+        {
+            ensure_sorted_by_key(&mut pass.pending, composite_z);
+        }
         for (index, item) in items.iter_mut().enumerate() {
-            item.key = self.backdrop_cache_key(pass, item, layout.signature(index));
+            item.key = self.backdrop_cache_key(
+                pass,
+                item,
+                layout.signature(index),
+                cache_keys_use_pending,
+            );
         }
         let mut kept = Vec::new();
         for (index, item) in items.iter().enumerate() {
@@ -3186,22 +3210,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
 
     fn backdrop_cache_key(
         &self,
-        pass: &mut LayerPass<'_>,
+        pass: &LayerPass<'_>,
         item: &PendingBackdrop<'_>,
         layout: u64,
+        cache_keys_use_pending: bool,
     ) -> Option<LayerRasterCacheKey> {
         let node_id = item.node_id?;
         let effect = item.batched?;
-        if NO_BACKDROP_CACHE.flag() {
-            return None;
-        }
-        if matches!(
-            pass.beneath.page,
-            Some(PageBase {
-                placement: PagePlacement::Projected { .. },
-                ..
-            })
-        ) {
+        if !cache_keys_use_pending {
             return None;
         }
         let scale = pass.scale;
@@ -3227,7 +3243,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let window = capture_window(item.capture_rect);
         let ops = filtered_ops(&pass.layer.scene.draw_ops, item.z, &[]);
         hash_capture_ops(&pass.layer.scene, &ops, window, scale, &mut hasher);
-        ensure_sorted_by_key(&mut pass.pending, composite_z);
         let pending_end = pass
             .pending
             .partition_point(|composite| composite.z_index < item.z);
@@ -3448,6 +3463,10 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if !self.backdrop_draws_now(&item) {
             return Ok(self.backdrop_placeholder(&item, scale));
         }
+        let cache_keys_use_pending = backdrop_cache_keys_use_pending(pass);
+        if cache_keys_use_pending && item.node_id.is_some() && item.batched.is_some() {
+            ensure_sorted_by_key(&mut pass.pending, composite_z);
+        }
         if item
             .batched
             .is_some_and(|effect| !effect.substrates().is_empty())
@@ -3457,7 +3476,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 pass.target_rect().pixel_size().0,
             );
             if layout.placements[0].is_some() {
-                item.key = self.backdrop_cache_key(pass, &item, layout.signature(0));
+                item.key = self.backdrop_cache_key(
+                    pass,
+                    &item,
+                    layout.signature(0),
+                    cache_keys_use_pending,
+                );
                 if let Some(cached) = self.cached_backdrop(&item) {
                     return Ok(Some(cached));
                 }
@@ -3470,7 +3494,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     .ok_or_else(|| "a child backdrop substrate produced no composite".into());
             }
         }
-        item.key = self.backdrop_cache_key(pass, &item, 0);
+        item.key = self.backdrop_cache_key(pass, &item, 0, cache_keys_use_pending);
         if let Some(cached) = self.cached_backdrop(&item) {
             return Ok(Some(cached));
         }
