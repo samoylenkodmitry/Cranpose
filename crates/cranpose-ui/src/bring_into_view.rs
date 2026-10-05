@@ -69,7 +69,12 @@ pub(crate) fn local_scroll_delta_to_reveal(
     caret: Rect,
     viewport: WindowCoordinates,
     ime_bottom: f32,
+    window_height: Option<f32>,
 ) -> f32 {
+    let ime_bottom = window_height.map_or(ime_bottom, |height| {
+        (viewport.bounds().y + viewport.bounds().height - (height - ime_bottom))
+            .clamp(0.0, ime_bottom.max(0.0))
+    });
     let delta = scroll_delta_to_reveal(caret, viewport.bounds(), ime_bottom);
     if delta.abs() <= f32::EPSILON {
         return 0.0;
@@ -110,7 +115,7 @@ pub(crate) fn local_scroll_delta_to_reveal(
 /// composition local.
 #[derive(Clone)]
 pub struct BringIntoViewResponder {
-    inner: Rc<dyn Fn(Rect, f32)>,
+    inner: Rc<dyn Fn(Rect, f32, Option<f32>)>,
 }
 
 impl BringIntoViewResponder {
@@ -118,14 +123,24 @@ impl BringIntoViewResponder {
     /// and the keyboard inset (px covering the viewport bottom).
     pub fn new(responder: impl Fn(Rect, f32) + 'static) -> Self {
         Self {
+            inner: Rc::new(move |caret, ime, _| responder(caret, ime)),
+        }
+    }
+
+    pub(crate) fn in_window(responder: impl Fn(Rect, f32, Option<f32>) + 'static) -> Self {
+        Self {
             inner: Rc::new(responder),
         }
+    }
+
+    pub(crate) fn reveal_in_window(&self, caret: Rect, ime: f32, height: f32) {
+        (self.inner)(caret, ime, (height > 0.0).then_some(height));
     }
 
     /// Asks the container to scroll `caret_window_rect` clear of a keyboard that
     /// covers the bottom `ime_bottom` px of the viewport.
     pub fn bring_into_view(&self, caret_window_rect: Rect, ime_bottom: f32) {
-        (self.inner)(caret_window_rect, ime_bottom);
+        (self.inner)(caret_window_rect, ime_bottom, None);
     }
 }
 

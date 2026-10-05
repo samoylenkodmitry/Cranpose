@@ -32,6 +32,133 @@ fn bottom(value: f32) -> EdgeInsets {
     EdgeInsets::from_components(0.0, 0.0, 0.0, value)
 }
 
+#[test]
+fn vertical_scroll_reveals_caret_above_keyboard() {
+    use cranpose_ui::{Column, ColumnSpec, ScrollState, local_bring_into_view_responder};
+    for reverse in [false, true] {
+        let responder = Rc::new(RefCell::new(None));
+        let scroll = Rc::new(Cell::new(None));
+        let mut composition = cranpose_ui::run_test_composition(|| {
+            let state = ScrollState::new(0.0);
+            scroll.set(Some(state));
+            let modifier = Modifier::empty()
+                .size_points(200.0, 400.0)
+                .vertical_scroll(state, reverse);
+            let content = {
+                let responder = responder.clone();
+                move || {
+                    *responder.borrow_mut() = local_bring_into_view_responder().current();
+                    Box(
+                        Modifier::empty().size_points(200.0, 800.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                }
+            };
+            Column(modifier, ColumnSpec::default(), content);
+        });
+        let _layout = layout_composition(&mut composition, Size::new(200.0, 400.0));
+        let state = scroll.get().expect("scroll state");
+        if reverse {
+            state.scroll_to(state.max_value());
+        }
+        let before = state.value_non_reactive();
+        responder
+            .borrow()
+            .as_ref()
+            .expect("vertical scroll responder")
+            .bring_into_view(
+                cranpose_ui::Rect {
+                    x: 10.0,
+                    y: 300.0,
+                    width: 2.0,
+                    height: 20.0,
+                },
+                200.0,
+            );
+        let delta = state.value_non_reactive() - before;
+        assert!(
+            if reverse {
+                delta < -100.0
+            } else {
+                delta > 100.0
+            },
+            "caret must be revealed: {delta}"
+        );
+    }
+}
+
+#[test]
+fn focused_field_moves_when_keyboard_opens_in_vertical_scroll() {
+    use cranpose_ui::{BasicTextField, Column, ColumnSpec, FocusRequester, ScrollState, TextStyle};
+    let focus = Rc::new(RefCell::new(None));
+    let insets = Rc::new(RefCell::new(None));
+    let mut composition = cranpose_ui::run_test_composition(|| {
+        let source = state(bottom(0.0));
+        *insets.borrow_mut() = Some(source.clone());
+        let requester = FocusRequester::new();
+        *focus.borrow_mut() = Some(requester.clone());
+        let scroll = ScrollState::new(0.0);
+        let text = cranpose_foundation::text::TextFieldState::new("hello");
+        CompositionLocalProvider([local_ime_insets().provides_state(source)], || {
+            Column(
+                Modifier::empty()
+                    .size_points(200.0, 400.0)
+                    .vertical_scroll(scroll, false),
+                ColumnSpec::default(),
+                move || {
+                    Box(
+                        Modifier::empty().size_points(200.0, 300.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    BasicTextField(
+                        text,
+                        Modifier::empty()
+                            .fill_max_width()
+                            .padding(12.0)
+                            .focus_requester(&requester)
+                            .content_description("editor"),
+                        TextStyle::default(),
+                    );
+                    Box(
+                        Modifier::empty().size_points(200.0, 500.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+        });
+    });
+    let mut nanos = 0;
+    let mut settle = |composition: &mut cranpose_ui::TestComposition| {
+        for _ in 0..6 {
+            nanos += 16_666_667;
+            composition.runtime_handle().drain_frame_callbacks(nanos);
+            composition.runtime_handle().drain_ui();
+            composition.process_invalid_scopes().expect("scope updates");
+            let layout = layout_composition(composition, Size::new(200.0, 400.0));
+            let _ = cranpose_ui::HeadlessRenderer::new().render(&layout);
+        }
+        layout_composition(composition, Size::new(200.0, 400.0))
+    };
+    settle(&mut composition);
+    focus
+        .borrow()
+        .as_ref()
+        .expect("requester")
+        .request_focus()
+        .expect("focus request");
+    settle(&mut composition);
+    insets.borrow().as_ref().expect("insets").set(bottom(200.0));
+    let layout = settle(&mut composition);
+    let field = tagged(layout.root(), "editor").rect;
+    assert!(
+        field.y + field.height <= 200.0,
+        "field remains covered: {field:?}"
+    );
+}
+
 fn tagged<'a>(node: &'a LayoutBox, tag: &str) -> &'a LayoutBox {
     fn find<'a>(node: &'a LayoutBox, tag: &str) -> Option<&'a LayoutBox> {
         if node

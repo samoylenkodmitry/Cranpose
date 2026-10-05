@@ -1568,6 +1568,15 @@ fn scroll_impl(
 
     let overscroll = motion_context.overscroll();
     let element = ScrollElement::new(state, overscroll.clone(), is_vertical, reverse_scrolling);
+    let (pointer_input, element) = if is_vertical {
+        let reveal = motion_context.reveal(state, reverse_scrolling);
+        (
+            pointer_input.report_window_coordinates(Rc::clone(&reveal.viewport)),
+            element.with_responder(reveal.responder.clone()),
+        )
+    } else {
+        (pointer_input, element)
+    };
     let layout_modifier =
         Modifier::with_element(element).with_inspector_metadata(inspector_metadata(
             if is_vertical {
