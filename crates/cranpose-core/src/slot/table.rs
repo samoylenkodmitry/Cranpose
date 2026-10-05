@@ -40,6 +40,7 @@ pub struct SlotTable {
     pub(super) payload_anchors: PayloadAnchorRegistry,
     pub(super) movables: MovableIndex,
     pub(super) diagnostics: SlotTableDiagnostics,
+    stale_group_indexes: metadata::StaleGroupIndexes,
     next_group_generation: u32,
 }
 
@@ -54,6 +55,7 @@ impl SlotTable {
             payload_anchors: PayloadAnchorRegistry::new(),
             movables: MovableIndex::default(),
             diagnostics: SlotTableDiagnostics::default(),
+            stale_group_indexes: metadata::StaleGroupIndexes::default(),
             next_group_generation: 1,
         }
     }
@@ -126,6 +128,7 @@ impl SlotTable {
         self.payloads
             .drain_rev(|payload| drops.push(payload.into_deferred_drop()));
         self.groups.clear();
+        self.stale_group_indexes = metadata::StaleGroupIndexes::default();
         self.nodes.clear();
         self.anchors.clear();
         self.payload_anchors.clear();

@@ -108,6 +108,9 @@ impl SlotWriteSession<'_> {
         log::error!(
             "slot writer value slot requested with an empty group stack; recording recovery group"
         );
+        // A frame whose anchor no longer resolves may come from a stale index:
+        // rewrite them all from the groups before inserting more.
+        self.table.flush_stale_group_indexes();
         let key = self.preview_group_key(GroupKeySeed::unkeyed(RECOVERY_VALUE_SLOT_STATIC_KEY));
         let started = self.begin_group(key, None, None);
         let slot = self.value_slot_in_active_group(started.anchor, 0, kind, init);

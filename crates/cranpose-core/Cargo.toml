@@ -73,6 +73,10 @@ name = "recompose_sibling_cursor"
 harness = false
 
 [[bench]]
+name = "keyed_front_inserts"
+harness = false
+
+[[bench]]
 name = "blocking"
 harness = false
 
