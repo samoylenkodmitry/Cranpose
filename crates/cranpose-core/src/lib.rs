@@ -1813,18 +1813,17 @@ pub trait Node: Any {
 /// # Behavior
 /// 1. Marks the starting node as needing layout
 /// 2. Walks up the parent chain, marking each ancestor
-/// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
-/// 4. Stops at the root (node with no parent)
+/// 3. Stops at the root (node with no parent)
 ///
 /// # Performance
-/// This function is O(height) in the worst case, but typically O(1) due to early exit
-/// when encountering an already-dirty ancestor.
+/// This function is O(height): a scoped layout repass can leave a dirty node
+/// under a clean ancestor, so the walk does not stop at a dirty ancestor.
 ///
 /// # Usage
 /// - Call from composer mutations (insert/remove/move) during apply phase
 /// - Call from applier-level operations that modify the tree structure
 pub fn bubble_layout_dirty(applier: &mut dyn Applier, node_id: NodeId) {
-    bubble_layout_dirty_applier(applier, node_id);
+    DirtyBubble::LAYOUT.apply(applier, node_id);
 }
 
 /// Unified API for bubbling measure dirty flags from a node to the root (Applier context).
@@ -1835,10 +1834,9 @@ pub fn bubble_layout_dirty(applier: &mut dyn Applier, node_id: NodeId) {
 /// # Behavior
 /// 1. Marks the starting node as needing measure
 /// 2. Walks up the parent chain, marking each ancestor
-/// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
-/// 4. Stops at the root (node with no parent)
+/// 3. Stops at the root (node with no parent)
 pub fn bubble_measure_dirty(applier: &mut dyn Applier, node_id: NodeId) {
-    bubble_measure_dirty_applier(applier, node_id);
+    DirtyBubble::MEASURE.apply(applier, node_id);
 }
 
 /// Unified API for bubbling semantics dirty flags from a node to the root (Applier context).
@@ -1847,7 +1845,7 @@ pub fn bubble_measure_dirty(applier: &mut dyn Applier, node_id: NodeId) {
 /// flags instead of layout ones, allowing semantics updates to propagate during
 /// the apply phase without forcing layout work.
 pub fn bubble_semantics_dirty(applier: &mut dyn Applier, node_id: NodeId) {
-    bubble_semantics_dirty_applier(applier, node_id);
+    DirtyBubble::SEMANTICS.apply(applier, node_id);
 }
 
 /// Schedules semantics bubbling for a node using the active composer if present.
@@ -1868,12 +1866,11 @@ pub fn queue_semantics_invalidation(node_id: NodeId) {
 /// # Behavior
 /// 1. Marks the starting node as needing layout
 /// 2. Walks up the parent chain, marking each ancestor
-/// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
-/// 4. Stops at the root (node with no parent)
+/// 3. Stops at the root (node with no parent)
 ///
 /// # Performance
-/// This function is O(height) in the worst case, but typically O(1) due to early exit
-/// when encountering an already-dirty ancestor.
+/// This function is O(height): a scoped layout repass can leave a dirty node
+/// under a clean ancestor, so the walk does not stop at a dirty ancestor.
 ///
 /// # Type Requirements
 /// The node type N must implement Node (which includes mark_needs_layout, parent, etc.).
@@ -1912,90 +1909,6 @@ pub fn bubble_measure_dirty_in_composer(node_id: NodeId) {
 /// query the root to determine whether the semantics tree needs rebuilding.
 pub fn bubble_semantics_dirty_in_composer<N: Node + 'static>(node_id: NodeId) {
     bubble_semantics_dirty_composer::<N>(node_id);
-}
-
-fn bubble_layout_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
-    if let Ok(node) = applier.get_mut(node_id) {
-        node.mark_needs_layout();
-    }
-
-    loop {
-        let parent_id = match applier.get_mut(node_id) {
-            Ok(node) => node.parent(),
-            Err(_) => None,
-        };
-
-        match parent_id {
-            Some(pid) => {
-                if let Ok(parent) = applier.get_mut(pid) {
-                    let parent_already_dirty = parent.needs_layout();
-                    if !parent_already_dirty {
-                        parent.mark_needs_layout();
-                    }
-                    node_id = pid;
-                } else {
-                    break;
-                }
-            }
-            None => break,
-        }
-    }
-}
-
-fn bubble_measure_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
-    if let Ok(node) = applier.get_mut(node_id) {
-        node.mark_needs_measure();
-    }
-
-    loop {
-        let parent_id = match applier.get_mut(node_id) {
-            Ok(node) => node.parent(),
-            Err(_) => None,
-        };
-
-        match parent_id {
-            Some(pid) => {
-                if let Ok(parent) = applier.get_mut(pid) {
-                    if !parent.needs_measure() {
-                        parent.mark_needs_measure();
-                    }
-                    node_id = pid;
-                } else {
-                    break;
-                }
-            }
-            None => {
-                break;
-            }
-        }
-    }
-}
-
-fn bubble_semantics_dirty_applier(applier: &mut dyn Applier, mut node_id: NodeId) {
-    if let Ok(node) = applier.get_mut(node_id) {
-        node.mark_needs_semantics();
-    }
-
-    loop {
-        let parent_id = match applier.get_mut(node_id) {
-            Ok(node) => node.parent(),
-            Err(_) => None,
-        };
-
-        match parent_id {
-            Some(pid) => {
-                if let Ok(parent) = applier.get_mut(pid) {
-                    if !parent.needs_semantics() {
-                        parent.mark_descendant_needs_semantics();
-                    }
-                    node_id = pid;
-                } else {
-                    break;
-                }
-            }
-            None => break,
-        }
-    }
 }
 
 fn bubble_layout_dirty_composer<N: Node + 'static>(mut node_id: NodeId) {
@@ -2217,6 +2130,18 @@ pub(crate) struct DirtyBubble {
 }
 
 impl DirtyBubble {
+    const LAYOUT: Self = Self {
+        layout: true,
+        measure: false,
+        semantics: false,
+    };
+
+    const MEASURE: Self = Self {
+        layout: false,
+        measure: true,
+        semantics: false,
+    };
+
     pub(crate) const LAYOUT_AND_MEASURE: Self = Self {
         layout: true,
         measure: true,
@@ -2229,15 +2154,38 @@ impl DirtyBubble {
         semantics: true,
     };
 
+    /// Marks `node_id` and every ancestor up to the root, visiting each node
+    /// once for all the flags. The walk goes on past an ancestor that is
+    /// already dirty: a scoped layout repass can leave a dirty node under a
+    /// clean ancestor.
     fn apply(self, applier: &mut dyn Applier, node_id: NodeId) {
-        if self.layout {
-            bubble_layout_dirty(applier, node_id);
+        let mut next = Some(node_id);
+        let mut start = true;
+        while let Some(id) = next {
+            let Ok(node) = applier.get_mut(id) else {
+                break;
+            };
+            self.mark(node, start);
+            next = node.parent();
+            start = false;
         }
-        if self.measure {
-            bubble_measure_dirty(applier, node_id);
+    }
+
+    /// Marks the bubble's start node, and an ancestor where it is not dirty
+    /// yet.
+    fn mark(self, node: &mut dyn Node, start: bool) {
+        if self.layout && (start || !node.needs_layout()) {
+            node.mark_needs_layout();
+        }
+        if self.measure && (start || !node.needs_measure()) {
+            node.mark_needs_measure();
         }
         if self.semantics {
-            bubble_semantics_dirty(applier, node_id);
+            if start {
+                node.mark_needs_semantics();
+            } else if !node.needs_semantics() {
+                node.mark_descendant_needs_semantics();
+            }
         }
     }
 }
@@ -3171,8 +3119,7 @@ fn insert_child_with_reparenting(
             child_node.on_removed_from_parent();
         }
         if removed {
-            bubble_layout_dirty(applier, old_parent_id);
-            bubble_measure_dirty(applier, old_parent_id);
+            DirtyBubble::LAYOUT_AND_MEASURE.apply(applier, old_parent_id);
             note_structural("reparent-detach", old_parent_id, child_id);
             applier.record_structural_change(old_parent_id);
         }
@@ -3218,8 +3165,7 @@ fn detach_child_from_parent(
         .get_mut(parent_id)
         .is_ok_and(|parent_node| parent_node.remove_child(child_id));
     if removed {
-        bubble_layout_dirty(applier, parent_id);
-        bubble_measure_dirty(applier, parent_id);
+        DirtyBubble::LAYOUT_AND_MEASURE.apply(applier, parent_id);
         note_structural("detach", parent_id, child_id);
         applier.record_structural_change(parent_id);
     }
@@ -3456,8 +3402,7 @@ fn reconcile_children(
     };
 
     if repaired {
-        bubble_layout_dirty(applier, parent_id);
-        bubble_measure_dirty(applier, parent_id);
+        DirtyBubble::LAYOUT_AND_MEASURE.apply(applier, parent_id);
     } else if is_dirty {
         bubble_layout_dirty(applier, parent_id);
     }

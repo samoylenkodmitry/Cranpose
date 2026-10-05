@@ -91,3 +91,7 @@ harness = false
 [[bench]]
 name = "child_sync"
 harness = false
+
+[[bench]]
+name = "dirty_bubble"
+harness = false
