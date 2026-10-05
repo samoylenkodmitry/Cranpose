@@ -1,0 +1,17 @@
+{
+  "package": "com.compose_rs.demo.insets.robot",
+  "extras": {"tab": "textinput"},
+  "steps": [
+    {"action": "await", "label": "Empty text field"},
+    {"action": "tap", "label": "Empty text field"},
+    {"action": "visible", "label": "Empty text field"},
+    {"action": "type", "text": "imecheck"},
+    {"action": "visible", "label": "Empty text field"},
+    {"action": "back"},
+    {"action": "closed"},
+    {"action": "tap", "label": "Basic text field"},
+    {"action": "visible", "label": "Basic text field"},
+    {"action": "back"},
+    {"action": "closed"}
+  ]
+}

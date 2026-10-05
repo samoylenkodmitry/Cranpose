@@ -1,0 +1,13 @@
+{
+  "package": "com.cranpose.showcase.insets",
+  "steps": [
+    {"action": "await", "label": "Search the sky"},
+    {"action": "tap", "label": "Search the sky"},
+    {"action": "visible", "label": "Search the sky"},
+    {"action": "swipe", "x": 300, "y": 1100, "to_y": 900},
+    {"action": "type", "text": "Mars"},
+    {"action": "visible", "label": "Search the sky"},
+    {"action": "back"},
+    {"action": "closed"}
+  ]
+}

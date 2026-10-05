@@ -12,6 +12,7 @@ mod lazy_retained_many_roots;
 mod localization;
 mod round_scaling_list_integration;
 mod round_scroll_indicator_integration;
+mod scoped_insets;
 mod shadow_api_integration;
 mod subcompose_disposal;
 #[cfg(feature = "svg")]
