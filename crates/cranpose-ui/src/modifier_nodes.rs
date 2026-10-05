@@ -4,7 +4,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::NodeId;
+use cranpose_core::{CompositionLocalReader, NodeId};
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, InvalidationKind, LayoutModifierNode,
     Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
@@ -363,7 +363,11 @@ impl DelegatableNode for PaddingNode {
 
 impl_layout_modifier_node!(PaddingNode, invalidate = InvalidationKind::Layout);
 
-impl LayoutModifierNode for PaddingNode {
+struct PaddingMeasure {
+    padding: EdgeInsets,
+}
+
+impl PaddingMeasure {
     fn measure(
         &self,
         context: &mut dyn ModifierNodeContext,
@@ -419,6 +423,96 @@ impl LayoutModifierNode for PaddingNode {
         let padding = device_padding(self.padding, density);
         let inner_width = (width - padding.horizontal_sum()).max(0.0);
         measurable.max_intrinsic_height(inner_width) + padding.vertical_sum()
+    }
+}
+
+macro_rules! impl_padding_layout {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl LayoutModifierNode for $ty {
+            fn measure(&self, context: &mut dyn ModifierNodeContext, measurable: &dyn Measurable, constraints: Constraints) -> cranpose_ui_layout::LayoutModifierMeasureResult {
+                PaddingMeasure { padding: self.padding() }.measure(context, measurable, constraints)
+            }
+            fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
+                PaddingMeasure { padding: self.padding() }.min_intrinsic_width(measurable, height, density)
+            }
+            fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
+                PaddingMeasure { padding: self.padding() }.max_intrinsic_width(measurable, height, density)
+            }
+            fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+                PaddingMeasure { padding: self.padding() }.min_intrinsic_height(measurable, width, density)
+            }
+            fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+                PaddingMeasure { padding: self.padding() }.max_intrinsic_height(measurable, width, density)
+            }
+        }
+    )+};
+}
+
+impl_padding_layout!(PaddingNode, InsetsPaddingNode);
+
+pub(crate) struct InsetsPaddingNode {
+    reader: CompositionLocalReader<EdgeInsets>,
+    observer: crate::safe_area::InsetsObserver,
+    target: Option<NodeId>,
+    state: NodeState,
+}
+
+impl InsetsPaddingNode {
+    fn padding(&self) -> EdgeInsets {
+        self.target.map_or_else(
+            || self.reader.value(),
+            |node| self.observer.observe(node, || self.reader.value()),
+        )
+    }
+}
+
+impl DelegatableNode for InsetsPaddingNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for InsetsPaddingNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        self.target = context.node_id();
+        context.invalidate(InvalidationKind::Layout);
+    }
+
+    fn on_detach(&mut self) {
+        self.observer.clear();
+        self.target = None;
+    }
+
+    fn as_layout_node(&self) -> Option<&dyn LayoutModifierNode> {
+        Some(self)
+    }
+
+    fn as_layout_node_mut(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct InsetsPaddingElement(pub(crate) CompositionLocalReader<EdgeInsets>);
+
+impl ModifierNodeElement for InsetsPaddingElement {
+    type Node = InsetsPaddingNode;
+
+    fn create(&self) -> Self::Node {
+        InsetsPaddingNode {
+            reader: self.0.clone(),
+            observer: crate::safe_area::InsetsObserver::new(),
+            target: None,
+            state: NodeState::new(),
+        }
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        node.reader = self.0.clone();
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::LAYOUT
     }
 }
 

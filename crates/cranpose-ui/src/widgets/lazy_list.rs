@@ -1451,17 +1451,23 @@ fn LazyColumnNode(
         let viewport = Rc::clone(&viewport);
         cranpose_core::remember(move || {
             let viewport = Rc::clone(&viewport);
-            crate::bring_into_view::BringIntoViewResponder::new(move |caret, ime_bottom| {
-                let vp = viewport.get();
-                if vp.size.width <= 0.0 || vp.size.height <= 0.0 {
-                    return;
-                }
-                let delta =
-                    crate::bring_into_view::local_scroll_delta_to_reveal(caret, vp, ime_bottom);
-                if delta.abs() > 0.5 {
-                    state.dispatch_scroll_delta(-delta);
-                }
-            })
+            crate::bring_into_view::BringIntoViewResponder::in_window(
+                move |caret, ime_bottom, window_height| {
+                    let vp = viewport.get();
+                    if vp.size.width <= 0.0 || vp.size.height <= 0.0 {
+                        return;
+                    }
+                    let delta = crate::bring_into_view::local_scroll_delta_to_reveal(
+                        caret,
+                        vp,
+                        ime_bottom,
+                        window_height,
+                    );
+                    if delta.abs() > 0.5 {
+                        state.dispatch_scroll_delta(-delta);
+                    }
+                },
+            )
         })
         .with(|r| r.clone())
     };

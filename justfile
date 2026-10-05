@@ -722,6 +722,10 @@ robot-one example *args:
 robot-android-surface serial output:
     python3 scripts/android_surface_robot.py --serial {{quote(serial)}} --output {{quote(output)}}
 
+# Verify keyboard show/hide and inset-driven layout on a physical Android device.
+robot-android-insets serial output *args:
+    python3 scripts/android_insets_robot.py --serial {{quote(serial)}} --output {{quote(output)}} {{args}}
+
 android-robot-build: _disk-guard
     cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
       ./gradlew --no-daemon -PcranposeRobot=true :app:assembleRelease :app:assembleReleaseAndroidTest
