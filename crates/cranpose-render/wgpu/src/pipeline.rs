@@ -8,7 +8,7 @@ use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
     Brush,
     hit_graph::collect_hits_from_graph,
-    layer_shadow::layer_shadow_geometry,
+    layer_shadow::{ShadowLight, layer_shadow_geometry},
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
         DrawPrimitiveSink, ImageDrawParams, ShapeDrawParams, TextDrawParams, emit_draw_primitive,
@@ -69,22 +69,13 @@ impl TextLayoutResolver for UiTextLayoutResolver {
 /// A layer shadow's caster: the shadow rect as a solid shape, recorded
 /// relative to its own origin so a shadow that scrolls keeps its
 /// fingerprint.
-fn layer_shadow_run(rect: Rect, color: Color, shape: Option<RoundedCornerShape>) -> RunDraw {
+fn layer_shadow_run(rect: Rect, color: Color, shape: RoundedCornerShape) -> RunDraw {
     let origin = Point::new(rect.x, rect.y);
-    let rect = rect.translate(-origin.x, -origin.y);
-    let brush = Brush::solid(color);
-    let primitive = match shape {
-        Some(shape) => DrawPrimitive::RoundRect {
-            rect,
-            brush,
-            radii: shape.radii(),
-            stroke: None,
-        },
-        None => DrawPrimitive::Rect {
-            rect,
-            brush,
-            stroke: None,
-        },
+    let primitive = DrawPrimitive::RoundRect {
+        rect: rect.translate(-origin.x, -origin.y),
+        brush: Brush::solid(color),
+        radii: shape.radii(),
+        stroke: None,
     };
     let mut recorder = ShapeRecorder::default();
     recorder.push_primitive(primitive);
@@ -128,8 +119,9 @@ pub(crate) fn push_layer_shadow(
     layer_bounds: Rect,
     transformed_bounds: Rect,
     clip: Option<Rect>,
+    light: ShadowLight,
 ) {
-    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds);
+    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds, light);
 
     let resolved_shape = match layer.shape {
         LayerShape::Rectangle => None,
@@ -143,37 +135,16 @@ pub(crate) fn push_layer_shadow(
     };
     let occluder = shadow_occluder(layer, transformed_bounds, resolved_shape.as_ref());
 
-    if let Some(ambient_pass) = shadow_geometry.ambient {
-        let ambient = Color(
-            layer.ambient_shadow_color.r(),
-            layer.ambient_shadow_color.g(),
-            layer.ambient_shadow_color.b(),
-            ambient_pass.alpha,
-        );
+    for (pass, color) in shadow_geometry.passes(layer) {
         scene.push_shadow_draw(ShadowDraw {
-            shapes: Some(layer_shadow_run(ambient_pass.rect, ambient, resolved_shape)),
+            shapes: Some(layer_shadow_run(
+                pass.rect,
+                color,
+                pass.corners(resolved_shape),
+            )),
             post_blur_cutouts: None,
             texts: vec![],
-            blur_radius: ambient_pass.blur_radius,
-            clip,
-            rounded_clip: None,
-            occluder,
-            z_index: 0,
-        });
-    }
-
-    if let Some(spot_pass) = shadow_geometry.spot {
-        let spot = Color(
-            layer.spot_shadow_color.r(),
-            layer.spot_shadow_color.g(),
-            layer.spot_shadow_color.b(),
-            spot_pass.alpha,
-        );
-        scene.push_shadow_draw(ShadowDraw {
-            shapes: Some(layer_shadow_run(spot_pass.rect, spot, resolved_shape)),
-            post_blur_cutouts: None,
-            texts: vec![],
-            blur_radius: spot_pass.blur_radius,
+            blur_radius: pass.blur_radius,
             clip,
             rounded_clip: None,
             occluder,

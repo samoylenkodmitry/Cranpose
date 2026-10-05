@@ -202,7 +202,8 @@ fn shadow_geometry_has_visible_expansion_and_offsets() {
         height: 24.0,
     };
 
-    push_layer_shadow(&mut scene, &layer, bounds, bounds, None);
+    let light = ShadowLight::for_window(200.0, 200.0, 1.0, 1.0);
+    push_layer_shadow(&mut scene, &layer, bounds, bounds, None, light);
 
     assert!(
         scene.shadow_draws.len() >= 2,
@@ -216,8 +217,8 @@ fn shadow_geometry_has_visible_expansion_and_offsets() {
     );
     let ambient_shape = ambient.shapes.as_ref().expect("ambient caster");
     assert!(
-        ambient_shape.bounds.x <= bounds.x - 2.0,
-        "ambient shadow should clearly expand left"
+        ambient_shape.bounds.x < bounds.x,
+        "ambient shadow should expand left"
     );
     assert!(
         ambient_shape.bounds.width > bounds.width,

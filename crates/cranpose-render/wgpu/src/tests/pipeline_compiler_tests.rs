@@ -114,14 +114,14 @@ fn a_demanded_job_waits_for_its_own_thread_until_spread() {
     drop(held);
 }
 
-/// A warm-up waits for every demanded job queued before it, however many
-/// threads are idle.
+/// A thread that frees up while a warm-up and a demanded job are queued
+/// takes the demanded job, though the warm-up was queued first.
 #[test]
 fn a_warm_up_waits_while_demanded_jobs_are_queued() {
     let compiler = PipelineCompiler::spawn();
     compiler.spread_demand(true);
     let threads = 1 + super::warm_up_threads();
-    let held = hold(&compiler, CompileLane::Demanded, threads);
+    let mut held = hold(&compiler, CompileLane::Demanded, threads);
     let (ran, order) = mpsc::channel();
     let warm_up = ran.clone();
     compiler.enqueue(CompileLane::WarmUp, move || {
@@ -132,8 +132,13 @@ fn a_warm_up_waits_while_demanded_jobs_are_queued() {
         order.recv_timeout(Duration::from_millis(100)).is_err(),
         "every thread is held"
     );
+    held.pop();
+    assert_eq!(
+        order.recv_timeout(Duration::from_secs(5)),
+        Ok("demanded"),
+        "the one free thread takes the demanded job first"
+    );
     drop(held);
-    assert_eq!(order.recv_timeout(Duration::from_secs(5)), Ok("demanded"));
     assert_eq!(order.recv_timeout(Duration::from_secs(5)), Ok("warm-up"));
 }
 
