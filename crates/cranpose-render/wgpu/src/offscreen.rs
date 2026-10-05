@@ -1,84 +1,18 @@
-use std::{
-    cell::OnceCell,
-    future::Future,
-    sync::atomic::{AtomicBool, Ordering},
-    task::{Context, Poll, Waker},
-};
+use std::cell::OnceCell;
 
 use crate::{gpu_stats::FrameStats, idle_pool::IdlePool};
 
-/// Set once a device turns out unable to draw into the float format, which
-/// then no renderer in the process composites in.
-static FLOAT_COMPOSITION_UNSUPPORTED: AtomicBool = AtomicBool::new(false);
+/// Bytes one pixel of a composition target holds: every renderer composites
+/// in an 8-bit format.
+pub const COMPOSITION_BYTES_PER_PIXEL: u64 = 4;
 
-pub(crate) fn composition_format() -> wgpu::TextureFormat {
-    static FORMAT: std::sync::OnceLock<wgpu::TextureFormat> = std::sync::OnceLock::new();
-    let preferred = *FORMAT.get_or_init(|| {
-        resolve_composition_format(
-            crate::debug_toggles::debug_toggle("CRANPOSE_COMPOSITION_8BIT").as_deref(),
-            cfg!(target_os = "android"),
-        )
-    });
-    if FLOAT_COMPOSITION_UNSUPPORTED.load(Ordering::Relaxed) {
-        wgpu::TextureFormat::Rgba8Unorm
-    } else {
-        preferred
-    }
-}
-
-/// The format a renderer on `device` composites in: the float format where
-/// the device can draw into it, eight bits where it cannot.
-///
-/// WebGPU, Vulkan, Metal and DirectX all draw into `Rgba16Float`. OpenGL ES
-/// and WebGL2 draw into it only through `EXT_color_buffer_float` or
-/// `EXT_color_buffer_half_float`, which some browsers and drivers leave out;
-/// every offscreen layer and effect pipeline would then fail validation and
-/// leave the window blank.
-pub(crate) fn settle_composition_format(
-    device: &wgpu::Device,
-    backend: wgpu::Backend,
-) -> wgpu::TextureFormat {
-    let format = composition_format();
-    if backend == wgpu::Backend::Gl
-        && format != wgpu::TextureFormat::Rgba8Unorm
-        && !renders_into(device, format)
-    {
-        log::warn!("[gpu-init] this device cannot draw into {format:?}; compositing in Rgba8Unorm");
-        FLOAT_COMPOSITION_UNSUPPORTED.store(true, Ordering::Relaxed);
-    }
-    composition_format()
-}
-
-/// Whether `device` accepts a texture of `format` to draw into and sample.
-pub(crate) fn renders_into(device: &wgpu::Device, format: wgpu::TextureFormat) -> bool {
-    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let _probe = create_2d_texture(
-        device,
-        format,
-        1,
-        1,
-        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        Some("Composition format probe"),
-    );
-    let mut error = std::pin::pin!(scope.pop());
-    // A device wgpu validates itself answers at once; only a browser's
-    // WebGPU answers later, and WebGPU draws into every format asked here.
-    match error.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
-        Poll::Ready(error) => error.is_none(),
-        Poll::Pending => true,
-    }
-}
-
-fn resolve_composition_format(requested: Option<&str>, android: bool) -> wgpu::TextureFormat {
-    let eight_bit = match requested.map(str::trim) {
-        Some("1" | "true" | "yes") => true,
-        Some("0" | "false" | "no") => false,
-        _ => android,
-    };
-    if eight_bit {
-        wgpu::TextureFormat::Rgba8Unorm
-    } else {
-        wgpu::TextureFormat::Rgba16Float
+/// The format a renderer composites in: the presentable image's own 8-bit
+/// format, so a frame draws straight into the image it presents, or
+/// `Rgba8Unorm` beside any other display format.
+pub(crate) fn composition_format(display: wgpu::TextureFormat) -> wgpu::TextureFormat {
+    match display.remove_srgb_suffix() {
+        format @ (wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm) => format,
+        _ => wgpu::TextureFormat::Rgba8Unorm,
     }
 }
 
@@ -202,11 +136,6 @@ impl OffscreenTarget {
             cached_bind_group: OnceCell::new(),
         }
     }
-}
-
-/// Bytes one pixel of the renderer's composition format occupies.
-pub fn composition_bytes_per_pixel() -> u64 {
-    crate::frame_graph::texture_format_bytes_per_pixel(composition_format())
 }
 
 pub(crate) struct OffscreenPool {

@@ -145,9 +145,14 @@ fn assert_blur_follows_its_kernel(radius: f32, budget: f32) {
     );
 }
 
+/// The output's own rounding plus half a level for the 8-bit scratch the
+/// horizontal pass leaves the vertical one; a wrong weight or tap offset
+/// lands tens of levels away.
+const KERNEL_BUDGET: f32 = 1.5;
+
 #[test]
-fn a_blur_matches_its_kernel_applied_by_the_cpu_within_one_step() {
-    assert_blur_follows_its_kernel(RADIUS, 1.0);
+fn a_blur_matches_its_kernel_applied_by_the_cpu_within_its_rounding() {
+    assert_blur_follows_its_kernel(RADIUS, KERNEL_BUDGET);
 }
 
 /// A wide blur averages each block of four texels, runs both passes at a
@@ -195,7 +200,7 @@ fn backdrop_blur_radius_is_already_in_pixels_at_high_display_density() {
             worst_kernel_deviation(RADIUS, density).expect("density regression requires a GPU");
         assert!(result.changed > 0);
         assert!(
-            result.worst <= 1.0,
+            result.worst <= KERNEL_BUDGET,
             "density {density} multiplied an already physical radius: deviation {} at {:?}",
             result.worst,
             result.worst_at

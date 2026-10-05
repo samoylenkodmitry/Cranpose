@@ -3923,7 +3923,7 @@ fn assert_local_surface_stats(
     let atlas_pixels = u64::from(layer_size.0 + effect_padding * 4 + ATLAS_ROUNDING)
         * u64::from(layer_size.1 + effect_padding * 4 + ATLAS_ROUNDING);
     let transient_pixels =
-        stats.transient_texture_bytes / cranpose_render_wgpu::composition_bytes_per_pixel();
+        stats.transient_texture_bytes / cranpose_render_wgpu::COMPOSITION_BYTES_PER_PIXEL;
     assert!(
         transient_pixels <= atlas_pixels * 2 && transient_pixels < frame_pixels * 2,
         "{label} should resolve through a capture atlas and a blur scratch bounded by the layer, never frame-sized scratch targets: atlas_pixels={atlas_pixels} stats={stats:?}"

@@ -39,7 +39,7 @@ use crate::{
     },
     geometry::{SegmentTransform, snap_delta_for_anchor},
     layer_cache::{Retained, RetainedContent},
-    offscreen::{OffscreenTarget, composition_format},
+    offscreen::OffscreenTarget,
     opaque_prefix::{OpaquePrefix, PrefixContext, opaque_prefix, page_fill_color},
     render::GpuRenderer,
     scene::{BackdropLayer, CompositorScene, DrawOp, DrawOpKind, EffectLayer, LayerRoundedClip},
@@ -3042,7 +3042,6 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             page_offset: pass.page.offset,
             page_size,
             scale: pass.scale,
-            format: composition_format(),
         };
         if let Some(clear) = page_fill_clear(&context, ops, composites, first_in_place_z) {
             *load_op = Some(clear);

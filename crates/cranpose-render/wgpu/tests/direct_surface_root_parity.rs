@@ -1,12 +1,9 @@
-use std::process::Command;
-
 use support::{page::*, read_texture};
 
 use crate::support;
 
 const FRAME_WIDTH: u32 = 320;
 const FRAME_HEIGHT: u32 = 240;
-const ISOLATED_TEST: &str = "CRANPOSE_DIRECT_SURFACE_ROOT_PARITY_CHILD";
 
 #[composable]
 fn CardsPage() {
@@ -97,26 +94,6 @@ fn render_frames() -> Option<Frames> {
 
 #[test]
 fn a_frame_rendered_straight_into_the_presentable_image_matches_the_converted_capture() {
-    if std::env::var_os(ISOLATED_TEST).as_deref() != Some(std::ffi::OsStr::new("1")) {
-        let output = Command::new(std::env::current_exe().expect("integration test executable"))
-            .args([
-                "--exact",
-                "direct_surface_root_parity::a_frame_rendered_straight_into_the_presentable_image_matches_the_converted_capture",
-                "--nocapture",
-            ])
-            .env(ISOLATED_TEST, "1")
-            .env("CRANPOSE_COMPOSITION_8BIT", "1")
-            .output()
-            .expect("run the 8-bit composition test in an isolated process");
-        assert!(
-            output.status.success(),
-            "isolated direct-surface parity failed:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return;
-    }
-
     let Some(frames) = render_frames() else {
         return;
     };

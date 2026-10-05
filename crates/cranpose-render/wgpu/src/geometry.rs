@@ -1,13 +1,13 @@
 use cranpose_render_common::graph::quad_bounds;
 use cranpose_ui_graphics::{Point, Rect};
 
-use crate::{offscreen::composition_bytes_per_pixel, scene::SnapAnchor};
+use crate::{offscreen::COMPOSITION_BYTES_PER_PIXEL, scene::SnapAnchor};
 
 const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
 const DEVICE_SNAP_SUBPIXEL_STEPS: f64 = 16.0;
 
 pub(crate) fn offscreen_byte_size(width: u32, height: u32) -> u64 {
-    (width as u64) * (height as u64) * composition_bytes_per_pixel()
+    (width as u64) * (height as u64) * COMPOSITION_BYTES_PER_PIXEL
 }
 
 /// Whole device pixels: an integral origin and a pixel size.
