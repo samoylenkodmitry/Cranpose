@@ -68,7 +68,7 @@ fn a_shadow_takes_skias_ambient_and_spot_geometry() {
     let ambient = geometry.ambient.expect("ambient pass");
     assert_rect(
         ambient.rect,
-        [18.202031, 28.202031, 43.595938, 15.595938],
+        [18.20203, 28.20203, 43.59594, 15.59594],
         "ambient",
     );
     assert_close(ambient.corner_scale, 1.0, "ambient corner scale");
@@ -79,11 +79,7 @@ fn a_shadow_takes_skias_ambient_and_spot_geometry() {
     // Spot: 10 / 490 of the way further from the light, scaled by 1 + 10/490,
     // over a penumbra of 800 × 10/490.
     let spot = geometry.spot.expect("spot pass");
-    assert_rect(
-        spot.rect,
-        [19.902041, 32.146939, 37.746939, 9.175510],
-        "spot",
-    );
+    assert_rect(spot.rect, [19.90204, 32.14694, 37.74694, 9.17551], "spot");
     assert_close(spot.corner_scale, 1.020408, "spot corner scale");
     assert_close(spot.corner_outset, -1.534694, "spot corner outset");
     assert_close(spot.blur_radius, 7.444898, "spot blur");
