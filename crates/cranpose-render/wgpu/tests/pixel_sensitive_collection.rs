@@ -349,3 +349,75 @@ fn nested_empty_clip_text_keeps_fractional_isolated_pixels_rigid_after_graph_edi
         &direct_run,
     );
 }
+
+fn graph_with_nested_isolated(descendant: RenderNode) -> RenderGraph {
+    let mut graph = graph_with_direct_clipped_text();
+    let Some(RenderNode::Layer(outer)) = graph.root.children.get_mut(1) else {
+        panic!("expected the isolated outer layer");
+    };
+    // The outer layer's content walks translated, so the inner isolated
+    // layer snaps on its own and only the outer one asks about the text.
+    outer.translated_content_context = true;
+    let empty_clip = shared_test_support::layer_node(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        },
+        ProjectiveTransform::translation(1.35, 2.25),
+        GraphicsLayer {
+            clip: true,
+            ..Default::default()
+        },
+        vec![descendant],
+    );
+    let inner = shared_test_support::layer_node(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 48.0,
+            height: 36.0,
+        },
+        ProjectiveTransform::translation(1.35, 2.25),
+        GraphicsLayer {
+            compositing_strategy: CompositingStrategy::Offscreen,
+            ..Default::default()
+        },
+        vec![RenderNode::Layer(Box::new(empty_clip))],
+    );
+    outer.children = vec![visible_content(), RenderNode::Layer(Box::new(inner))];
+    graph
+}
+
+#[test]
+fn text_hidden_in_a_nested_isolated_layer_keeps_the_outer_layer_rigid() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(error) => {
+            eprintln!("skipping pixel-sensitive collection check: {error}");
+            return;
+        }
+    };
+
+    let with_text = capture(
+        &mut renderer,
+        &graph_with_nested_isolated(hidden_text(None)),
+    );
+    let with_shape = capture(
+        &mut renderer,
+        &graph_with_nested_isolated(support::solid_rect(
+            Rect {
+                x: 4.0,
+                y: 4.0,
+                width: 20.0,
+                height: 22.0,
+            },
+            Color::BLACK,
+        )),
+    );
+    assert!(
+        with_text != with_shape,
+        "text below the nested isolated layer must snap the outer layer"
+    );
+}
