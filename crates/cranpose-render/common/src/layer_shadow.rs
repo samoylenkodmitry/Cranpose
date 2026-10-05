@@ -87,7 +87,7 @@ pub struct LayerShadowPass {
 impl LayerShadowPass {
     /// The caster's corners, a rectangle's as zero, as this pass draws them.
     pub fn corners(&self, caster: Option<RoundedCornerShape>) -> RoundedCornerShape {
-        let radii = caster.map_or(CornerRadii::uniform(0.0), |shape| shape.radii());
+        let radii = caster.map_or_else(|| CornerRadii::uniform(0.0), |shape| shape.radii());
         let grow = |radius: f32| (radius * self.corner_scale + self.corner_outset).max(0.0);
         RoundedCornerShape::with_radii(CornerRadii {
             top_left: grow(radii.top_left),
