@@ -150,7 +150,10 @@ enum Walk {
 #[derive(Clone, Copy)]
 enum Peek {
     Skip,
-    Clean(Point),
+    /// Nothing in the subtree changed since the last update: a move, a
+    /// resize or an unplacing records the node in the layout log, and the
+    /// update marks every recorded node before it walks.
+    Clean,
     Visit,
 }
 
@@ -335,8 +338,8 @@ impl<'a> SemanticsUpdate<'a> {
         match self.applier.with_node::<LayoutNode, _>(child_id, |layout| {
             if layout.is_window_root() {
                 Peek::Skip
-            } else if changed_only && !layout.needs_semantics() && layout.is_placed() {
-                Peek::Clean(layout.position())
+            } else if changed_only && !layout.needs_semantics() {
+                Peek::Clean
             } else {
                 Peek::Visit
             }
@@ -356,7 +359,7 @@ impl<'a> SemanticsUpdate<'a> {
         known: bool,
     ) -> Result<bool, NodeError> {
         match peek {
-            Peek::Clean(position) if known && position == node.placement.position => {
+            Peek::Clean if known => {
                 move_with_parent(node, origin);
                 Ok(true)
             }
