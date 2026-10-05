@@ -116,3 +116,31 @@ fn glyph_atlas_fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let coverage = textureSample(glyph_texture, glyph_sampler, uv).r;
     return vec4<f32>(input.color.rgb, input.color.a * coverage);
 }
+
+// A plain glyph quad on whole pixels at one texel a pixel: every fragment
+// samples the center of one of the glyph's texels, so it needs no clamp
+// and its bounds are not carried.
+struct AlignedVertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+}
+
+@vertex
+fn glyph_atlas_aligned_vs_main(
+    @builtin(vertex_index) corner: u32,
+    glyph: GlyphInstance,
+) -> AlignedVertexOutput {
+    let placed = glyph_vertex(corner, glyph, vec4<f32>(1.0, 0.0, 0.0, 1.0), vec2<f32>(0.0));
+    var output: AlignedVertexOutput;
+    output.clip_position = placed.clip_position;
+    output.color = placed.color;
+    output.uv = placed.uv;
+    return output;
+}
+
+@fragment
+fn glyph_atlas_aligned_fs_main(input: AlignedVertexOutput) -> @location(0) vec4<f32> {
+    let coverage = textureSample(glyph_texture, glyph_sampler, input.uv).r;
+    return vec4<f32>(input.color.rgb, input.color.a * coverage);
+}

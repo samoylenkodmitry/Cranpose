@@ -483,16 +483,23 @@ fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
     let filtered = Rc::clone(&renderer.text_glyph_atlas.filtered_bind_group);
     let full = (0, 0, 8, 8);
     let half = (0, 0, 4, 8);
+    let plain = GlyphQuads::Plain;
     let mut cmds = vec![
-        GlyphDrawCmd::shared((0..1, false), Some(full), full, Rc::clone(&texel)),
-        GlyphDrawCmd::shared((1..3, false), Some(full), full, Rc::clone(&texel)),
-        GlyphDrawCmd::shared((3..4, false), Some(half), half, Rc::clone(&texel)),
-        GlyphDrawCmd::shared((4..5, false), Some(half), half, Rc::clone(&filtered)),
-        GlyphDrawCmd::shared((6..7, false), Some(half), half, Rc::clone(&filtered)),
+        GlyphDrawCmd::shared((0..1, plain), Some(full), full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared((1..3, plain), Some(full), full, Rc::clone(&texel)),
+        GlyphDrawCmd::shared((3..4, plain), Some(half), half, Rc::clone(&texel)),
+        GlyphDrawCmd::shared((4..5, plain), Some(half), half, Rc::clone(&filtered)),
+        GlyphDrawCmd::shared((6..7, plain), Some(half), half, Rc::clone(&filtered)),
     ];
     queue_glyph(&mut renderer, 1, 0.0, &mut cmds);
     cmds.push(GlyphDrawCmd::shared(
-        (7..8, false),
+        (7..8, plain),
+        Some(half),
+        half,
+        Rc::clone(&filtered),
+    ));
+    cmds.push(GlyphDrawCmd::shared(
+        (8..9, GlyphQuads::Aligned),
         Some(half),
         half,
         Rc::clone(&filtered),
@@ -514,8 +521,10 @@ fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
             (Some(6..7), Some(half)),
             (None, Some((0, 0, 8, 8))),
             (Some(7..8), Some(half)),
+            (Some(8..9), Some(half)),
         ],
-        "a new scissor, a new atlas, a gap in the quads and a retained run each start a draw"
+        "a new scissor, a new atlas, a gap in the quads, a retained run and a new quad kind each \
+         start a draw"
     );
 }
 

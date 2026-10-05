@@ -16,8 +16,7 @@ use super::{
     local::ModifierLocalManager, modifier_debug_enabled,
 };
 use crate::modifier_nodes::{
-    AlignmentNode, FillDirection, FillNode, IntrinsicAxis, IntrinsicSizeNode, OffsetNode,
-    PaddingNode, SizeNode, WeightNode,
+    AlignmentNode, FillDirection, FillNode, OffsetNode, PaddingNode, SizeNode, WeightNode,
 };
 
 /// Snapshot of a modifier node inside a reconciled chain for debugging & inspector tooling.
@@ -281,8 +280,6 @@ impl ModifierChainHandle {
                     apply_size_node(&mut layout, size_node);
                 } else if let Some(fill_node) = any.downcast_ref::<FillNode>() {
                     apply_fill_node(&mut layout, fill_node);
-                } else if let Some(intrinsic_node) = any.downcast_ref::<IntrinsicSizeNode>() {
-                    apply_intrinsic_size_node(&mut layout, intrinsic_node);
                 } else if let Some(weight_node) = any.downcast_ref::<WeightNode>() {
                     layout.weight = Some(weight_node.layout_weight());
                 } else if let Some(alignment_node) = any.downcast_ref::<AlignmentNode>() {
@@ -392,18 +389,6 @@ fn apply_fill_node(layout: &mut LayoutProperties, node: &FillNode) {
         FillDirection::Both => {
             layout.width = DimensionConstraint::Fraction(fraction);
             layout.height = DimensionConstraint::Fraction(fraction);
-        }
-    }
-}
-
-fn apply_intrinsic_size_node(layout: &mut LayoutProperties, node: &IntrinsicSizeNode) {
-    let constraint = DimensionConstraint::Intrinsic(node.intrinsic_size());
-    match node.axis() {
-        IntrinsicAxis::Width => {
-            layout.width = constraint;
-        }
-        IntrinsicAxis::Height => {
-            layout.height = constraint;
         }
     }
 }
