@@ -1,0 +1,337 @@
+{
+ "kind": "ab",
+ "started_at": "2026-10-05T13:30:54+00:00",
+ "device": {
+  "ro.product.model": "EVR-AL00",
+  "ro.build.version.release": "10",
+  "ro.hardware": "kirin980"
+ },
+ "subjects": [
+  {
+   "name": "compose",
+   "package": "dev.perfcompare.compose",
+   "label": ""
+  },
+  {
+   "name": "cranpose",
+   "package": "dev.perfcompare.cranpose",
+   "label": ""
+  }
+ ],
+ "protocol": {
+  "warmup_s": 2.0,
+  "window_s": 5.0,
+  "max_pairs": 4,
+  "deciding": {
+   "fps": 0.03,
+   "cpu_ms_per_frame": 0.03,
+   "desired_to_present_p50_ms": 2.0
+  }
+ },
+ "scenarios": [
+  {
+   "scenario": "gauntlet",
+   "extras": "--ei tier 5",
+   "legs": [
+    {
+     "subject": "compose",
+     "order": 0,
+     "fps": 27.166666666666668,
+     "janky_pct": 75.92592592592592,
+     "interval_p99_ms": 66.594271,
+     "cpu_ms_per_frame": 64.04907975460122,
+     "gpu_mhz": 139.0,
+     "desired_to_present_p50_ms": 23.11198,
+     "pss_mb": 92.7587890625,
+     "throttled": false,
+     "temperature_before": {
+      "gpu": 38.0,
+      "cluster0": 44.0,
+      "shell_frame": 29.881,
+      "Battery": 29.0,
+      "cluster1": 44.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     },
+     "temperature_after": {
+      "gpu": 38.0,
+      "cluster0": 45.0,
+      "shell_frame": 29.958,
+      "Battery": 29.0,
+      "cluster1": 48.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     }
+    },
+    {
+     "subject": "cranpose",
+     "order": 1,
+     "fps": 52.892561983572854,
+     "janky_pct": 13.793103448275861,
+     "interval_p99_ms": 33.315104,
+     "cpu_ms_per_frame": 31.78125,
+     "gpu_mhz": 615.0,
+     "desired_to_present_p50_ms": 26.197916,
+     "pss_mb": 807.2568359375,
+     "throttled": false,
+     "temperature_before": {
+      "gpu": 38.0,
+      "cluster0": 46.0,
+      "shell_frame": 29.958,
+      "Battery": 29.0,
+      "cluster1": 47.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     },
+     "temperature_after": {
+      "gpu": 49.0,
+      "cluster0": 53.0,
+      "shell_frame": 30.984,
+      "Battery": 29.0,
+      "cluster1": 55.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     }
+    },
+    {
+     "subject": "cranpose",
+     "order": 2,
+     "fps": 52.62295081962192,
+     "janky_pct": 14.0625,
+     "interval_p99_ms": 33.316145,
+     "cpu_ms_per_frame": 32.18068535825545,
+     "gpu_mhz": 620.8,
+     "desired_to_present_p50_ms": 25.875521,
+     "pss_mb": 860.740234375,
+     "throttled": false,
+     "temperature_before": {
+      "gpu": 46.0,
+      "cluster0": 53.0,
+      "shell_frame": 30.984,
+      "Battery": 29.0,
+      "cluster1": 54.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     },
+     "temperature_after": {
+      "gpu": 51.0,
+      "cluster0": 55.0,
+      "shell_frame": 31.602,
+      "Battery": 29.0,
+      "cluster1": 56.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     }
+    },
+    {
+     "subject": "compose",
+     "order": 3,
+     "fps": 26.289517470841126,
+     "janky_pct": 83.43949044585987,
+     "interval_p99_ms": 66.579687,
+     "cpu_ms_per_frame": 65.37974683544304,
+     "gpu_mhz": 139.0,
+     "desired_to_present_p50_ms": 22.024479,
+     "pss_mb": 97.2880859375,
+     "throttled": false,
+     "temperature_before": {
+      "gpu": 49.0,
+      "cluster0": 55.0,
+      "shell_frame": 31.602,
+      "Battery": 29.0,
+      "cluster1": 56.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     },
+     "temperature_after": {
+      "gpu": 42.0,
+      "cluster0": 50.0,
+      "shell_frame": 32.395,
+      "Battery": 29.0,
+      "cluster1": 54.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     }
+    },
+    {
+     "subject": "compose",
+     "order": 4,
+     "fps": 26.166666666666668,
+     "janky_pct": 86.53846153846153,
+     "interval_p99_ms": 66.597917,
+     "cpu_ms_per_frame": 66.62420382165605,
+     "gpu_mhz": 139.0,
+     "desired_to_present_p50_ms": 23.455729,
+     "pss_mb": 96.3486328125,
+     "throttled": false,
+     "temperature_before": {
+      "gpu": 42.0,
+      "cluster0": 51.0,
+      "shell_frame": 32.395,
+      "Battery": 29.0,
+      "cluster1": 52.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     },
+     "temperature_after": {
+      "gpu": 41.0,
+      "cluster0": 50.0,
+      "shell_frame": 33.105,
+      "Battery": 29.0,
+      "cluster1": 54.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     }
+    },
+    {
+     "subject": "cranpose",
+     "order": 5,
+     "fps": 52.960526315647506,
+     "janky_pct": 13.39563862928349,
+     "interval_p99_ms": 33.311458,
+     "cpu_ms_per_frame": 32.17391304347826,
+     "gpu_mhz": 626.6,
+     "desired_to_present_p50_ms": 25.732813,
+     "pss_mb": 867.021484375,
+     "throttled": false,
+     "temperature_before": {
+      "gpu": 41.0,
+      "cluster0": 50.0,
+      "shell_frame": 33.105,
+      "Battery": 29.0,
+      "cluster1": 52.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     },
+     "temperature_after": {
+      "gpu": 51.0,
+      "cluster0": 55.0,
+      "shell_frame": 32.823,
+      "Battery": 29.0,
+      "cluster1": 57.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     }
+    },
+    {
+     "subject": "cranpose",
+     "order": 6,
+     "fps": 52.96052631590102,
+     "janky_pct": 13.707165109034268,
+     "interval_p99_ms": 33.329167,
+     "cpu_ms_per_frame": 31.645962732919255,
+     "gpu_mhz": 638.2,
+     "desired_to_present_p50_ms": 26.4375,
+     "pss_mb": 827.9892578125,
+     "throttled": false,
+     "temperature_before": {
+      "gpu": 49.0,
+      "cluster0": 56.0,
+      "shell_frame": 32.823,
+      "Battery": 29.0,
+      "cluster1": 57.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     },
+     "temperature_after": {
+      "gpu": 52.0,
+      "cluster0": 56.0,
+      "shell_frame": 32.704,
+      "Battery": 29.0,
+      "cluster1": 60.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     }
+    },
+    {
+     "subject": "compose",
+     "order": 7,
+     "fps": 26.666666666666668,
+     "janky_pct": 83.64779874213836,
+     "interval_p99_ms": 66.617708,
+     "cpu_ms_per_frame": 65.5,
+     "gpu_mhz": 139.0,
+     "desired_to_present_p50_ms": 23.370833,
+     "pss_mb": 99.48046875,
+     "throttled": false,
+     "temperature_before": {
+      "gpu": 50.0,
+      "cluster0": 57.0,
+      "shell_frame": 32.704,
+      "Battery": 29.0,
+      "cluster1": 60.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     },
+     "temperature_after": {
+      "gpu": 43.0,
+      "cluster0": 50.0,
+      "shell_frame": 33.181,
+      "Battery": 29.0,
+      "cluster1": 53.0,
+      "cooling_cluster0": 0,
+      "cooling_cluster1": 0,
+      "cooling_gpu": 0,
+      "cooling_cluster2": 0
+     }
+    }
+   ],
+   "summary": {
+    "compose": {
+     "fps": 26.478092068753895,
+     "cpu_ms_per_frame": 65.43987341772151,
+     "desired_to_present_p50_ms": 23.2414065,
+     "janky_pct": 83.54364459399912,
+     "interval_p99_ms": 66.596094,
+     "gpu_mhz": 139.0,
+     "pss_mb": 96.818359375
+    },
+    "cranpose": {
+     "fps": 52.92654414961018,
+     "cpu_ms_per_frame": 31.97758152173913,
+     "desired_to_present_p50_ms": 26.0367185,
+     "janky_pct": 13.750134278655064,
+     "interval_p99_ms": 33.3156245,
+     "gpu_mhz": 623.7,
+     "pss_mb": 844.36474609375
+    }
+   },
+   "verdicts": {
+    "fps": "better",
+    "cpu_ms_per_frame": "better",
+    "desired_to_present_p50_ms": "worse"
+   }
+  }
+ ],
+ "duration_s": 99
+}

@@ -1,0 +1,50 @@
+{
+ "runs": [
+  {
+   "file": "runs/2026-10-05-ab-manual-EVR-AL00.json",
+   "kind": "ab",
+   "started_at": "2026-10-05T13:30:54+00:00",
+   "device": "EVR-AL00",
+   "main": null,
+   "release": null,
+   "subjects": [
+    {
+     "name": "compose",
+     "label": ""
+    },
+    {
+     "name": "cranpose",
+     "label": ""
+    }
+   ],
+   "duration_s": 99,
+   "scenarios": {
+    "gauntlet": {
+     "legs": 8,
+     "summary": {
+      "compose": {
+       "fps": 26.478092068753895,
+       "cpu_ms_per_frame": 65.43987341772151,
+       "desired_to_present_p50_ms": 23.2414065,
+       "janky_pct": 83.54364459399912,
+       "pss_mb": 96.818359375
+      },
+      "cranpose": {
+       "fps": 52.92654414961018,
+       "cpu_ms_per_frame": 31.97758152173913,
+       "desired_to_present_p50_ms": 26.0367185,
+       "janky_pct": 13.750134278655064,
+       "pss_mb": 844.36474609375
+      }
+     },
+     "verdicts": {
+      "fps": "better",
+      "cpu_ms_per_frame": "better",
+      "desired_to_present_p50_ms": "worse"
+     }
+    }
+   },
+   "confirmed_regressions": {}
+  }
+ ]
+}
