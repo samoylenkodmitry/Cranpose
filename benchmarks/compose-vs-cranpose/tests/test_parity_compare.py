@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw
 
 BENCHMARK = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BENCHMARK))
-from parity import compare  # noqa: E402
+from parity import compare, compare_pair  # noqa: E402
 
 WIDTH, HEIGHT, HEADER = 540, 1000, 120
 SCROLL = 300
@@ -41,7 +41,13 @@ def scene(row_height, blocks=lambda row, block: True, color=lambda rgb: rgb):
 
 
 def changed(first, second, drift=160):
-    return compare(first, second, top=0, shift=8, tile=48, tile_delta=12.0, drift=drift)[1]
+    """The percent of changed tiles in the worse way, as the gate decides."""
+    return max(result[1] for result in compare_pair(first, second, 0, 8, 48, 12.0, drift))
+
+
+def changed_one_way(first, second):
+    return compare(first, second, 0, 8, 48, 12.0, 160)[1]
+
 
 
 class ParityCompareTest(unittest.TestCase):
@@ -50,11 +56,14 @@ class ParityCompareTest(unittest.TestCase):
         self.assertLessEqual(changed(scene(100), scene(97)), GATE)
 
     def test_rows_scrolled_past_the_other_screen_are_left_out(self):
-        self.assertLessEqual(changed(scene(97), scene(100)), GATE)
+        self.assertLessEqual(changed_one_way(scene(97), scene(100)), GATE)
+        self.assertLessEqual(changed_one_way(scene(100), scene(97)), GATE)
 
     def test_a_missing_element_is_changed(self):
         missing = scene(97, blocks=lambda row, block: (row, block) != (6, 2))
         self.assertGreater(changed(scene(100), missing), changed(scene(100), scene(97)))
+        self.assertGreater(changed(missing, scene(100)), changed(scene(97), scene(100)))
+        self.assertGreater(changed_one_way(scene(100), missing), changed_one_way(scene(100), scene(97)))
 
     def test_other_colors_are_changed(self):
         swapped = scene(97, color=lambda rgb: (rgb[2], rgb[1], rgb[0]))

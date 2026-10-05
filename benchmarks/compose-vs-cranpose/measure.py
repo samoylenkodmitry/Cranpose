@@ -49,6 +49,20 @@ APPS = {
         'apk': HERE / 'flutter-app/build/app/outputs/flutter-apk/app-release.apk',
         'layer': 'SurfaceView - ',
     },
+    # React Native: the gauntlet only. Its `PERF` lines come from JavaScript,
+    # under React Native's own log tag.
+    'rn': {
+        'package': 'dev.perfcompare.rn',
+        'activity': 'dev.perfcompare.rn/.MainActivity',
+        'apk': HERE / 'rn-app/android/app/build/outputs/apk/release/app-release.apk',
+        'log_tags': ['ReactNativeJS:I'],
+    },
+    # .NET MAUI: the gauntlet only, published fully AOT-compiled.
+    'maui': {
+        'package': 'dev.perfcompare.maui',
+        'activity': 'dev.perfcompare.maui/.MainActivity',
+        'apk': HERE / 'maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk',
+    },
     # The Cranpose app built from the latest release, beside main's
     # (`-PperfCompareSuffix=.release`).
     'cranpose-release': {
@@ -167,6 +181,11 @@ def parse_snap(lines):
 
 PENDING = 9223372036854775807
 LAYER_STATE = 'RequestedLayerState{'
+
+
+def app_log(device, app):
+    """The app's log lines: its own tag and any the app's framework logs under."""
+    return device.adb('logcat', '-d', '-s', 'PerfCompare:I', *APPS[app].get('log_tags', []))
 
 
 def app_layer(device, app):
@@ -433,7 +452,7 @@ def measure_run(device, app, scenario, args, destination):
                                if name.startswith('cooling_')))
     if app == 'compose':
         run['gfxinfo'] = gfxinfo_summary(output.split('GFX_BEGIN', 1)[1].split('GFX_END', 1)[0])
-    log = device.adb('logcat', '-d', '-s', 'PerfCompare:I')
+    log = app_log(device, app)
     run['app_log'] = [line for line in log.splitlines() if 'PERF' in line]
     if args.screenshots:
         shot = destination / f'{app}-{scenario}.png'

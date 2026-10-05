@@ -4,8 +4,10 @@ Two apps with the same UI, element for element: `cranpose-app` (Rust, Cranpose
 from this repository) and `compose-app` (Kotlin, Jetpack Compose from BOM
 2026.09.00, foundation 1.12). `measure.py` runs them alternately on one Android
 device and measures both from outside either framework. The gauntlet also runs
-in `views-app` (Android Views, RecyclerView 1.4) and `flutter-app` (Flutter
-3.47, which picks Impeller on OpenGL ES on the Mate).
+in `views-app` (Android Views, RecyclerView 1.4), `flutter-app` (Flutter 3.47,
+which picks Impeller on OpenGL ES on the Mate), `rn-app` (React Native 0.87 on
+the New Architecture with Hermes) and `maui-app` (.NET MAUI 10, fully
+AOT-compiled).
 
 ## Scenarios
 
@@ -78,7 +80,16 @@ and clusters, measures the width in a parent `onMeasure`, and redraws bars and
 sparklines in `onDraw`. Flutter uses a `ListView` of rows, lays the width out
 in a `SingleChildLayoutDelegate` that relayouts on the frame, rebuilds only the
 changing texts in `ValueListenableBuilder`s, and paints in `CustomPainter`s
-that repaint on the frame.
+that repaint on the frame. React Native runs one JavaScript frame loop, so
+each frame is one React commit: the changing texts, bars, badges and the
+width are small memoized components reading the frame through
+`useSyncExternalStore`, the list is a FlashList of rows, sparklines are Skia
+paths, and the footer's dividers stretch in Yoga's row. MAUI advances the
+frame on its animation ticker; views on screen set only what changed, the
+list is a CollectionView of rows scrolled through its RecyclerView (MAUI
+scrolls to items, not offsets), sparklines and bars are GraphicsView
+drawables, and the footer is a Grid whose row is as tall as its tallest
+cell.
 
 | Tier | Columns | Scale | Ticker tiles | Cluster depth |
 | --- | ---: | ---: | ---: | ---: |
@@ -92,17 +103,20 @@ that repaint on the frame.
 | 8 | 5 | 0.35 | 56 | 24 |
 
 Calibration fixes one tier per device: the Huawei Mate 20 X runs tier 5. On
-2026-10-05 Cranpose drew 52.8 fps there, Views 52 to 54, Flutter 29.5 and
-Compose 26.5. Raising a device's tier starts a new series rather than changing
-an old one.
+2026-10-05 Cranpose drew 52.8 fps there, Views 52 to 54, Flutter 29.5,
+Compose 26.5, React Native 8.4 and MAUI 6.0. Raising a device's tier starts a
+new series rather than changing an old one.
 
-`parity.py` launches two apps frozen on the same frame and compares the two
-captures the way the eye does: softened and cut into tiles. Each band of tiles
+`parity.py` launches two apps frozen on frame 120 and compares the two
+captures the way the eye does: softened and cut into tiles. On frame 120 a
+cluster sits mid-screen; on frame 240 one sits at the top of the list, where
+its look-alike levels make the drift ambiguous. Each band of tiles
 is found in the other capture up to 160 pixels higher or lower. Each tile is
 then matched at the best offset within 8 pixels of its band's, quarter by
 quarter of the neighbouring bands' where they drifted differently. A tile
 that still differs on average is changed; a band that has drifted past the
-other capture's edge is left out. The
+other capture's edge, or behind its still content, is left out. Each
+capture's tiles are found in the other, and the worse way decides. The
 bands absorb drift: the frameworks put lines of text on different pixel grids,
 so a list scrolled 720 dp shows its rows a few dozen pixels apart without
 looking any different. Flutter rounds each line to whole logical pixels and
@@ -111,17 +125,22 @@ composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
 
 | App | Changed tiles | What differs |
 | --- | ---: | --- |
-| Cranpose | 1.24% | Compose lays out in whole pixels (#1215) |
-| Flutter | 0.22% | Its unhinted text is about 2% wider, so a few lines break a word earlier |
-| Views | 0.21% | Lines of text a pixel apart |
+| Cranpose | 1.34% | Compose lays out in whole pixels (#1215) |
+| Views | 0.10% | Lines of text a pixel apart |
+| Flutter | 0.93% | Its unhinted text is about 2% wider, so a few lines break a word earlier |
+| React Native | 0.85% | Paragraph lines keep their leading above the first line and below the last |
+| MAUI | 0.10% | Lines of text a pixel apart |
 
 ## Parity rules
 
 - **Data:** `data.rs`, `shared-kotlin/dev/perfcompare/shared/PerfData.kt` (the
-  Compose and Views apps) and `flutter-app/lib/data.dart` implement the same
-  xorshift generator, so every post, comment, quote and particle is identical.
+  Compose and Views apps), `flutter-app/lib/data.dart`, `rn-app/src/data.ts`
+  and `maui-app/PerfData.cs` implement the same xorshift generator, so every
+  post, comment, quote and particle is identical.
 - **Fonts:** every app loads `/system/fonts/Roboto-Regular.ttf` and
-  `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. The bundled
+  `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. React
+  Native registers them with its font manager and MAUI serves them from its
+  own `IFontManager`; the Huawei system font is wider. The bundled
   Noto Sans Merged declares 2.1 em of ascent plus descent, which Compose honors
   and Cranpose does not, so it cannot be compared. The workspace also loads
   `Roboto-Medium.ttf` and follows GPUI's 1.618034 em line height, including the
@@ -313,6 +332,8 @@ and a 15 s window. Failed runs are kept in the report.
 (cd benchmarks/compose-vs-cranpose/compose-app && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/views-app && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/flutter-app && flutter build apk --release --target-platform android-arm64)
+(cd benchmarks/compose-vs-cranpose/rn-app && npm ci && cd android && ./gradlew :app:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/maui-app && dotnet publish -c Release -f net10.0-android)
 python3 benchmarks/compose-vs-cranpose/measure.py --serial SERIAL --output benchmarks/compose-vs-cranpose/results/RUN --install --reps 2 --screenshots
 python3 benchmarks/compose-vs-cranpose/summarize.py benchmarks/compose-vs-cranpose/results/RUN/report.json
 ```
