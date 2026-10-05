@@ -2872,35 +2872,37 @@ impl FrameRoot {
     }
 }
 
+/// What a presentable image must allow to be the frame's root target:
+/// rendering, and the copies a capture and the opaque-prefix cache take of
+/// the page and put back.
 const DIRECT_SURFACE_ROOT_USAGES: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT
-    .union(wgpu::TextureUsages::TEXTURE_BINDING)
     .union(wgpu::TextureUsages::COPY_SRC)
     .union(wgpu::TextureUsages::COPY_DST);
 
-/// The usages a presentable image needs to serve as the frame's root
-/// target: rendering plus the capture usages the composition target has.
-/// Callers configuring a surface ask for them when the surface offers them
-/// all; a partial set falls back to the composition copy, so nothing is
-/// requested in that case beyond rendering.
+/// The usages to ask of a presentable image: rendering, and whichever of
+/// the copies and sampling the surface offers. Sampling lets a frame whose
+/// backdrops read the page draw straight into the image too.
 pub fn presentable_root_usages(supported: wgpu::TextureUsages) -> wgpu::TextureUsages {
-    if supported.contains(DIRECT_SURFACE_ROOT_USAGES) {
-        DIRECT_SURFACE_ROOT_USAGES
-    } else {
-        wgpu::TextureUsages::RENDER_ATTACHMENT
-    }
+    wgpu::TextureUsages::RENDER_ATTACHMENT
+        | (supported & (DIRECT_SURFACE_ROOT_USAGES | wgpu::TextureUsages::TEXTURE_BINDING))
 }
 
 /// Whether the presented image can be the frame's root target: its bytes
 /// are the composition format (so the 8-bit output conversion would be an
-/// identity), it can be captured and sampled the way the composition target
-/// is, and it is the viewport's size.
+/// identity), it is the viewport's size, it can be copied as the page is,
+/// and it can be sampled when the frame `reads_page` through a backdrop.
+/// Metal's images cannot be sampled, so only a frame without backdrops
+/// draws straight into one there.
 fn surface_is_direct_root(
     texture: &wgpu::Texture,
     composition_format: wgpu::TextureFormat,
     viewport: (u32, u32),
+    reads_page: bool,
 ) -> bool {
+    let usage = texture.usage();
     texture.format().remove_srgb_suffix() == composition_format
-        && texture.usage().contains(DIRECT_SURFACE_ROOT_USAGES)
+        && usage.contains(DIRECT_SURFACE_ROOT_USAGES)
+        && (!reads_page || usage.contains(wgpu::TextureUsages::TEXTURE_BINDING))
         && (texture.width(), texture.height()) == viewport
 }
 
@@ -3685,10 +3687,11 @@ impl GpuRenderer {
         output_view: Option<&wgpu::TextureView>,
         output_texture: Option<&wgpu::Texture>,
         viewport: (u32, u32),
+        reads_page: bool,
     ) -> FrameRoot {
         if let (OutputMode::Display, Some(view), Some(texture)) =
             (output_mode, output_view, output_texture)
-            && surface_is_direct_root(texture, self.composition_format, viewport)
+            && surface_is_direct_root(texture, self.composition_format, viewport, reads_page)
         {
             return FrameRoot::Surface(Rc::new(OffscreenTarget::from_surface(
                 texture.clone(),
@@ -3898,7 +3901,18 @@ impl GpuRenderer {
         self.begin_text_glyph_run_frame();
 
         let text_cache_len = packet.text_cache_len;
-        let frame_root = self.frame_root(output_mode, output_view, output_texture, (width, height));
+        let reads_page = packet.root.contains_backdrop()
+            || packet
+                .overlay
+                .as_ref()
+                .is_some_and(LayerScene::contains_backdrop);
+        let frame_root = self.frame_root(
+            output_mode,
+            output_view,
+            output_texture,
+            (width, height),
+            reads_page,
+        );
         let root = frame_root.target();
         let screenshot_bind_group = output_view.and_then(|_| {
             matches!(output_mode, OutputMode::Screenshot).then(|| {
