@@ -39,6 +39,30 @@ impl SlotTable {
         self.locate_stale_group_index(stored, anchor)
     }
 
+    /// The index of an open writer frame's group: the index the frame opened
+    /// with while that group still sits there, else the anchor's lookup.
+    #[inline]
+    pub(in crate::slot) fn open_group_index(
+        &self,
+        anchor: AnchorId,
+        index: usize,
+    ) -> Option<usize> {
+        if self
+            .groups
+            .get(index)
+            .is_some_and(|group| group.anchor == anchor)
+        {
+            return Some(index);
+        }
+        self.moved_open_group_index(anchor)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn moved_open_group_index(&self, anchor: AnchorId) -> Option<usize> {
+        self.active_group_index(anchor)
+    }
+
     #[cold]
     #[inline(never)]
     fn locate_stale_group_index(&self, stored: usize, anchor: AnchorId) -> Option<usize> {

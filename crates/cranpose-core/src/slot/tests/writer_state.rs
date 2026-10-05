@@ -331,6 +331,12 @@ fn value_slot_with_stale_group_frame_uses_recovery_group() {
             .write_session(&mut harness.lifecycle, &mut harness.state);
         let started = begin_unkeyed(&mut session, GROUP_KEY, None);
         session.table.anchors.set_active(started.anchor, 99);
+        session
+            .state
+            .group_stack
+            .last_mut()
+            .expect("the started group has a frame")
+            .group_index = 99;
         session.value_slot_with_kind(PayloadKind::Internal, crate::slot::BRANCH_PATH_ROOT, || {
             17_i32
         })

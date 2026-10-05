@@ -362,7 +362,7 @@ impl SlotTable {
         payload_index: usize,
         kind: PayloadKind,
         init: &mut PayloadInit<'_>,
-    ) -> (ValueSlotId, Option<PayloadLocationRefresh>) {
+    ) -> (ValueSlotId, Option<usize>, Option<PayloadLocationRefresh>) {
         let payload_len = self.group_payload_len_checked_at(group_index, "value payload cursor");
         let payload_index = if payload_index > payload_len {
             log::error!(
@@ -412,6 +412,7 @@ impl SlotTable {
                 return (
                     ValueSlotId::new_for_table(PayloadAnchor::INVALID, self.storage_id()),
                     None,
+                    None,
                 );
             };
             location_refresh = Some(PayloadLocationRefresh {
@@ -423,6 +424,7 @@ impl SlotTable {
 
         (
             ValueSlotId::new_for_table(anchor, self.storage_id()),
+            self.group_payload_absolute_index(group_index, payload_index),
             location_refresh,
         )
     }

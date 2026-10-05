@@ -5,6 +5,7 @@ use super::{
     },
     SlotWriteSessionState,
 };
+use crate::AnchorId;
 
 impl SlotTable {
     fn detach_unvisited_children_internal(
@@ -31,7 +32,7 @@ impl SlotTable {
         lifecycle: &mut SlotLifecycleCoordinator,
         state: &mut SlotWriteSessionState,
     ) -> FinishGroupResult {
-        let (group_anchor, payload_cursor, node_cursor, was_skipped) = {
+        let (group_anchor, group_index, payload_cursor, node_cursor, was_skipped) = {
             let Some(frame) = state.group_stack.last_mut() else {
                 log::error!("slot writer finish_group_body called with an empty group stack");
                 return FinishGroupResult::empty();
@@ -40,9 +41,9 @@ impl SlotTable {
                 return FinishGroupResult::empty();
             }
             if frame.untouched_since_skip() {
-                let group_anchor = frame.group_anchor;
                 return FinishGroupResult {
-                    root_nodes: self.collect_subtree_root_node_ids(group_anchor),
+                    root_nodes: self
+                        .open_frame_root_node_ids(frame.group_anchor, frame.group_index),
                     was_skipped: true,
                     ..FinishGroupResult::empty()
                 };
@@ -50,6 +51,7 @@ impl SlotTable {
 
             (
                 frame.group_anchor,
+                frame.group_index,
                 frame.payload_cursor,
                 frame.node_cursor,
                 frame.was_skipped(),
@@ -78,7 +80,7 @@ impl SlotTable {
 
         let detached_children = self.detach_unvisited_children_internal(state);
         let root_nodes = if was_skipped {
-            self.collect_subtree_root_node_ids(group_anchor)
+            self.open_frame_root_node_ids(group_anchor, group_index)
         } else {
             RootNodeIds::new()
         };
@@ -96,6 +98,16 @@ impl SlotTable {
         }
 
         result
+    }
+
+    fn open_frame_root_node_ids(&self, group_anchor: AnchorId, group_index: usize) -> RootNodeIds {
+        let Some(group_index) = self.open_group_index(group_anchor, group_index) else {
+            log::error!(
+                "slot writer ignored root-node collection for stale group frame anchor {group_anchor:?}"
+            );
+            return RootNodeIds::new();
+        };
+        self.subtree_root_node_ids_at(group_index)
     }
 }
 
