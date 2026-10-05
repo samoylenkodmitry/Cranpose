@@ -631,6 +631,78 @@ fn configure_glass_folds(effect: &mut RenderEffect, enabled: bool) {
     }
 }
 
+#[test]
+fn resting_edge_lens_matches_its_explicit_optical_stages() {
+    let mut renderer = support::headless_renderer().expect("resting lens requires GPU");
+    renderer.set_transparent_background(true);
+    for (reach, activity, projection, padding, offset, scale, transparent) in [
+        (0.0, 1.0, (1.0, 1.0), 0.0, (0.0, 0.0), 1.0, false),
+        (0.0, 1.0, (1.0, 1.0), 7.25, (0.25, 0.75), 1.0, false),
+        (0.0, 0.5, (1.0, 1.0), 7.25, (0.25, 0.75), 1.0, false),
+        (0.0, 0.0, (1.0, 1.0), 7.25, (0.25, 0.75), 1.0, false),
+        (0.0, 1.0, (1.1, 0.95), 7.25, (0.25, 0.75), 1.0, false),
+        (8.0, 1.0, (1.0, 1.0), 7.25, (0.25, 0.75), 1.0, false),
+        (0.0, 1.0, (1.0, 1.0), 7.25, (0.25, 0.75), 0.85, false),
+        (0.0, 1.0, (1.0, 1.0), 7.25, (0.25, 0.75), 1.25, true),
+    ] {
+        let mut graph = striped_surface(false, false);
+        if transparent {
+            graph.root.children.drain(4..8);
+        }
+        let RenderNode::Layer(layer) = graph.root.children.last_mut().expect("lens") else {
+            panic!("lens must be a layer");
+        };
+        layer.transform_to_parent = ProjectiveTransform::uniform_scale(scale)
+            .then(ProjectiveTransform::translation(offset.0, offset.1));
+        let Some(RenderEffect::Shader { shader }) = &layer.graphics_layer.backdrop_effect else {
+            panic!("lens must carry a shader");
+        };
+        let mut shader = (**shader).clone();
+        shader.set_float(130, 2.0);
+        shader.set_float(131, reach);
+        shader.set_float(111, activity);
+        shader.set_float2(168, projection.0, projection.1);
+        shader.set_float2(172, 4.0, 1.0);
+        shader.set_input_padding(padding);
+        let stage = |index: u8| {
+            let mut pass = shader.clone();
+            pass.set_float(
+                cranpose_ui_graphics::GLASS_OPTICAL_STAGE_UNIFORM,
+                f32::from(index),
+            );
+            if index < 3 {
+                pass.set_output_support(None);
+                pass.set_output_padding(0.0);
+            }
+            liquid_glass_runtime_effect(pass)
+        };
+        let explicit = stage(1).then(stage(2)).then(stage(3));
+        let automatic = liquid_glass_runtime_effect(shader);
+        let mut frames = Vec::new();
+        let mut passes = Vec::new();
+        for effect in [explicit, automatic] {
+            let mut graph = graph.clone();
+            let RenderNode::Layer(layer) = graph.root.children.last_mut().expect("lens") else {
+                panic!("lens must be a layer");
+            };
+            layer.graphics_layer.backdrop_effect = Some(effect);
+            renderer.scene_mut().graph = Some(graph);
+            frames.push(renderer.capture_frame(160, 96).expect("lens capture"));
+            passes.push(renderer.last_frame_stats().expect("frame stats").pass_count);
+        }
+        eprintln!(
+            "reach={reach} activity={activity} projection={projection:?} padding={padding} scale={scale} transparent={transparent}: passes={passes:?}"
+        );
+        support::assert_bytes_within(
+            "resting lens optical stages",
+            160,
+            &frames[0].pixels,
+            &frames[1].pixels,
+            0,
+        );
+    }
+}
+
 fn exterior_lens(reach: f32, specialized: bool, recolor: bool) -> RenderGraph {
     let mut graph = striped_surface(false, specialized);
     let children = &mut graph.root.children;
