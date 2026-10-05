@@ -83,3 +83,7 @@ harness = false
 [[bench]]
 name = "blocking_allocations"
 harness = false
+
+[[bench]]
+name = "group_cost"
+harness = false
