@@ -5,7 +5,7 @@ use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::{
     Color, Modifier, Size, TextStyle, composable,
-    widgets::{Box, BoxSpec, Column, ColumnSpec, Text},
+    widgets::{Box, BoxSpec, Column, ColumnSpec, Row, RowSpec, Text},
 };
 
 use crate::support;
@@ -15,7 +15,8 @@ const HEIGHT: u32 = 240;
 const ROWS: [Color; 2] = [Color(0.92, 0.94, 0.98, 1.0), Color(0.86, 0.90, 0.96, 1.0)];
 const PANEL: Color = Color(0.20, 0.45, 0.85, 1.0);
 
-/// Six rows that never change over a panel whose label and offset do.
+/// Six rows that never change over a panel whose label and offset do. Each
+/// holds several texts, so its subtree is large enough to be looked up.
 #[composable]
 fn Page(label: MutableState<u32>, shift: MutableState<f32>) {
     support::FramePage(WIDTH, HEIGHT, Color::WHITE, move || {
@@ -31,11 +32,15 @@ fn Page(label: MutableState<u32>, shift: MutableState<f32>) {
                             .background(ROWS[row % 2]),
                         BoxSpec::default(),
                         move || {
-                            Text(
-                                format!("row {row}"),
-                                Modifier::empty(),
-                                TextStyle::default(),
-                            );
+                            Row(Modifier::empty(), RowSpec::default(), move || {
+                                for cell in ["row", "of", "cells"] {
+                                    Text(
+                                        format!("{cell} {row}"),
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
+                                }
+                            });
                         },
                     );
                 }
@@ -49,11 +54,15 @@ fn Page(label: MutableState<u32>, shift: MutableState<f32>) {
                         .background(PANEL),
                     BoxSpec::default(),
                     move || {
-                        Text(
-                            format!("count {}", label.get()),
-                            Modifier::empty(),
-                            TextStyle::default(),
-                        );
+                        Row(Modifier::empty(), RowSpec::default(), move || {
+                            Text(
+                                format!("count {}", label.get()),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                            Text("of", Modifier::empty(), TextStyle::default());
+                            Text("panel", Modifier::empty(), TextStyle::default());
+                        });
                     },
                 );
             },
@@ -110,6 +119,26 @@ impl Harness {
     }
 }
 
+/// Changes the page to `label` at `shift`, checks the frame against a fresh
+/// renderer's frame of the same state, and returns the frame's stats.
+fn change_and_compare(harness: &mut Harness, label: u32, shift: f32) -> RenderStatsSnapshot {
+    harness.set(label, shift);
+    let (stats, frame) = harness.frame();
+    let mut fresh = Harness::new(
+        support::create_headless_renderer().expect("a second headless renderer"),
+        label,
+        shift,
+    );
+    let (_, expected) = fresh.frame();
+    support::assert_same_bytes(
+        &format!("label {label} at shift {shift}"),
+        WIDTH,
+        &frame.pixels,
+        &expected.pixels,
+    );
+    stats
+}
+
 #[test]
 fn reused_draws_follow_a_changed_label_and_a_moved_panel() {
     let (_lock, renderer) = match support::headless_renderer_parts() {
@@ -126,23 +155,21 @@ fn reused_draws_follow_a_changed_label_and_a_moved_panel() {
     }
     assert!(
         reused > 0,
-        "rows that stood unchanged for frames must append their earlier draws"
+        "a page that stood unchanged for frames must append its earlier draws"
     );
 
-    for (label, shift) in [(7, 0.0), (7, 23.5), (8, 23.5)] {
-        harness.set(label, shift);
-        let (_, frame) = harness.frame();
-        let mut fresh = Harness::new(
-            support::create_headless_renderer().expect("a second headless renderer"),
-            label,
-            shift,
-        );
-        let (_, expected) = fresh.frame();
-        support::assert_same_bytes(
-            &format!("label {label} at shift {shift}"),
-            WIDTH,
-            &frame.pixels,
-            &expected.pixels,
-        );
+    change_and_compare(&mut harness, 7, 0.0);
+    // Moving the panel lays its siblings out again, so the rows are written
+    // anew; let them stand before the next change.
+    change_and_compare(&mut harness, 7, 23.5);
+    for _ in 0..3 {
+        harness.frame();
     }
+    let stats = change_and_compare(&mut harness, 8, 23.5);
+    assert!(
+        stats.reused_draw_segments >= 6,
+        "the six unchanged rows must reuse their draws while the panel's label \
+         changes, reused {}",
+        stats.reused_draw_segments
+    );
 }

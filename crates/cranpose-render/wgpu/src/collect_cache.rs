@@ -13,7 +13,7 @@ use cranpose_core::{
     NodeId,
     collections::map::{Entry as MapEntry, HashMap},
 };
-use cranpose_render_common::graph::LayerNode;
+use cranpose_render_common::graph::{LayerNode, upcoming_layer_revision};
 use cranpose_ui_graphics::FxHasher;
 
 use crate::{collect::WalkContext, scene::SceneSegment};
@@ -78,22 +78,25 @@ struct Segment {
 /// Kept small, so the lookups of a frame stay in cache.
 struct CachedChild {
     key: SegmentKey,
-    /// How many frames in a row the key has stood.
-    stood: u32,
     frame: u32,
-    /// Kept once the key has stood [`STORE_AFTER_FRAMES`] frames, so a
+    /// Kept once the subtree has stood [`STORE_AFTER_FRAMES`] frames, so a
     /// subtree that keeps changing is not copied each time.
     segment: Option<Box<Segment>>,
 }
 
-/// How many frames in a row a child's key stands before its draws are kept.
-const STORE_AFTER_FRAMES: u32 = 3;
+/// How many frames a subtree stands unchanged before its draws are kept.
+const STORE_AFTER_FRAMES: usize = 3;
 
 /// The draws of the direct children collected in recent frames, by node.
 #[derive(Default)]
 pub(crate) struct CollectCache {
     children: HashMap<NodeId, CachedChild>,
     frame: u32,
+    /// [`upcoming_layer_revision`] when each of the last
+    /// [`STORE_AFTER_FRAMES`] collections began, oldest first: a subtree whose
+    /// revision is below the first has stood unchanged through all of them,
+    /// whether or not the walk reached it.
+    revision_marks: [u64; STORE_AFTER_FRAMES],
     /// Children whose draws this frame reused.
     reused: u32,
 }
@@ -102,6 +105,10 @@ impl CollectCache {
     pub(crate) fn begin_frame(&mut self) {
         self.frame = self.frame.wrapping_add(1);
         self.reused = 0;
+        self.revision_marks.rotate_left(1);
+        if let Some(latest) = self.revision_marks.last_mut() {
+            *latest = upcoming_layer_revision();
+        }
     }
 
     /// How many children's draws the last collection reused.
@@ -122,18 +129,18 @@ impl CollectCache {
 
     /// What to do with `node`, collected under `key` this frame: reuse the
     /// draws it produced under the same key before, or collect it, keeping a
-    /// copy once the key has stood [`STORE_AFTER_FRAMES`] frames.
+    /// copy once its subtree has stood [`STORE_AFTER_FRAMES`] frames.
     pub(crate) fn visit(&mut self, node: NodeId, key: &SegmentKey) -> Visit<'_> {
         let frame = self.frame;
+        let keep = key.revision < self.revision_marks[0];
         let child = match self.children.entry(node) {
             MapEntry::Vacant(vacant) => {
                 vacant.insert(CachedChild {
                     key: *key,
-                    stood: 1,
-                    segment: None,
                     frame,
+                    segment: None,
                 });
-                return Visit::Collect { keep: false };
+                return Visit::Collect { keep };
             }
             MapEntry::Occupied(occupied) => occupied.into_mut(),
         };
@@ -141,23 +148,19 @@ impl CollectCache {
         if child.key != *key {
             let moved = child.key.placement != key.placement;
             child.key = *key;
-            child.stood = 1;
             child.segment = None;
             return if moved {
                 Visit::Moved
             } else {
-                Visit::Collect { keep: false }
+                Visit::Collect { keep }
             };
         }
-        child.stood = child.stood.saturating_add(1);
         match &child.segment {
             Some(segment) => {
                 self.reused += 1;
                 Visit::Reuse(&segment.draws, segment.pixel_sensitive)
             }
-            None => Visit::Collect {
-                keep: child.stood >= STORE_AFTER_FRAMES,
-            },
+            None => Visit::Collect { keep },
         }
     }
 

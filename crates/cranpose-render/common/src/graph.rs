@@ -231,10 +231,18 @@ pub struct LayerNode {
     pub children: Vec<RenderNode>,
 }
 
+static NEXT_LAYER_REVISION: AtomicU64 = AtomicU64::new(1);
+
 /// A [`LayerNode::content_revision`] no layer has had before.
-pub fn next_layer_revision() -> u64 {
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_add(1, Ordering::Relaxed)
+fn next_layer_revision() -> u64 {
+    NEXT_LAYER_REVISION.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The [`LayerNode::content_revision`] the next written layer gets: every
+/// revision given so far is below it, so a layer whose revision is below the
+/// value read at some moment has not changed since.
+pub fn upcoming_layer_revision() -> u64 {
+    NEXT_LAYER_REVISION.load(Ordering::Relaxed)
 }
 
 impl Default for LayerNode {
