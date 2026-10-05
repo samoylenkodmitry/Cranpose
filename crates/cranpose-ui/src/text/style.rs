@@ -378,31 +378,8 @@ impl TextStyle {
 
     pub fn measurement_hash(&self) -> u64 {
         let mut hasher = FxHasher::default();
-        let span = &self.span_style;
-        let paragraph = &self.paragraph_style;
-
-        hash_text_unit(span.font_size, &mut hasher);
-        span.font_weight.hash(&mut hasher);
-        span.font_style.hash(&mut hasher);
-        span.font_synthesis.hash(&mut hasher);
-        span.font_family.hash(&mut hasher);
-        span.font_feature_settings.hash(&mut hasher);
-        hash_text_unit(span.letter_spacing, &mut hasher);
-        hash_option_baseline_shift(&span.baseline_shift, &mut hasher);
-        hash_option_geometric_transform(&span.text_geometric_transform, &mut hasher);
-        span.locale_list.hash(&mut hasher);
-        span.platform_style.hash(&mut hasher);
-
-        paragraph.text_align.hash(&mut hasher);
-        paragraph.text_direction.hash(&mut hasher);
-        hash_text_unit(paragraph.line_height, &mut hasher);
-        hash_option_text_indent(&paragraph.text_indent, &mut hasher);
-        paragraph.platform_style.hash(&mut hasher);
-        paragraph.line_height_style.hash(&mut hasher);
-        paragraph.line_break.hash(&mut hasher);
-        paragraph.hyphens.hash(&mut hasher);
-        paragraph.text_motion.hash(&mut hasher);
-
+        hash_span_measurement(&self.span_style, &mut hasher);
+        hash_paragraph_style(&self.paragraph_style, &mut hasher);
         hasher.finish()
     }
 
@@ -491,6 +468,22 @@ fn merge_hyphens(current: Hyphens, incoming: Hyphens) -> Hyphens {
     } else {
         incoming
     }
+}
+
+/// The span attributes that change how text measures, without its colors,
+/// brush, background, decorations or shadow.
+pub(crate) fn hash_span_measurement<H: Hasher>(span: &SpanStyle, state: &mut H) {
+    hash_text_unit(span.font_size, state);
+    span.font_weight.hash(state);
+    span.font_style.hash(state);
+    span.font_synthesis.hash(state);
+    span.font_family.hash(state);
+    span.font_feature_settings.hash(state);
+    hash_text_unit(span.letter_spacing, state);
+    hash_option_baseline_shift(&span.baseline_shift, state);
+    hash_option_geometric_transform(&span.text_geometric_transform, state);
+    span.locale_list.hash(state);
+    span.platform_style.hash(state);
 }
 
 fn hash_f32_bits<H: Hasher>(value: f32, state: &mut H) {
@@ -605,23 +598,13 @@ fn hash_option_text_draw_style<H: Hasher>(draw_style: &Option<TextDrawStyle>, st
 }
 
 fn hash_span_style<H: Hasher>(span: &SpanStyle, state: &mut H) {
+    hash_span_measurement(span, state);
     hash_option_color(&span.color, state);
     hash_option_brush(&span.brush, state);
     hash_option_alpha(&span.alpha, state);
-    hash_text_unit(span.font_size, state);
-    span.font_weight.hash(state);
-    span.font_style.hash(state);
-    span.font_synthesis.hash(state);
-    span.font_family.hash(state);
-    span.font_feature_settings.hash(state);
-    hash_text_unit(span.letter_spacing, state);
-    hash_option_baseline_shift(&span.baseline_shift, state);
-    hash_option_geometric_transform(&span.text_geometric_transform, state);
-    span.locale_list.hash(state);
     hash_option_color(&span.background, state);
     span.text_decoration.hash(state);
     hash_option_shadow(&span.shadow, state);
-    span.platform_style.hash(state);
     hash_option_text_draw_style(&span.draw_style, state);
 }
 

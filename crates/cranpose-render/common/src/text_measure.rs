@@ -191,7 +191,7 @@ impl TextMeasurer for CachedFontTextMeasurer {
         if !text.span_styles.is_empty() {
             let mut hasher = cranpose_ui_graphics::FxHasher::default();
             style_hash.hash(&mut hasher);
-            text.span_styles_hash().hash(&mut hasher);
+            text.span_measurement_hash().hash(&mut hasher);
             style_hash = hasher.finish();
         }
         self.lock_cache()

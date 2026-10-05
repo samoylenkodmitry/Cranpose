@@ -405,36 +405,17 @@ impl AnnotatedString {
         )
     }
 
-    /// Computes a hash representing the contents of the span styles, suitable for cache invalidation.
-    pub fn span_styles_hash(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
+    /// Hash of the span styles' ranges and the attributes that change how
+    /// the text measures: two strings with the same text and hash measure
+    /// alike, whatever their spans' colors, backgrounds or decorations.
+    pub fn span_measurement_hash(&self) -> u64 {
+        use std::hash::Hasher;
         let mut hasher = cranpose_ui_graphics::FxHasher::default();
         hasher.write_usize(self.span_styles.len());
         for span in &self.span_styles {
             hasher.write_usize(span.range.start);
             hasher.write_usize(span.range.end);
-
-            let dummy = crate::text::TextStyle {
-                span_style: span.item.clone(),
-                ..Default::default()
-            };
-            hasher.write_u64(dummy.measurement_hash());
-
-            if let Some(c) = &span.item.color {
-                hasher.write_u32(c.0.to_bits());
-                hasher.write_u32(c.1.to_bits());
-                hasher.write_u32(c.2.to_bits());
-                hasher.write_u32(c.3.to_bits());
-            }
-            if let Some(bg) = &span.item.background {
-                hasher.write_u32(bg.0.to_bits());
-                hasher.write_u32(bg.1.to_bits());
-                hasher.write_u32(bg.2.to_bits());
-                hasher.write_u32(bg.3.to_bits());
-            }
-            if let Some(d) = &span.item.text_decoration {
-                d.hash(&mut hasher);
-            }
+            crate::text::style::hash_span_measurement(&span.item, &mut hasher);
         }
         hasher.finish()
     }

@@ -315,7 +315,10 @@ fn font_feature_settings_reach_every_text_cache_hash() {
         assert_ne!(style_a.render_hash(), style_b.render_hash());
         assert_ne!(a.render_hash(), b.render_hash());
         let (text_a, text_b) = (spanned(a.clone()), spanned(b.clone()));
-        assert_ne!(text_a.span_styles_hash(), text_b.span_styles_hash());
+        assert_ne!(
+            text_a.span_measurement_hash(),
+            text_b.span_measurement_hash()
+        );
         assert_ne!(text_a.render_hash(), text_b.render_hash());
     }
 }
@@ -419,4 +422,37 @@ fn text_alignment_respects_physical_edges_and_paragraph_direction() {
             );
         }
     }
+}
+
+#[test]
+fn span_measurement_hash_ignores_paint_and_follows_metrics() {
+    let spanned = |span: SpanStyle| crate::text::AnnotatedString {
+        text: "0123".to_owned(),
+        span_styles: vec![crate::text::RangeStyle {
+            item: span,
+            range: 0..2,
+        }],
+        ..Default::default()
+    };
+    let plain = spanned(SpanStyle::default());
+    let painted = spanned(SpanStyle {
+        color: Some(Color(1.0, 0.0, 0.0, 1.0)),
+        background: Some(Color(0.0, 0.0, 1.0, 0.5)),
+        brush: Some(Brush::solid(Color(0.0, 1.0, 0.0, 1.0))),
+        text_decoration: Some(TextDecoration::UNDERLINE),
+        ..Default::default()
+    });
+    let larger = spanned(SpanStyle {
+        font_size: TextUnit::Sp(30.0),
+        ..Default::default()
+    });
+    assert_eq!(
+        plain.span_measurement_hash(),
+        painted.span_measurement_hash()
+    );
+    assert_ne!(
+        plain.span_measurement_hash(),
+        larger.span_measurement_hash()
+    );
+    assert_ne!(plain.render_hash(), painted.render_hash());
 }
