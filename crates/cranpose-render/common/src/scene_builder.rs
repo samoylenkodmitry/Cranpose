@@ -353,7 +353,11 @@ fn dirty_ancestry(applier: &MemoryApplier, dirty: &HashMap<NodeId, NodeUpdate>) 
     let mut ancestry = HashSet::default();
     for &node in dirty.keys() {
         let mut current = node;
-        while let Some(parent) = applier.get_ref(current).ok().and_then(|node| node.parent()) {
+        while let Some(parent) = applier
+            .get_ref(current)
+            .ok()
+            .and_then(cranpose_core::Node::parent)
+        {
             if !ancestry.insert(parent) {
                 break;
             }
