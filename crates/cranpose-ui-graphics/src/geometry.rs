@@ -62,18 +62,22 @@ fn vector_path_mask_key(
     path: &crate::VectorPath,
     origin: Point,
     mask_size: (usize, usize),
-    rgb: [u8; 3],
-    alpha: f32,
+    brush: &Brush,
+    scope: Size,
 ) -> u64 {
     use std::hash::Hasher;
+
+    use crate::RenderHash;
     let mut hasher = crate::fx_hash::FxHasher::default();
     hasher.write_u8(path.fill_rule() as u8);
     hasher.write_u32(origin.x.to_bits());
     hasher.write_u32(origin.y.to_bits());
     hasher.write_usize(mask_size.0);
     hasher.write_usize(mask_size.1);
-    hasher.write(&rgb);
-    hasher.write_u32(alpha.to_bits());
+    hasher.write_u64(brush.render_hash());
+    // A gradient's open ends resolve against the scope.
+    hasher.write_u32(scope.width.to_bits());
+    hasher.write_u32(scope.height.to_bits());
     for subpath in path.subpaths() {
         hasher.write_usize(subpath.len());
         for point in subpath {
@@ -82,6 +86,11 @@ fn vector_path_mask_key(
         }
     }
     hasher.finish()
+}
+
+/// A channel in `[0, 1]` as a byte, rounded.
+fn unit_to_byte(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 fn vector_path_mask_cache_get(key: u64) -> Option<ImageBitmap> {
@@ -1311,17 +1320,7 @@ impl DrawScopeDefault {
         if bounds.width <= 0.0 || bounds.height <= 0.0 {
             return;
         }
-
-        let color = match brush {
-            Brush::Solid(color) => *color,
-            Brush::LinearGradient { colors, .. }
-            | Brush::RadialGradient { colors, .. }
-            | Brush::SweepGradient { colors, .. } => match colors.first() {
-                Some(color) => *color,
-                None => return,
-            },
-        };
-        if color.3 <= 0.0 {
+        if matches!(brush, Brush::Solid(color) if color.3 <= 0.0) {
             return;
         }
 
@@ -1335,31 +1334,51 @@ impl DrawScopeDefault {
             .ceil()
             .clamp(1.0, MAX_MASK_PIXELS) as usize;
 
-        let red = (color.0.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let green = (color.1.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let blue = (color.2.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-        let alpha = color.3.clamp(0.0, 1.0);
-        let key = vector_path_mask_key(
-            path,
-            origin,
-            (mask_width, mask_height),
-            [red, green, blue],
-            alpha,
-        );
-        let cached = vector_path_mask_cache_get(key);
-        let image = match cached {
+        let key = vector_path_mask_key(path, origin, (mask_width, mask_height), brush, self.size);
+        let image = match vector_path_mask_cache_get(key) {
             Some(image) => image,
             None => {
                 let mut mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE);
-                for coverage in &mut mask {
-                    *coverage = (alpha * *coverage as f32 + 0.5) as u8;
-                }
-                let Ok(image) = ImageBitmap::from_alpha8(
-                    mask_width as u32,
-                    mask_height as u32,
-                    [red, green, blue],
-                    mask,
-                ) else {
+                let painted = match brush {
+                    Brush::Solid(color) => {
+                        for coverage in &mut mask {
+                            *coverage = (color.3.clamp(0.0, 1.0) * *coverage as f32 + 0.5) as u8;
+                        }
+                        ImageBitmap::from_alpha8(
+                            mask_width as u32,
+                            mask_height as u32,
+                            [color.0, color.1, color.2].map(unit_to_byte),
+                            mask,
+                        )
+                    }
+                    // A shader brush fills in the scope's coordinates, as
+                    // Compose's `drawPath` resolves it: each pixel takes the
+                    // gradient's color at its center.
+                    _ => {
+                        let scope = Rect::from_size(self.size);
+                        let mut pixels = Vec::with_capacity(mask.len() * 4);
+                        for (index, coverage) in mask.iter().enumerate() {
+                            let x = origin.x + ((index % mask_width) as f32 + 0.5) / SUPERSAMPLE;
+                            let y = origin.y + ((index / mask_width) as f32 + 0.5) / SUPERSAMPLE;
+                            let [red, green, blue, alpha] =
+                                crate::brush_sampling::sample_brush_rgba(
+                                    brush,
+                                    scope,
+                                    x,
+                                    y,
+                                    Point::default(),
+                                );
+                            pixels.extend_from_slice(&[
+                                unit_to_byte(red),
+                                unit_to_byte(green),
+                                unit_to_byte(blue),
+                                unit_to_byte(alpha * f32::from(*coverage) / 255.0),
+                            ]);
+                        }
+                        ImageBitmap::from_rgba8(mask_width as u32, mask_height as u32, pixels)
+                    }
+                };
+                let Ok(image) = painted else {
                     return;
                 };
                 vector_path_mask_cache_put(key, image.clone());
