@@ -20,7 +20,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::{
-    collect_cache::{CollectCache, SegmentKey, Visit},
+    collect_cache::{CollectCache, Siblings, Visit},
     pipeline::{TextLayoutResolver, push_draw_primitive, push_layer_shadow, push_text_style_draws},
     scene::{
         BackdropLayer, CompositorScene, LayerRoundedClip, Placement as RunPlacement, RunDraw,
@@ -927,7 +927,7 @@ pub(crate) fn collect_root(
         root,
         text_layout,
         motion,
-        segments,
+        &mut Siblings::new(segments),
         context,
         &mut out,
         recycler,
@@ -1238,6 +1238,7 @@ fn collect_into(
     };
     let mut first_deferred = layer.children.len();
     let mut has_pixel_sensitive_subtree = false;
+    let mut siblings = Siblings::new(segments);
 
     for (index, child) in layer.children.iter().enumerate() {
         match child {
@@ -1257,7 +1258,7 @@ fn collect_into(
                     child_layer,
                     text_layout,
                     motion,
-                    segments,
+                    &mut siblings,
                     child_context,
                     out,
                     recycler,
@@ -1320,7 +1321,7 @@ fn collect_child(
     child: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
-    segments: &mut CollectCache,
+    segments: &mut Siblings<'_>,
     context: WalkContext,
     out: &mut LayerScene,
     recycler: &mut LayerSceneRecycler,
@@ -1352,7 +1353,7 @@ fn collect_child(
                         direct,
                         text_layout,
                         motion,
-                        segments,
+                        segments.cache(),
                         context,
                         out,
                         recycler,
@@ -1372,7 +1373,7 @@ fn collect_child(
                 direct,
                 text_layout,
                 motion,
-                segments,
+                segments.cache(),
                 context,
                 out,
                 recycler,
@@ -1381,7 +1382,9 @@ fn collect_child(
                 && out.children.len() == children
                 && out.scene.only_draws_since(mark)
             {
-                segments.keep(node, out.scene.segment_since(mark), pixel_sensitive);
+                segments
+                    .cache()
+                    .keep(node, out.scene.segment_since(mark), pixel_sensitive);
             }
             pixel_sensitive
         }
@@ -1412,7 +1415,7 @@ fn collect_child(
                 child,
                 text_layout,
                 motion,
-                segments,
+                segments.cache(),
                 context,
                 &mut out.scene,
                 recycler,
@@ -1451,12 +1454,12 @@ enum DirectPlan {
 fn plan_direct_child(
     child: &LayerNode,
     context: WalkContext,
-    segments: &mut CollectCache,
+    segments: &mut Siblings<'_>,
     scene: &mut CompositorScene,
 ) -> DirectPlan {
     let Some((node, key)) = context
         .reuse_draws
-        .then(|| SegmentKey::of(child, &context))
+        .then(|| segments.key(child, &context))
         .flatten()
     else {
         return DirectPlan::Collect {
@@ -1464,7 +1467,7 @@ fn plan_direct_child(
             keep: None,
         };
     };
-    match segments.visit(node, &key) {
+    match segments.cache().visit(node, &key) {
         Visit::Collect { keep } => DirectPlan::Collect {
             context,
             keep: keep.then_some(node),

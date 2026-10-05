@@ -34,28 +34,64 @@ pub(crate) struct SegmentKey {
     placement: u64,
 }
 
-impl SegmentKey {
+/// The cache seen from one layer's children, which the walk hands one
+/// context: its hash is taken once, at the first child looked up.
+pub(crate) struct Siblings<'a> {
+    cache: &'a mut CollectCache,
+    context_hash: Option<u64>,
+}
+
+impl<'a> Siblings<'a> {
+    pub(crate) fn new(cache: &'a mut CollectCache) -> Self {
+        Self {
+            cache,
+            context_hash: None,
+        }
+    }
+
+    pub(crate) fn cache(&mut self) -> &mut CollectCache {
+        self.cache
+    }
+
     /// The key of `layer` collected under `context`, when the layer has an
     /// identity, a revision to reuse its draws by, and enough under it to be
     /// worth a lookup.
-    pub(crate) fn of(layer: &LayerNode, context: &WalkContext) -> Option<(NodeId, Self)> {
+    pub(crate) fn key(
+        &mut self,
+        layer: &LayerNode,
+        context: &WalkContext,
+    ) -> Option<(NodeId, SegmentKey)> {
         let node = layer.node_id?;
         if layer.content_revision == 0 || layer.subtree_nodes < MIN_REUSED_NODES {
             return None;
         }
+        let context_hash = *self
+            .context_hash
+            .get_or_insert_with(|| context_hash(context));
+        debug_assert_eq!(
+            context_hash,
+            self::context_hash(context),
+            "siblings share one walk context"
+        );
         let mut placement = FxHasher::default();
+        placement.write_u64(context_hash);
         for value in layer.transform_to_parent.matrix().as_flattened() {
             placement.write_u32(value.to_bits());
         }
-        context.hash_placement(&mut placement);
         Some((
             node,
-            Self {
+            SegmentKey {
                 revision: layer.content_revision,
                 placement: placement.finish(),
             },
         ))
     }
+}
+
+fn context_hash(context: &WalkContext) -> u64 {
+    let mut state = FxHasher::default();
+    context.hash_placement(&mut state);
+    state.finish()
 }
 
 /// What [`CollectCache::visit`] decided for a child.
