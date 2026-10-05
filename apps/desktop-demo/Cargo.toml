@@ -106,8 +106,8 @@ path = "robot-runners/main.rs"
 required-features = ["desktop", "renderer-wgpu", "robot-app"]
 
 [[example]]
-name = "winamp_standalone"
-path = "examples/winamp_standalone.rs"
+name = "wsz_standalone"
+path = "examples/wsz_standalone.rs"
 required-features = ["desktop", "renderer-wgpu"]
 
 

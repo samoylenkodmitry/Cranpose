@@ -83,7 +83,7 @@ pub(crate) fn main() {
             for label in [
                 "Images",
                 "Text",
-                "Winamp",
+                "WSZ",
                 "XKCD",
                 "Shaders",
                 "Shader Rect",

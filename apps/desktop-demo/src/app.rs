@@ -56,8 +56,8 @@ mod url_resolve;
 pub mod wear;
 mod web_fetch;
 mod webview;
-mod winamp;
 mod window_snap;
+mod wsz;
 mod xkcd;
 
 use animations::AnimationsTab;
@@ -95,8 +95,8 @@ use shaders::ShadersTab;
 use text_showcase::TextShowcaseTab;
 pub use tool_windows::tool_windows_app;
 use web_fetch::web_fetch_example;
-pub use winamp::WinampStandaloneApp;
-use winamp::{remember_winamp_tab_state, WinampTab, WinampTabState};
+pub use wsz::WszStandaloneApp;
+use wsz::{remember_wsz_tab_state, WszTab, WszTabState};
 use xkcd::xkcd_tab;
 
 const DEMO_PAGE_PADDING: f32 = 20.0;
@@ -137,7 +137,7 @@ pub enum DemoTab {
     HackerNews,
     Images,
     Text,
-    Winamp,
+    Wsz,
     Xkcd,
     Shaders,
     ShaderRect,
@@ -287,11 +287,11 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 30] = [
         startup_aliases: &["text"],
     },
     DemoTabInfo {
-        tab: DemoTab::Winamp,
-        label: "Winamp",
-        slug: "winamp",
-        source_path: "apps/desktop-demo/src/app/winamp/mod.rs",
-        startup_aliases: &["winamp"],
+        tab: DemoTab::Wsz,
+        label: "WSZ",
+        slug: "wsz",
+        source_path: "apps/desktop-demo/src/app/wsz/mod.rs",
+        startup_aliases: &["wsz"],
     },
     DemoTabInfo {
         tab: DemoTab::Xkcd,
@@ -437,7 +437,7 @@ pub const DEMO_TABS: [DemoTab; 30] = [
     DemoTab::HackerNews,
     DemoTab::Images,
     DemoTab::Text,
-    DemoTab::Winamp,
+    DemoTab::Wsz,
     DemoTab::Xkcd,
     DemoTab::Shaders,
     DemoTab::ShaderRect,
@@ -819,7 +819,7 @@ fn CompactTabPicker(
 fn TabContent(
     active_tab: cranpose_core::MutableState<DemoTab>,
     startup: StartupSelection,
-    winamp_tab_state: WinampTabState,
+    wsz_tab_state: WszTabState,
     showing_source: cranpose_core::MutableState<bool>,
     modifier: Modifier,
 ) {
@@ -837,9 +837,9 @@ fn TabContent(
             } else {
                 cranpose_core::with_key(&active, || {
                     if tab_requires_scroll(active) {
-                        ScrollableTab(move || render_active_tab(active, startup, winamp_tab_state));
+                        ScrollableTab(move || render_active_tab(active, startup, wsz_tab_state));
                     } else {
-                        render_active_tab(active, startup, winamp_tab_state);
+                        render_active_tab(active, startup, wsz_tab_state);
                     }
                 });
             }
@@ -867,10 +867,6 @@ pub fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
 
 #[composable]
 pub fn combined_app_with_startup(startup: StartupSelection) {
-    if cranpose::launch_args().string("test_screen") == Some("insets_robot") {
-        crate::test_screens::insets_robot::InsetsRobotScreen();
-        return;
-    }
     if cranpose::launch_args().string("test_screen") == Some("accessibility_robot") {
         crate::test_screens::accessibility_robot::AccessibilityRobotScreen();
         return;
@@ -884,7 +880,7 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
         })
         .unwrap_or(DEFAULT_INITIAL_TAB);
     let active_tab = cranpose_core::rememberMutableStateOf(move || initial_tab);
-    let winamp_tab_state = remember_winamp_tab_state();
+    let wsz_tab_state = remember_wsz_tab_state();
     TEST_ACTIVE_TAB_STATE.with(|cell| {
         *cell.borrow_mut() = Some(active_tab);
     });
@@ -929,7 +925,7 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                         TabContent(
                             active_tab,
                             startup,
-                            winamp_tab_state,
+                            wsz_tab_state,
                             showing_source,
                             content_modifier.clone(),
                         );
@@ -1025,7 +1021,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
             | DemoTab::WebView
             | DemoTab::Guide
             | DemoTab::LazyList
-            | DemoTab::Winamp
+            | DemoTab::Wsz
             | DemoTab::MarkdownViewer
             | DemoTab::Liquid
             | DemoTab::GlassFeed
@@ -1034,7 +1030,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
 }
 
 #[composable]
-fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_state: WinampTabState) {
+fn render_active_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state: WszTabState) {
     match active {
         DemoTab::Guide => documentation::GuideTab(None),
         DemoTab::Counter => counter_app(),
@@ -1057,7 +1053,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::HackerNews
         | DemoTab::Images
         | DemoTab::Text
-        | DemoTab::Winamp
+        | DemoTab::Wsz
         | DemoTab::Xkcd
         | DemoTab::Shaders
         | DemoTab::ShaderRect
@@ -1065,21 +1061,17 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         | DemoTab::MarkdownViewer
         | DemoTab::Liquid
         | DemoTab::GlassFeed
-        | DemoTab::GlassTiles => render_showcase_tab(active, startup, winamp_tab_state),
+        | DemoTab::GlassTiles => render_showcase_tab(active, startup, wsz_tab_state),
     }
 }
 
 #[composable]
-fn render_showcase_tab(
-    active: DemoTab,
-    startup: StartupSelection,
-    winamp_tab_state: WinampTabState,
-) {
+fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state: WszTabState) {
     match active {
         DemoTab::HackerNews => HackerNewsTab(),
         DemoTab::Images => images_tab(),
         DemoTab::Text => TextShowcaseTab(),
-        DemoTab::Winamp => WinampTab(winamp_tab_state),
+        DemoTab::Wsz => WszTab(wsz_tab_state),
         DemoTab::Xkcd => xkcd_tab(),
         DemoTab::Shaders => ShadersTab(startup.initial_shader_section),
         DemoTab::ShaderRect => ShaderRectTab(),

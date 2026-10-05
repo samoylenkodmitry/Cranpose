@@ -240,10 +240,17 @@ const FLOATING_ACTION_MARGIN: f32 = 16.0;
 #[composable]
 fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) -> NodeId {
     let direction = layout_direction();
-    let safe_area = crate::safe_area::local_safe_area_insets().reader();
-    let ime = crate::safe_area::local_ime_insets().reader();
-    let observer = cranpose_core::remember(|| Rc::new(crate::safe_area::InsetsObserver::new()))
-        .with(Rc::clone);
+    let insets = crate::safe_area::window_insets().combined();
+    let (start_inset, end_inset) = match direction {
+        LayoutDirection::Ltr => (insets.left, insets.right),
+        LayoutDirection::Rtl => (insets.right, insets.left),
+    };
+    let window_padding = spec.content_insets.filter(PaddingValues::new(
+        start_inset,
+        insets.top,
+        end_inset,
+        insets.bottom,
+    ));
 
     let colors = spec.colors;
     let modifier = match colors.background {
@@ -257,23 +264,6 @@ fn ScaffoldImpl(modifier: Modifier, spec: ScaffoldSpec, slots: ScaffoldSlots) ->
     let content = slots.content;
 
     SubcomposeLayout(modifier, move |scope, constraints| {
-        let insets = observer.observe(scope.root_id(), || {
-            crate::safe_area::WindowInsets {
-                safe_area: safe_area.value(),
-                ime: ime.value(),
-            }
-            .combined()
-        });
-        let (start_inset, end_inset) = match direction {
-            LayoutDirection::Ltr => (insets.left, insets.right),
-            LayoutDirection::Rtl => (insets.right, insets.left),
-        };
-        let window_padding = spec.content_insets.filter(PaddingValues::new(
-            start_inset,
-            insets.top,
-            end_inset,
-            insets.bottom,
-        ));
         let width = constraints.max_width.max(constraints.min_width);
         let height = constraints.max_height.max(constraints.min_height);
         let loose = Constraints::loose(width, height);

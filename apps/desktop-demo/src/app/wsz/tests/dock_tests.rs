@@ -42,32 +42,32 @@ fn a_pane_docks_when_its_top_edge_meets_the_bottom_of_the_stack() {
 
 #[test]
 fn a_torn_pane_is_the_only_one_that_leaves_the_main_window() {
-    let mut dock = WinampDock::default();
-    assert!(dock.docked(WinampPane::Equalizer));
-    assert!(dock.docked(WinampPane::Playlist));
-    dock.tear(WinampPane::Equalizer);
-    assert!(!dock.docked(WinampPane::Equalizer));
+    let mut dock = WszDock::default();
+    assert!(dock.docked(WszPane::Equalizer));
+    assert!(dock.docked(WszPane::Playlist));
+    dock.tear(WszPane::Equalizer);
+    assert!(!dock.docked(WszPane::Equalizer));
     assert!(
-        dock.docked(WinampPane::Playlist),
+        dock.docked(WszPane::Playlist),
         "pulling one pane out leaves the rest of the stack where it was"
     );
-    dock.tear(WinampPane::Equalizer);
-    dock.dock(WinampPane::Equalizer);
+    dock.tear(WszPane::Equalizer);
+    dock.dock(WszPane::Equalizer);
     assert!(
-        dock.docked(WinampPane::Equalizer),
+        dock.docked(WszPane::Equalizer),
         "a pane torn twice is still one pane, so docking it once puts it back"
     );
 }
 
-fn docked_at(y: f32) -> Option<WinampPaneSlot> {
-    Some(WinampPaneSlot {
+fn docked_at(y: f32) -> Option<WszPaneSlot> {
+    Some(WszPaneSlot {
         docked: true,
         offset: Point::new(0.0, y),
     })
 }
 
-fn torn_from(y: f32) -> Option<WinampPaneSlot> {
-    Some(WinampPaneSlot {
+fn torn_from(y: f32) -> Option<WszPaneSlot> {
+    Some(WszPaneSlot {
         docked: false,
         offset: Point::new(0.0, y),
     })
@@ -75,13 +75,13 @@ fn torn_from(y: f32) -> Option<WinampPaneSlot> {
 
 #[test]
 fn the_stack_is_as_big_as_the_panes_docked_in_it() {
-    let shown = WinampState::default();
+    let shown = WszState::default();
     let playlist = Size::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT);
-    let mut dock = WinampDock::default();
+    let mut dock = WszDock::default();
 
     assert_eq!(
-        winamp_stack_layout(&shown, &dock, playlist),
-        WinampStackLayout {
+        wsz_stack_layout(&shown, &dock, playlist),
+        WszStackLayout {
             equalizer: docked_at(MAIN_HEIGHT),
             playlist: docked_at(MAIN_HEIGHT + EQ_HEIGHT),
             size: Size::new(MAIN_WIDTH, MAIN_HEIGHT + EQ_HEIGHT + PLAYLIST_HEIGHT),
@@ -89,10 +89,10 @@ fn the_stack_is_as_big_as_the_panes_docked_in_it() {
         "the main window, the equalizer under it and the playlist under that"
     );
 
-    dock.tear(WinampPane::Equalizer);
+    dock.tear(WszPane::Equalizer);
     assert_eq!(
-        winamp_stack_layout(&shown, &dock, playlist),
-        WinampStackLayout {
+        wsz_stack_layout(&shown, &dock, playlist),
+        WszStackLayout {
             equalizer: torn_from(MAIN_HEIGHT),
             playlist: docked_at(MAIN_HEIGHT),
             size: Size::new(MAIN_WIDTH, MAIN_HEIGHT + PLAYLIST_HEIGHT),
@@ -100,21 +100,21 @@ fn the_stack_is_as_big_as_the_panes_docked_in_it() {
         "a torn equalizer leaves the stack, and the playlist moves up into its place"
     );
 
-    dock.tear(WinampPane::Playlist);
+    dock.tear(WszPane::Playlist);
     assert_eq!(
-        winamp_stack_layout(&shown, &dock, playlist).size,
+        wsz_stack_layout(&shown, &dock, playlist).size,
         Size::new(MAIN_WIDTH, MAIN_HEIGHT),
         "with both panes torn the stack is the main window alone"
     );
 
-    let hidden_equalizer = WinampState {
+    let hidden_equalizer = WszState {
         eq_visible: false,
-        ..WinampState::default()
+        ..WszState::default()
     };
     let wide_playlist = Size::new(PLAYLIST_WIDTH + 75.0, PLAYLIST_HEIGHT + 58.0);
     assert_eq!(
-        winamp_stack_layout(&hidden_equalizer, &WinampDock::default(), wide_playlist),
-        WinampStackLayout {
+        wsz_stack_layout(&hidden_equalizer, &WszDock::default(), wide_playlist),
+        WszStackLayout {
             equalizer: None,
             playlist: docked_at(MAIN_HEIGHT),
             size: Size::new(wide_playlist.width, MAIN_HEIGHT + wide_playlist.height),
@@ -125,12 +125,12 @@ fn the_stack_is_as_big_as_the_panes_docked_in_it() {
 }
 
 fn torn(
-    pane: WinampPane,
+    pane: WszPane,
     state: WindowState,
     main_window: WindowState,
-    dock: MutableState<WinampDock>,
-) -> WinampStackPane {
-    WinampStackPane {
+    dock: MutableState<WszDock>,
+) -> WszStackPane {
+    WszStackPane {
         pane,
         dock,
         offset: Point::new(0.0, MAIN_HEIGHT),
@@ -145,14 +145,14 @@ fn a_pane_let_go_on_the_bottom_of_the_stack_goes_back_in() {
     let main_window =
         WindowState::placed_at(100.0, 100.0, MAIN_WIDTH, MAIN_HEIGHT + PLAYLIST_HEIGHT);
     let equalizer = WindowState::placed_at(112.0, 424.0, EQ_WIDTH, EQ_HEIGHT);
-    let dock = cranpose_core::mutableStateOf(WinampDock {
-        torn: vec![WinampPane::Equalizer],
+    let dock = cranpose_core::mutableStateOf(WszDock {
+        torn: vec![WszPane::Equalizer],
     });
 
-    dock_a_pane_let_go_on_the_stack(torn(WinampPane::Equalizer, equalizer, main_window, dock));
+    dock_a_pane_let_go_on_the_stack(torn(WszPane::Equalizer, equalizer, main_window, dock));
 
     assert!(
-        dock.get_non_reactive().docked(WinampPane::Equalizer),
+        dock.get_non_reactive().docked(WszPane::Equalizer),
         "the stack's bottom edge is as far down as the main window is tall"
     );
 }
@@ -161,19 +161,19 @@ fn a_pane_let_go_on_the_bottom_of_the_stack_goes_back_in() {
 fn a_pane_let_go_away_from_the_stack_stays_in_its_own_window() {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));
     let main_window = WindowState::placed_at(100.0, 100.0, MAIN_WIDTH, MAIN_HEIGHT);
-    let dock = cranpose_core::mutableStateOf(WinampDock {
-        torn: vec![WinampPane::Equalizer, WinampPane::Playlist],
+    let dock = cranpose_core::mutableStateOf(WszDock {
+        torn: vec![WszPane::Equalizer, WszPane::Playlist],
     });
 
     let far_off = WindowState::placed_at(600.0, 100.0, EQ_WIDTH, EQ_HEIGHT);
-    dock_a_pane_let_go_on_the_stack(torn(WinampPane::Equalizer, far_off, main_window, dock));
+    dock_a_pane_let_go_on_the_stack(torn(WszPane::Equalizer, far_off, main_window, dock));
     let nowhere = WindowState::new(PLAYLIST_WIDTH, PLAYLIST_HEIGHT);
-    dock_a_pane_let_go_on_the_stack(torn(WinampPane::Playlist, nowhere, main_window, dock));
+    dock_a_pane_let_go_on_the_stack(torn(WszPane::Playlist, nowhere, main_window, dock));
 
     assert_eq!(
         dock.get_non_reactive(),
-        WinampDock {
-            torn: vec![WinampPane::Equalizer, WinampPane::Playlist],
+        WszDock {
+            torn: vec![WszPane::Equalizer, WszPane::Playlist],
         },
         "a pane put down away from the stack, or with no place on the screen yet, is not docked"
     );
@@ -216,21 +216,21 @@ fn window_root_nodes() -> Vec<NodeId> {
 fn settle(composition: &mut TestComposition) {
     while composition
         .process_invalid_scopes()
-        .expect("the Winamp tab recomposes")
+        .expect("the WSZ tab recomposes")
     {}
 }
 
-fn undocked_winamp_tab() -> (TestComposition, WinampTabState) {
+fn undocked_wsz_tab() -> (TestComposition, WszTabState) {
     let tab = Rc::new(Cell::new(None));
     let mut composition = cranpose_ui::run_test_composition({
         let tab = Rc::clone(&tab);
         move || {
-            let tab_state = remember_winamp_tab_state();
+            let tab_state = remember_wsz_tab_state();
             tab.set(Some(tab_state));
-            WinampTab(tab_state);
+            WszTab(tab_state);
         }
     });
-    let tab_state = tab.get().expect("the Winamp tab composed");
+    let tab_state = tab.get().expect("the WSZ tab composed");
     tab_state.detached.set(true);
     settle(&mut composition);
     (composition, tab_state)
@@ -238,7 +238,7 @@ fn undocked_winamp_tab() -> (TestComposition, WinampTabState) {
 
 #[test]
 fn the_panes_draw_inside_the_main_window_until_one_is_torn_off() {
-    let (mut composition, tab) = undocked_winamp_tab();
+    let (mut composition, tab) = undocked_wsz_tab();
     let stack = window_root_nodes();
     assert_eq!(
         stack.len(),
@@ -251,7 +251,7 @@ fn the_panes_draw_inside_the_main_window_until_one_is_torn_off() {
         "the main window is the size of the stack"
     );
 
-    tab.dock.update(|held| held.tear(WinampPane::Equalizer));
+    tab.dock.update(|held| held.tear(WszPane::Equalizer));
     settle(&mut composition);
     let torn = window_root_nodes();
     assert_eq!(torn.len(), 2, "the torn equalizer is a window of its own");
@@ -262,7 +262,7 @@ fn the_panes_draw_inside_the_main_window_until_one_is_torn_off() {
         "the stack gives up the torn equalizer's room"
     );
 
-    tab.dock.update(|held| held.dock(WinampPane::Equalizer));
+    tab.dock.update(|held| held.dock(WszPane::Equalizer));
     settle(&mut composition);
     assert_eq!(window_root_nodes(), stack);
     assert_eq!(
@@ -271,7 +271,7 @@ fn the_panes_draw_inside_the_main_window_until_one_is_torn_off() {
         "a docked equalizer takes its room in the stack back"
     );
 
-    tab.dock.update(|held| held.tear(WinampPane::Equalizer));
+    tab.dock.update(|held| held.tear(WszPane::Equalizer));
     settle(&mut composition);
     assert_eq!(
         window_root_nodes(),
@@ -283,8 +283,8 @@ fn the_panes_draw_inside_the_main_window_until_one_is_torn_off() {
 
 #[test]
 fn undocking_makes_the_same_nodes_windows_again() {
-    let (mut composition, tab) = undocked_winamp_tab();
-    tab.dock.update(|held| held.tear(WinampPane::Playlist));
+    let (mut composition, tab) = undocked_wsz_tab();
+    tab.dock.update(|held| held.tear(WszPane::Playlist));
     settle(&mut composition);
     let undocked = window_root_nodes();
     assert_eq!(
