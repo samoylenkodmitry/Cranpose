@@ -174,7 +174,8 @@ fn shadow_geometry_has_visible_expansion_and_offsets() {
         width: 40.0,
         height: 24.0,
     };
-    let geometry = layer_shadow_geometry(&layer, bounds);
+    let light = ShadowLight::for_window(200.0, 200.0, 1.0, 1.0);
+    let geometry = layer_shadow_geometry(&layer, bounds, light);
     let ambient_pass = geometry.ambient.expect("ambient pass");
     let spot_pass = geometry.spot.expect("spot pass");
     let ambient_samples = blur_samples(ambient_pass.blur_radius.max(1.0));
@@ -186,6 +187,7 @@ fn shadow_geometry_has_visible_expansion_and_offsets() {
         RasterLayerBounds::from_transformed_bounds(bounds, bounds),
         bounds,
         None,
+        light,
     );
 
     assert!(
@@ -219,14 +221,18 @@ fn shadow_geometry_has_visible_expansion_and_offsets() {
             height: spot_pass.rect.height + spot_expansion * 2.0,
         }
     );
-    let spot_peak_alpha = scene.shapes[ambient_samples.len()..]
+    let spot_alpha: f32 = scene.shapes[ambient_samples.len()..]
         .iter()
         .filter_map(|shape| match &shape.brush {
             Brush::Solid(color) => Some(color.a()),
             _ => None,
         })
-        .fold(0.0f32, f32::max);
-    assert!(spot_peak_alpha > 0.02, "spot alpha should remain visible");
+        .sum();
+    assert!(
+        (spot_alpha - spot_pass.alpha).abs() < 0.01,
+        "the spot blur's samples add up to the pass's alpha: {spot_alpha} against {}",
+        spot_pass.alpha
+    );
 }
 
 #[test]
