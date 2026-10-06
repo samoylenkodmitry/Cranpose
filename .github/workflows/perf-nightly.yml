@@ -1,13 +1,14 @@
 name: perf nightly
 
-# Each night main's Cranpose against the latest release, and against the other
-# frameworks, on the Huawei Mate 20 X and on a Mac desktop
-# (benchmarks/compose-vs-cranpose README, "Short A/B comparisons" and "On a
-# Mac desktop"). macm3 builds every framework's apps and measures the desktop
-# ones; the Mac the phone is attached to builds Cranpose's and measures them
-# all on the phone. Results go to the perf-data branch the desktop demo's
-# Performance tab reads; a regression found twice in a row opens a
-# perf-regression issue.
+# Each night main's Cranpose against the latest release, and both against the
+# other frameworks at their latest releases, on the Huawei Mate 20 X and on a
+# Mac desktop (benchmarks/compose-vs-cranpose README, "Every night"). macm3
+# moves every framework's pin to its latest stable release, builds every
+# framework's apps, measures the desktop ones and opens a pull request with
+# the pins that moved; the Mac the phone is attached to builds Cranpose's and
+# measures them all on the phone. Results go to the perf-data branch the
+# desktop demo's Performance tab reads; a regression found twice in a row
+# opens a perf-regression issue.
 
 on:
   schedule:
@@ -17,6 +18,7 @@ on:
 permissions:
   contents: write
   issues: write
+  pull-requests: write
 
 concurrency:
   group: perf-nightly
@@ -38,6 +40,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+          # The release tags, to build the newest one main contains.
+          fetch-depth: 0
 
       - name: Configure machine-local SDK and cache paths
         env:
@@ -61,13 +65,20 @@ jobs:
           command -v just >/dev/null || cargo install just --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
 
+      - name: Move every framework to its latest release
+        if: steps.published.outputs.measured != 'yes'
+        run: python3 benchmarks/compose-vs-cranpose/versions.py bump --record "$RUNNER_TEMP/bumps.json"
+
       - name: Build every framework's apps
         if: steps.published.outputs.measured != 'yes'
         run: |
-          # The build caches sit beside the runner's other caches.
+          # The build caches sit beside the runner's other caches; a moved
+          # pin that does not build is put back.
           export PERF_BUILD_CACHE="$(dirname "$SCCACHE_DIR")/gauntlet"
+          export PERF_BUMPS="$RUNNER_TEMP/bumps.json"
           benchmarks/compose-vs-cranpose/build_apps.sh desktop
           benchmarks/compose-vs-cranpose/build_apps.sh android "$RUNNER_TEMP/gauntlet-apks"
+          benchmarks/compose-vs-cranpose/build_apps.sh release "$(git describe --tags --abbrev=0 --match 'v*')"
 
       - name: Measure the desktop apps
         if: steps.published.outputs.measured != 'yes'
@@ -75,11 +86,18 @@ jobs:
         shell: bash --noprofile --norc -eo pipefail {0}
         run: |
           scripts/ci/with_host_lock.sh --exclusive python3 benchmarks/compose-vs-cranpose/desktop.py \
-            --output "$RUNNER_TEMP/desktop" --tier 16 --main "$(git rev-parse HEAD)"
+            --output "$RUNNER_TEMP/desktop" --tier 16 --main "$(git rev-parse HEAD)" \
+            --release "$(git describe --tags --abbrev=0 --match 'v*')"
 
       - name: Publish the desktop run
         if: steps.published.outputs.measured != 'yes'
         run: just perf-publish "$RUNNER_TEMP/desktop/report.json"
+
+      - name: Propose the pins that moved
+        if: steps.published.outputs.measured != 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/perf/propose_versions.py --record "$RUNNER_TEMP/bumps.json"
 
       - name: Hand the Android apps to the phone's job
         if: steps.published.outputs.measured != 'yes'

@@ -951,12 +951,10 @@ perf-nightly serial output:
     python3 scripts/perf/nightly.py --serial {{serial}} --output {{output}}
 
 # Every framework's app on the phone: the builds in `apks` (APP.apk, from
-# benchmarks/compose-vs-cranpose/build_apps.sh) and Cranpose's built from
-# this checkout, into the target the nightly's main build uses.
+# benchmarks/compose-vs-cranpose/build_apps.sh) beside Cranpose's latest
+# release and main, built from this checkout.
 perf-frameworks serial output apks:
-    cd benchmarks/compose-vs-cranpose/cranpose-app/android && CARGO_TARGET_DIR="$PWD/../target" ./gradlew --no-daemon -q :app:assembleRelease
-    cp benchmarks/compose-vs-cranpose/cranpose-app/android/app/build/outputs/apk/release/app-release.apk {{apks}}/cranpose.apk
-    python3 benchmarks/compose-vs-cranpose/frameworks.py --serial {{serial}} --output {{output}} --install {{apks}} --main "$(git rev-parse HEAD)"
+    python3 scripts/perf/frameworks_phone.py --serial {{serial}} --output {{output}} --apks {{apks}}
 
 # Adds a comparison run to the perf-data branch the performance dashboard reads.
 perf-publish run:

@@ -325,18 +325,30 @@ python3 benchmarks/compose-vs-cranpose/frameworks.py --serial SERIAL --output OU
 ### Every night
 
 `.github/workflows/perf-nightly.yml` measures main's latest commit at 01:30,
-unless the dashboard already holds it:
+unless the dashboard already holds it. Cranpose runs twice: its latest
+release (`cranpose-release`, once a release draws the gauntlet) and main.
 
-1. On macm3, `build_apps.sh` builds every desktop app and every Android app
-   but Cranpose's, `desktop.py` measures the desktop apps at tier 16, and the
-   run goes to the dashboard.
+1. On macm3, `versions.py bump` moves each framework's pin to its latest
+   stable release, `build_apps.sh` builds every desktop app, every Android
+   app but Cranpose's, and the release's desktop app, and `desktop.py`
+   measures the desktop apps at tier 16. A moved pin that does not build is
+   put back. The run goes to the dashboard, and the pins that moved and
+   built go to the pull request `perf/framework-versions`.
 2. On the Mac the Mate 20 X is attached to, `scripts/perf/nightly.py`
    compares the latest release with main, and `just perf-frameworks` installs
-   macm3's Android builds beside main's Cranpose and runs `frameworks.py`.
+   macm3's Android builds beside Cranpose's release and main and runs
+   `frameworks.py`.
+
+Each run names the version of every framework it measured: the pins
+`versions.py` reads, the Flutter SDK and .NET MAUI workload `build_apps.sh`
+keeps at their latest, the phone's WebView or the Mac's Chrome, and the
+macOS SwiftUI ships with. `python3 versions.py check` lists each pin beside
+its registry's latest release.
 
 The Performance tab of the desktop demo reads the runs from the `perf-data`
 branch: the latest night's release against main, the trend, and the latest
-framework comparison of each device.
+framework comparison of each device. Each framework there opens its
+gauntlet's source at the commit measured.
 
 ### Long comparisons
 

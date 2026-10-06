@@ -41,10 +41,14 @@ const INDEX: &str = r#"{"runs": [
     "summary": {"compose": {"fps": 26.5}, "cranpose": {"fps": 52.8}},
     "verdicts": {"fps": "better", "cpu_ms_per_frame": "better", "desired_to_present_p50_ms": "worse"}}}},
  {"file": "runs/e.json", "kind": "frameworks", "started_at": "2026-10-06T06:40:00+00:00",
-  "device": "Apple M3 Pro",
-  "subjects": [{"name": "compose", "label": "compose"}, {"name": "egui", "label": "egui"}],
+  "device": "Apple M3 Pro", "main": "ccccccccc333",
+  "subjects": [
+   {"name": "egui", "label": "egui 0.36.2", "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"},
+   {"name": "compose", "label": "Compose Multiplatform 1.12.1",
+    "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"},
+   {"name": "avalonia", "label": "Avalonia 12.1.3", "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"}],
   "scenarios": {"gauntlet": {"legs": 6,
-    "summary": {"compose": {"fps": 17.1}, "egui": {"fps": 55.7}}, "verdicts": {}}}}
+    "summary": {"compose": {"fps": 17.1}, "egui": {"fps": 55.7}, "avalonia": {"fps": 17.3}}, "verdicts": {}}}}
 ]}"#;
 
 fn labels() -> Vec<String> {
@@ -91,19 +95,41 @@ fn the_latest_night_lists_each_scenario_with_both_builds_and_the_change() {
     assert!(shows(&labels, "feed"), "{labels:?}");
 }
 
+/// Where `text` first appears among the labels.
+fn position(labels: &[String], text: &str) -> usize {
+    labels
+        .iter()
+        .position(|label| label == text)
+        .unwrap_or_else(|| panic!("no {text}: {labels:?}"))
+}
+
 #[test]
 fn the_frameworks_card_shows_each_frameworks_frame_rate() {
     let labels = labels();
-    assert!(shows(&labels, "compose  26.5"), "{labels:?}");
-    assert!(shows(&labels, "cranpose  52.8"), "{labels:?}");
+    assert!(shows(&labels, "26.5"), "{labels:?}");
+    assert!(shows(&labels, "52.8"), "{labels:?}");
 }
 
 #[test]
 fn each_device_shows_its_latest_framework_comparison() {
     let labels = labels();
-    assert!(shows(&labels, "egui  55.7"), "the desktop run: {labels:?}");
+    assert!(shows(&labels, "55.7"), "the desktop run: {labels:?}");
     assert!(
-        !shows(&labels, "compose  4.7"),
+        !shows(&labels, "4.7"),
         "the phone's older comparison gives way to its latest: {labels:?}"
+    );
+}
+
+#[test]
+fn frameworks_show_their_versions_in_alphabetical_order() {
+    let labels = labels();
+    let avalonia = position(&labels, "Avalonia 12.1.3");
+    let compose = position(&labels, "Compose Multiplatform 1.12.1");
+    let egui = position(&labels, "egui 0.36.2");
+    assert!(avalonia < compose && compose < egui, "{labels:?}");
+    assert_eq!(
+        labels[egui + 1],
+        "55.7",
+        "the frame rate sits on the framework's bar: {labels:?}"
     );
 }

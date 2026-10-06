@@ -35,7 +35,8 @@ def index_entry(run, file):
         'device': run['device']['ro.product.model'],
         'main': run.get('main'),
         'release': run.get('release'),
-        'subjects': [{'name': subject['name'], 'label': subject['label']} for subject in run['subjects']],
+        'subjects': [{key: subject[key] for key in ('name', 'label', 'source') if key in subject}
+                     for subject in run['subjects']],
         'duration_s': run.get('duration_s'),
         'scenarios': {
             scenario['scenario']: {

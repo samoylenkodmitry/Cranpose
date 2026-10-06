@@ -5,11 +5,11 @@
 use std::{collections::BTreeMap, rc::Rc};
 
 use cranpose_core::{self, MutableState};
-use cranpose_services::{isSystemInDarkTheme, local_http_client, HttpClientRef};
+use cranpose_services::{isSystemInDarkTheme, local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
-    composable, Brush, Button, ButtonSpec, Canvas, Color, Column, ColumnSpec, DrawStyle,
-    LinearArrangement, Modifier, Path, Point, Row, RowSpec, ScrollState, Stroke, Text,
-    VerticalAlignment,
+    composable, Alignment, Box, BoxSpec, Brush, Button, ButtonSpec, Canvas, Color, Column,
+    ColumnSpec, DrawStyle, LinearArrangement, Modifier, Path, Point, Row, RowSpec, ScrollState,
+    Stroke, Text, VerticalAlignment,
 };
 use serde::Deserialize;
 
@@ -18,6 +18,8 @@ use super::demo_text::text_style;
 /// The run index the nightly publishes, served as raw JSON from the branch.
 const INDEX_URL: &str =
     "https://raw.githubusercontent.com/samoylenkodmitry/Cranpose/perf-data/index.json";
+/// Where a framework's gauntlet source opens.
+const SOURCE_URL: &str = "https://github.com/samoylenkodmitry/Cranpose/blob";
 
 /// `index.json` on the perf-data branch.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -44,7 +46,11 @@ pub struct PerfRun {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct PerfSubject {
     pub name: String,
+    /// The framework and the version measured, as `egui 0.36.2`.
     pub label: String,
+    /// The file the app draws the gauntlet in, from the repository's root.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -544,11 +550,12 @@ fn LineChart(palette: Palette, release: Vec<f32>, main: Vec<f32>, regressed: Vec
 
 #[composable]
 fn Frameworks(palette: Palette, run: PerfRun) {
-    let labels: Vec<String> = run
-        .subjects
-        .iter()
-        .map(|subject| subject.name.clone())
-        .collect();
+    // Alphabetical, each with the version measured and a link to its source
+    // at the commit the run measured.
+    let mut subjects: Vec<(usize, PerfSubject)> =
+        run.subjects.iter().cloned().enumerate().collect();
+    subjects.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
+    let commit = run.main.clone().unwrap_or_else(|| "main".to_string());
     let title = format!(
         "Frameworks on the {}, {}: frames per second (60 at most)",
         run.device,
@@ -561,55 +568,86 @@ fn Frameworks(palette: Palette, run: PerfRun) {
                 Modifier::empty(),
                 text_style(13.0, palette.text, true),
             );
-            for (subject, label) in labels.iter().enumerate() {
-                let fps = run.median(scenario, subject, "fps").unwrap_or(0.0) as f32;
-                let color = if label == "compose" {
+            for (index, subject) in &subjects {
+                let fps = run.median(scenario, *index, "fps").unwrap_or(0.0) as f32;
+                let color = if subject.name == "compose" {
                     palette.baseline
                 } else {
                     palette.accent
                 };
-                FpsBar(palette, format!("{label}  {fps:.1}"), fps / 60.0, color);
+                let url = subject
+                    .source
+                    .as_ref()
+                    .map(|source| format!("{SOURCE_URL}/{commit}/{source}"));
+                FpsBar(palette, subject.label.clone(), url, fps, color);
             }
         }
     });
 }
 
+/// A framework, which opens its source when it has one, and its frame rate as
+/// a bar with the number on it.
 #[composable]
-fn FpsBar(palette: Palette, label: String, share: f32, color: Color) {
+fn FpsBar(palette: Palette, label: String, url: Option<String>, fps: f32, color: Color) {
+    let uri_handler = local_uri_handler().current();
     Row(
         Modifier::empty().fill_max_width(),
         RowSpec::new()
             .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
             .vertical_alignment(VerticalAlignment::CenterVertically),
         move || {
-            Text(
-                label.clone(),
-                Modifier::empty().width(140.0),
-                text_style(12.0, palette.muted, false),
+            let name = Modifier::empty().width(220.0);
+            match url.clone() {
+                Some(url) => {
+                    let uri_handler = uri_handler.clone();
+                    Text(
+                        label.clone(),
+                        name.clickable(move |_| {
+                            if let Err(error) = uri_handler.open_uri(&url) {
+                                log::error!("Could not open {url}: {error:#}");
+                            }
+                        }),
+                        text_style(12.0, palette.accent, false),
+                    );
+                }
+                None => {
+                    Text(label.clone(), name, text_style(12.0, palette.muted, false));
+                }
+            }
+            Box(
+                Modifier::empty().weight(1.0).height(18.0),
+                BoxSpec::new().content_alignment(Alignment::CENTER_START),
+                move || {
+                    Canvas(Modifier::empty().fill_max_size(), move |scope| {
+                        let size = scope.size();
+                        scope.draw_round_rect_at(
+                            cranpose_ui::Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: size.width,
+                                height: size.height,
+                            },
+                            Brush::solid(palette.background),
+                            cranpose_ui::CornerRadii::uniform(9.0),
+                        );
+                        scope.draw_round_rect_at(
+                            cranpose_ui::Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: size.width * (fps / 60.0).clamp(0.0, 1.0),
+                                height: size.height,
+                            },
+                            Brush::solid(color),
+                            cranpose_ui::CornerRadii::uniform(9.0),
+                        );
+                    });
+                    Text(
+                        format!("{fps:.1}"),
+                        Modifier::empty().padding_horizontal(8.0),
+                        text_style(11.0, palette.text, true),
+                    );
+                },
             );
-            Canvas(Modifier::empty().weight(1.0).height(12.0), move |scope| {
-                let size = scope.size();
-                scope.draw_round_rect_at(
-                    cranpose_ui::Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: size.width,
-                        height: size.height,
-                    },
-                    Brush::solid(palette.background),
-                    cranpose_ui::CornerRadii::uniform(6.0),
-                );
-                scope.draw_round_rect_at(
-                    cranpose_ui::Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: size.width * share.clamp(0.0, 1.0),
-                        height: size.height,
-                    },
-                    Brush::solid(color),
-                    cranpose_ui::CornerRadii::uniform(6.0),
-                );
-            });
         },
     );
 }

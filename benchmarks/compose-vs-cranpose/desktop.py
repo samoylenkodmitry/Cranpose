@@ -15,7 +15,7 @@ which other processes spent more than `--max-others` cores is measured again.
   python3 desktop.py --output results/desktop-parity --parity --tier 5
 
 `--parity` freezes every app on frame 120, takes a picture of each window
-with `FrameCount.app` and compares each with the first app's picture, as
+with `FrameCount.app` and compares each with Compose's picture, as
 `parity.py` compares phone captures.
 
 Everything an app reads or writes, the fonts and Chrome's profile, sits in a
@@ -38,6 +38,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import versions
+
 
 HERE = Path(__file__).resolve().parent
 FONTS = HERE / 'fonts'
@@ -53,6 +55,9 @@ TITLE_BAR_PIXELS = 64
 APPS = {
     'cranpose': [HERE / 'cranpose-app/target/release/perf-compare',
                  '--scenario=gauntlet', '--tier={tier}', '--freeze={freeze}'],
+    # The latest release's, which `build_apps.sh release TAG` links in.
+    'cranpose-release': [HERE / 'cranpose-app/target-release/release/perf-compare',
+                         '--scenario=gauntlet', '--tier={tier}', '--freeze={freeze}'],
     'egui': [HERE / 'egui-app/target/release/perf-compare-egui'],
     'slint': [HERE / 'slint-app/target/release/perf-compare-slint'],
     'iced': [HERE / 'iced-app/target/release/perf-compare-iced'],
@@ -242,7 +247,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--apps', default=','.join(APPS))
+    parser.add_argument('--apps', help='the apps to run; by default every app that is built')
+    parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     parser.add_argument('--tier', type=int, default=12)
     parser.add_argument('--rounds', type=int, default=3)
     parser.add_argument('--seconds', type=float, default=5.0)
@@ -258,7 +264,11 @@ def main():
     parser.add_argument('--tile', type=int, default=48)
     parser.add_argument('--tile-delta', type=float, default=12.0)
     args = parser.parse_args()
-    apps = args.apps.split(',')
+    if args.apps:
+        apps = args.apps.split(',')
+    else:
+        apps = [name for name in APPS if name == 'web' or Path(APPS[name][0]).exists()]
+        print('not built:', ', '.join(name for name in APPS if name not in apps) or 'none', flush=True)
     args.output.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     page = serve_page()
@@ -278,8 +288,10 @@ def run(args, apps, page, stage):
         from PIL import Image
         from parity import compare_pair
         pictures = {name: picture(name, args, args.output, page, stage) for name in apps}
-        reference, results = apps[0], {}
-        for name in apps[1:]:
+        # Compose's picture is the one the others are held to.
+        reference = 'compose' if 'compose' in apps else apps[0]
+        results = {}
+        for name in (name for name in apps if name != reference):
             (_, changed_a, first, second, heat_a), (_, changed_b, _, _, heat_b) = compare_pair(
                 pictures[name], pictures[reference], TITLE_BAR_PIXELS, args.shift, args.tile,
                 args.tile_delta, args.drift)
@@ -314,7 +326,7 @@ def run(args, apps, page, stage):
         'started_at': started_at,
         'main': args.main,
         'device': {'ro.product.model': chip},
-        'subjects': [{'name': name, 'label': name} for name in apps],
+        'subjects': [versions.subject(name, 'desktop', release=args.release) for name in apps],
         'protocol': {'warmup_s': args.warmup, 'window_s': args.seconds, 'rounds': args.rounds,
                      'max_other_cores': args.max_others},
         'scenarios': [{'scenario': 'gauntlet', 'extras': f'tier {args.tier}, {width} x {height} window',

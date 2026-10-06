@@ -15,6 +15,7 @@ Usage: frameworks.py --serial SERIAL --output DIR [--apps compose,cranpose,...]
 
 import argparse
 import json
+import re
 import statistics
 import time
 from datetime import datetime, timezone
@@ -22,6 +23,7 @@ from pathlib import Path
 
 from ab import DECIDING, REPORTED, leg_record, metric_values, prime, size_window
 from measure import APPS, HEAVY, HERE, REMOTE_WINDOW, Device, device_lock, measure_run
+import versions
 
 DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,maui,avalonia,egui,slint,web'
 
@@ -41,6 +43,12 @@ def measure_frameworks(args):
     device.adb('push', str(HERE / 'perf_window.sh'), REMOTE_WINDOW)
     for app in apps:
         prime(device, app, args.scenario, args)
+    # The versions macm3 built with, and the WebView the web page runs in.
+    built = json.loads((args.install / 'versions.json').read_text()) if args.install and (
+        args.install / 'versions.json').exists() else {}
+    webview = device.shell('dumpsys', 'package', 'com.google.android.webview')
+    if match := re.search(r'versionName=(\S+)', webview):
+        built['web'] = f'WebView {match.group(1)}, {built.get("web") or versions.version("web", "android")}'
     legs = []
     for round_index in range(args.rounds):
         for app in apps if round_index % 2 == 0 else apps[::-1]:
@@ -60,9 +68,11 @@ def measure_frameworks(args):
         'kind': 'frameworks',
         'started_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
         'main': args.main,
+        'release': args.release,
         'device': {key: device.shell('getprop', key).strip() for key in
                    ['ro.product.model', 'ro.build.version.release', 'ro.hardware']},
-        'subjects': [{'name': app, 'package': APPS[app]['package'], 'label': app} for app in apps],
+        'subjects': [{**versions.subject(app, 'android', built, args.release), 'package': APPS[app]['package']}
+                     for app in apps],
         'protocol': {'warmup_s': args.warmup, 'window_s': args.window, 'min_frames': args.min_frames,
                      'max_window_s': args.max_window, 'rounds': args.rounds},
         'scenarios': [{
@@ -94,6 +104,7 @@ def main():
     parser.add_argument('--extra', default='', help='more `am start` extras')
     parser.add_argument('--install', type=Path, help='folder of APP.apk builds to install first')
     parser.add_argument('--main', help="the commit the Cranpose app was built at, recorded with the run")
+    parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     args = parser.parse_args()
     with device_lock(args.serial):
         run = measure_frameworks(args)
