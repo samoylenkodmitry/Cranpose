@@ -103,7 +103,6 @@ fn re_enabling_publishes_immediately_even_right_after_a_publish() {
 fn publish_waits(start: Instant, publishes: usize, read_after: &[usize]) -> Vec<Duration> {
     let mut policy = AccessibilityPublishPolicy::new();
     assert!(policy.update_enabled(true));
-    policy.set_backs_off_unread(true);
     let mut now = start;
     let mut waits = Vec::new();
     let mut last = None;
@@ -117,7 +116,7 @@ fn publish_waits(start: Instant, publishes: usize, read_after: &[usize]) -> Vec<
             waits.push(now - last);
         }
         last = Some(now);
-        policy.published();
+        policy.published(true);
         if read_after.contains(&index) {
             policy.note_read(now);
         }
@@ -150,11 +149,10 @@ fn a_reader_in_use_gets_changes_at_the_interactive_interval() {
 fn a_screen_reader_keeps_the_publish_interval_without_reads() {
     let start = Instant::now();
     let mut policy = policy_enabled_at(start);
-    policy.set_backs_off_unread(false);
-    policy.published();
+    policy.published(false);
     let next = start + ACCESSIBILITY_PUBLISH_INTERVAL;
     assert!(policy.try_begin_publish(next));
-    policy.published();
+    policy.published(false);
     assert!(!policy.try_begin_publish(next + ACCESSIBILITY_PUBLISH_INTERVAL / 2));
     assert!(policy.try_begin_publish(next + ACCESSIBILITY_PUBLISH_INTERVAL));
 }

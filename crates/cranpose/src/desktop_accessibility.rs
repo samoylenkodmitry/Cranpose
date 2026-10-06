@@ -227,6 +227,9 @@ impl DesktopAccessibilityBridge {
             self.previous.recycle(replaced.elements);
         }
         self.adapter.update_if_active(|| update);
+        // AccessKit activates only while a reader is connected, so a tree
+        // that goes unread is no cause to wait longer.
+        self.policy.published(false);
     }
 
     /// Runs what a reader asked of the app since the loop last looked, and

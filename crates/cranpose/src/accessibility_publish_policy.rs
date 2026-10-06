@@ -21,9 +21,6 @@ pub(crate) struct AccessibilityPublishPolicy {
     interval: Duration,
     /// Until when the reader counts as in use.
     interactive_until: Option<Instant>,
-    /// Whether waits grow while published trees go unread: on a platform
-    /// that reports reads, while no screen reader runs.
-    backs_off_unread: bool,
     /// Whether a reader read since the last tree was sent.
     read_since_publish: bool,
     published_once: bool,
@@ -37,7 +34,6 @@ impl AccessibilityPublishPolicy {
             pending_deadline: None,
             interval: ACCESSIBILITY_PUBLISH_INTERVAL,
             interactive_until: None,
-            backs_off_unread: false,
             read_since_publish: false,
             published_once: false,
         }
@@ -55,16 +51,6 @@ impl AccessibilityPublishPolicy {
         }
         self.enabled = enabled;
         became_enabled
-    }
-
-    /// Lets the wait between published trees grow while nothing reads them.
-    /// A screen reader reads only when the person uses it, so while one
-    /// runs, the wait stays at the publish interval.
-    pub(crate) fn set_backs_off_unread(&mut self, backs_off: bool) {
-        self.backs_off_unread = backs_off;
-        if !backs_off {
-            self.interval = ACCESSIBILITY_PUBLISH_INTERVAL;
-        }
     }
 
     /// A reader read the tree or acted on it at `now`: changes publish at
@@ -97,16 +83,18 @@ impl AccessibilityPublishPolicy {
         }
     }
 
-    /// A tree was sent to the platform. When the tree before it went unread
-    /// and the reader is not in use, the wait before the next one doubles,
-    /// up to [`ACCESSIBILITY_UNREAD_PUBLISH_INTERVAL`].
-    pub(crate) fn published(&mut self) {
+    /// A tree was sent to the platform. When `backs_off_unread`, the tree
+    /// before it went unread and the reader is not in use, the wait before
+    /// the next one doubles, up to [`ACCESSIBILITY_UNREAD_PUBLISH_INTERVAL`].
+    /// A platform backs off only where it reports reads and no screen reader
+    /// runs: a screen reader reads only when the person uses it.
+    pub(crate) fn published(&mut self, backs_off_unread: bool) {
         let in_use = self
             .interactive_until
             .zip(self.last_publish)
             .is_some_and(|(until, last)| last < until);
         let unread = self.published_once && !self.read_since_publish;
-        self.interval = if self.backs_off_unread && unread && !in_use {
+        self.interval = if backs_off_unread && unread && !in_use {
             (self.interval * 2).min(ACCESSIBILITY_UNREAD_PUBLISH_INTERVAL)
         } else {
             ACCESSIBILITY_PUBLISH_INTERVAL

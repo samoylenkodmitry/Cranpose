@@ -282,10 +282,6 @@ pub(crate) fn sync(
     let reader_on = cranpose_services::AccessibilityState {
         screen_reader_on: screen_reader_running(),
     };
-    // A service other than a screen reader may never read the tree, as a
-    // phone automation service does not: its trees publish less often while
-    // they go unread, and at the publish interval again once it reads one.
-    policy.set_backs_off_unread(!reader_on.screen_reader_on);
     let now = std::time::Instant::now();
     if PLATFORM_TREE_READ.swap(false, Ordering::Relaxed) {
         policy.note_read(now);
@@ -322,7 +318,10 @@ pub(crate) fn sync(
         return Ok(());
     }
     publish(app, &update)?;
-    policy.published();
+    // A service other than a screen reader may never read the tree, as a
+    // phone automation service does not: its trees publish less often while
+    // they go unread, and at the publish interval again once it reads one.
+    policy.published(!reader_on.screen_reader_on);
     Ok(())
 }
 
