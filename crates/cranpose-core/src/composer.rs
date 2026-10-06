@@ -1765,9 +1765,11 @@ impl Composer {
     }
 
     #[doc(hidden)]
-    #[track_caller]
-    pub fn __use_param_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> ValueSlotHandle<'_, T> {
-        let source = crate::caller_location_key();
+    pub fn __use_param_slot<T: 'static>(
+        &self,
+        source: Key,
+        init: impl FnOnce() -> T,
+    ) -> ValueSlotHandle<'_, T> {
         let slot = self.with_slot_session_mut(|slots| {
             slots.value_slot_with_kind(PayloadKind::Param, source, init)
         });
@@ -1777,35 +1779,25 @@ impl Composer {
     /// Finds the call's next parameter slot and runs `update` on its value,
     /// with one slot lookup for both.
     #[doc(hidden)]
-    #[track_caller]
     pub fn __update_param_slot<T: 'static, R>(
         &self,
+        source: Key,
         init: impl FnOnce() -> T,
         update: impl FnOnce(&mut T) -> R,
     ) -> (ValueSlotHandle<'_, T>, R) {
-        self.update_value_slot(
-            PayloadKind::Param,
-            crate::caller_location_key(),
-            init,
-            update,
-        )
+        self.update_value_slot(PayloadKind::Param, source, init, update)
     }
 
     /// Finds the call's return slot and runs `read` on its value, with one
     /// slot lookup for both.
     #[doc(hidden)]
-    #[track_caller]
     pub fn __update_return_slot<T: 'static, R>(
         &self,
+        source: Key,
         init: impl FnOnce() -> T,
         read: impl FnOnce(&mut T) -> R,
     ) -> (ValueSlotHandle<'_, T>, R) {
-        self.update_value_slot(
-            PayloadKind::Return,
-            crate::caller_location_key(),
-            init,
-            read,
-        )
+        self.update_value_slot(PayloadKind::Return, source, init, read)
     }
 
     fn update_value_slot<T: 'static, R>(

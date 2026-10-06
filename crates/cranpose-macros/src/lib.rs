@@ -175,8 +175,9 @@ impl PackedParams<'_> {
     fn slot_stmt(&self, core_path: &TokenStream2, composer: &Ident) -> TokenStream2 {
         let state = self.state_type(core_path);
         let slot = Self::slot();
+        let key = slot_key(core_path);
         quote! {
-            let #slot = #composer.__use_param_slot(|| <#state>::default());
+            let #slot = #composer.__use_param_slot(#key, || <#state>::default());
         }
     }
 
@@ -193,6 +194,7 @@ impl PackedParams<'_> {
         }
         let state = self.state_type(core_path);
         let slot = Self::slot();
+        let key = slot_key(core_path);
         let param_state = Ident::new("__param_state", Span::mixed_site());
         let stored = Ident::new("__stored", Span::mixed_site());
         let idents = self.params.iter().map(|(ident, _)| ident);
@@ -204,6 +206,7 @@ impl PackedParams<'_> {
             0,
             quote! {
                 let (_, #slot) = #composer.__update_param_slot(
+                    #key,
                     || <#state>::default(),
                     |#param_state: &mut #state| {
                         #param_state.update_fields(
@@ -396,6 +399,20 @@ fn core_crate_path() -> TokenStream2 {
     }
 }
 
+/// The key of a slot the expansion takes: cached in a static of the call
+/// site, or under hot reload, where a patch may reuse a static for a
+/// different site, the caller's location as a call computes it.
+fn slot_key(core_path: &TokenStream2) -> TokenStream2 {
+    if cfg!(feature = "hot-reload") {
+        return quote! { #core_path::caller_location_key() };
+    }
+    quote! {{
+        static __CRANPOSE_SLOT_KEY: ::std::sync::OnceLock<#core_path::Key> =
+            ::std::sync::OnceLock::new();
+        #core_path::cached_location_key(&__CRANPOSE_SLOT_KEY, file!(), line!(), column!())
+    }}
+}
+
 fn definition_key_stmt(
     core_path: &TokenStream2,
     caller_key_ident: &Ident,
@@ -532,6 +549,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let original_block = func.block.clone();
     let body_end = func.block.brace_token.span.close();
     let composer_ident = Ident::new("__composer", Span::mixed_site());
+    let slot_key = slot_key(&core_path);
     let outer_composer_ident = Ident::new("__outer_composer", Span::mixed_site());
     let caller_key_ident = Ident::new("__cranpose_caller_key", Span::mixed_site());
     let current_scope_ident = Ident::new("__current_scope", Span::mixed_site());
@@ -705,6 +723,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     };
                     quote! {
                         let (#slot_ident, ()) = #composer_ident.__update_param_slot(
+                            #slot_key,
                             || #core_path::CallbackHolder::new(),
                             |holder: &mut #core_path::CallbackHolder| {
                                 #update
@@ -727,7 +746,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .map(|(slot_ident, _)| {
                 quote! {
                     let #slot_ident = #composer_ident
-                        .__use_param_slot(|| #core_path::CallbackHolder::new());
+                        .__use_param_slot(#slot_key, || #core_path::CallbackHolder::new());
                 }
             })
             .collect();
@@ -851,6 +870,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #recompose_setter
                 let (#result_slot_index_ident, #previous_ident) = #composer_ident
                     .__update_return_slot(
+                        #slot_key,
                         || #core_path::ReturnSlot::<#return_ty>::default(),
                         |slot: &mut #core_path::ReturnSlot<#return_ty>| {
                             (!__changed).then(|| slot.get()).flatten()
