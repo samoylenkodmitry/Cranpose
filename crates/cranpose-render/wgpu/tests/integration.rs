@@ -88,6 +88,7 @@ mod surface_packet;
 mod swipe_to_dismiss_lazy;
 mod tab_lighting_rest_identity;
 mod text_field_live_edit;
+mod text_glyph_run_reuse;
 mod transient_pool;
 mod transparent_child;
 mod vertex_gradient_parity;
