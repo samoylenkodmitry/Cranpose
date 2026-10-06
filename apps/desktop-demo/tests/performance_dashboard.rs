@@ -1,5 +1,5 @@
 //! The Performance tab reads the run index the nightly publishes and shows
-//! the latest night, the trend, and the framework comparison.
+//! the latest night, the trend, and the framework comparison on each device.
 
 use std::rc::Rc;
 
@@ -7,8 +7,14 @@ use cranpose_testing::ComposeTestRule;
 use cranpose_ui::Size;
 use desktop_app::app::performance_dashboard::{PerfIndex, PerformanceDashboard};
 
-/// Two nights and one framework comparison, in `publish.py`'s index format.
+/// Two nights and framework comparisons on two devices, the phone's twice, in
+/// `publish.py`'s index format: oldest first.
 const INDEX: &str = r#"{"runs": [
+ {"file": "runs/d.json", "kind": "frameworks", "started_at": "2026-10-04T12:00:00+00:00",
+  "device": "EVR-AL00",
+  "subjects": [{"name": "compose", "label": "compose"}, {"name": "cranpose", "label": "cranpose"}],
+  "scenarios": {"gauntlet": {"legs": 4,
+    "summary": {"compose": {"fps": 4.7}, "cranpose": {"fps": 8.6}}, "verdicts": {}}}},
  {"file": "runs/a.json", "kind": "nightly", "started_at": "2026-10-05T01:30:00+00:00",
   "device": "EVR-AL00", "main": "aaaaaaaaa111", "release": "v0.9.7",
   "subjects": [{"name": "cranpose-release", "label": "v0.9.7"}, {"name": "cranpose", "label": "aaaaaaaaa"}],
@@ -33,7 +39,12 @@ const INDEX: &str = r#"{"runs": [
   "subjects": [{"name": "compose", "label": "BOM 2026.09.00"}, {"name": "cranpose", "label": "main"}],
   "scenarios": {"gauntlet": {"legs": 8,
     "summary": {"compose": {"fps": 26.5}, "cranpose": {"fps": 52.8}},
-    "verdicts": {"fps": "better", "cpu_ms_per_frame": "better", "desired_to_present_p50_ms": "worse"}}}}
+    "verdicts": {"fps": "better", "cpu_ms_per_frame": "better", "desired_to_present_p50_ms": "worse"}}}},
+ {"file": "runs/e.json", "kind": "frameworks", "started_at": "2026-10-06T06:40:00+00:00",
+  "device": "Apple M3 Pro",
+  "subjects": [{"name": "compose", "label": "compose"}, {"name": "egui", "label": "egui"}],
+  "scenarios": {"gauntlet": {"legs": 6,
+    "summary": {"compose": {"fps": 17.1}, "egui": {"fps": 55.7}}, "verdicts": {}}}}
 ]}"#;
 
 fn labels() -> Vec<String> {
@@ -85,4 +96,14 @@ fn the_frameworks_card_shows_each_frameworks_frame_rate() {
     let labels = labels();
     assert!(shows(&labels, "compose  26.5"), "{labels:?}");
     assert!(shows(&labels, "cranpose  52.8"), "{labels:?}");
+}
+
+#[test]
+fn each_device_shows_its_latest_framework_comparison() {
+    let labels = labels();
+    assert!(shows(&labels, "egui  55.7"), "the desktop run: {labels:?}");
+    assert!(
+        !shows(&labels, "compose  4.7"),
+        "the phone's older comparison gives way to its latest: {labels:?}"
+    );
 }

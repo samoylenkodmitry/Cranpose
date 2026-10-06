@@ -122,9 +122,10 @@ public static class PerfData
         new(1, 1.0f, 8, 6), new(2, 0.85f, 12, 8), new(2, 0.7f, 16, 10), new(3, 0.6f, 20, 12),
         new(3, 0.5f, 28, 14), new(4, 0.45f, 36, 16), new(4, 0.4f, 44, 20), new(5, 0.35f, 56, 24),
         new(6, 0.3f, 72, 28), new(7, 0.27f, 96, 32), new(8, 0.25f, 120, 40), new(10, 0.2f, 160, 48),
+        new(12, 0.18f, 200, 56), new(14, 0.16f, 240, 64), new(16, 0.14f, 300, 72), new(20, 0.12f, 400, 80),
     ];
 
-    /// <summary>Tier 1 to 12; anything else is clamped into that range.</summary>
+    /// <summary>Tier 1 to 16; anything else is clamped into that range.</summary>
     public static Tier GauntletTier(int tier) => Tiers[Math.Clamp(tier, 1, Tiers.Length) - 1];
 
     public sealed record Ticker(string Symbol, int BaseCents, int SwingCents, int Step, int Phase);

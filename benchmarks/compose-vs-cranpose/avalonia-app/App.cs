@@ -11,7 +11,7 @@ namespace PerfAvalonia;
 /// <summary>What `am start` asked of the gauntlet.</summary>
 public static class Launch
 {
-    /// <summary>Load tier, 1 to 12.</summary>
+    /// <summary>Load tier, 1 to 16.</summary>
     public static int Tier { get; set; } = 5;
 
     /// <summary>Stop on this frame and hold still, for picture comparisons; 0 runs on.</summary>

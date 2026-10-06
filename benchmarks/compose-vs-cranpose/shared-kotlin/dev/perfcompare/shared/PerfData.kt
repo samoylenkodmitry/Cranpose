@@ -149,9 +149,13 @@ val GAUNTLET_TIERS = listOf(
     GauntletTier(columns = 7, scale = 0.27f, tickers = 96, depth = 32),
     GauntletTier(columns = 8, scale = 0.25f, tickers = 120, depth = 40),
     GauntletTier(columns = 10, scale = 0.2f, tickers = 160, depth = 48),
+    GauntletTier(columns = 12, scale = 0.18f, tickers = 200, depth = 56),
+    GauntletTier(columns = 14, scale = 0.16f, tickers = 240, depth = 64),
+    GauntletTier(columns = 16, scale = 0.14f, tickers = 300, depth = 72),
+    GauntletTier(columns = 20, scale = 0.12f, tickers = 400, depth = 80),
 )
 
-/** Tier `1..12`; anything else is clamped into that range. */
+/** Tier `1..16`; anything else is clamped into that range. */
 fun gauntletTier(tier: Int): GauntletTier = GAUNTLET_TIERS[tier.coerceIn(1, GAUNTLET_TIERS.size) - 1]
 
 /** Card rows between two deep clusters in the list. */

@@ -129,6 +129,10 @@ const gauntletTiers = [
   GauntletTier(7, 0.27, 96, 32),
   GauntletTier(8, 0.25, 120, 40),
   GauntletTier(10, 0.2, 160, 48),
+  GauntletTier(12, 0.18, 200, 56),
+  GauntletTier(14, 0.16, 240, 64),
+  GauntletTier(16, 0.14, 300, 72),
+  GauntletTier(20, 0.12, 400, 80),
 ];
 
 GauntletTier gauntletTier(int tier) => gauntletTiers[tier.clamp(1, gauntletTiers.length) - 1];

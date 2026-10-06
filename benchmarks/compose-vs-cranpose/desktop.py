@@ -7,7 +7,9 @@ Roboto files in `PERF_FONTS`; Cranpose takes them as `--tier=N` arguments and
 the web page in its address. `FrameCount.app` counts the frames the app's
 window presents, the way SurfaceFlinger counts a phone app's, and `ps`
 counts the CPU time of the app and every process it started. The apps are
-measured in turn, round after round, as `frameworks.py` measures phones.
+measured in turn, round after round, as `frameworks.py` measures phones, and
+the run is a `frameworks` run `scripts/perf/publish.py` publishes. A leg in
+which other processes spent more than `--max-others` cores is measured again.
 
   python3 desktop.py --output results/desktop --tier 12
   python3 desktop.py --output results/desktop-parity --parity --tier 5
@@ -28,11 +30,15 @@ import os
 import shutil
 import signal
 import socketserver
+import statistics
 import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+
+from PIL import Image
 
 from parity import compare_pair
 
@@ -40,6 +46,8 @@ HERE = Path(__file__).resolve().parent
 FONTS = HERE / 'fonts'
 FRAMECOUNT = Path.home() / 'Applications/FrameCount.app'
 CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+# `perf-data`'s `DESKTOP_WINDOW`, in points.
+DESKTOP_WINDOW = (1280, 820)
 # The window's title bar at the display's 2x scale, which pictures leave out.
 TITLE_BAR_PIXELS = 64
 
@@ -84,7 +92,7 @@ def serve_page():
 
 
 def cpu_seconds(root):
-    """CPU time of `root` and every process below it."""
+    """CPU time of `root` and every process below it, and of all processes."""
     table = subprocess.run(['ps', '-A', '-o', 'pid=,ppid=,time='], capture_output=True, text=True,
                            check=True).stdout
     children, times = {}, {}
@@ -100,7 +108,7 @@ def cpu_seconds(root):
         pid = pending.pop()
         total += times.get(pid, 0.0)
         pending.extend(children.get(pid, []))
-    return total
+    return total, sum(times.values())
 
 
 def wait_for(log, text, timeout):
@@ -196,21 +204,25 @@ def measure(name, args, work, page, stage):
     try:
         wait_for(app.log, 'PERF first_frame', args.timeout)
         time.sleep(args.warmup)
-        cpu_before, wall_before = cpu_seconds(app.pid), time.monotonic()
+        (app_before, all_before), wall_before = cpu_seconds(app.pid), time.monotonic()
         out = stage / f'{name}-frames.json'
         frames = framecount(app.pid, out, '--seconds', str(args.seconds), '--out', str(out))
-        cpu_after, wall_after = cpu_seconds(app.pid), time.monotonic()
+        (app_after, all_after), wall_after = cpu_seconds(app.pid), time.monotonic()
         shutil.copy(out, work / out.name)
     finally:
         app.stop()
     # FrameCount starts and stops around its window, so CPU counts as a rate
-    # over the whole span and divides by the frame rate.
-    cores = (cpu_after - cpu_before) / (wall_after - wall_before)
+    # over the whole span and divides by the frame rate. What every other
+    # process spent in the span, FrameCount's capture included, tells a run
+    # that something else disturbed.
+    wall = wall_after - wall_before
+    cores = (app_after - app_before) / wall
+    others = (all_after - all_before) / wall - cores
     fps = frames['fps']
     return {'fps': round(fps, 1), 'frames': frames['frames'],
             'interval_p50_ms': round(frames['interval_p50_ms'], 2),
             'interval_p99_ms': round(frames['interval_p99_ms'], 2),
-            'cpu_cores': round(cores, 2),
+            'cpu_cores': round(cores, 2), 'other_cores': round(others, 2),
             'cpu_ms_per_frame': round(cores * 1000 / fps, 2) if fps else None}
 
 
@@ -222,7 +234,8 @@ def picture(name, args, work, page, stage):
         time.sleep(0.5)
         out = stage / f'{name}.png'
         framecount(app.pid, out, '--screenshot', str(out))
-        return shutil.copy(out, work / out.name)
+        shutil.copy(out, work / out.name)
+        return Image.open(out).convert('RGB')
     finally:
         app.stop()
 
@@ -233,10 +246,12 @@ def main():
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--apps', default=','.join(APPS))
     parser.add_argument('--tier', type=int, default=12)
-    parser.add_argument('--rounds', type=int, default=2)
+    parser.add_argument('--rounds', type=int, default=3)
     parser.add_argument('--seconds', type=float, default=5.0)
     parser.add_argument('--warmup', type=float, default=2.0)
     parser.add_argument('--timeout', type=float, default=60.0)
+    parser.add_argument('--max-others', type=float, default=1.5,
+                        help='cores other processes may spend in a leg before it is measured again')
     parser.add_argument('--parity', action='store_true')
     parser.add_argument('--freeze', type=int, default=120)
     parser.add_argument('--shift', type=int, default=8)
@@ -246,14 +261,15 @@ def main():
     args = parser.parse_args()
     apps = args.apps.split(',')
     args.output.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
     page = serve_page()
     with tempfile.TemporaryDirectory(prefix='gauntlet-') as folder:
         stage = Path(folder)
         shutil.copytree(FONTS, stage / 'fonts')
         report = run(args, apps, page, stage)
-    report['date'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    report['duration_s'] = round(time.monotonic() - started)
     (args.output / 'report.json').write_text(json.dumps(report, indent=1))
-    print(json.dumps(report.get('apps', report.get('changed_pct'))))
+    print(json.dumps(report['scenarios'][0]['summary'] if 'scenarios' in report else report['changed_pct']))
 
 
 def run(args, apps, page, stage):
@@ -262,24 +278,45 @@ def run(args, apps, page, stage):
         pictures = {name: picture(name, args, args.output, page, stage) for name in apps}
         reference, results = apps[0], {}
         for name in apps[1:]:
-            (_, changed_a, *_), (_, changed_b, *_) = compare_pair(
+            (_, changed_a, first, second, heat_a), (_, changed_b, _, _, heat_b) = compare_pair(
                 pictures[name], pictures[reference], TITLE_BAR_PIXELS, args.shift, args.tile,
                 args.tile_delta, args.drift)
+            side = Image.new('RGB', (first.width * 4, first.height))
+            for index, image in enumerate((first, second, heat_a, heat_b)):
+                side.paste(image.convert('RGB'), (first.width * index, 0))
+            side.save(args.output / f'{name}-side-by-side.png')
             results[name] = round(max(changed_a, changed_b), 3)
             print(f'{name:10} {results[name]:6.2f}% of tiles changed against {reference}', flush=True)
         return {'kind': 'desktop-parity', 'tier': args.tier, 'freeze': args.freeze,
                 'reference': reference, 'changed_pct': results}
-    legs = {name: [] for name in apps}
+    started_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    legs = []
     for round_index in range(args.rounds):
         for name in apps:
-            leg = measure(name, args, args.output, page, stage)
-            legs[name].append(leg)
-            print(f'round {round_index + 1} {name:10} fps {leg["fps"]:6.1f} '
-                  f'cpu/f {leg["cpu_ms_per_frame"]} p99 {leg["interval_p99_ms"]}', flush=True)
-    return {'kind': 'desktop', 'tier': args.tier, 'seconds': args.seconds, 'legs': legs,
-            'apps': {name: {key: round(sum(leg[key] or 0 for leg in runs) / len(runs), 2)
-                            for key in ('fps', 'cpu_ms_per_frame', 'cpu_cores')}
-                     for name, runs in legs.items()}}
+            for _ in range(3):
+                leg = measure(name, args, args.output, page, stage)
+                print(f'round {round_index + 1} {name:10} fps {leg["fps"]:6.1f} '
+                      f'cpu/f {leg["cpu_ms_per_frame"]} p99 {leg["interval_p99_ms"]} '
+                      f'others {leg["other_cores"]}', flush=True)
+                if leg['other_cores'] <= args.max_others:
+                    break
+            legs.append({'subject': name, 'round': round_index, **leg})
+    summary = {name: {key: round(statistics.median(leg[key] or 0 for leg in legs if leg['subject'] == name), 2)
+                      for key in ('fps', 'cpu_ms_per_frame', 'cpu_cores', 'other_cores')}
+               for name in apps}
+    chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
+                          check=True).stdout.strip()
+    width, height = DESKTOP_WINDOW
+    return {
+        'kind': 'frameworks',
+        'started_at': started_at,
+        'device': {'ro.product.model': chip},
+        'subjects': [{'name': name, 'label': name} for name in apps],
+        'protocol': {'warmup_s': args.warmup, 'window_s': args.seconds, 'rounds': args.rounds,
+                     'max_other_cores': args.max_others},
+        'scenarios': [{'scenario': 'gauntlet', 'extras': f'tier {args.tier}, {width} x {height} window',
+                       'legs': legs, 'summary': summary, 'verdicts': {}}],
+    }
 
 
 if __name__ == '__main__':

@@ -89,7 +89,7 @@ private const val SCROLL_PER_FRAME = 3f
 /** What `am start` asked of the gauntlet. */
 @Immutable
 data class GauntletLoad(
-    /** Load tier, 1 to 12. */
+    /** Load tier, 1 to 16. */
     val tier: Int,
     /** Stop on this frame and hold still, for picture comparisons; 0 runs on. */
     val freeze: Int,

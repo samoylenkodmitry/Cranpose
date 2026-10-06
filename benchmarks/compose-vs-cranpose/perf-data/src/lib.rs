@@ -353,7 +353,7 @@ pub struct GauntletTier {
     pub depth: usize,
 }
 
-pub const GAUNTLET_TIERS: [GauntletTier; 12] = [
+pub const GAUNTLET_TIERS: [GauntletTier; 16] = [
     GauntletTier {
         columns: 1,
         scale: 1.0,
@@ -426,6 +426,30 @@ pub const GAUNTLET_TIERS: [GauntletTier; 12] = [
         tickers: 160,
         depth: 48,
     },
+    GauntletTier {
+        columns: 12,
+        scale: 0.18,
+        tickers: 200,
+        depth: 56,
+    },
+    GauntletTier {
+        columns: 14,
+        scale: 0.16,
+        tickers: 240,
+        depth: 64,
+    },
+    GauntletTier {
+        columns: 16,
+        scale: 0.14,
+        tickers: 300,
+        depth: 72,
+    },
+    GauntletTier {
+        columns: 20,
+        scale: 0.12,
+        tickers: 400,
+        depth: 80,
+    },
 ];
 
 /// The window every desktop app opens for the gauntlet, in logical points.
@@ -436,7 +460,7 @@ pub const DESKTOP_WINDOW: (u32, u32) = (1280, 820);
 /// desktop, `desktop.py` sets `PERF_TIER` and `PERF_FREEZE`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Launch {
-    /// Load tier, 1 to 12.
+    /// Load tier, 1 to 16.
     pub tier: usize,
     /// Stop on this frame and hold still, for picture comparisons; 0 runs on.
     pub freeze: u32,
@@ -506,7 +530,7 @@ pub fn log_to_stdout() {
     }
 }
 
-/// Tier `1..=12`; anything else is clamped into that range.
+/// Tier `1..=16`; anything else is clamped into that range.
 pub fn gauntlet_tier(tier: usize) -> GauntletTier {
     GAUNTLET_TIERS[tier.clamp(1, GAUNTLET_TIERS.len()) - 1]
 }

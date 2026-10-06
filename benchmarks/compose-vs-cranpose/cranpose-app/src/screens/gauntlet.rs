@@ -44,7 +44,7 @@ const SCROLL_PER_FRAME: f32 = 3.0;
 /// What `am start` asked of the gauntlet.
 #[derive(Clone, Copy, PartialEq)]
 pub struct GauntletLoad {
-    /// Load tier, 1 to 12.
+    /// Load tier, 1 to 16.
     pub tier: usize,
     /// Stop on this frame and hold still, for picture comparisons; 0 runs on.
     pub freeze: u32,

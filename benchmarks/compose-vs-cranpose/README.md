@@ -126,6 +126,10 @@ animation frame; sparklines are SVG paths in a box CSS stretches.
 | 10 | 7 | 0.27 | 96 | 32 |
 | 11 | 8 | 0.25 | 120 | 40 |
 | 12 | 10 | 0.2 | 160 | 48 |
+| 13 | 12 | 0.18 | 200 | 56 |
+| 14 | 14 | 0.16 | 240 | 64 |
+| 15 | 16 | 0.14 | 300 | 72 |
+| 16 | 20 | 0.12 | 400 | 80 |
 
 Calibration fixes one tier per device: the heaviest every framework draws
 below 60 fps. The Huawei Mate 20 X runs tier 12, since egui held 60 fps there
@@ -470,6 +474,30 @@ What each framework lacks and how its app does without:
   app reads a removable volume, so the fonts and Chrome's profile sit in a
   temporary folder.
 
+The M3 Pro is many times faster than the Mate, so the desktop runs tier 16:
+at tier 12 egui, iced and the web page held 55 to 59 fps, and egui's cost
+grows little with the tier (54 fps at tiers 15 and 16 alike). The pictures
+match Compose's at tier 5 within 1.83% (GPUI) and 0.35% (Cranpose). On
+2026-10-06, Apple M3 Pro, 60 Hz display, medians of three rounds of 8 s:
+
+| App | fps | CPU ms per frame | Cores |
+| --- | ---: | ---: | ---: |
+| egui | 56.3 | 15.7 | 0.87 |
+| iced | 45.1 | 22.8 | 1.03 |
+| Web | 33.8 | 56.2 | 1.90 |
+| Flutter | 23.6 | 66.5 | 1.57 |
+| Slint | 21.7 | 47.2 | 1.02 |
+| Cranpose | 21.4 | 73.3 | 1.58 |
+| GPUI | 18.4 | 54.7 | 1.00 |
+| Avalonia | 17.3 | 88.3 | 1.53 |
+| Compose | 16.6 | 97.9 | 1.64 |
+| SwiftUI | 8.6 | 114.5* | 0.98 |
+
+\* SwiftUI hands its layers to the window server, whose CPU the count leaves
+out: other processes spent about 1 core during SwiftUI's legs, against
+0.3 to 0.8 during the others'. GPUI drew one line of text 1.618 em high
+until its root set the other apps' 1.4 em, which moved every card row.
+
 FrameCount needs the Screen Recording permission once: `framecount/build.sh`
 signs it with a requirement on its bundle identifier, so rebuilds keep it.
 
@@ -489,7 +517,7 @@ adb pull /system/fonts/Roboto-Bold.ttf benchmarks/compose-vs-cranpose/fonts/
 (cd benchmarks/compose-vs-cranpose/flutter-app && flutter build macos --release)
 (cd benchmarks/compose-vs-cranpose/compose-desktop-app && ./gradlew createDistributable)
 (cd benchmarks/compose-vs-cranpose/web-app && npm ci && npx tsc -p tsconfig.json)
-python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 12
+python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```
 

@@ -12,9 +12,9 @@ use std::{borrow::Cow, sync::Arc};
 
 use gpui::{
     AnyElement, App, AppContext, Background, Bounds, BoxShadow, Context, FontWeight, Hsla,
-    ImageSource, IntoElement, ListAlignment, ListState, ParentElement, PathBuilder, Pixels, Point,
-    Render, RenderImage, Rgba, SharedString, Styled, TitlebarOptions, Window, WindowBounds,
-    WindowOptions, canvas, div, img, linear_color_stop, linear_gradient, list, point,
+    ImageSource, IntoElement, ListAlignment, ListOffset, ListState, ParentElement, PathBuilder,
+    Pixels, Point, Render, RenderImage, Rgba, SharedString, Styled, TitlebarOptions, Window,
+    WindowBounds, WindowOptions, canvas, div, img, linear_color_stop, linear_gradient, list, point,
     prelude::FluentBuilder, px, relative, size,
 };
 use perf_data::*;
@@ -165,6 +165,8 @@ struct Gauntlet {
     avatars: Arc<Vec<Arc<RenderImage>>>,
     badge: Arc<Option<BadgeText>>,
     list: ListState,
+    /// The first row the list shows and its top in the list's content.
+    anchor: (usize, Pixels),
 }
 
 impl Gauntlet {
@@ -194,6 +196,7 @@ impl Gauntlet {
             avatars: Arc::new(avatars),
             badge: Arc::new(badge),
             list,
+            anchor: (0, px(0.0)),
         }
     }
 
@@ -600,7 +603,20 @@ impl Render for Gauntlet {
         }
         if !self.frozen {
             self.frame += 1;
-            self.list.scroll_by(px(SCROLL_PER_FRAME));
+            // The list scrolls to the frame's offset from the top: rows the
+            // last frame laid out above it move the anchor down.
+            let offset = px(self.frame as f32 * SCROLL_PER_FRAME);
+            while let Some(bounds) = self.list.bounds_for_item(self.anchor.0) {
+                let (row, top) = self.anchor;
+                if top + bounds.size.height > offset {
+                    break;
+                }
+                self.anchor = (row + 1, top + bounds.size.height);
+            }
+            self.list.scroll_to(ListOffset {
+                item_ix: self.anchor.0,
+                offset_in_item: offset - self.anchor.1,
+            });
             if self.load.freeze > 0 && self.frame >= self.load.freeze {
                 self.frozen = true;
                 log::info!("PERF frozen frame={}", self.frame);
@@ -622,6 +638,9 @@ impl Render for Gauntlet {
             .flex()
             .flex_col()
             .font_family("Roboto")
+            // Lines 1.4 em apart, as the other apps set them: GPUI's own
+            // default is 1.618 em.
+            .line_height(relative(1.4))
             .bg(hex(0xEEF0F5))
             .child(
                 div()

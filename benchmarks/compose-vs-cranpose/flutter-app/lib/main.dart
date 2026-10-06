@@ -53,7 +53,7 @@ void _perf(String line) {
 
 /// What `am start` asked of the gauntlet: tier and freeze frame, as arguments.
 class GauntletLoad {
-  /// Load tier, 1 to 12.
+  /// Load tier, 1 to 16.
   final GauntletTier tier;
 
   /// Stop on this frame and hold still, for picture comparisons; 0 runs on.

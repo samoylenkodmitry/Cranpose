@@ -12,11 +12,13 @@ import androidx.compose.ui.graphics.asComposeImageBitmap
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.platform.Font
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberWindowState
 import dev.perfcompare.shared.AVATAR_SIZE
 import dev.perfcompare.shared.avatarArgb
-import java.awt.Dimension
 import java.io.File
 import org.jetbrains.skia.Bitmap
 import org.jetbrains.skia.ColorAlphaType
@@ -63,10 +65,13 @@ fun main() = application {
         freeze = environment["PERF_FREEZE"]?.toIntOrNull() ?: 0,
     )
     var firstFrameLogged = false
-    Window(onCloseRequest = ::exitApplication, title = "Gauntlet", resizable = false) {
+    val state = rememberWindowState(size = DpSize(1280.dp, 820.dp))
+    Window(onCloseRequest = ::exitApplication, state = state, title = "Gauntlet", resizable = false) {
         LaunchedEffect(Unit) {
-            window.contentPane.preferredSize = Dimension(1280, 820)
-            window.pack()
+            // The window's size counts its title bar: it grows by the
+            // window's insets, so the content is 1280 x 820.
+            val insets = window.insets
+            state.size = DpSize((1280 + insets.left + insets.right).dp, (820 + insets.top + insets.bottom).dp)
         }
         Column(
             Modifier

@@ -85,8 +85,20 @@ impl PerfIndex {
             .collect()
     }
 
-    fn latest_framework_run(&self) -> Option<&PerfRun> {
-        self.runs.iter().rev().find(|run| run.compares_frameworks())
+    /// The latest framework comparison on each device, the newest first.
+    fn latest_framework_runs(&self) -> Vec<&PerfRun> {
+        let mut devices = Vec::new();
+        self.runs
+            .iter()
+            .rev()
+            .filter(|run| {
+                let first = run.compares_frameworks() && !devices.contains(&run.device.as_str());
+                if first {
+                    devices.push(run.device.as_str());
+                }
+                first
+            })
+            .collect()
     }
 }
 
@@ -237,7 +249,7 @@ pub fn PerformanceDashboard(index: Rc<PerfIndex>, refresh: Option<MutableState<u
                     );
                 }
             }
-            if let Some(run) = index.latest_framework_run() {
+            for run in index.latest_framework_runs() {
                 Frameworks(palette, run.clone());
             }
         },

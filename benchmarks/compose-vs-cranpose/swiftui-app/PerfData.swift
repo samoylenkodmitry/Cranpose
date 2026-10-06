@@ -114,9 +114,13 @@ enum PerfData {
         Tier(columns: 4, scale: 0.4, tickers: 44, depth: 20), Tier(columns: 5, scale: 0.35, tickers: 56, depth: 24),
         Tier(columns: 6, scale: 0.3, tickers: 72, depth: 28), Tier(columns: 7, scale: 0.27, tickers: 96, depth: 32),
         Tier(columns: 8, scale: 0.25, tickers: 120, depth: 40), Tier(columns: 10, scale: 0.2, tickers: 160, depth: 48),
+        Tier(columns: 12, scale: 0.18, tickers: 200, depth: 56),
+        Tier(columns: 14, scale: 0.16, tickers: 240, depth: 64),
+        Tier(columns: 16, scale: 0.14, tickers: 300, depth: 72),
+        Tier(columns: 20, scale: 0.12, tickers: 400, depth: 80),
     ]
 
-    /// Tier 1 to 12; anything else is clamped into that range.
+    /// Tier 1 to 16; anything else is clamped into that range.
     static func tier(_ tier: Int) -> Tier { tiers[min(max(tier, 1), tiers.count) - 1] }
 
     struct Ticker {
