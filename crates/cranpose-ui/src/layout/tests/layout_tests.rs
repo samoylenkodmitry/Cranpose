@@ -2204,7 +2204,7 @@ fn parent_data_uses_resolved_layout_properties() {
         cranpose_ui_layout::ParentData::default(),
         "a child reports no parent data outside its parent's measure"
     );
-    frame.bind(&builder.state);
+    frame.bind(&builder.state, ChildPass::Measure);
 
     let parent_data = measurable
         .flex_parent_data()
