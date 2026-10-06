@@ -1,9 +1,23 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use crate::{Composer, ComposerCore};
 
 thread_local! {
     static CURRENT_COMPOSER: RefCell<Option<Rc<ComposerCore>>> = const { RefCell::new(None) };
+}
+
+/// How many threads have a composer installed. Code outside any
+/// composition, as a draw closure's branch guards are, reads this instead of
+/// the thread-local, which costs a call into the platform on Android.
+static INSTALLED_COMPOSERS: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether any thread may have a composer: `false` means this one has none.
+fn any_composer_installed() -> bool {
+    INSTALLED_COMPOSERS.load(Ordering::Relaxed) != 0
 }
 
 /// Restores the previous composer when its scope ends.
@@ -27,7 +41,18 @@ pub fn enter(composer: &Composer) -> ComposerScopeGuard {
 }
 
 fn replace_current(composer: Option<Rc<ComposerCore>>) -> Option<Rc<ComposerCore>> {
-    CURRENT_COMPOSER.with(|current| current.replace(composer))
+    let installs = composer.is_some();
+    let previous = CURRENT_COMPOSER.with(|current| current.replace(composer));
+    match (previous.is_some(), installs) {
+        (false, true) => {
+            INSTALLED_COMPOSERS.fetch_add(1, Ordering::Relaxed);
+        }
+        (true, false) => {
+            INSTALLED_COMPOSERS.fetch_sub(1, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+    previous
 }
 
 pub(crate) fn without_composer<R>(f: impl FnOnce() -> R) -> R {
@@ -54,11 +79,17 @@ pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
 }
 
 pub(crate) fn with_current_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option<R> {
+    if !any_composer_installed() {
+        return None;
+    }
     CURRENT_COMPOSER.with(|current| current.borrow().as_deref().map(f))
 }
 
 /// Return the current thread's composer.
 pub fn current_composer() -> Option<Composer> {
+    if !any_composer_installed() {
+        return None;
+    }
     CURRENT_COMPOSER.with(|current| {
         let core = current.borrow().as_ref()?.clone();
         Some(Composer::from_core(core))
