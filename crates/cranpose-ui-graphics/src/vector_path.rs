@@ -289,19 +289,12 @@ impl PathFillRule {
     /// Hands `span` each run of a sample line that lies inside the fill,
     /// from `crossings` sorted left to right.
     fn for_each_span(self, crossings: &[(f32, &Edge)], mut span: impl FnMut(f32, f32)) {
-        let inside = |winding: i32| match self {
-            Self::NonZero => winding != 0,
-            Self::EvenOdd => winding % 2 != 0,
-        };
         let mut winding = 0i32;
         let mut span_start = 0.0f32;
         for &(x, edge) in crossings {
-            let was_inside = inside(winding);
-            winding += match self {
-                Self::NonZero => edge.winding,
-                Self::EvenOdd => 1,
-            };
-            match (was_inside, inside(winding)) {
+            let was_inside = self.contains(winding);
+            winding += edge.winding;
+            match (was_inside, self.contains(winding)) {
                 (false, true) => span_start = x,
                 (true, false) => span(span_start, x),
                 _ => {}

@@ -25,8 +25,8 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, FRAGMENT_KIND_ARC, FRAGMENT_KIND_FILL, FRAGMENT_KIND_LINE,
-    FRAGMENT_KIND_STROKE, FxHasher, ImageBitmap, ImageSampling, Point, RecordLane, RecordSegment,
-    Rect, RenderHash, TileMode,
+    FRAGMENT_KIND_STROKE, FRAGMENT_KIND_TRAPEZOID, FxHasher, ImageBitmap, ImageSampling, Point,
+    RecordLane, RecordSegment, Rect, RenderHash, TileMode,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -877,8 +877,8 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
         if segment.lane != RecordLane::Shapes {
             continue;
         }
-        let exact_placement = !canonicalize
-            || segment.kinds & ((1u8 << FRAGMENT_KIND_ARC) | (1u8 << FRAGMENT_KIND_LINE)) != 0;
+        let exact_placement =
+            !canonicalize || segment.kinds & ((1u8 << FRAGMENT_KIND_ARC) | LINE_KINDS) != 0;
         exact_placement.hash(state);
         if exact_placement {
             for value in [offset.x, offset.y, origin_x, origin_y, root_scale] {
@@ -1173,25 +1173,33 @@ const FLAT_FILL_ENTRIES: [[(&str, &str); 2]; 2] = [
     ],
 ];
 
-const ALL_SHAPE_KINDS: u8 = (1 << FRAGMENT_KIND_FILL)
-    | (1 << FRAGMENT_KIND_STROKE)
-    | (1 << FRAGMENT_KIND_ARC)
-    | (1 << FRAGMENT_KIND_LINE);
-const LINE_KIND: u8 = 1 << FRAGMENT_KIND_LINE;
+/// The entry points of a variant that draws slices of path fills alone and
+/// flat: a solid brush, and a gradient between two stops from the vertices.
+const SLICE_ENTRIES: [(&str, &str); 2] = [
+    ("vs_record_slice", "fs_slice"),
+    ("vs_record_gradient_slice", "fs_gradient_slice"),
+];
+
+const ALL_SHAPE_KINDS: u8 =
+    (1 << FRAGMENT_KIND_FILL) | (1 << FRAGMENT_KIND_STROKE) | (1 << FRAGMENT_KIND_ARC) | LINE_KINDS;
+/// The kinds the shader draws from line records: segments, and slices of
+/// path fills. A variant compiles in the code of only those it draws.
+const LINE_KINDS: u8 = (1 << FRAGMENT_KIND_LINE) | TRAPEZOID_KIND;
+const TRAPEZOID_KIND: u8 = 1 << FRAGMENT_KIND_TRAPEZOID;
 
 fn variant_kinds(kinds: u8) -> u8 {
     if kinds.count_ones() <= 1 {
         kinds
-    } else if kinds & LINE_KIND != 0 {
-        ALL_SHAPE_KINDS
     } else {
-        ALL_SHAPE_KINDS & !LINE_KIND
+        (ALL_SHAPE_KINDS & !LINE_KINDS) | (kinds & LINE_KINDS)
     }
 }
 
 impl ShapeVariant {
+    /// Every kind but slices of path fills, which only a segment holding
+    /// them compiles in.
     const GENERAL: Self = Self {
-        kinds: ALL_SHAPE_KINDS,
+        kinds: ALL_SHAPE_KINDS & !TRAPEZOID_KIND,
         brush: None,
         solid: false,
         clip: SegmentClip::Tested,
@@ -1203,20 +1211,29 @@ impl ShapeVariant {
         },
     };
 
+    /// The variant `segment` draws with. `vertex_gradients` says a rect
+    /// fill may take its gradient from its vertices here; a segment of
+    /// slices of path fills may wherever it is drawn `flat`.
     pub(crate) fn of_segment(
         segment: &RecordSegment,
         clip: SegmentClip,
         ablation: ShapeAblation,
         laid: bool,
-        vertex_gradients: bool,
+        (flat, vertex_gradients): (bool, bool),
     ) -> Self {
         if !shape_variants_enabled() || clip == SegmentClip::Rounded {
             return Self {
+                kinds: Self::GENERAL.kinds | (segment.kinds & TRAPEZOID_KIND),
                 ablation,
                 ..Self::GENERAL
             }
             .clipped_by(clip);
         }
+        let vertex_gradients = if segment.kinds == TRAPEZOID_KIND {
+            flat
+        } else {
+            vertex_gradients
+        };
         let gradient = segment.gradient || (segment.vertex_gradient && !vertex_gradients);
         Self {
             kinds: variant_kinds(segment.kinds),
@@ -1234,8 +1251,13 @@ impl ShapeVariant {
         }
     }
 
+    /// The one kind the variant draws, as the shader's packed kind names
+    /// it: a slice of a path fill is a line record.
     fn kind(self) -> Option<u8> {
-        (self.kinds.count_ones() == 1).then(|| self.kinds.trailing_zeros() as u8)
+        (self.kinds.count_ones() == 1).then(|| match self.kinds.trailing_zeros() {
+            FRAGMENT_KIND_TRAPEZOID => FRAGMENT_KIND_LINE as u8,
+            kind => kind as u8,
+        })
     }
 
     /// The vertex and fragment entry points of this variant, for records
@@ -1244,6 +1266,8 @@ impl ShapeVariant {
         let fill = self.kind() == Some(FRAGMENT_KIND_FILL as u8);
         if self.rounded() {
             ("vs_record", "fs_main")
+        } else if self.solid && flat && self.kinds == TRAPEZOID_KIND {
+            SLICE_ENTRIES[usize::from(self.dither)]
         } else if self.solid && fill && flat {
             FLAT_FILL_ENTRIES[usize::from(self.clip == SegmentClip::Tested)]
                 [usize::from(self.dither)]
@@ -1258,7 +1282,7 @@ impl ShapeVariant {
 
     fn general(self) -> Self {
         Self {
-            kinds: (ALL_SHAPE_KINDS & !LINE_KIND) | (self.kinds & LINE_KIND),
+            kinds: (ALL_SHAPE_KINDS & !LINE_KINDS) | (self.kinds & LINE_KINDS),
             ablation: self.ablation,
             ..Self::GENERAL
         }
@@ -1450,6 +1474,9 @@ impl KeyWriter {
 }
 
 /// Unpacks what [`KeyWriter`] packed, low bit first.
+/// The bits a key's shape kinds take: one per fragment kind.
+const KIND_BITS: u32 = FRAGMENT_KIND_TRAPEZOID + 1;
+
 struct KeyReader(u64);
 
 impl KeyReader {
@@ -1470,13 +1497,15 @@ impl KeyReader {
     }
 
     fn take_kinds(&mut self) -> Option<u8> {
-        u8::try_from(self.take(4)).ok().filter(|kinds| *kinds != 0)
+        u8::try_from(self.take(KIND_BITS))
+            .ok()
+            .filter(|kinds| *kinds != 0)
     }
 }
 
 impl ShapePipelineKey {
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY002";
+    pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY003";
 
     /// The key as a number a later launch reads back with
     /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
@@ -1486,7 +1515,7 @@ impl ShapePipelineKey {
         bits.put(self.blend_mode as u64, 5);
         bits.put(self.tier as u64, 2);
         let variant = self.variant;
-        bits.put(u64::from(variant.kinds), 4);
+        bits.put(u64::from(variant.kinds), KIND_BITS);
         bits.put_byte(variant.brush);
         bits.put(u64::from(variant.solid), 1);
         bits.put(
@@ -2145,12 +2174,23 @@ struct CachedImageTexture {
 }
 
 impl CachedImageTexture {
-    fn bind_group(&self, sampling: ImageSampling) -> &wgpu::BindGroup {
-        match sampling {
-            ImageSampling::Nearest => &self.nearest_bind_group,
-            ImageSampling::Linear => &self.linear_bind_group,
+    fn binding(&self, sampling: ImageSampling) -> ImageBinding {
+        ImageBinding {
+            bind_group: match sampling {
+                ImageSampling::Nearest => self.nearest_bind_group.clone(),
+                ImageSampling::Linear => self.linear_bind_group.clone(),
+            },
+            alpha_mask: self.alpha_mask,
         }
     }
+}
+
+/// What an image's draw binds: its texture's bind group for the draw's
+/// sampling, which keeps the texture alive whatever the cache evicts before
+/// the pass is drawn, and whether the texture is an alpha mask.
+pub(crate) struct ImageBinding {
+    bind_group: wgpu::BindGroup,
+    alpha_mask: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -2444,8 +2484,7 @@ pub(crate) struct ImageVariant {
 pub(crate) struct ImageDrawCmd {
     index_start: u32,
     scissor: (u32, u32, u32, u32),
-    image_id: u64,
-    sampling: ImageSampling,
+    image: ImageBinding,
     /// The rounded clip whose coverage the image takes in place: its index
     /// among the pass's clip instances.
     clip: Option<u32>,
@@ -3686,9 +3725,15 @@ impl GpuRenderer {
         view
     }
 
-    fn ensure_image_cached(&mut self, image: &ImageBitmap) -> Result<(), String> {
-        if self.image_texture_cache.get(&image.id()).is_some() {
-            return Ok(());
+    /// The binding a draw of `image` sampled by `sampling` takes, uploading
+    /// the image the first time a draw needs it.
+    fn image_binding(
+        &mut self,
+        image: &ImageBitmap,
+        sampling: ImageSampling,
+    ) -> Result<ImageBinding, String> {
+        if let Some(cached) = self.image_texture_cache.get(&image.id()) {
+            return Ok(cached.binding(sampling));
         }
 
         let size = wgpu::Extent3d {
@@ -3741,17 +3786,16 @@ impl GpuRenderer {
         let linear_bind_group = self.image_bind_group(&view, &self.image_linear_sampler);
 
         let bytes = image.pixels().len();
-        if let Some(replaced) = self.image_texture_cache.put(
-            image.id(),
-            CachedImageTexture {
-                alpha_mask,
-                _texture: texture,
-                _view: view,
-                nearest_bind_group,
-                linear_bind_group,
-                bytes,
-            },
-        ) {
+        let cached = CachedImageTexture {
+            alpha_mask,
+            _texture: texture,
+            _view: view,
+            nearest_bind_group,
+            linear_bind_group,
+            bytes,
+        };
+        let binding = cached.binding(sampling);
+        if let Some(replaced) = self.image_texture_cache.put(image.id(), cached) {
             self.image_texture_cache_bytes = self
                 .image_texture_cache_bytes
                 .saturating_sub(replaced.bytes);
@@ -3766,7 +3810,7 @@ impl GpuRenderer {
             self.image_texture_cache_bytes =
                 self.image_texture_cache_bytes.saturating_sub(evicted.bytes);
         }
-        Ok(())
+        Ok(binding)
     }
 
     fn image_bind_group(
@@ -4969,9 +5013,12 @@ impl GpuRenderer {
                 clip,
                 ablation,
                 laid,
-                turns == ShapeTurns::None
-                    && placement.snap_anchor.is_some()
-                    && viewport.offset.iter().all(|value| value.fract() == 0.0),
+                (
+                    turns == ShapeTurns::None,
+                    turns == ShapeTurns::None
+                        && placement.snap_anchor.is_some()
+                        && viewport.offset.iter().all(|value| value.fract() == 0.0),
+                ),
             ),
             turns,
             depth: if depth {
@@ -5315,20 +5362,16 @@ impl GpuRenderer {
                 continue;
             };
             pass.set_scissor_rect(x, y, width, height);
-            let cached = self
-                .image_texture_cache
-                .peek(&cmd.image_id)
-                .ok_or_else(|| "image texture missing from cache".to_string())?;
             let variant = ImageVariant {
                 depth,
-                alpha_mask: cached.alpha_mask,
+                alpha_mask: cmd.image.alpha_mask,
                 rounded: cmd.clip.is_some(),
             };
             if bound_pipeline != Some(variant) {
                 pass.set_pipeline(self.image_pipeline(blend_mode, variant));
                 bound_pipeline = Some(variant);
             }
-            pass.set_bind_group(1, cached.bind_group(cmd.sampling), &[]);
+            pass.set_bind_group(1, &cmd.image.bind_group, &[]);
             let instance = match cmd.clip {
                 Some(clip) => {
                     if !clips_bound {
@@ -5457,7 +5500,6 @@ impl GpuRenderer {
             .map(|filter| apply_filter_to_bitmap(&image_draw.image, filter))
             .transpose()?;
         let prepared_image = filtered_image.as_ref().unwrap_or(&image_draw.image);
-        self.ensure_image_cached(prepared_image)?;
         if let cranpose_ui_graphics::ImagePixelFormat::Alpha8 { color } = prepared_image.format() {
             for (channel, value) in tint[..3].iter_mut().zip(color) {
                 *channel *= value as f32 / 255.0;
@@ -5484,8 +5526,7 @@ impl GpuRenderer {
         image_cmds.push(ImageDrawCmd {
             index_start,
             scissor,
-            image_id: prepared_image.id(),
-            sampling: geometry.sampling,
+            image: self.image_binding(prepared_image, geometry.sampling)?,
             clip,
         });
         Ok(())
@@ -6065,8 +6106,6 @@ impl GpuRenderer {
             return Ok(());
         }
 
-        self.ensure_image_cached(image)?;
-
         let (device_quad, scissor_rect) =
             if sampling == ImageSampling::Nearest && root_scale.is_finite() && root_scale > 0.0 {
                 let left_px = (rect.x * root_scale).round();
@@ -6113,8 +6152,7 @@ impl GpuRenderer {
         image_cmds.push(ImageDrawCmd {
             index_start,
             scissor,
-            image_id: image.id(),
-            sampling,
+            image: self.image_binding(image, sampling)?,
             clip: None,
         });
         Ok(())

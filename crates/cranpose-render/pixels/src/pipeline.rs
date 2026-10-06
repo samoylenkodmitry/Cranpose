@@ -1023,22 +1023,8 @@ fn push_shadow_primitive(
         blend_mode: BlendMode,
     ) -> Option<(crate::scene::DrawShape, BlendMode)> {
         let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
-        Some((
-            crate::scene::DrawShape {
-                rect: params.rect,
-                snap_anchor: None,
-                snap_to_pixel_grid: false,
-                brush: params.brush.into_brush(),
-                shape: params.shape,
-                stroke: params.stroke,
-                arc: params.arc,
-                line: params.line,
-                z_index: 0,
-                clip: params.clip,
-                blend_mode: params.blend_mode,
-            },
-            params.blend_mode,
-        ))
+        let blend_mode = params.blend_mode;
+        Some((crate::scene::DrawShape::of_params(params, 0), blend_mode))
     }
 
     match shadow_prim {

@@ -10,7 +10,7 @@ use bytemuck::{Pod, Zeroable};
 use crate::{
     ArcGeometry, BlendMode, Brush, Color, CornerRadii, DrawPrimitive, FxHasher, LineGeometry,
     Point, Rect, RenderHash, ShapeRecordBody, ShapeRecordCurve, ShapeRecords, Stroke, StrokeCap,
-    StrokeJoin, TAU, TileMode, arc_band,
+    StrokeJoin, TAU, TileMode, Trapezoid, arc_band,
     float::{at_least, within},
     vertex_gradient,
 };
@@ -21,8 +21,12 @@ pub const RECORD_KIND_RECT: u32 = 0;
 pub const RECORD_KIND_ROUND_RECT: u32 = 1;
 /// The kind bits of [`ShapeRecord::flags`]: an arc band or annular sector.
 pub const RECORD_KIND_ARC: u32 = 2;
-/// The kind bits of [`ShapeRecord::flags`]: a stroked straight segment.
+/// The kind bits of [`ShapeRecord::flags`]: a stroked straight segment, or
+/// a slice of a path fill, whose cap bits are [`TRAPEZOID_CAP`].
 pub const RECORD_KIND_LINE: u32 = 3;
+/// The cap bits of a line record that is a slice of a path fill: no stroke
+/// cap takes them. Its join bits hold which of its sides are open.
+pub const TRAPEZOID_CAP: u32 = 3;
 
 const KIND_SHIFT: u32 = 0;
 const STROKED_BIT: u32 = 1 << 2;
@@ -36,6 +40,8 @@ const ARC_BANDED_BIT: u32 = 1 << 20;
 const BAND_CLASS_SHIFT: u32 = 21;
 const BAND_CLASS_MASK: u32 = 0b111;
 const VERTEX_GRADIENT_BIT: u32 = 1 << 24;
+const OPEN_LEFT_BIT: u32 = 1 << JOIN_SHIFT;
+const OPEN_RIGHT_BIT: u32 = 2 << JOIN_SHIFT;
 const RECT_FILL_MASK: u32 = STROKED_BIT | (RECORD_KIND_ARC << KIND_SHIFT);
 const NO_SEGMENT_KEY: u32 = u32::MAX;
 
@@ -274,11 +280,12 @@ pub fn band_pays(geometry: &ArcGeometry, rect: Rect) -> bool {
 }
 
 /// The fragment program's shape kinds: a filled rect or round rect, a
-/// stroked one, an arc band and a line segment.
+/// stroked one, an arc band, a line segment and a slice of a path fill.
 pub const FRAGMENT_KIND_FILL: u32 = 0;
 pub const FRAGMENT_KIND_STROKE: u32 = 1;
 pub const FRAGMENT_KIND_ARC: u32 = 2;
 pub const FRAGMENT_KIND_LINE: u32 = 3;
+pub const FRAGMENT_KIND_TRAPEZOID: u32 = 4;
 
 const TWO_BITS: u32 = 0b11;
 const BLEND_MASK: u32 = 0xff;
@@ -438,11 +445,25 @@ impl ShapeRecord {
 
     /// The segment the fragment stage draws; `None` for any other kind.
     pub fn line_geometry(&self) -> Option<LineGeometry> {
-        (self.kind() == RECORD_KIND_LINE).then(|| LineGeometry {
+        (self.kind() == RECORD_KIND_LINE && !is_trapezoid(self.flags)).then(|| LineGeometry {
             start: Point::new(self.arc[0], self.arc[1]),
             end: Point::new(self.arc_band[2], self.arc_band[3]),
             half_width: self.stroke_width * 0.5,
             cap: STROKE_CAPS[((self.flags >> CAP_SHIFT) & TWO_BITS) as usize],
+        })
+    }
+
+    /// The slice of a path fill the fragment stage draws; `None` for any
+    /// other kind. Its corners ride in the arc column, its sides in the
+    /// curve's, and the rect its brush resolves against in the radii.
+    pub fn trapezoid(&self) -> Option<Trapezoid> {
+        is_trapezoid(self.flags).then(|| Trapezoid {
+            left: self.arc_normalized[0],
+            right: self.arc_normalized[1],
+            top: [self.arc[0], self.arc[1]],
+            bottom: [self.arc_band[2], self.arc_band[3]],
+            open_left: self.flags & OPEN_LEFT_BIT != 0,
+            open_right: self.flags & OPEN_RIGHT_BIT != 0,
         })
     }
 
@@ -535,6 +556,8 @@ fn fragment_kind(flags: u32) -> u32 {
     let kind = (flags >> KIND_SHIFT) & TWO_BITS;
     if kind == RECORD_KIND_ARC {
         FRAGMENT_KIND_ARC
+    } else if is_trapezoid(flags) {
+        FRAGMENT_KIND_TRAPEZOID
     } else if kind == RECORD_KIND_LINE {
         FRAGMENT_KIND_LINE
     } else if flags & STROKED_BIT != 0 {
@@ -542,6 +565,11 @@ fn fragment_kind(flags: u32) -> u32 {
     } else {
         FRAGMENT_KIND_FILL
     }
+}
+
+fn is_trapezoid(flags: u32) -> bool {
+    (flags >> KIND_SHIFT) & TWO_BITS == RECORD_KIND_LINE
+        && (flags >> CAP_SHIFT) & TWO_BITS == TRAPEZOID_CAP
 }
 
 const STROKE_CAPS: [StrokeCap; 3] = [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square];
@@ -828,6 +856,7 @@ pub fn primitive_coverage_rect(primitive: &DrawPrimitive) -> Option<Rect> {
         DrawPrimitive::Line {
             start, end, stroke, ..
         } => Some(LineGeometry::new(*start, *end, *stroke).bounds()),
+        DrawPrimitive::Trapezoid { trapezoid, .. } => Some(trapezoid.bounds()),
         DrawPrimitive::Image { rect, .. } => Some(*rect),
         DrawPrimitive::Text(text) => Some(text.rect),
         DrawPrimitive::Content | DrawPrimitive::Shadow(_) => None,
@@ -1006,6 +1035,11 @@ impl ShapeRecorder {
                 stroke,
                 blend_mode,
             ),
+            DrawPrimitive::Trapezoid {
+                rect,
+                brush,
+                trapezoid,
+            } => self.push_trapezoids(rect, &[trapezoid], &brush, blend_mode),
             other => return Recorded::Other(other),
         })
     }
@@ -1070,6 +1104,74 @@ impl ShapeRecorder {
             None,
         );
         bounds
+    }
+
+    /// Records the slices of a path fill, each painted by `brush` resolved
+    /// against `brush_rect`, and returns the box they reach. The brush is
+    /// interned once for them all. A slice's corners ride in the arc
+    /// column; its sides and width, which is never zero, in the curve's
+    /// normalised column, so no slice's row equals a band's, whose trig
+    /// the GPU writes into its radii; and the brush rect in the radii.
+    pub fn push_trapezoids(
+        &mut self,
+        brush_rect: Rect,
+        trapezoids: &[Trapezoid],
+        brush: &Brush,
+        blend: BlendMode,
+    ) -> Rect {
+        let (handle, color) = self.intern_brush(brush);
+        let flags = pack_flags(RECORD_KIND_LINE, None, blend, StrokeCap::Butt)
+            | (TRAPEZOID_CAP << CAP_SHIFT);
+        let radii = rect_row(brush_rect);
+        // Every slice shares the brush and the rect it resolves against, so
+        // one shading serves them all.
+        let shading = self.brush_shading(
+            &ShapeRecordBody {
+                brush: handle,
+                flags,
+                ..ShapeRecordBody::zeroed()
+            },
+            &ShapeRecordCurve {
+                radii,
+                arc_normalized: [0.0; 4],
+            },
+        );
+        let mut reach: Option<Rect> = None;
+        for trapezoid in trapezoids {
+            let bounds = trapezoid.bounds();
+            let open = (u32::from(trapezoid.open_left) * OPEN_LEFT_BIT)
+                | (u32::from(trapezoid.open_right) * OPEN_RIGHT_BIT);
+            self.push_shaded(
+                ShapeRecordBody {
+                    rect: rect_row(bounds),
+                    color,
+                    stroke_width: 0.0,
+                    flags: flags | open,
+                    brush: handle,
+                    placement: 0,
+                    arc_geometry: [
+                        trapezoid.top[0],
+                        trapezoid.top[1],
+                        trapezoid.bottom[0],
+                        trapezoid.bottom[1],
+                    ],
+                },
+                ShapeRecordCurve {
+                    radii,
+                    arc_normalized: [
+                        trapezoid.left,
+                        trapezoid.right,
+                        trapezoid.right - trapezoid.left,
+                        0.0,
+                    ],
+                },
+                [0.0; 4],
+                (blend, shading),
+                None,
+            );
+            reach = Some(reach.map_or(bounds, |reach| reach.union(bounds)));
+        }
+        reach.unwrap_or(Rect::EMPTY)
     }
 
     #[inline]
@@ -1237,10 +1339,23 @@ impl ShapeRecorder {
     #[inline(always)]
     fn push_shape(
         &mut self,
-        mut body: ShapeRecordBody,
+        body: ShapeRecordBody,
         curve: ShapeRecordCurve,
         source: [f32; 4],
         blend: BlendMode,
+        band_bucket: Option<usize>,
+    ) -> Rect {
+        let shading = self.brush_shading(&body, &curve);
+        self.push_shaded(body, curve, source, (blend, shading), band_bucket)
+    }
+
+    /// [`Self::push_shape`] for a record whose brush shading is known.
+    fn push_shaded(
+        &mut self,
+        mut body: ShapeRecordBody,
+        curve: ShapeRecordCurve,
+        source: [f32; 4],
+        (blend, shading): (BlendMode, BrushShading),
         band_bucket: Option<usize>,
     ) -> Rect {
         let half_stroke = if body.flags & STROKED_BIT != 0 {
@@ -1251,7 +1366,6 @@ impl ShapeRecorder {
         let coverage = expand_rect(row_rect(body.rect), half_stroke);
         self.include_bounds(coverage);
         let index = self.tables.shapes.len() as u32;
-        let shading = self.brush_shading(&body);
         body.flags |= shading.flag();
         let brush_bit = 1u8
             << match body.brush {
@@ -1261,8 +1375,9 @@ impl ShapeRecorder {
         let kind_bit = 1u8 << fragment_kind(body.flags);
         let band_class = band_bucket.unwrap_or(0) as u8;
         body.flags |= u32::from(band_class) << BAND_CLASS_SHIFT;
-        let extend = self.note_segment_key(RecordLane::Shapes, blend, shading)
-            && self.segment_takes_class(band_class);
+        let extend =
+            self.note_segment_key(RecordLane::Shapes, blend, shading, is_trapezoid(body.flags))
+                && self.segment_takes_class(band_class);
         if !extend {
             self.segment_waste = 0;
         }
@@ -1302,7 +1417,7 @@ impl ShapeRecorder {
     }
 
     fn extend_segment(&mut self, lane: RecordLane, index: u32, blend: BlendMode, kind_bit: u8) {
-        let extend = self.note_segment_key(lane, blend, BrushShading::Solid);
+        let extend = self.note_segment_key(lane, blend, BrushShading::Solid, false);
         if !extend {
             self.segment_waste = 0;
         }
@@ -1348,15 +1463,21 @@ impl ShapeRecorder {
     }
 
     /// Whether the next record continues the open segment, and makes its
-    /// key the open one.
+    /// key the open one. Slices of path fills keep segments of their own: a
+    /// slice whose gradient rides on its vertices is exact only in the
+    /// pipelines that draw slices alone.
     #[inline]
     fn note_segment_key(
         &mut self,
         lane: RecordLane,
         blend: BlendMode,
         shading: BrushShading,
+        slice: bool,
     ) -> bool {
-        let key = ((lane as u32) << 16) | ((blend as u32) << 2) | shading as u32;
+        let key = ((lane as u32) << 16)
+            | (u32::from(slice) << 15)
+            | ((blend as u32) << 2)
+            | shading as u32;
         let extend = key == self.last_segment_key;
         self.last_segment_key = key;
         extend
@@ -1383,17 +1504,26 @@ impl ShapeRecorder {
     }
 
     #[inline]
-    fn brush_shading(&self, body: &ShapeRecordBody) -> BrushShading {
+    /// How a record's brush is shaded: solid, from its vertices, or per
+    /// fragment. A rect fill takes a linear gradient from its vertices where
+    /// the gradient is affine over its quad; a slice of a path fill where it
+    /// runs between two stops and clamps, which the slice's fragments clamp
+    /// exactly as the gradient sampler does.
+    fn brush_shading(&self, body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> BrushShading {
         if body.brush == 0 {
             return BrushShading::Solid;
         }
         let tables = &self.tables;
-        let spans = body.flags & RECT_FILL_MASK == 0
-            && tables
-                .brushes
-                .get(body.brush as usize - 1)
-                .is_some_and(|brush| vertex_gradient::spans_quad(brush, &tables.stops, body.rect));
-        if spans {
+        let Some(brush) = tables.brushes.get(body.brush as usize - 1) else {
+            return BrushShading::Fragment;
+        };
+        let vertex = if is_trapezoid(body.flags) {
+            vertex_gradient::clamps_between_two_stops(brush, &tables.stops, curve.radii)
+        } else {
+            body.flags & RECT_FILL_MASK == 0
+                && vertex_gradient::spans_quad(brush, &tables.stops, body.rect)
+        };
+        if vertex {
             BrushShading::Vertex
         } else {
             BrushShading::Fragment
@@ -1818,8 +1948,13 @@ impl CommandRecording {
         let rect = record.rect_value();
         let brush = self.brush_of(&record);
         let stroke = record.stroke();
-        let primitive = match record.kind() {
-            RECORD_KIND_ROUND_RECT => DrawPrimitive::RoundRect {
+        let primitive = match (record.kind(), record.trapezoid()) {
+            (_, Some(trapezoid)) => DrawPrimitive::Trapezoid {
+                rect: row_rect(record.radii),
+                brush,
+                trapezoid,
+            },
+            (RECORD_KIND_ROUND_RECT, _) => DrawPrimitive::RoundRect {
                 rect,
                 brush,
                 radii: CornerRadii {
@@ -1830,14 +1965,14 @@ impl CommandRecording {
                 },
                 stroke,
             },
-            RECORD_KIND_LINE => DrawPrimitive::Line {
+            (RECORD_KIND_LINE, _) => DrawPrimitive::Line {
                 rect,
                 brush,
                 start: Point::new(record.arc[0], record.arc[1]),
                 end: Point::new(record.arc_band[2], record.arc_band[3]),
                 stroke: stroke.unwrap_or_default(),
             },
-            RECORD_KIND_ARC => DrawPrimitive::Arc {
+            (RECORD_KIND_ARC, _) => DrawPrimitive::Arc {
                 rect,
                 brush,
                 center: Point::new(record.arc[0], record.arc[1]),
@@ -2111,6 +2246,23 @@ impl CommandRecorder {
         blend: BlendMode,
     ) {
         self.shapes.push_line(line, brush, stroke, blend);
+        self.note_shape();
+    }
+
+    /// Records the slices of a path fill a draw scope cut; see
+    /// [`ShapeRecorder::push_trapezoids`].
+    pub fn push_trapezoids(
+        &mut self,
+        brush_rect: Rect,
+        trapezoids: &[Trapezoid],
+        brush: &Brush,
+        blend: BlendMode,
+    ) {
+        if trapezoids.is_empty() {
+            return;
+        }
+        self.shapes
+            .push_trapezoids(brush_rect, trapezoids, brush, blend);
         self.note_shape();
     }
 

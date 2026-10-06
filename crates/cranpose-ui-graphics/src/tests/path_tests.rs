@@ -1,5 +1,5 @@
 use super::*;
-use crate::{BlendMode, Brush, Color, DrawPrimitive, DrawScope, DrawScopeDefault, Size};
+use crate::{BlendMode, Brush, Color, DrawPrimitive, DrawScope, DrawScopeDefault, Size, Trapezoid};
 
 fn stroke(width: f32, cap: StrokeCap, join: StrokeJoin) -> Stroke {
     Stroke { width, cap, join }
@@ -241,7 +241,7 @@ fn primitives(draw: impl FnOnce(&mut DrawScopeDefault)) -> Vec<DrawPrimitive> {
 }
 
 #[test]
-fn a_drawn_path_strokes_as_lines_and_fills_as_an_image() {
+fn a_drawn_path_strokes_as_lines_and_fills_as_slices() {
     let mut path = Path::new();
     path.move_to(Point::new(4.0, 4.0));
     path.line_to(Point::new(40.0, 4.0));
@@ -260,7 +260,10 @@ fn a_drawn_path_strokes_as_lines_and_fills_as_an_image() {
         DrawPrimitive::Line { stroke, .. } if stroke.cap == StrokeCap::Round
     )));
     let filled = primitives(|scope| scope.draw_path(&path, brush.clone(), DrawStyle::Fill));
-    assert!(matches!(filled.as_slice(), [DrawPrimitive::Image { .. }]));
+    assert!(matches!(
+        filled.as_slice(),
+        [DrawPrimitive::Trapezoid { .. }]
+    ));
     let blended = primitives(|scope| {
         scope.draw_path_blend(&path, brush.clone(), DrawStyle::Fill, BlendMode::Plus);
     });
@@ -286,4 +289,169 @@ fn a_drawn_path_strokes_as_lines_and_fills_as_an_image() {
         6,
         "72 units of edge in 12-unit periods: six dashes, three on each edge"
     );
+}
+
+/// The slices a filled path records, with the rect each brush resolves
+/// against.
+fn fill_slices(path: &Path, brush: Brush) -> Vec<(Rect, Trapezoid)> {
+    primitives(|scope| scope.draw_path(path, brush, DrawStyle::Fill))
+        .into_iter()
+        .map(|primitive| match primitive {
+            DrawPrimitive::Trapezoid {
+                rect, trapezoid, ..
+            } => (rect, trapezoid),
+            other => panic!("a fill that slices records slices only, not {other:?}"),
+        })
+        .collect()
+}
+
+fn polygon(points: &[(f32, f32)]) -> Path {
+    let mut path = Path::new();
+    let mut points = points.iter().map(|&(x, y)| Point::new(x, y));
+    if let Some(first) = points.next() {
+        path.move_to(first);
+    }
+    for point in points {
+        path.line_to(point);
+    }
+    path.close();
+    path
+}
+
+fn slice_area(slices: &[(Rect, Trapezoid)]) -> f32 {
+    slices
+        .iter()
+        .map(|(_, slice)| {
+            let width = slice.right - slice.left;
+            width * ((slice.bottom[0] - slice.top[0]) + (slice.bottom[1] - slice.top[1])) * 0.5
+        })
+        .sum()
+}
+
+/// How much of the pixel at `point` the slices cover together.
+fn covered(slices: &[(Rect, Trapezoid)], point: Point) -> f32 {
+    slices.iter().map(|(_, slice)| slice.coverage(point)).sum()
+}
+
+#[test]
+fn a_filled_sparkline_slices_into_columns_that_open_only_at_its_outline() {
+    let heights = [30.0, 12.0, 26.0, 4.0, 18.0, 22.0, 9.0];
+    let mut points = vec![(0.0, 40.0)];
+    points.extend(
+        heights
+            .iter()
+            .enumerate()
+            .map(|(index, &y)| (index as f32 * 10.0, y)),
+    );
+    points.push((60.0, 40.0));
+    let slices = fill_slices(&polygon(&points), Brush::solid(Color::WHITE));
+    assert_eq!(
+        slices.len(),
+        heights.len() - 1,
+        "one slice between each two points"
+    );
+    let expected: f32 = heights
+        .windows(2)
+        .map(|pair| 10.0 * (40.0 - (pair[0] + pair[1]) * 0.5))
+        .sum();
+    assert!(
+        (slice_area(&slices) - expected).abs() < 1.0e-3,
+        "the slices cover the area under the line: {} of {expected}",
+        slice_area(&slices)
+    );
+    for (index, (rect, slice)) in slices.iter().enumerate() {
+        assert_eq!(
+            (slice.open_left, slice.open_right),
+            (index == 0, index == slices.len() - 1),
+            "slice {index}: only the outline's upright ends are open: {slice:?}"
+        );
+        assert_eq!(
+            *rect,
+            Rect::from_size(Size::new(64.0, 64.0)),
+            "a path's brush resolves against its scope"
+        );
+    }
+    for (x, y, inside) in [(15.0, 35.0, 1.0), (15.0, 2.0, 0.0), (45.0, 39.0, 1.0)] {
+        assert_eq!(
+            covered(&slices, Point::new(x, y)),
+            inside,
+            "pixel at ({x}, {y})"
+        );
+    }
+    // A pixel centred on a shared side belongs to the slice on its right.
+    assert_eq!(covered(&slices, Point::new(20.0, 35.0)), 1.0);
+    // An open side shares its pixel with the outside.
+    assert_eq!(covered(&slices, Point::new(0.0, 35.0)), 0.5);
+}
+
+#[test]
+fn a_path_that_crosses_itself_fills_where_it_winds() {
+    // A bow tie: its two diagonals cross at the centre.
+    let slices = fill_slices(
+        &polygon(&[(0.0, 0.0), (40.0, 40.0), (40.0, 0.0), (0.0, 40.0)]),
+        Brush::solid(Color::WHITE),
+    );
+    assert!(
+        (slice_area(&slices) - 800.0).abs() < 1.0e-2,
+        "two triangles of 400 each, not {}",
+        slice_area(&slices)
+    );
+    for (x, y, inside) in [
+        (5.0, 20.0, 1.0),
+        (35.0, 20.0, 1.0),
+        (20.0, 5.0, 0.0),
+        (20.0, 35.0, 0.0),
+    ] {
+        assert_eq!(
+            covered(&slices, Point::new(x, y)),
+            inside,
+            "pixel at ({x}, {y})"
+        );
+    }
+}
+
+#[test]
+fn a_contour_wound_against_the_outline_cuts_a_hole() {
+    let mut path = polygon(&[(0.0, 0.0), (48.0, 0.0), (48.0, 48.0), (0.0, 48.0)]);
+    // A diamond wound the other way.
+    path.move_to(Point::new(24.0, 8.0));
+    path.line_to(Point::new(8.0, 24.0));
+    path.line_to(Point::new(24.0, 40.0));
+    path.line_to(Point::new(40.0, 24.0));
+    path.close();
+    let slices = fill_slices(&path, Brush::solid(Color::WHITE));
+    assert!(
+        (slice_area(&slices) - (48.0 * 48.0 - 512.0)).abs() < 1.0e-2,
+        "the square less the diamond's 512, not {}",
+        slice_area(&slices)
+    );
+    assert_eq!(covered(&slices, Point::new(24.5, 24.5)), 0.0, "the hole");
+    assert_eq!(covered(&slices, Point::new(4.5, 24.5)), 1.0, "the frame");
+}
+
+#[test]
+fn a_path_with_an_upright_edge_inside_its_fill_keeps_its_mask() {
+    // A step: the fill on the left reaches higher than on the right, so the
+    // upright edge between them meets only part of the column beside it.
+    let step = polygon(&[
+        (0.0, 0.0),
+        (20.0, 0.0),
+        (20.0, 10.0),
+        (40.0, 10.0),
+        (40.0, 30.0),
+        (0.0, 30.0),
+    ]);
+    let filled =
+        primitives(|scope| scope.draw_path(&step, Brush::solid(Color::WHITE), DrawStyle::Fill));
+    assert!(
+        matches!(filled.as_slice(), [DrawPrimitive::Image { .. }]),
+        "the step is rasterized as before: {filled:?}"
+    );
+}
+
+#[test]
+fn a_fill_with_no_area_records_nothing() {
+    let flat = polygon(&[(0.0, 10.0), (20.0, 10.0), (40.0, 10.0)]);
+    assert!(fill_slices(&flat, Brush::solid(Color::WHITE)).is_empty());
+    assert!(fill_slices(&Path::new(), Brush::solid(Color::WHITE)).is_empty());
 }
