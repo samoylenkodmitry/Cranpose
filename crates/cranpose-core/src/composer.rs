@@ -1166,7 +1166,7 @@ impl Composer {
         node_ids.into_iter().any(|node_id| {
             applier
                 .get_mut(node_id)
-                .is_ok_and(|node| node.needs_measure() || node.needs_layout())
+                .is_ok_and(|node| node.layout_dirty())
         })
     }
 

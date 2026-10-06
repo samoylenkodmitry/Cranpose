@@ -421,6 +421,10 @@ mod selection_handle_tests;
 mod tab_switching_tests;
 
 #[cfg(test)]
+#[path = "tests/layout_keep_tests.rs"]
+mod layout_keep_tests;
+
+#[cfg(test)]
 #[path = "tests/lazy_list_viewport_tests.rs"]
 mod lazy_list_viewport_tests;
 
