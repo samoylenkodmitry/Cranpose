@@ -35,6 +35,8 @@ static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new
 static PLATFORM_ACCESSIBILITY_ENABLED: AtomicBool = AtomicBool::new(false);
 static HOST_TREE_LOST: AtomicBool = AtomicBool::new(false);
 static PLATFORM_SCREEN_READER_ON: AtomicBool = AtomicBool::new(false);
+/// Set when the host reports that a reader read the published tree.
+static PLATFORM_TREE_READ: AtomicBool = AtomicBool::new(false);
 static OPTION_BITS: AtomicU8 = AtomicU8::new(0);
 const REDUCE_MOTION_BIT: u8 = 1;
 const INCREASE_CONTRAST_BIT: u8 = 2;
@@ -280,12 +282,15 @@ pub(crate) fn sync(
     let reader_on = cranpose_services::AccessibilityState {
         screen_reader_on: screen_reader_running(),
     };
+    let now = std::time::Instant::now();
+    if PLATFORM_TREE_READ.swap(false, Ordering::Relaxed) {
+        policy.note_read(now);
+    }
     if cranpose_services::set_platform_accessibility_state(reader_on) {
         shell.request_root_render();
     }
     accessibility::apply_accessibility_options(shell, system_options());
     let mut announcements = accessibility::drain_app_announcements();
-    let now = std::time::Instant::now();
     let elements = if policy.try_begin_publish(now) {
         accessibility::snapshot_if_changed(shell, seen_revision, previous)
     } else {
@@ -312,7 +317,12 @@ pub(crate) fn sync(
     if update.is_empty() {
         return Ok(());
     }
-    publish(app, &update)
+    publish(app, &update)?;
+    // A service other than a screen reader may never read the tree, as a
+    // phone automation service does not: its trees publish less often while
+    // they go unread, and at the publish interval again once it reads one.
+    policy.published(!reader_on.screen_reader_on);
+    Ok(())
 }
 
 /// Hands the host the virtual ids in order, the records of the controls it
@@ -389,6 +399,19 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
         .unwrap_or_else(PoisonError::into_inner)
         .push(virtual_id);
     wake_loop();
+}
+
+/// The host reports that a reader read the tree it holds, once a tree, or
+/// acted on it.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityRead(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+) {
+    if !PLATFORM_TREE_READ.swap(true, Ordering::Relaxed) {
+        wake_loop();
+    }
 }
 
 #[doc(hidden)]

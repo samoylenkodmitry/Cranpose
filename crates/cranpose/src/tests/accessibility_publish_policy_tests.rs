@@ -96,3 +96,63 @@ fn re_enabling_publishes_immediately_even_right_after_a_publish() {
     assert!(policy.update_enabled(true));
     assert!(policy.try_begin_publish(start + Duration::from_millis(1)));
 }
+
+/// Publishes a tree at each open window from `start`, noting a read right
+/// after the publishes `read_after` names, and returns the waits between
+/// them.
+fn publish_waits(start: Instant, publishes: usize, read_after: &[usize]) -> Vec<Duration> {
+    let mut policy = AccessibilityPublishPolicy::new();
+    assert!(policy.update_enabled(true));
+    let mut now = start;
+    let mut waits = Vec::new();
+    let mut last = None;
+    for index in 0..publishes {
+        while !policy.try_begin_publish(now) {
+            now = policy
+                .wake_deadline()
+                .expect("a refused publish arms a wake");
+        }
+        if let Some(last) = last {
+            waits.push(now - last);
+        }
+        last = Some(now);
+        policy.published(true);
+        if read_after.contains(&index) {
+            policy.note_read(now);
+        }
+    }
+    waits
+}
+
+#[test]
+fn unread_trees_publish_less_often_up_to_the_unread_interval() {
+    let s = Duration::from_secs;
+    assert_eq!(
+        publish_waits(Instant::now(), 6, &[]),
+        [s(1), s(2), s(4), s(4), s(4)],
+        "each unread tree doubles the wait from a second, up to four"
+    );
+}
+
+#[test]
+fn a_reader_in_use_gets_changes_at_the_interactive_interval() {
+    let ms = Duration::from_millis;
+    let mut expected = vec![ms(1000), ms(2000)];
+    // The read after the third tree: changes publish every 100 ms for 2 s.
+    expected.extend([ms(100); 19]);
+    // Past the window and unread again: a second, then growing.
+    expected.extend([ms(1000), ms(2000), ms(4000), ms(4000)]);
+    assert_eq!(publish_waits(Instant::now(), 26, &[2]), expected);
+}
+
+#[test]
+fn a_screen_reader_keeps_the_publish_interval_without_reads() {
+    let start = Instant::now();
+    let mut policy = policy_enabled_at(start);
+    policy.published(false);
+    let next = start + ACCESSIBILITY_PUBLISH_INTERVAL;
+    assert!(policy.try_begin_publish(next));
+    policy.published(false);
+    assert!(!policy.try_begin_publish(next + ACCESSIBILITY_PUBLISH_INTERVAL / 2));
+    assert!(policy.try_begin_publish(next + ACCESSIBILITY_PUBLISH_INTERVAL));
+}
