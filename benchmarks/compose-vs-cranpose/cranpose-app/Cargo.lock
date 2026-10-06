@@ -2231,6 +2231,9 @@ dependencies = [
 [[package]]
 name = "perf-data"
 version = "0.1.0"
+dependencies = [
+ "log",
+]
 
 [[package]]
 name = "phf"
