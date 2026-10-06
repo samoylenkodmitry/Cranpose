@@ -209,46 +209,6 @@ macro_rules! impl_draw_modifier_node {
     };
 }
 
-macro_rules! forward_intrinsics_to_child {
-    () => {
-        fn min_intrinsic_width(
-            &self,
-            measurable: &dyn Measurable,
-            height: f32,
-            _density: f32,
-        ) -> f32 {
-            measurable.min_intrinsic_width(height)
-        }
-
-        fn max_intrinsic_width(
-            &self,
-            measurable: &dyn Measurable,
-            height: f32,
-            _density: f32,
-        ) -> f32 {
-            measurable.max_intrinsic_width(height)
-        }
-
-        fn min_intrinsic_height(
-            &self,
-            measurable: &dyn Measurable,
-            width: f32,
-            _density: f32,
-        ) -> f32 {
-            measurable.min_intrinsic_height(width)
-        }
-
-        fn max_intrinsic_height(
-            &self,
-            measurable: &dyn Measurable,
-            width: f32,
-            _density: f32,
-        ) -> f32 {
-            measurable.max_intrinsic_height(width)
-        }
-    };
-}
-
 macro_rules! impl_sink_reporter_element {
     ($element:ty, $node:ty) => {
         impl ModifierNodeElement for $element {
@@ -2176,8 +2136,6 @@ impl LayoutModifierNode for OffsetNode {
         let offset = self.device_offset(context.density());
         measure_pass_through(measurable, constraints, |_| (offset.x, offset.y))
     }
-
-    forward_intrinsics_to_child!();
 }
 
 /// Element that creates and updates offset nodes.
@@ -2278,8 +2236,6 @@ impl LayoutModifierNode for FractionalOffsetNode {
             (self.x_fraction * size.width, self.y_fraction * size.height)
         })
     }
-
-    forward_intrinsics_to_child!();
 }
 
 /// Element that creates and updates fractional offset nodes.
@@ -2363,6 +2319,15 @@ impl FillNode {
     pub fn fraction(&self) -> f32 {
         self.fraction
     }
+
+    /// The extent the content gets of a given `extent` across the axis that
+    /// `other` fills: the filled fraction, unless only `other` fills.
+    fn filled(&self, extent: f32, other: FillDirection, density: f32) -> f32 {
+        if self.direction == other || !extent.is_finite() {
+            return extent;
+        }
+        cranpose_ui_layout::round_to_px(extent * self.fraction, density)
+    }
 }
 
 impl DelegatableNode for FillNode {
@@ -2444,7 +2409,21 @@ impl LayoutModifierNode for FillNode {
         })
     }
 
-    forward_intrinsics_to_child!();
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
+        measurable.min_intrinsic_width(self.filled(height, FillDirection::Horizontal, density))
+    }
+
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, density: f32) -> f32 {
+        measurable.max_intrinsic_width(self.filled(height, FillDirection::Horizontal, density))
+    }
+
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+        measurable.min_intrinsic_height(self.filled(width, FillDirection::Vertical, density))
+    }
+
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, density: f32) -> f32 {
+        measurable.max_intrinsic_height(self.filled(width, FillDirection::Vertical, density))
+    }
 }
 
 /// Element that creates and updates fill nodes.

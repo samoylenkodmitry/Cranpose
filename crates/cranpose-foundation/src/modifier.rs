@@ -488,44 +488,28 @@ pub trait LayoutModifierNode: ModifierNode {
         })
     }
 
-    /// Returns the minimum intrinsic width of this modifier node.
-    fn min_intrinsic_width(
-        &self,
-        _measurable: &dyn Measurable,
-        _height: f32,
-        _density: f32,
-    ) -> f32 {
-        0.0
+    /// Returns the minimum intrinsic width of this modifier node. The default is
+    /// the wrapped content's, for a node that keeps the content's size.
+    fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, _density: f32) -> f32 {
+        measurable.min_intrinsic_width(height)
     }
 
-    /// Returns the maximum intrinsic width of this modifier node.
-    fn max_intrinsic_width(
-        &self,
-        _measurable: &dyn Measurable,
-        _height: f32,
-        _density: f32,
-    ) -> f32 {
-        0.0
+    /// Returns the maximum intrinsic width of this modifier node. The default is
+    /// the wrapped content's, for a node that keeps the content's size.
+    fn max_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, _density: f32) -> f32 {
+        measurable.max_intrinsic_width(height)
     }
 
-    /// Returns the minimum intrinsic height of this modifier node.
-    fn min_intrinsic_height(
-        &self,
-        _measurable: &dyn Measurable,
-        _width: f32,
-        _density: f32,
-    ) -> f32 {
-        0.0
+    /// Returns the minimum intrinsic height of this modifier node. The default is
+    /// the wrapped content's, for a node that keeps the content's size.
+    fn min_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
+        measurable.min_intrinsic_height(width)
     }
 
-    /// Returns the maximum intrinsic height of this modifier node.
-    fn max_intrinsic_height(
-        &self,
-        _measurable: &dyn Measurable,
-        _width: f32,
-        _density: f32,
-    ) -> f32 {
-        0.0
+    /// Returns the maximum intrinsic height of this modifier node. The default is
+    /// the wrapped content's, for a node that keeps the content's size.
+    fn max_intrinsic_height(&self, measurable: &dyn Measurable, width: f32, _density: f32) -> f32 {
+        measurable.max_intrinsic_height(width)
     }
 }
 
