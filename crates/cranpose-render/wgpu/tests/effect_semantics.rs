@@ -767,7 +767,7 @@ fn scaled_child_fixture(translation: Point) -> RenderGraph {
         solid_rect(frame_rect(), Color(0.96, 0.93, 0.9, 1.0)),
         RenderNode::Layer(Box::new(child)),
     ]);
-    graph.root.recompute_raster_cache_hashes();
+    graph.root.forget_raster_cache_hashes();
     graph
 }
 
@@ -2258,7 +2258,7 @@ fn opaque_row_with_glass_fixture(animated_color: Color) -> RenderGraph {
             animated_color,
         ),
     ]);
-    graph.root.recompute_raster_cache_hashes();
+    graph.root.forget_raster_cache_hashes();
     graph
 }
 
@@ -2608,7 +2608,7 @@ fn see_through_row_fixture(page: RenderNode, row_y: f32) -> RenderGraph {
 
     let mut graph = graph(vec![page, RenderNode::Layer(Box::new(row))]);
     graph.root.graphics_layer.shadow_elevation = 4.0;
-    graph.root.recompute_raster_cache_hashes();
+    graph.root.forget_raster_cache_hashes();
     graph
 }
 

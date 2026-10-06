@@ -115,6 +115,7 @@ fn deferred_draws_keep_their_order_after_interleaved_children() {
     for (children, expected) in cases {
         let collected = collect_root(
             &layer(children),
+            0,
             &mut crate::pipeline::UiTextLayoutResolver,
             &mut LayerMotion::default(),
             SceneCapacityHint::default(),
@@ -219,6 +220,7 @@ fn isolated_layers_snap_their_own_text_and_translating_text_descendants() {
                     raster_scale: RasterScale::Exact(1.0),
                     light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
                     wants_pixel_sensitive: false,
+                    update: 0,
                 },
                 &mut CompositorScene::new(),
                 &mut LayerSceneRecycler::default(),
@@ -381,6 +383,7 @@ fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() 
         raster_scale: RasterScale::Exact(1.0),
         light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
         wants_pixel_sensitive: false,
+        update: 0,
     };
     assert!(matches!(
         placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 0.0)),
@@ -422,6 +425,7 @@ fn a_rounded_layer_its_parent_clip_holds_draws_in_place_whatever_the_float_sums(
         raster_scale: RasterScale::Exact(1.0),
         light: ShadowLight::for_window(100.0, 100.0, 1.0, 1.0),
         wants_pixel_sensitive: false,
+        update: 0,
     };
     assert!(matches!(
         placement_in(&bar, &panel),
@@ -465,6 +469,7 @@ fn shapes_of_a_rounded_layer_drawn_in_place_take_its_radius_and_nothing_else_doe
         .push(shapes_run(vec![white_rect(rect(0.0, 200.0, 50.0, 50.0))]));
     let scene = collect_root(
         &parent,
+        0,
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
@@ -613,6 +618,7 @@ fn collected(layer: LayerNode) -> ChildLayer {
     };
     let mut scene = collect_root(
         &root,
+        0,
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
@@ -837,6 +843,7 @@ fn a_detached_backdrop_keeps_its_original_capture_reach_and_paint_order() {
     };
     let collected = collect_root(
         &root,
+        0,
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
@@ -871,6 +878,7 @@ fn draw_ops_under_clip(child: LayerNode) -> usize {
     };
     collect_root(
         &root,
+        0,
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
@@ -946,6 +954,7 @@ fn a_plain_texts_draw_carries_its_nodes_style() {
     let (root, style) = text_root(cranpose_ui::TextStyle::default());
     let scene = collect_root(
         &root,
+        0,
         &mut crate::pipeline::UiTextLayoutResolver,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),

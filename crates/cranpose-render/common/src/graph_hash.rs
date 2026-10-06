@@ -6,60 +6,11 @@ use cranpose_ui_graphics::{
 
 use crate::{
     graph::{
-        CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-        RenderNode,
+        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
     },
     layer_composition::{layer_composite_params, local_content_layer_for},
     raster_cache::LayerRasterCacheHashes,
 };
-
-pub(crate) fn recompute_layer_raster_cache_hashes(layer: &mut LayerNode) {
-    recompute_layer_raster_cache_hashes_inner(layer, false);
-}
-
-pub(crate) fn recompute_layer_raster_cache_hashes_under(
-    layer: &mut LayerNode,
-    ancestor_hashed: bool,
-) {
-    recompute_layer_raster_cache_hashes_inner(layer, ancestor_hashed);
-}
-
-pub(crate) fn refresh_layer_own_raster_cache_hashes(layer: &mut LayerNode, ancestor_hashed: bool) {
-    if layer_children_ancestor_hashed(layer, ancestor_hashed) {
-        layer.cache_hashes = layer_raster_cache_hashes(layer);
-        layer.cache_hashes_valid = true;
-    } else {
-        layer.cache_hashes_valid = false;
-    }
-}
-
-pub(crate) fn layer_children_ancestor_hashed(layer: &LayerNode, ancestor_hashed: bool) -> bool {
-    ancestor_hashed || layer_hashes_have_consumers(layer)
-}
-
-fn layer_hashes_have_consumers(layer: &LayerNode) -> bool {
-    layer.cache_policy != CachePolicy::None
-        || layer.isolation.has_any()
-        || layer.effect().is_some()
-        || layer.backdrop().is_some()
-        || layer.blend_mode() != BlendMode::SrcOver
-        || layer.opacity() < 1.0
-}
-
-fn recompute_layer_raster_cache_hashes_inner(layer: &mut LayerNode, ancestor_hashed: bool) {
-    let eager = ancestor_hashed || layer_hashes_have_consumers(layer);
-    for child in &mut layer.children {
-        if let RenderNode::Layer(child_layer) = child {
-            recompute_layer_raster_cache_hashes_inner(child_layer, eager);
-        }
-    }
-    if eager {
-        layer.cache_hashes = layer_raster_cache_hashes(layer);
-        layer.cache_hashes_valid = true;
-    } else {
-        layer.cache_hashes_valid = false;
-    }
-}
 
 pub(crate) fn layer_raster_cache_hashes(layer: &LayerNode) -> LayerRasterCacheHashes {
     LayerRasterCacheHashes {

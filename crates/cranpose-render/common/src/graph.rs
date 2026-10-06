@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     mem::size_of,
     ops::{Deref, DerefMut, Range},
     rc::Rc,
@@ -215,9 +216,34 @@ pub struct LayerNode {
     pub draws_within_bounds: bool,
     pub isolation: IsolationReasons,
     pub cache_policy: CachePolicy,
-    pub cache_hashes: LayerRasterCacheHashes,
-    pub cache_hashes_valid: bool,
+    /// The raster cache hashes, computed the first time a renderer asks and
+    /// kept until the layer or a layer beneath it changes.
+    pub cache_hashes: Cell<Option<LayerRasterCacheHashes>>,
+    /// The scene updates that changed what the layer draws.
+    pub content_changes: ContentChanges,
     pub children: Vec<RenderNode>,
+}
+
+/// The last scene update that changed what a layer draws, and how many
+/// updates in a row up to it did.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ContentChanges {
+    last_update: u64,
+    run: u32,
+}
+
+impl ContentChanges {
+    fn note(&mut self, update: u64) {
+        if self.run > 0 && self.last_update == update {
+            return;
+        }
+        self.run = if self.run > 0 && self.last_update + 1 == update {
+            self.run + 1
+        } else {
+            1
+        };
+        self.last_update = update;
+    }
 }
 
 impl Default for LayerNode {
@@ -247,8 +273,8 @@ impl Default for LayerNode {
             draws_within_bounds: false,
             isolation: IsolationReasons::default(),
             cache_policy: CachePolicy::None,
-            cache_hashes: LayerRasterCacheHashes::default(),
-            cache_hashes_valid: false,
+            cache_hashes: Cell::new(None),
+            content_changes: ContentChanges::default(),
             children: Vec::new(),
         }
     }
@@ -377,11 +403,7 @@ impl LayerNode {
     }
 
     pub fn target_content_hash(&self) -> u64 {
-        if self.cache_hashes_valid {
-            self.cache_hashes.target_content
-        } else {
-            crate::graph_hash::layer_raster_cache_hashes(self).target_content
-        }
+        self.raster_cache_hashes().target_content
     }
 
     pub fn motion_source_content_hash(&self) -> u64 {
@@ -389,15 +411,48 @@ impl LayerNode {
     }
 
     pub fn effect_hash(&self) -> u64 {
-        if self.cache_hashes_valid {
-            self.cache_hashes.effect
-        } else {
-            crate::graph_hash::layer_raster_cache_hashes(self).effect
+        self.raster_cache_hashes().effect
+    }
+
+    fn raster_cache_hashes(&self) -> LayerRasterCacheHashes {
+        if let Some(hashes) = self.cache_hashes.get() {
+            return hashes;
+        }
+        let hashes = crate::graph_hash::layer_raster_cache_hashes(self);
+        self.cache_hashes.set(Some(hashes));
+        hashes
+    }
+
+    /// Forgets the raster cache hashes of this layer and every layer beneath
+    /// it, after a change the scene builder did not make: they are computed
+    /// again when asked for.
+    pub fn forget_raster_cache_hashes(&mut self) {
+        self.cache_hashes.set(None);
+        for child in &mut self.children {
+            if let RenderNode::Layer(child) = child {
+                child.forget_raster_cache_hashes();
+            }
         }
     }
 
-    pub fn recompute_raster_cache_hashes(&mut self) {
-        crate::graph_hash::recompute_layer_raster_cache_hashes(self);
+    /// Forgets this layer's own raster cache hashes: a property its hash
+    /// covers, or a layer beneath it, changed.
+    pub(crate) fn forget_own_raster_cache_hashes(&mut self) {
+        self.cache_hashes.set(None);
+    }
+
+    /// Records that scene update `update` changed what this layer draws, and
+    /// forgets its hashes.
+    pub(crate) fn note_content_change(&mut self, update: u64) {
+        self.cache_hashes.set(None);
+        self.content_changes.note(update);
+    }
+
+    /// Whether what this layer draws changed in scene update `update` and in
+    /// the one before it. A raster cache keyed on its content would miss
+    /// again on the next frame, so a renderer neither hashes nor caches it.
+    pub fn content_churns(&self, update: u64) -> bool {
+        self.content_changes.run >= 2 && self.content_changes.last_update == update
     }
 }
 
@@ -501,12 +556,13 @@ impl DrawRunNode {
 #[derive(Clone)]
 pub struct RenderGraph {
     pub root: LayerNode,
+    /// How many scene updates the graph took: the number of the latest.
+    pub update: u64,
 }
 
 impl RenderGraph {
-    pub fn new(mut root: LayerNode) -> Self {
-        root.recompute_raster_cache_hashes();
-        Self { root }
+    pub fn new(root: LayerNode) -> Self {
+        Self { root, update: 0 }
     }
 
     pub fn node_count(&self) -> usize {

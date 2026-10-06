@@ -43,7 +43,7 @@ pub fn build_dev_overlay_graph(
     let x = (viewport.width - text_width - padding * 2.0).max(padding);
     let y = padding;
 
-    let mut overlay_layer = LayerNode {
+    let overlay_layer = LayerNode {
         node_id: Some(node_id),
         local_bounds: Rect {
             x: 0.0,
@@ -91,13 +91,9 @@ pub fn build_dev_overlay_graph(
         ],
         ..Default::default()
     };
-    overlay_layer.recompute_raster_cache_hashes();
-
-    let mut graph = RenderGraph::new(LayerNode {
+    RenderGraph::new(LayerNode {
         local_bounds: Rect::from_size(viewport),
         children: vec![RenderNode::Layer(Box::new(overlay_layer))],
         ..Default::default()
-    });
-    graph.root.recompute_raster_cache_hashes();
-    graph
+    })
 }

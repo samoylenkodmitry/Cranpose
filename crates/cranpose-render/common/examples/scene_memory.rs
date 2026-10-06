@@ -59,12 +59,7 @@ fn main() {
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("scene");
     let creation = region.change();
     let rebuild = |graph: &mut RenderGraph| {
-        let previous = std::mem::replace(
-            graph,
-            RenderGraph {
-                root: LayerNode::default(),
-            },
-        );
+        let previous = std::mem::replace(graph, RenderGraph::new(LayerNode::default()));
         *graph =
             rebuild_graph_from_applier(&applier, root, 1.0, Some(previous)).expect("rebuilt scene");
         black_box(&*graph);

@@ -87,12 +87,7 @@ fn run_case(arcs: usize, readers: usize) {
     let mut retained: [Option<Arc<ShapeRecorder>>; 4] = std::array::from_fn(|_| None);
     let mut frame = |tick: usize, graph: &mut RenderGraph| {
         angle.set(tick as f32 * 0.005);
-        let previous = std::mem::replace(
-            graph,
-            RenderGraph {
-                root: LayerNode::default(),
-            },
-        );
+        let previous = std::mem::replace(graph, RenderGraph::new(LayerNode::default()));
         *graph =
             rebuild_graph_from_applier(&applier, root, 1.0, Some(previous)).expect("redraw Canvas");
         let run = canvas_run(&graph.root).expect("recorded Canvas");

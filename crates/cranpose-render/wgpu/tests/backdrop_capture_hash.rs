@@ -42,7 +42,7 @@ fn blur_backdrop(x: f32, y: f32, width: f32, height: f32) -> LayerNode {
         children: vec![support::solid_rect(bounds, Color(0.10, 0.25, 0.95, 0.55))],
         ..LayerNode::default()
     };
-    backdrop.recompute_raster_cache_hashes();
+    backdrop.forget_raster_cache_hashes();
     backdrop
 }
 

@@ -157,7 +157,7 @@ fn render_graph_new_recomputes_manual_layer_hashes() {
     );
     root.graphics_layer.render_effect = Some(RenderEffect::blur(3.0));
     let mut expected = root.clone();
-    expected.recompute_raster_cache_hashes();
+    expected.forget_raster_cache_hashes();
 
     let graph = RenderGraph::new(root);
     assert_eq!(
@@ -196,11 +196,11 @@ fn motion_source_content_hash_ignores_translated_content_offset() {
     );
     base.translated_content_context = true;
     base.translated_content_offset = Point::new(0.0, -24.0);
-    base.recompute_raster_cache_hashes();
+    base.forget_raster_cache_hashes();
 
     let mut moved = base.clone();
     moved.translated_content_offset = Point::new(0.0, -72.0);
-    moved.recompute_raster_cache_hashes();
+    moved.forget_raster_cache_hashes();
 
     assert_ne!(base.target_content_hash(), moved.target_content_hash());
     assert_eq!(

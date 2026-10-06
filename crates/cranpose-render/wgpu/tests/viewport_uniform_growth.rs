@@ -44,7 +44,7 @@ fn tiles(rows: u32, ink: [u8; 3]) -> RenderGraph {
         (rows * TILE) as f32,
         children,
     ));
-    graph.root.recompute_raster_cache_hashes();
+    graph.root.forget_raster_cache_hashes();
     graph
 }
 

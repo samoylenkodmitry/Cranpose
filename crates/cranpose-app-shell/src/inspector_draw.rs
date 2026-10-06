@@ -127,13 +127,11 @@ impl Canvas {
     }
 
     fn finish(self) -> RenderGraph {
-        let mut root = LayerNode {
+        RenderGraph::new(LayerNode {
             local_bounds: self.viewport,
             children: self.children,
             ..Default::default()
-        };
-        root.recompute_raster_cache_hashes();
-        RenderGraph::new(root)
+        })
     }
 }
 

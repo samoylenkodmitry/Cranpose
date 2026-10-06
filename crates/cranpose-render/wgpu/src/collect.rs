@@ -199,6 +199,9 @@ struct WalkContext {
     /// walk finds text or an image. Only then does a subtree that draws
     /// nothing have to be searched for them.
     wants_pixel_sensitive: bool,
+    /// The graph's latest scene update, which tells an isolated layer whose
+    /// content changes every frame from one a raster cache can keep.
+    update: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -850,6 +853,7 @@ fn takes_rounded_clip(primitive: &DrawPrimitive) -> bool {
 
 pub(crate) fn collect_root(
     root: &LayerNode,
+    update: u64,
     text_layout: &mut impl TextLayoutResolver,
     motion: &mut LayerMotion,
     capacity: SceneCapacityHint,
@@ -871,6 +875,7 @@ pub(crate) fn collect_root(
             root_scale,
         ),
         wants_pixel_sensitive: false,
+        update,
     };
     collect_child(root, text_layout, motion, context, &mut out, recycler);
     out.scene.flush_loose();
@@ -887,6 +892,7 @@ pub(crate) fn collect_overlay(
 ) -> LayerScene {
     collect_root(
         root,
+        0,
         text_layout,
         &mut LayerMotion::default(),
         SceneCapacityHint::default(),
@@ -949,6 +955,18 @@ fn light_in_layer(layer: &LayerNode, context: &WalkContext) -> ShadowLight {
     context.light.in_space(origin.x, origin.y, scale)
 }
 
+/// The key of what `layer` draws. A layer whose content changed in update
+/// `update` and in the one before gets a key of this update alone instead
+/// of a hash of its content: the content is new, so the cache treats it as
+/// it treats content that changes, without the hashing.
+fn content_key(layer: &LayerNode, update: u64) -> u64 {
+    const CHURN_SALT: u64 = 0x6a09_e667_f3bc_c909;
+    if layer.content_churns(update) {
+        return update.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ CHURN_SALT;
+    }
+    layer.target_content_hash()
+}
+
 fn isolated_child(
     layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
@@ -958,7 +976,7 @@ fn isolated_child(
     recycler: &mut LayerSceneRecycler,
 ) -> (ChildLayer, bool) {
     let local_layer = local_content_layer_for(&layer.graphics_layer);
-    let content_hash = layer.target_content_hash();
+    let content_hash = content_key(layer, context.update);
     let nominal_scale = layer_uniform_scale(&layer.graphics_layer);
     let retained_scale = if layer.cache_policy == CachePolicy::Auto {
         motion.retained_scale(layer.node_id, nominal_scale, content_hash)
@@ -980,6 +998,7 @@ fn isolated_child(
         light: light_in_layer(layer, &context),
         wants_pixel_sensitive: context.wants_pixel_sensitive
             || (!context.translated && context.snap_anchor.is_none()),
+        update: context.update,
     };
     let mut content = recycler.take(SceneCapacityHint::default());
     let has_pixel_sensitive_subtree = collect_into(
@@ -1186,6 +1205,7 @@ fn collect_into(
                     raster_scale: context.raster_scale,
                     light: context.light,
                     wants_pixel_sensitive: context.wants_pixel_sensitive,
+                    update: context.update,
                 };
                 has_pixel_sensitive_subtree |= collect_child(
                     child_layer,
@@ -1315,6 +1335,7 @@ fn collect_child(
                 raster_scale: context.raster_scale,
                 light: context.light,
                 wants_pixel_sensitive: context.wants_pixel_sensitive,
+                update: context.update,
             };
             if child.backdrop().is_some() {
                 push_backdrop_layer(child, child_offset, child_context, &mut out.scene);
