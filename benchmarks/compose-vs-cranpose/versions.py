@@ -270,8 +270,16 @@ def version(app, platform, release=None):
 
 
 def subject(app, platform, versions=None, release=None):
-    """A run's subject: the app, its framework and version, and its source."""
-    found = (versions or {}).get(app) or version(app, platform, release)
+    """A run's subject: the app, its framework and version, and its source.
+    A version no file or tool on this machine names reads as unknown, so a
+    night's measurements are kept."""
+    found = (versions or {}).get(app)
+    if not found:
+        try:
+            found = version(app, platform, release)
+        except (OSError, subprocess.CalledProcessError) as error:
+            print(f'{app}: no version: {error}', flush=True)
+            found = 'unknown'
     return {'name': app, 'label': f'{NAMES[app]} {found}', 'version': found, 'source': SOURCES[app]}
 
 
