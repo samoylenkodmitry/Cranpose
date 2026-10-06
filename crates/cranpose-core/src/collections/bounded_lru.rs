@@ -85,6 +85,14 @@ where
         self.cap
     }
 
+    /// Sets the bound, evicting the least recently used entries past it.
+    pub fn set_cap(&mut self, cap: NonZeroUsize) {
+        self.cap = cap;
+        while self.len() > cap.get() {
+            self.pop_lru();
+        }
+    }
+
     /// Drops every entry and gives back the storage they took.
     pub fn clear(&mut self) {
         *self = Self::new(self.cap);

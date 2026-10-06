@@ -83,7 +83,10 @@ fn skip_shadow_draws() -> bool {
 const MAX_TEXT_IMAGE_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;
-const MAX_TEXT_GLYPH_RUN_CACHE_ITEMS: usize = 1024;
+/// The fewest text runs the run cache holds. It holds twice the runs the
+/// last frame drew when that is more, so a frame never evicts runs the next
+/// one draws again; idle runs leave it after `TEXT_GLYPH_RUN_IDLE_FRAMES`.
+const MIN_TEXT_GLYPH_RUN_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS: usize = 1024;
 /// Frames a text run may go undrawn before its glyphs and quads are freed,
 /// on the CPU and in retained GPU buffers alike. Shorter than the shape
@@ -3049,6 +3052,8 @@ pub struct GpuRenderer {
     text_glyph_gpu_run_cache: BoundedLruCache<TextGlyphRunCacheKey, Rc<CachedGpuTextGlyphRun>>,
     text_glyph_run_arena: GlyphRunArena,
     text_glyph_run_frame: u64,
+    /// Text runs the frame has drawn so far, cached or not.
+    text_glyph_runs_drawn: usize,
     text_glyph_mask_cache: SoftwareGlyphRasterCache,
     text_line_index_cache: TextLineIndexCache,
     pub(crate) scratch_image_vertices: Vec<Vertex>,
@@ -3404,8 +3409,9 @@ impl GpuRenderer {
             ),
             text_glyph_atlas,
             text_glyph_run_cache: BoundedLruCache::with_capacity_at_least_one(
-                MAX_TEXT_GLYPH_RUN_CACHE_ITEMS,
+                MIN_TEXT_GLYPH_RUN_CACHE_ITEMS,
             ),
+            text_glyph_runs_drawn: 0,
             text_glyph_gpu_run_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
             ),
@@ -5788,6 +5794,11 @@ impl GpuRenderer {
     fn begin_text_glyph_run_frame(&mut self) {
         self.text_glyph_run_frame += 1;
         let frame = self.text_glyph_run_frame;
+        let demand = std::mem::take(&mut self.text_glyph_runs_drawn).saturating_mul(2);
+        self.text_glyph_run_cache.set_cap(
+            std::num::NonZeroUsize::new(demand.max(MIN_TEXT_GLYPH_RUN_CACHE_ITEMS))
+                .unwrap_or(std::num::NonZeroUsize::MIN),
+        );
         evict_idle(&mut self.text_glyph_gpu_run_cache, frame, |run| {
             run.last_frame.get()
         });
@@ -5943,6 +5954,7 @@ impl GpuRenderer {
     ) -> Option<TextGlyphRunLookup> {
         let atlas_generation = self.text_glyph_atlas.generation();
         let frame = self.text_glyph_run_frame;
+        self.text_glyph_runs_drawn += 1;
         if let Some(cached) = self.text_glyph_run_cache.get(&run_key) {
             cached.last_frame.set(frame);
             return Some(TextGlyphRunLookup {
@@ -5982,6 +5994,15 @@ impl GpuRenderer {
         };
         let bounds = GlyphRunBounds::of(glyphs.iter());
         self.frame_stats.record_text_glyph_run_collected();
+        // A run this frame drew stays: the cache grows rather than evict it.
+        let cache = &mut self.text_glyph_run_cache;
+        if cache.len() == cache.cap().get()
+            && cache
+                .peek_lru()
+                .is_some_and(|(_, run)| run.last_frame.get() == frame)
+        {
+            cache.set_cap(cache.cap().saturating_add(cache.len()));
+        }
         self.text_glyph_run_cache.put(
             run_key,
             CachedTextGlyphRun {

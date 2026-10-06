@@ -182,3 +182,20 @@ fn clear_drops_every_entry_and_keeps_the_bound() {
     lru.put(4, "four");
     assert_eq!(lru.push(5, "five"), Some((3, "three")));
 }
+
+#[test]
+fn set_cap_evicts_the_least_recent_entries_past_the_new_bound() {
+    let mut cache = cache(4);
+    for (key, value) in [("a", 1), ("b", 2), ("c", 3), ("d", 4)] {
+        cache.push(key, value);
+    }
+    assert_eq!(cache.get(&"a"), Some(&1));
+
+    cache.set_cap(std::num::NonZeroUsize::new(2).expect("nonzero"));
+    assert_eq!(cache.len(), 2);
+    assert!(cache.contains(&"a") && cache.contains(&"d"));
+
+    cache.set_cap(std::num::NonZeroUsize::new(3).expect("nonzero"));
+    assert_eq!(cache.push("e", 5), None, "a raised bound takes a new entry");
+    assert_eq!(cache.len(), 3);
+}
