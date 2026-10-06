@@ -443,7 +443,7 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilityScrollToIndex(int virtualViewId, int index);
     /** Asks the app for every record again: an update named a control this host never received. */
     private static native void nativeOnAccessibilityTreeLost();
-    /** A reader read the tree the provider holds; reported once a tree. */
+    /** A reader read the tree the provider holds, once a tree, or acted on it. */
     private static native void nativeOnAccessibilityRead();
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
@@ -963,10 +963,13 @@ public class CranposeActivity extends NativeActivity {
         }
 
         private void noteRead() {
-            if (!readReported) {
-                readReported = true;
-                nativeOnAccessibilityRead();
-            }
+            if (!readReported) noteUse();
+        }
+
+        /** Reports every action: the screen it changes publishes at once. */
+        private void noteUse() {
+            readReported = true;
+            nativeOnAccessibilityRead();
         }
 
         @Override
@@ -1154,7 +1157,7 @@ public class CranposeActivity extends NativeActivity {
 
         @Override
         public boolean performAction(int virtualViewId, int action, Bundle arguments) {
-            noteRead();
+            noteUse();
             CranposeAccessibilityElement element = find(virtualViewId);
             if (element == null) return false;
             boolean showOnScreen = Build.VERSION.SDK_INT >= 23

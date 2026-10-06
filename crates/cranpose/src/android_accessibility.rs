@@ -402,7 +402,8 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
     wake_loop();
 }
 
-/// The host reports that a reader read the tree it holds, once a tree.
+/// The host reports that a reader read the tree it holds, once a tree, or
+/// acted on it.
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityRead(
