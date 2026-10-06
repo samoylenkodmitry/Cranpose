@@ -478,47 +478,80 @@ fn a_text_that_wraps_nothing_keeps_its_layout_while_its_width_grows() {
     );
 }
 
-#[test]
-fn a_wrapped_label_keeps_its_layout_while_its_width_moves_between_breaks() {
+/// Measures a text node at `first`, then at each of `widths`: the first
+/// layout's text, and whether each width kept that layout.
+fn layouts_kept_at(
+    text: &'static str,
+    options: TextLayoutOptions,
+    first: f32,
+    widths: &'static [f32],
+) -> (Option<String>, Vec<bool>) {
     let (tx, rx) = mpsc::channel();
-
     std::thread::spawn(move || {
         let app_context = crate::AppContext::new();
         app_context.enter(|| {
             let node = TextModifierNode::new(
-                Rc::new(AnnotatedString::from("cell 123")),
+                Rc::new(AnnotatedString::from(text)),
                 TextStyle::default(),
-                TextLayoutOptions::default(),
+                options,
                 crate::density::Density::new(1.0, 1.0),
             );
-            // The default monospaced measurer draws 8.4 per character, so
-            // "cell " is 42 wide and the whole label 67.2.
             let layout_at = |width: f32| {
                 node.layout.measure_layout(Some(width));
                 node.layout.measured_layout()
             };
-            let first = layout_at(50.0);
-            let text = first.as_ref().map(|layout| layout.text.text.clone());
-            let same = |other: &Option<Rc<crate::text::PreparedTextLayout>>| {
-                matches!((&first, other), (Some(a), Some(b)) if Rc::ptr_eq(a, b))
-            };
-            let moved = [layout_at(43.0), layout_at(60.0), layout_at(66.0)]
+            let held = layout_at(first);
+            let kept = widths
                 .iter()
-                .all(same);
-            let unwrapped = same(&layout_at(80.0));
-            let narrowed = same(&layout_at(30.0));
-            tx.send((text, moved, unwrapped, narrowed))
-                .expect("send layouts");
+                .map(|width| match (&held, &layout_at(*width)) {
+                    (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                    _ => false,
+                })
+                .collect();
+            let text = held.as_ref().map(|layout| layout.text.text.clone());
+            tx.send((text, kept)).expect("send layouts");
         });
     });
+    rx.recv().expect("receive layouts")
+}
 
-    let (text, moved, unwrapped, narrowed) = rx.recv().expect("receive layouts");
+#[test]
+fn a_wrapped_label_keeps_its_layout_while_its_width_moves_between_breaks() {
+    // The default monospaced measurer draws 8.4 per character, so "cell " is
+    // 42 wide and the whole label 67.2.
+    let (text, kept) = layouts_kept_at(
+        "cell 123",
+        TextLayoutOptions::default(),
+        50.0,
+        &[43.0, 60.0, 66.0, 80.0, 30.0],
+    );
     assert_eq!(text.as_deref(), Some("cell\n123"));
-    assert!(moved, "widths that break it the same keep the first layout");
-    assert!(!unwrapped, "a width the whole label fits lays it out again");
-    assert!(
-        !narrowed,
-        "a width \"cell\" no longer fits lays it out again"
+    assert_eq!(
+        kept,
+        [true, true, true, false, false],
+        "widths that break it the same keep the first layout; a width the whole label fits or \"cell\" no longer fits lays it out again"
+    );
+}
+
+#[test]
+fn an_elided_label_keeps_its_layout_while_its_width_moves_within_a_character() {
+    // At 8.4 per character, "alpha …" is 58.8 wide and "alpha b…" 67.2, so
+    // with the half-point fitting tolerance "alpha b…" fits from 66.7.
+    let (text, kept) = layouts_kept_at(
+        "alpha beta gamma delta",
+        TextLayoutOptions {
+            overflow: crate::text::TextOverflow::Ellipsis,
+            max_lines: 1,
+            ..TextLayoutOptions::default()
+        },
+        60.0,
+        &[59.0, 63.0, 66.5, 67.0, 58.0],
+    );
+    assert_eq!(text.as_deref(), Some("alpha …"));
+    assert_eq!(
+        kept,
+        [true, true, true, false, false],
+        "widths that cut the ellipsis at the same character keep the first layout"
     );
 }
 

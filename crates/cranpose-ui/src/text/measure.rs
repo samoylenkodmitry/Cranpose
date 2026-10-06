@@ -59,8 +59,9 @@ pub struct PreparedTextLayout {
     /// `text` as a renderer draws it, converted on first use: see
     /// [`PreparedTextLayout::render_text`].
     pub render_text: std::cell::OnceCell<std::sync::Arc<crate::text::RenderString>>,
-    /// The max widths the layout's greedy wrap breaks the same lines at, when
-    /// it wrapped: `None` when it did not, or broke lines another way.
+    /// The max widths the layout's greedy wrap breaks the same lines at and
+    /// cuts its ellipsis at the same character, when it wrapped: `None` when
+    /// it did not, broke lines another way, or a line overflowed its width.
     pub(crate) wrap_hold: Option<WrapHold>,
 }
 
@@ -1111,11 +1112,10 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     let did_overflow = apply_overflow(
         measurer,
         node_id,
-        text,
-        style,
+        (text, style),
         opts,
         max_width,
-        &mut visible_lines,
+        (&mut visible_lines, &mut wrap_hold),
     );
     let overflow_ms = overflow_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
 
@@ -1546,6 +1546,8 @@ impl DisplayLine {
         self.measured_width = None;
     }
 
+    /// Elides the line to fit `max_width` and returns the widths that cut
+    /// it at the same character.
     fn ellipsize<M: TextMeasurer + ?Sized>(
         &mut self,
         measurer: &M,
@@ -1554,8 +1556,8 @@ impl DisplayLine {
         style: &TextStyle,
         max_width: Option<f32>,
         placement: EllipsisPlacement,
-    ) {
-        *self = fit_ellipsis(
+    ) -> WrapHold {
+        let (line, cut) = fit_ellipsis(
             measurer,
             node_id,
             source,
@@ -1564,6 +1566,8 @@ impl DisplayLine {
             max_width,
             placement,
         );
+        *self = line;
+        cut
     }
 }
 
@@ -1641,7 +1645,8 @@ pub(crate) enum PreparedWidths {
     /// No line wrapped or overflowed: unconstrained, and every width from
     /// its measured width up. A narrower width may wrap, so it is not held.
     AtLeast(f32),
-    /// Lines wrapped greedily, and every width that breaks them the same.
+    /// Lines wrapped greedily, and every width that breaks them and cuts the
+    /// last kept line's ellipsis the same.
     Wrapped(WrapHold),
 }
 
@@ -1667,12 +1672,11 @@ impl PreparedWidths {
             .overflow
             .scale_down_min_font_size_sp()
             .is_some()
-            || prepared.did_overflow
             || trailing_space
         {
             return exact;
         }
-        if wrapped {
+        if wrapped || prepared.did_overflow {
             return match (prepared.wrap_hold, max_width) {
                 (Some(hold), Some(width)) if hold.holds(width) => Self::Wrapped(hold),
                 _ => exact,
@@ -2256,14 +2260,17 @@ fn skip_leading_whitespace(line: &str, boundaries: &[usize], mut idx: usize) -> 
     idx
 }
 
+/// Cuts `visible_lines` to the options' line limit and elides what does not
+/// fit, and returns whether anything did not. Narrows `hold` to the widths
+/// that cut the ellipsis at the same character, or clears it when a line
+/// overflows its width.
 fn apply_overflow<M: TextMeasurer + ?Sized>(
     measurer: &M,
     node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
+    (text, style): (&crate::text::AnnotatedString, &TextStyle),
     options: TextLayoutOptions,
     max_width: Option<f32>,
-    visible_lines: &mut Vec<DisplayLine>,
+    (visible_lines, hold): (&mut Vec<DisplayLine>, &mut Option<WrapHold>),
 ) -> bool {
     if options.overflow == TextOverflow::Visible {
         return false;
@@ -2275,7 +2282,10 @@ fn apply_overflow<M: TextMeasurer + ?Sized>(
         visible_lines.truncate(options.max_lines);
         if let (Some(placement), Some(last_line)) = (ellipsis, visible_lines.last_mut()) {
             last_line.extend_to_paragraph_end(text);
-            last_line.ellipsize(measurer, node_id, text, style, max_width, placement);
+            let cut = last_line.ellipsize(measurer, node_id, text, style, max_width, placement);
+            if let Some(hold) = hold {
+                hold.narrow(cut.fits, cut.pulls_up);
+            }
         }
     }
 
@@ -2288,6 +2298,7 @@ fn apply_overflow<M: TextMeasurer + ?Sized>(
             continue;
         }
         did_overflow = true;
+        *hold = None;
         if line_index + 1 == visible_len
             && let Some(placement) = ellipsis
         {
@@ -2378,6 +2389,9 @@ impl EllipsisPlacement {
     }
 }
 
+/// The line `source_range` elided at `placement` to fit `max_width`, and the
+/// widths the same elision fits: from its own width up to the width of the
+/// elision keeping one character more.
 fn fit_ellipsis<M: TextMeasurer + ?Sized>(
     measurer: &M,
     node_id: Option<NodeId>,
@@ -2386,8 +2400,9 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     max_width: Option<f32>,
     placement: EllipsisPlacement,
-) -> DisplayLine {
+) -> (DisplayLine, WrapHold) {
     let width_limit = max_width.unwrap_or(f32::INFINITY);
+    // The line when it fits, or the width it overflows at.
     let fitting_line = |text: DisplayLineText| {
         let mut line = DisplayLine {
             source_range: source_range.clone(),
@@ -2395,13 +2410,22 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
             measured_width: None,
         };
         let width = line.measure_width(measurer, node_id, source, style);
-        (width <= width_limit + WRAP_EPSILON).then_some(line)
+        if width <= width_limit + WRAP_EPSILON {
+            Ok(line)
+        } else {
+            Err(width)
+        }
     };
-    if placement != EllipsisPlacement::End
-        && let Some(line) = fitting_line(DisplayLineText::Source)
-    {
-        return line;
-    }
+    // Keeping every character elides nothing, so the whole line bounds the
+    // widths an elision holds.
+    let whole = if placement == EllipsisPlacement::End {
+        f32::INFINITY
+    } else {
+        match fitting_line(DisplayLineText::Source) {
+            Ok(line) => return ElisionSearch::found(line, f32::INFINITY),
+            Err(width) => width,
+        }
+    };
 
     let boundaries = char_boundaries(&source.text[source_range.clone()]);
     let elided_line = |kept_chars: usize| {
@@ -2412,16 +2436,18 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
             kept_chars,
         )))
     };
-    let Some(mut best) = elided_line(0) else {
-        return DisplayLine {
-            source_range: source_range.clone(),
-            text: DisplayLineText::Ellipsized(crate::text::AnnotatedString::default()),
-            measured_width: None,
-        };
+    let best = match elided_line(0) {
+        Ok(line) => line,
+        Err(ellipsis_width) => {
+            let empty = DisplayLine {
+                source_range: source_range.clone(),
+                text: DisplayLineText::Ellipsized(crate::text::AnnotatedString::default()),
+                measured_width: None,
+            };
+            return ElisionSearch::found(empty, ellipsis_width);
+        }
     };
 
-    let mut fitting = 0usize;
-    let mut overflowing = boundaries.len();
     // The line's prefix widths place the cut without measuring an elided
     // string per guess; measuring the guess and the one past it confirms it,
     // and the search below only runs when shaping across the cut moved it.
@@ -2431,31 +2457,53 @@ fn fit_ellipsis<M: TextMeasurer + ?Sized>(
             .filter(|widths| widths.char_count() + 1 == boundaries.len())
             .and_then(|widths| placement.estimated_kept_chars(&widths, ellipsis_width, width_limit))
     });
+    let mut search = ElisionSearch {
+        best,
+        fitting: 0,
+        overflowing: boundaries.len(),
+        overflow_width: whole,
+    };
     if let Some(guess) = guess.filter(|guess| *guess > 0) {
         for kept_chars in [guess, guess + 1] {
-            if kept_chars <= fitting || kept_chars >= overflowing {
+            if kept_chars <= search.fitting || kept_chars >= search.overflowing {
                 break;
             }
-            match elided_line(kept_chars) {
-                Some(line) => {
-                    fitting = kept_chars;
-                    best = line;
-                }
-                None => overflowing = kept_chars,
-            }
+            search.probe(kept_chars, elided_line(kept_chars));
         }
     }
-    while fitting + 1 < overflowing {
-        let kept_chars = fitting + (overflowing - fitting) / 2;
-        match elided_line(kept_chars) {
-            Some(line) => {
-                fitting = kept_chars;
-                best = line;
-            }
-            None => overflowing = kept_chars,
+    while search.fitting + 1 < search.overflowing {
+        let kept_chars = search.fitting + (search.overflowing - search.fitting) / 2;
+        search.probe(kept_chars, elided_line(kept_chars));
+    }
+    ElisionSearch::found(search.best, search.overflow_width)
+}
+
+/// The most characters an elision was found to keep within the width, and
+/// the fewest it was found to overflow at.
+struct ElisionSearch {
+    best: DisplayLine,
+    fitting: usize,
+    overflowing: usize,
+    overflow_width: f32,
+}
+
+impl ElisionSearch {
+    fn probe(&mut self, kept_chars: usize, line: Result<DisplayLine, f32>) {
+        match line {
+            Ok(line) => (self.fitting, self.best) = (kept_chars, line),
+            Err(width) => (self.overflowing, self.overflow_width) = (kept_chars, width),
         }
     }
-    best
+
+    /// `line`, and the widths it fits while the next wider elision, which is
+    /// `overflow_width` wide, does not.
+    fn found(line: DisplayLine, overflow_width: f32) -> (DisplayLine, WrapHold) {
+        let cut = WrapHold {
+            fits: line.measured_width.unwrap_or(f32::NEG_INFINITY),
+            pulls_up: overflow_width,
+        };
+        (line, cut)
+    }
 }
 
 fn char_boundaries(text: &str) -> Vec<usize> {
