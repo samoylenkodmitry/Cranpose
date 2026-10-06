@@ -16,8 +16,9 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.2 for the catch-up barrier below, and
-`cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.2 to require it.
+`cranpose-wgpu-hal` is at 30.0.3 for the catch-up barrier and the Metal
+pipeline switch below, and `cranpose-wgpu-core` and `cranpose-wgpu` are at
+30.0.3 to require it.
 
 | fork | upstream |
 | --- | --- |
@@ -70,6 +71,18 @@ The fork also defines compact `Debug` output for Vulkan samplers and texture
 views. These implementations omit the Vulkan create-info and raw format fields.
 The smaller output lets the linker remove ash's large enum-name formatters.
 Commit `aea67c5d8` records an ARM64 benchmark-library reduction of 85,872 bytes.
+
+### Metal pipeline switches copy only vertex buffer locations
+
+A Metal render pass copies the bound pipeline's stage info into its state at
+every `set_render_pipeline`. Upstream keeps the stage's naga vertex buffer
+mappings there, each owning a vector of attributes, so every switch
+allocated once per mapping: about 2,100 allocations a frame in Cranpose's
+gauntlet benchmark at tier 12 on an M5. The pass reads only each mapping's
+shader location, to put that buffer's size in the sizes buffer. The fork
+keeps those locations (`vertex_buffer_ids`), which a switch copies into the
+capacity it already holds. Shader compilation still receives the full
+mappings.
 
 ### Update the fork
 
