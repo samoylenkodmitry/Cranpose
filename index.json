@@ -271,6 +271,116 @@
     }
    },
    "confirmed_regressions": {}
+  },
+  {
+   "file": "runs/2026-10-06-frameworks-b5ab87780-Apple-M3-Pro.json",
+   "kind": "frameworks",
+   "started_at": "2026-10-06T06:59:18+00:00",
+   "device": "Apple M3 Pro",
+   "main": "b5ab87780fe6facf5b9fcb9cec7f482f341098ee",
+   "release": null,
+   "subjects": [
+    {
+     "name": "cranpose",
+     "label": "Cranpose 0.9.7 main b5ab87780",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
+    },
+    {
+     "name": "egui",
+     "label": "egui 0.36.2",
+     "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
+    },
+    {
+     "name": "slint",
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
+    },
+    {
+     "name": "iced",
+     "label": "iced 0.14.0",
+     "source": "benchmarks/compose-vs-cranpose/iced-app/src/main.rs"
+    },
+    {
+     "name": "gpui",
+     "label": "GPUI 0.3.8",
+     "source": "benchmarks/compose-vs-cranpose/gpui-app/src/main.rs"
+    },
+    {
+     "name": "avalonia",
+     "label": "Avalonia 12.1.3",
+     "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"
+    },
+    {
+     "name": "swiftui",
+     "label": "SwiftUI macOS 27.0",
+     "source": "benchmarks/compose-vs-cranpose/swiftui-app/Gauntlet.swift"
+    },
+    {
+     "name": "flutter",
+     "label": "Flutter 3.47.6",
+     "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
+    },
+    {
+     "name": "compose",
+     "label": "Compose Multiplatform 1.12.1",
+     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
+    },
+    {
+     "name": "web",
+     "label": "Web Chrome 154.0.8037.98",
+     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"
+    }
+   ],
+   "duration_s": 267,
+   "scenarios": {
+    "gauntlet": {
+     "legs": 30,
+     "summary": {
+      "cranpose": {
+       "fps": 14.8,
+       "cpu_ms_per_frame": 67.37
+      },
+      "egui": {
+       "fps": 56.0,
+       "cpu_ms_per_frame": 15.73
+      },
+      "slint": {
+       "fps": 24.0,
+       "cpu_ms_per_frame": 42.65
+      },
+      "iced": {
+       "fps": 47.4,
+       "cpu_ms_per_frame": 22.48
+      },
+      "gpui": {
+       "fps": 22.5,
+       "cpu_ms_per_frame": 44.7
+      },
+      "avalonia": {
+       "fps": 21.6,
+       "cpu_ms_per_frame": 70.82
+      },
+      "swiftui": {
+       "fps": 9.0,
+       "cpu_ms_per_frame": 106.94
+      },
+      "flutter": {
+       "fps": 26.4,
+       "cpu_ms_per_frame": 59.18
+      },
+      "compose": {
+       "fps": 20.6,
+       "cpu_ms_per_frame": 86.66
+      },
+      "web": {
+       "fps": 35.9,
+       "cpu_ms_per_frame": 53.47
+      }
+     },
+     "verdicts": {}
+    }
+   },
+   "confirmed_regressions": {}
   }
  ]
 }
