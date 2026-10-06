@@ -113,6 +113,7 @@ fn shape_snap_does_not_move_its_fixed_ancestor_clip() {
         stroke: None,
         arc: None,
         line: None,
+        trapezoid: None,
         z_index: 0,
         clip: Some(Rect {
             x: 2.0,
@@ -528,6 +529,7 @@ fn shape_template(rect: Rect) -> crate::scene::DrawShape {
         stroke: None,
         arc: None,
         line: None,
+        trapezoid: None,
         z_index: 0,
         clip: None,
         blend_mode: BlendMode::SrcOver,

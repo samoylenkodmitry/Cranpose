@@ -3,7 +3,10 @@ use cranpose_ui::{
     TextLayoutOptions, TextStyle,
     text::{Shadow, SpanStyle, TextDecoration},
 };
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, Point, Rect, Stroke};
+use cranpose_ui_graphics::{
+    Brush, Color, CornerRadii, DrawPrimitive, DrawScope, DrawScopeDefault, DrawStyle, Path, Point,
+    Rect, Size, Stroke, Trapezoid,
+};
 
 use crate::{
     graph::{
@@ -65,9 +68,10 @@ pub enum SharedRenderCase {
     ClippedText,
     StrokedRoundRect,
     AnnularSector,
+    FilledPath,
 }
 
-pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 9] = [
+pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 10] = [
     SharedRenderCase::RoundedRect,
     SharedRenderCase::PrimitiveClip,
     SharedRenderCase::TranslatedSubtree,
@@ -77,6 +81,7 @@ pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 9] = [
     SharedRenderCase::ClippedText,
     SharedRenderCase::StrokedRoundRect,
     SharedRenderCase::AnnularSector,
+    SharedRenderCase::FilledPath,
 ];
 
 impl SharedRenderCase {
@@ -91,6 +96,7 @@ impl SharedRenderCase {
             SharedRenderCase::ClippedText => "clipped_text",
             SharedRenderCase::StrokedRoundRect => "stroked_round_rect",
             SharedRenderCase::AnnularSector => "annular_sector",
+            SharedRenderCase::FilledPath => "filled_path",
         }
     }
 
@@ -114,6 +120,7 @@ impl SharedRenderCase {
             SharedRenderCase::ClippedText => vec![clipped_text_fixture()],
             SharedRenderCase::StrokedRoundRect => vec![stroked_round_rect_fixture()],
             SharedRenderCase::AnnularSector => vec![annular_sector_fixture()],
+            SharedRenderCase::FilledPath => vec![filled_path_fixture()],
         }
     }
 
@@ -163,6 +170,12 @@ impl SharedRenderCase {
                     panic!("clipped_text expects exactly one rendered frame");
                 };
                 assert_clipped_text_frame(&frame.pixels, frame.width, frame.height);
+            }
+            SharedRenderCase::FilledPath => {
+                let [frame] = frames else {
+                    panic!("filled_path expects exactly one rendered frame");
+                };
+                assert_filled_path_frame(&frame.pixels, frame.width, frame.height);
             }
         }
     }
@@ -592,6 +605,62 @@ fn annular_sector_fixture() -> RenderFixture {
             None,
         )],
     )
+}
+
+/// A sparkline a draw scope fills: slices whose sides meet, with steep
+/// edges that stand above the columns beside them.
+fn filled_path_primitives() -> Vec<DrawPrimitive> {
+    let mut path = Path::new();
+    path.move_to(Point::new(6.0, 66.0));
+    for (index, y) in [40.0, 8.0, 52.0, 20.5, 61.0, 14.25].into_iter().enumerate() {
+        path.line_to(Point::new(6.0 + index as f32 * 12.0, y));
+    }
+    path.line_to(Point::new(66.0, 66.0));
+    path.close();
+    let mut scope = DrawScopeDefault::new(Size::new(72.0, 72.0));
+    scope.draw_path(&path, Brush::solid(FOREGROUND_COLOR), DrawStyle::Fill);
+    scope.into_primitives()
+}
+
+fn filled_path_fixture() -> RenderFixture {
+    build_fixture(
+        72,
+        72,
+        filled_path_primitives()
+            .into_iter()
+            .map(|primitive| draw_node(primitive, None))
+            .collect(),
+    )
+}
+
+/// Each pixel takes the share of the foreground the fill's slices give it.
+fn assert_filled_path_frame(pixels: &[u8], width: u32, height: u32) {
+    assert_eq!((width, height), (72, 72));
+    let slices: Vec<Trapezoid> = filled_path_primitives()
+        .iter()
+        .filter_map(|primitive| match primitive {
+            DrawPrimitive::Trapezoid { trapezoid, .. } => Some(*trapezoid),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(slices.len(), 5, "the fill slices between its points");
+    let background = f32::from(sample_pixel(pixels, width, 2, 2)[0]);
+    let foreground = FOREGROUND_COLOR.r() * 255.0;
+    for y in 0..height {
+        for x in 0..width {
+            let centre = Point::new(x as f32 + 0.5, y as f32 + 0.5);
+            let expected = slices.iter().fold(0.0f32, |value, slice| {
+                value + slice.coverage(centre) * (1.0 - value)
+            });
+            let actual = (f32::from(sample_pixel(pixels, width, x, y)[0]) - background)
+                / (foreground - background);
+            assert!(
+                (actual - expected).abs() <= 0.05,
+                "filled path pixel ({x}, {y}) carries {actual:.3} of the foreground, \
+                 its slices give it {expected:.3}"
+            );
+        }
+    }
 }
 
 fn assert_stroked_round_rect_frame(pixels: &[u8], width: u32, height: u32) {

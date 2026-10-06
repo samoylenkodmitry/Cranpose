@@ -843,6 +843,7 @@ fn takes_rounded_clip(primitive: &DrawPrimitive) -> bool {
             | DrawPrimitive::RoundRect { .. }
             | DrawPrimitive::Arc { .. }
             | DrawPrimitive::Line { .. }
+            | DrawPrimitive::Trapezoid { .. }
             | DrawPrimitive::Image { .. }
     )
 }

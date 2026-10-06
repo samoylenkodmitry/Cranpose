@@ -361,6 +361,23 @@ fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
             hash_point(*end, state);
             hash_optional_stroke(Some(*stroke), state);
         }
+        DrawPrimitive::Trapezoid {
+            rect,
+            brush,
+            trapezoid,
+        } => {
+            10u8.hash(state);
+            hash_rect(*rect, state);
+            hash_brush(brush, state);
+            for value in [trapezoid.left, trapezoid.right]
+                .into_iter()
+                .chain(trapezoid.top)
+                .chain(trapezoid.bottom)
+            {
+                hash_f32_bits(value, state);
+            }
+            [trapezoid.open_left, trapezoid.open_right].hash(state);
+        }
         DrawPrimitive::Image {
             rect,
             image,

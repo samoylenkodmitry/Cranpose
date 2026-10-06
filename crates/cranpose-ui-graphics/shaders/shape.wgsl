@@ -145,6 +145,44 @@ fn full_from_dithered_fill(fill: DitheredFillOutput) -> VertexOutput {
     return output;
 }
 
+// What a slice of a path fill drawn flat needs: its colour, its edges, with
+// which sides are open in the signs of their lengths, and its clip. A tiling
+// GPU stores every vector a vertex writes, and a sparkline's fill takes a
+// slice for each of its points, so the set is kept to these.
+struct SliceOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) @interpolate(flat) color: vec4<f32>,
+    @location(1) @interpolate(flat) edges: vec4<f32>,
+    @location(2) @interpolate(flat) bottom: vec4<f32>,
+    @location(3) @interpolate(flat) clip_rect: vec4<f32>,
+}
+
+fn slice_output(full: VertexOutput) -> SliceOutput {
+    let open = (u32(max(full.stroke_params.y, 0.0)) >> 4u) & 3u;
+    let signs = select(vec2<f32>(1.0), vec2<f32>(-1.0), vec2<bool>((open & 1u) != 0u, (open & 2u) != 0u));
+    return SliceOutput(
+        full.clip_position,
+        full.color,
+        full.arc_params,
+        vec4<f32>(full.radii.xy, full.radii.zw * signs),
+        full.clip_rect,
+    );
+}
+
+// `SliceOutput` for a linear gradient between two stops: the stops, and the
+// vertex's place in the dither pattern and between the stops. Where it lies
+// between them is affine, so it interpolates exactly, and the fragment
+// clamps it as the gradient sampler clamps its own.
+struct GradientSliceOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) @interpolate(flat) color: vec4<f32>,
+    @location(1) @interpolate(flat) edges: vec4<f32>,
+    @location(2) @interpolate(flat) bottom: vec4<f32>,
+    @location(3) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(4) @interpolate(flat) color_end: vec4<f32>,
+    @location(5) ramp: vec3<f32>,
+}
+
 struct GradientFillOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) world_pos: vec4<f32>,
@@ -495,9 +533,7 @@ fn fill_interior(rect: vec4<f32>, radii: vec4<f32>) -> vec4<f32> {
 // corner never leaves a pixel just short of full coverage.
 const ARC_INSET_SLACK: f32 = 0.015625;
 
-fn linear_gradient_line(params: vec4<f32>, geometry: RecordGeometry) -> vec4<f32> {
-    let rect = geometry.rect;
-    let canonicalize = geometry.canonicalize;
+fn linear_gradient_line(params: vec4<f32>, rect: vec4<f32>, canonicalize: bool) -> vec4<f32> {
     return vec4<f32>(
         device_coordinate(resolve_gradient_point(rect.x, rect.z, params.x), canonicalize),
         device_coordinate(resolve_gradient_point(rect.y, rect.w, params.y), canonicalize),
@@ -506,15 +542,41 @@ fn linear_gradient_line(params: vec4<f32>, geometry: RecordGeometry) -> vec4<f32
     );
 }
 
-fn vertex_gradient_color(record: ShapeRecord, geometry: RecordGeometry, position: vec2<f32>) -> vec4<f32> {
+// A linear gradient between two stops at a vertex: the stops' colours and
+// where the vertex lies between them, 0 at the first and 1 at the last.
+struct GradientRamp {
+    first: vec4<f32>,
+    last: vec4<f32>,
+    t: f32,
+}
+
+fn vertex_gradient_ramp(
+    record: ShapeRecord,
+    rect: vec4<f32>,
+    canonicalize: bool,
+    scale: f32,
+    position: vec2<f32>,
+) -> GradientRamp {
     let brush = brushes[record.brush - 1u];
-    let line = linear_gradient_line(brush.params * geometry.scale, geometry);
+    let line = linear_gradient_line(brush.params * scale, rect, canonicalize);
     let dir = line.zw - line.xy;
     let t = dot(position - line.xy, dir) / max(dot(dir, dir), 0.00001);
     let first = gradient_stops[brush.stop_start];
     let last = gradient_stops[brush.stop_start + 1u];
     let span = max(last.position.x - first.position.x, 0.00001);
-    return mix(first.color, last.color, (t - first.position.x) / span);
+    return GradientRamp(first.color, last.color, (t - first.position.x) / span);
+}
+
+fn vertex_gradient_color(record: ShapeRecord, rect: vec4<f32>, geometry: RecordGeometry, position: vec2<f32>) -> vec4<f32> {
+    let ramp = vertex_gradient_ramp(record, rect, geometry.canonicalize, geometry.scale, position);
+    return mix(ramp.first, ramp.last, ramp.t);
+}
+
+// The rect a slice of a path fill resolves its brush against: the one it
+// carries in its radii, the same for every slice of the fill.
+fn slice_brush_rect(record: ShapeRecord, placement: Placement) -> vec4<f32> {
+    let scale = placement.root_scale;
+    return vec4<f32>((record.radii.xy + placement.offset) * scale, record.radii.zw * scale);
 }
 
 fn shape_output(
@@ -531,10 +593,41 @@ fn shape_output(
     let scale = geometry.scale;
     let kind = record.flags & 3u;
     let stroked = DRAWS_STROKES & ((record.flags & RECORD_STROKED) != 0u);
+    let line_cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
+    let trapezoid = (DRAWS_LINES & (kind == RECORD_KIND_LINE)) & is_trapezoid(line_cap);
 
-    if (DRAWS_LINES & (kind == RECORD_KIND_LINE)) {
+    if (trapezoid) {
+        let frame = trapezoid_frame(record, placement);
+        let open = (record.flags >> RECORD_JOIN_SHIFT) & 3u;
+        let width = max(frame.sides.y - frame.sides.x, TRAPEZOID_MIN_WIDTH);
+        let lengths = vec2<f32>(
+            length(vec2<f32>(width, frame.top.y - frame.top.x)),
+            length(vec2<f32>(width, frame.bottom.y - frame.bottom.x)),
+        );
+        output.arc_params = vec4<f32>(frame.sides, frame.top);
+        output.radii = vec4<f32>(frame.bottom, lengths);
+        output.stroke_params = vec4<f32>(
+            0.0,
+            f32(SHAPE_KIND_LINE | (TRAPEZOID_CAP << 2u) | (open << 4u)),
+            0.0,
+            0.0,
+        );
+        // The bands test discards outside `rect`: give it every corner the
+        // vertex stage may place, each edge's slope and reach over the
+        // margin past either side.
+        let reach = BAND_MARGIN * (1.0 + (abs(vec2<f32>(
+            frame.top.y - frame.top.x,
+            frame.bottom.y - frame.bottom.x,
+        )) + lengths) / width);
+        let low = vec2<f32>(frame.sides.x - BAND_MARGIN, min(frame.top.x, frame.top.y) - reach.x);
+        let high = vec2<f32>(
+            frame.sides.y + BAND_MARGIN,
+            max(frame.bottom.x, frame.bottom.y) + reach.y,
+        );
+        output.rect = vec4<f32>(low, high - low);
+    } else if (DRAWS_LINES & (kind == RECORD_KIND_LINE)) {
         let line = line_frame(record, placement);
-        let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
+        let cap = line_cap;
         output.radii = vec4<f32>(0.0);
         output.stroke_params = vec4<f32>(
             line.half_width,
@@ -610,13 +703,14 @@ fn shape_output(
 
     output.gradient_params = vec4<f32>(0.0);
     output.brush = vec4<u32>(0u);
+    let brush_rect = select(geometry.rect, slice_brush_rect(record, placement), trapezoid);
     if (!SHAPE_SOLID & (record.brush != 0u)) {
         let brush = brushes[record.brush - 1u];
-        let rect = geometry.rect;
+        let rect = brush_rect;
         let canonicalize = geometry.canonicalize;
         let params = brush.params * scale;
         if (brush.kind == BRUSH_LINEAR) {
-            output.gradient_params = linear_gradient_line(params, geometry);
+            output.gradient_params = linear_gradient_line(params, rect, canonicalize);
         } else if (brush.kind == BRUSH_RADIAL) {
             output.gradient_params = vec4<f32>(
                 device_coordinate(rect.x + params.x, canonicalize),
@@ -641,7 +735,7 @@ fn shape_output(
         output.stop_color3 = stops.color3;
     } else if (SHAPE_DITHER) {
         if ((record.flags & RECORD_VERTEX_GRADIENT) != 0u) {
-            output.color = vertex_gradient_color(record, geometry, position);
+            output.color = vertex_gradient_color(record, brush_rect, geometry, position);
         } else {
             output.world_pos = vec4<f32>(position, vec2<f32>(UNDITHERED));
         }
@@ -665,13 +759,23 @@ fn record_vertex(record: ShapeRecord, local: u32) -> VertexOutput {
     let placement = record_placement(record);
     let geometry = record_geometry(record, placement);
     var position: vec2<f32>;
-    if (DRAWS_LINES & ((record.flags & 3u) == RECORD_KIND_LINE)) {
-        let line = line_frame(record, placement);
-        let cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
+    let line_cap = (record.flags >> RECORD_CAP_SHIFT) & 3u;
+    if ((DRAWS_LINES & ((record.flags & 3u) == RECORD_KIND_LINE)) & is_trapezoid(line_cap)) {
+        position = trapezoid_corner(
+            trapezoid_frame(record, placement),
+            (record.flags >> RECORD_JOIN_SHIFT) & 3u,
+            placement_turned(placement),
+            min(local, 3u),
+        );
         if (local >= 4u) {
-            return pinned(line_corner(line, cap, 3u), placement);
+            return pinned(position, placement);
         }
-        position = line_corner(line, cap, local);
+    } else if (DRAWS_LINES & ((record.flags & 3u) == RECORD_KIND_LINE)) {
+        let line = line_frame(record, placement);
+        if (local >= 4u) {
+            return pinned(line_corner(line, line_cap, 3u), placement);
+        }
+        position = line_corner(line, line_cap, local);
     } else if (DRAWS_BANDS & ((record.flags & RECORD_ARC_BANDED) != 0u)) {
         let segments = 1u << ((record.flags >> RECORD_BAND_CLASS_SHIFT) & RECORD_BAND_CLASS_MASK);
         if (local >= segments * 2u + 2u) {
@@ -802,6 +906,42 @@ fn vs_record_dithered_fill(
 }
 
 @vertex
+fn vs_record_slice(
+    @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
+    record: ShapeRecord,
+) -> SliceOutput {
+    return slice_output(placed_record_vertex(record, vertex_idx, instance));
+}
+
+@vertex
+fn vs_record_gradient_slice(
+    @builtin(vertex_index) vertex_idx: u32,
+    @builtin(instance_index) instance: u32,
+    record: ShapeRecord,
+) -> GradientSliceOutput {
+    let full = placed_record_vertex(record, vertex_idx, instance);
+    let slice = slice_output(full);
+    let placement = record_placement(record);
+    let ramp = vertex_gradient_ramp(
+        record,
+        slice_brush_rect(record, placement),
+        false,
+        placement.root_scale,
+        full.world_pos.xy,
+    );
+    return GradientSliceOutput(
+        slice.clip_position,
+        ramp.first,
+        slice.edges,
+        slice.bottom,
+        slice.clip_rect,
+        ramp.last,
+        vec3<f32>(full.world_pos.zw, ramp.t),
+    );
+}
+
+@vertex
 fn vs_record_gradient_fill(
     @builtin(vertex_index) vertex_idx: u32,
     @builtin(instance_index) instance: u32,
@@ -830,8 +970,10 @@ fn vs_record_interior(
     // last corner, so neither rasterizes anything.
     var output: InteriorOutput;
     output.clip_position = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    // Arcs and line records, segments and slices of path fills alike, have
+    // no rect interior.
     let kind = record.flags & 3u;
-    if (kind == RECORD_KIND_ARC || (record.flags & RECORD_STROKED) != 0u || record.brush != 0u) {
+    if (kind >= RECORD_KIND_ARC || (record.flags & RECORD_STROKED) != 0u || record.brush != 0u) {
         return output;
     }
     let depth = record_depth(instance);
@@ -947,6 +1089,85 @@ fn line_coverage(p: vec2<f32>, frame: vec4<f32>, params: vec4<f32>, cap: u32) ->
     return across_coverage * clamp(reach + 0.5 - along, 0.0, 1.0);
 }
 
+// A slice of a path fill in device space: its left and right sides, and
+// its top and bottom edges' y at each. The record keeps the edges' y in
+// `arc_geometry` and its sides in `arc_normalized`, in its own units.
+struct TrapezoidFrame {
+    sides: vec2<f32>,
+    top: vec2<f32>,
+    bottom: vec2<f32>,
+}
+
+// Narrower slices are measured as this wide, so no edge's slope divides by
+// zero; the rasterizer gives such a slice few pixels or none.
+const TRAPEZOID_MIN_WIDTH: f32 = 1.0e-6;
+
+fn trapezoid_frame(record: ShapeRecord, placement: Placement) -> TrapezoidFrame {
+    let scale = placement.root_scale;
+    return TrapezoidFrame(
+        (record.arc_normalized.xy + placement.offset.x) * scale,
+        (record.arc_geometry.xy + placement.offset.y) * scale,
+        (record.arc_geometry.zw + placement.offset.y) * scale,
+    );
+}
+
+// Corner `local` of a slice's quad, which walks it as a rect's quad does:
+// the right side in its high bit and the bottom in its low one. Each edge
+// is pushed out across itself by the antialiasing margin, and an open side
+// out past itself, as every side of a turned slice is: a turned slice tests
+// which pixels its shared sides own, while a flat one leaves that to the
+// rasterizer, which gives a pixel on a shared side to one slice alone.
+fn trapezoid_corner(frame: TrapezoidFrame, open: u32, turned: bool, local: u32) -> vec2<f32> {
+    let right = (local >> 1u) == 1u;
+    let padded = turned | ((open & select(1u, 2u, right)) != 0u);
+    let pad = select(0.0, BAND_MARGIN, padded);
+    let x = select(frame.sides.x - pad, frame.sides.y + pad, right);
+    let width = max(frame.sides.y - frame.sides.x, TRAPEZOID_MIN_WIDTH);
+    let along = (x - frame.sides.x) / width;
+    let rise = vec2<f32>(frame.top.y - frame.top.x, frame.bottom.y - frame.bottom.x);
+    let reach = BAND_MARGIN * vec2<f32>(
+        length(vec2<f32>(width, rise.x)),
+        length(vec2<f32>(width, rise.y)),
+    ) / width;
+    let top = frame.top.x + rise.x * along - reach.x;
+    let bottom = frame.bottom.x + rise.y * along + reach.y;
+    return vec2<f32>(x, select(min(top, bottom), max(top, bottom), (local & 1u) == 1u));
+}
+
+// How far `p` lies inside a slice's edge from `a` to `b` of length
+// `extent`, `side` 1 for a top edge and -1 for a bottom one: across the
+// edge beside it, and from the nearer end past either end, so a steep edge
+// does not shade the column past its end. `Trapezoid::coverage` on the CPU
+// takes the same distances.
+fn trapezoid_edge_distance(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>, extent: f32, side: f32) -> f32 {
+    let along = (b - a) / extent;
+    let offset = p - a;
+    let across = (offset.y * along.x - offset.x * along.y) * side;
+    let t = dot(offset, along);
+    let past = select(p - b, offset, t < 0.0);
+    return select(across, sign(across) * length(past), (t < 0.0) | (t > extent));
+}
+
+// The share of the pixel at `p` a slice covers: half a pixel each way
+// across its edges and its open sides. `edges` is its sides and top edge,
+// `bottom` its bottom edge and the two edges' lengths, `open` which sides
+// are open. A turned slice owns only the centres in its columns on a
+// shared side.
+fn trapezoid_coverage(p: vec2<f32>, edges: vec4<f32>, bottom: vec4<f32>, open: u32, turned: bool) -> f32 {
+    let shared_left = (open & 1u) == 0u;
+    let shared_right = (open & 2u) == 0u;
+    if (turned & ((shared_left & (p.x < edges.x)) | (shared_right & (p.x >= edges.y)))) {
+        return 0.0;
+    }
+    let below_top = trapezoid_edge_distance(p, edges.xz, edges.yw, bottom.z, 1.0);
+    let above_bottom =
+        trapezoid_edge_distance(p, vec2<f32>(edges.x, bottom.x), vec2<f32>(edges.y, bottom.y), bottom.w, -1.0);
+    let band = clamp(below_top + 0.5, 0.0, 1.0) + clamp(above_bottom + 0.5, 0.0, 1.0) - 1.0;
+    let sides = select(clamp(p.x - edges.x + 0.5, 0.0, 1.0), 1.0, shared_left)
+        + select(clamp(edges.y - p.x + 0.5, 0.0, 1.0), 1.0, shared_right) - 1.0;
+    return max(band, 0.0) * clamp(sides, 0.0, 1.0);
+}
+
 fn band_padded_range(mid: f32, ring_half: f32, start: f32, sweep: f32) -> vec2<f32> {
     let inner_padded = mid - ring_half;
     if (inner_padded <= 0.0) {
@@ -1010,9 +1231,11 @@ fn band_position(
 // `stroke_params.y` packs three 2-bit fields and a flag:
 //
 //   bits 0-1  shape kind : 0 = fill, 1 = stroked rect/round-rect, 2 = arc band,
-//                          3 = line
-//   bits 2-3  stroke cap : 0 = butt, 1 = round, 2 = square   (arcs and lines)
-//   bits 4-5  stroke join: 0 = miter, 1 = round, 2 = bevel   (rects only)
+//                          3 = line, or a slice of a path fill
+//   bits 2-3  stroke cap : 0 = butt, 1 = round, 2 = square   (arcs and lines);
+//                          `TRAPEZOID_CAP` marks a slice
+//   bits 4-5  stroke join: 0 = miter, 1 = round, 2 = bevel   (rects only);
+//                          a slice's open sides, bit 4 its left and 5 its right
 //   bit  6    turned     : `SHAPE_FLAG_TURNED`, under `TURNS_MIXED` only
 //
 // Angle convention for arcs: radians, 0 = +X, increasing CLOCKWISE on screen
@@ -1022,6 +1245,10 @@ const SHAPE_KIND_FILL: u32 = 0u;
 const SHAPE_KIND_STROKE: u32 = 1u;
 const SHAPE_KIND_ARC: u32 = 2u;
 const SHAPE_KIND_LINE: u32 = 3u;
+// A kind only `SHAPE_KINDS` names: a slice is a line record whose cap is
+// `TRAPEZOID_CAP`.
+const SHAPE_KIND_TRAPEZOID: u32 = 4u;
+const TRAPEZOID_CAP: u32 = 3u;
 
 // Pipeline constants a batch fixes when every record it draws agrees: the
 // shape kind (-1 keeps the per-record ladder), whether every brush is solid,
@@ -1029,10 +1256,14 @@ const SHAPE_KIND_LINE: u32 = 3u;
 // the batch cannot take out of the program; the record data stays the same,
 // so the general program and every specialised one shade one record alike.
 override SHAPE_KIND_FIXED: i32 = -1;
-override SHAPE_KINDS: u32 = 15u;
+override SHAPE_KINDS: u32 = 31u;
 override DRAWS_STROKES: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_STROKE)) != 0u;
 override DRAWS_ARCS: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_ARC)) != 0u;
-override DRAWS_LINES: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_LINE)) != 0u;
+// Line records are segments or slices of path fills; a pipeline compiles in
+// the code of only those it draws.
+override DRAWS_SEGMENTS: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_LINE)) != 0u;
+override DRAWS_TRAPEZOIDS: bool = (SHAPE_KINDS & (1u << SHAPE_KIND_TRAPEZOID)) != 0u;
+override DRAWS_LINES: bool = DRAWS_SEGMENTS || DRAWS_TRAPEZOIDS;
 override DRAWS_BANDS: bool = SHAPE_BANDS && (DRAWS_ARCS || DRAWS_STROKES);
 override SHAPE_SOLID: bool = false;
 // Whether a fill's interior is shaded apart, off for a solid batch and for
@@ -1049,6 +1280,11 @@ override SHAPE_DISCARD: bool = false;
 override BRUSH_KIND_FIXED: i32 = -1;
 override SHAPE_DITHER: bool = false;
 const UNDITHERED: f32 = -1.0e30;
+
+// Whether a line record whose cap bits are `cap` is a slice of a path fill.
+fn is_trapezoid(cap: u32) -> bool {
+    return DRAWS_TRAPEZOIDS & (!DRAWS_SEGMENTS | (cap == TRAPEZOID_CAP));
+}
 
 const STROKE_CAP_BUTT: u32 = 0u;
 const STROKE_CAP_ROUND: u32 = 1u;
@@ -1433,7 +1669,15 @@ fn shape_record_coverage(input: VertexOutput) -> f32 {
     let has_radii = (input.radii[0] > 0.0 || input.radii[1] > 0.0 ||
                      input.radii[2] > 0.0 || input.radii[3] > 0.0);
     var alpha: f32;
-    if (DRAWS_LINES & (shape_kind == SHAPE_KIND_LINE)) {
+    if ((DRAWS_LINES & (shape_kind == SHAPE_KIND_LINE)) & is_trapezoid(stroke_cap)) {
+        alpha = trapezoid_coverage(
+            rect_pos,
+            input.arc_params,
+            input.radii,
+            stroke_join,
+            fragment_turned(input),
+        );
+    } else if (DRAWS_LINES & (shape_kind == SHAPE_KIND_LINE)) {
         alpha = line_coverage(rect_pos, input.arc_params, input.stroke_params, stroke_cap);
     } else if (DRAWS_ARCS & (shape_kind == SHAPE_KIND_ARC)) {
         // Arcs have no corner radii, so `radii` carries the precomputed
@@ -1502,6 +1746,46 @@ fn fs_plain_fill(input: PlainFillOutput) -> @location(0) vec4<f32> {
 @fragment
 fn fs_dithered_fill(input: DitheredFillOutput) -> @location(0) vec4<f32> {
     return fragment(full_from_dithered_fill(input));
+}
+
+// The share of the pixel a flat slice covers after its clip, as
+// `shape_record_coverage` takes a slice's.
+fn slice_coverage(fragment_position: vec2<f32>, edges: vec4<f32>, bottom: vec4<f32>, clip_rect: vec4<f32>) -> f32 {
+    if (SHAPE_DISCARD) {
+        discard;
+    }
+    let p = fragment_position + uniforms.viewport_offset;
+    let outside = (p.x < clip_rect.x) | (p.x > clip_rect.x + clip_rect.z)
+        | (p.y < clip_rect.y) | (p.y > clip_rect.y + clip_rect.w);
+    if (SHAPE_CLIPPED & (clip_rect.z > 0.0) & (clip_rect.w > 0.0) & outside) {
+        discard;
+    }
+    if (SHAPE_FLAT) {
+        return 1.0;
+    }
+    let open = select(0u, 1u, bottom.z < 0.0) | select(0u, 2u, bottom.w < 0.0);
+    let coverage = trapezoid_coverage(p, edges, vec4<f32>(bottom.xy, abs(bottom.zw)), open, false);
+    if (coverage < 0.001) {
+        discard;
+    }
+    return coverage;
+}
+
+@fragment
+fn fs_slice(input: SliceOutput) -> @location(0) vec4<f32> {
+    let coverage = slice_coverage(input.clip_position.xy, input.edges, input.bottom, input.clip_rect);
+    return vec4<f32>(input.color.rgb, input.color.a * coverage);
+}
+
+@fragment
+fn fs_gradient_slice(input: GradientSliceOutput) -> @location(0) vec4<f32> {
+    let coverage = slice_coverage(input.clip_position.xy, input.edges, input.bottom, input.clip_rect);
+    var color = mix(input.color, input.color_end, clamp(input.ramp.z, 0.0, 1.0));
+    if (color.a > 0.0) {
+        let offset = gradient_dither(input.ramp.xy) * (1.0 / 255.0);
+        color = vec4<f32>(clamp(color.rgb + vec3<f32>(offset), vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+    }
+    return vec4<f32>(color.rgb, color.a * coverage);
 }
 
 @fragment

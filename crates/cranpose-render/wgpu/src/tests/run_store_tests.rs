@@ -34,7 +34,7 @@ fn arena_key(segment: &RecordSegment) -> crate::render::ShapePipelineKey {
             crate::render::SegmentClip::Untested,
             Default::default(),
             false,
-            true,
+            (true, true),
         ),
         turns: crate::render::ShapeTurns::None,
         depth: crate::render::ShapeDepth::Off,
@@ -309,7 +309,7 @@ fn a_solid_segment_never_tests_its_interiors() {
     for clip in [SegmentClip::Untested, SegmentClip::Tested] {
         let variant = |interiors: bool| {
             let segment = shape_segment(1, BlendMode::SrcOver, (interiors, false, false));
-            ShapeVariant::of_segment(&segment, clip, Default::default(), false, true)
+            ShapeVariant::of_segment(&segment, clip, Default::default(), false, (true, true))
         };
         assert_eq!(variant(true), variant(false), "clip: {clip:?}");
     }
@@ -326,8 +326,8 @@ fn a_segment_whose_interiors_a_pre_pass_lays_down_skips_the_interior_fast_path()
     // dropping the interior's fast path, which the test cannot read apart.
     let drops_fast_path = |segment: &RecordSegment| {
         let clip = crate::render::SegmentClip::Untested;
-        ShapeVariant::of_segment(segment, clip, Default::default(), true, true)
-            != ShapeVariant::of_segment(segment, clip, Default::default(), false, true)
+        ShapeVariant::of_segment(segment, clip, Default::default(), true, (true, true))
+            != ShapeVariant::of_segment(segment, clip, Default::default(), false, (true, true))
     };
     assert!(drops_fast_path(&segment(true, false)), "laid down ahead");
     assert!(
