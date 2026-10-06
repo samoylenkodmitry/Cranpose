@@ -152,6 +152,9 @@ fn draw_raster_scene(
     for (index, text) in scene.texts.iter().enumerate() {
         ordered_items.push((text.z_index, RenderItem::Text(index)));
     }
+    for (index, shadow) in scene.shadows.iter().enumerate() {
+        ordered_items.push((shadow.z_index, RenderItem::Shadow(index)));
+    }
     ordered_items.sort_unstable_by_key(|(z, _)| *z);
 
     for (_, item) in ordered_items {
@@ -161,6 +164,9 @@ fn draw_raster_scene(
             }
             RenderItem::Image(index) => {
                 draw_image(frame, width, height, &scene.images[index], diagnostics);
+            }
+            RenderItem::Shadow(index) => {
+                draw_shadow(frame, width, height, &scene.shadows[index], diagnostics);
             }
             RenderItem::Text(index) => {
                 draw_text(
@@ -181,6 +187,50 @@ enum RenderItem {
     Shape(usize),
     Image(usize),
     Text(usize),
+    Shadow(usize),
+}
+
+/// Draws one pass of an elevation shadow: its color at the shadow's
+/// coverage of each pixel's centre.
+fn draw_shadow(
+    frame: &mut [u8],
+    width: u32,
+    height: u32,
+    draw: &crate::scene::ShadowDraw,
+    diagnostics: &RenderDiagnostics,
+) {
+    let snap_delta = draw
+        .snap_anchor
+        .map(snap_delta_for_anchor)
+        .unwrap_or_default();
+    let shadow = draw.shadow.translated(snap_delta.x, snap_delta.y);
+    let clip = draw
+        .clip
+        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    let Some(bounds) = clip_rect_to_bounds(shadow.bounds, clip, width, height) else {
+        return;
+    };
+    let color = [
+        draw.color.r(),
+        draw.color.g(),
+        draw.color.b(),
+        draw.color.a(),
+    ];
+    for py in bounds.min_y.max(0)..bounds.max_y.min(height as i32) {
+        for px in bounds.min_x.max(0)..bounds.max_x.min(width as i32) {
+            let coverage = shadow.coverage(px as f32 + 0.5, py as f32 + 0.5);
+            if coverage <= 0.0 {
+                continue;
+            }
+            let idx = ((py as u32 * width + px as u32) * 4) as usize;
+            blend_pixel(
+                &mut frame[idx..idx + 4],
+                [color[0], color[1], color[2], color[3] * coverage],
+                BlendMode::SrcOver,
+                diagnostics,
+            );
+        }
+    }
 }
 
 fn draw_shape(

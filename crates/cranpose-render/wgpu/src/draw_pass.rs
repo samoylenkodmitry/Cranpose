@@ -16,8 +16,9 @@ use crate::{
         image_draw_bounds, run_draw_bounds, run_draw_is_visible_in_rect, scissor_rect_for_rect,
         segment_scene_rect, supported_blend_mode, text_draw_bounds, text_draw_is_visible_in_rect,
     },
+    rrect_shadow::{ShadowInstance, append_shadow_instances, rrect_shadow_bounds},
     run_store::{RunDrawCall, run_has_shapes},
-    scene::{CompositorScene, DrawOp, DrawOpKind, RunDraw, TextDraw},
+    scene::{CompositorScene, DrawOp, DrawOpKind, RRectShadowDraw, RunDraw, TextDraw},
 };
 
 /// A render target and its size in pixels.
@@ -125,6 +126,7 @@ enum Item<'a> {
     Run(&'a RunDraw, Option<std::ops::Range<u32>>),
     Image(usize),
     Text(&'a TextDraw),
+    RRectShadow(&'a RRectShadowDraw),
     Composite(&'a ResolvedComposite),
 }
 
@@ -153,6 +155,11 @@ enum Batch<'a> {
     },
     Glyphs {
         cmds: std::ops::Range<usize>,
+        uniform_slot: usize,
+        scissor: Option<(u32, u32, u32, u32)>,
+    },
+    Shadows {
+        instances: std::ops::Range<u32>,
         uniform_slot: usize,
         scissor: Option<(u32, u32, u32, u32)>,
     },
@@ -261,6 +268,32 @@ fn composite_visible(
 }
 
 impl GpuRenderer {
+    /// Uploads the quads a prepared pass drew into its scratch: image
+    /// vertices, shadow instances and glyph instances, each when there are
+    /// any.
+    fn upload_pass_buffers<C: FrameCommandRecorder>(
+        &self,
+        recorder: &mut C,
+        scratch: &PassScratch,
+    ) -> PassBuffers {
+        PassBuffers {
+            images: (!scratch.image_indices.is_empty()).then(|| {
+                self.upload_image_slot(
+                    recorder,
+                    &scratch.image_vertices,
+                    &scratch.image_indices,
+                    &scratch.image_clips,
+                )
+            }),
+            shadows: (!scratch.shadow_instances.is_empty())
+                .then(|| self.upload_shadow_instances(recorder, &scratch.shadow_instances)),
+            glyphs: (!scratch.glyph_instances.plain.is_empty())
+                .then(|| self.upload_glyph_instances(recorder, &scratch.glyph_instances.plain)),
+            turned_glyphs: (!scratch.glyph_instances.turned.is_empty())
+                .then(|| self.upload_turned_glyphs(recorder, &scratch.glyph_instances.turned)),
+        }
+    }
+
     /// Draws the segments into the target as one render pass, ops and
     /// composites interleaved in z order. Returns whether anything was drawn;
     /// when nothing draws and the load op clears, a clear pass runs instead so
@@ -302,28 +335,10 @@ impl GpuRenderer {
         prep.finish(self);
         let batches = prep.batches;
         scratch.arena_draws = prep.arena_draws;
-        let buffers = PassBuffers {
-            images: match &prepared {
-                Ok(()) if !scratch.image_indices.is_empty() => Some(self.upload_image_slot(
-                    recorder,
-                    &scratch.image_vertices,
-                    &scratch.image_indices,
-                    &scratch.image_clips,
-                )),
-                _ => None,
-            },
-            glyphs: match &prepared {
-                Ok(()) if !scratch.glyph_instances.plain.is_empty() => {
-                    Some(self.upload_glyph_instances(recorder, &scratch.glyph_instances.plain))
-                }
-                _ => None,
-            },
-            turned_glyphs: match &prepared {
-                Ok(()) if !scratch.glyph_instances.turned.is_empty() => {
-                    Some(self.upload_turned_glyphs(recorder, &scratch.glyph_instances.turned))
-                }
-                _ => None,
-            },
+        let buffers = if prepared.is_ok() {
+            self.upload_pass_buffers(recorder, &scratch)
+        } else {
+            PassBuffers::default()
         };
         let result = match prepared {
             Err(error) => Err(error),
@@ -379,6 +394,7 @@ impl GpuRenderer {
             glyph_instances: std::mem::take(&mut self.scratch_glyph_instances),
             glyph_cmds: std::mem::take(&mut self.scratch_glyph_cmds),
             glyph_moved: std::mem::take(&mut self.scratch_glyph_moved),
+            shadow_instances: std::mem::take(&mut self.scratch_shadow_instances),
             arena_draws: std::mem::take(&mut self.scratch_arena_draws),
         };
         scratch.arena_draws.clear();
@@ -388,6 +404,7 @@ impl GpuRenderer {
         scratch.image_clips.clear();
         scratch.glyph_instances.clear();
         scratch.glyph_cmds.clear();
+        scratch.shadow_instances.clear();
         scratch
     }
 
@@ -399,6 +416,7 @@ impl GpuRenderer {
         self.scratch_glyph_instances = scratch.glyph_instances;
         self.scratch_glyph_cmds = scratch.glyph_cmds;
         self.scratch_glyph_moved = scratch.glyph_moved;
+        self.scratch_shadow_instances = scratch.shadow_instances;
         self.scratch_arena_draws = scratch.arena_draws;
     }
 
@@ -450,6 +468,24 @@ impl GpuRenderer {
                         (buffers.glyphs.as_ref(), buffers.turned_glyphs.as_ref()),
                         *uniform_slot,
                         &cmds.glyphs[range.clone()],
+                        *scissor,
+                        frame,
+                    )?;
+                }
+                Batch::Shadows {
+                    instances,
+                    uniform_slot,
+                    scissor,
+                } => {
+                    let buffer = buffers
+                        .shadows
+                        .as_ref()
+                        .ok_or_else(|| "shadow batch without shadow instances".to_string())?;
+                    self.draw_shadow_instances(
+                        pass,
+                        buffer,
+                        *uniform_slot,
+                        instances.clone(),
                         *scissor,
                         frame,
                     )?;
@@ -616,6 +652,9 @@ pub(crate) fn op_draw_bounds(
         DrawOpKind::Run(index) => run_draw_bounds(&scene.runs[index], root_scale),
         DrawOpKind::Image(index) => image_draw_bounds(&scene.images[index], root_scale),
         DrawOpKind::Text(index) => text_draw_bounds(&scene.texts[index], root_scale),
+        DrawOpKind::RRectShadow(index) => {
+            rrect_shadow_bounds(&scene.rrect_shadows[index], root_scale)
+        }
         DrawOpKind::Shadow(index) => {
             let shadow = &scene.shadow_draws[index];
             if shadow.requires_surface() {
@@ -711,6 +750,7 @@ fn unshadowed_item<'a>(
         DrawOpKind::Image(index) => Some(Item::Image(index)),
         DrawOpKind::Text(_) if skip_text => None,
         DrawOpKind::Text(index) => Some(Item::Text(&scene.texts[index])),
+        DrawOpKind::RRectShadow(index) => Some(Item::RRectShadow(&scene.rrect_shadows[index])),
         DrawOpKind::Shadow(_) => None,
     }
 }
@@ -783,8 +823,10 @@ fn unblurred_shadow_run(
 /// commands, kept on the renderer between frames so they never reallocate.
 /// The quads a pass drew from its scratch, uploaded for its draws: image
 /// vertices and indices, and glyph instances.
+#[derive(Default)]
 struct PassBuffers {
     images: Option<crate::render::ImageSlot>,
+    shadows: Option<crate::frame_graph::BufferUpload>,
     glyphs: Option<crate::frame_graph::BufferUpload>,
     turned_glyphs: Option<crate::frame_graph::BufferUpload>,
 }
@@ -798,6 +840,7 @@ struct PassScratch {
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
     /// Where a glyph batch's draws of one kind wait while it groups them.
     glyph_moved: Vec<crate::render::GlyphDrawCmd>,
+    shadow_instances: Vec<ShadowInstance>,
     arena_draws: Vec<RunDrawCall>,
 }
 
@@ -1038,6 +1081,11 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     continue;
                 }
                 Item::Text(text) => self.text_item(renderer, text, &run, scratch)?,
+                Item::RRectShadow(_) => {
+                    self.flush(renderer, run.binding);
+                    self.shadow_run(renderer, &mut items, &run, scratch);
+                    continue;
+                }
                 Item::Composite(composite) => {
                     self.flush(renderer, run.binding);
                     self.composite_item(renderer, composite, &run)?;
@@ -1388,6 +1436,38 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             });
         }
         Ok(())
+    }
+
+    /// Draws a run of round rect shadows as one instanced batch, placed in
+    /// the pass's order as an image batch is.
+    fn shadow_run(
+        &mut self,
+        renderer: &mut GpuRenderer,
+        items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
+        run: &SegmentRun<'s, '_>,
+        scratch: &mut PassScratch,
+    ) {
+        let start = scratch.shadow_instances.len();
+        while let Some(Item::RRectShadow(draw)) =
+            items.next_if(|item| matches!(item, Item::RRectShadow(_)))
+        {
+            append_shadow_instances(draw, run.segment.scale, &mut scratch.shadow_instances);
+        }
+        let end = scratch.shadow_instances.len();
+        if start == end {
+            return;
+        }
+        let slot = if run.viewport == run.binding.bound {
+            run.binding.uniform_slot
+        } else {
+            renderer.claim_uniform_slot(run.viewport)
+        };
+        let uniform_slot = self.claim_overlay(renderer, run.viewport, slot);
+        self.batches.push(Batch::Shadows {
+            instances: start as u32..end as u32,
+            uniform_slot,
+            scissor: run.segment.scissor,
+        });
     }
 
     /// Draws one text as glyphs when its glyphs are in the atlas, joining

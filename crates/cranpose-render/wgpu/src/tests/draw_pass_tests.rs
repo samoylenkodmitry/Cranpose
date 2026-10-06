@@ -35,7 +35,6 @@ fn shadow_run_items_preserve_geometry_culling_and_first_run_window() {
             blur_radius: 0.0,
             clip: None,
             rounded_clip: None,
-            occluder: None,
             z_index: 0,
         });
     }

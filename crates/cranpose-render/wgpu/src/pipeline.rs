@@ -32,7 +32,9 @@ use cranpose_ui_graphics::{
     RenderEffect, RoundedCornerShape, RuntimeShader, ShapeRecorder, TileMode,
 };
 
-use crate::scene::{CompositorScene, Placement, RunDraw, Scene, ShadowDraw, SnapAnchor, TextDraw};
+use crate::scene::{
+    CompositorScene, Placement, RRectShadowDraw, RunDraw, Scene, ShadowDraw, SnapAnchor, TextDraw,
+};
 
 mod style;
 use cranpose_render_common::style_shared::resolve_layer_brush;
@@ -66,53 +68,9 @@ impl TextLayoutResolver for UiTextLayoutResolver {
     }
 }
 
-/// A layer shadow's caster: the shadow rect as a solid shape, recorded
-/// relative to its own origin so a shadow that scrolls keeps its
-/// fingerprint.
-fn layer_shadow_run(rect: Rect, color: Color, shape: RoundedCornerShape) -> RunDraw {
-    let origin = Point::new(rect.x, rect.y);
-    let primitive = DrawPrimitive::RoundRect {
-        rect: rect.translate(-origin.x, -origin.y),
-        brush: Brush::solid(color),
-        radii: shape.radii(),
-        stroke: None,
-    };
-    let mut recorder = ShapeRecorder::default();
-    recorder.push_primitive(primitive);
-    RunDraw::whole(Arc::new(recorder), Placement::at(origin, None, None)).expect("a shadow rect")
-}
-
-fn shadow_occluder(
-    layer: &GraphicsLayer,
-    transformed_bounds: Rect,
-    resolved_shape: Option<&RoundedCornerShape>,
-) -> Option<Rect> {
-    if layer.alpha < 1.0
-        || layer.rotation_x.abs() > f32::EPSILON
-        || layer.rotation_y.abs() > f32::EPSILON
-        || layer.rotation_z.abs() > f32::EPSILON
-    {
-        return None;
-    }
-    let inset = resolved_shape
-        .map_or(0.0, |shape| {
-            let radii = shape.radii();
-            radii
-                .top_left
-                .max(radii.top_right)
-                .max(radii.bottom_right)
-                .max(radii.bottom_left)
-        })
-        .max(0.0);
-    let occluder = Rect {
-        x: transformed_bounds.x + inset,
-        y: transformed_bounds.y + inset,
-        width: transformed_bounds.width - inset * 2.0,
-        height: transformed_bounds.height - inset * 2.0,
-    };
-    (occluder.width > 1.0 && occluder.height > 1.0).then_some(occluder)
-}
-
+/// `layer`'s elevation shadow over `transformed_bounds`, cut to `clip`: its
+/// ambient and spot passes as Skia draws them, each a round rect shadow the
+/// pass draws straight into its target.
 pub(crate) fn push_layer_shadow(
     scene: &mut CompositorScene,
     layer: &GraphicsLayer,
@@ -121,9 +79,7 @@ pub(crate) fn push_layer_shadow(
     clip: Option<Rect>,
     light: ShadowLight,
 ) {
-    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds, light);
-
-    let resolved_shape = match layer.shape {
+    let caster = match layer.shape {
         LayerShape::Rectangle => None,
         LayerShape::Rounded(shape) => {
             let scale = layer_uniform_scale(layer).max(0.1);
@@ -133,22 +89,13 @@ pub(crate) fn push_layer_shadow(
             )))
         }
     };
-    let occluder = shadow_occluder(layer, transformed_bounds, resolved_shape.as_ref());
-
-    for (pass, color) in shadow_geometry.passes(layer) {
-        scene.push_shadow_draw(ShadowDraw {
-            shapes: Some(layer_shadow_run(
-                pass.rect,
-                color,
-                pass.corners(resolved_shape),
-            )),
-            post_blur_cutouts: None,
-            texts: vec![],
-            blur_radius: pass.blur_radius,
+    for (shadow, color) in layer_shadow_geometry(layer, transformed_bounds, caster, light).passes()
+    {
+        scene.push_rrect_shadow(RRectShadowDraw {
+            shadow,
+            color,
             clip,
-            rounded_clip: None,
-            occluder,
-            z_index: 0,
+            snap_anchor: None,
         });
     }
 }
@@ -773,7 +720,6 @@ impl TextStyleDrawSink for CompositorScene {
             blur_radius,
             clip,
             rounded_clip: None,
-            occluder: None,
             z_index: 0,
         });
     }
@@ -1950,7 +1896,6 @@ fn push_shadow_primitive(
                 blur_radius: *blur_radius,
                 clip,
                 rounded_clip: None,
-                occluder: None,
                 z_index: 0,
             });
         }
@@ -1986,7 +1931,6 @@ fn push_shadow_primitive(
                 blur_radius: *blur_radius,
                 clip: Some(shadow_clip),
                 rounded_clip: None,
-                occluder: None,
                 z_index: 0,
             });
         }

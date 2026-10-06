@@ -11,28 +11,28 @@ const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
 
 fn shadowed_root_graph(cache_policy: CachePolicy) -> RenderGraph {
+    let card = Rect {
+        x: 24.0,
+        y: 20.0,
+        width: 80.0,
+        height: 56.0,
+    };
     let bounds = Rect {
         x: 0.0,
         y: 0.0,
         width: FRAME_WIDTH as f32,
         height: FRAME_HEIGHT as f32,
     };
-    let mut root = support::contract_layer(
+    let root = support::contract_layer(
         Some(4_100),
         cache_policy,
         bounds,
         ProjectiveTransform::identity(),
-        vec![support::solid_rect(
-            Rect {
-                x: 24.0,
-                y: 20.0,
-                width: 80.0,
-                height: 56.0,
-            },
-            Color(0.9, 0.2, 0.15, 1.0),
-        )],
+        vec![
+            support::drop_shadow(card, Color::BLACK, 4.0),
+            support::solid_rect(card, Color(0.9, 0.2, 0.15, 1.0)),
+        ],
     );
-    root.graphics_layer.shadow_elevation = 4.0;
     RenderGraph::new(root)
 }
 
