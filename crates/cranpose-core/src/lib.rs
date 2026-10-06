@@ -2211,7 +2211,7 @@ impl DirtyBubble {
     }
 
     /// Marks the bubble's start node with its flags, and an ancestor as
-    /// having a dirty descendant.
+    /// having a dirty descendant where it is not marked yet.
     fn mark(self, node: &mut dyn Node, start: bool) {
         if start {
             if self.layout {
@@ -2225,7 +2225,12 @@ impl DirtyBubble {
             }
             return;
         }
-        if self.layout || self.measure {
+        let marked = if self.measure {
+            node.descendant_needs_measure()
+        } else {
+            node.descendant_needs_layout()
+        };
+        if (self.layout || self.measure) && !marked {
             node.mark_descendant_needs_layout(self.measure);
         }
         if self.semantics && !node.needs_semantics() {
