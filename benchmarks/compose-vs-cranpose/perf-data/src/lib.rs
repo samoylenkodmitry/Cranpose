@@ -30,16 +30,6 @@ pub const CHIP_BACKGROUND_RGB: [[u8; 3]; 8] = [
     [0xED, 0xE9, 0xFE],
     [0xFC, 0xE7, 0xF3],
 ];
-/// The gauntlet's ink, text and surface colors.
-pub const INK_RGB: [u8; 3] = [0x11, 0x18, 0x27];
-pub const BODY_RGB: [u8; 3] = [0x37, 0x41, 0x51];
-pub const MUTED_RGB: [u8; 3] = [0x6B, 0x72, 0x80];
-pub const HAIRLINE_RGB: [u8; 3] = [0xE5, 0xE7, 0xEB];
-pub const PANEL_RGB: [u8; 3] = [0xE2, 0xE8, 0xF0];
-pub const BACKGROUND_RGB: [u8; 3] = [0xEE, 0xF0, 0xF5];
-pub const TOP_BAR_RGB: [u8; 3] = [0x1E, 0x2A, 0x4A];
-pub const UP_RGB: [u8; 3] = [0x16, 0xA3, 0x4A];
-pub const DOWN_RGB: [u8; 3] = [0xDC, 0x26, 0x26];
 /// A cluster's levels, alternating.
 pub const LEVEL_BACKGROUND_RGB: [[u8; 3]; 2] = [[0xF1, 0xF5, 0xF9], [0xCB, 0xD5, 0xE1]];
 /// Dark ends of the media gradients.

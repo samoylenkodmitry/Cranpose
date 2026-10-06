@@ -151,7 +151,7 @@ desktop)
     step cranpose
     rust_target cranpose-app
     cargo_app cranpose-app
-    for app in egui slint iced gpui tauri dioxus freya floem; do
+    for app in egui slint iced gpui tauri dioxus; do
         rust_target "$app-app"
         reads=("$app-app" perf-data)
         # Dioxus draws with the web page's CSS.
@@ -210,6 +210,9 @@ android)
         nativescript-app shared-ts -- \
         attempt nativescript bash -c "cd '$here/nativescript-app' && npm ci --no-audit --no-fund && npx ns build android --release --gradleArgs=-Pabis=arm64-v8a --key-store-path '$HOME/.android/debug.keystore' --key-store-password android --key-store-alias androiddebugkey --key-store-alias-password android"
     cp "$here/nativescript-app/platforms/android/app/build/outputs/apk/release/app-release.apk" "$out/nativescript.apk"
+    build lynx lynx-app/app/build/outputs/apk/release/app-release.apk lynx-app shared-ts -- \
+        attempt lynx bash -c "cd '$here/lynx-app/page' && npm ci --no-audit --no-fund && npm run build && cd .. && ./gradlew --no-daemon -q :app:assembleRelease"
+    cp "$here/lynx-app/app/build/outputs/apk/release/app-release.apk" "$out/lynx.apk"
     build maui maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk \
         maui-app shared-cs -- \
         bash -c "cd '$here/maui-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"

@@ -45,7 +45,7 @@ import {
   tickers,
   widthFraction,
 } from '../../shared-ts/data';
-import { pngDataUri } from './png';
+import { pngDataUri } from '../../shared-ts/png';
 
 const INK = '#111827';
 const BODY = '#374151';
