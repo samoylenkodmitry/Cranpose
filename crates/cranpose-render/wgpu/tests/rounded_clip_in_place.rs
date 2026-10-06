@@ -8,8 +8,8 @@ use cranpose_ui::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
-    LayerShape, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect, RoundedCornerShape,
-    RuntimeShader, ShadowPrimitive,
+    ImageBitmap, ImageSampling, LayerShape, Point, RUNTIME_SHADER_PRELUDE_WGSL, Rect, RenderEffect,
+    RoundedCornerShape, RuntimeShader, ShadowPrimitive,
 };
 use support::{capture_graph_settled, draw_node, page_graph, solid_rect};
 
@@ -194,6 +194,83 @@ fn a_bar_over_a_rounded_track_differs_from_its_surface_only_where_their_edges_me
         "away from the arcs, the records drawn in place match the surface: {}",
         support::describe_differing(&outside)
     );
+}
+
+/// An image covering the clip whole, drawn with `sampling`: a photo in a
+/// rounded frame. Its texels differ on every row and column, so a shifted
+/// or resampled edge shows.
+fn photo(sampling: ImageSampling) -> RenderNode {
+    let (width, height) = (24u32, 8u32);
+    let pixels = (0..width * height)
+        .flat_map(|index| {
+            let (x, y) = (index % width, index / width);
+            [
+                (40 + x * 8) as u8,
+                (200 - y * 20) as u8,
+                ((x + y) * 9) as u8,
+                255,
+            ]
+        })
+        .collect();
+    let image = ImageBitmap::from_rgba8(width, height, pixels).expect("a photo");
+    draw_node(
+        DrawPrimitive::Image {
+            rect: CLIP,
+            image,
+            alpha: 1.0,
+            color_filter: None,
+            sampling,
+            src_rect: None,
+        },
+        None,
+    )
+}
+
+/// A coverage mask covering the clip whole, its alpha ramping across it: a
+/// filled path the draw scope rasterized.
+fn mask() -> RenderNode {
+    let (width, height) = (24u32, 8u32);
+    let alpha = (0..width * height)
+        .map(|index| (100 + (index % width) * 6) as u8)
+        .collect();
+    let image = ImageBitmap::from_alpha8(width, height, [30, 90, 200], alpha).expect("a mask");
+    draw_node(
+        DrawPrimitive::Image {
+            rect: CLIP,
+            image,
+            alpha: 1.0,
+            color_filter: None,
+            sampling: ImageSampling::Linear,
+            src_rect: None,
+        },
+        None,
+    )
+}
+
+#[test]
+fn an_image_filling_a_rounded_clip_draws_in_place_as_its_surface_would() {
+    let images = [
+        ("linear", photo(ImageSampling::Linear)),
+        ("nearest", photo(ImageSampling::Nearest)),
+        ("mask", mask()),
+    ];
+    for (sampling, image) in images {
+        let Some((frames, isolated)) = both_ways(vec![image]) else {
+            return;
+        };
+        assert_eq!(
+            isolated,
+            [0, 1],
+            "{sampling:?}: in place, then through a surface"
+        );
+        let differing =
+            support::pixels_differing_beyond(WIDTH, &frames[0], &frames[1], SURFACE_ROUNDING);
+        assert!(
+            differing.is_empty(),
+            "{sampling}: the image takes the clip's coverage as the surface's mask does: {}",
+            support::describe_differing(&differing)
+        );
+    }
 }
 
 /// The workspace port's bid/ask bar in miniature: a rounded clip at a

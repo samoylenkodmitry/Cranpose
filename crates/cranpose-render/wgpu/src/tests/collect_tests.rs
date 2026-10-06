@@ -302,8 +302,41 @@ fn a_rounded_layer_whose_shapes_enter_a_corner_draws_in_place_rounded() {
     );
 }
 
+/// A 2 by 2 image drawn over `bounds`.
+fn image_over(bounds: Rect) -> DrawPrimitive {
+    DrawPrimitive::Image {
+        rect: bounds,
+        image: cranpose_ui_graphics::ImageBitmap::from_rgba8(2, 2, vec![255; 16])
+            .expect("a 2 by 2 image"),
+        alpha: 1.0,
+        color_filter: None,
+        sampling: cranpose_ui_graphics::ImageSampling::Linear,
+        src_rect: None,
+    }
+}
+
 #[test]
-fn a_rounded_layer_whose_text_or_image_enters_a_corner_isolates() {
+fn a_rounded_layer_whose_image_enters_a_corner_draws_in_place_rounded() {
+    let loose = rounded_layer(20.0, drawn_node(image_over(rect(0.0, 0.0, 200.0, 100.0))));
+    assert!(matches!(
+        child_placement(&loose, RasterScale::Exact(1.0)),
+        Placement::DirectRounded(_, radius) if radius == 20.0
+    ));
+    let in_a_run = rounded_layer(
+        20.0,
+        shapes_run(vec![
+            white_rect(rect(0.0, 0.0, 200.0, 100.0)),
+            image_over(rect(0.0, 0.0, 60.0, 60.0)),
+        ]),
+    );
+    assert!(matches!(
+        child_placement(&in_a_run, RasterScale::Exact(1.0)),
+        Placement::DirectRounded(..)
+    ));
+}
+
+#[test]
+fn a_rounded_layer_whose_text_enters_a_corner_isolates() {
     let text = rounded_layer(20.0, drawn_node(snap_test_text()));
     assert!(matches!(
         child_placement(&text, RasterScale::Exact(1.0)),

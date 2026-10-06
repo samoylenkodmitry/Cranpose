@@ -308,6 +308,7 @@ impl GpuRenderer {
                     recorder,
                     &scratch.image_vertices,
                     &scratch.image_indices,
+                    &scratch.image_clips,
                 )),
                 _ => None,
             },
@@ -374,6 +375,7 @@ impl GpuRenderer {
             image_vertices: std::mem::take(&mut self.scratch_image_vertices),
             image_indices: std::mem::take(&mut self.scratch_image_indices),
             image_cmds: std::mem::take(&mut self.scratch_image_cmds),
+            image_clips: std::mem::take(&mut self.scratch_image_clips),
             glyph_instances: std::mem::take(&mut self.scratch_glyph_instances),
             glyph_cmds: std::mem::take(&mut self.scratch_glyph_cmds),
             glyph_moved: std::mem::take(&mut self.scratch_glyph_moved),
@@ -383,6 +385,7 @@ impl GpuRenderer {
         scratch.image_vertices.clear();
         scratch.image_indices.clear();
         scratch.image_cmds.clear();
+        scratch.image_clips.clear();
         scratch.glyph_instances.clear();
         scratch.glyph_cmds.clear();
         scratch
@@ -392,6 +395,7 @@ impl GpuRenderer {
         self.scratch_image_vertices = scratch.image_vertices;
         self.scratch_image_indices = scratch.image_indices;
         self.scratch_image_cmds = scratch.image_cmds;
+        self.scratch_image_clips = scratch.image_clips;
         self.scratch_glyph_instances = scratch.glyph_instances;
         self.scratch_glyph_cmds = scratch.glyph_cmds;
         self.scratch_glyph_moved = scratch.glyph_moved;
@@ -789,6 +793,7 @@ struct PassScratch {
     image_vertices: Vec<crate::render::Vertex>,
     image_indices: Vec<u32>,
     image_cmds: Vec<crate::render::ImageDrawCmd>,
+    image_clips: Vec<crate::render::DeviceRoundedClip>,
     glyph_instances: crate::render::GlyphInstances,
     glyph_cmds: Vec<crate::render::GlyphDrawCmd>,
     /// Where a glyph batch's draws of one kind wait while it groups them.
@@ -1368,8 +1373,8 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 image,
                 run.viewport,
                 run.segment.scale,
-                &mut scratch.image_vertices,
-                &mut scratch.image_indices,
+                (&mut scratch.image_vertices, &mut scratch.image_indices),
+                &mut scratch.image_clips,
                 &mut scratch.image_cmds,
             )?;
         }
