@@ -575,6 +575,7 @@ fn note_location_key(key: Key, file: &str, line: u32, column: u32) {
 fn note_location_key(_key: Key, _file: &str, _line: u32, _column: u32) {}
 
 #[doc(hidden)]
+#[inline]
 pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
     composer_context::with_current_core(|core| core.open_branch_fold(key))
 }
@@ -590,6 +591,7 @@ pub fn branch_location_key(file: &str, line: u32, column: u32, branch: u32) -> K
 }
 
 #[doc(hidden)]
+#[inline]
 pub fn cached_branch_location_key(
     cell: &OnceLock<Key>,
     file: &str,
