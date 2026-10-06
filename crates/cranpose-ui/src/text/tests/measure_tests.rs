@@ -1703,7 +1703,7 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
     let style = TextStyle::default();
     let whole = 0..text.text.len();
     let held = DisplayLine::from_source_range(0..0);
-    let mut lines = vec![held.clone()];
+    let mut lines: DisplayLines = smallvec::smallvec![held.clone()];
     wrap_line_to_width(
         &MonospacedTextMeasurer,
         &text,
@@ -1736,7 +1736,7 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
 #[test]
 fn a_line_that_cannot_balance_leaves_the_lines_as_they_were() {
     let text = crate::text::AnnotatedString::from("unbreakable");
-    let mut lines = vec![DisplayLine::from_source_range(0..0)];
+    let mut lines: DisplayLines = smallvec::smallvec![DisplayLine::from_source_range(0..0)];
     let balanced = wrap_line_with_word_balance(
         &MonospacedTextMeasurer,
         &text,

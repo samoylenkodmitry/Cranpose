@@ -1048,9 +1048,9 @@ fn wrapped_line_ranges_with_measurer<M: TextMeasurer + ?Sized>(
 
     let line_ranges = split_line_ranges(text.text.as_str());
     let Some(width_limit) = wrap_width else {
-        return line_ranges;
+        return line_ranges.into_vec();
     };
-    let mut lines = Vec::with_capacity(line_ranges.len());
+    let mut lines = DisplayLines::with_capacity(line_ranges.len());
     for line_range in line_ranges {
         wrap_line_to_width(
             measurer,
@@ -1178,7 +1178,7 @@ fn prepare_layout<M: TextMeasurer + ?Sized>(
     let wrap_start = telemetry.then(Instant::now);
     let line_ranges = split_line_ranges(text.text.as_str());
     let source_line_count = line_ranges.len();
-    let mut visible_lines: Vec<DisplayLine>;
+    let mut visible_lines: DisplayLines;
     let mut wrap_hold = None;
     if let Some(width_limit) = wrap_width {
         (visible_lines, wrap_hold) = wrap_lines(
@@ -1676,12 +1676,17 @@ impl DisplayLine {
     }
 }
 
-fn split_line_ranges(text: &str) -> Vec<Range<usize>> {
+/// A text's lines, which for most texts is one, kept without an allocation.
+type LineRanges = smallvec::SmallVec<[Range<usize>; 1]>;
+/// A layout's display lines, kept without an allocation for one line.
+type DisplayLines = smallvec::SmallVec<[DisplayLine; 1]>;
+
+fn split_line_ranges(text: &str) -> LineRanges {
     if text.is_empty() {
-        return single_line_range(0..0);
+        return smallvec::smallvec![0..0];
     }
 
-    let mut ranges = Vec::new();
+    let mut ranges = LineRanges::new();
     let mut start = 0usize;
     for (idx, ch) in text.char_indices() {
         if ch == '\n' {
@@ -1821,10 +1826,6 @@ fn boundary_index_for_byte(boundaries: &[usize], byte_offset: usize) -> usize {
         .unwrap_or_else(|index| index.min(boundaries.len().saturating_sub(1)))
 }
 
-fn single_line_range(range: Range<usize>) -> Vec<Range<usize>> {
-    std::iter::once(range).collect()
-}
-
 struct LineMeasureContext<'a, M: TextMeasurer + ?Sized> {
     measurer: &'a M,
     text: &'a crate::text::AnnotatedString,
@@ -1926,13 +1927,13 @@ impl LineLimit {
 fn wrap_lines<M: TextMeasurer + ?Sized>(
     measurer: &M,
     text: &crate::text::AnnotatedString,
-    line_ranges: Vec<Range<usize>>,
+    line_ranges: LineRanges,
     style: &TextStyle,
     (max_width, limit): (f32, LineLimit),
     modes: (LineBreak, Hyphens),
-) -> (Vec<DisplayLine>, Option<WrapHold>) {
+) -> (DisplayLines, Option<WrapHold>) {
     let source_lines = line_ranges.len();
-    let mut lines = Vec::with_capacity(source_lines.min(limit.lines.saturating_add(1)));
+    let mut lines = DisplayLines::with_capacity(source_lines.min(limit.lines.saturating_add(1)));
     let mut hold = Some(WrapHold::ANY);
     for line_range in line_ranges {
         if limit.reached(lines.len()) {
@@ -1966,7 +1967,7 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     (max_width, limit, hold): (f32, LineLimit, &mut Option<WrapHold>),
     (line_break, hyphens): (LineBreak, Hyphens),
-    out: &mut Vec<DisplayLine>,
+    out: &mut DisplayLines,
 ) {
     let line_text = &text.text[line_range.clone()];
     if line_text.is_empty() {
@@ -2021,7 +2022,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     (max_width, limit, hold): (f32, LineLimit, &mut Option<WrapHold>),
     (line_break, hyphens): (LineBreak, Hyphens),
-    out: &mut Vec<DisplayLine>,
+    out: &mut DisplayLines,
 ) {
     let line_text = &text.text[line_range.clone()];
     let boundaries = char_boundaries(line_text);
@@ -2129,7 +2130,7 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     max_width: f32,
     line_break: LineBreak,
-    out: &mut Vec<DisplayLine>,
+    out: &mut DisplayLines,
 ) -> bool {
     let line_text = &text.text[line_range.clone()];
     let boundaries = char_boundaries(line_text);
@@ -2432,7 +2433,7 @@ fn apply_overflow<M: TextMeasurer + ?Sized>(
     (text, style): (&crate::text::AnnotatedString, &TextStyle),
     options: TextLayoutOptions,
     max_width: Option<f32>,
-    (visible_lines, hold): (&mut Vec<DisplayLine>, &mut Option<WrapHold>),
+    (visible_lines, hold): (&mut DisplayLines, &mut Option<WrapHold>),
 ) -> bool {
     if options.overflow == TextOverflow::Visible {
         return false;

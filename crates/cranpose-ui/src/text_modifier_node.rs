@@ -207,18 +207,13 @@ impl TextModifierNode {
         options: TextLayoutOptions,
         density: Density,
     ) -> Self {
-        Self::sharing_style(text, std::sync::Arc::new(style), options, density)
-    }
-
-    fn sharing_style(
-        text: Rc<AnnotatedString>,
-        style: std::sync::Arc<TextStyle>,
-        options: TextLayoutOptions,
-        density: Density,
-    ) -> Self {
         Self {
             layout: Rc::new(TextPreparedLayoutOwner::new(
-                text, style, options, None, None,
+                text,
+                std::sync::Arc::new(style),
+                options,
+                None,
+                None,
             )),
             density,
             state: NodeState::new(),
@@ -390,7 +385,7 @@ impl SemanticsNode for TextModifierNode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextModifierElement {
     text: Rc<AnnotatedString>,
-    style: std::sync::Arc<TextStyle>,
+    style: TextStyle,
     options: TextLayoutOptions,
     density: Density,
 }
@@ -406,7 +401,7 @@ impl TextModifierElement {
     ) -> Self {
         Self {
             text,
-            style: std::sync::Arc::new(style),
+            style,
             options: options.normalized(),
             density,
         }
@@ -426,7 +421,7 @@ impl ModifierNodeElement for TextModifierElement {
     type Node = TextModifierNode;
 
     fn create(&self) -> Self::Node {
-        TextModifierNode::sharing_style(
+        TextModifierNode::new(
             self.text.clone(),
             self.style.clone(),
             self.options,
@@ -437,13 +432,18 @@ impl ModifierNodeElement for TextModifierElement {
     fn update(&self, node: &mut Self::Node) {
         node.density = self.density;
         let current = node.layout.as_ref();
-        if current.text != self.text
-            || *current.style != *self.style
-            || current.options != self.options
-        {
+        let same_style = *current.style == self.style;
+        if current.text != self.text || !same_style || current.options != self.options {
+            // A text that changed in the same style, as a ticker's does,
+            // keeps sharing the style it had.
+            let style = if same_style {
+                std::sync::Arc::clone(&current.style)
+            } else {
+                std::sync::Arc::new(self.style.clone())
+            };
             let owner = TextPreparedLayoutOwner::new(
                 self.text.clone(),
-                self.style.clone(),
+                style,
                 self.options,
                 current.node_id(),
                 current.measured_max_width.get(),
