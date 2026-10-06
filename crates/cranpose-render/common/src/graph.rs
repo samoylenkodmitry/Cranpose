@@ -259,6 +259,32 @@ impl Default for LayerNode {
 pub const CONTAINED_DRAW_SLACK: f32 = 1.0;
 
 impl LayerNode {
+    /// Every string this layer and the layers below it paint, in draw order.
+    pub fn painted_text(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        self.collect_painted_text(&mut out);
+        out
+    }
+
+    fn collect_painted_text(&self, out: &mut Vec<String>) {
+        for child in &self.children {
+            match child {
+                RenderNode::Primitive(primitive) => {
+                    if let PrimitiveNode::Text(text) = &primitive.node {
+                        out.push(text.text.text.clone());
+                    }
+                }
+                RenderNode::Layer(child) => child.collect_painted_text(out),
+                RenderNode::DrawRun(run) => {
+                    out.extend(run.primitives().filter_map(|primitive| match primitive {
+                        DrawPrimitive::Text(text) => Some(text.text.to_string()),
+                        _ => None,
+                    }))
+                }
+            }
+        }
+    }
+
     /// Whether this layer's content, as [`LayerNode::draws_within_bounds`]
     /// describes it, stays within its bounds: it clips to them, or its draws,
     /// its texts and its children placed where they are all fit inside.
