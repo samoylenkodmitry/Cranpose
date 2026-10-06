@@ -177,8 +177,9 @@ fn triangle_area(a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> f64 {
 }
 
 /// The device pixels a record's quad rasterizes: the stored rect (the
-/// disc for a scope-recorded arc), grown by the stroke's outer half for a
-/// stroked rect, scaled; for a line, its quad along the segment.
+/// disc for a scope-recorded arc, the box of a slice of a path fill),
+/// grown by the stroke's outer half for a stroked rect, scaled; for a line,
+/// its quad along the segment.
 /// Canonicalization moves edges by at most a sixteenth of a pixel, which
 /// the estimate ignores.
 pub(crate) fn quad_area(record: &ShapeRecord, scale: f32) -> f64 {
@@ -211,7 +212,7 @@ pub(crate) struct ShapeFill {
 }
 
 impl ShapeFill {
-    pub(crate) const CLASSES: usize = 8;
+    pub(crate) const CLASSES: usize = 10;
     pub(crate) const LABELS: [&'static str; ShapeFill::CLASSES] = [
         "fill",
         "fill_grad",
@@ -221,6 +222,8 @@ impl ShapeFill {
         "arc_grad",
         "line",
         "line_grad",
+        "slice",
+        "slice_grad",
     ];
 
     fn class(record: &ShapeRecord) -> usize {

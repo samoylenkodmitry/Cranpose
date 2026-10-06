@@ -25,8 +25,8 @@ use cranpose_render_common::{
 };
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, FRAGMENT_KIND_ARC, FRAGMENT_KIND_FILL, FRAGMENT_KIND_LINE,
-    FRAGMENT_KIND_STROKE, FxHasher, ImageBitmap, ImageSampling, Point, RecordLane, RecordSegment,
-    Rect, RenderHash, TileMode,
+    FRAGMENT_KIND_STROKE, FRAGMENT_KIND_TRAPEZOID, FxHasher, ImageBitmap, ImageSampling, Point,
+    RecordLane, RecordSegment, Rect, RenderHash, TileMode,
 };
 use smallvec::SmallVec;
 use web_time::Instant;
@@ -877,8 +877,8 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
         if segment.lane != RecordLane::Shapes {
             continue;
         }
-        let exact_placement = !canonicalize
-            || segment.kinds & ((1u8 << FRAGMENT_KIND_ARC) | (1u8 << FRAGMENT_KIND_LINE)) != 0;
+        let exact_placement =
+            !canonicalize || segment.kinds & ((1u8 << FRAGMENT_KIND_ARC) | LINE_KINDS) != 0;
         exact_placement.hash(state);
         if exact_placement {
             for value in [offset.x, offset.y, origin_x, origin_y, root_scale] {
@@ -1173,25 +1173,33 @@ const FLAT_FILL_ENTRIES: [[(&str, &str); 2]; 2] = [
     ],
 ];
 
-const ALL_SHAPE_KINDS: u8 = (1 << FRAGMENT_KIND_FILL)
-    | (1 << FRAGMENT_KIND_STROKE)
-    | (1 << FRAGMENT_KIND_ARC)
-    | (1 << FRAGMENT_KIND_LINE);
-const LINE_KIND: u8 = 1 << FRAGMENT_KIND_LINE;
+/// The entry points of a variant that draws slices of path fills alone and
+/// flat: a solid brush, and a gradient between two stops from the vertices.
+const SLICE_ENTRIES: [(&str, &str); 2] = [
+    ("vs_record_slice", "fs_slice"),
+    ("vs_record_gradient_slice", "fs_gradient_slice"),
+];
+
+const ALL_SHAPE_KINDS: u8 =
+    (1 << FRAGMENT_KIND_FILL) | (1 << FRAGMENT_KIND_STROKE) | (1 << FRAGMENT_KIND_ARC) | LINE_KINDS;
+/// The kinds the shader draws from line records: segments, and slices of
+/// path fills. A variant compiles in the code of only those it draws.
+const LINE_KINDS: u8 = (1 << FRAGMENT_KIND_LINE) | TRAPEZOID_KIND;
+const TRAPEZOID_KIND: u8 = 1 << FRAGMENT_KIND_TRAPEZOID;
 
 fn variant_kinds(kinds: u8) -> u8 {
     if kinds.count_ones() <= 1 {
         kinds
-    } else if kinds & LINE_KIND != 0 {
-        ALL_SHAPE_KINDS
     } else {
-        ALL_SHAPE_KINDS & !LINE_KIND
+        (ALL_SHAPE_KINDS & !LINE_KINDS) | (kinds & LINE_KINDS)
     }
 }
 
 impl ShapeVariant {
+    /// Every kind but slices of path fills, which only a segment holding
+    /// them compiles in.
     const GENERAL: Self = Self {
-        kinds: ALL_SHAPE_KINDS,
+        kinds: ALL_SHAPE_KINDS & !TRAPEZOID_KIND,
         brush: None,
         solid: false,
         clip: SegmentClip::Tested,
@@ -1203,20 +1211,29 @@ impl ShapeVariant {
         },
     };
 
+    /// The variant `segment` draws with. `vertex_gradients` says a rect
+    /// fill may take its gradient from its vertices here; a segment of
+    /// slices of path fills may wherever it is drawn `flat`.
     pub(crate) fn of_segment(
         segment: &RecordSegment,
         clip: SegmentClip,
         ablation: ShapeAblation,
         laid: bool,
-        vertex_gradients: bool,
+        (flat, vertex_gradients): (bool, bool),
     ) -> Self {
         if !shape_variants_enabled() || clip == SegmentClip::Rounded {
             return Self {
+                kinds: Self::GENERAL.kinds | (segment.kinds & TRAPEZOID_KIND),
                 ablation,
                 ..Self::GENERAL
             }
             .clipped_by(clip);
         }
+        let vertex_gradients = if segment.kinds == TRAPEZOID_KIND {
+            flat
+        } else {
+            vertex_gradients
+        };
         let gradient = segment.gradient || (segment.vertex_gradient && !vertex_gradients);
         Self {
             kinds: variant_kinds(segment.kinds),
@@ -1234,8 +1251,13 @@ impl ShapeVariant {
         }
     }
 
+    /// The one kind the variant draws, as the shader's packed kind names
+    /// it: a slice of a path fill is a line record.
     fn kind(self) -> Option<u8> {
-        (self.kinds.count_ones() == 1).then(|| self.kinds.trailing_zeros() as u8)
+        (self.kinds.count_ones() == 1).then(|| match self.kinds.trailing_zeros() {
+            FRAGMENT_KIND_TRAPEZOID => FRAGMENT_KIND_LINE as u8,
+            kind => kind as u8,
+        })
     }
 
     /// The vertex and fragment entry points of this variant, for records
@@ -1244,6 +1266,8 @@ impl ShapeVariant {
         let fill = self.kind() == Some(FRAGMENT_KIND_FILL as u8);
         if self.rounded() {
             ("vs_record", "fs_main")
+        } else if self.solid && flat && self.kinds == TRAPEZOID_KIND {
+            SLICE_ENTRIES[usize::from(self.dither)]
         } else if self.solid && fill && flat {
             FLAT_FILL_ENTRIES[usize::from(self.clip == SegmentClip::Tested)]
                 [usize::from(self.dither)]
@@ -1258,7 +1282,7 @@ impl ShapeVariant {
 
     fn general(self) -> Self {
         Self {
-            kinds: (ALL_SHAPE_KINDS & !LINE_KIND) | (self.kinds & LINE_KIND),
+            kinds: (ALL_SHAPE_KINDS & !LINE_KINDS) | (self.kinds & LINE_KINDS),
             ablation: self.ablation,
             ..Self::GENERAL
         }
@@ -1450,6 +1474,9 @@ impl KeyWriter {
 }
 
 /// Unpacks what [`KeyWriter`] packed, low bit first.
+/// The bits a key's shape kinds take: one per fragment kind.
+const KIND_BITS: u32 = FRAGMENT_KIND_TRAPEZOID + 1;
+
 struct KeyReader(u64);
 
 impl KeyReader {
@@ -1470,13 +1497,15 @@ impl KeyReader {
     }
 
     fn take_kinds(&mut self) -> Option<u8> {
-        u8::try_from(self.take(4)).ok().filter(|kinds| *kinds != 0)
+        u8::try_from(self.take(KIND_BITS))
+            .ok()
+            .filter(|kinds| *kinds != 0)
     }
 }
 
 impl ShapePipelineKey {
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY002";
+    pub(crate) const DISK_LAYOUT: [u8; 8] = *b"CPKEY003";
 
     /// The key as a number a later launch reads back with
     /// [`Self::from_bits`], to build the pipeline ahead of its first frame.
@@ -1486,7 +1515,7 @@ impl ShapePipelineKey {
         bits.put(self.blend_mode as u64, 5);
         bits.put(self.tier as u64, 2);
         let variant = self.variant;
-        bits.put(u64::from(variant.kinds), 4);
+        bits.put(u64::from(variant.kinds), KIND_BITS);
         bits.put_byte(variant.brush);
         bits.put(u64::from(variant.solid), 1);
         bits.put(
@@ -4984,9 +5013,12 @@ impl GpuRenderer {
                 clip,
                 ablation,
                 laid,
-                turns == ShapeTurns::None
-                    && placement.snap_anchor.is_some()
-                    && viewport.offset.iter().all(|value| value.fract() == 0.0),
+                (
+                    turns == ShapeTurns::None,
+                    turns == ShapeTurns::None
+                        && placement.snap_anchor.is_some()
+                        && viewport.offset.iter().all(|value| value.fract() == 0.0),
+                ),
             ),
             turns,
             depth: if depth {

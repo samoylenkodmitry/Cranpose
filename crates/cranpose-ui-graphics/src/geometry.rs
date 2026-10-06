@@ -4,8 +4,9 @@ use std::{ops::AddAssign, rc::Rc};
 
 use crate::{
     ArcRecordArgs, Brush, Color, ColorFilter, CommandRecorder, CommandRecording, ImageBitmap,
-    ImageSampling, normalized_band,
+    ImageSampling, PathFillRule, Trapezoid, normalized_band,
     path::{DrawStyle, Path},
+    path_fill::PathSlicer,
     stroke::{LineGeometry, Stroke},
     typography::{
         DrawTextMeasurer, DrawTextStyle, TextAlign, TextMeasurement, TextVerticalAlign,
@@ -622,6 +623,15 @@ pub enum DrawPrimitive {
         end: Point,
         stroke: Stroke,
     },
+    /// One slice of a filled path, which the draw scope cuts a fill into
+    /// so the GPU draws it: see [`Trapezoid`].
+    Trapezoid {
+        /// The rect `brush` resolves against: the draw scope's own, as a
+        /// path's brush resolves in Compose.
+        rect: Rect,
+        brush: Brush,
+        trapezoid: Trapezoid,
+    },
     Image {
         rect: Rect,
         image: ImageBitmap,
@@ -770,6 +780,15 @@ impl DrawPrimitive {
                 start: Point::new(start.x + dx, start.y + dy),
                 end: Point::new(end.x + dx, end.y + dy),
                 stroke,
+            },
+            DrawPrimitive::Trapezoid {
+                rect,
+                brush,
+                trapezoid,
+            } => DrawPrimitive::Trapezoid {
+                rect: rect.translate(dx, dy),
+                brush,
+                trapezoid: trapezoid.translate(dx, dy),
             },
             DrawPrimitive::Image {
                 rect,
@@ -1298,6 +1317,36 @@ impl DrawScopeDefault {
         self.recording.push_scope_arc(&args, &geometry);
     }
 
+    /// Records the fill of `path` as the slices the GPU draws, its brush
+    /// resolved against the scope's rect; a path that cannot be sliced is
+    /// rasterized into a mask instead.
+    fn push_path_fill(&mut self, path: &Path, brush: &Brush, blend_mode: BlendMode) {
+        thread_local! {
+            static SLICER: std::cell::RefCell<PathSlicer> =
+                std::cell::RefCell::new(PathSlicer::default());
+        }
+        let brush_rect = Rect::from_size(self.size);
+        let recording = &mut self.recording;
+        let sliced = SLICER.with(|slicer| {
+            let mut slicer = slicer.borrow_mut();
+            let contours = path
+                .contours()
+                .iter()
+                .map(|contour| contour.points.as_slice());
+            slicer
+                .slice(contours, PathFillRule::NonZero)
+                .map(|slices| recording.push_trapezoids(brush_rect, slices, brush, blend_mode))
+                .is_some()
+        });
+        if !sliced {
+            self.push_vector_path(
+                &path.to_vector_path(PathFillRule::NonZero),
+                brush,
+                blend_mode,
+            );
+        }
+    }
+
     /// Rasterizes the fill of `path` into a cached coverage image and
     /// records it, blended by `blend_mode`.
     fn push_vector_path(&mut self, path: &crate::VectorPath, brush: &Brush, blend_mode: BlendMode) {
@@ -1608,11 +1657,7 @@ impl DrawScope for DrawScopeDefault {
     ) {
         let (stroke, dash) = match style {
             DrawStyle::Fill => {
-                self.push_vector_path(
-                    &path.to_vector_path(crate::PathFillRule::NonZero),
-                    &brush,
-                    blend_mode,
-                );
+                self.push_path_fill(path, &brush, blend_mode);
                 return;
             }
             DrawStyle::Stroke(stroke) => (stroke, None),

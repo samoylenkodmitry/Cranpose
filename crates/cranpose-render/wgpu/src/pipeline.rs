@@ -1714,6 +1714,15 @@ fn loose_shape(primitive: &DrawPrimitive, layer: &GraphicsLayer) -> Option<DrawP
             end: *end,
             stroke: *stroke,
         },
+        DrawPrimitive::Trapezoid {
+            rect,
+            brush,
+            trapezoid,
+        } => DrawPrimitive::Trapezoid {
+            rect: *rect,
+            brush: painted(brush),
+            trapezoid: *trapezoid,
+        },
         DrawPrimitive::Blend {
             primitive,
             blend_mode,
