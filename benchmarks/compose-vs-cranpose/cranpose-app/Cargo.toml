@@ -28,6 +28,7 @@ cranpose-core = { path = "../../../crates/cranpose-core" }
 cranpose-ui = { path = "../../../crates/cranpose-ui" }
 cranpose-foundation = { path = "../../../crates/cranpose-foundation" }
 log = "0.4"
+perf-data = { path = "../perf-data" }
 
 [dev-dependencies]
 cranpose-app-shell = { path = "../../../crates/cranpose-app-shell" }

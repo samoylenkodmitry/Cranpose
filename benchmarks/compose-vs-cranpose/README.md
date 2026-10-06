@@ -1,9 +1,23 @@
 # Cranpose vs Jetpack Compose on a device
 
 Two apps with the same UI, element for element: `cranpose-app` (Rust, Cranpose
-from this repository) and `compose-app` (Kotlin, Jetpack Compose from BOM
-2026.09.00, foundation 1.12). `measure.py` runs them alternately on one Android
-device and measures both from outside either framework.
+from this repository) and `compose-app` (Kotlin, Jetpack Compose).
+`measure.py` runs them alternately on one Android device and measures both
+from outside either framework. The gauntlet also runs in `views-app` (Android
+Views with RecyclerView), `flutter-app` (Flutter, which picks Impeller on
+OpenGL ES on the Mate), `rn-app` (React Native on the New Architecture with
+Hermes), `maui-app` (.NET MAUI, fully AOT-compiled), `avalonia-app` (Avalonia
+on Skia, fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
+GameActivity), `slint-app` (Slint on Skia) and `web-app` (a web page in
+Capacitor, on the device's Chromium WebView: the stack Ionic, Tauri and
+Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
+packages them: each crate's folder is its Android module, behind one launch
+activity that hands the native side the `am start` extras.
+
+This file describes the apps and how they are measured, not results: the
+nightly measures every framework at its latest stable release, and the
+desktop demo's Performance tab shows each device's latest numbers with the
+versions measured ("Every night", below).
 
 ## Scenarios
 
@@ -29,6 +43,7 @@ model with every comparison because frame capacity varies by device.
 | `deep` | The same width animation over 40 levels nested inside one another, each with a row of wrapping chips. | 40 levels × 6 chips | Deep relayout |
 | `deep_layer` | `deep`, with every level in a static rotated graphics layer. | 40 levels × 6 chips | Relayout under nested layers |
 | `workspace` | GPUI trading workspace: quote subscriptions, watchlist, chart, order book, trades and statistics. | 200 symbols, 16 hidden subscriptions | Text updates, clipping, scrolling and hover |
+| `gauntlet` | Every stage at once (below). Advances a frame index each frame, never wall time. | tier 5 | Composition, layout, intrinsics, text, images, paths, shadows, layers |
 
 Knobs:
 
@@ -41,14 +56,131 @@ Knobs:
 - `deep` and `deep_layer`: `--ei depth` and `--ei chips`;
 - `workspace`: `--es mode quotes`, `scroll` or `hover` (default `quotes`);
 - `--ez still true` holds the feed still, or starts the workspace at tick zero
-  with its stream, automatic scrolling and synthetic hover stopped.
+  with its stream, automatic scrolling and synthetic hover stopped;
+- `gauntlet`: `--ei tier` (1 to 8) and `--ei freeze K`, which stops on frame K
+  for picture comparisons.
+
+### Gauntlet
+
+One screen heavy enough that no framework holds 60 fps on the device it runs
+on, so every framework's frame rate shows its per-frame cost. Every frame
+advances a frame index `k`, and everything follows from `k`, so each framework
+does the same work per frame. Printed values are integer arithmetic of `k`,
+so both apps show the same digits on the same frame.
+
+- **Ticker strip:** quote tiles in a flow row whose price and change text and
+  bar change every frame: recomposition, text shaping and reflow.
+- **Card grid:** a lazy grid scrolling 3 dp a frame. Each card has an elevation
+  shadow and a border, a circle-clipped avatar bitmap, a two-line title, an
+  annotated subtitle, four lines of body text, a progress bar and percent,
+  a 48-point sparkline with a gradient fill, a chip flow row, and a footer of
+  counters split by dividers in an `IntrinsicSize.Min` row. Every fifth card
+  carries a translucent badge tilting in its graphics layer.
+- **Deep clusters:** after every five card rows, a cluster of nested levels.
+- **Width:** the whole content's width follows `k` between 92% and 100%, so
+  every visible node is measured again each frame.
+
+Each app is written in its own framework's best idiom, not translated line by
+line. Compose uses `LazyVerticalGrid` with full-span clusters, reads the
+width in `Modifier.layout`, and isolates every per-frame read in its own small
+composable or draw lambda. Cranpose uses `LazyColumn` rows (it has no lazy
+grid yet, #1165), reads the width at the screen root above one argument-stable
+call, and isolates the same reads. Views uses a `RecyclerView` of card rows
+and clusters, measures the width in a parent `onMeasure`, and redraws bars and
+sparklines in `onDraw`. Flutter uses a `ListView` of rows, lays the width out
+in a `SingleChildLayoutDelegate` that relayouts on the frame, rebuilds only the
+changing texts in `ValueListenableBuilder`s, and paints in `CustomPainter`s
+that repaint on the frame. React Native runs one JavaScript frame loop, so
+each frame is one React commit: the changing texts, bars, badges and the
+width are small memoized components reading the frame through
+`useSyncExternalStore`, the list is a FlashList of rows, sparklines are Skia
+paths, and the footer's dividers stretch in Yoga's row. MAUI advances the
+frame on its animation ticker; views on screen set only what changed, the
+list is a CollectionView of rows scrolled through its RecyclerView (MAUI
+scrolls to items, not offsets), sparklines and bars are GraphicsView
+drawables, and the footer is a Grid whose row is as tall as its tallest
+cell. Avalonia advances the frame on the top level's animation frame
+callback; controls on screen set only what changed, the list is an
+ItemsControl over a VirtualizingStackPanel whose card rows and clusters each
+recycle only their own kind, flow rows are WrapPanels, cards are Borders with
+a box shadow, and bars and sparklines are controls that draw themselves.
+egui lays out and paints the whole screen every frame, as immediate
+mode does: boxes reserve their background and paint it once their content is
+laid out, fixed-size pieces allocate their size and paint, and the list lays
+out only the rows on screen from an anchor that moves as rows scroll off.
+Slint declares the screen in compiled `.slint` markup: every per-frame value
+is a binding on a `Clock.frame` global, flow rows are `FlexboxLayout`s, rows
+come from a Rust `Model` as the `ListView` shows them, and a pure Rust
+callback draws the sparkline paths; Slint components cannot contain
+themselves, so a cluster's levels are boxes stacked from the outermost in.
+The web page lays everything out in CSS, trims paragraph leading with
+`text-box`, keeps only the rows on screen in the DOM, recycling rows that
+scroll off behind a spacer as tall, and sets only what changed each
+animation frame; sparklines are SVG paths in a box CSS stretches.
+
+| Tier | Columns | Scale | Ticker tiles | Cluster depth |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 1 | 1.0 | 8 | 6 |
+| 2 | 2 | 0.85 | 12 | 8 |
+| 3 | 2 | 0.7 | 16 | 10 |
+| 4 | 3 | 0.6 | 20 | 12 |
+| 5 | 3 | 0.5 | 28 | 14 |
+| 6 | 4 | 0.45 | 36 | 16 |
+| 7 | 4 | 0.4 | 44 | 20 |
+| 8 | 5 | 0.35 | 56 | 24 |
+| 9 | 6 | 0.3 | 72 | 28 |
+| 10 | 7 | 0.27 | 96 | 32 |
+| 11 | 8 | 0.25 | 120 | 40 |
+| 12 | 10 | 0.2 | 160 | 48 |
+| 13 | 12 | 0.18 | 200 | 56 |
+| 14 | 14 | 0.16 | 240 | 64 |
+| 15 | 16 | 0.14 | 300 | 72 |
+| 16 | 20 | 0.12 | 400 | 80 |
+
+Calibration fixes one tier per device: the lightest at which every
+framework draws below 60 fps. The Huawei Mate 20 X runs tier 12 and the
+Apple M3 Pro desktop tier 16. Raising a device's tier starts a new series
+rather than changing an old one. The web view renders in a sandboxed process
+of its own, which the phone's CPU count leaves out.
+
+`parity.py` launches two apps frozen on frame 120 and compares the two
+captures the way the eye does: softened and cut into tiles. On frame 120 a
+cluster sits mid-screen; on frame 240 one sits at the top of the list, where
+its look-alike levels make the drift ambiguous. Each band of tiles
+is found in the other capture up to 160 pixels higher or lower. Each tile is
+then matched at the best offset within 8 pixels of its band's, quarter by
+quarter of the neighbouring bands' where they drifted differently. A tile
+that still differs on average is changed; a band that has drifted past the
+other capture's edge, or behind its still content, is left out. Each
+capture's tiles are found in the other, and the worse way decides. The
+bands absorb drift: the frameworks put lines of text on different pixel grids,
+so a list scrolled 720 dp shows its rows a few dozen pixels apart without
+looking any different. Flutter rounds each line to whole logical pixels and
+Compose rounds it up to whole device pixels. Any difference for the same
+composable code is a Cranpose bug. Against Compose at tier 5 every app stays
+under the 2% gate; what the other frameworks draw differently, by design:
+
+- Flutter and Slint set text slightly wider, so a few lines break a word
+  earlier.
+- React Native keeps a paragraph's leading above its first line and below its
+  last.
+- egui filters textures in linear light, so the striped avatars average
+  lighter, and puts each glyph on a whole pixel.
+- Views, MAUI and the web page put lines of text a pixel apart.
 
 ## Parity rules
 
-- **Data:** `data.rs` and `Data.kt` implement the same xorshift generator, so
-  every post, comment, quote and particle is identical.
-- **Fonts:** both apps load `/system/fonts/Roboto-Regular.ttf` and
-  `Roboto-Bold.ttf` from the device and set a 1.4 em line height. The bundled
+- **Data:** `data.rs`, `shared-kotlin/dev/perfcompare/shared/PerfData.kt` (the
+  Compose and Views apps), `flutter-app/lib/data.dart`, `rn-app/src/data.ts`
+  and `shared-cs/PerfData.cs` implement the same xorshift generator, so every
+  post, comment, quote and particle is identical. `data.rs` is `perf-data`,
+  which the Cranpose, egui and Slint apps share; React Native and the web page
+  share `shared-ts/data.ts`, and MAUI and Avalonia share `shared-cs`.
+- **Fonts:** every app loads `/system/fonts/Roboto-Regular.ttf` and
+  `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. React
+  Native registers them with its font manager, MAUI serves them from its
+  own `IFontManager` and Avalonia from a font collection; the Huawei system
+  font is wider. The bundled
   Noto Sans Merged declares 2.1 em of ascent plus descent, which Compose honors
   and Cranpose does not, so it cannot be compared. The workspace also loads
   `Roboto-Medium.ttf` and follows GPUI's 1.618034 em line height, including the
@@ -56,6 +188,18 @@ Knobs:
   height, `Trim.None` and `includeFontPadding = false` for that contract.
 - **Window:** the same fullscreen theme, `singleTask` and `configChanges`, and
   one arm64 build each.
+- **Shadows:** egui has no elevation, so its cards draw Android's two
+  elevation shadows themselves: the ambient one and the spot one cast from
+  the light above the window's top centre, with Android's alphas, offsets and
+  blur widths. egui's text uses its light theme, which blends glyph coverage
+  as the other apps do.
+- **Accessibility:** the apps keep the tree that accessibility services read,
+  as their toolkits do by default. egui builds AccessKit's tree every frame
+  with a label for each text. Its Android adapter attaches to GameActivity's
+  view, which R8 must keep, and needs `accesskit_winit`'s `accesskit_android`
+  feature, which egui-winit leaves off. Avalonia serves its tree by default:
+  uiautomator reads 765 nodes at tier 5. Slint's Android backend has no
+  accessibility support, so the Slint app does none of this work.
 - **Release builds:**
   - Compose: R8 with resource shrinking, not debuggable, and fully
     AOT-compiled with `cmd package compile -m speed -f`. That is Compose's best
@@ -122,6 +266,73 @@ off before the first tick, light theme and those same three Roboto files;
 preserve the original reference checkout and benchmark executable.
 
 ## Measurement
+
+### Short A/B comparisons
+
+`ab.py` compares two installed builds as briefly as the evidence allows. It
+holds the device lock throughout and launches each build once unmeasured.
+Then it measures legs of 2 s warm-up plus a 5 s window, in pairs, A B then
+B A. From the second pair on, it stops a scenario once fps, CPU per frame and
+desired → present are each settled:
+- **Same:** medians within half the threshold, and each build's own range
+  narrower than the threshold.
+- **Different:** ranges apart, with medians apart by the threshold times
+  three with two legs a side, two with three, one with four.
+
+The thresholds are 3% of fps, 3% of CPU per frame and 2 ms. After four pairs
+anything still open is inconclusive. On the Mate, a same-build A/A comparison
+settles in 4 legs for 60 fps scenes and runs 8 legs for the gauntlet, whose
+launch-to-launch noise is about 3%.
+
+```bash
+python3 benchmarks/compose-vs-cranpose/ab.py --serial SERIAL --a cranpose-release --b cranpose \
+  --scenarios gauntlet,feed,grid --output OUTPUT
+```
+
+`cranpose-release` is the Cranpose app built with `-PperfCompareSuffix=.release`,
+so a second build installs beside the first. A build too slow to draw 40 frames
+in 5 seconds gets a longer window, up to 30 seconds, sized from its previous
+launch.
+
+`frameworks.py` measures every framework's app on the gauntlet for the
+dashboard: each launched once unmeasured, then two rounds of one leg each,
+the order reversed in the second. `--install DIR` first installs each app's
+`APP.apk` from DIR and compiles every app's Java with `speed`, as the Compose
+app's best case.
+
+```bash
+python3 benchmarks/compose-vs-cranpose/frameworks.py --serial SERIAL --output OUTPUT
+```
+
+### Every night
+
+`.github/workflows/perf-nightly.yml` measures main's latest commit at 01:30,
+unless the dashboard already holds it. Cranpose runs twice: its latest
+release (`cranpose-release`, once a release draws the gauntlet) and main.
+
+1. On macm3, `versions.py bump` moves each framework's pin to its latest
+   stable release, `build_apps.sh` builds every desktop app, every Android
+   app but Cranpose's, and the release's desktop app, and `desktop.py`
+   measures the desktop apps at tier 16. A moved pin that does not build is
+   put back. The run goes to the dashboard, and the pins that moved and
+   built go to the pull request `perf/framework-versions`.
+2. On the Mac the Mate 20 X is attached to, `scripts/perf/nightly.py`
+   compares the latest release with main, and `just perf-frameworks` installs
+   macm3's Android builds beside Cranpose's release and main and runs
+   `frameworks.py`.
+
+Each run names the version of every framework it measured: the pins
+`versions.py` reads, the Flutter SDK and .NET MAUI workload `build_apps.sh`
+keeps at their latest, the phone's WebView or the Mac's Chrome, and the
+macOS SwiftUI ships with. `python3 versions.py check` lists each pin beside
+its registry's latest release.
+
+The Performance tab of the desktop demo reads the runs from the `perf-data`
+branch: the latest night's release against main, the trend, and the latest
+framework comparison of each device. Each framework there opens its
+gauntlet's source at the commit measured.
+
+### Long comparisons
 
 Check the animation clock before comparing frame-driven workloads:
 
@@ -210,6 +421,13 @@ and a 15 s window. Failed runs are kept in the report.
 ```bash
 (cd benchmarks/compose-vs-cranpose/cranpose-app/android && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/compose-app && ./gradlew :app:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/views-app && ./gradlew :app:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/flutter-app && flutter build apk --release --target-platform android-arm64)
+(cd benchmarks/compose-vs-cranpose/rn-app && npm ci && cd android && ./gradlew :app:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/maui-app && dotnet publish -c Release -f net10.0-android)
+(cd benchmarks/compose-vs-cranpose/avalonia-app && dotnet publish -c Release -f net10.0-android)
+(cd benchmarks/compose-vs-cranpose/rust-android && ./gradlew :egui:assembleRelease :slint:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/web-app && npm ci && npm run build && cd android && ./gradlew :app:assembleRelease)
 python3 benchmarks/compose-vs-cranpose/measure.py --serial SERIAL --output benchmarks/compose-vs-cranpose/results/RUN --install --reps 2 --screenshots
 python3 benchmarks/compose-vs-cranpose/summarize.py benchmarks/compose-vs-cranpose/results/RUN/report.json
 ```
@@ -227,17 +445,70 @@ adb -s emulator-5680 shell settings put system min_refresh_rate 120.0
 python3 benchmarks/compose-vs-cranpose/measure.py --serial emulator-5680 --output benchmarks/compose-vs-cranpose/results/RUN --reps 2 --interval 0.25
 ```
 
+### On a Mac desktop
+
+`desktop.py` runs the gauntlet's desktop apps on a Mac, one at a time, each in
+a window of 1280 x 820 points (`perf-data`'s `DESKTOP_WINDOW`). Each app reads
+the tier from `PERF_TIER`, the frame to freeze on from `PERF_FREEZE` and the
+Roboto files from `PERF_FONTS`; Cranpose takes `--tier=N` arguments and the
+web page reads its address. `framecount/FrameCount.app` counts the frames the
+window presents through ScreenCaptureKit, as SurfaceFlinger counts a phone
+app's, and takes the pictures `--parity` compares. `ps` counts the CPU time
+of the app and every process it started. Desktop numbers feed the dashboard
+only; merges are judged on the slowest phone.
+
+| App | Stack |
+| --- | --- |
+| `cranpose` | `cranpose-app`'s desktop binary |
+| `compose` | `compose-desktop-app`: Compose Multiplatform on the JVM, drawing the composables `compose-app` draws, from `shared-compose` |
+| `egui`, `slint` | the Android crates' desktop binaries |
+| `iced` | `iced-app`: iced on wgpu |
+| `gpui` | `gpui-app`: Zed's GPUI as `gpui-pre` publishes it |
+| `avalonia` | `avalonia-app`'s desktop head, Native AOT |
+| `swiftui` | `swiftui-app`: SwiftUI |
+| `flutter` | `flutter-app`'s macOS runner, on Impeller |
+| `web` | the web page in a Chrome app window, the engine Electron apps ship |
+
+What each framework lacks and how its app does without:
+
+- iced text has no line limit or ellipsis: a box as tall as the lines clips
+  the paragraph. iced has no list that lays out only the rows on screen: the
+  app keeps the first row on screen and its top, and sensors around the rows
+  report their heights.
+- GPUI draws text only upright: the badge's text is Roboto Bold's outlines,
+  drawn as paths. Nested flex columns made GPUI's layout engine measure each
+  cluster level again for its parent, so the levels stack in block layout.
+  GPUI slows a window that is not in front to 30 fps; the app turns that off.
+- Slint's Skia renderer draws through wgpu on macOS and tells the rendering
+  notifier that a frame was drawn only with the `unstable-wgpu-30` feature.
+- The JVM opens no window outside the login session, so `desktop.py` starts
+  every app bundle through `open`. macOS then asks the user before such an
+  app reads a removable volume, so the fonts and Chrome's profile sit in a
+  temporary folder.
+
+SwiftUI hands its layers to the window server, whose CPU the count leaves
+out; `desktop.py` reports the cores other processes spent beside each leg.
+
+FrameCount needs the Screen Recording permission once: `framecount/build.sh`
+signs it with a requirement on its bundle identifier, so rebuilds keep it.
+
+```bash
+sh benchmarks/compose-vs-cranpose/framecount/build.sh
+(cd benchmarks/compose-vs-cranpose/cranpose-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/egui-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/slint-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/iced-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/gpui-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/avalonia-app && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64)
+(cd benchmarks/compose-vs-cranpose/swiftui-app && ./build.sh)
+(cd benchmarks/compose-vs-cranpose/flutter-app && flutter build macos --release)
+(cd benchmarks/compose-vs-cranpose/compose-desktop-app && ./gradlew createDistributable)
+(cd benchmarks/compose-vs-cranpose/web-app && npm ci && npx tsc -p tsconfig.json)
+python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
+python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
+```
+
 ## Findings
 
-Historical baseline findings on a Huawei Mate 20 X (Kirin 980, Android 10)
-filed these issues:
-
-- #790: transformed graphics layers render offscreen every frame;
-- #791: nested rotated layers use 1.7 GB and take seconds to reach 60 fps;
-- #792: frames reach the screen 1–2 vsyncs after Compose's;
-- #793: 2–3× Compose's memory on identical screens;
-- #794: the GPU runs at about twice Compose's clock;
-- #795: text with `Ellipsis` and `max_lines` wraps early and drops the "…";
-- #796: the APK is 12× Compose's.
-
-Re-run `measure.py` to check a fix; reports stay out of the repository.
+What the comparisons find is filed as issues, not kept here. Re-run
+`measure.py` to check a fix; reports stay out of the repository.

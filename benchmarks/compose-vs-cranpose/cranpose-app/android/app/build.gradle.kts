@@ -17,6 +17,9 @@ android {
 
     defaultConfig {
         applicationId = "dev.perfcompare.cranpose"
+        // A second build, such as the latest release beside main, installs
+        // next to the first under its own package: -PperfCompareSuffix=.release
+        applicationIdSuffix = providers.gradleProperty("perfCompareSuffix").orNull
         minSdk = 24
         targetSdk = 36
         versionCode = 1

@@ -22,6 +22,7 @@ pub enum Scenario {
     Deep,
     DeepLayer,
     Workspace,
+    Gauntlet,
 }
 
 impl Scenario {
@@ -35,6 +36,7 @@ impl Scenario {
             "deep" => Self::Deep,
             "deep_layer" => Self::DeepLayer,
             "workspace" => Self::Workspace,
+            "gauntlet" => Self::Gauntlet,
             _ => Self::Feed,
         }
     }
@@ -50,29 +52,27 @@ impl Scenario {
             Self::Deep => "Cranpose · deep",
             Self::DeepLayer => "Cranpose · deep + layers",
             Self::Workspace => "Cranpose · trading workspace",
+            // Both apps title it alike: the two pictures are compared.
+            Self::Gauntlet => "Gauntlet",
         }
     }
 }
 
-/// The device's Roboto faces, read from the same files the Compose app
-/// loads, so both frameworks shape and measure identical fonts. Read once and
-/// kept for the life of the process.
-#[cfg(target_os = "android")]
-fn system_roboto() -> &'static [&'static [u8]] {
-    let faces: Vec<&'static [u8]> = [
-        "/system/fonts/Roboto-Regular.ttf",
-        "/system/fonts/Roboto-Medium.ttf",
-        "/system/fonts/Roboto-Bold.ttf",
-    ]
-    .iter()
-    .filter_map(|path| match std::fs::read(path) {
-        Ok(bytes) => Some(&*Box::leak(bytes.into_boxed_slice())),
-        Err(error) => {
-            log::warn!("font {path} unavailable: {error}");
-            None
-        }
-    })
-    .collect();
+/// The Roboto faces every app loads: on Android the device's own, the files
+/// the Compose app loads, so both frameworks shape and measure identical
+/// fonts; on a desktop the ones in the folder `PERF_FONTS` names, which
+/// every desktop app loads. Read once and kept for the life of the process.
+fn roboto_faces() -> &'static [&'static [u8]] {
+    let faces: Vec<&'static [u8]> = ["Roboto-Regular.ttf", "Roboto-Medium.ttf", "Roboto-Bold.ttf"]
+        .iter()
+        .filter_map(|file| match std::fs::read(perf_data::font_path(file)) {
+            Ok(bytes) => Some(&*Box::leak(bytes.into_boxed_slice())),
+            Err(error) => {
+                log::warn!("font {file} unavailable: {error}");
+                None
+            }
+        })
+        .collect();
     Box::leak(faces.into_boxed_slice())
 }
 
@@ -80,21 +80,29 @@ fn system_roboto() -> &'static [&'static [u8]] {
 /// font of its own, as the Compose APK does not.
 #[cfg(target_os = "android")]
 pub fn create_app() -> AppLauncher<AppFonts> {
-    launcher().with_fonts(system_roboto())
+    launcher().with_fonts(roboto_faces())
 }
 
-/// Off Android there is no Roboto to match, so text draws in the embedded
-/// face.
+/// Runs the app in a desktop window, in the Roboto files every desktop app
+/// loads, or without them in the embedded face.
 #[cfg(not(target_os = "android"))]
-pub fn create_app() -> AppLauncher {
-    launcher()
+pub fn run_desktop() -> Result<(), cranpose::LaunchError> {
+    let faces = roboto_faces();
+    if faces.is_empty() {
+        launcher().try_run(PerfCompareApp)
+    } else {
+        launcher().with_fonts(faces).try_run(PerfCompareApp)
+    }
 }
 
 /// A phone-sized window, or for the trading workspace the 1280 × 820
-/// window gpui-fast's showcase opens.
+/// window gpui-fast's showcase opens, the size every desktop app gives the
+/// gauntlet too.
 fn launcher() -> AppLauncher {
-    let workspace = launch_args().string("scenario") == Some("workspace");
-    let (width, height) = if workspace { (1280, 820) } else { (360, 748) };
+    let (width, height) = match launch_args().string("scenario") {
+        Some("workspace" | "gauntlet") => perf_data::DESKTOP_WINDOW,
+        _ => (360, 748),
+    };
     AppLauncher::new()
         .with_title("Perf Compare")
         .with_size(width, height)
@@ -116,6 +124,7 @@ struct Launch {
     depth: usize,
     chips: usize,
     workspace: screens::workspace::WorkspaceMode,
+    gauntlet: screens::gauntlet::GauntletLoad,
     still: bool,
 }
 
@@ -151,6 +160,10 @@ impl Launch {
             workspace: screens::workspace::WorkspaceMode::from_name(
                 args.string("mode").unwrap_or("quotes"),
             ),
+            gauntlet: screens::gauntlet::GauntletLoad {
+                tier: count("tier", 5),
+                freeze: u32::try_from(count("freeze", 0)).unwrap_or(u32::MAX),
+            },
             still: args.boolean("still").unwrap_or(false),
         }
     }
@@ -200,6 +213,7 @@ pub fn PerfCompareApp() {
                 Scenario::Workspace => {
                     screens::workspace::WorkspaceFrame(launch.workspace, launch.still)
                 }
+                Scenario::Gauntlet => screens::gauntlet::GauntletScreen(launch.gauntlet),
             }
         },
     );

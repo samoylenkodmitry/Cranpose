@@ -24,6 +24,7 @@ use cranpose_ui::{
 mod animations;
 pub mod chrome_tabs;
 mod controls_ui;
+mod demo_text;
 mod demo_trace;
 mod documentation;
 pub mod flame_window;
@@ -44,6 +45,7 @@ mod liquid_ui;
 mod markdown;
 mod mineswapper2;
 mod net_image;
+pub mod performance_dashboard;
 pub mod pet;
 mod recomposition_lab;
 pub mod rotary;
@@ -135,6 +137,7 @@ pub enum DemoTab {
     Mineswapper2,
     RecompositionLab,
     HackerNews,
+    Performance,
     Images,
     Text,
     Wsz,
@@ -162,7 +165,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 30] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 31] = [
     DemoTabInfo {
         tab: DemoTab::Guide,
         label: "Cranpose Guide",
@@ -271,6 +274,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 30] = [
         slug: "hacker-news",
         source_path: "apps/desktop-demo/src/app/hacker_news.rs",
         startup_aliases: &["hackernews"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Performance,
+        label: "Performance",
+        slug: "performance",
+        source_path: "apps/desktop-demo/src/app/performance_dashboard.rs",
+        startup_aliases: &["perf", "performance"],
     },
     DemoTabInfo {
         tab: DemoTab::Images,
@@ -419,7 +429,7 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DEFAULT_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 30] = [
+pub const DEMO_TABS: [DemoTab; 31] = [
     DemoTab::Guide,
     DemoTab::Counter,
     DemoTab::Liquid,
@@ -435,6 +445,7 @@ pub const DEMO_TABS: [DemoTab; 30] = [
     DemoTab::Mineswapper2,
     DemoTab::RecompositionLab,
     DemoTab::HackerNews,
+    DemoTab::Performance,
     DemoTab::Images,
     DemoTab::Text,
     DemoTab::Wsz,
@@ -1018,6 +1029,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
     !matches!(
         tab,
         DemoTab::HackerNews
+            | DemoTab::Performance
             | DemoTab::WebView
             | DemoTab::Guide
             | DemoTab::LazyList
@@ -1051,6 +1063,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state: 
         DemoTab::Rotary => rotary_tab(),
         DemoTab::Wear => wear::wear_tab(),
         DemoTab::HackerNews
+        | DemoTab::Performance
         | DemoTab::Images
         | DemoTab::Text
         | DemoTab::Wsz
@@ -1069,6 +1082,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state: 
 fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state: WszTabState) {
     match active {
         DemoTab::HackerNews => HackerNewsTab(),
+        DemoTab::Performance => performance_dashboard::PerformanceTab(),
         DemoTab::Images => images_tab(),
         DemoTab::Text => TextShowcaseTab(),
         DemoTab::Wsz => WszTab(wsz_tab_state),

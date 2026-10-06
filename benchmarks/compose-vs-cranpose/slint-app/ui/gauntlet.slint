@@ -1,0 +1,481 @@
+// The gauntlet in Slint: the screen `compose-app/.../Gauntlet.kt` and
+// `cranpose-app/src/screens/gauntlet.rs` draw, element for element, in
+// Slint's declarative idiom. The benchmark's README describes it.
+//
+// Every frame advances `Clock.frame` and everything follows from it, never
+// from wall time: each per-frame value is a binding on the frame, so a frame
+// re-evaluates those bindings and lays out what they touch.
+
+import { ListView } from "std-widgets.slint";
+
+export struct TickerData {
+    symbol: string,
+    base: int,
+    swing: int,
+    step: int,
+    phase: int,
+    color: color,
+}
+
+export struct ChipData {
+    text: string,
+    background: color,
+    color: color,
+}
+
+export struct CardData {
+    card: int,
+    avatar: image,
+    title: string,
+    author: string,
+    tag: string,
+    tag-color: color,
+    body: string,
+    line: color,
+    bar: color,
+    chips: [ChipData],
+    stats: [string],
+}
+
+/// A list row: cards side by side, or the cluster numbered `cluster`.
+export struct RowData {
+    cluster: int,
+    cards: [CardData],
+}
+
+/// The frame index every per-frame value follows.
+export global Clock {
+    in-out property <int> frame;
+}
+
+/// One tier's scale, and the frame's numbers, in the integer arithmetic the
+/// other apps use.
+export global Gauntlet {
+    in property <float> s: 1;
+    in property <int> depth;
+    in property <[color]> palette;
+
+    /// A card's 48-point sparkline on the frame, as path commands in a
+    /// `width` by `height` box: the line, or the area under it.
+    pure callback spark-path(card: int, frame: int, width: float, height: float, area: bool) -> string;
+
+    pure public function truncate(value: float) -> int {
+        value < 0 ? -floor(-value) : floor(value)
+    }
+    pure public function triangle(value: int, period: int) -> int {
+        period / 2 - abs(mod(value, period) - period / 2)
+    }
+    pure public function cents(ticker: TickerData, frame: int) -> int {
+        ticker.base + truncate(ticker.swing * (triangle(frame * ticker.step + ticker.phase, 2000) - 500) / 500)
+    }
+    pure public function two-decimals(hundredths: int) -> string {
+        "\{floor(abs(hundredths) / 100)}.\{mod(abs(hundredths), 100) < 10 ? "0" : ""}\{mod(abs(hundredths), 100)}"
+    }
+    pure public function cents-text(cents: int) -> string {
+        (cents < 0 ? "-" : "") + two-decimals(cents)
+    }
+    pure public function change-text(ticker: TickerData, cents: int) -> string {
+        (cents < ticker.base ? "-" : "+") + two-decimals(truncate((cents - ticker.base) * 10000 / ticker.base)) + "%"
+    }
+    pure public function progress(card: int, frame: int) -> int {
+        mod(frame * 3 + card * 37, 1000)
+    }
+    pure public function width-fraction(frame: int) -> float {
+        0.92 + 0.08 * triangle(frame * 3, 200) / 100
+    }
+}
+
+global Ink {
+    out property <color> ink: #111827;
+    out property <color> body: #374151;
+    out property <color> muted: #6B7280;
+    out property <color> hairline: #E5E7EB;
+    out property <color> panel: #E2E8F0;
+    out property <color> up: #16A34A;
+    out property <color> down: #DC2626;
+}
+
+/// A rounded track filled to `share`.
+component Bar inherits Rectangle {
+    in property <float> share;
+    in property <color> fill;
+    background: Ink.hairline;
+    Rectangle {
+        x: 0;
+        width: parent.width * share;
+        height: parent.height;
+        border-radius: parent.border-radius;
+        background: fill;
+    }
+}
+
+component TickerTile inherits Rectangle {
+    in property <TickerData> ticker;
+    property <float> s: Gauntlet.s;
+    property <int> cents: Gauntlet.cents(ticker, Clock.frame);
+    background: white;
+    border-radius: 6px * s;
+    HorizontalLayout {
+        padding-left: 6px * s;
+        padding-right: 6px * s;
+        padding-top: 3px * s;
+        padding-bottom: 3px * s;
+        spacing: 4px * s;
+        Text {
+            text: ticker.symbol;
+            font-size: 10px * s;
+            font-weight: 700;
+            color: Ink.ink;
+            vertical-alignment: center;
+        }
+        // The price and the change: bindings on the frame, re-evaluated alone.
+        Text {
+            text: Gauntlet.cents-text(cents);
+            font-size: 10px * s;
+            color: Ink.body;
+            vertical-alignment: center;
+        }
+        Text {
+            text: Gauntlet.change-text(ticker, cents);
+            font-size: 10px * s;
+            color: cents >= ticker.base ? Ink.up : Ink.down;
+            vertical-alignment: center;
+        }
+        VerticalLayout {
+            alignment: center;
+            Bar {
+                width: 20px * s;
+                height: 4px * s;
+                border-radius: 2px * s;
+                fill: ticker.color;
+                share: clamp((cents - ticker.base + ticker.swing) / (2 * ticker.swing), 0, 1);
+            }
+        }
+    }
+}
+
+component Sparkline inherits Rectangle {
+    in property <int> card;
+    in property <color> line;
+    height: 36px * Gauntlet.s;
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        commands: Gauntlet.spark-path(card, Clock.frame, self.width / 1px, self.height / 1px, true);
+        fill: @linear-gradient(180deg, line.with-alpha(0.25) 0%, line.with-alpha(0) 100%);
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        commands: Gauntlet.spark-path(card, Clock.frame, self.width / 1px, self.height / 1px, false);
+        stroke: line;
+        stroke-width: 1.5px * Gauntlet.s;
+    }
+}
+
+component Counter inherits VerticalLayout {
+    in property <string> value;
+    in property <string> label;
+    horizontal-stretch: 1;
+    alignment: start;
+    Text {
+        text: value;
+        font-size: 12px * Gauntlet.s;
+        font-weight: 700;
+        color: Ink.ink;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: label;
+        font-size: 9px * Gauntlet.s;
+        color: Ink.muted;
+        horizontal-alignment: center;
+    }
+}
+
+component Card inherits Rectangle {
+    in property <CardData> data;
+    property <float> s: Gauntlet.s;
+    // Android's own line spacing for Roboto is 1.172 em: lines 1.4 em apart.
+    property <float> paragraph: 1.4 / 1.172;
+    background: white;
+    border-radius: 12px * s;
+    border-width: 1px;
+    border-color: Ink.hairline;
+    drop-shadow-offset-y: 1px * s;
+    drop-shadow-blur: 3px * s;
+    drop-shadow-color: #00000040;
+    // Compose draws its border over the padding: the content is inset by the
+    // padding alone.
+    VerticalLayout {
+        padding: 10px * s;
+        spacing: 6px * s;
+        HorizontalLayout {
+            spacing: 8px * s;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 32px * s;
+                    height: 32px * s;
+                    border-radius: 16px * s;
+                    clip: true;
+                    Image {
+                        source: data.avatar;
+                        width: parent.width;
+                        height: parent.height;
+                        image-fit: cover;
+                    }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                Text {
+                    text: data.title;
+                    font-size: 13px * s;
+                    font-weight: 700;
+                    color: Ink.ink;
+                    wrap: word-wrap;
+                    max-lines: 2;
+                    overflow: elide;
+                    line-height-factor: paragraph;
+                }
+                // `by Ada Lovelace · #rust`: the author bold, the tag in its color.
+                HorizontalLayout {
+                    Text {
+                        text: "by ";
+                        font-size: 11px * s;
+                        color: Ink.muted;
+                    }
+                    Text {
+                        text: data.author;
+                        font-size: 11px * s;
+                        font-weight: 700;
+                        color: Ink.muted;
+                    }
+                    Text {
+                        text: " · ";
+                        font-size: 11px * s;
+                        color: Ink.muted;
+                    }
+                    Text {
+                        text: data.tag;
+                        font-size: 11px * s;
+                        color: data.tag-color;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+        Text {
+            text: data.body;
+            font-size: 12px * s;
+            color: Ink.body;
+            wrap: word-wrap;
+            max-lines: 4;
+            overflow: elide;
+            line-height-factor: paragraph;
+        }
+        HorizontalLayout {
+            spacing: 6px * s;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                Bar {
+                    height: 6px * s;
+                    border-radius: 3px * s;
+                    fill: data.bar;
+                    share: Gauntlet.progress(data.card, Clock.frame) / 1000;
+                }
+            }
+            Text {
+                text: "\{floor(Gauntlet.progress(data.card, Clock.frame) / 10)}%";
+                font-size: 10px * s;
+                color: Ink.muted;
+                vertical-alignment: center;
+            }
+        }
+        Sparkline {
+            card: data.card;
+            line: data.line;
+        }
+        FlexboxLayout {
+            spacing: 4px * s;
+            for chip in data.chips: Rectangle {
+                background: chip.background;
+                border-radius: 10px * s;
+                HorizontalLayout {
+                    padding-left: 8px * s;
+                    padding-right: 8px * s;
+                    padding-top: 3px * s;
+                    padding-bottom: 3px * s;
+                    Text {
+                        text: chip.text;
+                        font-size: 10px * s;
+                        color: chip.color;
+                    }
+                }
+            }
+        }
+        // Three counters split by dividers as tall as the row: a horizontal
+        // layout is as tall as its tallest cell and stretches the dividers.
+        HorizontalLayout {
+            Counter {
+                value: data.stats[0];
+                label: "likes";
+            }
+            Rectangle {
+                width: 1px;
+                background: Ink.hairline;
+            }
+            Counter {
+                value: data.stats[1];
+                label: "replies";
+            }
+            Rectangle {
+                width: 1px;
+                background: Ink.hairline;
+            }
+            Counter {
+                value: data.stats[2];
+                label: "shares";
+            }
+        }
+    }
+    // A translucent tag tilting with the frame: rotated, never laid out again.
+    if mod(data.card, 5) == 0: Rectangle {
+        x: parent.width - self.width - 6px * s;
+        y: 6px * s;
+        width: hot.preferred-width + 12px * s;
+        height: hot.preferred-height + 4px * s;
+        transform-rotation: (Gauntlet.triangle(Clock.frame * 2 + data.card * 30, 40) * 0.5 - 5) * 1deg;
+        opacity: 0.9;
+        background: Gauntlet.palette[0];
+        border-radius: 8px * s;
+        hot := Text {
+            text: "HOT";
+            font-size: 9px * s;
+            font-weight: 700;
+            color: white;
+        }
+    }
+}
+
+/// `depth` levels nested inside one another, each a row of three labels above
+/// the next level. Slint components cannot contain themselves, so the levels
+/// are boxes stacked from the outermost in, each inset where its parent pads.
+component Cluster inherits Rectangle {
+    in property <int> cluster;
+    property <float> s: Gauntlet.s;
+    property <int> depth: Gauntlet.depth;
+    property <length> label: probe.preferred-height;
+    height: depth * (3px * s + label) + 2px * s + label;
+    probe := Text {
+        text: "C";
+        font-size: 9px * s;
+        visible: false;
+    }
+    for level in depth + 1: Rectangle {
+        property <int> remaining: depth - level;
+        x: level * 3px * s;
+        y: level * (2px * s + label);
+        width: root.width - level * 4px * s;
+        height: remaining * (3px * s + label) + 2px * s + label;
+        background: mod(remaining, 2) == 0 ? #F1F5F9 : #CBD5E1;
+        border-radius: 4px * s;
+        HorizontalLayout {
+            x: 3px * s;
+            y: 1px * s;
+            width: parent.width - 4px * s;
+            height: label;
+            spacing: 2px * s;
+            for chip in 3: Rectangle {
+                horizontal-stretch: 1;
+                background: Gauntlet.palette[mod(remaining + chip + cluster, 8)];
+                border-radius: 2px * s;
+                Text {
+                    x: 0;
+                    width: parent.width;
+                    text: "C\{cluster}.L\{remaining}.\{chip}";
+                    font-size: 9px * s;
+                    color: white;
+                    overflow: elide;
+                }
+            }
+        }
+    }
+}
+
+export component GauntletWindow inherits Window {
+    in property <[TickerData]> tickers;
+    in property <[RowData]> rows;
+    /// The list's scroll offset, which the frame clock sets.
+    in-out property <length> scroll <=> list.content-y;
+    property <float> s: Gauntlet.s;
+    title: "Gauntlet";
+    background: #EEF0F5;
+    default-font-family: "Roboto";
+    VerticalLayout {
+        Rectangle {
+            height: 56px;
+            background: #1E2A4A;
+            Text {
+                x: 16px;
+                height: parent.height;
+                text: "Gauntlet";
+                font-size: 20px;
+                font-weight: 700;
+                color: white;
+                vertical-alignment: center;
+            }
+        }
+        // The content's width follows the frame, in whole pixels.
+        Rectangle {
+            VerticalLayout {
+                x: 0;
+                width: round(parent.width / 1phx * Gauntlet.width-fraction(Clock.frame)) * 1phx;
+                height: parent.height;
+                Rectangle {
+                    background: Ink.panel;
+                    FlexboxLayout {
+                        padding: 6px * s;
+                        spacing: 4px * s;
+                        for ticker in tickers: TickerTile {
+                            ticker: ticker;
+                        }
+                    }
+                }
+                list := ListView {
+                    // Each row is as tall as its content, 8 px (scaled) below
+                    // the one above.
+                    for row in rows: VerticalLayout {
+                        padding-top: 8px * s;
+                        padding-left: 8px * s;
+                        padding-right: 8px * s;
+                        if row.cluster >= 0: Cluster {
+                            cluster: row.cluster;
+                        }
+                        // Equal columns. A horizontal layout takes its height
+                        // from each cell's height at the cell's own width, so
+                        // each column is given its width rather than stretched
+                        // to it: the cards wrap their text at that width.
+                        if row.cluster < 0: HorizontalLayout {
+                            spacing: 8px * s;
+                            for card in row.cards: VerticalLayout {
+                                width: (parent.width - (row.cards.length - 1) * 8px * s) / row.cards.length;
+                                alignment: start;
+                                Card {
+                                    data: card;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
