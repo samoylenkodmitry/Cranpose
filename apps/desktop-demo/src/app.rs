@@ -280,7 +280,7 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 31] = [
         label: "Performance",
         slug: "performance",
         source_path: "apps/desktop-demo/src/app/performance_dashboard.rs",
-        startup_aliases: &["perf"],
+        startup_aliases: &["perf", "performance"],
     },
     DemoTabInfo {
         tab: DemoTab::Images,
