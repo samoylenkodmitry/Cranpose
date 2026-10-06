@@ -37,8 +37,8 @@ fn prepared_layout_cache_distinguishes_visual_styles() {
     style.span_style.color = Some(crate::Color(0.0, 0.0, 1.0, 1.0));
     let blue = service.prepare_with_options(
         None,
-        &Rc::new(text.clone()),
-        &std::sync::Arc::new(style.clone()),
+        &Rc::new(text),
+        &std::sync::Arc::new(style),
         options,
         None,
     );
@@ -589,8 +589,8 @@ fn text_service_reuses_prepared_layout_cache_across_node_ids() {
     );
     let second = service.prepare_with_options(
         Some(10),
-        &Rc::new(text.clone()),
-        &std::sync::Arc::new(style.clone()),
+        &Rc::new(text),
+        &std::sync::Arc::new(style),
         options,
         Some(120.0),
     );
@@ -651,7 +651,7 @@ fn prepared_text_preserves_width_variants_and_owned_edits() {
     let reloaded = service.prepare_with_options(
         None,
         &Rc::new(text.clone()),
-        &std::sync::Arc::new(style.clone()),
+        &std::sync::Arc::new(style),
         options,
         Some(50.0),
     );
