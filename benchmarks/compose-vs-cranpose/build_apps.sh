@@ -17,7 +17,9 @@
 # Build caches live under PERF_BUILD_CACHE, which survives the checkout's
 # cleaning between jobs: each Rust app's target (linked in as its `target`),
 # the Flutter SDK on its stable channel, .NET with its Android workload,
-# NuGet's packages and npm's cache.
+# NuGet's packages and npm's cache. Each app's last build is kept there too,
+# with a stamp of what it read: an app whose files, pin and toolchains did not
+# change since is not built again, so a night builds only what moved.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -89,25 +91,79 @@ cargo_app() {
     (cd "$here/$1" && env -u CARGO_TARGET_DIR cargo build --release)
 }
 
+# What every build runs: Rust, Flutter, .NET and its workloads, Xcode, Node
+# and the JDKs. A change to any of them builds every app again.
+toolchains() {
+    {
+        (cd "$here" && rustc -V)
+        flutter --version --machine
+        dotnet --version
+        dotnet workload list
+        xcodebuild -version
+        node -v
+        /usr/libexec/java_home -V
+    } 2>&1 | shasum -a 256 | cut -c1-16
+}
+
+# The stamp of the PATHS a build reads, as the checkout has them now (moved
+# pins included), and of the toolchains.
+stamp() {
+    (cd "$here" && git ls-files -s -- "$@" && git diff HEAD -- "$@" && echo "$tools") | shasum -a 256 | cut -c1-16
+}
+
+# usage: build NAME OUTPUT PATHS... -- COMMAND...
+# Runs COMMAND, which makes OUTPUT (a file or a folder, from this folder),
+# unless the last build of NAME read the same PATHS and toolchains: then puts
+# that build's OUTPUT back. The stamp is taken again after COMMAND, as a pin
+# `attempt` put back changed what the build read.
+build() {
+    local name=$1 output=$here/$2
+    shift 2
+    local paths=()
+    while [[ $1 != -- ]]; do
+        paths+=("$1")
+        shift
+    done
+    shift
+    local kept=$cache/built/$name
+    if [[ -e $kept && $(cat "$kept.stamp" 2>/dev/null) == "$(stamp "${paths[@]}")" ]]; then
+        echo "== $name: unchanged since its last build"
+        mkdir -p "$(dirname "$output")"
+        ditto "$kept" "$output"
+        return
+    fi
+    step "$name"
+    "$@"
+    mkdir -p "$cache/built"
+    rm -rf "$kept"
+    ditto "$output" "$kept"
+    stamp "${paths[@]}" > "$kept.stamp"
+}
+
 case $mode in
 desktop)
     flutter_ready
     dotnet_ready
-    for app in cranpose egui slint iced gpui; do
-        step "$app"
+    tools=$(toolchains)
+    # Cranpose's app reads the whole workspace, which moves every night.
+    step cranpose
+    rust_target cranpose-app
+    cargo_app cranpose-app
+    for app in egui slint iced gpui; do
         rust_target "$app-app"
-        attempt "$app" cargo_app "$app-app"
+        build "$app" "$app-app/target/release/perf-compare-$app" "$app-app" perf-data -- \
+            attempt "$app" cargo_app "$app-app"
     done
-    step avalonia
-    attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64"
-    step swiftui
-    "$here/swiftui-app/build.sh"
-    step flutter
-    (cd "$here/flutter-app" && flutter build macos --release)
-    step compose
-    attempt compose-desktop bash -c "cd '$here/compose-desktop-app' && ./gradlew --no-daemon -q createDistributable"
-    step web
-    attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json"
+    build avalonia avalonia-app/bin/Release/net10.0/osx-arm64/publish avalonia-app shared-cs -- \
+        attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64"
+    build swiftui swiftui-app/build/PerfSwiftUI.app swiftui-app -- "$here/swiftui-app/build.sh"
+    build flutter flutter-app/build/macos/Build/Products/Release/perf_flutter.app flutter-app -- \
+        bash -c "cd '$here/flutter-app' && flutter build macos --release"
+    build compose compose-desktop-app/build/compose/binaries/main/app/PerfCompose.app \
+        compose-desktop-app shared-compose shared-kotlin -- \
+        attempt compose-desktop bash -c "cd '$here/compose-desktop-app' && ./gradlew --no-daemon -q createDistributable"
+    build web web-app/www/js web-app shared-ts -- \
+        attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json"
     python3 "$here/versions.py" write "$here/desktop-versions.json" --platform desktop
     step framecount
     # A rebuild of the same source would only sign it again.
@@ -122,34 +178,38 @@ android)
     mkdir -p "$out"
     flutter_ready
     dotnet_ready
-    step compose
-    attempt compose bash -c "cd '$here/compose-app' && ./gradlew --no-daemon -q :app:assembleRelease"
+    tools=$(toolchains)
+    build compose-android compose-app/app/build/outputs/apk/release/app-release.apk \
+        compose-app shared-compose shared-kotlin -- \
+        attempt compose bash -c "cd '$here/compose-app' && ./gradlew --no-daemon -q :app:assembleRelease"
     cp "$here/compose-app/app/build/outputs/apk/release/app-release.apk" "$out/compose.apk"
-    step views
-    attempt views bash -c "cd '$here/views-app' && ./gradlew --no-daemon -q :app:assembleRelease"
+    build views views-app/app/build/outputs/apk/release/app-release.apk views-app shared-kotlin -- \
+        attempt views bash -c "cd '$here/views-app' && ./gradlew --no-daemon -q :app:assembleRelease"
     cp "$here/views-app/app/build/outputs/apk/release/app-release.apk" "$out/views.apk"
-    step flutter
-    (cd "$here/flutter-app" && flutter build apk --release --target-platform android-arm64)
+    build flutter-android flutter-app/build/app/outputs/flutter-apk/app-release.apk flutter-app -- \
+        bash -c "cd '$here/flutter-app' && flutter build apk --release --target-platform android-arm64"
     cp "$here/flutter-app/build/app/outputs/flutter-apk/app-release.apk" "$out/flutter.apk"
-    step rn
-    attempt rn bash -c "cd '$here/rn-app' && npm ci --no-audit --no-fund && cd android && ./gradlew --no-daemon -q :app:assembleRelease"
+    build rn rn-app/android/app/build/outputs/apk/release/app-release.apk rn-app shared-ts -- \
+        attempt rn bash -c "cd '$here/rn-app' && npm ci --no-audit --no-fund && cd android && ./gradlew --no-daemon -q :app:assembleRelease"
     cp "$here/rn-app/android/app/build/outputs/apk/release/app-release.apk" "$out/rn.apk"
-    step maui
-    (cd "$here/maui-app" && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory="$ANDROID_HOME")
+    build maui maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk \
+        maui-app shared-cs -- \
+        bash -c "cd '$here/maui-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"
     cp "$here/maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk" "$out/maui.apk"
-    step avalonia
-    attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"
+    build avalonia-android avalonia-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.avalonia-Signed.apk \
+        avalonia-app shared-cs -- \
+        attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"
     cp "$here/avalonia-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.avalonia-Signed.apk" "$out/avalonia.apk"
     for app in egui slint; do
-        step "$app"
         rust_target "$app-app"
-        attempt "$app" bash -c "cd '$here/rust-android' && env -u CARGO_TARGET_DIR ./gradlew --no-daemon -q :$app:assembleRelease"
+        build "$app-android" "$app-app/build/outputs/apk/release/$app-release.apk" "$app-app" perf-data rust-android -- \
+            attempt "$app" bash -c "cd '$here/rust-android' && env -u CARGO_TARGET_DIR ./gradlew --no-daemon -q :$app:assembleRelease"
         cp "$here/$app-app/build/outputs/apk/release/$app-release.apk" "$out/$app.apk"
     done
-    step web
     # Capacitor's Android build needs JDK 21.
     jdk21=$(/usr/libexec/java_home -v 21)
-    attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npm run build && cd android && ./gradlew --no-daemon -q -Dorg.gradle.java.home='$jdk21' :app:assembleRelease"
+    build web-android web-app/android/app/build/outputs/apk/release/app-release.apk web-app shared-ts -- \
+        attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npm run build && cd android && ./gradlew --no-daemon -q -Dorg.gradle.java.home='$jdk21' :app:assembleRelease"
     cp "$here/web-app/android/app/build/outputs/apk/release/app-release.apk" "$out/web.apk"
     python3 "$here/versions.py" write "$out/versions.json" --platform android
     ;;

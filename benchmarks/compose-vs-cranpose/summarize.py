@@ -7,6 +7,8 @@ import statistics
 from collections import defaultdict
 from pathlib import Path
 
+from measure import memory_mb
+
 METRICS = [
     ('fps', 'Presented FPS', '{:.1f}'),
     ('janky_pct', 'Frames > 1.5 vsync (%)', '{:.2f}'),
@@ -20,7 +22,8 @@ METRICS = [
     ('cpu_big_mhz', 'Mean big-core clock (MHz)', '{:.0f}'),
     ('desired_to_ready_p50_ms', 'Desired timestamp → ready p50 (ms)', '{:.1f}'),
     ('desired_to_present_p50_ms', 'Desired timestamp → present p50 (ms)', '{:.1f}'),
-    ('pss_mb', 'Memory PSS (MB)', '{:.0f}'),
+    ('ram_mb', 'Memory PSS (MB)', '{:.0f}'),
+    ('gpu_ram_mb', 'GPU memory, GL and EGL mtrack (MB)', '{:.0f}'),
     ('big_rise', 'Big-core cluster rise in window (°C)', '{:+.1f}'),
     ('big_end', 'Big-core cluster at window end (°C)', '{:.0f}'),
     ('gpu_rise', 'GPU rise in window (°C)', '{:+.1f}'),
@@ -63,7 +66,7 @@ def main():
     report = json.loads(args.report.read_text())
     groups = defaultdict(list)
     for run in report['runs']:
-        run['pss_mb'] = run['memory'].get('total_pss_kb', 0) / 1024
+        run.update(memory_mb(run['memory']))
         thermal_fields(run)
         groups[(run['scenario'], run['app'])].append(run)
     scenarios = list(dict.fromkeys(run['scenario'] for run in report['runs']))
