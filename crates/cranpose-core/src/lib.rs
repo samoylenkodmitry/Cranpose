@@ -531,6 +531,14 @@ pub fn composable_definition_key(
     location_key(file, line, column) ^ avalanche_location_key(std::hash::Hasher::finish(&hasher))
 }
 
+/// The key [`caller_location_key`] gives a call site, remembered in a static
+/// of the call site that the `#[composable]` macro writes, so the call takes
+/// no thread-local lookup.
+#[doc(hidden)]
+pub fn cached_location_key(cell: &OnceLock<Key>, file: &str, line: u32, column: u32) -> Key {
+    *cell.get_or_init(|| registered_location_key(file_location_hash(file), file, line, column))
+}
+
 #[doc(hidden)]
 pub fn cached_composable_definition_key(
     cell: &OnceLock<Key>,
