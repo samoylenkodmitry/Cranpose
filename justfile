@@ -46,15 +46,27 @@ toolchains:
 # rustfmt.toml sets unstable import options, so formatting is the one gate that
 # runs on nightly rather than on the pinned stable.
 
-# Format the workspace.
+# Format the workspace and the benchmark apps, each its own workspace.
 fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --manifest-path apps/isolated-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/slint-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/iced-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/gpui-app/Cargo.toml
 
 # Verify formatting without touching the tree. This is the CI gate.
 fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --all --check --manifest-path apps/isolated-demo/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/cranpose-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/perf-data/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/egui-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/slint-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/iced-app/Cargo.toml
+    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/gpui-app/Cargo.toml
 
 # --- lint ------------------------------------------------------------------
 
@@ -358,6 +370,9 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 scripts/perf_report_test.py
     python3 benchmarks/compose-vs-cranpose/tests/test_surfaceflinger_report.py
     python3 benchmarks/compose-vs-cranpose/tests/test_clock_samples.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_ab_decisions.py
+    {{benchmark_python}} benchmarks/compose-vs-cranpose/tests/test_parity_compare.py
+    python3 scripts/perf/publish_test.py
 
 # Covers the shared/exclusive lock that keeps builds off the machine while a
 # measurement runs, and the turnstile that keeps a stream of builds from
@@ -928,3 +943,23 @@ liquid-reference-device-test device team results suite:
 
 liquid-reference-device-run device run results suite architecture="arm64":
     xcodebuild -xctestrun '{{run}}' -destination 'platform=iOS,arch={{architecture}},id={{device}}' -resultBundlePath '{{results}}' -parallel-testing-enabled NO -test-timeouts-enabled NO -only-testing:LiquidReferenceTests/{{suite}} test-without-building
+
+# Nightly comparison of the latest release's benchmark app against main's on
+# an attached Android device: builds both, compares them with the short A/B
+# protocol and writes OUTPUT/run.json.
+perf-nightly serial output:
+    python3 scripts/perf/nightly.py --serial {{serial}} --output {{output}}
+
+# Every framework's app on the phone: the builds in `apks` (APP.apk, from
+# benchmarks/compose-vs-cranpose/build_apps.sh) beside Cranpose's latest
+# release and main, built from this checkout.
+perf-frameworks serial output apks:
+    python3 scripts/perf/frameworks_phone.py --serial {{serial}} --output {{output}} --apks {{apks}}
+
+# Adds a comparison run to the perf-data branch the performance dashboard reads.
+perf-publish run:
+    python3 scripts/perf/publish.py --run {{run}}
+
+# Opens an issue for a night's confirmed regressions.
+perf-report run:
+    python3 scripts/perf/report.py --run {{run}}

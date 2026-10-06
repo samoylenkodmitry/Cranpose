@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The same window as the other apps: fullscreen, no title bar, and the
+         screen's background behind the first frame. -->
+    <style name="LaunchTheme" parent="@android:style/Theme.NoTitleBar.Fullscreen">
+        <item name="android:windowBackground">@color/background</item>
+    </style>
+    <style name="NormalTheme" parent="@android:style/Theme.NoTitleBar.Fullscreen">
+        <item name="android:windowBackground">@color/background</item>
+    </style>
+    <color name="background">#FFEEF0F5</color>
+</resources>

@@ -1,7 +1,6 @@
 use std::rc::Rc;
 
-use cranpose::LazyItems;
-use cranpose::prelude::*;
+use cranpose::{LazyItems, prelude::*};
 use cranpose_foundation::lazy::rememberLazyListState;
 use cranpose_ui::widgets::{FlowRow, FlowRowSpec};
 

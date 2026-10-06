@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application
+        android:allowBackup="false"
+        android:hardwareAccelerated="true"
+        android:label="${label}">
+        <profileable android:shell="true" />
+        <!-- The same window as the Cranpose and Compose activities: fullscreen,
+             no title bar, singleTask, and configuration changes handled in place. -->
+        <activity
+            android:name="dev.perfcompare.launch.LaunchActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="${theme}"
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode|layoutDirection|fontScale|density">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="${libName}" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -14,12 +14,16 @@ both apps, and temperature is recorded as a result in its own right.
 import argparse
 import json
 import re
+import shlex
 import statistics
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent.parent / 'scripts'))
+from android_robot_device import device_lock  # noqa: E402  (the shared per-device lock)
 APPS = {
     'cranpose': {
         'package': 'dev.perfcompare.cranpose',
@@ -31,9 +35,71 @@ APPS = {
         'activity': 'dev.perfcompare.compose/.MainActivity',
         'apk': HERE / 'compose-app/app/build/outputs/apk/release/app-release.apk',
     },
+    # Android Views: the gauntlet only.
+    'views': {
+        'package': 'dev.perfcompare.views',
+        'activity': 'dev.perfcompare.views/.MainActivity',
+        'apk': HERE / 'views-app/app/build/outputs/apk/release/app-release.apk',
+    },
+    # Flutter: the gauntlet only. Its frames reach the screen through the
+    # SurfaceView above the window, `SurfaceView - package/activity#N`.
+    'flutter': {
+        'package': 'dev.perfcompare.flutter',
+        'activity': 'dev.perfcompare.flutter/.MainActivity',
+        'apk': HERE / 'flutter-app/build/app/outputs/flutter-apk/app-release.apk',
+        'layer': 'SurfaceView - ',
+    },
+    # React Native: the gauntlet only. Its `PERF` lines come from JavaScript,
+    # under React Native's own log tag.
+    'rn': {
+        'package': 'dev.perfcompare.rn',
+        'activity': 'dev.perfcompare.rn/.MainActivity',
+        'apk': HERE / 'rn-app/android/app/build/outputs/apk/release/app-release.apk',
+        'log_tags': ['ReactNativeJS:I'],
+    },
+    # .NET MAUI: the gauntlet only, published fully AOT-compiled.
+    'maui': {
+        'package': 'dev.perfcompare.maui',
+        'activity': 'dev.perfcompare.maui/.MainActivity',
+        'apk': HERE / 'maui-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.maui-Signed.apk',
+    },
+    # Avalonia 12 on Skia, fully AOT-compiled: the gauntlet only. Its frames
+    # reach the screen through a SurfaceView, as Flutter's do.
+    'avalonia': {
+        'package': 'dev.perfcompare.avalonia',
+        'activity': 'dev.perfcompare.avalonia/.MainActivity',
+        'apk': HERE / 'avalonia-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.avalonia-Signed.apk',
+        'layer': 'SurfaceView - ',
+    },
+    # The web platform (Chromium's Android WebView) in Capacitor: the gauntlet only.
+    'web': {
+        'package': 'dev.perfcompare.web',
+        'activity': 'dev.perfcompare.web/.MainActivity',
+        'apk': HERE / 'web-app/android/app/build/outputs/apk/release/app-release.apk',
+    },
+    # Rust frameworks, packaged by `rust-android`: the gauntlet only. egui runs
+    # in a GameActivity, which draws into a SurfaceView, as Flutter does.
+    'egui': {
+        'package': 'dev.perfcompare.egui',
+        'activity': 'dev.perfcompare.egui/dev.perfcompare.launch.LaunchActivity',
+        'apk': HERE / 'egui-app/build/outputs/apk/release/egui-release.apk',
+        'layer': 'SurfaceView - ',
+    },
+    'slint': {
+        'package': 'dev.perfcompare.slint',
+        'activity': 'dev.perfcompare.slint/dev.perfcompare.launch.LaunchActivity',
+        'apk': HERE / 'slint-app/build/outputs/apk/release/slint-release.apk',
+    },
+    # The Cranpose app built from the latest release, beside main's
+    # (`-PperfCompareSuffix=.release`).
+    'cranpose-release': {
+        'package': 'dev.perfcompare.cranpose.release',
+        'activity': 'dev.perfcompare.cranpose.release/dev.cranpose.android.CranposeActivity',
+        'apk': HERE / 'cranpose-app/android/app/build/outputs/apk/release/app-release.apk',
+    },
 }
 SCENARIOS = ['feed', 'ticker', 'particles', 'layers', 'grid', 'grid_layer', 'deep', 'deep_layer',
-             'workspace']
+             'workspace', 'gauntlet']
 REMOTE_WINDOW = '/data/local/tmp/perf_window.sh'
 # Loads that keep Jetpack Compose itself below 60 fps on the Huawei Mate 20 X:
 # a test both frameworks pass at 60 fps cannot tell them apart.
@@ -48,12 +114,30 @@ HEAVY = {
     'deep_layer': '--ei depth 40 --ei chips 6',
     # gpui-fast's trading workspace, 16 quotes every 16 ms.
     'workspace': '--es mode quotes',
+    # Every stage at once; the tier is calibrated per device (README).
+    'gauntlet': '--ei tier 12',
 }
 
 
 class Device:
     def __init__(self, serial):
         self.serial = serial
+
+    def install(self, app, apk):
+        """Installs `apk` as `app`, in place of an install signed by another
+        key, and compiles its Java ahead of time: `speed`, the Compose app's
+        best case, for every app alike."""
+        package = APPS[app]['package']
+        for attempt in range(2):
+            result = subprocess.run(['adb', '-s', self.serial, 'install', '-r', '-d', str(apk)],
+                                    capture_output=True, text=True, timeout=600)
+            if result.returncode == 0:
+                break
+            if attempt == 0 and 'INSTALL_FAILED_UPDATE_INCOMPATIBLE' in result.stdout + result.stderr:
+                self.adb('uninstall', package)
+                continue
+            raise RuntimeError(f'{apk.name} did not install: {result.stdout.strip()} {result.stderr.strip()}')
+        self.shell('cmd', 'package', 'compile', '-m', 'speed', '-f', package)
 
     def adb(self, *args, timeout=120, check=True):
         result = subprocess.run(['adb', '-s', self.serial, *args], capture_output=True,
@@ -64,7 +148,9 @@ class Device:
         return result.stdout
 
     def shell(self, *args, timeout=120, check=True):
-        return self.adb('shell', *args, timeout=timeout, check=check)
+        # `adb shell` joins its arguments into one command line for the
+        # device's shell: quote each, so a layer name with spaces stays one.
+        return self.adb('shell', *(shlex.quote(arg) for arg in args), timeout=timeout, check=check)
 
     def pid(self, package):
         deadline = time.monotonic() + 10
@@ -140,16 +226,29 @@ PENDING = 9223372036854775807
 LAYER_STATE = 'RequestedLayerState{'
 
 
-def app_layer(device, package):
-    """The app window's buffer layer: `package/activity#N`, without a handle
-    prefix. Newer Android lists each layer as `RequestedLayerState{name ...}`
-    and gives the window's buffers to its `VRI-package/activity#N` layer."""
+def app_log(device, app):
+    """The app's log lines: its own tag and any the app's framework logs under."""
+    return device.adb('logcat', '-d', '-s', 'PerfCompare:I', *APPS[app].get('log_tags', []))
+
+
+def app_layer(device, app):
+    """The app's buffer layer: the window's `package/activity#N`, without a
+    handle prefix, or the layer named with the app's `layer` prefix when it
+    draws into a SurfaceView. Newer Android lists each layer as
+    `RequestedLayerState{name ...}` and gives the window's buffers to its
+    `VRI-package/activity#N` layer."""
+    package = APPS[app]['package']
+    prefix = APPS[app].get('layer')
     layers = []
     for line in device.shell('dumpsys', 'SurfaceFlinger', '--list').splitlines():
         name = line.strip()
         if name.startswith(LAYER_STATE):
             name = name[len(LAYER_STATE):].split(' parentId=')[0]
-        if ' ' not in name and (name.startswith(package + '/') or name.startswith(f'VRI-{package}/')):
+        if prefix:
+            found = name.startswith(f'{prefix}{package}/')
+        else:
+            found = ' ' not in name and (name.startswith(package + '/') or name.startswith(f'VRI-{package}/'))
+        if found:
             layers.append(name)
     if len(layers) != 1:
         raise ValueError(f'expected one buffer layer for {package}: {layers}')
@@ -262,8 +361,8 @@ def meminfo(device, package):
 
 
 def launch(device, app, scenario, extra=()):
-    device.shell('am', 'force-stop', APPS['cranpose']['package'])
-    device.shell('am', 'force-stop', APPS['compose']['package'])
+    for spec in APPS.values():
+        device.shell('am', 'force-stop', spec['package'])
     time.sleep(1.0)
     device.shell('input', 'keyevent', 'KEYCODE_WAKEUP')
     device.adb('logcat', '-c')
@@ -333,7 +432,23 @@ def clock_summary(freqs):
     return summary
 
 
-def measure_run(device, app, scenario, args, destination):
+def frame_rate(device, app):
+    """The app's recent frame rate, from the presents SurfaceFlinger keeps for
+    its layer; 0 when it has presented fewer than two frames."""
+    presents = sorted(
+        int(fields[1]) for fields in (line.split() for line in
+                                      device.shell('dumpsys', 'SurfaceFlinger', '--latency', app_layer(device, app))
+                                      .splitlines()[1:])
+        if len(fields) == 3 and 0 < int(fields[1]) < PENDING)
+    if len(presents) < 2:
+        return 0.0
+    return (len(presents) - 1) / ((presents[-1] - presents[0]) / 1e9)
+
+
+def measure_run(device, app, scenario, args, destination, window=None):
+    """One cold launch measured over `window` seconds after the warm-up
+    (`args.window` unless given)."""
+    window = window or args.window
     package = APPS[app]['package']
     run = {'app': app, 'scenario': scenario, 'temperature_before': device.temperatures()}
     extras = (HEAVY.get(scenario, '') if args.load == 'heavy' else '') + ' ' + args.extra
@@ -341,11 +456,11 @@ def measure_run(device, app, scenario, args, destination):
     run['launch'], pid = launch(device, app, scenario, extras.split())
     run['started_s'] = round(time.monotonic() - args.started, 1)
     time.sleep(args.warmup)
-    layer = app_layer(device, package)
-    samples = int(args.window / args.interval)
+    layer = app_layer(device, app)
+    samples = int(window / args.interval)
     output = device.shell('sh', REMOTE_WINDOW, str(pid), package, layer, str(samples),
                           str(args.interval), '1' if app == 'compose' else '0',
-                          timeout=args.window + 60)
+                          timeout=window + 60)
     (destination / f'{app}-{scenario}-{int(time.time())}.txt').write_text(output)
     lines = output.splitlines()
     if any(line.strip() == 'STAT' for line in lines):
@@ -396,7 +511,7 @@ def measure_run(device, app, scenario, args, destination):
                                if name.startswith('cooling_')))
     if app == 'compose':
         run['gfxinfo'] = gfxinfo_summary(output.split('GFX_BEGIN', 1)[1].split('GFX_END', 1)[0])
-    log = device.adb('logcat', '-d', '-s', 'PerfCompare:I')
+    log = app_log(device, app)
     run['app_log'] = [line for line in log.splitlines() if 'PERF' in line]
     if args.screenshots:
         shot = destination / f'{app}-{scenario}.png'
@@ -441,16 +556,23 @@ def main():
     parser.add_argument('--load', choices=['heavy', 'default'], default='heavy',
                         help='heavy: the per-scenario loads in HEAVY; default: the apps\' own sizes')
     args = parser.parse_args()
+    with device_lock(args.serial):
+        compare(args)
+
+
+def compare(args):
+    """Runs the whole comparison: the caller holds the device lock."""
     args.started = time.monotonic()
     args.output.mkdir(parents=True, exist_ok=True)
     device = Device(args.serial)
     report = {'device': {key: device.shell('getprop', key).strip() for key in
                          ['ro.product.model', 'ro.build.version.release', 'ro.hardware']},
               'runs': [], 'startup': {'cranpose': [], 'compose': []}, 'failures': []}
-    for app, spec in APPS.items():
+    for app in args.apps.split(','):
+        spec = APPS[app]
         report[app + '_apk_bytes'] = spec['apk'].stat().st_size
         if args.install:
-            device.adb('install', '-r', '-d', str(spec['apk']), timeout=300)
+            device.install(app, spec['apk'])
     debuggable = device.shell('dumpsys', 'package', APPS['compose']['package'])
     if 'DEBUGGABLE' in debuggable.split('pkgFlags=')[-1].split('\n')[0]:
         raise RuntimeError('the Compose APK is debuggable; measure a release build')

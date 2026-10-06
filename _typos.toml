@@ -21,6 +21,10 @@ extend-exclude = [
   "apps/desktop-demo/robot-fixtures/**",
   # Screenshot and recording scratch space, not source.
   "example/**",
+  # Xcode's generated project and interface files: object IDs, and Apple's
+  # own spelling in the templates.
+  "**/*.pbxproj",
+  "**/*.xib",
   ".claude/**",
 ]
 
@@ -53,3 +57,5 @@ abd = "abd"
 # Apple's Core Audio Format container, one of the audio extensions CranAmp
 # lists.
 caf = "caf"
+# Avalonia names its bitmap class `WriteableBitmap`.
+Writeable = "Writeable"

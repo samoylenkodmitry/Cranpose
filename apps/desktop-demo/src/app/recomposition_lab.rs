@@ -2,11 +2,11 @@ use std::cell::Cell;
 
 use cranpose_core::{self, MutableState};
 use cranpose_ui::{
-    composable,
-    text::{FontWeight, SpanStyle, TextUnit},
-    BoxWithConstraints, BoxWithConstraintsScope, Button, ButtonSpec, Color, Column, ColumnSpec,
-    LinearArrangement, Modifier, Row, RowSpec, Text, TextStyle,
+    composable, BoxWithConstraints, BoxWithConstraintsScope, Button, ButtonSpec, Color, Column,
+    ColumnSpec, LinearArrangement, Modifier, Row, RowSpec, Text, TextStyle,
 };
+
+use super::demo_text::text_style;
 
 thread_local! {
     static INSTANCE_SEQ: Cell<u32> = const { Cell::new(0) };
@@ -19,28 +19,16 @@ fn next_instance() -> u32 {
     })
 }
 
-fn lab_style(size: f32, color: Color, bold: bool) -> TextStyle {
-    TextStyle {
-        span_style: SpanStyle {
-            color: Some(color),
-            font_size: TextUnit::Sp(size),
-            font_weight: bold.then_some(FontWeight::BOLD),
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
 fn title_style() -> TextStyle {
-    lab_style(22.0, Color(0.10, 0.12, 0.18, 1.0), true)
+    text_style(22.0, Color(0.10, 0.12, 0.18, 1.0), true)
 }
 
 fn label_style() -> TextStyle {
-    lab_style(14.0, Color(0.16, 0.19, 0.25, 1.0), false)
+    text_style(14.0, Color(0.16, 0.19, 0.25, 1.0), false)
 }
 
 fn counter_style() -> TextStyle {
-    lab_style(12.0, Color(0.12, 0.45, 0.25, 1.0), false)
+    text_style(12.0, Color(0.12, 0.45, 0.25, 1.0), false)
 }
 
 #[composable]

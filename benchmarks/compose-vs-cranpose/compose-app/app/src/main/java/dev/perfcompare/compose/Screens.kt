@@ -29,51 +29,17 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.isActive
-import java.io.File
 import kotlin.math.sin
 
 private const val MEDIA_HEIGHT = 140f
 
-// The device's Roboto faces, the same two files the Cranpose app loads.
-private val Roboto = FontFamily(
-    Font(File("/system/fonts/Roboto-Regular.ttf"), FontWeight.Normal),
-    Font(File("/system/fonts/Roboto-Bold.ttf"), FontWeight.Bold),
-)
 private val Ink = Color(0xFF111827)
 private val Up = Color(0xFF16A34A)
 private val Down = Color(0xFFDC2626)
-
-// Line height is explicit because the two frameworks read different vertical
-// metrics from the same font; 1.4 em makes both lay out identical lines.
-fun textStyle(sizeSp: Float, color: Color, bold: Boolean) = TextStyle(
-    color = color,
-    fontSize = sizeSp.sp,
-    fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
-    fontFamily = Roboto,
-    lineHeight = 1.4f.em,
-)
-
-@Composable
-fun TopBar(title: String) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(56.dp)
-            .background(Color(0xFF1E2A4A))
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        BasicText(title, style = textStyle(20f, Color.White, true))
-    }
-}
 
 /** Seconds since this screen's first frame, written once per frame. */
 @Composable

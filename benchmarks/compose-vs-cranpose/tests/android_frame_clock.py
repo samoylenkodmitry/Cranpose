@@ -38,7 +38,7 @@ def sample(check, mode, index):
     capture_finished = time.monotonic_ns()
     sf_started = time.monotonic_ns()
     sf = check.device.shell('dumpsys', 'SurfaceFlinger', '--latency',
-                            app_layer(check.device, check.package))
+                            app_layer(check.device, check.args.app))
     sf_finished = time.monotonic_ns()
     sf_path = path.with_suffix('.surfaceflinger.txt')
     sf_path.write_text(sf)

@@ -1,0 +1,30 @@
+[package]
+name = "perf-compare-gpui"
+version = "0.1.0"
+edition = "2024"
+description = "The gauntlet of the framework comparison in GPUI"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[dependencies]
+# Zed's GPUI as `gpui-pre` publishes it, with the macOS platform and its
+# CoreText text system (`font-kit`).
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = ["font-kit"] }
+# GPUI's image frames, for the avatars.
+image = { version = "0.25", default-features = false }
+log = "0.4"
+perf-data = { path = "../perf-data" }
+# Glyph outlines for the badge's rotated text.
+ttf-parser = "0.25"
+
+# Its own workspace, like a real application, built as the Cranpose app is.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = 0

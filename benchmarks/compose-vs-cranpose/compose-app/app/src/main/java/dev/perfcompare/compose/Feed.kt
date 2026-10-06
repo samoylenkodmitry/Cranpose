@@ -1,5 +1,6 @@
 package dev.perfcompare.compose
 
+import dev.perfcompare.shared.*
 import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.scrollBy
