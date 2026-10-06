@@ -186,7 +186,7 @@ fn scene_bounds_for_test(scene: &mut Scene) -> Option<Rect> {
 }
 
 #[test]
-fn shadow_geometry_has_visible_expansion_and_offsets() {
+fn a_layer_shadow_draws_skias_ambient_then_spot_pass() {
     let mut scene = Scene::new();
     let layer = GraphicsLayer {
         shadow_elevation: 10.0,
@@ -205,40 +205,22 @@ fn shadow_geometry_has_visible_expansion_and_offsets() {
     let light = ShadowLight::for_window(200.0, 200.0, 1.0, 1.0);
     push_layer_shadow(&mut scene, &layer, bounds, bounds, None, light);
 
-    assert!(
-        scene.shadow_draws.len() >= 2,
-        "elevation shadow should emit ambient + spot blur draws"
+    let geometry = cranpose_render_common::layer_shadow::layer_shadow_geometry(
+        &layer,
+        bounds,
+        Some(RoundedCornerShape::uniform(8.0)),
+        light,
     );
-
-    let ambient = &scene.shadow_draws[0];
+    let drawn: Vec<_> = scene
+        .rrect_shadows
+        .iter()
+        .map(|draw| (draw.shadow, draw.color))
+        .collect();
+    assert_eq!(drawn, geometry.passes().collect::<Vec<_>>());
     assert!(
-        ambient.blur_radius > 0.0,
-        "ambient shadow should have a blur radius"
+        scene.shadow_draws.is_empty(),
+        "an elevation shadow takes no blurred surface"
     );
-    let ambient_shape = ambient.shapes.as_ref().expect("ambient caster");
-    assert!(
-        ambient_shape.bounds.x < bounds.x,
-        "ambient shadow should expand left"
-    );
-    assert!(
-        ambient_shape.bounds.width > bounds.width,
-        "ambient shadow should clearly expand width"
-    );
-    let ambient_peak_alpha = ambient_shape.tables().shapes.get(0).unwrap().color[3];
-    assert!(
-        ambient_peak_alpha > 0.02,
-        "ambient alpha should remain visible"
-    );
-
-    let spot = &scene.shadow_draws[1];
-    assert!(spot.blur_radius > 0.0, "spot shadow should have blur");
-    let spot_shape = spot.shapes.as_ref().expect("spot caster");
-    assert!(
-        spot_shape.bounds.y > bounds.y,
-        "spot shadow should be offset downward from source bounds"
-    );
-    let spot_alpha = spot_shape.tables().shapes.get(0).unwrap().color[3];
-    assert!(spot_alpha > 0.02, "spot alpha should remain visible");
 }
 
 #[test]

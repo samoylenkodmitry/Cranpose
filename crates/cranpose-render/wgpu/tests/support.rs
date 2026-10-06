@@ -1124,6 +1124,24 @@ pub fn solid_rect(rect: Rect, color: Color) -> RenderNode {
     brush_rect(rect, Brush::solid(color))
 }
 
+/// A drop shadow of `rect` in `color` blurred by `blur_radius`: a shadow the
+/// renderer resolves on a surface of its own.
+pub fn drop_shadow(rect: Rect, color: Color, blur_radius: f32) -> RenderNode {
+    draw_node(
+        DrawPrimitive::Shadow(cranpose_ui_graphics::ShadowPrimitive::Drop {
+            shape: std::boxed::Box::new(DrawPrimitive::Rect {
+                rect,
+                brush: Brush::solid(color),
+                stroke: None,
+            }),
+            cutout: None,
+            blur_radius,
+            blend_mode: cranpose_ui_graphics::BlendMode::SrcOver,
+        }),
+        None,
+    )
+}
+
 pub fn brush_rect(rect: Rect, brush: Brush) -> RenderNode {
     draw_node(
         DrawPrimitive::Rect {

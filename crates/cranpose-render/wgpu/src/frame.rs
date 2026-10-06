@@ -5263,6 +5263,9 @@ pub(crate) fn scene_bounds(layer: &LayerScene, scale: f32) -> Option<Rect> {
                 let text = &scene.texts[index];
                 clipped(text.rect, text.clip)
             }
+            DrawOpKind::RRectShadow(index) => {
+                crate::rrect_shadow::rrect_shadow_bounds(&scene.rrect_shadows[index], scale)
+            }
             DrawOpKind::Shadow(index) => {
                 let shadow = &scene.shadow_draws[index];
                 let mut shadow_bounds = None;

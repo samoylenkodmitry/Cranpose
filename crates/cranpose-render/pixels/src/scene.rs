@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
-use cranpose_render_common::primitive_emit::ShapeDrawParams;
+use cranpose_render_common::{layer_shadow::ShadowRRect, primitive_emit::ShapeDrawParams};
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, LineGeometry,
@@ -50,10 +50,22 @@ pub(crate) struct ImageDraw {
     pub src_rect: Option<Rect>,
 }
 
+/// One pass of a layer's elevation shadow: Skia's round rect shadow in
+/// device pixels, its color and the clip it is cut to.
+#[derive(Clone, Copy)]
+pub(crate) struct ShadowDraw {
+    pub shadow: ShadowRRect,
+    pub snap_anchor: Option<Point>,
+    pub color: Color,
+    pub z_index: usize,
+    pub clip: Option<Rect>,
+}
+
 pub(crate) struct RasterScene {
     pub shapes: Vec<DrawShape>,
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
+    pub shadows: Vec<ShadowDraw>,
     pub next_z: usize,
 }
 
@@ -63,6 +75,7 @@ impl RasterScene {
             shapes: Vec::new(),
             images: Vec::new(),
             texts: Vec::new(),
+            shadows: Vec::new(),
             next_z: 0,
         }
     }
@@ -89,6 +102,18 @@ impl RasterScene {
             z_index,
             clip,
             blend_mode,
+        });
+    }
+
+    pub fn push_shadow(&mut self, shadow: ShadowRRect, color: Color, clip: Option<Rect>) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        self.shadows.push(ShadowDraw {
+            shadow,
+            snap_anchor: None,
+            color,
+            z_index,
+            clip,
         });
     }
 

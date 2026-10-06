@@ -12,7 +12,10 @@ use crate::{
         hash_text_gradient_phase_for_cache, resolve_image_geometry, shadow_draw_bounds,
         text_raster_geometry_for_draw,
     },
-    scene::{CompositorScene, DrawOp, DrawOpKind, ImageDraw, ShadowDraw, TextDraw},
+    rrect_shadow::{device_clip, device_shadow, rrect_shadow_bounds},
+    scene::{
+        CompositorScene, DrawOp, DrawOpKind, ImageDraw, RRectShadowDraw, ShadowDraw, TextDraw,
+    },
 };
 
 /// A device rect a capture reads, in the device space of the scene whose
@@ -129,6 +132,15 @@ pub(crate) fn hash_capture_ops<H: Hasher>(
                 if window.touches_logical(text.rect, OP_MARGIN, scale) {
                     2u8.hash(state);
                     hash_text(text, window, scale, state);
+                }
+            }
+            DrawOpKind::RRectShadow(index) => {
+                let draw = &scene.rrect_shadows[index];
+                if rrect_shadow_bounds(draw, scale)
+                    .is_some_and(|bounds| window.touches_logical(bounds, OP_MARGIN, scale))
+                {
+                    5u8.hash(state);
+                    hash_rrect_shadow(draw, window, scale, state);
                 }
             }
             DrawOpKind::Shadow(index) => {
@@ -278,6 +290,49 @@ fn hash_image<H: Hasher>(image: &ImageDraw, window: CaptureWindow, scale: f32, s
     image.motion_context_animated.hash(state);
 }
 
+/// A round rect shadow by everything its pixels depend on, its device
+/// geometry and clip taken against the capture's origin.
+fn hash_rrect_shadow<H: Hasher>(
+    draw: &RRectShadowDraw,
+    window: CaptureWindow,
+    scale: f32,
+    state: &mut H,
+) {
+    let shadow = device_shadow(draw, scale);
+    let bounds = shadow.bounds;
+    hash_device_tuple(
+        (bounds.x, bounds.y, bounds.width, bounds.height),
+        window,
+        state,
+    );
+    let hole = shadow
+        .hole
+        .map_or([0.0, -1.0], |hole| [hole.inset, hole.radius]);
+    for value in shadow
+        .radii
+        .into_iter()
+        .chain([shadow.umbra_inset, shadow.distance_correction])
+        .chain(hole)
+    {
+        hash_f32_for_cache(value, state);
+    }
+    for channel in [
+        draw.color.r(),
+        draw.color.g(),
+        draw.color.b(),
+        draw.color.a(),
+    ] {
+        channel.to_bits().hash(state);
+    }
+    hash_optional_tuple(
+        device_clip(draw, scale).map(|[left, top, right, bottom]| {
+            clipped_device_tuple((left, top, right - left, bottom - top), window)
+        }),
+        window,
+        state,
+    );
+}
+
 fn hash_shadow<H: Hasher>(shadow: &ShadowDraw, window: CaptureWindow, scale: f32, state: &mut H) {
     let anchor = shadow
         .shapes
@@ -296,18 +351,16 @@ fn hash_shadow<H: Hasher>(shadow: &ShadowDraw, window: CaptureWindow, scale: f32
         window,
         state,
     );
-    for rect in [shadow.clip, shadow.occluder] {
-        hash_optional_tuple(
-            rect.map(|rect| {
-                clipped_device_tuple(
-                    crate::render::anchored_rect_to_device(rect, anchor, scale),
-                    window,
-                )
-            }),
-            window,
-            state,
-        );
-    }
+    hash_optional_tuple(
+        shadow.clip.map(|rect| {
+            clipped_device_tuple(
+                crate::render::anchored_rect_to_device(rect, anchor, scale),
+                window,
+            )
+        }),
+        window,
+        state,
+    );
     hash_mask(
         crate::render::shadow_composite_mask(shadow, anchor, scale),
         window,

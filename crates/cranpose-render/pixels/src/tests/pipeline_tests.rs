@@ -159,7 +159,7 @@ fn fallback_detection_triggers_for_effects_and_offscreen() {
 }
 
 #[test]
-fn shadow_geometry_has_visible_expansion_and_offsets() {
+fn a_layer_shadow_draws_skias_ambient_then_spot_pass() {
     let mut scene = RasterScene::new();
     let layer = GraphicsLayer {
         shadow_elevation: 10.0,
@@ -175,12 +175,6 @@ fn shadow_geometry_has_visible_expansion_and_offsets() {
         height: 24.0,
     };
     let light = ShadowLight::for_window(200.0, 200.0, 1.0, 1.0);
-    let geometry = layer_shadow_geometry(&layer, bounds, light);
-    let ambient_pass = geometry.ambient.expect("ambient pass");
-    let spot_pass = geometry.spot.expect("spot pass");
-    let ambient_samples = blur_samples(ambient_pass.blur_radius.max(1.0));
-    let spot_samples = blur_samples(spot_pass.blur_radius.max(1.0));
-
     push_layer_shadow(
         &mut scene,
         &layer,
@@ -190,49 +184,19 @@ fn shadow_geometry_has_visible_expansion_and_offsets() {
         light,
     );
 
-    assert!(
-        scene.shapes.len() == ambient_samples.len() + spot_samples.len(),
-        "pixels shadow blur should emit one sample per shared ambient/spot pass"
+    let geometry = layer_shadow_geometry(
+        &layer,
+        bounds,
+        Some(RoundedCornerShape::uniform(8.0)),
+        light,
     );
-
-    let ambient = &scene.shapes[0];
-    let ambient_expansion = ambient_samples
-        .last()
-        .expect("ambient blur samples")
-        .expansion;
-    assert_eq!(
-        ambient.rect,
-        Rect {
-            x: ambient_pass.rect.x - ambient_expansion,
-            y: ambient_pass.rect.y - ambient_expansion,
-            width: ambient_pass.rect.width + ambient_expansion * 2.0,
-            height: ambient_pass.rect.height + ambient_expansion * 2.0,
-        }
-    );
-
-    let spot = &scene.shapes[ambient_samples.len()];
-    let spot_expansion = spot_samples.last().expect("spot blur samples").expansion;
-    assert_eq!(
-        spot.rect,
-        Rect {
-            x: spot_pass.rect.x - spot_expansion,
-            y: spot_pass.rect.y - spot_expansion,
-            width: spot_pass.rect.width + spot_expansion * 2.0,
-            height: spot_pass.rect.height + spot_expansion * 2.0,
-        }
-    );
-    let spot_alpha: f32 = scene.shapes[ambient_samples.len()..]
+    let drawn: Vec<_> = scene
+        .shadows
         .iter()
-        .filter_map(|shape| match &shape.brush {
-            Brush::Solid(color) => Some(color.a()),
-            _ => None,
-        })
-        .sum();
-    assert!(
-        (spot_alpha - spot_pass.alpha).abs() < 0.01,
-        "the spot blur's samples add up to the pass's alpha: {spot_alpha} against {}",
-        spot_pass.alpha
-    );
+        .map(|shadow| (shadow.shadow, shadow.color))
+        .collect();
+    assert_eq!(drawn, geometry.passes().collect::<Vec<_>>());
+    assert!(scene.shapes.is_empty(), "a shadow draws no blurred shapes");
 }
 
 #[test]

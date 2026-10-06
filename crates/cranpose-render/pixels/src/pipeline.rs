@@ -52,6 +52,7 @@ struct SceneCounts {
     shapes: usize,
     images: usize,
     texts: usize,
+    shadows: usize,
 }
 
 fn scene_counts(scene: &RasterScene) -> SceneCounts {
@@ -59,6 +60,7 @@ fn scene_counts(scene: &RasterScene) -> SceneCounts {
         shapes: scene.shapes.len(),
         images: scene.images.len(),
         texts: scene.texts.len(),
+        shadows: scene.shadows.len(),
     }
 }
 
@@ -79,6 +81,9 @@ fn assign_snap_anchor_since(
     }
     for text in &mut scene.texts[counts.texts..] {
         text.snap_anchor = Some(snap_anchor);
+    }
+    for shadow in &mut scene.shadows[counts.shadows..] {
+        shadow.snap_anchor = Some(snap_anchor);
     }
 }
 
@@ -313,11 +318,10 @@ fn push_layer_shadow(
     clip: Option<Rect>,
     light: ShadowLight,
 ) {
-    let shadow_geometry = layer_shadow_geometry(layer, transformed_bounds, light);
-    let scale = layer_uniform_scale(layer).max(0.1);
-    let resolved_shape = match layer.shape {
+    let caster = match layer.shape {
         LayerShape::Rectangle => None,
         LayerShape::Rounded(shape) => {
+            let scale = layer_uniform_scale(layer).max(0.1);
             let resolved = shape.resolve(
                 layer_bounds.local_bounds.width,
                 layer_bounds.local_bounds.height,
@@ -327,22 +331,9 @@ fn push_layer_shadow(
             )))
         }
     };
-
-    for (pass, color) in shadow_geometry.passes(layer) {
-        let shape = crate::scene::DrawShape {
-            rect: pass.rect,
-            snap_anchor: None,
-            snap_to_pixel_grid: false,
-            brush: Brush::solid(color),
-            shape: Some(pass.corners(resolved_shape)),
-            stroke: None,
-            arc: None,
-            line: None,
-            z_index: 0,
-            clip: None,
-            blend_mode: BlendMode::SrcOver,
-        };
-        push_blurred_shape_samples(scene, &shape, BlendMode::SrcOver, clip, pass.blur_radius);
+    for (shadow, color) in layer_shadow_geometry(layer, transformed_bounds, caster, light).passes()
+    {
+        scene.push_shadow(shadow, color, clip);
     }
 }
 

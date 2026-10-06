@@ -47,14 +47,17 @@ fn direct_graph() -> RenderGraph {
 }
 
 fn shadowed_child_graph() -> RenderGraph {
-    let mut child = test_layer(Some(7_701), vec![]);
-    child.local_bounds = Rect {
+    let bounds = Rect {
         x: 24.0,
         y: 20.0,
         width: 48.0,
         height: 32.0,
     };
-    child.graphics_layer.shadow_elevation = 6.0;
+    let mut child = test_layer(
+        Some(7_701),
+        vec![support::drop_shadow(bounds, Color::BLACK, 6.0)],
+    );
+    child.local_bounds = bounds;
     RenderGraph::new(test_layer(
         Some(7_702),
         vec![RenderNode::Layer(Box::new(child))],

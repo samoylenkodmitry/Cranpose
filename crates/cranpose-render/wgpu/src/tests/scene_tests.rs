@@ -27,7 +27,6 @@ fn shadow_draw(shapes: Option<RunDraw>, post_blur_cutouts: Option<RunDraw>) -> S
         blur_radius: 4.0,
         clip: None,
         rounded_clip: None,
-        occluder: None,
         z_index: 0,
     }
 }

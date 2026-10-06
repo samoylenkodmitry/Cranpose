@@ -574,9 +574,9 @@ fn can_draw_in_place(
 /// or shadow that resolves into a texture, nothing that blends other than
 /// source-over (it would reach the pixels beneath the layer), no image (its
 /// quad's edges are not anti-aliased, where a turned surface filters them),
-/// shadow texts their clips leave whole (a clip turned off the pixel grid is
-/// no scissor; a text's own glyphs are cut to its clip before the turn), and
-/// children that draw in place unclipped.
+/// shadow texts and elevation shadows their clips leave whole (a clip turned
+/// off the pixel grid is no scissor; a text's own glyphs are cut to its clip
+/// before the turn), and children that draw in place unclipped.
 fn content_draws_in_place(content: &LayerScene) -> bool {
     let scene = &content.scene;
     let whole =
@@ -592,6 +592,10 @@ fn content_draws_in_place(content: &LayerScene) -> bool {
             !shadow.requires_surface()
                 && shadow.texts.iter().all(|text| whole(text.rect, text.clip))
         })
+        && scene
+            .rrect_shadows
+            .iter()
+            .all(|shadow| whole(shadow.shadow.bounds, shadow.clip))
         && scene.images.is_empty()
         && content
             .children
@@ -1279,7 +1283,7 @@ fn collect_child(
                     .shadow_clip
                     .map(|clip| clip.translate(child_offset.x, child_offset.y)),
             );
-            let shadows_before = out.scene.shadow_draws.len();
+            let shadows_before = out.scene.rrect_shadows.len();
             push_layer_shadow(
                 &mut out.scene,
                 &child.graphics_layer,
@@ -1330,7 +1334,7 @@ fn collect_child(
                     .shadow_clip
                     .map(|clip| quad_bounds(transform.map_rect(clip))),
             );
-            let shadows_before = out.scene.shadow_draws.len();
+            let shadows_before = out.scene.rrect_shadows.len();
             push_layer_shadow(
                 &mut out.scene,
                 &child.graphics_layer,
@@ -1377,13 +1381,17 @@ fn clipped_away(child: &LayerNode, bounds: Rect, clip: Option<Rect>) -> bool {
         .is_none()
 }
 
+/// Anchors the layer shadows pushed since `shadows_before` with
+/// `snap_anchor`.
 fn assign_shadow_anchor(
     scene: &mut CompositorScene,
     shadows_before: usize,
     snap_anchor: Option<SnapAnchor>,
 ) {
     if let Some(anchor) = snap_anchor {
-        anchor_shadows(&mut scene.shadow_draws[shadows_before..], anchor);
+        for shadow in &mut scene.rrect_shadows[shadows_before..] {
+            shadow.snap_anchor = Some(anchor);
+        }
     }
 }
 
@@ -1407,6 +1415,7 @@ struct SceneCounts {
     images: usize,
     texts: usize,
     shadow_draws: usize,
+    rrect_shadows: usize,
     effect_layers: usize,
 }
 
@@ -1415,6 +1424,7 @@ fn scene_counts(scene: &CompositorScene) -> SceneCounts {
         images: scene.images.len(),
         texts: scene.texts.len(),
         shadow_draws: scene.shadow_draws.len(),
+        rrect_shadows: scene.rrect_shadows.len(),
         effect_layers: scene.effect_layers.len(),
     }
 }
@@ -1434,6 +1444,7 @@ fn assign_snap_anchor_since(
         text.snap_anchor = Some(anchor);
     }
     anchor_shadows(&mut scene.shadow_draws[counts.shadow_draws..], anchor);
+    assign_shadow_anchor(scene, counts.rrect_shadows, snap_anchor);
     for layer in &mut scene.effect_layers[counts.effect_layers..] {
         layer.snap_anchor = Some(anchor);
     }
