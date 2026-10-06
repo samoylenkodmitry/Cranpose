@@ -81,7 +81,8 @@ fn bind_slots_host_to_runtime_state(
 
 struct GroupEntry {
     key: crate::slot::GroupKey,
-    restored: Option<crate::slot::DetachedSubtree>,
+    /// Boxed: a restore is rare, and the entry moves on every call.
+    restored: Option<Box<crate::slot::DetachedSubtree>>,
     placeholder_for: Option<crate::slot::GroupKey>,
 }
 
@@ -160,6 +161,41 @@ pub(crate) struct ComposerRuntimeState {
     retention_policy: Cell<RetentionPolicy>,
     live_hosts: RefCell<HashMap<usize, std::rc::Weak<SlotsHost>>>,
     applier_host: RefCell<Option<std::rc::Weak<dyn ApplierHost>>>,
+}
+
+/// How many applied command queues a thread keeps for its passes.
+const SPARE_COMMAND_QUEUES: usize = 8;
+
+/// The most commands a kept queue has room for. A larger one grew in a
+/// spike such as the first composition, and keeping it would hold its memory.
+const SPARE_COMMAND_CAPACITY: usize = 1024;
+
+thread_local! {
+    /// Applied command queues for the next passes' composers to fill. A
+    /// composer takes the last one kept; nested passes finish first, so each
+    /// pass gets back the storage a pass at its depth grew.
+    static SPARE_COMMANDS: RefCell<Vec<CommandQueue>> = const { RefCell::new(Vec::new()) };
+}
+
+fn spare_commands() -> CommandQueue {
+    SPARE_COMMANDS
+        .try_with(|spare| spare.borrow_mut().pop())
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Keeps an applied, empty command queue for the next pass on this thread.
+pub(crate) fn recycle_commands(commands: CommandQueue) {
+    if commands.capacity() > SPARE_COMMAND_CAPACITY {
+        return;
+    }
+    let _ = SPARE_COMMANDS.try_with(|spare| {
+        let mut spare = spare.borrow_mut();
+        if spare.len() < SPARE_COMMAND_QUEUES {
+            spare.push(commands);
+        }
+    });
 }
 
 impl Default for ComposerRuntimeState {
@@ -659,6 +695,17 @@ impl Drop for SubcomposeStackGuard {
     }
 }
 
+impl Drop for ComposerCore {
+    /// A pass that queued nothing never takes its queue: hand its storage
+    /// back for the next pass.
+    fn drop(&mut self) {
+        let commands = std::mem::take(self.commands.get_mut());
+        if commands.len() == 0 && commands.capacity() > 0 {
+            recycle_commands(commands);
+        }
+    }
+}
+
 impl ComposerCore {
     pub(crate) fn open_branch_fold(&self, key: Key) -> BranchGroupGuard {
         let hosts = self.slot_hosts.borrow();
@@ -691,6 +738,7 @@ impl ComposerCore {
             Vec::new()
         };
 
+        let commands = spare_commands();
         Self {
             shared_state,
             slots,
@@ -700,7 +748,7 @@ impl ComposerCore {
             parent_stack: RefCell::new(parent_stack),
             subcompose_stack: RefCell::new(Vec::new()),
             root: Cell::new(root),
-            commands: RefCell::new(CommandQueue::default()),
+            commands: RefCell::new(commands),
             scope_stack: RefCell::new(Vec::new()),
             subcomposition_owner_scope: RefCell::new(None),
             local_stack: RefCell::new(None),
@@ -1118,7 +1166,7 @@ impl Composer {
         node_ids.into_iter().any(|node_id| {
             applier
                 .get_mut(node_id)
-                .is_ok_and(|node| node.needs_measure() || node.needs_layout())
+                .is_ok_and(|node| node.layout_dirty())
         })
     }
 
@@ -1203,7 +1251,8 @@ impl Composer {
             .take_retained(host, retain_key, |subtree| {
                 host.with_write_session(|slots| slots.retained_restore_ready(key, subtree))
             })
-            .or_else(|| self.take_movable_from_another_table(host, retain_key, key));
+            .or_else(|| self.take_movable_from_another_table(host, retain_key, key))
+            .map(Box::new);
         if restored.is_some() || !key.is_movable() {
             return GroupEntry {
                 key,
@@ -1363,13 +1412,14 @@ impl Composer {
 
         impl Drop for GroupGuard<'_> {
             fn drop(&mut self) {
-                self.composer.close_group_body(self.host, &self.scope);
+                let result = self.host.with_write_session(|slots| {
+                    let result = slots.finish_group_body();
+                    slots.end_group();
+                    result
+                });
+                self.composer
+                    .close_finished_group(self.host, &self.scope, result);
                 self.scope.mark_recomposed();
-                #[expect(
-                    clippy::redundant_closure_for_method_calls,
-                    reason = "the method path is not general over the session lifetime"
-                )]
-                self.host.with_write_session(|slots| slots.end_group());
                 if let Err(err) = self.composer.flush_pending_commands_if_large() {
                     log::error!("mid-composition command flush failed: {err}");
                 }
@@ -1650,6 +1700,15 @@ impl Composer {
             reason = "the method path is not general over the session lifetime"
         )]
         let result = host.with_write_session(|slots| slots.finish_group_body());
+        self.close_finished_group(host, scope, result);
+    }
+
+    fn close_finished_group(
+        &self,
+        host: &Rc<SlotsHost>,
+        scope: &RecomposeScope,
+        result: FinishGroupResult,
+    ) {
         self.handle_finished_group_result(host, Some(scope.id()), result);
         if let Some(popped) = self.scope_stack().pop() {
             debug_assert_eq!(
@@ -1706,13 +1765,52 @@ impl Composer {
     }
 
     #[doc(hidden)]
-    #[track_caller]
-    pub fn __use_param_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> ValueSlotHandle<'_, T> {
-        let source = crate::caller_location_key();
+    pub fn __use_param_slot<T: 'static>(
+        &self,
+        source: Key,
+        init: impl FnOnce() -> T,
+    ) -> ValueSlotHandle<'_, T> {
         let slot = self.with_slot_session_mut(|slots| {
             slots.value_slot_with_kind(PayloadKind::Param, source, init)
         });
         ValueSlotHandle::new(slot)
+    }
+
+    /// Finds the call's next parameter slot and runs `update` on its value,
+    /// with one slot lookup for both.
+    #[doc(hidden)]
+    pub fn __update_param_slot<T: 'static, R>(
+        &self,
+        source: Key,
+        init: impl FnOnce() -> T,
+        update: impl FnOnce(&mut T) -> R,
+    ) -> (ValueSlotHandle<'_, T>, R) {
+        self.update_value_slot(PayloadKind::Param, source, init, update)
+    }
+
+    /// Finds the call's return slot and runs `read` on its value, with one
+    /// slot lookup for both.
+    #[doc(hidden)]
+    pub fn __update_return_slot<T: 'static, R>(
+        &self,
+        source: Key,
+        init: impl FnOnce() -> T,
+        read: impl FnOnce(&mut T) -> R,
+    ) -> (ValueSlotHandle<'_, T>, R) {
+        self.update_value_slot(PayloadKind::Return, source, init, read)
+    }
+
+    fn update_value_slot<T: 'static, R>(
+        &self,
+        kind: PayloadKind,
+        source: Key,
+        init: impl FnOnce() -> T,
+        update: impl FnOnce(&mut T) -> R,
+    ) -> (ValueSlotHandle<'_, T>, R) {
+        self.with_slot_session_mut(|slots| {
+            let (slot, value) = slots.value_slot_and_value(kind, source, init);
+            (ValueSlotHandle::new(slot), update(value))
+        })
     }
 
     #[doc(hidden)]
@@ -1903,7 +2001,7 @@ impl Composer {
 
     fn flush_subcompose_pass(
         &self,
-        commands: CommandQueue,
+        mut commands: CommandQueue,
         runtime_handle: &RuntimeHandle,
         compact_applier: bool,
         side_effects: Vec<Box<dyn FnOnce()>>,
@@ -1915,6 +2013,7 @@ impl Composer {
                 update.apply(&mut *applier)?;
             }
         }
+        recycle_commands(commands);
         if compact_applier {
             self.core.applier.compact();
             self.core.applier.borrow_dyn().clear_recycled_nodes();

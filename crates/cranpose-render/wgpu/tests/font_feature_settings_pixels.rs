@@ -19,7 +19,7 @@ fn FontFeatureSettingsProbe(settings: MutableState<usize>) {
     let style = TextStyle::from_span_style(SpanStyle {
         color: Some(Color(1.0, 1.0, 1.0, 1.0)),
         font_size: TextUnit::Sp(40.0),
-        font_feature_settings: SETTINGS[settings.get()].map(str::to_owned),
+        font_feature_settings: SETTINGS[settings.get()].map(Into::into),
         ..Default::default()
     });
     Box(

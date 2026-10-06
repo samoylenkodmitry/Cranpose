@@ -11,6 +11,10 @@ pub(in crate::slot) struct RootFrame {
 
 pub(in crate::slot) struct GroupFrame {
     pub(in crate::slot) group_anchor: AnchorId,
+    /// Where the group sat when the frame opened. Groups move, enter or
+    /// leave only at the writer's cursor, which lies past every open group,
+    /// so this stays the group's index while the frame is open.
+    pub(in crate::slot) group_index: usize,
     pub(in crate::slot) next_child_index: usize,
     pub(in crate::slot) payload_cursor: usize,
     pub(in crate::slot) old_payload_len: usize,
@@ -102,6 +106,7 @@ impl Default for GroupFrame {
     fn default() -> Self {
         Self {
             group_anchor: AnchorId::INVALID,
+            group_index: 0,
             next_child_index: 0,
             payload_cursor: 0,
             old_payload_len: 0,
@@ -120,12 +125,13 @@ impl GroupFrame {
     pub(in crate::slot) fn reset(
         &mut self,
         anchor: AnchorId,
-        next_child_index: usize,
+        group_index: usize,
         old_payload_len: usize,
         old_node_len: usize,
     ) {
         self.group_anchor = anchor;
-        self.next_child_index = next_child_index;
+        self.group_index = group_index;
+        self.next_child_index = group_index + 1;
         self.payload_cursor = 0;
         self.old_payload_len = old_payload_len;
         self.node_cursor = 0;

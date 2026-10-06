@@ -33,7 +33,7 @@ impl SlotTable {
         };
         state.push_group_frame(
             anchor,
-            group_index + 1,
+            group_index,
             self.group_payload_len_at(group_index),
             self.group_node_len_at(group_index),
         );
@@ -69,13 +69,17 @@ impl SlotWriteSession<'_> {
     }
 
     fn discard_stale_group_frames(&mut self) {
-        while let Some(group_anchor) = self
+        while let Some((group_anchor, group_index)) = self
             .state
             .group_stack
             .last()
-            .map(|frame| frame.group_anchor)
+            .map(|frame| (frame.group_anchor, frame.group_index))
         {
-            if self.table.active_group_index(group_anchor).is_some() {
+            if self
+                .table
+                .open_group_index(group_anchor, group_index)
+                .is_some()
+            {
                 return;
             }
             log::error!(
@@ -260,7 +264,7 @@ impl SlotWriteSession<'_> {
     pub(crate) fn begin_group(
         &mut self,
         key: GroupKey,
-        restored: Option<DetachedSubtree>,
+        restored: Option<Box<DetachedSubtree>>,
         parent_node: Option<NodeId>,
     ) -> GroupStart<ActiveGroupId> {
         self.flush_payload_location_refreshes();
@@ -279,7 +283,7 @@ impl SlotWriteSession<'_> {
         self.state.consume_group_key(key);
 
         if let Some(restored) = restored
-            && let Some(started) = self.restore_started_group(key, restored, parent_node)
+            && let Some(started) = self.restore_started_group(key, *restored, parent_node)
         {
             return started;
         }
@@ -291,11 +295,11 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn end_group(&mut self) {
-        let Some(group_anchor) = self.state.pop_group_frame() else {
+        let Some((group_anchor, opened_index)) = self.state.pop_group_frame() else {
             log::error!("slot writer end_group called with an empty group stack");
             return;
         };
-        let Some(group_index) = self.table.active_group_index(group_anchor) else {
+        let Some(group_index) = self.table.open_group_index(group_anchor, opened_index) else {
             log::error!("slot writer end_group ignored stale group frame anchor {group_anchor:?}");
             return;
         };
@@ -304,16 +308,16 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn skip_group(&mut self) {
-        let Some(group_anchor) = self
+        let Some((group_anchor, opened_index)) = self
             .state
             .group_stack
             .last()
-            .map(|frame| frame.group_anchor)
+            .map(|frame| (frame.group_anchor, frame.group_index))
         else {
             log::error!("slot writer skip_group called with an empty group stack");
             return;
         };
-        let Some(group_index) = self.table.active_group_index(group_anchor) else {
+        let Some(group_index) = self.table.open_group_index(group_anchor, opened_index) else {
             log::error!("slot writer skip_group ignored stale group frame anchor {group_anchor:?}");
             return;
         };

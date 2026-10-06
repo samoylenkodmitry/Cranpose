@@ -87,7 +87,7 @@ pub(crate) fn apply_draw_commands(
                     combined_alpha,
                     combined_filter,
                     sampling,
-                    clip,
+                    (clip, 0.0),
                     src_rect,
                     blend_mode.unwrap_or(BlendMode::SrcOver),
                     false,

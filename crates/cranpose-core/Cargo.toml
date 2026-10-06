@@ -83,3 +83,15 @@ harness = false
 [[bench]]
 name = "blocking_allocations"
 harness = false
+
+[[bench]]
+name = "group_cost"
+harness = false
+
+[[bench]]
+name = "child_sync"
+harness = false
+
+[[bench]]
+name = "dirty_bubble"
+harness = false

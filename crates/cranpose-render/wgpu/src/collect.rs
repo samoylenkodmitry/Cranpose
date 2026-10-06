@@ -680,7 +680,7 @@ fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
 /// The radius a layer whose rounded clip cuts into its content draws in
 /// place with, its records taking the clip's coverage as its surface's
 /// composite would: a uniform one, with nothing in the corners but shapes
-/// drawn straight under that clip. Text, images, shadows, layers that
+/// and images drawn straight under that clip. Text, shadows, layers that
 /// composite and anything under a clip of its own stay out of the corners,
 /// which the rect clip alone then leaves whole.
 fn content_takes_rounded_clip(
@@ -706,7 +706,11 @@ fn content_takes_rounded_clip(
 fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
     layer.children.iter().all(|node| match node {
         RenderNode::Primitive(entry) => match &entry.node {
-            PrimitiveNode::Draw(draw) if draw.clip.is_none() && is_shape(&draw.primitive) => true,
+            PrimitiveNode::Draw(draw)
+                if draw.clip.is_none() && takes_rounded_clip(&draw.primitive) =>
+            {
+                true
+            }
             PrimitiveNode::Draw(draw) => {
                 primitive_stays_clear(&draw.primitive, corners.raster_scale, |rect| {
                     stays_clear(rect, offset, corners)
@@ -753,11 +757,14 @@ fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorn
     )
 }
 
-/// Whether a run's shapes may take the corners: its other lanes (text,
-/// images, shadows) stay out of them.
+/// Whether a run's shapes and images may take the corners: the rest of its
+/// other lane (text, shadows) stays out of them.
 fn run_takes_corners(run: &DrawRunNode, offset: Point, corners: &RoundedClipCorners) -> bool {
-    run_others_stay_clear(run, corners.raster_scale, |rect| {
-        stays_clear(rect, offset, corners)
+    run_others_all(run, |primitive| {
+        takes_rounded_clip(primitive)
+            || primitive_stays_clear(primitive, corners.raster_scale, |rect| {
+                stays_clear(rect, offset, corners)
+            })
     })
 }
 
@@ -766,14 +773,19 @@ fn run_others_stay_clear(
     raster_scale: RasterScale,
     clear: impl Fn(Rect) -> bool,
 ) -> bool {
+    run_others_all(run, |primitive| {
+        primitive_stays_clear(primitive, raster_scale, &clear)
+    })
+}
+
+/// Whether every primitive of the run's other lane is one `keeps`.
+fn run_others_all(run: &DrawRunNode, keeps: impl Fn(&DrawPrimitive) -> bool) -> bool {
     let recording = &*run.recording;
     recording
         .segments_in(&run.segments)
         .all(|segment| match segment.lane {
             RecordLane::Shapes | RecordLane::Content => true,
-            RecordLane::Others => recording.others()[segment.range()]
-                .iter()
-                .all(|primitive| primitive_stays_clear(primitive, raster_scale, &clear)),
+            RecordLane::Others => recording.others()[segment.range()].iter().all(&keeps),
         })
 }
 
@@ -818,15 +830,16 @@ fn stays_clear(rect: Rect, offset: Point, corners: &RoundedClipCorners) -> bool 
     ))
 }
 
-/// Whether a primitive draws as a shape record, which takes a rounded clip's
-/// coverage in the shape shader.
-fn is_shape(primitive: &DrawPrimitive) -> bool {
+/// Whether a primitive takes a rounded clip's coverage in its own shader: a
+/// shape record in the shape shader, or an image in the image shader.
+fn takes_rounded_clip(primitive: &DrawPrimitive) -> bool {
     matches!(
         primitive,
         DrawPrimitive::Rect { .. }
             | DrawPrimitive::RoundRect { .. }
             | DrawPrimitive::Arc { .. }
             | DrawPrimitive::Line { .. }
+            | DrawPrimitive::Image { .. }
     )
 }
 

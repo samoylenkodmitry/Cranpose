@@ -157,7 +157,7 @@ fn rejects_garbage() {
 #[test]
 fn fills_axis_aligned_rectangle() {
     let path = VectorPath::parse("M 2 2 H 8 V 8 H 2 Z").expect("valid path");
-    let mask = path.coverage_mask(10, 10, Point::ZERO, 1.0);
+    let mask = path.coverage_mask(10, 10, Point::ZERO, 1.0, 1.0);
 
     assert_eq!(mask_at(&mask, 10, 5, 5), 255, "interior must be opaque");
     assert_eq!(mask_at(&mask, 10, 4, 2), 255, "top edge row is inside");
@@ -168,7 +168,7 @@ fn fills_axis_aligned_rectangle() {
 #[test]
 fn triangle_edge_is_antialiased() {
     let path = VectorPath::parse("M 0 0 L 8 0 L 0 8 Z").expect("valid path");
-    let mask = path.coverage_mask(8, 8, Point::ZERO, 1.0);
+    let mask = path.coverage_mask(8, 8, Point::ZERO, 1.0, 1.0);
 
     assert_eq!(mask_at(&mask, 8, 1, 1), 255, "deep interior is opaque");
     assert_eq!(mask_at(&mask, 8, 7, 7), 0, "far corner is empty");
@@ -185,8 +185,8 @@ fn even_odd_ring_has_a_hole() {
     let even_odd = VectorPath::parse_with_fill_rule(d, PathFillRule::EvenOdd).expect("valid path");
     let non_zero = VectorPath::parse(d).expect("valid path");
 
-    let even_odd_mask = even_odd.coverage_mask(12, 12, Point::ZERO, 1.0);
-    let non_zero_mask = non_zero.coverage_mask(12, 12, Point::ZERO, 1.0);
+    let even_odd_mask = even_odd.coverage_mask(12, 12, Point::ZERO, 1.0, 1.0);
+    let non_zero_mask = non_zero.coverage_mask(12, 12, Point::ZERO, 1.0, 1.0);
 
     assert_eq!(mask_at(&even_odd_mask, 12, 6, 6), 0, "even-odd hole");
     assert_eq!(mask_at(&even_odd_mask, 12, 2, 6), 255, "even-odd ring");
@@ -197,7 +197,7 @@ fn even_odd_ring_has_a_hole() {
 fn non_zero_ring_with_reversed_inner_winding_has_a_hole() {
     let d = "M 0 0 H 12 V 12 H 0 Z M 4 4 V 8 H 8 V 4 Z";
     let path = VectorPath::parse(d).expect("valid path");
-    let mask = path.coverage_mask(12, 12, Point::ZERO, 1.0);
+    let mask = path.coverage_mask(12, 12, Point::ZERO, 1.0, 1.0);
     assert_eq!(mask_at(&mask, 12, 6, 6), 0, "reversed winding hole");
     assert_eq!(mask_at(&mask, 12, 2, 6), 255, "ring stays filled");
 }
@@ -205,7 +205,7 @@ fn non_zero_ring_with_reversed_inner_winding_has_a_hole() {
 #[test]
 fn circle_from_arcs_fills_center_and_respects_radius() {
     let path = VectorPath::parse("M 0 8 A 8 8 0 1 1 16 8 A 8 8 0 1 1 0 8 Z").expect("valid path");
-    let mask = path.coverage_mask(16, 16, Point::ZERO, 1.0);
+    let mask = path.coverage_mask(16, 16, Point::ZERO, 1.0, 1.0);
 
     assert_eq!(mask_at(&mask, 16, 8, 8), 255, "circle center is opaque");
     assert_eq!(mask_at(&mask, 16, 0, 0), 0, "circle corner is empty");
@@ -221,7 +221,7 @@ fn circle_from_arcs_fills_center_and_respects_radius() {
 #[test]
 fn scale_and_origin_map_path_units_to_pixels() {
     let path = VectorPath::parse("M 10 10 H 14 V 14 H 10 Z").expect("valid path");
-    let mask = path.coverage_mask(8, 8, Point::new(10.0, 10.0), 2.0);
+    let mask = path.coverage_mask(8, 8, Point::new(10.0, 10.0), 2.0, 1.0);
     assert_eq!(mask_at(&mask, 8, 4, 4), 255, "scaled interior");
     let full: usize = mask.iter().filter(|&&value| value == 255).count();
     assert_eq!(full, 64, "the 8x8 pixel mask must be fully covered");
@@ -231,7 +231,7 @@ fn scale_and_origin_map_path_units_to_pixels() {
 fn empty_and_degenerate_paths_produce_empty_masks() {
     let path = VectorPath::parse("M 5 5 L 6 6").expect("valid path");
     assert!(path.is_empty());
-    let mask = path.coverage_mask(8, 8, Point::ZERO, 1.0);
+    let mask = path.coverage_mask(8, 8, Point::ZERO, 1.0, 1.0);
     assert!(mask.iter().all(|&value| value == 0));
 }
 
@@ -258,7 +258,7 @@ fn coverage_masks_of_curved_self_crossing_paths_keep_every_value() {
         .iter()
         .map(|&(d, fill_rule, origin, scale)| {
             let path = VectorPath::parse_with_fill_rule(d, fill_rule).expect("valid path");
-            mask_checksum(&path.coverage_mask(137, 109, origin, scale))
+            mask_checksum(&path.coverage_mask(137, 109, origin, scale, 1.0))
         })
         .collect();
     assert_eq!(checksums, GOLDEN_COVERAGE_CHECKSUMS);

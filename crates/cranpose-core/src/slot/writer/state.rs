@@ -261,21 +261,23 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn push_group_frame(
         &mut self,
         anchor: AnchorId,
-        next_child_index: usize,
+        group_index: usize,
         old_payload_len: usize,
         old_node_len: usize,
     ) {
         let fold_watermark = self.branch_fold_entries.len();
         let frame = self.group_stack.push();
-        frame.reset(anchor, next_child_index, old_payload_len, old_node_len);
+        frame.reset(anchor, group_index, old_payload_len, old_node_len);
         frame.fold_watermark = fold_watermark;
         self.branch_fold = None;
     }
 
-    pub(in crate::slot) fn pop_group_frame(&mut self) -> Option<AnchorId> {
-        let anchor = self.group_stack.pop()?.group_anchor;
+    /// Closes the top frame and returns its group's anchor and index.
+    pub(in crate::slot) fn pop_group_frame(&mut self) -> Option<(AnchorId, usize)> {
+        let frame = self.group_stack.pop()?;
+        let group = (frame.group_anchor, frame.group_index);
         self.branch_fold = None;
-        Some(anchor)
+        Some(group)
     }
 }
 

@@ -135,12 +135,7 @@ fn collecting_root_nodes_with_stale_group_anchor_returns_empty() {
 
     harness.table.anchors.mark_detached(group_anchor);
 
-    assert!(
-        harness
-            .table
-            .collect_subtree_root_node_ids(group_anchor)
-            .is_empty()
-    );
+    assert_eq!(harness.table.first_subtree_root_node_id(group_anchor), None);
 }
 
 #[test]

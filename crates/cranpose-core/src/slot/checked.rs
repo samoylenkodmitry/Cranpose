@@ -85,6 +85,36 @@ fn panic_u32_delta_out_of_range(field: &'static str, delta: i64) -> ! {
     panic!("{field} delta exceeds u32 storage limit: {delta}");
 }
 
+/// Shifts every value by `delta`, as [`checked_u32_delta`] shifts one, with
+/// one check after the walk where that checks each value.
+pub(in crate::slot) fn shift_u32_values<'a>(
+    values: impl Iterator<Item = &'a mut u32>,
+    delta: CheckedU32Delta,
+    field: &'static str,
+) {
+    let overflowed = match delta {
+        CheckedU32Delta::Add(delta) => values.fold(false, |overflowed, value| {
+            let (shifted, overflow) = value.overflowing_add(delta);
+            *value = shifted;
+            overflowed | overflow
+        }),
+        CheckedU32Delta::Sub(delta) => values.fold(false, |overflowed, value| {
+            let (shifted, overflow) = value.overflowing_sub(delta);
+            *value = shifted;
+            overflowed | overflow
+        }),
+    };
+    if overflowed {
+        panic_u32_shift_overflow(field, delta);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn panic_u32_shift_overflow(field: &'static str, delta: CheckedU32Delta) -> ! {
+    panic!("{field} shift by {delta:?} left the u32 range");
+}
+
 #[cold]
 #[inline(never)]
 fn panic_u32_delta_overflow(field: &'static str, value: u32, delta: u32) -> ! {

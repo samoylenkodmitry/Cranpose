@@ -175,8 +175,9 @@ impl PackedParams<'_> {
     fn slot_stmt(&self, core_path: &TokenStream2, composer: &Ident) -> TokenStream2 {
         let state = self.state_type(core_path);
         let slot = Self::slot();
+        let key = slot_key(core_path);
         quote! {
-            let #slot = #composer.__use_param_slot(|| <#state>::default());
+            let #slot = #composer.__use_param_slot(#key, || <#state>::default());
         }
     }
 
@@ -193,6 +194,7 @@ impl PackedParams<'_> {
         }
         let state = self.state_type(core_path);
         let slot = Self::slot();
+        let key = slot_key(core_path);
         let param_state = Ident::new("__param_state", Span::mixed_site());
         let stored = Ident::new("__stored", Span::mixed_site());
         let idents = self.params.iter().map(|(ident, _)| ident);
@@ -200,17 +202,20 @@ impl PackedParams<'_> {
             self.params.iter().enumerate().map(|(index, (ident, ty))| {
                 param_field_refresh(core_path, &stored, ident, ty, index)
             });
-        let slot_stmt = self.slot_stmt(core_path, composer);
         setup.insert(
             0,
             quote! {
-                #slot_stmt
-                if #composer.with_slot_value_mut::<#state, _>(#slot, |#param_state| {
-                    #param_state.update_fields(
-                        || (#(::core::clone::Clone::clone(&#idents),)*),
-                        |#stored| false #(| #refreshes)*,
-                    )
-                }) {
+                let (_, #slot) = #composer.__update_param_slot(
+                    #key,
+                    || <#state>::default(),
+                    |#param_state: &mut #state| {
+                        #param_state.update_fields(
+                            || (#(::core::clone::Clone::clone(&#idents),)*),
+                            |#stored| false #(| #refreshes)*,
+                        )
+                    },
+                );
+                if #slot {
                     __changed = true;
                 }
             },
@@ -394,6 +399,20 @@ fn core_crate_path() -> TokenStream2 {
     }
 }
 
+/// The key of a slot the expansion takes: cached in a static of the call
+/// site, or under hot reload, where a patch may reuse a static for a
+/// different site, the caller's location as a call computes it.
+fn slot_key(core_path: &TokenStream2) -> TokenStream2 {
+    if cfg!(feature = "hot-reload") {
+        return quote! { #core_path::caller_location_key() };
+    }
+    quote! {{
+        static __CRANPOSE_SLOT_KEY: ::std::sync::OnceLock<#core_path::Key> =
+            ::std::sync::OnceLock::new();
+        #core_path::cached_location_key(&__CRANPOSE_SLOT_KEY, file!(), line!(), column!())
+    }}
+}
+
 fn definition_key_stmt(
     core_path: &TokenStream2,
     caller_key_ident: &Ident,
@@ -530,11 +549,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let original_block = func.block.clone();
     let body_end = func.block.brace_token.span.close();
     let composer_ident = Ident::new("__composer", Span::mixed_site());
+    let slot_key = slot_key(&core_path);
     let outer_composer_ident = Ident::new("__outer_composer", Span::mixed_site());
     let caller_key_ident = Ident::new("__cranpose_caller_key", Span::mixed_site());
     let current_scope_ident = Ident::new("__current_scope", Span::mixed_site());
     let result_slot_index_ident = Ident::new("__result_slot_index", Span::mixed_site());
-    let has_previous_ident = Ident::new("__has_previous", Span::mixed_site());
+    let previous_ident = Ident::new("__previous", Span::mixed_site());
     let result_ident = Ident::new("__result", Span::mixed_site());
     let value_ident = Ident::new("__value", Span::mixed_site());
     let key_expr = quote! { #caller_key_ident };
@@ -702,11 +722,10 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! { holder.update(#ident); }
                     };
                     quote! {
-                        let #slot_ident = #composer_ident
-                            .__use_param_slot(|| #core_path::CallbackHolder::new());
-                        #composer_ident.with_slot_value::<#core_path::CallbackHolder, _>(
-                            #slot_ident,
-                            |holder| {
+                        let (#slot_ident, ()) = #composer_ident.__update_param_slot(
+                            #slot_key,
+                            || #core_path::CallbackHolder::new(),
+                            |holder: &mut #core_path::CallbackHolder| {
                                 #update
                             },
                         );
@@ -727,7 +746,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .map(|(slot_ident, _)| {
                 quote! {
                     let #slot_ident = #composer_ident
-                        .__use_param_slot(|| #core_path::CallbackHolder::new());
+                        .__use_param_slot(#slot_key, || #core_path::CallbackHolder::new());
                 }
             })
             .collect();
@@ -849,23 +868,16 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let mut __changed = #current_scope_ident.should_recompose();
                 #(#param_setup)*
                 #recompose_setter
-                let #result_slot_index_ident = #composer_ident
-                    .__use_return_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
-                let #has_previous_ident = #composer_ident
-                    .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
-                        #result_slot_index_ident,
-                        |slot| slot.get().is_some(),
+                let (#result_slot_index_ident, #previous_ident) = #composer_ident
+                    .__update_return_slot(
+                        #slot_key,
+                        || #core_path::ReturnSlot::<#return_ty>::default(),
+                        |slot: &mut #core_path::ReturnSlot<#return_ty>| {
+                            (!__changed).then(|| slot.get()).flatten()
+                        },
                     );
-                if !__changed && #has_previous_ident {
+                if let ::core::option::Option::Some(#result_ident) = #previous_ident {
                     #composer_ident.skip_current_group();
-                    let #result_ident = #composer_ident
-                        .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
-                            #result_slot_index_ident,
-                            |slot| {
-                                slot.get()
-                                    .expect("composable return value missing during skip")
-                            },
-                        );
                     return #result_ident;
                 }
                 let #value_ident: #return_ty = #body_call;

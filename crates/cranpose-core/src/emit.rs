@@ -259,12 +259,22 @@ impl Composer {
                 if parent_id == id {
                     return true;
                 }
+                // A child where the parent held it before is already attached
+                // to the parent: its node needs no visit.
+                let attached_before = frame.previous.get(frame.new_children.len()) == Some(&id);
                 if matches!(attach_mode, ParentAttachMode::DeferredSync) {
                     frame.new_children.push(id);
                 }
                 drop(parent_stack);
 
-                {
+                if attached_before {
+                    debug_assert!(
+                        self.borrow_applier()
+                            .get_mut(id)
+                            .map_or(true, |node| node.parent().is_none_or(|p| p == parent_id)),
+                        "a parent's previous child must name no other parent"
+                    );
+                } else {
                     let mut applier = self.borrow_applier();
                     if let Ok(child_node) = applier.get_mut(id) {
                         child_node.set_parent_for_bubbling(parent_id);
@@ -435,7 +445,7 @@ impl Composer {
     /// This is useful during measure-time subcomposition to ensure newly created
     /// nodes are available for measurement before the full composition is committed.
     pub fn apply_pending_commands(&self) -> Result<(), NodeError> {
-        let commands = self.take_commands();
+        let mut commands = self.take_commands();
         let runtime_handle = self.runtime_handle();
         let result = {
             let mut applier = self.borrow_applier();
@@ -450,6 +460,12 @@ impl Composer {
             }
             result
         };
+        // The pass goes on queueing: hand it back the storage just applied.
+        let mut queued = self.commands_mut();
+        if queued.len() == 0 {
+            std::mem::swap(&mut *queued, &mut commands);
+        }
+        drop(queued);
         if result.is_err() {
             let host = self.active_slots_host();
             if !host.has_active_pass() {

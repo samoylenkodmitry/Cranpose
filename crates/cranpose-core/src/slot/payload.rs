@@ -254,6 +254,7 @@ impl SlotTable {
             .get(self.group_payload_absolute_index(group_index, payload_index)?)
     }
 
+    #[cfg(test)]
     pub(in crate::slot) fn group_payload_record_at_mut(
         &mut self,
         group_index: usize,
@@ -263,19 +264,22 @@ impl SlotTable {
         self.payloads.get_mut(index)
     }
 
+    /// The anchor and record index of the payload at `payload_index` when it
+    /// matches `init`.
     fn reuse_payload_at(
         &mut self,
         group_index: usize,
         payload_index: usize,
         kind: PayloadKind,
         init: &PayloadInit<'_>,
-    ) -> Option<PayloadAnchor> {
-        let payload = self.group_payload_record_at_mut(group_index, payload_index)?;
+    ) -> Option<(PayloadAnchor, usize)> {
+        let record_index = self.group_payload_absolute_index(group_index, payload_index)?;
+        let payload = self.payloads.get_mut(record_index)?;
         if !init.matches(payload) {
             return None;
         }
         payload.kind = kind;
-        Some(payload.anchor)
+        Some((payload.anchor, record_index))
     }
 
     pub(in crate::slot) fn total_payload_count(&self) -> usize {
@@ -362,7 +366,7 @@ impl SlotTable {
         payload_index: usize,
         kind: PayloadKind,
         init: &mut PayloadInit<'_>,
-    ) -> (ValueSlotId, Option<PayloadLocationRefresh>) {
+    ) -> (ValueSlotId, Option<usize>, Option<PayloadLocationRefresh>) {
         let payload_len = self.group_payload_len_checked_at(group_index, "value payload cursor");
         let payload_index = if payload_index > payload_len {
             log::error!(
@@ -375,15 +379,21 @@ impl SlotTable {
         let mut location_refresh = None;
 
         let anchor = if payload_index < payload_len {
-            if let Some(anchor) = self.reuse_payload_at(group_index, payload_index, kind, init) {
-                anchor
+            if let Some((anchor, record_index)) =
+                self.reuse_payload_at(group_index, payload_index, kind, init)
+            {
+                return (
+                    ValueSlotId::new_for_table(anchor, self.storage_id()),
+                    Some(record_index),
+                    None,
+                );
             } else if let Some(found) =
                 self.find_matching_payload_from(group_index, payload_index + 1, payload_len, init)
             {
                 self.rotate_payload_record_to_cursor(group_index, found, payload_index);
                 self.refresh_group_payload_anchor_locations(owner, payload_index);
                 self.reuse_payload_at(group_index, payload_index, kind, init)
-                    .unwrap_or(PayloadAnchor::INVALID)
+                    .map_or(PayloadAnchor::INVALID, |(anchor, _)| anchor)
             } else {
                 match self.insert_value_payload_internal(
                     owner,
@@ -412,6 +422,7 @@ impl SlotTable {
                 return (
                     ValueSlotId::new_for_table(PayloadAnchor::INVALID, self.storage_id()),
                     None,
+                    None,
                 );
             };
             location_refresh = Some(PayloadLocationRefresh {
@@ -423,6 +434,7 @@ impl SlotTable {
 
         (
             ValueSlotId::new_for_table(anchor, self.storage_id()),
+            self.group_payload_absolute_index(group_index, payload_index),
             location_refresh,
         )
     }
