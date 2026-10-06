@@ -1122,12 +1122,26 @@ impl ShapeRecorder {
         let (handle, color) = self.intern_brush(brush);
         let flags = pack_flags(RECORD_KIND_LINE, None, blend, StrokeCap::Butt)
             | (TRAPEZOID_CAP << CAP_SHIFT);
+        let radii = rect_row(brush_rect);
+        // Every slice shares the brush and the rect it resolves against, so
+        // one shading serves them all.
+        let shading = self.brush_shading(
+            &ShapeRecordBody {
+                brush: handle,
+                flags,
+                ..ShapeRecordBody::zeroed()
+            },
+            &ShapeRecordCurve {
+                radii,
+                arc_normalized: [0.0; 4],
+            },
+        );
         let mut reach: Option<Rect> = None;
         for trapezoid in trapezoids {
             let bounds = trapezoid.bounds();
             let open = (u32::from(trapezoid.open_left) * OPEN_LEFT_BIT)
                 | (u32::from(trapezoid.open_right) * OPEN_RIGHT_BIT);
-            self.push_shape(
+            self.push_shaded(
                 ShapeRecordBody {
                     rect: rect_row(bounds),
                     color,
@@ -1143,7 +1157,7 @@ impl ShapeRecorder {
                     ],
                 },
                 ShapeRecordCurve {
-                    radii: rect_row(brush_rect),
+                    radii,
                     arc_normalized: [
                         trapezoid.left,
                         trapezoid.right,
@@ -1152,7 +1166,7 @@ impl ShapeRecorder {
                     ],
                 },
                 [0.0; 4],
-                blend,
+                (blend, shading),
                 None,
             );
             reach = Some(reach.map_or(bounds, |reach| reach.union(bounds)));
@@ -1325,10 +1339,23 @@ impl ShapeRecorder {
     #[inline(always)]
     fn push_shape(
         &mut self,
-        mut body: ShapeRecordBody,
+        body: ShapeRecordBody,
         curve: ShapeRecordCurve,
         source: [f32; 4],
         blend: BlendMode,
+        band_bucket: Option<usize>,
+    ) -> Rect {
+        let shading = self.brush_shading(&body, &curve);
+        self.push_shaded(body, curve, source, (blend, shading), band_bucket)
+    }
+
+    /// [`Self::push_shape`] for a record whose brush shading is known.
+    fn push_shaded(
+        &mut self,
+        mut body: ShapeRecordBody,
+        curve: ShapeRecordCurve,
+        source: [f32; 4],
+        (blend, shading): (BlendMode, BrushShading),
         band_bucket: Option<usize>,
     ) -> Rect {
         let half_stroke = if body.flags & STROKED_BIT != 0 {
@@ -1339,7 +1366,6 @@ impl ShapeRecorder {
         let coverage = expand_rect(row_rect(body.rect), half_stroke);
         self.include_bounds(coverage);
         let index = self.tables.shapes.len() as u32;
-        let shading = self.brush_shading(&body, &curve);
         body.flags |= shading.flag();
         let brush_bit = 1u8
             << match body.brush {

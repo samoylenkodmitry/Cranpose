@@ -187,9 +187,12 @@ impl PathSlicer {
         self.events.clear();
         self.events
             .extend(self.edges.iter().flat_map(|edge| [edge.x0, edge.x1]));
-        self.events.sort_unstable_by(f32::total_cmp);
+        // A contour's edges come in runs already ordered, as a chart's do
+        // from its left end to its right and back; a stable sort merges the
+        // runs instead of sorting the whole.
+        self.events.sort_by(f32::total_cmp);
         self.events.dedup();
-        self.edges.sort_unstable_by(|a, b| a.x0.total_cmp(&b.x0));
+        self.edges.sort_by(|a, b| a.x0.total_cmp(&b.x0));
         let mut next_edge = 0;
         let mut previous = 0..0;
         let mut event = 0;
@@ -257,24 +260,23 @@ impl PathSlicer {
                 start: edge.y_at(left),
                 end: edge.y_at(right),
             }));
-        self.crossings.sort_unstable_by(|a, b| {
-            a.start
-                .total_cmp(&b.start)
-                .then_with(|| a.end.total_cmp(&b.end))
+        // The active edges keep the previous slice's order, which changes
+        // only where edges cross or enter, so the crossings come nearly in
+        // order and a pass of insertion settles them. Edges that meet at the
+        // left side within the tolerance then go in the order they leave it.
+        insertion_sort(&mut self.crossings, |upper, lower| {
+            upper
+                .start
+                .total_cmp(&lower.start)
+                .then_with(|| upper.end.total_cmp(&lower.end))
+                .is_gt()
         });
-        // Edges that meet at the left side within the tolerance go in the
-        // order they leave it.
-        for index in 1..self.crossings.len() {
-            let mut at = index;
-            while at > 0 {
-                let (upper, lower) = (self.crossings[at - 1], self.crossings[at]);
-                if (lower.start - upper.start).abs() > TOLERANCE || upper.end <= lower.end {
-                    break;
-                }
-                self.crossings.swap(at - 1, at);
-                at -= 1;
-            }
-        }
+        insertion_sort(&mut self.crossings, |upper, lower| {
+            (lower.start - upper.start).abs() <= TOLERANCE && upper.end > lower.end
+        });
+        self.active.clear();
+        self.active
+            .extend(self.crossings.iter().map(|crossing| crossing.edge));
         let cut = self
             .crossings
             .windows(2)
@@ -321,6 +323,18 @@ impl PathSlicer {
                 }
                 _ => {}
             }
+        }
+    }
+}
+
+/// Moves each item of `items` back past those before it that `misplaced`
+/// says belong after it.
+fn insertion_sort<T: Copy>(items: &mut [T], misplaced: impl Fn(&T, &T) -> bool) {
+    for index in 1..items.len() {
+        let mut at = index;
+        while at > 0 && misplaced(&items[at - 1], &items[at]) {
+            items.swap(at - 1, at);
+            at -= 1;
         }
     }
 }
