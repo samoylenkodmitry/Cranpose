@@ -1985,12 +1985,12 @@ impl LayoutBuilderState {
             }
 
             children.push(MeasuredChild {
-                node: child,
+                node: RefCell::new(child),
                 offset: policy_position,
             });
         }
 
-        node_handle.set_active_children(children.iter().map(|c| c.node.node_id));
+        node_handle.set_active_children(children.iter().map(|c| c.node.borrow().node_id));
         node_handle.recycle_placement_scratch(placements);
 
         Ok(Some(Rc::new(
@@ -2155,8 +2155,9 @@ impl LayoutBuilderState {
 
     /// Walks the children of a kept measurement, measures again each one
     /// `change` finds changed, at the constraints it last had, and keeps the
-    /// measurement with their new measurements. `None` as soon as `change`
-    /// refuses a child or one measures differently for its parent.
+    /// measurement with their new measurements swapped in. `None` as soon as
+    /// `change` refuses a child or one measures differently for its parent;
+    /// the measurement is then left as it was.
     fn remeasure_changed_children(
         self: &Rc<Self>,
         cached: &Rc<MeasuredNode>,
@@ -2165,7 +2166,8 @@ impl LayoutBuilderState {
     ) -> Result<Option<Rc<MeasuredNode>>, NodeError> {
         let mut replaced = smallvec::SmallVec::<[(usize, Rc<MeasuredNode>); 4]>::new();
         for (index, previous) in cached.children.iter().enumerate() {
-            let child_id = previous.node.node_id();
+            let previous = Rc::clone(&previous.node.borrow());
+            let child_id = previous.node_id();
             let child = match change(child_id)? {
                 ChildChange::Unchanged => continue,
                 ChildChange::Refuse => return Ok(None),
@@ -2173,19 +2175,22 @@ impl LayoutBuilderState {
             };
             let measured = self.measure_node(child_id, child.constraints)?;
             remeasured(child_id);
-            if !measures_the_same_for_parent(&previous.node, &measured) {
+            if !measures_the_same_for_parent(&previous, &measured) {
                 return Ok(None);
             }
             if child.placed {
                 self.place_where_it_was(child_id);
             }
-            replaced.push((index, measured));
+            if !Rc::ptr_eq(&previous, &measured) {
+                replaced.push((index, measured));
+            }
         }
-        Ok(Some(if replaced.is_empty() {
-            Rc::clone(cached)
-        } else {
-            Rc::new(cached.with_children_replaced(&replaced))
-        }))
+        for (index, measured) in replaced {
+            if let Some(child) = cached.children.get(index) {
+                *child.node.borrow_mut() = measured;
+            }
+        }
+        Ok(Some(Rc::clone(cached)))
     }
 
     /// What the walk over a kept layout node finds of a child, from the
@@ -2536,25 +2541,6 @@ impl MeasuredNode {
         self
     }
 
-    /// This measurement with some children's measurements replaced.
-    fn with_children_replaced(&self, replaced: &[(usize, Rc<MeasuredNode>)]) -> Self {
-        let mut children = self.children.clone();
-        for (index, measured) in replaced {
-            if let Some(child) = children.get_mut(*index) {
-                child.node = Rc::clone(measured);
-            }
-        }
-        Self {
-            node_id: self.node_id,
-            size: self.size,
-            offset: self.offset,
-            content_offset: self.content_offset,
-            alignment_lines: self.alignment_lines,
-            children,
-            window_root: self.window_root,
-        }
-    }
-
     fn with_alignment_lines(mut self, alignment_lines: AlignmentLines) -> Self {
         self.alignment_lines = alignment_lines;
         self
@@ -2598,7 +2584,9 @@ impl MeasuredNode {
 
 #[derive(Debug, Clone)]
 struct MeasuredChild {
-    node: Rc<MeasuredNode>,
+    /// The child's measurement. A kept parent swaps in the new measurement
+    /// of a child that measures the same for it.
+    node: RefCell<Rc<MeasuredNode>>,
     offset: Point,
 }
 
@@ -3122,7 +3110,7 @@ impl LayoutRuntimeState {
                 });
             }
             measured_children.push(MeasuredChild {
-                node: measured,
+                node: RefCell::new(measured),
                 offset: Point {
                     x: content_offset.x + base_position.x,
                     y: content_offset.y + base_position.y,
@@ -3667,7 +3655,7 @@ fn clear_semantics_dirty_flags(
     }
 
     for child in &node.children {
-        clear_semantics_dirty_flags(applier, &child.node)?;
+        clear_semantics_dirty_flags(applier, &child.node.borrow())?;
     }
 
     Ok(())
@@ -3795,7 +3783,7 @@ fn build_semantics_node_from_live_nodes(
     for child in &node.children {
         children.push(build_semantics_node_from_live_nodes(
             applier,
-            &child.node,
+            &child.node.borrow(),
             Some(content),
         )?);
     }
@@ -3876,14 +3864,15 @@ fn build_layout_tree(
             snapshot_node_data(applier, node.node_id, top_left, node.size, parent_transform)?;
         let mut children = Vec::with_capacity(node.children.len());
         for child in &node.children {
-            if crate::modifier::is_window_root(applier, child.node.node_id) {
+            let child_node = child.node.borrow();
+            if crate::modifier::is_window_root(applier, child_node.node_id) {
                 continue;
             }
             let child_origin = Point {
                 x: top_left.x + child.offset.x,
                 y: top_left.y + child.offset.y,
             };
-            children.push(place(applier, &child.node, child_origin, window_transform)?);
+            children.push(place(applier, &child_node, child_origin, window_transform)?);
         }
         Ok(LayoutBox {
             node_generation: applier.node_generation(node.node_id),
