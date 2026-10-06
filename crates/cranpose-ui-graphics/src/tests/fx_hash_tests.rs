@@ -74,3 +74,59 @@ fn low_bits_avalanche_enough_for_hash_map_bucketing() {
         );
     }
 }
+
+fn hash_bytes(bytes: &[u8]) -> u64 {
+    let mut hasher = FxHasher::default();
+    hasher.write(bytes);
+    hasher.finish()
+}
+
+/// A recording-sized column: long enough to fold in lanes.
+fn column() -> Vec<u8> {
+    (0..256u32).map(|index| (index * 37 % 251) as u8).collect()
+}
+
+#[test]
+fn every_single_bit_of_a_long_write_changes_the_hash() {
+    let base = column();
+    let hash = hash_bytes(&base);
+    for bit in 0..base.len() * 8 {
+        let mut flipped = base.clone();
+        flipped[bit / 8] ^= 1 << (bit % 8);
+        assert_ne!(
+            hash_bytes(&flipped),
+            hash,
+            "bit {bit} did not change the hash"
+        );
+    }
+}
+
+#[test]
+fn words_trading_places_in_a_long_write_change_the_hash() {
+    let base = column();
+    let hash = hash_bytes(&base);
+    let swapped = |first: usize, second: usize| {
+        let mut bytes = base.clone();
+        for offset in 0..8 {
+            bytes.swap(first * 8 + offset, second * 8 + offset);
+        }
+        hash_bytes(&bytes)
+    };
+    // Two lanes of one block, the same lane of two blocks, and two lanes of
+    // two blocks.
+    for (first, second) in [(0, 1), (0, 4), (1, 6)] {
+        assert_ne!(swapped(first, second), hash, "words {first} and {second}");
+    }
+}
+
+#[test]
+fn long_writes_of_every_length_stay_distinct() {
+    let base = column();
+    let mut seen = std::collections::HashSet::new();
+    for len in 0..=base.len() {
+        assert!(
+            seen.insert(hash_bytes(&base[..len])),
+            "collision at len {len}"
+        );
+    }
+}
