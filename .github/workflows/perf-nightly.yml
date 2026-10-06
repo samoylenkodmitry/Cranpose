@@ -64,6 +64,8 @@ jobs:
           scripts/ci/rustup_locked.sh target add aarch64-linux-android
           command -v just >/dev/null || cargo install just --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+          # The CPU and GPU clocks each desktop leg records.
+          command -v macmon >/dev/null || brew install macmon
 
       - name: Move every framework to its latest release
         if: steps.published.outputs.measured != 'yes'

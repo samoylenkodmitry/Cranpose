@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "gauntlet",
+  "description": "The page desktop.py serves asks the app for the launch and writes its PERF lines through it.",
+  "windows": ["gauntlet"],
+  "remote": { "urls": ["http://127.0.0.1:*/*"] },
+  "permissions": ["core:default", "allow-launch", "allow-log"]
+}

@@ -1,0 +1,24 @@
+[package]
+name = "perf-compare-dioxus"
+version = "0.1.0"
+edition = "2024"
+description = "The gauntlet of the framework comparison in Dioxus"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[dependencies]
+# Dioxus on its desktop renderer: the system's WKWebView.
+dioxus = { version = "0.7.10", features = ["desktop"] }
+log = "0.4"
+perf-data = { path = "../perf-data" }
+
+# Its own workspace, like a real application, built as the Cranpose app is.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = 0

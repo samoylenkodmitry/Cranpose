@@ -3,7 +3,7 @@
 //! implement the same generator bit for bit, so every app draws identical
 //! content.
 
-use std::path::PathBuf;
+use std::{ops::Range, path::PathBuf, sync::OnceLock};
 
 pub const POST_COUNT: usize = 5000;
 pub const BAR_COUNT: usize = 24;
@@ -30,6 +30,18 @@ pub const CHIP_BACKGROUND_RGB: [[u8; 3]; 8] = [
     [0xED, 0xE9, 0xFE],
     [0xFC, 0xE7, 0xF3],
 ];
+/// The gauntlet's ink, text and surface colors.
+pub const INK_RGB: [u8; 3] = [0x11, 0x18, 0x27];
+pub const BODY_RGB: [u8; 3] = [0x37, 0x41, 0x51];
+pub const MUTED_RGB: [u8; 3] = [0x6B, 0x72, 0x80];
+pub const HAIRLINE_RGB: [u8; 3] = [0xE5, 0xE7, 0xEB];
+pub const PANEL_RGB: [u8; 3] = [0xE2, 0xE8, 0xF0];
+pub const BACKGROUND_RGB: [u8; 3] = [0xEE, 0xF0, 0xF5];
+pub const TOP_BAR_RGB: [u8; 3] = [0x1E, 0x2A, 0x4A];
+pub const UP_RGB: [u8; 3] = [0x16, 0xA3, 0x4A];
+pub const DOWN_RGB: [u8; 3] = [0xDC, 0x26, 0x26];
+/// A cluster's levels, alternating.
+pub const LEVEL_BACKGROUND_RGB: [[u8; 3]; 2] = [[0xF1, 0xF5, 0xF9], [0xCB, 0xD5, 0xE1]];
 /// Dark ends of the media gradients.
 pub const GRADIENT_END_RGB: [[u8; 3]; 8] = [
     [0x7F, 0x1D, 0x1D],
@@ -530,6 +542,30 @@ pub fn log_to_stdout() {
     }
 }
 
+/// What a desktop app's gauntlet draws, made once: the launch `desktop.py`
+/// asked for, its tier, the posts and the quotes.
+pub struct Gauntlet {
+    pub launch: Launch,
+    pub tier: GauntletTier,
+    pub posts: Vec<Post>,
+    pub tickers: Vec<Ticker>,
+}
+
+/// The desktop gauntlet's data, made on first use from `PERF_TIER`.
+pub fn desktop_gauntlet() -> &'static Gauntlet {
+    static GAUNTLET: OnceLock<Gauntlet> = OnceLock::new();
+    GAUNTLET.get_or_init(|| {
+        let launch = Launch::from_env();
+        let tier = gauntlet_tier(launch.tier);
+        Gauntlet {
+            launch,
+            tier,
+            posts: posts(),
+            tickers: tickers(tier.tickers),
+        }
+    })
+}
+
 /// Tier `1..=16`; anything else is clamped into that range.
 pub fn gauntlet_tier(tier: usize) -> GauntletTier {
     GAUNTLET_TIERS[tier.clamp(1, GAUNTLET_TIERS.len()) - 1]
@@ -537,6 +573,58 @@ pub fn gauntlet_tier(tier: usize) -> GauntletTier {
 
 /// Card rows between two deep clusters in the list.
 pub const CARD_ROWS_PER_CLUSTER: usize = 5;
+/// The list's rows: blocks of five card rows and a cluster, more than any
+/// measurement window reaches.
+pub const GAUNTLET_ROWS: usize = 2000 * (CARD_ROWS_PER_CLUSTER + 1);
+/// How far the list scrolls each frame, in logical pixels.
+pub const SCROLL_PER_FRAME: f32 = 3.0;
+/// The most rows one frame renders below the anchor.
+pub const MAX_ROWS_PER_FRAME: usize = 64;
+
+/// Where a list that renders only the rows on screen starts: the first row
+/// it renders and that row's top in the list's content. Rows report their
+/// heights once laid out.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ListAnchor {
+    pub row: usize,
+    pub top: f32,
+}
+
+impl ListAnchor {
+    /// The anchor past the rows that ended above `offset`, `gap` apart, as
+    /// far as `height` knows their heights.
+    pub fn advanced(self, offset: f32, gap: f32, height: impl Fn(usize) -> Option<f32>) -> Self {
+        let mut anchor = self;
+        while let Some(row_height) = height(anchor.row) {
+            if anchor.top + row_height + gap > offset {
+                break;
+            }
+            anchor.top += row_height + gap;
+            anchor.row += 1;
+        }
+        anchor
+    }
+
+    /// The rows from the anchor that fill `viewport` below `offset`, `gap`
+    /// apart: a row not yet laid out counts as `estimate` tall, so a frame
+    /// renders enough of them.
+    pub fn rows(
+        self,
+        offset: f32,
+        viewport: f32,
+        gap: f32,
+        estimate: f32,
+        height: impl Fn(usize) -> Option<f32>,
+    ) -> Range<usize> {
+        let bottom = offset - self.top + viewport;
+        let (mut last, mut reached) = (self.row, 0.0);
+        while last < GAUNTLET_ROWS && reached < bottom && last < self.row + MAX_ROWS_PER_FRAME {
+            reached += height(last).unwrap_or(estimate) + gap;
+            last += 1;
+        }
+        self.row..last
+    }
+}
 /// Avatars the cards cycle through.
 pub const AVATAR_COUNT: usize = 8;
 /// Side of an avatar bitmap in pixels.

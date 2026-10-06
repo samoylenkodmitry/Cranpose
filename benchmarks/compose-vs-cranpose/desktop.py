@@ -56,7 +56,8 @@ DESKTOP_WINDOW = (1280, 820)
 TITLE_BAR_PIXELS = 64
 
 # What each app's legs are summarized by.
-SUMMARY = ('fps', 'cpu_ms_per_frame', 'cpu_cores', 'other_cores', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz')
+SUMMARY = ('fps', 'cpu_ms_per_frame', 'cpu_cores', 'server_cores', 'other_cores', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz',
+           'gpu_mhz')
 
 # Each app's command: `{tier}`, `{freeze}`, `{page}` and `{profile}` are
 # filled in for the run.
@@ -72,6 +73,7 @@ APPS = {
     'gpui': [HERE / 'gpui-app/target/release/perf-compare-gpui'],
     'avalonia': [HERE / 'avalonia-app/bin/Release/net10.0/osx-arm64/publish/PerfAvalonia'],
     'swiftui': [HERE / 'swiftui-app/build/PerfSwiftUI.app/Contents/MacOS/PerfSwiftUI'],
+    'appkit': [HERE / 'appkit-app/build/PerfAppKit.app/Contents/MacOS/PerfAppKit'],
     'flutter': [HERE / 'flutter-app/build/macos/Build/Products/Release/perf_flutter.app/Contents/MacOS/perf_flutter'],
     'compose': [HERE / 'compose-desktop-app/build/compose/binaries/main/app/PerfCompose.app/Contents/MacOS/PerfCompose'],
     # Chrome, the engine Electron apps ship, in an app window of its own
@@ -79,6 +81,11 @@ APPS = {
     'web': [CHROME, '--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
             '--enable-logging=stderr', '--window-size=1280,852',
             '--app={page}?tier={tier}&freeze={freeze}'],
+    # The same page in Tauri, on the system's WKWebView.
+    'tauri': [HERE / 'tauri-app/target/release/perf-compare-tauri', '--page={page}'],
+    'dioxus': [HERE / 'dioxus-app/target/release/perf-compare-dioxus'],
+    'freya': [HERE / 'freya-app/target/release/perf-compare-freya'],
+    'floem': [HERE / 'floem-app/target/release/perf-compare-floem'],
 }
 
 
@@ -101,48 +108,62 @@ def serve_page():
     return f'http://127.0.0.1:{server.server_address[1]}/index.html'
 
 
+# The services a WKWebView runs its page in. launchd starts them, outside the
+# app's process tree, for the app that asked.
+WEBKIT_SERVICE = 'com.apple.WebKit.'
+# The window server composites every window, and renders the layer trees
+# SwiftUI, AppKit and WebKit hand it; a Metal app hands it one surface.
+WINDOW_SERVER = '/WindowServer'
+
+
+def seconds(clock):
+    """`ps` time, `[[days-]hours:]minutes:seconds`, in seconds."""
+    days, _, rest = clock.rpartition('-')
+    total = 0.0
+    for part in rest.split(':'):
+        total = total * 60 + float(part)
+    return total + (int(days) * 86_400 if days else 0)
+
+
 def processes():
-    """Every process's children and CPU seconds."""
-    table = subprocess.run(['ps', '-A', '-o', 'pid=,ppid=,time='], capture_output=True, text=True,
-                           check=True).stdout
-    children, times = {}, {}
+    """Every process: its parent, its CPU seconds, how long ago it started and
+    its command."""
+    table = subprocess.run(['ps', '-A', '-o', 'pid=,ppid=,time=,etime=,comm='], capture_output=True,
+                           text=True, check=True).stdout
+    found = {}
     for line in table.splitlines():
-        pid, ppid, clock = line.split()
-        children.setdefault(int(ppid), []).append(int(pid))
-        seconds = 0.0
-        for part in clock.split(':'):
-            seconds = seconds * 60 + float(part)
-        times[int(pid)] = seconds
-    return children, times
-
-
-def tree(root, children):
-    """`root` and every process below it."""
-    found, pending = [], [root]
-    while pending:
-        pid = pending.pop()
-        found.append(pid)
-        pending.extend(children.get(pid, []))
+        pid, ppid, clock, elapsed, command = line.split(None, 4)
+        found[int(pid)] = (int(ppid), seconds(clock), seconds(elapsed), command)
     return found
 
 
-def cpu_seconds(root):
-    """CPU time of `root` and every process below it, and of all processes."""
-    children, times = processes()
-    return sum(times.get(pid, 0.0) for pid in tree(root, children)), sum(times.values())
+def tree(root, table, age):
+    """`root`, every process below it, and the WebKit services started in the
+    `age` seconds since the app started, which do a WKWebView's work."""
+    children = {}
+    for pid, (ppid, *_) in table.items():
+        children.setdefault(ppid, []).append(pid)
+    services = [pid for pid, (_, _, elapsed, command) in table.items()
+                if WEBKIT_SERVICE in command and elapsed <= age]
+    found, pending = set(), [root, *services]
+    while pending:
+        pid = pending.pop()
+        if pid not in found:
+            found.add(pid)
+            pending.extend(children.get(pid, []))
+    return found
 
 
 MB = 1024 * 1024
 
 
-def memory(root, stage):
-    """What the app and every process it started hold in memory, as macOS
-    counts a process's footprint, and the part of it that is the GPU's:
-    Metal's buffers and textures (`IOAccelerator`) and the surfaces the
-    window server composites (`IOSurface`)."""
-    children, _ = processes()
+def memory(pids, stage):
+    """What the app's processes hold in memory, as macOS counts a process's
+    footprint, and the part of it that is the GPU's: Metal's buffers and
+    textures (`IOAccelerator`) and the surfaces the window server composites
+    (`IOSurface`)."""
     out = stage / 'footprint.json'
-    targets = [part for pid in tree(root, children) for part in ('-p', str(pid))]
+    targets = [part for pid in sorted(pids) for part in ('-p', str(pid))]
     subprocess.run(['footprint', '-f', 'bytes', '-j', str(out), *targets], capture_output=True,
                    check=True, timeout=60)
     report = json.loads(out.read_text())
@@ -214,6 +235,7 @@ class App:
         variables = {'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze), 'PERF_FONTS': str(stage / 'fonts')}
         executable, arguments = command[0], command[1:]
         self.log.write_text('')
+        self.started = time.monotonic()
         if '.app/Contents/MacOS/' not in executable:
             with self.log.open('w') as output:
                 self.process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
@@ -271,29 +293,36 @@ def measure(name, args, work, page, stage):
         wait_for(app.log, 'PERF first_frame', args.timeout)
         time.sleep(args.warmup)
         clocks = Clocks()
-        (app_before, all_before), wall_before = cpu_seconds(app.pid), time.monotonic()
+        before, wall_before = processes(), time.monotonic()
         out = stage / f'{name}-frames.json'
         frames = framecount(app.pid, out, '--seconds', f'{window:.1f}', '--out', str(out))
-        (app_after, all_after), wall_after = cpu_seconds(app.pid), time.monotonic()
+        after, wall_after = processes(), time.monotonic()
         clocked = clocks.stop()
-        held = memory(app.pid, stage)
+        mine = tree(app.pid, after, wall_after - app.started + 1)
+        held = memory(mine, stage)
         shutil.copy(out, work / out.name)
     finally:
         app.stop()
     # FrameCount starts and stops around its window, so CPU counts as a rate
     # over the whole span and divides by the frame rate. What every other
     # process spent in the span, FrameCount's capture included, tells a run
-    # that something else disturbed.
+    # that something else disturbed; a process that ended within the span
+    # counts for neither.
     wall = wall_after - wall_before
-    cores = (app_after - app_before) / wall
-    others = (all_after - all_before) / wall - cores
+    spent = {pid: cpu - before.get(pid, (0, 0.0))[1] for pid, (_, cpu, _, _) in after.items()}
+    server = {pid for pid, (_, _, _, command) in after.items() if command.endswith(WINDOW_SERVER)}
+    server_cores = sum(spent[pid] for pid in server) / wall
+    # The window server's work counts toward the app in front: its layers
+    # are what the window server renders.
+    cores = sum(value for pid, value in spent.items() if pid in mine) / wall + server_cores
+    others = sum(value for pid, value in spent.items() if pid not in mine and pid not in server) / wall
     fps = frames['fps']
     wanted = args.min_frames / fps if fps > 0 else args.max_window
     args.windows[name] = min(args.max_window, max(args.window, wanted))
     return {'fps': round(fps, 1), 'frames': frames['frames'], 'window_s': round(window, 1),
             'interval_p50_ms': round(frames['interval_p50_ms'], 2),
             'interval_p99_ms': round(frames['interval_p99_ms'], 2),
-            'cpu_cores': round(cores, 2), 'other_cores': round(others, 2),
+            'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2), 'other_cores': round(others, 2),
             'cpu_ms_per_frame': round(cores * 1000 / fps, 2) if fps else None,
             **held, **clocked}
 

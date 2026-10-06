@@ -149,14 +149,20 @@ desktop)
     step cranpose
     rust_target cranpose-app
     cargo_app cranpose-app
-    for app in egui slint iced gpui; do
+    for app in egui slint iced gpui tauri dioxus freya floem; do
         rust_target "$app-app"
-        build "$app" "$app-app/target/release/perf-compare-$app" "$app-app" perf-data -- \
+        reads=("$app-app" perf-data)
+        # Dioxus draws with the web page's CSS.
+        if [[ $app == dioxus ]]; then
+            reads+=(web-app/www/style.css)
+        fi
+        build "$app" "$app-app/target/release/perf-compare-$app" "${reads[@]}" -- \
             attempt "$app" cargo_app "$app-app"
     done
     build avalonia avalonia-app/bin/Release/net10.0/osx-arm64/publish avalonia-app shared-cs -- \
         attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64"
-    build swiftui swiftui-app/build/PerfSwiftUI.app swiftui-app -- "$here/swiftui-app/build.sh"
+    build swiftui swiftui-app/build/PerfSwiftUI.app swiftui-app shared-swift -- "$here/swiftui-app/build.sh"
+    build appkit appkit-app/build/PerfAppKit.app appkit-app shared-swift -- "$here/appkit-app/build.sh"
     build flutter flutter-app/build/macos/Build/Products/Release/perf_flutter.app flutter-app -- \
         bash -c "cd '$here/flutter-app' && flutter build macos --release"
     build compose compose-desktop-app/build/compose/binaries/main/app/PerfCompose.app \
