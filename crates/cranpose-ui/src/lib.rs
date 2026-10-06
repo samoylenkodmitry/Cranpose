@@ -228,7 +228,7 @@ pub use render_state::{
 };
 #[doc(hidden)]
 pub use render_state::{
-    clear_transient_scroll_motion_contexts, debug_last_fling_velocity,
+    GeometrySceneNodes, clear_transient_scroll_motion_contexts, debug_last_fling_velocity,
     debug_reset_last_fling_velocity, has_current_app_context, has_pending_draw_repasses,
     has_pending_layer_property_repasses, has_pending_layout_repasses, has_pending_measure_repasses,
     peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,

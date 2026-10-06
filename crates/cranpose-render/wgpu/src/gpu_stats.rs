@@ -165,6 +165,9 @@ pub struct FrameStatsSnapshot {
     pub text_glyph_atlas_hits: u32,
     pub text_glyph_atlas_misses: u32,
     pub text_glyph_atlas_miss_pixels: u64,
+    /// Texts whose glyph runs the frame laid out again: a text drawn as it
+    /// was before takes its run from the cache.
+    pub text_glyph_runs_collected: u32,
     pub offscreen_pool_size: u32,
     pub offscreen_pool_bytes: u64,
     pub text_pool_size: u32,
@@ -271,7 +274,7 @@ impl FrameStatsSnapshot {
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
              stages={} admit={} blur={} substrate={} composite={} effect={} shader_px={:.2}MP glass_raster_px={:.2}MP blur_px={:.2}MP | shape={} shape_fill_px={:.2}MP{} shape_verts={} interiors={} depth_passes={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
-             text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
+             text_glyph_atlas: hit={} miss={} miss_px={:.2}MP runs_collected={} | \
              caches: text_pool={} img={} txt={}",
             frame_count,
             self.encoder_count,
@@ -331,6 +334,7 @@ impl FrameStatsSnapshot {
             self.text_glyph_atlas_hits,
             self.text_glyph_atlas_misses,
             self.text_glyph_atlas_miss_pixels as f64 / 1_000_000.0,
+            self.text_glyph_runs_collected,
             self.text_pool_size,
             self.image_cache_size,
             self.text_cache_size,
@@ -412,6 +416,7 @@ pub(crate) struct FrameStats {
     pub text_glyph_atlas_hits: Cell<u32>,
     pub text_glyph_atlas_misses: Cell<u32>,
     pub text_glyph_atlas_miss_pixels: Cell<u64>,
+    pub text_glyph_runs_collected: Cell<u32>,
     pub offscreen_pool_size: Cell<u32>,
     pub offscreen_pool_bytes: Cell<u64>,
     pub text_pool_size: Cell<u32>,
@@ -704,6 +709,11 @@ impl FrameStats {
             .set(self.text_glyph_atlas_hits.get().saturating_add(count));
     }
 
+    pub fn record_text_glyph_run_collected(&self) {
+        self.text_glyph_runs_collected
+            .set(self.text_glyph_runs_collected.get().saturating_add(1));
+    }
+
     pub fn record_text_glyph_atlas_miss(&self, width: u32, height: u32) {
         self.text_glyph_atlas_misses
             .set(self.text_glyph_atlas_misses.get().saturating_add(1));
@@ -788,6 +798,7 @@ impl FrameStats {
             text_glyph_atlas_hits: self.text_glyph_atlas_hits.get(),
             text_glyph_atlas_misses: self.text_glyph_atlas_misses.get(),
             text_glyph_atlas_miss_pixels: self.text_glyph_atlas_miss_pixels.get(),
+            text_glyph_runs_collected: self.text_glyph_runs_collected.get(),
             offscreen_pool_size: self.offscreen_pool_size.get(),
             offscreen_pool_bytes: self.offscreen_pool_bytes.get(),
             text_pool_size: self.text_pool_size.get(),
@@ -863,6 +874,7 @@ impl FrameStats {
         self.text_glyph_atlas_hits.set(0);
         self.text_glyph_atlas_misses.set(0);
         self.text_glyph_atlas_miss_pixels.set(0);
+        self.text_glyph_runs_collected.set(0);
         *self.top_isolated_layers.borrow_mut() = [None; TOP_ISOLATED_LAYER_LIMIT];
         self.top_isolated_layer_count.set(0);
         self.shadow_shape_cache_miss_log_count.set(0);

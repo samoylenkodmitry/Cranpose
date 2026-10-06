@@ -180,7 +180,7 @@ pub fn update_graph_from_applier_report(
     {
         eprintln!(
             "[scene-update-diag] scoped update abandoned, whole scene rebuilt: {reason:?} dirty={}",
-            updates.content.len() + updates.layers.len()
+            updates.content.len() + updates.layers.len() + updates.moved.len()
         );
     }
     report
@@ -190,6 +190,28 @@ pub fn update_graph_from_applier_report(
 enum NodeUpdate {
     Content,
     Layer,
+    /// The node moved in its parent and kept its size: its layer moves and
+    /// keeps what it drew.
+    Moved,
+}
+
+/// Each dirty node with the update it needs: content wins over the others,
+/// and a moved node whose layer properties changed too is drawn again.
+fn dirty_node_updates(updates: SceneUpdates<'_>) -> HashMap<NodeId, NodeUpdate> {
+    let mut dirty = HashMap::with_capacity_and_hasher(
+        updates.moved.len() + updates.layers.len() + updates.content.len(),
+        Default::default(),
+    );
+    dirty.extend(updates.moved.iter().map(|&id| (id, NodeUpdate::Moved)));
+    for &id in updates.layers {
+        let kind = match dirty.get(&id) {
+            Some(NodeUpdate::Moved) => NodeUpdate::Content,
+            _ => NodeUpdate::Layer,
+        };
+        dirty.insert(id, kind);
+    }
+    dirty.extend(updates.content.iter().map(|&id| (id, NodeUpdate::Content)));
+    dirty
 }
 
 fn update_graph_from_applier_report_inner(
@@ -209,12 +231,7 @@ fn update_graph_from_applier_report_inner(
         eprintln!("[scene-update-diag] dirty={updates:?}");
     }
 
-    let mut remaining_dirty_nodes: HashMap<NodeId, NodeUpdate> = updates
-        .layers
-        .iter()
-        .map(|&id| (id, NodeUpdate::Layer))
-        .chain(updates.content.iter().map(|&id| (id, NodeUpdate::Content)))
-        .collect();
+    let mut remaining_dirty_nodes = dirty_node_updates(updates);
     if let Some(root_id) = layer_identity(&graph.root)
         && let Some(kind) = remaining_dirty_nodes.remove(&root_id)
     {
@@ -543,11 +560,37 @@ fn try_update_retained_layer(
     ancestors: TranslateAncestorContext,
 ) -> Option<bool> {
     match kind {
-        NodeUpdate::Content => {
+        NodeUpdate::Moved if !root => {
+            move_retained_layer(applier, layer, ancestors.parent_content_offset).or_else(|| {
+                try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors).then_some(true)
+            })
+        }
+        NodeUpdate::Content | NodeUpdate::Moved => {
             try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors).then_some(true)
         }
         NodeUpdate::Layer => update_layer_properties(applier, layer, root, ancestors),
     }
+}
+
+/// Moves the layer of a node that only moved in its parent, keeping what it
+/// drew, and returns whether hit geometry changed. `None` when the layer
+/// cannot keep its content: its size changed, or its subtree publishes
+/// window origins.
+fn move_retained_layer(
+    applier: &MemoryApplier,
+    layer: &mut LayerNode,
+    parent_content_offset: Point,
+) -> Option<bool> {
+    if layer.has_origin_sinks {
+        return None;
+    }
+    let state = scene_layout_state(applier, layer_identity(layer)?)?;
+    if !state.is_placed() || Rect::from_size(state.size()) != layer.node_rect() {
+        return None;
+    }
+    let previous = HitGraphState::of(layer);
+    translate_retained_child(layer, &state, parent_content_offset);
+    Some(previous.dirty_against(&HitGraphState::of(layer)))
 }
 
 fn content_layer_mut(container: &mut LayerNode) -> Option<&mut LayerNode> {
@@ -838,7 +881,7 @@ thread_local! {
 fn translated_children(
     applier: &MemoryApplier,
     container: &LayerNode,
-    dirty_nodes: &HashMap<NodeId, NodeUpdate>,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     fresh_children: &[NodeId],
     scratch: &mut TranslateScratch,
 ) -> Result<bool, &'static str> {
@@ -884,9 +927,11 @@ fn translated_children(
     Ok(children_unchanged)
 }
 
+/// Checks that every child kept as it is still fits its layer. A moved child
+/// that no longer fits is drawn again: it becomes a content update.
 fn check_retained_children(
     container: &LayerNode,
-    dirty_nodes: &HashMap<NodeId, NodeUpdate>,
+    dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
     children_unchanged: bool,
     old_index_by_id: &HashMap<NodeId, usize>,
@@ -902,14 +947,19 @@ fn check_retained_children(
         let RenderNode::Layer(layer) = &container.children[old_index] else {
             return Err("retained child slot is not a layer");
         };
-        if dirty_nodes.contains_key(child_id) {
-            continue;
-        }
-        if layer.has_origin_sinks {
-            return Err("child subtree publishes window origins");
-        }
-        if Rect::from_size(state.size()) != layer.node_rect() {
-            return Err("child resized");
+        let fits = !layer.has_origin_sinks && Rect::from_size(state.size()) == layer.node_rect();
+        match dirty_nodes.get_mut(child_id) {
+            Some(NodeUpdate::Content | NodeUpdate::Layer) => {}
+            Some(kind @ NodeUpdate::Moved) => {
+                if !fits {
+                    *kind = NodeUpdate::Content;
+                }
+            }
+            None if layer.has_origin_sinks => {
+                return Err("child subtree publishes window origins");
+            }
+            None if !fits => return Err("child resized"),
+            None => {}
         }
     }
     Ok(())
@@ -1099,7 +1149,7 @@ fn reconcile_translated_children(
             let RenderNode::Layer(layer) = child else {
                 unreachable!("retained child identities were checked");
             };
-            if !dirty_nodes.contains_key(child_id) {
+            if keeps_retained_child(dirty_nodes, *child_id) {
                 translate_retained_child(layer, state, geometry.content_offset);
             }
         }
@@ -1108,7 +1158,7 @@ fn reconcile_translated_children(
     let mut entering = scratch.entering.drain(..).peekable();
     for ((child_id, state), kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
         if let Some(mut layer) = kept {
-            if !dirty_nodes.contains_key(child_id) {
+            if keeps_retained_child(dirty_nodes, *child_id) {
                 translate_retained_child(&mut layer, state, geometry.content_offset);
             }
             container.children.push(RenderNode::Layer(layer));
@@ -1238,6 +1288,20 @@ fn translate_layer_from_data(
     crate::graph_hash::refresh_layer_own_raster_cache_hashes(container, container_ancestor_hashed);
 
     true
+}
+
+/// Whether a retained child keeps its layer as it is and only follows its
+/// placement: it is not dirty, or it only moved, which this placement
+/// settles.
+fn keeps_retained_child(dirty_nodes: &mut HashMap<NodeId, NodeUpdate>, child_id: NodeId) -> bool {
+    match dirty_nodes.get(&child_id) {
+        None => true,
+        Some(NodeUpdate::Moved) => {
+            dirty_nodes.remove(&child_id);
+            true
+        }
+        Some(NodeUpdate::Content | NodeUpdate::Layer) => false,
+    }
 }
 
 fn translate_retained_child(
