@@ -2044,7 +2044,12 @@ impl LayoutBuilderState {
         let _frame_binding_cleanup = LayoutRuntimeFrameBindingCleanup {
             state: &runtime_state,
         };
-        self.bind_layout_children(&mut applier, &runtime_state, &pools.child_ids)?;
+        self.bind_layout_children(
+            &mut applier,
+            &runtime_state,
+            &pools.child_ids,
+            ChildPass::Measure,
+        )?;
         drop(applier);
         pools.child_ids.clear();
 
@@ -2101,6 +2106,69 @@ impl LayoutBuilderState {
         .ok();
 
         Ok(Some(measured))
+    }
+
+    /// The intrinsic size `kind` names of a layout node, through its modifier
+    /// chain and measure policy, as Compose computes it: no measure, no
+    /// placement, and the node's measurement cache stays as it was. `None`
+    /// when the node is not a layout node.
+    fn layout_node_intrinsic(
+        self: &Rc<Self>,
+        node_id: NodeId,
+        kind: IntrinsicKind,
+    ) -> Result<Option<f32>, NodeError> {
+        let Ok(mut applier) = self.applier.try_borrow_typed() else {
+            return Ok(None);
+        };
+        let mut pools = VecPools::acquire(&self.frame_arena);
+        let bound = applier.with_node::<LayoutNode, _>(node_id, |node| {
+            let runtime_state = node.layout_runtime_state_handle();
+            let chain = runtime_state.borrow_mut().bind_node(node);
+            pools.child_ids.extend_from_slice(&node.children);
+            (runtime_state, chain)
+        });
+        let (runtime_state, chain) = match bound {
+            Ok(bound) => bound,
+            Err(NodeError::TypeMismatch { .. } | NodeError::Missing { .. }) => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let _frame_binding_cleanup = LayoutRuntimeFrameBindingCleanup {
+            state: &runtime_state,
+        };
+        self.bind_layout_children(
+            &mut applier,
+            &runtime_state,
+            &pools.child_ids,
+            ChildPass::Intrinsics,
+        )?;
+        drop(applier);
+        pools.child_ids.clear();
+
+        let runtime_state = runtime_state.borrow();
+        let value = if chain.uses_chain {
+            let scope = crate::density::DensityMeasureScope::new(chain.density);
+            let frame = CoordinatorFrame::new(
+                &runtime_state.measure_policy,
+                &scope,
+                runtime_state.child_measurables.as_slice(),
+                &runtime_state.child_states,
+                &mut pools.placements,
+                &mut pools.child_ids,
+            );
+            runtime_state
+                .coordinator_chain
+                .intrinsic_from(0, &frame, kind)
+        } else {
+            policy_intrinsic(
+                runtime_state.measure_policy.as_ref(),
+                runtime_state.child_measurables.as_slice(),
+                kind,
+            )
+        };
+        match runtime_state.frame.error.borrow_mut().take() {
+            Some(err) => Err(err),
+            None => Ok(Some(value)),
+        }
     }
 
     /// The measurement of a node whose own inputs did not change since it
@@ -2300,9 +2368,10 @@ impl LayoutBuilderState {
         applier: &mut MemoryApplier,
         runtime_state: &RefCell<LayoutRuntimeState>,
         child_ids: &[NodeId],
+        pass: ChildPass,
     ) -> Result<(), NodeError> {
         let mut runtime_state = runtime_state.borrow_mut();
-        runtime_state.frame.bind(self);
+        runtime_state.frame.bind(self, pass);
         let mut bound = 0;
         for &child_id in child_ids {
             if self.bind_layout_child(applier, &mut runtime_state, bound, child_id)? {
@@ -2590,6 +2659,45 @@ struct MeasuredChild {
     offset: Point,
 }
 
+/// The intrinsic size `kind` names, of a measurable.
+fn measurable_intrinsic(measurable: &dyn Measurable, kind: IntrinsicKind) -> f32 {
+    match kind {
+        IntrinsicKind::MinWidth(height) => measurable.min_intrinsic_width(height),
+        IntrinsicKind::MaxWidth(height) => measurable.max_intrinsic_width(height),
+        IntrinsicKind::MinHeight(width) => measurable.min_intrinsic_height(width),
+        IntrinsicKind::MaxHeight(width) => measurable.max_intrinsic_height(width),
+    }
+}
+
+/// The intrinsic size `kind` names, of a measure policy over `measurables`.
+fn policy_intrinsic(
+    policy: &dyn MeasurePolicy,
+    measurables: &[Box<dyn Measurable>],
+    kind: IntrinsicKind,
+) -> f32 {
+    match kind {
+        IntrinsicKind::MinWidth(height) => policy.min_intrinsic_width(measurables, height),
+        IntrinsicKind::MaxWidth(height) => policy.max_intrinsic_width(measurables, height),
+        IntrinsicKind::MinHeight(width) => policy.min_intrinsic_height(measurables, width),
+        IntrinsicKind::MaxHeight(width) => policy.max_intrinsic_height(measurables, width),
+    }
+}
+
+/// The intrinsic size `kind` names, of a layout modifier around `wrapped`.
+fn layout_modifier_intrinsic(
+    node: &dyn cranpose_foundation::LayoutModifierNode,
+    wrapped: &dyn Measurable,
+    kind: IntrinsicKind,
+    density: f32,
+) -> f32 {
+    match kind {
+        IntrinsicKind::MinWidth(height) => node.min_intrinsic_width(wrapped, height, density),
+        IntrinsicKind::MaxWidth(height) => node.max_intrinsic_width(wrapped, height, density),
+        IntrinsicKind::MinHeight(width) => node.min_intrinsic_height(wrapped, width, density),
+        IntrinsicKind::MaxHeight(width) => node.max_intrinsic_height(wrapped, width, density),
+    }
+}
+
 struct CoordinatorFrame<'a> {
     measure_policy: &'a Rc<dyn MeasurePolicy>,
     scope: &'a dyn cranpose_ui_layout::MeasureScope,
@@ -2656,22 +2764,22 @@ impl Measurable for CoordinatorLink<'_, '_, '_> {
 
     fn min_intrinsic_width(&self, height: f32) -> f32 {
         self.chain
-            .min_intrinsic_width_from(self.index, self.frame, height)
+            .intrinsic_from(self.index, self.frame, IntrinsicKind::MinWidth(height))
     }
 
     fn max_intrinsic_width(&self, height: f32) -> f32 {
         self.chain
-            .max_intrinsic_width_from(self.index, self.frame, height)
+            .intrinsic_from(self.index, self.frame, IntrinsicKind::MaxWidth(height))
     }
 
     fn min_intrinsic_height(&self, width: f32) -> f32 {
         self.chain
-            .min_intrinsic_height_from(self.index, self.frame, width)
+            .intrinsic_from(self.index, self.frame, IntrinsicKind::MinHeight(width))
     }
 
     fn max_intrinsic_height(&self, width: f32) -> f32 {
         self.chain
-            .max_intrinsic_height_from(self.index, self.frame, width)
+            .intrinsic_from(self.index, self.frame, IntrinsicKind::MaxHeight(width))
     }
 }
 
@@ -2871,79 +2979,22 @@ impl CoordinatorChain {
         )
     }
 
-    fn min_intrinsic_width_from(
+    fn intrinsic_from(
         &self,
         index: usize,
         frame: &CoordinatorFrame<'_>,
-        height: f32,
+        kind: IntrinsicKind,
     ) -> f32 {
         let Some(node) = self.nodes.get(index) else {
-            return frame
-                .measure_policy
-                .min_intrinsic_width(frame.measurables, height);
+            return policy_intrinsic(frame.measure_policy.as_ref(), frame.measurables, kind);
         };
         let wrapped = CoordinatorLink::new(self, frame, index + 1);
         let node_borrow = node.node.borrow();
         node_borrow.as_layout_node().map_or_else(
-            || wrapped.min_intrinsic_width(height),
-            |layout_node| layout_node.min_intrinsic_width(&wrapped, height, frame.scope.density()),
-        )
-    }
-
-    fn max_intrinsic_width_from(
-        &self,
-        index: usize,
-        frame: &CoordinatorFrame<'_>,
-        height: f32,
-    ) -> f32 {
-        let Some(node) = self.nodes.get(index) else {
-            return frame
-                .measure_policy
-                .max_intrinsic_width(frame.measurables, height);
-        };
-        let wrapped = CoordinatorLink::new(self, frame, index + 1);
-        let node_borrow = node.node.borrow();
-        node_borrow.as_layout_node().map_or_else(
-            || wrapped.max_intrinsic_width(height),
-            |layout_node| layout_node.max_intrinsic_width(&wrapped, height, frame.scope.density()),
-        )
-    }
-
-    fn min_intrinsic_height_from(
-        &self,
-        index: usize,
-        frame: &CoordinatorFrame<'_>,
-        width: f32,
-    ) -> f32 {
-        let Some(node) = self.nodes.get(index) else {
-            return frame
-                .measure_policy
-                .min_intrinsic_height(frame.measurables, width);
-        };
-        let wrapped = CoordinatorLink::new(self, frame, index + 1);
-        let node_borrow = node.node.borrow();
-        node_borrow.as_layout_node().map_or_else(
-            || wrapped.min_intrinsic_height(width),
-            |layout_node| layout_node.min_intrinsic_height(&wrapped, width, frame.scope.density()),
-        )
-    }
-
-    fn max_intrinsic_height_from(
-        &self,
-        index: usize,
-        frame: &CoordinatorFrame<'_>,
-        width: f32,
-    ) -> f32 {
-        let Some(node) = self.nodes.get(index) else {
-            return frame
-                .measure_policy
-                .max_intrinsic_height(frame.measurables, width);
-        };
-        let wrapped = CoordinatorLink::new(self, frame, index + 1);
-        let node_borrow = node.node.borrow();
-        node_borrow.as_layout_node().map_or_else(
-            || wrapped.max_intrinsic_height(width),
-            |layout_node| layout_node.max_intrinsic_height(&wrapped, width, frame.scope.density()),
+            || measurable_intrinsic(&wrapped, kind),
+            |layout_node| {
+                layout_modifier_intrinsic(layout_node, &wrapped, kind, frame.scope.density())
+            },
         )
     }
 
@@ -3181,12 +3232,30 @@ pub(crate) struct LayoutRuntimeDebugStats {
 struct LayoutChildFrame {
     builder: RefCell<Option<Rc<LayoutBuilderState>>>,
     error: RefCell<Option<NodeError>>,
+    pass: Cell<ChildPass>,
+}
+
+/// What a node binds its children for.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum ChildPass {
+    /// A measure of the node, which records how it read each child, for a
+    /// later keep of its measurement.
+    #[default]
+    Measure,
+    /// An intrinsic size of the node, which its parent asks: the record of
+    /// the node's last measure stays as it was.
+    Intrinsics,
 }
 
 impl LayoutChildFrame {
-    fn bind(&self, builder: &Rc<LayoutBuilderState>) {
+    fn bind(&self, builder: &Rc<LayoutBuilderState>, pass: ChildPass) {
         self.error.borrow_mut().take();
         *self.builder.borrow_mut() = Some(Rc::clone(builder));
+        self.pass.set(pass);
+    }
+
+    fn measures(&self) -> bool {
+        self.pass.get() == ChildPass::Measure
     }
 
     fn unbind(&self) {
@@ -3331,14 +3400,16 @@ impl LayoutChildMeasureState {
         let stale = binding.dirty || child_epoch < pass.cache_floor;
         let cache_epoch = if stale { pass.cache_epoch } else { child_epoch };
         binding.cache.activate(cache_epoch);
-        self.measured.borrow_mut().take();
-        self.last_position.set(None);
         self.cache.borrow_mut().clone_from(binding.cache);
         self.cache_epoch.set(cache_epoch);
         self.force_remeasure.set(stale || binding.descendant_dirty);
         self.parent_data.set(binding.parent_data);
-        self.measured_constraints.set(None);
-        self.read_intrinsics.set(false);
+        if self.frame.measures() {
+            self.measured.borrow_mut().take();
+            self.last_position.set(None);
+            self.measured_constraints.set(None);
+            self.read_intrinsics.set(false);
+        }
         let mut layout_state = self.layout_state.borrow_mut();
         let shared = layout_state
             .as_ref()
@@ -3367,6 +3438,21 @@ impl LayoutChildMeasureState {
         });
     }
 
+    /// The intrinsic size of a child that is a layout node, from its
+    /// modifier chain and measure policy, without measuring it. `None` for
+    /// another node type, which measures for it.
+    fn layout_intrinsic(&self, kind: IntrinsicKind) -> Option<f32> {
+        let builder = self.frame.builder.borrow();
+        let builder = builder.as_ref()?;
+        match builder.layout_node_intrinsic(self.node_id, kind) {
+            Ok(value) => value,
+            Err(err) => {
+                self.frame.record_error(err);
+                Some(0.0)
+            }
+        }
+    }
+
     fn perform_measure(&self, constraints: Constraints) -> Result<Rc<MeasuredNode>, NodeError> {
         let builder = self.frame.builder.borrow();
         let builder = builder.as_ref().ok_or(NodeError::MissingContext {
@@ -3377,7 +3463,9 @@ impl LayoutChildMeasureState {
     }
 
     fn measure_cached(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
-        self.measured_constraints.set(Some(constraints));
+        if self.frame.measures() {
+            self.measured_constraints.set(Some(constraints));
+        }
         let cache = self.cache.borrow();
         cache.activate(self.cache_epoch.get());
         if !self.force_remeasure.get()
@@ -3423,7 +3511,9 @@ impl LayoutChildMeasurable {
         extent: fn(Size) -> f32,
     ) -> f32 {
         let state = &self.state;
-        state.read_intrinsics.set(true);
+        if state.frame.measures() {
+            state.read_intrinsics.set(true);
+        }
         let cache = state.cache.borrow();
         cache.activate(state.cache_epoch.get());
         if !state.force_remeasure.get()
@@ -3431,10 +3521,12 @@ impl LayoutChildMeasurable {
         {
             return value;
         }
-        let Some(node) = state.measure_cached(constraints) else {
-            return 0.0;
+        let value = match state.layout_intrinsic(kind) {
+            Some(value) => value,
+            None => state
+                .measure_cached(constraints)
+                .map_or(0.0, |node| extent(node.size_for_parent())),
         };
-        let value = extent(node.size_for_parent());
         cache.store_intrinsic(kind, value);
         value
     }
