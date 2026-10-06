@@ -3,6 +3,7 @@ use std::ops::Range;
 use super::{
     CheckedU32Delta, GroupRecord, checked_u32_delta, checked_usize_to_i64,
     ranges::{GroupItemRange, ItemRangeKind, NodeRangeKind, PayloadRangeKind, TypedItemRange},
+    shift_u32_values,
 };
 
 pub(in crate::slot) trait SegmentItems {
@@ -210,9 +211,11 @@ pub(in crate::slot) fn shift_group_segment_starts_from<S: GroupSegment>(
         return;
     }
     let delta = CheckedU32Delta::from_i64(delta, S::NAME);
-    for group in &mut groups[start_group_index..] {
-        apply_group_segment_start_delta::<S>(group, delta);
-    }
+    shift_u32_values(
+        groups[start_group_index..].iter_mut().map(S::start_mut),
+        delta,
+        S::NAME,
+    );
 }
 
 pub(in crate::slot) fn offset_detached_group_segment_starts<S: GroupSegment>(
@@ -223,9 +226,7 @@ pub(in crate::slot) fn offset_detached_group_segment_starts<S: GroupSegment>(
         return;
     }
     let delta = CheckedU32Delta::from_i64(delta, S::NAME);
-    for group in groups {
-        apply_group_segment_start_delta::<S>(group, delta);
-    }
+    shift_u32_values(groups.iter_mut().map(S::start_mut), delta, S::NAME);
 }
 
 pub(in crate::slot) fn subtree_segment_span<S: GroupSegment>(
@@ -441,12 +442,4 @@ pub(in crate::slot) fn move_subtree_segment_to_earlier_group<S: GroupSegment, I:
         item_len_delta,
     );
     item_len
-}
-
-fn apply_group_segment_start_delta<S: GroupSegment>(
-    group: &mut GroupRecord,
-    delta: CheckedU32Delta,
-) {
-    let start = S::start_mut(group);
-    *start = checked_u32_delta(*start, delta, 0, S::NAME);
 }
