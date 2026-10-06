@@ -276,10 +276,11 @@ impl LayerNode {
                 }
                 RenderNode::Layer(child) => child.collect_painted_text(out),
                 RenderNode::DrawRun(run) => {
-                    out.extend(run.primitives().filter_map(|primitive| match primitive {
-                        DrawPrimitive::Text(text) => Some(text.text.to_string()),
-                        _ => None,
-                    }))
+                    for primitive in run.primitives() {
+                        if let DrawPrimitive::Text(text) = primitive {
+                            out.push(text.text.to_string());
+                        }
+                    }
                 }
             }
         }
