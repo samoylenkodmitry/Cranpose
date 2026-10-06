@@ -1040,6 +1040,10 @@ fn invalidated_cached_lazy_item_recomposes_instead_of_reusing_stale_content() {
 
     item_invocations.set(0);
     label_state.set(1);
+    while composition
+        .process_invalid_scopes()
+        .expect("lazy item recomposition")
+    {}
     let texts = render_texts(&mut composition, root);
 
     assert!(

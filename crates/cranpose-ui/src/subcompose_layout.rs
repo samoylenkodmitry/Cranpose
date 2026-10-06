@@ -18,7 +18,9 @@ use web_time::Instant;
 use crate::{
     layout::MeasuredNode,
     modifier::{Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size},
-    widgets::nodes::{LayoutNode, LayoutNodeCacheHandles, LayoutState, allocate_virtual_node_id},
+    widgets::nodes::{
+        DescendantDirt, LayoutNode, LayoutNodeCacheHandles, LayoutState, allocate_virtual_node_id,
+    },
 };
 
 fn subcompose_telemetry_enabled() -> bool {
@@ -737,6 +739,8 @@ pub struct SubcomposeLayoutNode {
     id: Cell<Option<NodeId>>,
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
+    /// A node below this one needs layout or measure.
+    descendant_dirt: Cell<DescendantDirt>,
     needs_semantics: Cell<bool>,
     needs_redraw: Cell<bool>,
     needs_pointer_pass: Cell<bool>,
@@ -760,6 +764,7 @@ impl SubcomposeLayoutNode {
             id: Cell::new(None),
             needs_measure: Cell::new(true),
             needs_layout: Cell::new(true),
+            descendant_dirt: Cell::default(),
             needs_semantics: Cell::new(true),
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
@@ -798,6 +803,7 @@ impl SubcomposeLayoutNode {
             id: Cell::new(None),
             needs_measure: Cell::new(true),
             needs_layout: Cell::new(true),
+            descendant_dirt: Cell::default(),
             needs_semantics: Cell::new(true),
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
@@ -1038,8 +1044,11 @@ impl SubcomposeLayoutNode {
         self.needs_measure.set(false);
     }
 
+    /// Clears the node's layout flag and its descendants': a layout pass
+    /// visited them.
     pub(crate) fn clear_needs_layout(&self) {
         self.needs_layout.set(false);
+        self.descendant_dirt.set(DescendantDirt::default());
     }
 
     /// Mark this node as needing semantics recomputation.
@@ -1300,6 +1309,22 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
 
     fn needs_measure(&self) -> bool {
         self.needs_measure.get()
+    }
+
+    fn mark_descendant_needs_layout(&self, measure: bool) {
+        self.descendant_dirt
+            .set(self.descendant_dirt.get().marked(measure));
+        if measure {
+            self.cache_handles.forget_intrinsics();
+        }
+    }
+
+    fn descendant_needs_layout(&self) -> bool {
+        self.descendant_dirt.get().layout
+    }
+
+    fn descendant_needs_measure(&self) -> bool {
+        self.descendant_dirt.get().measure
     }
 
     fn mark_needs_semantics(&self) {
