@@ -2174,12 +2174,23 @@ struct CachedImageTexture {
 }
 
 impl CachedImageTexture {
-    fn bind_group(&self, sampling: ImageSampling) -> &wgpu::BindGroup {
-        match sampling {
-            ImageSampling::Nearest => &self.nearest_bind_group,
-            ImageSampling::Linear => &self.linear_bind_group,
+    fn binding(&self, sampling: ImageSampling) -> ImageBinding {
+        ImageBinding {
+            bind_group: match sampling {
+                ImageSampling::Nearest => self.nearest_bind_group.clone(),
+                ImageSampling::Linear => self.linear_bind_group.clone(),
+            },
+            alpha_mask: self.alpha_mask,
         }
     }
+}
+
+/// What an image's draw binds: its texture's bind group for the draw's
+/// sampling, which keeps the texture alive whatever the cache evicts before
+/// the pass is drawn, and whether the texture is an alpha mask.
+pub(crate) struct ImageBinding {
+    bind_group: wgpu::BindGroup,
+    alpha_mask: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -2473,8 +2484,7 @@ pub(crate) struct ImageVariant {
 pub(crate) struct ImageDrawCmd {
     index_start: u32,
     scissor: (u32, u32, u32, u32),
-    image_id: u64,
-    sampling: ImageSampling,
+    image: ImageBinding,
     /// The rounded clip whose coverage the image takes in place: its index
     /// among the pass's clip instances.
     clip: Option<u32>,
@@ -3715,9 +3725,15 @@ impl GpuRenderer {
         view
     }
 
-    fn ensure_image_cached(&mut self, image: &ImageBitmap) -> Result<(), String> {
-        if self.image_texture_cache.get(&image.id()).is_some() {
-            return Ok(());
+    /// The binding a draw of `image` sampled by `sampling` takes, uploading
+    /// the image the first time a draw needs it.
+    fn image_binding(
+        &mut self,
+        image: &ImageBitmap,
+        sampling: ImageSampling,
+    ) -> Result<ImageBinding, String> {
+        if let Some(cached) = self.image_texture_cache.get(&image.id()) {
+            return Ok(cached.binding(sampling));
         }
 
         let size = wgpu::Extent3d {
@@ -3770,17 +3786,16 @@ impl GpuRenderer {
         let linear_bind_group = self.image_bind_group(&view, &self.image_linear_sampler);
 
         let bytes = image.pixels().len();
-        if let Some(replaced) = self.image_texture_cache.put(
-            image.id(),
-            CachedImageTexture {
-                alpha_mask,
-                _texture: texture,
-                _view: view,
-                nearest_bind_group,
-                linear_bind_group,
-                bytes,
-            },
-        ) {
+        let cached = CachedImageTexture {
+            alpha_mask,
+            _texture: texture,
+            _view: view,
+            nearest_bind_group,
+            linear_bind_group,
+            bytes,
+        };
+        let binding = cached.binding(sampling);
+        if let Some(replaced) = self.image_texture_cache.put(image.id(), cached) {
             self.image_texture_cache_bytes = self
                 .image_texture_cache_bytes
                 .saturating_sub(replaced.bytes);
@@ -3795,7 +3810,7 @@ impl GpuRenderer {
             self.image_texture_cache_bytes =
                 self.image_texture_cache_bytes.saturating_sub(evicted.bytes);
         }
-        Ok(())
+        Ok(binding)
     }
 
     fn image_bind_group(
@@ -5347,20 +5362,16 @@ impl GpuRenderer {
                 continue;
             };
             pass.set_scissor_rect(x, y, width, height);
-            let cached = self
-                .image_texture_cache
-                .peek(&cmd.image_id)
-                .ok_or_else(|| "image texture missing from cache".to_string())?;
             let variant = ImageVariant {
                 depth,
-                alpha_mask: cached.alpha_mask,
+                alpha_mask: cmd.image.alpha_mask,
                 rounded: cmd.clip.is_some(),
             };
             if bound_pipeline != Some(variant) {
                 pass.set_pipeline(self.image_pipeline(blend_mode, variant));
                 bound_pipeline = Some(variant);
             }
-            pass.set_bind_group(1, cached.bind_group(cmd.sampling), &[]);
+            pass.set_bind_group(1, &cmd.image.bind_group, &[]);
             let instance = match cmd.clip {
                 Some(clip) => {
                     if !clips_bound {
@@ -5489,7 +5500,6 @@ impl GpuRenderer {
             .map(|filter| apply_filter_to_bitmap(&image_draw.image, filter))
             .transpose()?;
         let prepared_image = filtered_image.as_ref().unwrap_or(&image_draw.image);
-        self.ensure_image_cached(prepared_image)?;
         if let cranpose_ui_graphics::ImagePixelFormat::Alpha8 { color } = prepared_image.format() {
             for (channel, value) in tint[..3].iter_mut().zip(color) {
                 *channel *= value as f32 / 255.0;
@@ -5516,8 +5526,7 @@ impl GpuRenderer {
         image_cmds.push(ImageDrawCmd {
             index_start,
             scissor,
-            image_id: prepared_image.id(),
-            sampling: geometry.sampling,
+            image: self.image_binding(prepared_image, geometry.sampling)?,
             clip,
         });
         Ok(())
@@ -6097,8 +6106,6 @@ impl GpuRenderer {
             return Ok(());
         }
 
-        self.ensure_image_cached(image)?;
-
         let (device_quad, scissor_rect) =
             if sampling == ImageSampling::Nearest && root_scale.is_finite() && root_scale > 0.0 {
                 let left_px = (rect.x * root_scale).round();
@@ -6145,8 +6152,7 @@ impl GpuRenderer {
         image_cmds.push(ImageDrawCmd {
             index_start,
             scissor,
-            image_id: image.id(),
-            sampling,
+            image: self.image_binding(image, sampling)?,
             clip: None,
         });
         Ok(())
