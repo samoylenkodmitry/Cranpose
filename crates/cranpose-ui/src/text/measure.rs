@@ -1035,7 +1035,7 @@ fn wrapped_line_ranges_with_measurer<M: TextMeasurer + ?Sized>(
             text,
             line_range,
             style,
-            (width_limit, &mut None),
+            (width_limit, LineLimit::NONE, &mut None),
             (line_break_mode, hyphens_mode),
             &mut lines,
         );
@@ -1097,7 +1097,7 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
             text,
             line_ranges,
             style,
-            width_limit,
+            (width_limit, LineLimit::of(opts)),
             (line_break_mode, hyphens_mode),
         );
     } else {
@@ -1784,24 +1784,64 @@ impl<'a, M: TextMeasurer + ?Sized> LineMeasureContext<'a, M> {
 
 /// The display lines `line_ranges` wrap into at `max_width`, and when any
 /// wrapped greedily, the widths that wrap them the same.
+/// How many lines a wrap keeps, and whether the last kept line runs on to
+/// its paragraph's end to be elided when text is cut after it.
+#[derive(Clone, Copy, Debug)]
+struct LineLimit {
+    lines: usize,
+    elides_last: bool,
+}
+
+impl LineLimit {
+    const NONE: Self = Self {
+        lines: usize::MAX,
+        elides_last: false,
+    };
+
+    fn of(options: TextLayoutOptions) -> Self {
+        Self {
+            lines: options.max_lines,
+            elides_last: EllipsisPlacement::for_options(options).is_some(),
+        }
+    }
+
+    /// Whether a wrap with `lines` lines so far has reached the limit: it
+    /// then ends with one line that stands for all the cut text.
+    fn reached(self, lines: usize) -> bool {
+        lines >= self.lines
+    }
+
+    /// Whether the next line after `lines` lines is the last kept line and
+    /// is elided, so where it breaks does not change the layout.
+    fn elides_next(self, lines: usize) -> bool {
+        self.elides_last && lines + 1 == self.lines
+    }
+}
+
 fn wrap_lines<M: TextMeasurer + ?Sized>(
     measurer: &M,
     text: &crate::text::AnnotatedString,
     line_ranges: Vec<Range<usize>>,
     style: &TextStyle,
-    max_width: f32,
+    (max_width, limit): (f32, LineLimit),
     modes: (LineBreak, Hyphens),
 ) -> (Vec<DisplayLine>, Option<WrapHold>) {
     let source_lines = line_ranges.len();
-    let mut lines = Vec::with_capacity(source_lines);
+    let mut lines = Vec::with_capacity(source_lines.min(limit.lines.saturating_add(1)));
     let mut hold = Some(WrapHold::ANY);
     for line_range in line_ranges {
+        if limit.reached(lines.len()) {
+            if lines.len() == limit.lines {
+                lines.push(DisplayLine::from_source_range(line_range));
+            }
+            break;
+        }
         wrap_line_to_width(
             measurer,
             text,
             line_range,
             style,
-            (max_width, &mut hold),
+            (max_width, limit, &mut hold),
             modes,
             &mut lines,
         );
@@ -1819,7 +1859,7 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
     text: &crate::text::AnnotatedString,
     line_range: Range<usize>,
     style: &TextStyle,
-    (max_width, hold): (f32, &mut Option<WrapHold>),
+    (max_width, limit, hold): (f32, LineLimit, &mut Option<WrapHold>),
     (line_break, hyphens): (LineBreak, Hyphens),
     out: &mut Vec<DisplayLine>,
 ) {
@@ -1863,7 +1903,7 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
         text,
         line_range,
         style,
-        (max_width, hold),
+        (max_width, limit, hold),
         (line_break, hyphens),
         out,
     );
@@ -1874,7 +1914,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     text: &crate::text::AnnotatedString,
     line_range: Range<usize>,
     style: &TextStyle,
-    (max_width, hold): (f32, &mut Option<WrapHold>),
+    (max_width, limit, hold): (f32, LineLimit, &mut Option<WrapHold>),
     (line_break, hyphens): (LineBreak, Hyphens),
     out: &mut Vec<DisplayLine>,
 ) {
@@ -1897,6 +1937,12 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
     let mut start_idx = 0usize;
 
     while start_idx < boundaries.len() - 1 {
+        if limit.reached(out.len()) {
+            out.push(DisplayLine::from_source_range(
+                line_range.start + boundaries[start_idx]..line_range.end,
+            ));
+            return;
+        }
         let mut low = start_idx + 1;
         let mut high = boundaries.len() - 1;
         let mut best = start_idx + 1;
@@ -1926,7 +1972,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             &measure_context,
             (line_text, &boundaries),
             (start_idx, best),
-            can_hyphenate,
+            (can_hyphenate, limit.elides_next(out.len())),
         );
         if can_hyphenate {
             effective_wrap_idx = resolve_auto_hyphen_break(
@@ -2112,13 +2158,24 @@ fn choose_wrap_break(
 /// Narrows `hold` to the widths a line from `start_idx` breaks the same at
 /// as it does where `best` characters fit, or clears it when the break was
 /// hyphenated, which no width range describes.
+/// Narrows `hold` to the widths that break the line from `start_idx` at
+/// `best` the same. A line that runs on to be elided holds while the rest of
+/// its paragraph does not fit on it, wherever it breaks.
 fn narrow_to_break<M: TextMeasurer + ?Sized>(
     hold: &mut Option<WrapHold>,
     measure_context: &LineMeasureContext<'_, M>,
     (line, boundaries): (&str, &[usize]),
     (start_idx, best): (usize, usize),
-    hyphenated: bool,
+    (hyphenated, elided): (bool, bool),
 ) {
+    let end = boundaries.len() - 1;
+    if elided && best < end {
+        if let Some(hold) = hold {
+            let rest = measure_context.measure_char_range(boundaries, start_idx, end);
+            hold.narrow(f32::NEG_INFINITY, rest);
+        }
+        return;
+    }
     if hyphenated {
         *hold = None;
     }

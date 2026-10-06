@@ -1662,7 +1662,7 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
         &text,
         whole.clone(),
         &style,
-        (f32::MAX, &mut None),
+        (f32::MAX, LineLimit::NONE, &mut None),
         (LineBreak::Simple, Hyphens::None),
         &mut lines,
     );
@@ -1674,7 +1674,7 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
         &text,
         whole,
         &style,
-        (60.0, &mut None),
+        (60.0, LineLimit::NONE, &mut None),
         (LineBreak::Simple, Hyphens::None),
         &mut lines,
     );
