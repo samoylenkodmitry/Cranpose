@@ -217,6 +217,7 @@ fn layer_only_update_keeps_outer_draw_and_child_canvas_recordings() {
         SceneUpdates {
             content: &[],
             layers: &[parent],
+            moved: &[],
         },
     );
     assert_eq!(
@@ -280,6 +281,7 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
         SceneUpdates {
             content: &[],
             layers: &[parent],
+            moved: &[],
         },
     );
     let after = sink.get();
@@ -353,6 +355,7 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
         SceneUpdates {
             content: &[child],
             layers: &[parent],
+            moved: &[],
         },
     );
     assert_ne!(
@@ -428,6 +431,7 @@ fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
         SceneUpdates {
             content: &[parent],
             layers: &[child],
+            moved: &[],
         },
     );
     assert_ne!(

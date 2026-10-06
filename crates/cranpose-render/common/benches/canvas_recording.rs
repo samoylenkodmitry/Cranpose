@@ -509,6 +509,7 @@ fn run_property_mode(
             SceneUpdates {
                 content: &[],
                 layers: std::slice::from_ref(&canvas_node),
+                moved: &[],
             }
         } else {
             SceneUpdates::content(std::slice::from_ref(&canvas_node))

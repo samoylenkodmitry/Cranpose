@@ -24,6 +24,7 @@ struct RenderState {
     layer_property_repasses: Mutex<DirtyNodeSet>,
     modifier_slice_repasses: Mutex<DirtyNodeSet>,
     geometry_scene_nodes: Mutex<DirtyNodeSet>,
+    moved_scene_nodes: Mutex<DirtyNodeSet>,
     render_invalidated: AtomicBool,
     pointer_invalidated: AtomicBool,
     focus_invalidated: AtomicBool,
@@ -191,6 +192,7 @@ impl RenderState {
             layer_property_repasses: Mutex::new(DirtyNodeSet::new()),
             modifier_slice_repasses: Mutex::new(DirtyNodeSet::new()),
             geometry_scene_nodes: Mutex::new(DirtyNodeSet::new()),
+            moved_scene_nodes: Mutex::new(DirtyNodeSet::new()),
             render_invalidated: AtomicBool::new(false),
             pointer_invalidated: AtomicBool::new(false),
             focus_invalidated: AtomicBool::new(false),
@@ -980,13 +982,40 @@ pub(crate) fn record_geometry_scene_node(node_id: NodeId) {
     });
 }
 
+pub(crate) fn record_moved_scene_node(node_id: NodeId) {
+    with_render_state(|state| {
+        lock_repass_manager(&state.moved_scene_nodes).schedule_repass(node_id);
+    });
+}
+
+/// The nodes whose geometry a layout pass changed, by what the scene redoes
+/// for them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GeometrySceneNodes {
+    /// Nodes that changed size or were placed anew: the scene draws them
+    /// again.
+    pub reshaped: Vec<NodeId>,
+    /// Nodes that moved in their parent: the scene moves what it drew for
+    /// them, unless they are also reshaped or drawn again.
+    pub moved: Vec<NodeId>,
+}
+
+impl GeometrySceneNodes {
+    /// Whether the pass changed no node's geometry.
+    pub fn is_empty(&self) -> bool {
+        self.reshaped.is_empty() && self.moved.is_empty()
+    }
+}
+
 /// Takes the nodes whose geometry the last layout pass actually changed.
 ///
 /// The scene phase merges these into its scoped update scope. Consuming them
 /// is mandatory whenever layout ran: geometry recorded by one pass is
 /// meaningless to the next.
-pub fn take_geometry_scene_nodes() -> Vec<NodeId> {
-    with_render_state(|state| lock_repass_manager(&state.geometry_scene_nodes).take_dirty_nodes())
+pub fn take_geometry_scene_nodes() -> GeometrySceneNodes {
+    let mut nodes = GeometrySceneNodes::default();
+    take_geometry_scene_nodes_into(&mut nodes);
+    nodes
 }
 
 /// Takes changed geometry nodes into reusable caller-owned storage.
@@ -994,14 +1023,16 @@ pub fn take_geometry_scene_nodes() -> Vec<NodeId> {
 /// ```
 /// let context = cranpose_ui::AppContext::new();
 /// context.enter(|| {
-///     let mut nodes = Vec::new();
+///     let mut nodes = cranpose_ui::GeometrySceneNodes::default();
 ///     cranpose_ui::take_geometry_scene_nodes_into(&mut nodes);
 ///     assert!(nodes.is_empty());
 /// });
 /// ```
-pub fn take_geometry_scene_nodes_into(output: &mut Vec<NodeId>) {
+pub fn take_geometry_scene_nodes_into(output: &mut GeometrySceneNodes) {
     with_render_state(|state| {
-        lock_repass_manager(&state.geometry_scene_nodes).take_dirty_nodes_into(output);
+        lock_repass_manager(&state.geometry_scene_nodes)
+            .take_dirty_nodes_into(&mut output.reshaped);
+        lock_repass_manager(&state.moved_scene_nodes).take_dirty_nodes_into(&mut output.moved);
     });
 }
 
