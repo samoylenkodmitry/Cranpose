@@ -151,7 +151,8 @@ fn renderer_translates_draw_commands() {
             }
             DrawPrimitive::Image { rect, .. }
             | DrawPrimitive::Arc { rect, .. }
-            | DrawPrimitive::Line { rect, .. } => {
+            | DrawPrimitive::Line { rect, .. }
+            | DrawPrimitive::Trapezoid { rect, .. } => {
                 if rect.x >= 10.0 && rect.y >= 10.0 {
                     saw_translated = true;
                 }
@@ -166,7 +167,8 @@ fn renderer_translates_draw_commands() {
                 | DrawPrimitive::RoundRect { rect, .. }
                 | DrawPrimitive::Image { rect, .. }
                 | DrawPrimitive::Arc { rect, .. }
-                | DrawPrimitive::Line { rect, .. } => {
+                | DrawPrimitive::Line { rect, .. }
+                | DrawPrimitive::Trapezoid { rect, .. } => {
                     if rect.x >= 10.0 && rect.y >= 10.0 {
                         saw_translated = true;
                     }
@@ -203,7 +205,8 @@ fn renderer_translates_draw_commands() {
             | DrawPrimitive::RoundRect { rect, .. }
             | DrawPrimitive::Image { rect, .. }
             | DrawPrimitive::Arc { rect, .. }
-            | DrawPrimitive::Line { rect, .. } => {
+            | DrawPrimitive::Line { rect, .. }
+            | DrawPrimitive::Trapezoid { rect, .. } => {
                 assert!(rect.x >= 10.0);
                 assert!(rect.y >= 10.0);
             }
@@ -216,7 +219,8 @@ fn renderer_translates_draw_commands() {
                 | DrawPrimitive::RoundRect { rect, .. }
                 | DrawPrimitive::Image { rect, .. }
                 | DrawPrimitive::Arc { rect, .. }
-                | DrawPrimitive::Line { rect, .. } => {
+                | DrawPrimitive::Line { rect, .. }
+                | DrawPrimitive::Trapezoid { rect, .. } => {
                     assert!(rect.x >= 10.0);
                     assert!(rect.y >= 10.0);
                 }

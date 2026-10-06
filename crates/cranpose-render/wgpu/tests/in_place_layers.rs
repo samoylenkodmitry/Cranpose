@@ -8,6 +8,7 @@ use cranpose_ui::{
     composable,
     text::{SpanStyle, TextUnit},
 };
+use cranpose_ui_graphics::{Brush, DrawStyle, Path, Point};
 
 use crate::support;
 
@@ -49,6 +50,9 @@ enum Scene {
     ScaledText,
     /// A 0.6w x 60 box of ink scaled by 0.8 and turned by 23 degrees.
     ScaledTurnedBox,
+    /// A 0.6w x 60 chart, turned by 23 degrees, whose filled zigzag
+    /// slices into a column between each two of its points.
+    Chart,
 }
 
 impl Scene {
@@ -83,6 +87,33 @@ fn InkBox(width: f32, height: f32, degrees: f32, scale: f32, offscreen: bool) {
             .size_points(width, height)
             .then(turned(degrees, scale, offscreen))
             .background(INK),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+/// The rows of ink above the chart's zigzag on average: its points rise and
+/// fall between 10 and 30.
+const CHART_CLEAR_ROWS: f32 = 20.0;
+
+#[composable]
+fn InkChart(width: f32, offscreen: bool) {
+    Box(
+        Modifier::empty()
+            .size_points(width, 60.0)
+            .then(turned(23.0, 1.0, offscreen))
+            .draw_behind(|scope| {
+                let size = scope.size();
+                let mut path = Path::new();
+                path.move_to(Point::new(0.0, size.height));
+                for index in 0..=12 {
+                    let y = if index % 2 == 0 { 10.0 } else { 30.0 };
+                    path.line_to(Point::new(size.width * index as f32 / 12.0, y));
+                }
+                path.line_to(Point::new(size.width, size.height));
+                path.close();
+                scope.draw_path(&path, Brush::solid(INK), DrawStyle::Fill);
+            }),
         BoxSpec::default(),
         || {},
     );
@@ -123,6 +154,7 @@ fn TurnedPage(scene: Scene, offscreen: bool, width: MutableState<f32>) {
                     InkText(format!("Scaled in place {w}"), turned(0.0, 0.75, offscreen));
                 }
                 Scene::ScaledTurnedBox => InkBox(w * 0.6, 60.0, 23.0, 0.8, offscreen),
+                Scene::Chart => InkChart(w * 0.6, offscreen),
                 Scene::Nested | Scene::InSurface => {
                     Box(
                         Modifier::empty().size_points(160.0, 100.0).then(turned(
@@ -357,6 +389,19 @@ fn a_scaled_and_turned_box_drawn_in_place_covers_what_its_surface_covers() {
         WIDTH * 0.6 * 0.8 * 60.0 * 0.8,
     );
     assert_centred(Scene::ScaledTurnedBox, &drawn, 0.05);
+}
+
+#[test]
+fn a_turned_chart_drawn_in_place_covers_what_its_surface_covers() {
+    let Some(drawn) = assert_lands_alike(Scene::Chart, 0.005, 0.05) else {
+        return;
+    };
+    // A seam between two columns would leave a line of page in the ink.
+    assert_area(
+        Scene::Chart,
+        &drawn,
+        WIDTH * 0.6 * (60.0 - CHART_CLEAR_ROWS),
+    );
 }
 
 #[test]

@@ -32,7 +32,13 @@ fn variant(segment: RecordSegment, clipped: bool) -> ShapeVariant {
     } else {
         SegmentClip::Untested
     };
-    ShapeVariant::of_segment(&segment, clip, ShapeAblation::default(), false, true)
+    ShapeVariant::of_segment(
+        &segment,
+        clip,
+        ShapeAblation::default(),
+        false,
+        (true, true),
+    )
 }
 
 fn key(segment: RecordSegment) -> ShapePipelineKey {

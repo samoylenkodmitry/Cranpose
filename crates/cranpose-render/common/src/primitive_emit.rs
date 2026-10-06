@@ -6,7 +6,7 @@ use cranpose_ui::text::{
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, GraphicsLayer,
     ImageBitmap, ImageSampling, LineGeometry, Point, Rect, RoundedCornerShape, ShadowPrimitive,
-    Stroke, TextPrimitive, arc_band, inflate_rect,
+    Stroke, TextPrimitive, Trapezoid, arc_band, inflate_rect,
 };
 
 use crate::{
@@ -47,6 +47,10 @@ pub struct ShapeDrawParams {
     /// `Some` replaces the rect geometry entirely with a stroked segment, its
     /// ends and width in `local_rect` units.
     pub line: Option<LineGeometry>,
+    /// `Some` replaces the rect geometry entirely with a slice of a path
+    /// fill, in `local_rect` units; `local_rect` is the rect its brush
+    /// resolves against.
+    pub trapezoid: Option<Trapezoid>,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
     pub motion_context_animated: bool,
@@ -237,6 +241,7 @@ pub fn rect_shape_params(
         stroke,
         arc: None,
         line: None,
+        trapezoid: None,
         clip,
         blend_mode,
         motion_context_animated,
@@ -271,6 +276,7 @@ pub fn round_rect_shape_params(
         stroke,
         arc: None,
         line: None,
+        trapezoid: None,
         clip,
         blend_mode,
         motion_context_animated,
@@ -325,6 +331,7 @@ pub fn arc_shape_params(
         stroke: None,
         arc: Some(arc.scaled_about(arc_center, scale)),
         line: None,
+        trapezoid: None,
         clip,
         blend_mode,
         motion_context_animated,
@@ -368,6 +375,61 @@ pub fn line_shape_params(
         stroke: None,
         arc: None,
         line: Some(line.placed(place(start), place(end), layer_uniform_scale(layer))),
+        trapezoid: None,
+        clip,
+        blend_mode,
+        motion_context_animated,
+    })
+}
+
+/// The [`DrawPrimitive::Trapezoid`] arm of [`emit_draw_primitive`]: the
+/// brush rect placed by the layer's transform as a rect is, and the slice's
+/// corners placed by it as points; see [`rect_shape_params`].
+#[expect(clippy::too_many_arguments)]
+pub fn trapezoid_shape_params(
+    brush_rect: Rect,
+    brush: &Brush,
+    trapezoid: Trapezoid,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+    blend_mode: BlendMode,
+    motion_context_animated: bool,
+) -> Option<ShapeDrawParams> {
+    if trapezoid.right <= trapezoid.left {
+        return None;
+    }
+    let place = |x: f32, y: f32| {
+        apply_layer_affine_to_point(
+            Point::new(x + layer_bounds.x, y + layer_bounds.y),
+            layer_bounds,
+            layer,
+        )
+    };
+    let [top_left, top_right, bottom_left, bottom_right] = [
+        place(trapezoid.left, trapezoid.top[0]),
+        place(trapezoid.right, trapezoid.top[1]),
+        place(trapezoid.left, trapezoid.bottom[0]),
+        place(trapezoid.right, trapezoid.bottom[1]),
+    ];
+    let draw_rect = brush_rect.translate(layer_bounds.x, layer_bounds.y);
+    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+    Some(ShapeDrawParams {
+        rect: quad_bounds(quad),
+        local_rect: apply_layer_affine_to_rect(draw_rect, layer_bounds, layer),
+        quad,
+        brush: resolve_layer_brush(brush, layer),
+        shape: None,
+        stroke: None,
+        arc: None,
+        line: None,
+        trapezoid: Some(Trapezoid {
+            left: top_left.x,
+            right: top_right.x,
+            top: [top_left.y, top_right.y],
+            bottom: [bottom_left.y, bottom_right.y],
+            ..trapezoid
+        }),
         clip,
         blend_mode,
         motion_context_animated,
@@ -475,6 +537,24 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 *start,
                 *end,
                 *stroke,
+                layer_bounds,
+                layer,
+                clip,
+                blend_mode.unwrap_or(BlendMode::SrcOver),
+                motion_context_animated,
+            ) {
+                sink.push_shape(params);
+            }
+        }
+        DrawPrimitive::Trapezoid {
+            rect,
+            brush,
+            trapezoid,
+        } => {
+            if let Some(params) = trapezoid_shape_params(
+                *rect,
+                brush,
+                *trapezoid,
                 layer_bounds,
                 layer,
                 clip,

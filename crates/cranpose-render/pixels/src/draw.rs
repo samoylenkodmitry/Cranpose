@@ -10,6 +10,7 @@ use cranpose_render_common::{
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, ColorFilter, CornerRadii, LineGeometry, Point, Rect, StrokeJoin,
+    Trapezoid, expand_rect,
 };
 
 use crate::{
@@ -271,7 +272,7 @@ fn draw_shape(
     let Some(coverage) = ShapeCoverage::of(draw, rect, snap_delta) else {
         return;
     };
-    let Some(clip_bounds) = clip_rect_to_bounds(rect, clip, width, height) else {
+    let Some(clip_bounds) = clip_rect_to_bounds(coverage.reach(rect), clip, width, height) else {
         return;
     };
 
@@ -312,6 +313,7 @@ fn draw_shape(
 /// arc band, a stroked outline or a fill, placed where its snap moved it.
 enum ShapeCoverage {
     Line(LineGeometry),
+    Trapezoid(Trapezoid),
     Arc(ArcGeometry),
     Stroke {
         rect: Rect,
@@ -333,6 +335,11 @@ impl ShapeCoverage {
         if let Some(line) = draw.line {
             return (!line.is_degenerate())
                 .then(|| Self::Line(line.placed(shift(line.start), shift(line.end), 1.0)));
+        }
+        if let Some(trapezoid) = draw.trapezoid {
+            return Some(Self::Trapezoid(
+                trapezoid.translate(snap_delta.x, snap_delta.y),
+            ));
         }
         if let Some(arc) = draw.arc {
             return (!arc.is_degenerate()).then(|| {
@@ -361,9 +368,19 @@ impl ShapeCoverage {
         }
     }
 
+    /// The pixels it can cover: a slice's own box, which its edges reach
+    /// half a pixel past, otherwise the shape's `rect`.
+    fn reach(&self, rect: Rect) -> Rect {
+        match self {
+            Self::Trapezoid(trapezoid) => expand_rect(trapezoid.bounds(), 0.5),
+            _ => rect,
+        }
+    }
+
     fn at(&self, point: Point) -> f32 {
         match self {
             Self::Line(line) => line.coverage(point),
+            Self::Trapezoid(trapezoid) => trapezoid.coverage(point),
             Self::Arc(arc) => shape_sdf::arc_coverage(point, arc),
             Self::Stroke {
                 rect,

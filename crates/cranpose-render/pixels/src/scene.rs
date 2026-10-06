@@ -5,7 +5,7 @@ use cranpose_render_common::{layer_shadow::ShadowRRect, primitive_emit::ShapeDra
 use cranpose_ui::TextStyle;
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, LineGeometry,
-    Point, Rect, RoundedCornerShape, Stroke,
+    Point, Rect, RoundedCornerShape, Stroke, Trapezoid,
 };
 
 #[derive(Clone)]
@@ -18,9 +18,30 @@ pub(crate) struct DrawShape {
     pub stroke: Option<Stroke>,
     pub arc: Option<ArcGeometry>,
     pub line: Option<LineGeometry>,
+    pub trapezoid: Option<Trapezoid>,
     pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
+}
+
+impl DrawShape {
+    /// The shape `params` resolved, drawn `z_index`-th.
+    pub(crate) fn of_params(params: ShapeDrawParams, z_index: usize) -> Self {
+        Self {
+            rect: params.rect,
+            snap_anchor: None,
+            snap_to_pixel_grid: false,
+            brush: params.brush.into_brush(),
+            shape: params.shape,
+            stroke: params.stroke,
+            arc: params.arc,
+            line: params.line,
+            trapezoid: params.trapezoid,
+            z_index,
+            clip: params.clip,
+            blend_mode: params.blend_mode,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -99,6 +120,7 @@ impl RasterScene {
             stroke: None,
             arc: None,
             line: None,
+            trapezoid: None,
             z_index,
             clip,
             blend_mode,
@@ -136,6 +158,7 @@ impl RasterScene {
             stroke: None,
             arc: None,
             line: None,
+            trapezoid: None,
             z_index,
             clip,
             blend_mode,
@@ -143,23 +166,11 @@ impl RasterScene {
     }
 
     /// Queues a shape an emitted primitive resolved: a rect, rounded rect,
-    /// stroke, arc band or line segment.
+    /// stroke, arc band, line segment or slice of a path fill.
     pub fn push_shape_params(&mut self, params: ShapeDrawParams) {
         let z_index = self.next_z;
         self.next_z += 1;
-        self.shapes.push(DrawShape {
-            rect: params.rect,
-            snap_anchor: None,
-            snap_to_pixel_grid: false,
-            brush: params.brush.into_brush(),
-            shape: params.shape,
-            stroke: params.stroke,
-            arc: params.arc,
-            line: params.line,
-            z_index,
-            clip: params.clip,
-            blend_mode: params.blend_mode,
-        });
+        self.shapes.push(DrawShape::of_params(params, z_index));
     }
 
     #[expect(clippy::too_many_arguments)]
