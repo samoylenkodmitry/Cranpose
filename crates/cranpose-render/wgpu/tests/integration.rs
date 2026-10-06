@@ -47,6 +47,7 @@ mod layer_effect_cache;
 mod line_coverage;
 mod liquid_control_tone;
 mod liquid_modifier_order;
+mod many_images;
 mod nested_composite_order;
 mod nested_rotated_relayout;
 mod never_wait;
