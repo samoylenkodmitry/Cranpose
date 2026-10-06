@@ -1,0 +1,17 @@
+{
+  "name": "perf-nativescript",
+  "main": "app/app.ts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The gauntlet of the framework comparison in NativeScript",
+  "dependencies": {
+    "@nativescript/core": "9.1.2"
+  },
+  "devDependencies": {
+    "@nativescript/android": "9.1.1",
+    "@nativescript/types": "9.1.2",
+    "@nativescript/webpack": "5.0.38",
+    "nativescript": "9.1.2",
+    "typescript": "~6.0.0"
+  }
+}

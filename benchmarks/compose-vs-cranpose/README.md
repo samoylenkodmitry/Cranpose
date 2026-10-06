@@ -6,7 +6,8 @@ from this repository) and `compose-app` (Kotlin, Jetpack Compose).
 from outside either framework. The gauntlet also runs in `views-app` (Android
 Views with RecyclerView), `flutter-app` (Flutter, which picks Impeller on
 OpenGL ES on the Mate), `rn-app` (React Native on the New Architecture with
-Hermes), `maui-app` (.NET MAUI, fully AOT-compiled), `avalonia-app` (Avalonia
+Hermes), `nativescript-app` (NativeScript: TypeScript on V8 driving Android
+views), `maui-app` (.NET MAUI, fully AOT-compiled), `avalonia-app` (Avalonia
 on Skia, fully AOT-compiled), `uno-app` (Uno Platform on its Skia renderer,
 fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
 GameActivity), `slint-app` (Slint on Skia) and `web-app` (a web page in
@@ -95,7 +96,14 @@ that repaint on the frame. React Native runs one JavaScript frame loop, so
 each frame is one React commit: the changing texts, bars, badges and the
 width are small memoized components reading the frame through
 `useSyncExternalStore`, the list is a FlashList of rows, sparklines are Skia
-paths, and the footer's dividers stretch in Yoga's row. MAUI advances the
+paths, and the footer's dividers stretch in Yoga's row. NativeScript
+advances the frame on Android's Choreographer: its own requestAnimationFrame
+runs from the native choreographer's vsync, which the main thread serves
+before its Java messages, so once frames take longer than a vsync the window
+never reports its first draw. Its core layouts and labels are Android views
+that the views on screen update with only what changed, the list is a
+ListView whose two row templates each recycle their own kind, and sparklines
+are an Android view written in TypeScript. MAUI advances the
 frame on its animation ticker; views on screen set only what changed, the
 list is a CollectionView of rows scrolled through its RecyclerView (MAUI
 scrolls to items, not offsets), sparklines and bars are GraphicsView
@@ -176,12 +184,13 @@ under the 2% gate; what the other frameworks draw differently, by design:
   `shared-cs/PerfData.cs`, `shared-swift/PerfData.swift` and
   `fyne-app/data.go` implement the same xorshift generator, so every
   post, comment, quote and particle is identical. `data.rs` is `perf-data`,
-  which the Cranpose, egui and Slint apps share; React Native and the web page
-  share `shared-ts/data.ts`, MAUI and Avalonia share `shared-cs`, and SwiftUI
-  and AppKit share `shared-swift/PerfData.swift`.
+  which the Cranpose, egui and Slint apps share; React Native, NativeScript
+  and the web page share `shared-ts/data.ts`, MAUI and Avalonia share
+  `shared-cs`, and SwiftUI and AppKit share `shared-swift/PerfData.swift`.
 - **Fonts:** every app loads `/system/fonts/Roboto-Regular.ttf` and
   `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. React
-  Native registers them with its font manager, MAUI serves them from its
+  Native registers them with its font manager, NativeScript copies them into
+  the app's `fonts` folder, where its `fontFamily` looks, MAUI serves them from its
   own `IFontManager` and Avalonia from a font collection; the Huawei system
   font is wider. The bundled
   Noto Sans Merged declares 2.1 em of ascent plus descent, which Compose honors
@@ -436,6 +445,7 @@ and a 15 s window. Failed runs are kept in the report.
 (cd benchmarks/compose-vs-cranpose/views-app && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/flutter-app && flutter build apk --release --target-platform android-arm64)
 (cd benchmarks/compose-vs-cranpose/rn-app && npm ci && cd android && ./gradlew :app:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/nativescript-app && npm ci && npx ns build android --release --gradleArgs=-Pabis=arm64-v8a --key-store-path ~/.android/debug.keystore --key-store-password android --key-store-alias androiddebugkey --key-store-alias-password android)
 (cd benchmarks/compose-vs-cranpose/maui-app && dotnet publish -c Release -f net10.0-android)
 (cd benchmarks/compose-vs-cranpose/avalonia-app && dotnet publish -c Release -f net10.0-android)
 (cd benchmarks/compose-vs-cranpose/rust-android && ./gradlew :egui:assembleRelease :slint:assembleRelease)

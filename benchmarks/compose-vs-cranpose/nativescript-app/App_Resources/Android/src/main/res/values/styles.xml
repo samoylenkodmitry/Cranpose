@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The same window as the other apps: fullscreen, and the screen's
+         background behind the first frame. NativeScript's Android project
+         derives its own styles from these names. -->
+    <style name="AppThemeBase" parent="Theme.AppCompat.Light.NoActionBar">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowBackground">@color/perf_background</item>
+        <item name="android:forceDarkAllowed">false</item>
+    </style>
+    <style name="AppTheme" parent="AppThemeBase" />
+    <style name="LaunchScreenTheme" parent="AppThemeBase" />
+    <style name="NativeScriptToolbarStyleBase" parent="Widget.AppCompat.Toolbar" />
+    <style name="NativeScriptToolbarStyle" parent="NativeScriptToolbarStyleBase" />
+    <color name="perf_background">#FFEEF0F5</color>
+</resources>

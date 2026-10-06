@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="__PACKAGE__">
+	<application
+		android:name="com.tns.NativeScriptApplication"
+		android:label="Perf NativeScript"
+		android:theme="@style/AppTheme"
+		android:hardwareAccelerated="true">
+		<profileable android:shell="true" />
+		<!-- The same window as the other apps: fullscreen, and the screen's
+		     background behind the first frame. -->
+		<activity
+			android:name="com.tns.NativeScriptActivity"
+			android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|locale|uiMode|density|fontScale|layoutDirection"
+			android:theme="@style/AppTheme"
+			android:launchMode="singleTask"
+			android:exported="true">
+			<intent-filter>
+				<action android:name="android.intent.action.MAIN" />
+				<category android:name="android.intent.category.LAUNCHER" />
+			</intent-filter>
+		</activity>
+		<activity android:name="com.tns.ErrorReportActivity" />
+	</application>
+</manifest>

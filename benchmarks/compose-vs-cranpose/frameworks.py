@@ -26,7 +26,7 @@ from ab import DECIDING, REPORTED, leg_record, metric_values, prime, size_window
 from measure import APPS, HEAVY, HERE, REMOTE_WINDOW, Device, device_lock, measure_run
 import versions
 
-DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,maui,avalonia,uno,egui,slint,web'
+DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,nativescript,maui,avalonia,uno,egui,slint,web'
 
 
 def measure_frameworks(args):

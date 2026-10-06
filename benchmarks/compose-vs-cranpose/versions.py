@@ -50,11 +50,13 @@ SOURCES = {
     'floem': 'benchmarks/compose-vs-cranpose/floem-app/src/main.rs',
     'fyne': 'benchmarks/compose-vs-cranpose/fyne-app/main.go',
     'uno': 'benchmarks/compose-vs-cranpose/uno-app/Gauntlet.cs',
+    'nativescript': 'benchmarks/compose-vs-cranpose/nativescript-app/app/app.ts',
 }
 
 # The apps each platform runs besides Cranpose's.
 PLATFORM_APPS = {
-    'android': ['compose', 'views', 'flutter', 'rn', 'maui', 'avalonia', 'uno', 'egui', 'slint', 'web'],
+    'android': ['compose', 'views', 'flutter', 'rn', 'nativescript', 'maui', 'avalonia', 'uno', 'egui', 'slint',
+                'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
                 'tauri', 'dioxus', 'freya', 'floem', 'fyne', 'uno'],
 }
@@ -64,7 +66,7 @@ NAMES = {
     'flutter': 'Flutter', 'rn': 'React Native', 'maui': '.NET MAUI', 'avalonia': 'Avalonia',
     'egui': 'egui', 'slint': 'Slint', 'iced': 'iced', 'gpui': 'GPUI', 'swiftui': 'SwiftUI', 'appkit': 'AppKit',
     'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'freya': 'Freya', 'floem': 'Floem',
-    'fyne': 'Fyne', 'uno': 'Uno Platform',
+    'fyne': 'Fyne', 'uno': 'Uno Platform', 'nativescript': 'NativeScript',
 }
 
 
@@ -196,6 +198,8 @@ PINS = {
     'views': Pin(['views-app/app/build.gradle.kts'], r'androidx.recyclerview:recyclerview:([\d.]+)',
                  lambda: maven(GOOGLE, 'androidx.recyclerview', 'recyclerview')),
     'rn': Pin(['rn-app/package.json'], r'"react-native": "([^"]+)"', lambda: npm('react-native'), npm_lock('rn-app')),
+    'nativescript': Pin(['nativescript-app/package.json'], r'"@nativescript/(?:core|types)": "([^"]+)"',
+                        lambda: npm('@nativescript/core'), npm_lock('nativescript-app')),
     'web': Pin(['web-app/package.json'], r'"@capacitor/(?:core|android|cli)": "([^"]+)"',
                lambda: npm('@capacitor/core'), npm_lock('web-app')),
     'tauri': Pin(['tauri-app/Cargo.toml'], r'tauri = \{ version = "([^"]+)"', lambda: crates_io('tauri'),

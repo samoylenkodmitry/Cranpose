@@ -79,6 +79,12 @@ APPS = {
         'apk': HERE / 'uno-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.uno-Signed.apk',
         'layer': 'SurfaceView - ',
     },
+    # NativeScript 9: TypeScript on V8 driving native Android views, the gauntlet only.
+    'nativescript': {
+        'package': 'dev.perfcompare.nativescript',
+        'activity': 'dev.perfcompare.nativescript/com.tns.NativeScriptActivity',
+        'apk': HERE / 'nativescript-app/platforms/android/app/build/outputs/apk/release/app-release.apk',
+    },
     # The web platform (Chromium's Android WebView) in Capacitor: the gauntlet only.
     'web': {
         'package': 'dev.perfcompare.web',

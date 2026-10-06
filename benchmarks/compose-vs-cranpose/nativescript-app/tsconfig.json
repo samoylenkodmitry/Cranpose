@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "esnext",
+    "target": "ES2020",
+    "moduleResolution": "bundler",
+    "experimentalDecorators": true,
+    "noEmitHelpers": true,
+    "noEmitOnError": true,
+    "skipLibCheck": true,
+    "lib": ["ESNext", "dom"]
+  },
+  "include": ["app/**/*", "../shared-ts/data.ts"],
+  "files": ["./references.d.ts"],
+  "exclude": ["node_modules", "platforms"]
+}
