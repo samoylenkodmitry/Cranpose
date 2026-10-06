@@ -61,6 +61,8 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) frame_rate_preference: FrameRatePreference,
     pub(crate) scene_dirty: bool,
     pub(crate) scoped_layout_scene_nodes: Vec<NodeId>,
+    /// Nodes the layout pass only moved: the scene moves their layers.
+    pub(crate) scoped_moved_scene_nodes: Vec<NodeId>,
     pub(crate) scoped_draw_nodes: Vec<NodeId>,
     pub(crate) scoped_layer_property_nodes: Vec<NodeId>,
     pub(crate) structural_scene_nodes: Vec<NodeId>,
@@ -105,6 +107,7 @@ impl<R: Renderer> RootSurface<R> {
             frame_rate_preference: FrameRatePreference::default(),
             scene_dirty: true,
             scoped_layout_scene_nodes: Vec::new(),
+            scoped_moved_scene_nodes: Vec::new(),
             scoped_draw_nodes: Vec::new(),
             scoped_layer_property_nodes: Vec::new(),
             structural_scene_nodes: Vec::new(),
@@ -180,6 +183,7 @@ impl<R: Renderer> RootSurface<R> {
     pub(crate) fn invalidate_scene_root(&mut self, root: Option<NodeId>) {
         self.scoped_layout_scene_nodes.clear();
         self.scoped_layout_scene_nodes.extend(root);
+        self.scoped_moved_scene_nodes.clear();
         self.scoped_draw_nodes.clear();
         self.scoped_layer_property_nodes.clear();
         self.structural_scene_nodes.clear();
@@ -402,6 +406,7 @@ impl PlatformTextInputHandler for TextInputRouter {
 #[derive(Clone, Copy)]
 pub(crate) enum SurfaceDirtyLane {
     Layout,
+    Moved,
     Draw,
     LayerProperties,
     Structural,
@@ -421,6 +426,12 @@ fn append_surface_dirty_node(
                 surface.scoped_layout_scene_nodes.push(node);
             }
         }
+        SurfaceDirtyLane::Moved => {
+            surface.scene_dirty = true;
+            if seen.insert((surface_index, node)) {
+                surface.scoped_moved_scene_nodes.push(node);
+            }
+        }
         SurfaceDirtyLane::Draw => surface.scoped_draw_nodes.push(node),
         SurfaceDirtyLane::LayerProperties => surface.scoped_layer_property_nodes.push(node),
         SurfaceDirtyLane::Structural => {
@@ -428,6 +439,18 @@ fn append_surface_dirty_node(
                 surface.structural_scene_nodes.push(node);
             }
         }
+    }
+}
+
+/// The nodes `lane` already queued on `surface`, which routing must not
+/// queue twice.
+fn queued_scene_nodes<R: Renderer>(surface: &RootSurface<R>, lane: SurfaceDirtyLane) -> &[NodeId] {
+    match lane {
+        SurfaceDirtyLane::Layout => &surface.scoped_layout_scene_nodes,
+        SurfaceDirtyLane::Moved => &surface.scoped_moved_scene_nodes,
+        SurfaceDirtyLane::Draw
+        | SurfaceDirtyLane::LayerProperties
+        | SurfaceDirtyLane::Structural => &[],
     }
 }
 
@@ -455,21 +478,12 @@ pub(crate) fn route_nodes_by_surface<R: Renderer>(
         return;
     }
     scratch.seen.clear();
-    match lane {
-        SurfaceDirtyLane::Layout => {
-            for (index, surface) in surfaces.iter().enumerate() {
-                scratch.seen.extend(
-                    surface
-                        .scoped_layout_scene_nodes
-                        .iter()
-                        .copied()
-                        .map(|node| (index, node)),
-                );
-            }
-        }
-        SurfaceDirtyLane::Draw
-        | SurfaceDirtyLane::LayerProperties
-        | SurfaceDirtyLane::Structural => {}
+    for (index, surface) in surfaces.iter().enumerate() {
+        scratch.seen.extend(
+            queued_scene_nodes(surface, lane)
+                .iter()
+                .map(|node| (index, *node)),
+        );
     }
     if app.app_context.window_roots().is_empty() {
         scratch.owners.clear();

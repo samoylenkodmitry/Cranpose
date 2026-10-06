@@ -59,23 +59,30 @@ fn TrimmableList(dropped: MutableState<usize>) {
     );
 }
 
-/// The scope the app shell hands the scoped scene update: every node whose
-/// geometry the layout pass changed, plus every parent whose child set did.
-fn scoped_scene_nodes(applier: &mut MemoryApplier, root: NodeId) -> Vec<NodeId> {
-    let mut nodes = Vec::new();
-    for node in cranpose_ui::take_geometry_scene_nodes() {
-        if let Some(node) = applier.scene_node_attached_to(node, root)
-            && !nodes.contains(&node)
-        {
-            nodes.push(node);
+/// The scope the app shell hands the scoped scene update: the content of
+/// every node the layout pass reshaped or placed anew and of every parent
+/// whose child set changed, and the nodes it only moved.
+fn scoped_scene_nodes(applier: &mut MemoryApplier, root: NodeId) -> (Vec<NodeId>, Vec<NodeId>) {
+    let geometry = cranpose_ui::take_geometry_scene_nodes();
+    let mut attached = |ids: Vec<NodeId>, nodes: &mut Vec<NodeId>| {
+        for node in ids {
+            if let Some(node) = applier.scene_node_attached_to(node, root)
+                && !nodes.contains(&node)
+            {
+                nodes.push(node);
+            }
         }
-    }
+    };
+    let mut nodes = Vec::new();
+    let mut moved = Vec::new();
+    attached(geometry.reshaped, &mut nodes);
+    attached(geometry.moved, &mut moved);
     for node in applier.take_structural_change_parents_attached_to(root) {
         if !nodes.contains(&node) {
             nodes.push(node);
         }
     }
-    nodes
+    (nodes, moved)
 }
 
 #[test]
@@ -127,16 +134,20 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
             let mut applier = composition.applier_mut();
             applier.set_runtime_handle(handle.clone());
             applier.compute_layout(root, VIEWPORT).expect("relayout");
-            let dirty = scoped_scene_nodes(&mut applier, root);
+            let (dirty, moved) = scoped_scene_nodes(&mut applier, root);
             assert!(
-                !dirty.is_empty(),
+                !dirty.is_empty() || !moved.is_empty(),
                 "dropping row {} told the scene phase nothing had moved",
                 count - 1
             );
             if !update_graph_from_applier_report(
                 &applier,
                 &mut graph,
-                SceneUpdates::content(&dirty),
+                SceneUpdates {
+                    content: &dirty,
+                    layers: &[],
+                    moved: &moved,
+                },
                 1.0,
             )
             .applied()

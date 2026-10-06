@@ -522,7 +522,7 @@ fn a_first_placement_reports_the_node_even_at_the_origin() {
     let mut state = state_of(7);
     state.place(origin());
     assert!(state.is_placed());
-    assert_eq!(crate::take_geometry_scene_nodes(), vec![7]);
+    assert_eq!(crate::take_geometry_scene_nodes().reshaped, vec![7]);
 }
 
 #[test]
@@ -543,8 +543,25 @@ fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
     state.place(Point { x: 0.0, y: 18.0 });
     assert_eq!(
         crate::take_geometry_scene_nodes(),
-        vec![7],
-        "a move is reported"
+        crate::GeometrySceneNodes {
+            reshaped: Vec::new(),
+            moved: vec![7],
+        },
+        "a move is reported apart from a reshape"
+    );
+
+    state.set_size(Size {
+        width: 10.0,
+        height: 4.0,
+    });
+    state.place(Point { x: 3.0, y: 18.0 });
+    assert_eq!(
+        crate::take_geometry_scene_nodes(),
+        crate::GeometrySceneNodes {
+            reshaped: vec![7],
+            moved: vec![7],
+        },
+        "a node that moved and resized is reported as both"
     );
 }
 
@@ -568,7 +585,7 @@ fn a_node_its_pass_clears_and_never_places_is_left_unplaced() {
     let _ = crate::take_geometry_scene_nodes();
     state.place(origin());
     assert_eq!(
-        crate::take_geometry_scene_nodes(),
+        crate::take_geometry_scene_nodes().reshaped,
         vec![7],
         "placing a node an earlier pass left unplaced reports it, where it was or not"
     );

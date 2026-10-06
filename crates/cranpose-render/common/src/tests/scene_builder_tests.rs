@@ -2337,6 +2337,7 @@ fn update_graph_from_applier_refreshes_dirty_graphics_layer_transform() {
         SceneUpdates {
             content: &[],
             layers: &[node_id],
+            moved: &[],
         },
         1.0,
     );
@@ -2420,6 +2421,7 @@ fn update_graph_from_applier_reports_hit_dirty_for_moved_clickable_layer() {
         SceneUpdates {
             content: &[],
             layers: &[node_id],
+            moved: &[],
         },
         1.0,
     );

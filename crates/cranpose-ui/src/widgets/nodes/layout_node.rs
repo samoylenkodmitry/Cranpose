@@ -181,14 +181,17 @@ impl LayoutState {
 
     /// Writes the placed position and marks the node placed, self-reporting
     /// an actual move to the scene phase, and a placement of a node the
-    /// scene does not draw: one the running pass did not find placed.
+    /// scene does not draw: one the running pass did not find placed. A move
+    /// is reported apart, so the scene can keep what it drew for the node.
     pub fn place(&mut self, position: Point) {
         let newly_placed = !self.is_placed && !self.restore_placement();
         let moved = self.position != position;
-        if (newly_placed || moved)
-            && let Some(id) = self.node_id
-        {
-            crate::render_state::record_geometry_scene_node(id);
+        if let Some(id) = self.node_id {
+            if newly_placed {
+                crate::render_state::record_geometry_scene_node(id);
+            } else if moved {
+                crate::render_state::record_moved_scene_node(id);
+            }
         }
         self.position = position;
         if moved || !self.is_placed {
