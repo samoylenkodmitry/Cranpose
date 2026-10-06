@@ -7,7 +7,8 @@ from outside either framework. The gauntlet also runs in `views-app` (Android
 Views with RecyclerView), `flutter-app` (Flutter, which picks Impeller on
 OpenGL ES on the Mate), `rn-app` (React Native on the New Architecture with
 Hermes), `maui-app` (.NET MAUI, fully AOT-compiled), `avalonia-app` (Avalonia
-on Skia, fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
+on Skia, fully AOT-compiled), `uno-app` (Uno Platform on its Skia renderer,
+fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
 GameActivity), `slint-app` (Slint on Skia) and `web-app` (a web page in
 Capacitor, on the device's Chromium WebView: the stack Ionic, Tauri and
 Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
@@ -536,7 +537,9 @@ What each framework lacks and how its app does without:
   row; sparklines draw in a Skia canvas element. Uno's macOS window sizes its
   content in pixels, so the app asks for 1280 x 820 times the display's scale.
   A self-contained build runs on Mono unless told otherwise
-  (`-p:UseMonoRuntime=false`).
+  (`-p:UseMonoRuntime=false`). Its time per frame grows faster than its
+  element count: on the M3 Pro about 0.1 s at tier 5, 0.8 s at tier 10 and
+  over 2 s at tier 12, so at tier 16 a window may hold no frame.
 - The JVM opens no window outside the login session, so `desktop.py` starts
   every app bundle through `open`. macOS then asks the user before such an
   app reads a removable volume, so the fonts and Chrome's profile sit in a

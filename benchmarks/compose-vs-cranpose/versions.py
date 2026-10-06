@@ -54,7 +54,7 @@ SOURCES = {
 
 # The apps each platform runs besides Cranpose's.
 PLATFORM_APPS = {
-    'android': ['compose', 'views', 'flutter', 'rn', 'maui', 'avalonia', 'egui', 'slint', 'web'],
+    'android': ['compose', 'views', 'flutter', 'rn', 'maui', 'avalonia', 'uno', 'egui', 'slint', 'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
                 'tauri', 'dioxus', 'freya', 'floem', 'fyne', 'uno'],
 }

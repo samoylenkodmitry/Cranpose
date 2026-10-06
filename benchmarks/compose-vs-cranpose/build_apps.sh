@@ -212,6 +212,10 @@ android)
         avalonia-app shared-cs -- \
         attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"
     cp "$here/avalonia-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.avalonia-Signed.apk" "$out/avalonia.apk"
+    build uno-android uno-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.uno-Signed.apk \
+        uno-app shared-cs -- \
+        attempt uno bash -c "cd '$here/uno-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"
+    cp "$here/uno-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.uno-Signed.apk" "$out/uno.apk"
     for app in egui slint; do
         rust_target "$app-app"
         build "$app-android" "$app-app/build/outputs/apk/release/$app-release.apk" "$app-app" perf-data rust-android -- \
