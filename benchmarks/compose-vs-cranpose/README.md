@@ -314,11 +314,29 @@ launch.
 
 `frameworks.py` measures every framework's app on the gauntlet for the
 dashboard: each launched once unmeasured, then two rounds of one leg each,
-the order reversed in the second.
+the order reversed in the second. `--install DIR` first installs each app's
+`APP.apk` from DIR and compiles every app's Java with `speed`, as the Compose
+app's best case.
 
 ```bash
 python3 benchmarks/compose-vs-cranpose/frameworks.py --serial SERIAL --output OUTPUT
 ```
+
+### Every night
+
+`.github/workflows/perf-nightly.yml` measures main's latest commit at 01:30,
+unless the dashboard already holds it:
+
+1. On macm3, `build_apps.sh` builds every desktop app and every Android app
+   but Cranpose's, `desktop.py` measures the desktop apps at tier 16, and the
+   run goes to the dashboard.
+2. On the Mac the Mate 20 X is attached to, `scripts/perf/nightly.py`
+   compares the latest release with main, and `just perf-frameworks` installs
+   macm3's Android builds beside main's Cranpose and runs `frameworks.py`.
+
+The Performance tab of the desktop demo reads the runs from the `perf-data`
+branch: the latest night's release against main, the trend, and the latest
+framework comparison of each device.
 
 ### Long comparisons
 
@@ -503,10 +521,6 @@ signs it with a requirement on its bundle identifier, so rebuilds keep it.
 
 ```bash
 sh benchmarks/compose-vs-cranpose/framecount/build.sh
-mkdir -p benchmarks/compose-vs-cranpose/fonts
-adb pull /system/fonts/Roboto-Regular.ttf benchmarks/compose-vs-cranpose/fonts/
-adb pull /system/fonts/Roboto-Medium.ttf benchmarks/compose-vs-cranpose/fonts/
-adb pull /system/fonts/Roboto-Bold.ttf benchmarks/compose-vs-cranpose/fonts/
 (cd benchmarks/compose-vs-cranpose/cranpose-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/egui-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/slint-app && cargo build --release)

@@ -7,7 +7,10 @@ a round, the order reversed each round so heat and time fall on all alike.
 Legs are `ab.py`'s: a warm-up, then a window long enough for `--min-frames`
 frames, from 5 to 30 seconds. Writes `frameworks.json` in the dashboard's run
 format, kind `frameworks`: device, subjects, every leg and per-app medians.
+`--install DIR` first installs each app's `APP.apk` from DIR, as the
+nightly hands over the builds macm3 made.
 Usage: frameworks.py --serial SERIAL --output DIR [--apps compose,cranpose,...]
+                     [--install DIR] [--main COMMIT]
 """
 
 import argparse
@@ -31,6 +34,10 @@ def measure_frameworks(args):
     args.output.mkdir(parents=True, exist_ok=True)
     device = Device(args.serial)
     apps = args.apps.split(',')
+    if args.install:
+        for app in apps:
+            if (apk := args.install / f'{app}.apk').exists():
+                device.install(app, apk)
     device.adb('push', str(HERE / 'perf_window.sh'), REMOTE_WINDOW)
     for app in apps:
         prime(device, app, args.scenario, args)
@@ -52,6 +59,7 @@ def measure_frameworks(args):
     return {
         'kind': 'frameworks',
         'started_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+        'main': args.main,
         'device': {key: device.shell('getprop', key).strip() for key in
                    ['ro.product.model', 'ro.build.version.release', 'ro.hardware']},
         'subjects': [{'name': app, 'package': APPS[app]['package'], 'label': app} for app in apps],
@@ -84,6 +92,8 @@ def main():
     parser.add_argument('--interval', type=float, default=0.5)
     parser.add_argument('--clock-ticks', type=int, default=100)
     parser.add_argument('--extra', default='', help='more `am start` extras')
+    parser.add_argument('--install', type=Path, help='folder of APP.apk builds to install first')
+    parser.add_argument('--main', help="the commit the Cranpose app was built at, recorded with the run")
     args = parser.parse_args()
     with device_lock(args.serial):
         run = measure_frameworks(args)

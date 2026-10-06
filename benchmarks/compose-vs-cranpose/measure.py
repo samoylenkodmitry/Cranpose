@@ -123,6 +123,22 @@ class Device:
     def __init__(self, serial):
         self.serial = serial
 
+    def install(self, app, apk):
+        """Installs `apk` as `app`, in place of an install signed by another
+        key, and compiles its Java ahead of time: `speed`, the Compose app's
+        best case, for every app alike."""
+        package = APPS[app]['package']
+        for attempt in range(2):
+            result = subprocess.run(['adb', '-s', self.serial, 'install', '-r', '-d', str(apk)],
+                                    capture_output=True, text=True, timeout=600)
+            if result.returncode == 0:
+                break
+            if attempt == 0 and 'INSTALL_FAILED_UPDATE_INCOMPATIBLE' in result.stdout + result.stderr:
+                self.adb('uninstall', package)
+                continue
+            raise RuntimeError(f'{apk.name} did not install: {result.stdout.strip()} {result.stderr.strip()}')
+        self.shell('cmd', 'package', 'compile', '-m', 'speed', '-f', package)
+
     def adb(self, *args, timeout=120, check=True):
         result = subprocess.run(['adb', '-s', self.serial, *args], capture_output=True,
                                 text=True, timeout=timeout)
@@ -556,7 +572,7 @@ def compare(args):
         spec = APPS[app]
         report[app + '_apk_bytes'] = spec['apk'].stat().st_size
         if args.install:
-            device.adb('install', '-r', '-d', str(spec['apk']), timeout=300)
+            device.install(app, spec['apk'])
     debuggable = device.shell('dumpsys', 'package', APPS['compose']['package'])
     if 'DEBUGGABLE' in debuggable.split('pkgFlags=')[-1].split('\n')[0]:
         raise RuntimeError('the Compose APK is debuggable; measure a release build')

@@ -6,6 +6,8 @@ each scenario's medians and verdicts, so the dashboard draws its trends from
 the index and opens a run's file only for its legs. A run that was skipped
 publishes nothing.
 Usage: publish.py --run RUN_JSON [--tree DIR] [--no-push]
+       publish.py --published KIND DEVICE COMMIT   exits 0 when such a run is in
+                                                  the index, 1 when not
 """
 
 import argparse
@@ -49,6 +51,13 @@ def index_entry(run, file):
     }
 
 
+def published_runs():
+    """The runs the data branch's index lists, or none before its first run."""
+    if subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=REPO).returncode != 0:
+        return []
+    return json.loads(git('show', f'origin/{DATA_BRANCH}:index.json', cwd=REPO))['runs']
+
+
 def data_tree(tree):
     """A worktree on the data branch, starting the branch when it is new."""
     fetched = subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=REPO).returncode == 0
@@ -68,10 +77,19 @@ def data_tree(tree):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--run', required=True, type=Path)
+    parser.add_argument('--run', type=Path)
+    parser.add_argument('--published', nargs=3, metavar=('KIND', 'DEVICE', 'COMMIT'))
     parser.add_argument('--tree', type=Path, default=Path.home() / 'perf-nightly' / 'data-tree')
     parser.add_argument('--no-push', action='store_true')
     args = parser.parse_args()
+    if args.published:
+        kind, device, commit = args.published
+        found = any(run['kind'] == kind and run['device'] == device and run.get('main') == commit
+                    for run in published_runs())
+        print(f'{kind} on {device} at {commit[:9]}:', 'published' if found else 'not published')
+        raise SystemExit(0 if found else 1)
+    if not args.run:
+        parser.error('--run or --published is required')
     run = json.loads(args.run.read_text())
     if run.get('skipped'):
         print('nothing to publish:', run['skipped'])

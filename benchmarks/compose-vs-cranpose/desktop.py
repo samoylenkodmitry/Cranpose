@@ -38,9 +38,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PIL import Image
-
-from parity import compare_pair
 
 HERE = Path(__file__).resolve().parent
 FONTS = HERE / 'fonts'
@@ -235,6 +232,7 @@ def picture(name, args, work, page, stage):
         out = stage / f'{name}.png'
         framecount(app.pid, out, '--screenshot', str(out))
         shutil.copy(out, work / out.name)
+        from PIL import Image  # pictures alone need Pillow
         return Image.open(out).convert('RGB')
     finally:
         app.stop()
@@ -250,6 +248,7 @@ def main():
     parser.add_argument('--seconds', type=float, default=5.0)
     parser.add_argument('--warmup', type=float, default=2.0)
     parser.add_argument('--timeout', type=float, default=60.0)
+    parser.add_argument('--main', help='the commit the Cranpose app was built at, recorded with the run')
     parser.add_argument('--max-others', type=float, default=1.5,
                         help='cores other processes may spend in a leg before it is measured again')
     parser.add_argument('--parity', action='store_true')
@@ -275,6 +274,9 @@ def main():
 def run(args, apps, page, stage):
     """The pictures and their comparison, or the measured rounds."""
     if args.parity:
+        # Pillow, which comparing pictures needs and measuring does not.
+        from PIL import Image
+        from parity import compare_pair
         pictures = {name: picture(name, args, args.output, page, stage) for name in apps}
         reference, results = apps[0], {}
         for name in apps[1:]:
@@ -310,6 +312,7 @@ def run(args, apps, page, stage):
     return {
         'kind': 'frameworks',
         'started_at': started_at,
+        'main': args.main,
         'device': {'ro.product.model': chip},
         'subjects': [{'name': name, 'label': name} for name in apps],
         'protocol': {'warmup_s': args.warmup, 'window_s': args.seconds, 'rounds': args.rounds,

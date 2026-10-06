@@ -1,10 +1,13 @@
 name: perf nightly
 
-# The latest release's benchmark app against main's on the Huawei Mate 20 X
-# attached to the runner labelled mate-20x: benchmarks/compose-vs-cranpose
-# README, "Short A/B comparisons". Results go to the perf-data branch the
-# desktop demo's Performance tab reads; a regression found twice in a row
-# opens a perf-regression issue.
+# Each night main's Cranpose against the latest release, and against the other
+# frameworks, on the Huawei Mate 20 X and on a Mac desktop
+# (benchmarks/compose-vs-cranpose README, "Short A/B comparisons" and "On a
+# Mac desktop"). macm3 builds every framework's apps and measures the desktop
+# ones; the Mac the phone is attached to builds Cranpose's and measures them
+# all on the phone. Results go to the perf-data branch the desktop demo's
+# Performance tab reads; a regression found twice in a row opens a
+# perf-regression issue.
 
 on:
   schedule:
@@ -20,16 +23,94 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  android-ab:
-    name: release against main (Mate 20 X)
-    runs-on: [self-hosted, macOS, ARM64, mate-20x]
-    timeout-minutes: 90
+  desktop:
+    name: frameworks on a Mac desktop (macm3)
+    # macm3's runners carry `recent-repo`; the Mac the phone is attached to
+    # does not.
+    runs-on: [self-hosted, macOS, ARM64, recent-repo]
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
+    outputs:
+      measured: ${{ steps.published.outputs.measured }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - name: Configure machine-local SDK and cache paths
+        env:
+          RUNNER_NAME: ${{ runner.name }}
+          RUNNER_OS: ${{ runner.os }}
+        run: scripts/ci/android_env.sh
+
+      - name: Skip a main this Mac already measured
+        id: published
+        run: |
+          if python3 scripts/perf/publish.py --published frameworks \
+              "$(sysctl -n machdep.cpu.brand_string)" "$(git rev-parse HEAD)"; then
+            echo "measured=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Provision toolchains
+        if: steps.published.outputs.measured != 'yes'
+        run: |
+          scripts/ci/install_toolchains.sh
+          scripts/ci/rustup_locked.sh target add aarch64-linux-android
+          command -v just >/dev/null || cargo install just --locked
+          command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
+
+      - name: Build every framework's apps
+        if: steps.published.outputs.measured != 'yes'
+        run: |
+          # The build caches sit beside the runner's other caches.
+          export PERF_BUILD_CACHE="$(dirname "$SCCACHE_DIR")/gauntlet"
+          benchmarks/compose-vs-cranpose/build_apps.sh desktop
+          benchmarks/compose-vs-cranpose/build_apps.sh android "$RUNNER_TEMP/gauntlet-apks"
+
+      - name: Measure the desktop apps
+        if: steps.published.outputs.measured != 'yes'
+        # Outside the job's shared lock: a measurement empties the machine.
+        shell: bash --noprofile --norc -eo pipefail {0}
+        run: |
+          scripts/ci/with_host_lock.sh --exclusive python3 benchmarks/compose-vs-cranpose/desktop.py \
+            --output "$RUNNER_TEMP/desktop" --tier 16 --main "$(git rev-parse HEAD)"
+
+      - name: Publish the desktop run
+        if: steps.published.outputs.measured != 'yes'
+        run: just perf-publish "$RUNNER_TEMP/desktop/report.json"
+
+      - name: Hand the Android apps to the phone's job
+        if: steps.published.outputs.measured != 'yes'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gauntlet-apks
+          path: ${{ runner.temp }}/gauntlet-apks/*.apk
+          retention-days: 2
+
+      - name: Keep the run
+        if: ${{ !cancelled() && steps.published.outputs.measured != 'yes' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-nightly-desktop
+          path: ${{ runner.temp }}/desktop/*.json
+          retention-days: 30
+
+  android:
+    name: release against main, and the frameworks (Mate 20 X)
+    needs: desktop
+    # The release against main runs whatever became of the desktop job.
+    if: ${{ !cancelled() }}
+    # The Mac the Mate 20 X is attached to; its runner takes jobs while the
+    # Mac sits idle on power.
+    runs-on: [self-hosted, macOS, ARM64, idle-mac]
+    timeout-minutes: 180
     defaults:
       run:
         shell: ${{ github.workspace }}/scripts/ci/with_host_lock.sh --shared bash --noprofile --norc -eo pipefail {0}
     env:
       PERF_SERIAL: LKN5T19419001735
-      PERF_OUTPUT: ${{ runner.temp }}/perf-nightly-${{ github.run_id }}
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,6 +118,9 @@ jobs:
           ref: main
           # The release tags, to find the newest one main contains.
           fetch-depth: 0
+
+      - name: Name the run's folder
+        run: echo "PERF_OUTPUT=$RUNNER_TEMP/perf-nightly-$GITHUB_RUN_ID" >> "$GITHUB_ENV"
 
       - name: Configure machine-local SDK and cache paths
         env:
@@ -61,6 +145,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: just perf-report "$PERF_OUTPUT/run.json"
+
+      - name: Fetch the other frameworks' apps
+        if: ${{ !cancelled() && needs.desktop.result == 'success' && needs.desktop.outputs.measured != 'yes' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gauntlet-apks
+          path: ${{ runner.temp }}/gauntlet-apks
+
+      - name: Compare the frameworks on the phone
+        if: ${{ !cancelled() && needs.desktop.result == 'success' && needs.desktop.outputs.measured != 'yes' }}
+        run: |
+          just perf-frameworks "$PERF_SERIAL" "$PERF_OUTPUT/frameworks" "$RUNNER_TEMP/gauntlet-apks"
+          just perf-publish "$PERF_OUTPUT/frameworks/frameworks.json"
 
       - name: Keep the run
         if: ${{ !cancelled() }}

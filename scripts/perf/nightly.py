@@ -29,10 +29,12 @@ BENCH = Path('benchmarks/compose-vs-cranpose')
 ANDROID = BENCH / 'cranpose-app/android'
 SCENARIOS = ['gauntlet', 'feed', 'ticker', 'particles', 'layers', 'grid', 'grid_layer', 'deep',
              'deep_layer', 'workspace']
-DATA_BRANCH = 'perf-data'
 
 sys.path.insert(0, str(REPO / 'scripts'))
+sys.path.insert(0, str(REPO / BENCH))
 from android_robot_device import device_lock  # noqa: E402
+from measure import Device  # noqa: E402
+from publish import published_runs  # noqa: E402
 
 
 def git(*args, cwd=REPO):
@@ -42,10 +44,7 @@ def git(*args, cwd=REPO):
 
 def measured_pairs():
     """The (main, release) pairs the data branch already holds."""
-    if subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=REPO).returncode != 0:
-        return set()
-    index = json.loads(git('show', f'origin/{DATA_BRANCH}:index.json'))
-    return {(run['main'], run['release']) for run in index['runs'] if run['kind'] == 'nightly'}
+    return {(run['main'], run['release']) for run in published_runs() if run['kind'] == 'nightly'}
 
 
 def release_has(tag, path, needle):
@@ -105,9 +104,9 @@ def nightly(args):
     release_apk = build(release_tree_at(args.release_tree, release), '.release')
     main_apk = build(REPO)
     with device_lock(args.serial):
-        for apk in (release_apk, main_apk):
-            subprocess.run(['adb', '-s', args.serial, 'install', '-r', '-d', str(apk)], check=True,
-                           timeout=600)
+        device = Device(args.serial)
+        device.install('cranpose-release', release_apk)
+        device.install('cranpose', main_apk)
     labels = (release, main[:9])
     report = compare(args, scenarios, args.output / 'ab', labels)
     worse = [scenario['scenario'] for scenario in report['scenarios']
