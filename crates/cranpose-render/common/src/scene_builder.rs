@@ -253,7 +253,7 @@ fn update_graph_from_applier_report_inner(
                 false,
             );
             return GraphUpdateReport {
-                update: classify_walk(walked.is_some(), &remaining_dirty_nodes),
+                update: classify_walk(applier, walked.is_some(), &mut remaining_dirty_nodes),
                 hit_graph_dirty: hit_graph_dirty || walked.is_none_or(|r| r.hit_graph_dirty),
             };
         }
@@ -295,7 +295,7 @@ fn update_graph_from_applier_report_inner(
         };
     };
 
-    match classify_walk(true, &remaining_dirty_nodes) {
+    match classify_walk(applier, true, &mut remaining_dirty_nodes) {
         GraphUpdate::Patched => GraphUpdateReport {
             update: GraphUpdate::Patched,
             hit_graph_dirty: report.hit_graph_dirty,
@@ -307,16 +307,54 @@ fn update_graph_from_applier_report_inner(
     }
 }
 
-fn classify_walk(walked: bool, remaining_dirty_nodes: &HashMap<NodeId, NodeUpdate>) -> GraphUpdate {
+/// The update a walk made. A dirty node the walk did not find needs the whole
+/// scene built again, unless no layer draws it.
+fn classify_walk(
+    applier: &MemoryApplier,
+    walked: bool,
+    remaining_dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
+) -> GraphUpdate {
     if !walked {
-        GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable)
-    } else if !remaining_dirty_nodes.is_empty() {
+        return GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable);
+    }
+    remaining_dirty_nodes.retain(|&node, _| is_drawn(applier, node));
+    if !remaining_dirty_nodes.is_empty() {
         GraphUpdate::NeedsRebuild(GraphRebuildReason::UnmatchedDirtyNodes(
             remaining_dirty_nodes.len(),
         ))
     } else {
         GraphUpdate::Patched
     }
+}
+
+/// Whether the scene draws `node`: each subcompose node above it draws the
+/// slot `node` is in. A slot a lazy list keeps for reuse, or composes before
+/// it shows it, stays in the applier's tree without being drawn, and its
+/// nodes still change.
+fn is_drawn(applier: &MemoryApplier, node: NodeId) -> bool {
+    let mut child = node;
+    let mut current = node;
+    while let Some(parent) = applier
+        .get_ref(current)
+        .ok()
+        .and_then(cranpose_core::Node::parent)
+    {
+        let Ok(parent_node) = applier.get_ref(parent) else {
+            return true;
+        };
+        current = parent;
+        if parent_node.is_virtual() {
+            continue;
+        }
+        let parent_node: &dyn Any = parent_node;
+        if let Some(subcompose) = parent_node.downcast_ref::<SubcomposeLayoutNode>()
+            && !subcompose.with_active_children(|children| children.contains(&child))
+        {
+            return false;
+        }
+        child = parent;
+    }
+    true
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
