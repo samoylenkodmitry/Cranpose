@@ -1135,7 +1135,7 @@ fn scoped_layout_repass_remeasures_only_dirty_subtree() -> Result<(), NodeError>
     let root_needs_measure =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_measure())?;
     let root_needs_layout =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
+        applier.with_node::<LayoutNode, _>(root_id, |node| Node::layout_dirty(node))?;
 
     assert!(
         !root_needs_measure,
@@ -1254,7 +1254,7 @@ fn scoped_layout_repass_remeasures_dirty_subcompose_child() -> Result<(), NodeEr
     let root_needs_measure =
         applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_measure())?;
     let root_needs_layout =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
+        applier.with_node::<LayoutNode, _>(root_id, |node| Node::layout_dirty(node))?;
 
     assert!(
         !root_needs_measure,
@@ -1797,7 +1797,7 @@ fn dirty_child_triggers_parent_remeasure() -> Result<(), NodeError> {
     bubble_layout_dirty(&mut applier, child);
 
     let root_needs_measure =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
+        applier.with_node::<LayoutNode, _>(root_id, |node| Node::layout_dirty(node))?;
     assert!(
         root_needs_measure,
         "Root should be dirty when child is dirty (due to bubbling)"
@@ -1892,9 +1892,9 @@ fn dirty_bubbling_to_root() -> Result<(), NodeError> {
     bubble_layout_dirty(&mut applier, leaf);
 
     let middle_needs_layout =
-        applier.with_node::<LayoutNode, _>(middle_id, |node| node.needs_layout())?;
+        applier.with_node::<LayoutNode, _>(middle_id, |node| Node::layout_dirty(node))?;
     let root_needs_layout =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
+        applier.with_node::<LayoutNode, _>(root_id, |node| Node::layout_dirty(node))?;
 
     assert!(
         middle_needs_layout,
@@ -2084,7 +2084,7 @@ fn bubbling_reaches_clean_ancestors_above_dirty_intermediate() -> Result<(), Nod
     bubble_layout_dirty(&mut applier, leaf);
 
     let root_needs_layout =
-        applier.with_node::<LayoutNode, _>(root_id, |node| node.needs_layout())?;
+        applier.with_node::<LayoutNode, _>(root_id, |node| Node::layout_dirty(node))?;
 
     assert!(
         root_needs_layout,
@@ -2135,8 +2135,8 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
         })?;
     }
 
-    assert!(!applier.with_node::<LayoutNode, _>(root_id, |n| n.needs_layout())?);
-    assert!(!applier.with_node::<LayoutNode, _>(child_id, |n| n.needs_layout())?);
+    assert!(!applier.with_node::<LayoutNode, _>(root_id, |n| Node::layout_dirty(n))?);
+    assert!(!applier.with_node::<LayoutNode, _>(child_id, |n| Node::layout_dirty(n))?);
     assert!(!applier.with_node::<LayoutNode, _>(leaf_id, |n| n.needs_layout())?);
 
     applier.with_node::<LayoutNode, _>(leaf_id, |node| {
@@ -2145,13 +2145,13 @@ fn property_change_bubbles_without_manual_call() -> Result<(), NodeError> {
 
     assert!(applier.with_node::<LayoutNode, _>(leaf_id, |n| n.needs_layout())?);
 
-    assert!(!applier.with_node::<LayoutNode, _>(child_id, |n| n.needs_layout())?);
-    assert!(!applier.with_node::<LayoutNode, _>(root_id, |n| n.needs_layout())?);
+    assert!(!applier.with_node::<LayoutNode, _>(child_id, |n| Node::layout_dirty(n))?);
+    assert!(!applier.with_node::<LayoutNode, _>(root_id, |n| Node::layout_dirty(n))?);
 
     bubble_layout_dirty(&mut applier, leaf_id);
 
     assert!(
-        applier.with_node::<LayoutNode, _>(root_id, |n| n.needs_layout())?,
+        applier.with_node::<LayoutNode, _>(root_id, |n| Node::layout_dirty(n))?,
         "Root should be dirty after property change bubbled from leaf"
     );
 
@@ -2192,6 +2192,7 @@ fn parent_data_uses_resolved_layout_properties() {
                         node.resolved_modifiers().layout_properties(),
                     )),
                     dirty: false,
+                    descendant_dirty: false,
                 },
                 &builder.state,
             );

@@ -71,6 +71,10 @@ harness = false
 name = "lazy_scroll"
 harness = false
 
+[[bench]]
+name = "layout_keep"
+harness = false
+
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
