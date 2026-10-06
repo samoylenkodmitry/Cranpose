@@ -3,8 +3,8 @@
 use std::{ops::Range, sync::Arc};
 
 use cranpose_core::NodeId;
-use cranpose_render_common::graph::DrawCommandId;
 pub use cranpose_render_common::graph_scene::{HitRegion, Scene};
+use cranpose_render_common::{graph::DrawCommandId, layer_shadow::ShadowRRect};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
     BlendMode, Color, ColorFilter, CommandRecording, DrawPrimitive, GraphicsLayer, ImageBitmap,
@@ -213,6 +213,7 @@ pub(crate) enum DrawOpKind {
     Image(usize),
     Text(usize),
     Shadow(usize),
+    RRectShadow(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -232,7 +233,6 @@ pub(crate) struct ShadowDraw {
     pub blur_radius: f32,
     pub clip: Option<Rect>,
     pub rounded_clip: Option<LayerRoundedClip>,
-    pub occluder: Option<Rect>,
     pub z_index: usize,
 }
 
@@ -246,6 +246,17 @@ impl ShadowDraw {
                     .any(|segment| segment.blend == BlendMode::DstOut)
             })
     }
+}
+
+/// One pass of a layer's elevation shadow, drawn straight into the pass:
+/// Skia's round rect shadow in the scene's logical space, its color, the
+/// clip it is cut to and the rigid anchor it snaps with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RRectShadowDraw {
+    pub shadow: ShadowRRect,
+    pub color: Color,
+    pub clip: Option<Rect>,
+    pub snap_anchor: Option<SnapAnchor>,
 }
 
 #[derive(Clone)]
@@ -293,6 +304,7 @@ pub(crate) struct CompositorScene {
     pub texts: Vec<TextDraw>,
     pub shadow_draws: Vec<ShadowDraw>,
     shadow_recorders: Vec<Arc<ShapeRecorder>>,
+    pub rrect_shadows: Vec<RRectShadowDraw>,
     pub draw_ops: Vec<DrawOp>,
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
@@ -305,6 +317,7 @@ pub(crate) struct SceneCapacityHint {
     pub images: usize,
     pub texts: usize,
     pub shadow_draws: usize,
+    pub rrect_shadows: usize,
     pub draw_ops: usize,
     pub effect_layers: usize,
     pub backdrop_layers: usize,
@@ -324,6 +337,7 @@ struct SceneBuffers {
     texts: Vec<TextDraw>,
     shadow_draws: Vec<ShadowDraw>,
     shadow_recorders: Vec<Arc<ShapeRecorder>>,
+    rrect_shadows: Vec<RRectShadowDraw>,
     draw_ops: Vec<DrawOp>,
     effect_layers: Vec<EffectLayer>,
     backdrop_layers: Vec<BackdropLayer>,
@@ -346,6 +360,7 @@ impl Drop for CompositorScene {
                 texts: std::mem::take(&mut self.texts),
                 shadow_draws: std::mem::take(&mut self.shadow_draws),
                 shadow_recorders: std::mem::take(&mut self.shadow_recorders),
+                rrect_shadows: std::mem::take(&mut self.rrect_shadows),
                 draw_ops: std::mem::take(&mut self.draw_ops),
                 effect_layers: std::mem::take(&mut self.effect_layers),
                 backdrop_layers: std::mem::take(&mut self.backdrop_layers),
@@ -371,6 +386,7 @@ impl CompositorScene {
                 texts: buffers.texts,
                 shadow_draws: buffers.shadow_draws,
                 shadow_recorders: buffers.shadow_recorders,
+                rrect_shadows: buffers.rrect_shadows,
                 draw_ops: buffers.draw_ops,
                 effect_layers: buffers.effect_layers,
                 backdrop_layers: buffers.backdrop_layers,
@@ -387,6 +403,7 @@ impl CompositorScene {
             texts: Vec::with_capacity(hint.texts),
             shadow_draws: Vec::with_capacity(hint.shadow_draws),
             shadow_recorders: Vec::new(),
+            rrect_shadows: Vec::with_capacity(hint.rrect_shadows),
             draw_ops: Vec::with_capacity(hint.draw_ops),
             effect_layers: Vec::with_capacity(hint.effect_layers),
             backdrop_layers: Vec::with_capacity(hint.backdrop_layers),
@@ -400,6 +417,7 @@ impl CompositorScene {
             images: self.images.len(),
             texts: self.texts.len(),
             shadow_draws: self.shadow_draws.len(),
+            rrect_shadows: self.rrect_shadows.len(),
             draw_ops: self.draw_ops.len(),
             effect_layers: self.effect_layers.len(),
             backdrop_layers: self.backdrop_layers.len(),
@@ -425,6 +443,7 @@ impl CompositorScene {
                 }
             }
         }
+        self.rrect_shadows.clear();
         self.draw_ops.clear();
         self.effect_layers.clear();
         self.backdrop_layers.clear();
@@ -568,6 +587,18 @@ impl CompositorScene {
         self.draw_ops.push(DrawOp {
             z_index,
             kind: DrawOpKind::Shadow(index),
+        });
+    }
+
+    pub(crate) fn push_rrect_shadow(&mut self, draw: RRectShadowDraw) {
+        self.flush_loose();
+        let z_index = self.next_z;
+        self.next_z += 1;
+        let index = self.rrect_shadows.len();
+        self.rrect_shadows.push(draw);
+        self.draw_ops.push(DrawOp {
+            z_index,
+            kind: DrawOpKind::RRectShadow(index),
         });
     }
 

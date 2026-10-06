@@ -297,16 +297,28 @@ fn a_layer_effect_with_a_shaped_placeholder_keeps_the_content_in_that_shape() {
 
 #[test]
 fn a_shadow_is_left_out_until_its_blur_lands() {
-    let shadowed = |elevation: f32| {
-        effect_page_with(
-            GraphicsLayer {
-                shadow_elevation: elevation,
-                ..GraphicsLayer::default()
+    let square = || {
+        support::solid_rect(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: PANE.width,
+                height: PANE.height,
             },
-            None,
+            Color(0.0, 1.0, 0.0, 1.0),
         )
     };
-    let graph = shadowed(6.0);
+    let shadow = support::drop_shadow(
+        Rect {
+            x: 6.0,
+            y: 6.0,
+            width: PANE.width,
+            height: PANE.height,
+        },
+        Color::BLACK,
+        6.0,
+    );
+    let graph = page(GraphicsLayer::default(), vec![shadow, square()]);
     let mut renderer = support::headless_renderer_compiling_in_background().expect("GPU required");
     let first = support::capture_graph(&mut renderer, graph.clone(), SIZE, SIZE);
     let stats = renderer.last_frame_stats().expect("frame statistics");
@@ -319,7 +331,7 @@ fn a_shadow_is_left_out_until_its_blur_lands() {
         "the page without its shadow",
         SIZE,
         &first.pixels,
-        &settled(shadowed(0.0)).pixels,
+        &settled(page(GraphicsLayer::default(), vec![square()])).pixels,
     );
     assert_lands(&mut renderer, graph);
 }

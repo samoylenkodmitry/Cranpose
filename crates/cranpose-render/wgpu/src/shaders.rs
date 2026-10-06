@@ -6,6 +6,8 @@ pub const IMAGE_SHADER: &str = cranpose_ui_graphics::framework_shaders::IMAGE_WG
 
 pub const GLYPH_ATLAS_SHADER: &str = cranpose_ui_graphics::framework_shaders::GLYPH_ATLAS_WGSL;
 
+pub const RRECT_SHADOW_SHADER: &str = cranpose_ui_graphics::framework_shaders::RRECT_SHADOW_WGSL;
+
 pub const FULLSCREEN_QUAD_VS: &str =
     cranpose_ui_graphics::framework_shaders::FULLSCREEN_QUAD_VS_WGSL;
 

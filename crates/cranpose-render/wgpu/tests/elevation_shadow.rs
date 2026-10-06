@@ -1,12 +1,17 @@
+//! Elevation shadows draw straight into the page: Skia's round rect shadow
+//! at each pixel, with no surface, blur or composite.
+
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
+use cranpose_render_common::layer_shadow::{ShadowLight, layer_shadow_geometry};
 use cranpose_ui::{
     Color, LinearArrangement, Modifier, composable,
     widgets::{Box, BoxSpec, LazyColumn, LazyColumnSpec},
 };
+use cranpose_ui_graphics::{GraphicsLayer, LayerShape, Rect, RoundedCornerShape};
 
 use crate::support;
 
@@ -99,25 +104,19 @@ impl Harness {
 }
 
 #[test]
-fn an_opaque_card_shadow_composites_only_its_visible_ring() {
+fn scrolling_card_shadows_draw_in_the_page_pass() {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
     let mut harness = Harness::new(renderer);
     for _ in 0..4 {
         harness.frame(-12.0);
     }
-    let stats = harness.frame(-12.0);
-    assert!(
-        stats.shadow_shape_cache_hits > 0,
-        "warm scrolled frames must composite cached card shadows \
-         (hits={})",
-        stats.shadow_shape_cache_hits,
-    );
-    let hit_px = stats.shadow_shape_cache_hit_pixels;
-    assert!(
-        hit_px <= 550_000,
-        "an opaque caster's shadow must composite only its visible ring: \
-         {hit_px} shadow pixels in one frame, expected the banded perimeter \
-         strips (≤ 0.55 MP on this fixture)"
+    let stats = harness.frame(-12.5);
+    assert_eq!(stats.blur_passes, 0, "no shadow blurs: {stats:?}");
+    assert_eq!(stats.offscreen_acquires, 0, "no shadow surface: {stats:?}");
+    assert_eq!(
+        stats.shadow_shape_cache_misses + stats.shadow_shape_cache_hits,
+        0,
+        "no shadow cache: {stats:?}"
     );
 }
 
@@ -125,21 +124,14 @@ fn an_opaque_card_shadow_composites_only_its_visible_ring() {
 fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
     let mut harness = Harness::new(renderer);
-    for _ in 0..4 {
+    for _ in 0..5 {
         harness.frame(-12.0);
     }
-    assert!(
-        harness.frame(-12.0).shadow_shape_cache_hits != 0,
-        "fixture stopped exercising cached card shadows"
-    );
-    let frame = {
-        self::Harness::frame(&mut harness, -12.0);
-        harness
-            .shell
-            .renderer()
-            .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-            .expect("frame capture should succeed")
-    };
+    let frame = harness
+        .shell
+        .renderer()
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("frame capture should succeed");
     let pixel = |x: u32, y: u32| {
         let offset = ((y * frame.width + x) * 4) as usize;
         [
@@ -149,17 +141,10 @@ fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
         ]
     };
     let x_inside = FRAME_WIDTH / 2;
-    let mut card_top: Option<u32> = None;
-    let mut y = 40u32;
-    while y < FRAME_HEIGHT - 80 {
-        let [r, g, b] = pixel(x_inside, y);
-        if r > 230 && g > 230 && b > 230 {
-            card_top = Some(y);
-            break;
-        }
-        y += 1;
-    }
-    let card_top = card_top.expect("a bright opaque card is on screen");
+    let bright = |y: u32| pixel(x_inside, y).iter().all(|c| *c > 230);
+    let card_top = (41..FRAME_HEIGHT - 80)
+        .find(|&y| bright(y) && !bright(y - 1))
+        .expect("the top edge of a bright opaque card is on screen");
     let card_bottom = card_top + CARD_HEIGHT as u32 - 1;
 
     let interior = pixel(x_inside, card_top + CARD_HEIGHT as u32 / 2);
@@ -180,7 +165,7 @@ fn the_shadow_ring_survives_and_the_card_interior_stays_clean() {
 }
 
 #[test]
-fn a_fully_occluded_shadow_drops_its_composite_instead_of_desyncing_the_plan() {
+fn a_shadow_clipped_to_its_hole_draws_nothing_and_the_card_shows() {
     let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(renderer, root_key, || {
@@ -218,20 +203,118 @@ fn a_fully_occluded_shadow_drops_its_composite_instead_of_desyncing_the_plan() {
     shell.set_viewport(FRAME_WIDTH as f32, FRAME_HEIGHT as f32);
     shell.set_buffer_size(FRAME_WIDTH, FRAME_HEIGHT);
     shell.update();
+    let frame = shell
+        .renderer()
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("a frame whose shadow lies under its card must render");
+    for (x, y) in [(161, 161), (260, 260), (358, 358)] {
+        let offset = ((y * frame.width + x) * 4) as usize;
+        assert!(
+            frame.pixels[offset..offset + 3].iter().all(|c| *c > 245),
+            "the card's fill at ({x}, {y}): {:?}",
+            &frame.pixels[offset..offset + 3]
+        );
+    }
+}
 
-    let mut occluded_seen = 0u32;
-    for _ in 0..4 {
-        shell.update();
-        shell
-            .renderer()
-            .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
-            .expect("a frame with a fully occluded shadow must still render");
-        let stats = shell.renderer().last_frame_stats().expect("frame stats");
-        occluded_seen = occluded_seen.max(stats.shadow_fully_occluded_composites);
+const PAGE: Color = Color(0.85, 0.86, 0.88, 1.0);
+const CARD: Rect = Rect {
+    x: 40.0,
+    y: 30.0,
+    width: 80.0,
+    height: 50.0,
+};
+
+/// One white card with a round rect shadow on a grey page, `width` × 120.
+fn shadowed_card(width: f32) {
+    Box(
+        Modifier::empty().size_points(width, 120.0).background(PAGE),
+        BoxSpec::new(),
+        || {
+            Box(
+                Modifier::empty()
+                    .offset(CARD.x, CARD.y)
+                    .size_points(CARD.width, CARD.height)
+                    .shadow_with(
+                        6.0,
+                        LayerShape::Rounded(RoundedCornerShape::uniform(10.0)),
+                        false,
+                        Color::BLACK,
+                        Color::BLACK,
+                    )
+                    .background(Color::WHITE),
+                BoxSpec::new(),
+                || {},
+            );
+        },
+    );
+}
+
+#[test]
+fn an_elevation_shadow_draws_skias_ramp_at_every_pixel() {
+    const WIDTH: u32 = 160;
+    const HEIGHT: u32 = 120;
+    let (_lock, renderer) = support::headless_renderer_parts().expect("headless renderer");
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(renderer, root_key, || shadowed_card(WIDTH as f32));
+    shell.set_viewport(WIDTH as f32, HEIGHT as f32);
+    shell.set_buffer_size(WIDTH, HEIGHT);
+    shell.update();
+    let frame = shell
+        .renderer()
+        .capture_frame(WIDTH, HEIGHT)
+        .expect("frame capture should succeed");
+
+    let layer = GraphicsLayer {
+        shadow_elevation: 6.0,
+        ambient_shadow_color: Color::BLACK,
+        spot_shadow_color: Color::BLACK,
+        shape: LayerShape::Rounded(RoundedCornerShape::uniform(10.0)),
+        ..GraphicsLayer::default()
+    };
+    let light = ShadowLight::for_window(WIDTH as f32, HEIGHT as f32, 1.0, 1.0);
+    let geometry =
+        layer_shadow_geometry(&layer, CARD, Some(RoundedCornerShape::uniform(10.0)), light);
+    let near_card = |x: f32, y: f32| {
+        x > CARD.x - 1.0
+            && x < CARD.x + CARD.width + 1.0
+            && y > CARD.y - 1.0
+            && y < CARD.y + CARD.height + 1.0
+    };
+    let mut worst = (0.0_f32, 0, 0);
+    let mut shaded = 0;
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+            if near_card(cx, cy) {
+                continue;
+            }
+            let kept: f32 = geometry
+                .passes()
+                .map(|(shadow, color)| 1.0 - color.a() * shadow.coverage(cx, cy))
+                .product();
+            if kept < 1.0 {
+                shaded += 1;
+            }
+            let offset = ((y * WIDTH + x) * 4) as usize;
+            for (channel, page) in [PAGE.r(), PAGE.g(), PAGE.b()].into_iter().enumerate() {
+                let expected = page * kept * 255.0;
+                let error = (frame.pixels[offset + channel] as f32 - expected).abs();
+                if error > worst.0 {
+                    worst = (error, x, y);
+                }
+            }
+        }
     }
     assert!(
-        occluded_seen > 0,
-        "fixture must exercise the fully occluded shadow path \
-         (shadow_fully_occluded_composites stayed 0)"
+        shaded > 1_000,
+        "the fixture shades the page: {shaded} pixels"
+    );
+    assert!(
+        worst.0 <= 2.0,
+        "the shadow strays {} levels from Skia's ramp at ({}, {})",
+        worst.0,
+        worst.1,
+        worst.2
     );
 }

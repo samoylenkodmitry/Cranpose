@@ -62,6 +62,7 @@ use crate::{
     pipeline_compiler::{CompilerSend, PipelineCompilation, PipelineCompiler},
     record_columns::record_vertex_layouts,
     rect_to_quad,
+    rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance, create_rrect_shadow_pipeline},
     run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore},
     scene::{
         CompositorScene, DrawOp, DrawOpKind, ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
@@ -303,55 +304,6 @@ fn mask_rect(rect: Rect) -> [f32; 4] {
     [rect.x, rect.y, rect.width, rect.height]
 }
 
-/// The parts of a shadow's covered device rect that lie outside its
-/// occluder: up to four disjoint bands (above, below, left of and right of
-/// the occluder) that together tile the coverage minus the occluder's whole
-/// interior pixels. A fractional occluder shrinks inward so no covered pixel
-/// is skipped.
-fn shadow_bands(
-    coverage: DeviceRect4,
-    occluder: Option<DeviceRect4>,
-) -> SmallVec<[DeviceRect4; 4]> {
-    let mut bands = SmallVec::new();
-    let (cx, cy, cw, ch) = coverage;
-    let (cr, cb) = (cx + cw, cy + ch);
-    let Some((ox, oy, ow, oh)) = occluder else {
-        bands.push(coverage);
-        return bands;
-    };
-    let left = ox.ceil().max(cx);
-    let top = oy.ceil().max(cy);
-    let right = (ox + ow).floor().min(cr);
-    let bottom = (oy + oh).floor().min(cb);
-    if right <= left || bottom <= top {
-        bands.push(coverage);
-        return bands;
-    }
-    if top > cy {
-        bands.push((cx, cy, cw, top - cy));
-    }
-    if bottom < cb {
-        bands.push((cx, bottom, cw, cb - bottom));
-    }
-    if left > cx {
-        bands.push((cx, top, left - cx, bottom - top));
-    }
-    if right < cr {
-        bands.push((right, top, cr - right, bottom - top));
-    }
-    bands
-}
-
-fn banded_pixels(bands: &[DeviceRect4]) -> u64 {
-    bands
-        .iter()
-        .map(|band| (band.2 as u64).saturating_mul(band.3 as u64))
-        .sum()
-}
-
-#[cfg(test)]
-#[path = "tests/render_shadow_band_tests.rs"]
-mod shadow_band_tests;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct TextImageCacheKey(u64);
 
@@ -584,7 +536,7 @@ fn is_blend_mode_supported(mode: BlendMode) -> bool {
     )
 }
 
-fn blend_state_for_mode(mode: BlendMode) -> wgpu::BlendState {
+pub(crate) fn blend_state_for_mode(mode: BlendMode) -> wgpu::BlendState {
     match mode {
         BlendMode::Src => wgpu::BlendState::REPLACE,
         BlendMode::DstOut => wgpu::BlendState {
@@ -1428,7 +1380,7 @@ impl ShapeDepth {
 
 /// The depth state of a glyph or image pipeline: in a pass with a depth
 /// buffer it paints what later opaque interiors leave visible, as shapes do.
-fn overlay_depth_state(depth: bool) -> Option<wgpu::DepthStencilState> {
+pub(crate) fn overlay_depth_state(depth: bool) -> Option<wgpu::DepthStencilState> {
     if depth {
         ShapeDepth::Tested.stencil_state()
     } else {
@@ -2995,8 +2947,11 @@ pub struct GpuRenderer {
     image_pipeline_dst_out: [FixedPipeline; 4],
     /// Indexed by depth, then turned: see [`GpuRenderer::glyph_atlas_pipeline`].
     glyph_atlas_pipeline: [FixedPipeline; 6],
+    /// Round rect shadow pipelines without and with a depth buffer.
+    rrect_shadow_pipeline: [FixedPipeline; 2],
     image_shader: SharedShader,
     glyph_atlas_shader: SharedShader,
+    rrect_shadow_shader: SharedShader,
     /// Transient depth buffers by target size, for passes that lay opaque
     /// interiors down first.
     depth_targets: Vec<((u32, u32), wgpu::TextureView)>,
@@ -3023,6 +2978,7 @@ pub struct GpuRenderer {
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
     pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
     pub(crate) scratch_glyph_moved: Vec<GlyphDrawCmd>,
+    pub(crate) scratch_shadow_instances: Vec<ShadowInstance>,
     pub(crate) scratch_arena_draws: Vec<RunDrawCall>,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
     scratch_text_glyph_entries: Vec<GlyphAtlasEntry>,
@@ -3284,6 +3240,13 @@ impl GpuRenderer {
             || shaders::GLYPH_ATLAS_SHADER.into(),
             &image_layouts,
         );
+        let rrect_shadow_shader = SharedShader::new(
+            &device,
+            adapter_backend,
+            "Round Rect Shadow Shader",
+            || shaders::RRECT_SHADOW_SHADER.into(),
+            &[Some(&uniform_bind_group_layout)],
+        );
 
         let mut renderer = Self {
             device,
@@ -3329,8 +3292,13 @@ impl GpuRenderer {
                 FixedPipeline::new("glyph/atlas/turned"),
                 FixedPipeline::new("glyph/atlas/turned/depth"),
             ],
+            rrect_shadow_pipeline: [
+                FixedPipeline::new("shadow/rrect"),
+                FixedPipeline::new("shadow/rrect/depth"),
+            ],
             image_shader,
             glyph_atlas_shader,
+            rrect_shadow_shader,
             depth_targets: Vec::new(),
             uniform_bind_group_layout,
             image_bind_group_layout,
@@ -3365,6 +3333,7 @@ impl GpuRenderer {
             scratch_image_cmds: Vec::new(),
             scratch_glyph_cmds: Vec::new(),
             scratch_glyph_moved: Vec::new(),
+            scratch_shadow_instances: Vec::new(),
             scratch_arena_draws: Vec::new(),
             scratch_text_glyph_run: Vec::new(),
             scratch_text_glyph_entries: Vec::new(),
@@ -3498,6 +3467,9 @@ impl GpuRenderer {
                     Box::new(self.glyph_atlas_pipeline_job(depth, quads))
                 });
             }
+            warm(&self.rrect_shadow_pipeline[usize::from(depth)], &|| {
+                Box::new(self.rrect_shadow_pipeline_job(depth))
+            });
         }
     }
 
@@ -3570,6 +3542,59 @@ impl GpuRenderer {
             &self.recorder,
             self.adapter_backend,
             || self.glyph_atlas_pipeline_job(depth, quads)(),
+        )
+    }
+
+    fn rrect_shadow_pipeline_job(
+        &self,
+        depth: bool,
+    ) -> impl FnOnce() -> wgpu::RenderPipeline + CompilerSend + 'static {
+        let device = Arc::clone(&self.device);
+        let cache = self.pipeline_cache.clone();
+        let format = self.composition_format;
+        let shader = self.rrect_shadow_shader.clone();
+        move || create_rrect_shadow_pipeline(&device, cache.as_ref(), format, &shader, depth)
+    }
+
+    /// Draws `instances` of the pass's uploaded shadow instances, bound with
+    /// `uniform_slot` under `scissor`.
+    pub(crate) fn draw_shadow_instances(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        buffer: &BufferUpload,
+        uniform_slot: usize,
+        instances: std::ops::Range<u32>,
+        scissor: Option<(u32, u32, u32, u32)>,
+        frame: PassFrame,
+    ) -> Result<(), String> {
+        let depth = frame.depth;
+        let pipeline = self.rrect_shadow_pipeline[usize::from(depth)].for_draw(
+            &self.recorder,
+            self.adapter_backend,
+            || self.rrect_shadow_pipeline_job(depth)(),
+        );
+        let (x, y, width, height) = frame.scissor(scissor);
+        pass.set_scissor_rect(x, y, width, height);
+        pass.set_pipeline(pipeline);
+        self.viewport_uniforms.bind(pass, uniform_slot)?;
+        pass.set_vertex_buffer(0, buffer.slice());
+        pass.draw(0..SHADOW_QUAD_CORNERS, instances);
+        self.frame_stats.add_draw_calls(1);
+        Ok(())
+    }
+
+    pub(crate) fn upload_shadow_instances<C: FrameCommandRecorder>(
+        &self,
+        recorder: &mut C,
+        instances: &[ShadowInstance],
+    ) -> BufferUpload {
+        recorder.upload_buffer(
+            UploadAllocatorSpec::vertex(
+                "Shadow Instance Buffer",
+                std::mem::size_of::<ShadowInstance>() as u64,
+            ),
+            &self.device,
+            bytemuck::cast_slice(instances),
         )
     }
 
@@ -4517,7 +4542,7 @@ impl GpuRenderer {
     /// Resolves a blurred shadow at `z` into a texture and queues its
     /// composites. The shadow's shapes and texts render into a source the
     /// size of their blur footprint, blur in place and take the post-blur
-    /// cutouts; the source is then blitted in bands around the occluder.
+    /// cutouts; the source is then blitted over the rect the shadow covers.
     /// Shape-only shadows live in the shadow cache, keyed by their content
     /// and device placement, so a scrolling card re-blits its cached blur.
     /// The blurred shadow texture and whether the cache held it: a
@@ -4669,19 +4694,10 @@ impl GpuRenderer {
         let Some(coverage) = coverage else {
             return;
         };
-        let bands = shadow_bands(
-            coverage,
-            shadow
-                .occluder
-                .map(|occluder| anchored_rect_to_device(occluder, anchor, root_scale)),
-        );
-        if bands.is_empty() {
-            self.frame_stats.record_shadow_fully_occluded();
-            return;
-        }
         if hit {
-            self.frame_stats
-                .record_shadow_shape_cache_hit(banded_pixels(&bands));
+            self.frame_stats.record_shadow_shape_cache_hit(
+                (coverage.2 as u64).saturating_mul(coverage.3 as u64),
+            );
         }
         let rounded_mask = shadow_composite_mask(shadow, anchor, root_scale);
         let downscaled =
@@ -4694,22 +4710,20 @@ impl GpuRenderer {
         } else {
             (CompositeSampleMode::Nearest, None)
         };
-        for band in bands {
-            resolved.push(ResolvedComposite {
-                z_index: z,
-                source: Rc::clone(&source),
-                content,
-                dest,
-                scissor: Some(band),
-                kind: ResolvedCompositeKind::Blit {
-                    alpha: 1.0,
-                    blend_mode: BlendMode::SrcOver,
-                    rounded_mask,
-                    sample_mode,
-                    source_viewport,
-                },
-            });
-        }
+        resolved.push(ResolvedComposite {
+            z_index: z,
+            source,
+            content,
+            dest,
+            scissor: Some(coverage),
+            kind: ResolvedCompositeKind::Blit {
+                alpha: 1.0,
+                blend_mode: BlendMode::SrcOver,
+                rounded_mask,
+                sample_mode,
+                source_viewport,
+            },
+        });
     }
 
     /// Draws a shadow's shapes and texts into a surface covering `bounds`

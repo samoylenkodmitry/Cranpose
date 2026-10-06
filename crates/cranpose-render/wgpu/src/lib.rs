@@ -43,6 +43,7 @@ mod pipeline_records;
 mod present_runtime;
 mod record_columns;
 mod render;
+mod rrect_shadow;
 mod run_geometry;
 mod run_store;
 mod scene;
