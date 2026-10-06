@@ -1598,7 +1598,7 @@ fn fit_ellipsis_places_the_cut_from_prefix_widths() {
                 elided_measures: Rc::clone(&elided_measures),
                 cut_penalty,
             };
-            let line = fit_ellipsis(
+            let (line, _) = fit_ellipsis(
                 &measurer,
                 None,
                 &source,
@@ -1662,7 +1662,7 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
         &text,
         whole.clone(),
         &style,
-        (f32::MAX, &mut None),
+        (f32::MAX, LineLimit::NONE, &mut None),
         (LineBreak::Simple, Hyphens::None),
         &mut lines,
     );
@@ -1674,7 +1674,7 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
         &text,
         whole,
         &style,
-        (60.0, &mut None),
+        (60.0, LineLimit::NONE, &mut None),
         (LineBreak::Simple, Hyphens::None),
         &mut lines,
     );
@@ -1763,14 +1763,50 @@ fn the_text_service_drops_what_layout_passes_stopped_measuring() {
 
 /// Lays `text` out greedily with the monospaced measurer at `max_width`.
 fn wrapped_at(text: &str, max_width: f32) -> PreparedTextLayout {
+    laid_out_at(text, TextLayoutOptions::default(), max_width)
+}
+
+fn laid_out_at(text: &str, options: TextLayoutOptions, max_width: f32) -> PreparedTextLayout {
     prepare_text_layout_with_measurer_for_node(
         &MonospacedTextMeasurer,
         None,
         &crate::text::AnnotatedString::from(text),
         &TextStyle::default(),
-        TextLayoutOptions::default(),
+        options,
         Some(max_width),
     )
+}
+
+/// Sweeps `texts` over widths and checks that every width a layout holds
+/// lays it out the same; returns how many layouts held a width range.
+fn sweep_held_widths(texts: &[&str], options: TextLayoutOptions) -> usize {
+    let mut held = 0;
+    for text in texts {
+        for step in 0..120 {
+            let width = 6.25 + step as f32 * 2.5;
+            let prepared = laid_out_at(text, options, width);
+            let Some(hold) = prepared.wrap_hold else {
+                continue;
+            };
+            assert!(hold.holds(width), "{text:?} at {width} holds its own width");
+            held += 1;
+            let first_probe = (hold.fits - WRAP_EPSILON - 4.0).max(0.5);
+            for probe_step in 0..200 {
+                let probe = first_probe + probe_step as f32 * 0.37;
+                if !hold.holds(probe) {
+                    continue;
+                }
+                let probed = laid_out_at(text, options, probe);
+                assert_eq!(
+                    probed.text.text, prepared.text.text,
+                    "{text:?} lays out at {probe} as at {width}: {hold:?}"
+                );
+                assert_eq!(probed.metrics, prepared.metrics, "{text:?} at {probe}");
+                assert_eq!(probed.did_overflow, prepared.did_overflow);
+            }
+        }
+    }
+    held
 }
 
 #[test]
@@ -1783,33 +1819,38 @@ fn a_greedily_wrapped_layout_comes_out_the_same_at_every_width_it_holds() {
         "x  y   z",
         "one\ntwo three four five",
     ];
-    let mut held = 0;
-    for text in texts {
-        for step in 0..120 {
-            let width = 6.25 + step as f32 * 2.5;
-            let prepared = wrapped_at(text, width);
-            let Some(hold) = prepared.wrap_hold else {
-                continue;
-            };
-            assert!(hold.holds(width), "{text:?} at {width} holds its own width");
-            held += 1;
-            let first_probe = (hold.fits - WRAP_EPSILON - 4.0).max(0.5);
-            for probe_step in 0..200 {
-                let probe = first_probe + probe_step as f32 * 0.37;
-                if !hold.holds(probe) {
-                    continue;
-                }
-                let probed = wrapped_at(text, probe);
-                assert_eq!(
-                    probed.text.text, prepared.text.text,
-                    "{text:?} wraps at {probe} as at {width}: {hold:?}"
-                );
-                assert_eq!(probed.metrics, prepared.metrics, "{text:?} at {probe}");
-                assert_eq!(probed.did_overflow, prepared.did_overflow);
-            }
-        }
-    }
+    let held = sweep_held_widths(&texts, TextLayoutOptions::default());
     assert!(held > 100, "only {held} layouts wrapped");
+}
+
+#[test]
+fn an_elided_layout_comes_out_the_same_at_every_width_it_holds() {
+    let texts = [
+        "alpha beta gamma delta epsilon zeta eta theta",
+        "a bb ccc dddd eeeee ffffff ggggggg hhhhhhhh",
+        "supercalifragilistic word and more words after it",
+        "x  y   z    w",
+        "one\ntwo three four five six seven",
+    ];
+    for (overflow, max_lines) in [
+        (TextOverflow::Ellipsis, 1),
+        (TextOverflow::Ellipsis, 2),
+        (TextOverflow::Ellipsis, 4),
+        (TextOverflow::StartEllipsis, 1),
+        (TextOverflow::MiddleEllipsis, 1),
+        (TextOverflow::Clip, 2),
+    ] {
+        let options = TextLayoutOptions {
+            overflow,
+            max_lines,
+            ..TextLayoutOptions::default()
+        };
+        let held = sweep_held_widths(&texts, options);
+        assert!(
+            held > 100,
+            "only {held} layouts held a width range with {overflow:?} in {max_lines} lines"
+        );
+    }
 }
 
 #[test]
