@@ -176,12 +176,24 @@ impl PathSlicer {
     /// from left to right. `None` when a slice's side meets only part of
     /// its neighbour's, as an upright edge inside the fill makes it, when a
     /// coordinate is not finite, or when the path has too many edges.
-    pub(crate) fn slice<'a>(
+    pub(crate) fn slice<'a, I>(
         &mut self,
-        contours: impl IntoIterator<Item = &'a [Point]>,
+        contours: I,
         fill_rule: PathFillRule,
-    ) -> Option<&[Trapezoid]> {
-        self.collect_edges(contours)?;
+    ) -> Option<&[Trapezoid]>
+    where
+        I: IntoIterator<Item = &'a [Point]>,
+        I::IntoIter: Clone,
+    {
+        let filled = contours.into_iter().filter(|points| points.len() >= 3);
+        if let (Some(points), None) = (filled.clone().next(), filled.clone().nth(1)) {
+            match self.slice_monotone(points) {
+                ChainSlicing::Sliced => return Some(&self.slices),
+                ChainSlicing::Unsliceable => return None,
+                ChainSlicing::NotMonotone => {}
+            }
+        }
+        self.collect_edges(filled)?;
         self.slices.clear();
         self.active.clear();
         self.events.clear();
@@ -221,9 +233,67 @@ impl PathSlicer {
         Some(&self.slices)
     }
 
+    /// Slices a contour that each upright line crosses at most twice, as a
+    /// chart's area or a convex shape: its two chains from the leftmost
+    /// vertex to the rightmost, walked together, give the slices from left
+    /// to right with no sorting. They are the slices the sweep in
+    /// [`Self::slice`] makes of the contour.
+    fn slice_monotone(&mut self, points: &[Point]) -> ChainSlicing {
+        if points
+            .iter()
+            .any(|point| !(point.x.is_finite() && point.y.is_finite()))
+        {
+            return ChainSlicing::Unsliceable;
+        }
+        let Some((leftmost, rightmost)) = horizontal_extremes(points) else {
+            return ChainSlicing::NotMonotone;
+        };
+        if !chain_edges(points, leftmost, rightmost, 1, &mut self.edges)
+            || !chain_edges(points, leftmost, rightmost, -1, &mut self.active)
+        {
+            return ChainSlicing::NotMonotone;
+        }
+        if self.edges.len() + self.active.len() > MAX_EDGES {
+            return ChainSlicing::Unsliceable;
+        }
+        self.slices.clear();
+        let (mut first, mut second) = (0, 0);
+        let mut left = self.edges.first().map_or(0.0, |edge| edge.x0);
+        let mut previous_sliced = false;
+        while let (Some(&a), Some(&b)) = (self.edges.get(first), self.active.get(second)) {
+            let next = a.x1.min(b.x1);
+            let (top, bottom, cut) = ordered_pair(a, b, left, next);
+            let right = cut.unwrap_or(next);
+            let sliced = top.start != bottom.start || top.end != bottom.end;
+            if sliced {
+                if previous_sliced && let Some(previous) = self.slices.last_mut() {
+                    previous.open_right = false;
+                }
+                self.slices.push(Trapezoid {
+                    left,
+                    right,
+                    top: [top.start, top.end],
+                    bottom: [bottom.start, bottom.end],
+                    open_left: !previous_sliced,
+                    open_right: true,
+                });
+                if self.slices.len() > MAX_SLICES {
+                    return ChainSlicing::Unsliceable;
+                }
+            }
+            previous_sliced = sliced;
+            left = right;
+            if cut.is_none() {
+                first += usize::from(a.x1 <= left);
+                second += usize::from(b.x1 <= left);
+            }
+        }
+        ChainSlicing::Sliced
+    }
+
     fn collect_edges<'a>(&mut self, contours: impl IntoIterator<Item = &'a [Point]>) -> Option<()> {
         self.edges.clear();
-        for points in contours.into_iter().filter(|points| points.len() >= 3) {
+        for points in contours {
             let closing = points.iter().skip(1).chain(points.first());
             for (a, b) in points.iter().zip(closing) {
                 if !(a.x.is_finite() && a.y.is_finite() && b.x.is_finite() && b.y.is_finite()) {
@@ -325,6 +395,105 @@ impl PathSlicer {
             }
         }
     }
+}
+
+/// What slicing a contour as one that each upright line crosses at most
+/// twice came to.
+enum ChainSlicing {
+    Sliced,
+    /// The contour is monotone, but the sweep would not slice it either.
+    Unsliceable,
+    NotMonotone,
+}
+
+/// The first of the leftmost vertices and the first of the rightmost ones.
+/// `None` when every vertex lies on one upright line.
+fn horizontal_extremes(points: &[Point]) -> Option<(usize, usize)> {
+    let mut leftmost = 0;
+    let mut rightmost = 0;
+    for (index, point) in points.iter().enumerate() {
+        if point.x < points[leftmost].x {
+            leftmost = index;
+        }
+        if point.x > points[rightmost].x {
+            rightmost = index;
+        }
+    }
+    (leftmost != rightmost).then_some((leftmost, rightmost))
+}
+
+/// The edges from vertex `from` to vertex `to`, stepping `step` through
+/// the contour, as edges from left to right with the winding the contour
+/// runs them in. False when the chain turns back left, or when an upright
+/// edge stands inside it rather than at its ends.
+fn chain_edges(
+    points: &[Point],
+    from: usize,
+    to: usize,
+    step: isize,
+    edges: &mut Vec<Edge>,
+) -> bool {
+    edges.clear();
+    let count = points.len();
+    let mut index = from;
+    let mut upright_after_edge = false;
+    while index != to {
+        let next = index.wrapping_add_signed(step).wrapping_add(count) % count;
+        let (a, b) = (points[index], points[next]);
+        if a.x > b.x {
+            return false;
+        }
+        if a.x < b.x {
+            if upright_after_edge {
+                return false;
+            }
+            let winding = if step > 0 { 1 } else { -1 };
+            edges.push(Edge {
+                x0: a.x,
+                y0: a.y,
+                x1: b.x,
+                y1: b.y,
+                winding,
+            });
+        } else if a.y != b.y && !edges.is_empty() {
+            upright_after_edge = true;
+        }
+        index = next;
+    }
+    true
+}
+
+/// The crossings of edges `a` and `b` across the slice from `left` to
+/// `right`, upper first, ordered as [`PathSlicer::order_crossings`] orders
+/// them, and where they cross inside the slice, which ends it early.
+fn ordered_pair(a: Edge, b: Edge, left: f32, right: f32) -> (Crossing, Crossing, Option<f32>) {
+    let crossing = |edge: Edge| Crossing {
+        edge,
+        start: edge.y_at(left),
+        end: edge.y_at(right),
+    };
+    let (mut upper, mut lower) = (crossing(a), crossing(b));
+    if upper
+        .start
+        .total_cmp(&lower.start)
+        .then_with(|| upper.end.total_cmp(&lower.end))
+        .is_gt()
+    {
+        std::mem::swap(&mut upper, &mut lower);
+    }
+    if (lower.start - upper.start).abs() <= TOLERANCE && upper.end > lower.end {
+        std::mem::swap(&mut upper, &mut lower);
+    }
+    let gap_start = lower.start - upper.start;
+    let overlap_end = upper.end - lower.end;
+    let cut = (gap_start > TOLERANCE && overlap_end > TOLERANCE)
+        .then(|| left + (right - left) * gap_start / (gap_start + overlap_end))
+        .filter(|&x| x > left && x < right);
+    if let Some(cut) = cut {
+        upper.end = upper.edge.y_at(cut);
+        lower.end = lower.edge.y_at(cut);
+    }
+    (upper, lower, cut)
 }
 
 /// Moves each item of `items` back past those before it that `misplaced`
