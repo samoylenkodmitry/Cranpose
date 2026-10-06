@@ -56,35 +56,43 @@
    "subjects": [
     {
      "name": "compose",
-     "label": "compose"
+     "label": "Compose BOM 2026.09.00",
+     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
     },
     {
      "name": "cranpose",
-     "label": "cranpose"
+     "label": "Cranpose 0.9.7 (PR #1219)",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
     },
     {
      "name": "views",
-     "label": "views"
+     "label": "Views 1.4.0",
+     "source": "benchmarks/compose-vs-cranpose/views-app/app/src/main/java/dev/perfcompare/views/Gauntlet.kt"
     },
     {
      "name": "flutter",
-     "label": "flutter"
+     "label": "Flutter 3.47.6",
+     "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
     },
     {
      "name": "rn",
-     "label": "rn"
+     "label": "React Native 0.87.1",
+     "source": "benchmarks/compose-vs-cranpose/rn-app/src/Gauntlet.tsx"
     },
     {
      "name": "maui",
-     "label": "maui"
+     "label": ".NET MAUI 10.0.110",
+     "source": "benchmarks/compose-vs-cranpose/maui-app/GauntletPage.cs"
     },
     {
      "name": "egui",
-     "label": "egui"
+     "label": "egui 0.36.2",
+     "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
     },
     {
      "name": "slint",
-     "label": "slint"
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
     }
    ],
    "duration_s": 380,

@@ -8,44 +8,60 @@
  },
  "subjects": [
   {
-   "name": "compose",
    "package": "dev.perfcompare.compose",
-   "label": "compose"
+   "name": "compose",
+   "label": "Compose BOM 2026.09.00",
+   "version": "BOM 2026.09.00",
+   "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
   },
   {
-   "name": "cranpose",
    "package": "dev.perfcompare.cranpose",
-   "label": "cranpose"
+   "name": "cranpose",
+   "label": "Cranpose 0.9.7 (PR #1219)",
+   "version": "0.9.7 (PR #1219)",
+   "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
   },
   {
-   "name": "views",
    "package": "dev.perfcompare.views",
-   "label": "views"
+   "name": "views",
+   "label": "Views 1.4.0",
+   "version": "1.4.0",
+   "source": "benchmarks/compose-vs-cranpose/views-app/app/src/main/java/dev/perfcompare/views/Gauntlet.kt"
   },
   {
-   "name": "flutter",
    "package": "dev.perfcompare.flutter",
-   "label": "flutter"
+   "name": "flutter",
+   "label": "Flutter 3.47.6",
+   "version": "3.47.6",
+   "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
   },
   {
-   "name": "rn",
    "package": "dev.perfcompare.rn",
-   "label": "rn"
+   "name": "rn",
+   "label": "React Native 0.87.1",
+   "version": "0.87.1",
+   "source": "benchmarks/compose-vs-cranpose/rn-app/src/Gauntlet.tsx"
   },
   {
-   "name": "maui",
    "package": "dev.perfcompare.maui",
-   "label": "maui"
+   "name": "maui",
+   "label": ".NET MAUI 10.0.110",
+   "version": "10.0.110",
+   "source": "benchmarks/compose-vs-cranpose/maui-app/GauntletPage.cs"
   },
   {
-   "name": "egui",
    "package": "dev.perfcompare.egui",
-   "label": "egui"
+   "name": "egui",
+   "label": "egui 0.36.2",
+   "version": "0.36.2",
+   "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
   },
   {
-   "name": "slint",
    "package": "dev.perfcompare.slint",
-   "label": "slint"
+   "name": "slint",
+   "label": "Slint 1.18.1",
+   "version": "1.18.1",
+   "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
   }
  ],
  "protocol": {
