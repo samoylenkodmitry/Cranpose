@@ -915,18 +915,6 @@ fn assert_same_cache_hash_state(dirty_road: &LayerNode, full_road: &LayerNode, p
         "tree shape must match at {path}"
     );
     assert_eq!(
-        dirty_road.cache_hashes_valid, full_road.cache_hashes_valid,
-        "hash validity at {path} (node {:?})",
-        dirty_road.node_id
-    );
-    if full_road.cache_hashes_valid {
-        assert_eq!(
-            dirty_road.cache_hashes, full_road.cache_hashes,
-            "stored hashes at {path} (node {:?})",
-            dirty_road.node_id
-        );
-    }
-    assert_eq!(
         dirty_road.target_content_hash(),
         full_road.target_content_hash(),
         "target content hash at {path} (node {:?})",
@@ -953,7 +941,7 @@ fn assert_same_cache_hash_state(dirty_road: &LayerNode, full_road: &LayerNode, p
 
 fn assert_dirty_hash_road_matches_full_walk(graph: &RenderGraph) {
     let mut full_road = graph.root.clone();
-    full_road.recompute_raster_cache_hashes();
+    full_road.forget_raster_cache_hashes();
     assert_same_cache_hash_state(&graph.root, &full_road, "root");
 }
 
@@ -1017,7 +1005,7 @@ fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
         .compute_layout(root, viewport)
         .expect("initial layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.recompute_raster_cache_hashes();
+    graph.root.forget_raster_cache_hashes();
     applier.clear_runtime_handle();
     drop(applier);
     assert_dirty_hash_road_matches_full_walk(&graph);
@@ -1108,7 +1096,7 @@ fn dirty_update_with_a_new_row_leaves_the_hashes_a_full_walk_leaves() {
         .compute_layout(root, viewport)
         .expect("initial layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.recompute_raster_cache_hashes();
+    graph.root.forget_raster_cache_hashes();
     applier.clear_runtime_handle();
     drop(applier);
 
@@ -1240,9 +1228,10 @@ fn scene_build_publishes_live_translated_window_rect_without_layout_tree() {
 
 #[test]
 fn update_graph_from_applier_reports_failed_dirty_child_rebuild() {
-    let mut graph = RenderGraph {
-        root: build_layer_node_for_test(snapshot_with_translation(0.0), false),
-    };
+    let mut graph = RenderGraph::new(build_layer_node_for_test(
+        snapshot_with_translation(0.0),
+        false,
+    ));
     let applier = MemoryApplier::new();
 
     let report =
@@ -1351,7 +1340,7 @@ fn update_graph_from_applier_refreshes_scroll_content_offset() {
         .compute_layout(root, viewport)
         .expect("initial scroll layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.recompute_raster_cache_hashes();
+    graph.root.forget_raster_cache_hashes();
     let initial_target_top =
         find_text_top(&graph.root, "scroll target").expect("initial target text");
     applier.clear_runtime_handle();
@@ -1803,7 +1792,7 @@ fn a_sliding_lazy_window_lowers_only_the_entering_rows() {
         .compute_layout(root, viewport)
         .expect("initial lazy layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.recompute_raster_cache_hashes();
+    graph.root.forget_raster_cache_hashes();
     let _ = applier.take_structural_change_parents_attached_to(root);
     let initial_row_top = find_text_top(&graph.root, "row 4").expect("initial row text");
     applier.clear_runtime_handle();
@@ -1958,7 +1947,7 @@ fn a_lazy_jump_of_any_distance_patches_to_what_a_fresh_build_shows() {
             .compute_layout(root, viewport)
             .expect("initial lazy layout");
         let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-        graph.root.recompute_raster_cache_hashes();
+        graph.root.forget_raster_cache_hashes();
         let _ = applier.take_structural_change_parents_attached_to(root);
         applier.clear_runtime_handle();
         drop(applier);
@@ -3971,7 +3960,7 @@ fn initial_scrolled_graph(composition: &mut cranpose_ui::TestComposition) -> (No
         .compute_layout(root, scroll_viewport())
         .expect("initial scroll layout");
     let mut graph = build_graph_from_applier(&applier, root, 1.0).expect("initial graph");
-    graph.root.recompute_raster_cache_hashes();
+    graph.root.forget_raster_cache_hashes();
     applier.clear_runtime_handle();
     (root, graph)
 }

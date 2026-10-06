@@ -51,7 +51,7 @@ impl RendererFrontend {
                 .push(cranpose_render_common::graph::RenderNode::Layer(Box::new(
                     inspector.root.clone(),
                 )));
-            graph.root.recompute_raster_cache_hashes();
+            graph.root.forget_raster_cache_hashes();
         }
     }
 
@@ -140,6 +140,7 @@ impl RendererFrontend {
         let recycler = &mut self.scene_recyclers[self.returned_scenes];
         let root = collect_root(
             &graph.root,
+            graph.update,
             &mut self.text_state,
             &mut self.layer_motion,
             self.root_scene_capacity,

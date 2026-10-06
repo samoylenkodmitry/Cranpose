@@ -419,7 +419,7 @@ fn cached_backdrop_uses_the_current_modulated_opacity() {
             layer.node_id = Some(83);
             layer.cache_policy = CachePolicy::Auto;
             layer.graphics_layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
-            layer.recompute_raster_cache_hashes();
+            layer.forget_raster_cache_hashes();
             page
         };
         let mut renderer = support::headless_renderer().expect("GPU required for opacity probe");

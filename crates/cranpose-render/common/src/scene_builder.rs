@@ -16,14 +16,13 @@ use cranpose_ui_graphics::{
 use crate::{
     SceneUpdates,
     graph::{
-        CachePolicy, DrawCommandId, DrawRunNode, HitTestNode, IsolationReasons, LayerNode,
-        PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
+        CachePolicy, ContentChanges, DrawCommandId, DrawRunNode, HitTestNode, IsolationReasons,
+        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
         RenderNode, TextPrimitiveNode,
     },
     layer_transform::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
-    raster_cache::LayerRasterCacheHashes,
     style_shared::{DrawPlacement, recording_for_placement_reusing},
 };
 
@@ -119,9 +118,7 @@ fn lowered_layer_count() -> usize {
 pub fn build_graph_from_layout_tree(root: &LayoutBox, _scale: f32) -> RenderGraph {
     bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
-    let mut graph = RenderGraph {
-        root: LayerNode::default(),
-    };
+    let mut graph = RenderGraph::new(LayerNode::default());
     write_snapshot_layer(root_snapshot, LowerContext::ROOT, &mut graph.root);
     graph
 }
@@ -132,9 +129,7 @@ pub fn build_graph_from_applier(
     _scale: f32,
 ) -> Option<RenderGraph> {
     bump_recording_generation();
-    let mut graph = RenderGraph {
-        root: LayerNode::default(),
-    };
+    let mut graph = RenderGraph::new(LayerNode::default());
     lower_root_into(applier, root, &mut graph.root).then_some(graph)
 }
 
@@ -150,6 +145,8 @@ pub fn rebuild_graph_from_applier(
         Some(mut graph) => {
             release_for_rebuild(&mut graph.root);
             bump_recording_generation();
+            graph.update += 1;
+            graph.root.note_content_change(graph.update);
             lower_root_into(applier, root, &mut graph.root).then_some(graph)
         }
         None => build_graph_from_applier(applier, root, scale),
@@ -193,10 +190,13 @@ enum NodeUpdate {
     /// The node moved in its parent and kept its size: its layer moves and
     /// keeps what it drew.
     Moved,
+    /// The node moved and its layer properties changed: its layer moves,
+    /// takes the new properties and keeps what it drew.
+    MovedLayer,
 }
 
 /// Each dirty node with the update it needs: content wins over the others,
-/// and a moved node whose layer properties changed too is drawn again.
+/// and a moved node whose layer properties changed too moves with them.
 fn dirty_node_updates(updates: SceneUpdates<'_>) -> HashMap<NodeId, NodeUpdate> {
     let mut dirty = HashMap::with_capacity_and_hasher(
         updates.moved.len() + updates.layers.len() + updates.content.len(),
@@ -205,7 +205,7 @@ fn dirty_node_updates(updates: SceneUpdates<'_>) -> HashMap<NodeId, NodeUpdate> 
     dirty.extend(updates.moved.iter().map(|&id| (id, NodeUpdate::Moved)));
     for &id in updates.layers {
         let kind = match dirty.get(&id) {
-            Some(NodeUpdate::Moved) => NodeUpdate::Content,
+            Some(NodeUpdate::Moved) => NodeUpdate::MovedLayer,
             _ => NodeUpdate::Layer,
         };
         dirty.insert(id, kind);
@@ -226,6 +226,8 @@ fn update_graph_from_applier_report_inner(
         };
     }
     bump_recording_generation();
+    graph.update += 1;
+    let update = graph.update;
 
     if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!("[scene-update-diag] dirty={updates:?}");
@@ -243,7 +245,7 @@ fn update_graph_from_applier_report_inner(
             true,
             TranslateAncestorContext {
                 inherited_motion_context_animated: false,
-                ancestor_hashed: false,
+                update,
                 inherited_translated_content_context: false,
                 parent_content_offset: Point::default(),
                 parent_abs: AbsOrigin::ROOT,
@@ -267,7 +269,7 @@ fn update_graph_from_applier_report_inner(
                     ancestry: &ancestry,
                 },
                 inherited,
-                false,
+                update,
             );
             return GraphUpdateReport {
                 update: classify_walk(applier, walked.is_some(), &mut remaining_dirty_nodes),
@@ -284,7 +286,7 @@ fn update_graph_from_applier_report_inner(
             };
         }
         let hit_graph_dirty = previous.dirty_against(&HitGraphState::of(&graph.root));
-        graph.root.recompute_raster_cache_hashes();
+        graph.root.note_content_change(update);
 
         return GraphUpdateReport {
             update: GraphUpdate::Patched,
@@ -304,7 +306,7 @@ fn update_graph_from_applier_report_inner(
             ancestry: &ancestry,
         },
         inherited_translated_content_context,
-        false,
+        update,
     ) else {
         return GraphUpdateReport {
             update: GraphUpdate::NeedsRebuild(GraphRebuildReason::DirtyLayerUnavailable),
@@ -428,7 +430,7 @@ fn replace_dirty_layers_from_applier(
     parent_children: AbsOrigin,
     mut dirty: DirtyWalk<'_>,
     inherited_translated_content_context: bool,
-    ancestor_hashed: bool,
+    update: u64,
 ) -> Option<ReplaceDirtyLayersReport> {
     if dirty.nodes.is_empty() {
         return Some(ReplaceDirtyLayersReport::default());
@@ -436,8 +438,6 @@ fn replace_dirty_layers_from_applier(
 
     let child_inherited_translated_content_context =
         inherited_translated_content_context || parent.translated_content_context;
-    let child_ancestor_hashed =
-        crate::graph_hash::layer_children_ancestor_hashed(parent, ancestor_hashed);
     let mut report = ReplaceDirtyLayersReport::default();
 
     for child in &mut parent.children {
@@ -458,7 +458,7 @@ fn replace_dirty_layers_from_applier(
                 false,
                 TranslateAncestorContext {
                     inherited_motion_context_animated: parent.motion_context_animated,
-                    ancestor_hashed: child_ancestor_hashed,
+                    update,
                     inherited_translated_content_context:
                         child_inherited_translated_content_context,
                     parent_content_offset: parent.content_offset,
@@ -474,7 +474,7 @@ fn replace_dirty_layers_from_applier(
                     child_children,
                     dirty.reborrow(),
                     child_inherited_translated_content_context,
-                    child_ancestor_hashed,
+                    update,
                 )?;
                 report.hit_graph_dirty |= child_report.hit_graph_dirty;
                 continue;
@@ -499,10 +499,7 @@ fn replace_dirty_layers_from_applier(
             report.hit_graph_dirty |= previous.dirty_against(&HitGraphState::of(child_layer));
             remove_dirty_descendants(child_layer, dirty.nodes);
 
-            crate::graph_hash::recompute_layer_raster_cache_hashes_under(
-                child_layer,
-                child_ancestor_hashed,
-            );
+            child_layer.note_content_change(update);
             report.updated = true;
             continue;
         }
@@ -517,7 +514,7 @@ fn replace_dirty_layers_from_applier(
             child_children,
             dirty.reborrow(),
             child_inherited_translated_content_context,
-            child_ancestor_hashed,
+            update,
         )?;
         report.updated |= child_report.updated;
         report.hit_graph_dirty |= child_report.hit_graph_dirty;
@@ -529,7 +526,7 @@ fn replace_dirty_layers_from_applier(
         // child that stopped publishing leaves the flag set, which only keeps
         // the scroll fast path off; a child that started must set it.
         parent.has_origin_sinks |= children_have_origin_sinks(&parent.children);
-        crate::graph_hash::refresh_layer_own_raster_cache_hashes(parent, ancestor_hashed);
+        parent.note_content_change(update);
     }
 
     Some(report)
@@ -545,7 +542,8 @@ fn translate_bail(reason: &str) -> bool {
 #[derive(Clone, Copy)]
 struct TranslateAncestorContext {
     inherited_motion_context_animated: bool,
-    ancestor_hashed: bool,
+    /// The scene update in progress.
+    update: u64,
     inherited_translated_content_context: bool,
     parent_content_offset: Point,
     parent_abs: AbsOrigin,
@@ -568,7 +566,8 @@ fn try_update_retained_layer(
         NodeUpdate::Content | NodeUpdate::Moved => {
             try_translate_scrolled_layer(applier, layer, dirty_nodes, ancestors).then_some(true)
         }
-        NodeUpdate::Layer => update_layer_properties(applier, layer, root, ancestors),
+        NodeUpdate::Layer => update_layer_properties(applier, layer, root, false, ancestors),
+        NodeUpdate::MovedLayer => update_layer_properties(applier, layer, root, true, ancestors),
     }
 }
 
@@ -603,15 +602,18 @@ fn content_layer_mut(container: &mut LayerNode) -> Option<&mut LayerNode> {
     })
 }
 
+/// Whether `layer` still fits its node's layout, so new layer properties
+/// can update it in place: at `placement`, unless the node `moved`.
 fn retained_layer_matches_layout(
     layer: &LayerNode,
     data: &SnapshotNodeData<'_>,
     placement: Point,
     wrapped: bool,
+    moved: bool,
 ) -> bool {
     let state = &data.layout_state;
     let slices = &data.modifier_slices;
-    state.position() == placement
+    (moved || state.position() == placement)
         && Rect::from_size(state.size()) == layer.node_rect()
         && slices.layer_bounds(state.size()) == layer.local_bounds
         && state.content_offset() == layer.content_offset
@@ -622,21 +624,22 @@ fn update_layer_properties(
     applier: &MemoryApplier,
     container: &mut LayerNode,
     root: bool,
+    moved: bool,
     ancestors: TranslateAncestorContext,
 ) -> Option<bool> {
     let node_id = layer_identity(container)?;
     let wrapped = container.wraps.is_some();
+    // The wrapper of a node's outer draws holds its placement; a moved
+    // wrapped node is drawn again.
+    if moved && wrapped {
+        return None;
+    }
     let placement = container.origin_in_parent;
-    let target_ancestor_hashed = if wrapped {
-        crate::graph_hash::layer_children_ancestor_hashed(container, ancestors.ancestor_hashed)
-    } else {
-        ancestors.ancestor_hashed
-    };
     let hit_graph_dirty = read_placed_node_data(applier, node_id, root, |data| {
         let target = content_layer_mut(container)?;
         let slices = &data.modifier_slices;
         let state = &data.layout_state;
-        if !retained_layer_matches_layout(target, &data, placement, wrapped) {
+        if !retained_layer_matches_layout(target, &data, placement, wrapped, moved) {
             return None;
         }
         let context = LowerContext {
@@ -646,8 +649,6 @@ fn update_layer_properties(
             parent_content_offset: ancestors.parent_content_offset,
         };
         let previous = HitGraphState::of(target);
-        let children_hashed =
-            crate::graph_hash::layer_children_ancestor_hashed(target, target_ancestor_hashed);
         let (head, child_context) = prepare_node_layer(node_id, slices, state, context);
         assign_layer(target, head);
         if wrapped {
@@ -667,28 +668,12 @@ fn update_layer_properties(
                 }
             }
         }
-        if children_hashed
-            == crate::graph_hash::layer_children_ancestor_hashed(target, target_ancestor_hashed)
-        {
-            crate::graph_hash::refresh_layer_own_raster_cache_hashes(
-                target,
-                target_ancestor_hashed,
-            );
-        } else {
-            crate::graph_hash::recompute_layer_raster_cache_hashes_under(
-                target,
-                target_ancestor_hashed,
-            );
-        }
         Some(previous.dirty_against(&HitGraphState::of(target)))
     })??;
     if wrapped {
         container.refresh_child_facts();
         container.has_origin_sinks = children_have_origin_sinks(&container.children);
-        crate::graph_hash::refresh_layer_own_raster_cache_hashes(
-            container,
-            ancestors.ancestor_hashed,
-        );
+        container.forget_own_raster_cache_hashes();
     }
     Some(hit_graph_dirty)
 }
@@ -748,17 +733,10 @@ fn try_translate_scrolled_layer(
         let size = data.layout_state.size();
         let placement = data.layout_state.position();
         let slices = Rc::clone(&data.modifier_slices);
-        let inner_ancestors = TranslateAncestorContext {
-            ancestor_hashed: crate::graph_hash::layer_children_ancestor_hashed(
-                container,
-                ancestors.ancestor_hashed,
-            ),
-            ..ancestors
-        };
         let Some(inner) = content_layer_mut(container) else {
             return translate_bail("wrapped layer missing");
         };
-        if !translate_layer_from_data(applier, inner, dirty_nodes, inner_ancestors, data, true) {
+        if !translate_layer_from_data(applier, inner, dirty_nodes, ancestors, data, true) {
             return false;
         }
         let outer = outer_draws(node_id, slices.draw_commands(), outer_count, size)
@@ -772,18 +750,7 @@ fn try_translate_scrolled_layer(
             outer,
             ancestors.parent_content_offset,
         );
-        for child in &mut container.children {
-            if let RenderNode::Layer(layer) = child {
-                crate::graph_hash::refresh_layer_own_raster_cache_hashes(
-                    layer,
-                    inner_ancestors.ancestor_hashed,
-                );
-            }
-        }
-        crate::graph_hash::refresh_layer_own_raster_cache_hashes(
-            container,
-            ancestors.ancestor_hashed,
-        );
+        container.note_content_change(ancestors.update);
         true
     })
     .unwrap_or_else(|| translate_bail("container snapshot read failed"))
@@ -950,7 +917,7 @@ fn check_retained_children(
         let fits = !layer.has_origin_sinks && Rect::from_size(state.size()) == layer.node_rect();
         match dirty_nodes.get_mut(child_id) {
             Some(NodeUpdate::Content | NodeUpdate::Layer) => {}
-            Some(kind @ NodeUpdate::Moved) => {
+            Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) => {
                 if !fits {
                     *kind = NodeUpdate::Content;
                 }
@@ -1055,9 +1022,9 @@ fn build_entering_children(
     scratch: &mut TranslateScratch,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
     geometry: TranslateGeometry,
-    inherited: (bool, bool),
+    inherited: (bool, u64),
 ) {
-    let (child_inherited_translated_content_context, children_ancestor_hashed) = inherited;
+    let (child_inherited_translated_content_context, update) = inherited;
     let entering = &mut scratch.entering;
     entering.clear();
     for (child_id, _) in &scratch.placed_fresh {
@@ -1073,10 +1040,7 @@ fn build_entering_children(
         let Some(mut lowered) = lower_child(applier, *child_id, context) else {
             continue;
         };
-        crate::graph_hash::recompute_layer_raster_cache_hashes_under(
-            &mut lowered,
-            children_ancestor_hashed,
-        );
+        lowered.note_content_change(update);
         forget_dirty_subtree(&lowered, dirty_nodes);
         entering.push((*child_id, lowered));
     }
@@ -1181,7 +1145,7 @@ fn translate_layer_from_data(
 ) -> bool {
     let TranslateAncestorContext {
         inherited_motion_context_animated,
-        ancestor_hashed: container_ancestor_hashed,
+        update,
         inherited_translated_content_context,
         parent_content_offset,
         parent_abs,
@@ -1246,8 +1210,6 @@ fn translate_layer_from_data(
     );
     let child_inherited_translated_content_context =
         inherited_translated_content_context || container.translated_content_context;
-    let children_ancestor_hashed =
-        crate::graph_hash::layer_children_ancestor_hashed(container, container_ancestor_hashed);
     if !children_unchanged {
         recycle_leaving_children(container, &mut scratch, dirty_nodes);
         build_entering_children(
@@ -1256,10 +1218,7 @@ fn translate_layer_from_data(
             &mut scratch,
             dirty_nodes,
             geometry,
-            (
-                child_inherited_translated_content_context,
-                children_ancestor_hashed,
-            ),
+            (child_inherited_translated_content_context, update),
         );
     }
 
@@ -1285,7 +1244,7 @@ fn translate_layer_from_data(
     container.has_origin_sinks = modifier_slices_have_origin_sinks(&modifier_slices)
         || children_have_origin_sinks(&container.children);
     container.refresh_child_facts();
-    crate::graph_hash::refresh_layer_own_raster_cache_hashes(container, container_ancestor_hashed);
+    container.note_content_change(update);
 
     true
 }
@@ -1300,7 +1259,7 @@ fn keeps_retained_child(dirty_nodes: &mut HashMap<NodeId, NodeUpdate>, child_id:
             dirty_nodes.remove(&child_id);
             true
         }
-        Some(NodeUpdate::Content | NodeUpdate::Layer) => false,
+        Some(NodeUpdate::Content | NodeUpdate::Layer | NodeUpdate::MovedLayer) => false,
     }
 }
 
@@ -1499,9 +1458,12 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
         isolation,
         cache_policy,
         cache_hashes,
-        cache_hashes_valid,
+        content_changes,
         children,
     } = layer;
+    if *node_id != head.node_id {
+        *content_changes = ContentChanges::default();
+    }
     *node_id = head.node_id;
     *wraps = head.wraps;
     *local_bounds = head.local_bounds;
@@ -1521,8 +1483,7 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
     *draws_within_bounds = false;
     *isolation = head.isolation;
     *cache_policy = head.cache_policy;
-    *cache_hashes = LayerRasterCacheHashes::default();
-    *cache_hashes_valid = false;
+    cache_hashes.set(None);
     layer.refresh_child_facts();
 }
 

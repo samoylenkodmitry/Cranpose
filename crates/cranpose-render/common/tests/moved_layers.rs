@@ -1,5 +1,6 @@
 //! A node the layout pass only moves keeps what its layer drew: the scene
-//! update moves the layer, as the app shell routes such nodes.
+//! update moves the layer, as the app shell routes such nodes, and gives it
+//! new layer properties when those changed too.
 
 use std::{
     cell::{Cell, RefCell},
@@ -15,8 +16,8 @@ use cranpose_render_common::{
     },
 };
 use cranpose_ui::{
-    Box, BoxSpec, Brush, Canvas, Color, Column, ColumnSpec, LayoutEngine, Modifier, Size,
-    TestComposition, Text, TextStyle, composable, run_test_composition,
+    Box, BoxSpec, Brush, Canvas, Color, Column, ColumnSpec, GraphicsLayer, LayoutEngine, Modifier,
+    Size, TestComposition, Text, TextStyle, composable, run_test_composition,
 };
 use cranpose_ui_graphics::{DrawPrimitive, Rect};
 
@@ -27,6 +28,7 @@ const VIEWPORT: Size = Size::new(240.0, 240.0);
 struct Probe {
     spacer_height: Option<MutableState<f32>>,
     canvas_color: Option<MutableState<Color>>,
+    canvas_angle: Option<MutableState<f32>>,
     canvas: Option<NodeId>,
     label_window_rect: Option<MutableState<Rect>>,
 }
@@ -54,12 +56,18 @@ fn moving_column(probe: Rc<RefCell<Probe>>, draws: Rc<Cell<usize>>) -> TestCompo
             move || {
                 let height = cranpose_core::rememberMutableStateOf(|| 20.0_f32);
                 let color = cranpose_core::rememberMutableStateOf(|| Color::RED);
+                let angle = cranpose_core::rememberMutableStateOf(|| 0.0_f32);
                 let window_rect =
                     cranpose_core::rememberMutableStateOf(|| Rect::from_size(Size::ZERO));
                 Spacer(height);
                 let draws = Rc::clone(&draws);
                 let canvas = Canvas(
-                    Modifier::empty().size(Size::new(40.0, 24.0)),
+                    Modifier::empty()
+                        .size(Size::new(40.0, 24.0))
+                        .graphics_layer(move || GraphicsLayer {
+                            rotation_z: angle.get(),
+                            ..Default::default()
+                        }),
                     move |scope| {
                         draws.set(draws.get() + 1);
                         scope.draw_rect(Brush::solid(color.get()));
@@ -75,6 +83,7 @@ fn moving_column(probe: Rc<RefCell<Probe>>, draws: Rc<Cell<usize>>) -> TestCompo
                 *probe.borrow_mut() = Probe {
                     spacer_height: Some(height),
                     canvas_color: Some(color),
+                    canvas_angle: Some(angle),
                     canvas: Some(canvas),
                     label_window_rect: Some(window_rect),
                 };
@@ -107,8 +116,9 @@ fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph
 }
 
 /// Recomposes, lays out and updates `graph` with the nodes the app shell
-/// would route: content for reshaped, redrawn and restructured nodes, and
-/// the moved ones apart. Returns the moved nodes.
+/// would route: content for reshaped, redrawn and restructured nodes, the
+/// nodes whose layer properties changed and the moved ones apart. Returns
+/// the moved nodes.
 fn update_frame(
     composition: &mut TestComposition,
     root: NodeId,
@@ -124,13 +134,15 @@ fn update_frame(
         content.sort_unstable();
         content.dedup();
         let moved = geometry.moved;
+        let mut layers = Vec::new();
+        cranpose_ui::take_layer_property_repass_nodes_into(&mut layers);
         assert!(
             update_graph_from_applier(
                 applier,
                 graph,
                 SceneUpdates {
                     content: &content,
-                    layers: &[],
+                    layers: &layers,
                     moved: &moved,
                 },
                 1.0,
@@ -254,5 +266,41 @@ fn a_node_that_moved_and_changed_what_it_draws_draws_again() {
         painted_output(&graph),
         painted_output(&fresh),
         "the scene paints the moved canvas in its new color"
+    );
+}
+
+#[test]
+fn a_node_that_moved_and_turned_keeps_what_it_drew() {
+    clear_command_recordings_for_tests();
+    let probe = Rc::new(RefCell::new(Probe::default()));
+    let draws = Rc::new(Cell::new(0));
+    let mut composition = moving_column(Rc::clone(&probe), Rc::clone(&draws));
+    let root = composition.root().expect("root");
+    let mut graph = initial_graph(&mut composition, root);
+    let (height, angle, canvas) = {
+        let probe = probe.borrow();
+        (
+            probe.spacer_height.expect("spacer height"),
+            probe.canvas_angle.expect("canvas angle"),
+            probe.canvas.expect("canvas"),
+        )
+    };
+    let drawn = draws.get();
+
+    height.set(50.0);
+    angle.set(30.0);
+    let moved = update_frame(&mut composition, root, &mut graph);
+
+    assert!(moved.contains(&canvas), "the canvas moved: {moved:?}");
+    assert_eq!(
+        draws.get(),
+        drawn,
+        "a canvas that moved and turned keeps its recording"
+    );
+    let fresh = fresh_graph(&mut composition, root);
+    assert_eq!(
+        painted_output(&graph),
+        painted_output(&fresh),
+        "the scene paints the canvas moved and turned"
     );
 }

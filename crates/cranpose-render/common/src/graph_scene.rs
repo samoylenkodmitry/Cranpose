@@ -344,12 +344,11 @@ impl Scene {
     pub fn rebuild_from_applier(&mut self, applier: &MemoryApplier, root: NodeId) {
         let previous = self.graph.take();
         self.clear_hits();
-        let Some(mut graph) =
+        let Some(graph) =
             crate::scene_builder::rebuild_graph_from_applier(applier, root, 1.0, previous)
         else {
             return;
         };
-        graph.root.recompute_raster_cache_hashes();
         self.install_graph_with_hits(graph);
     }
 

@@ -112,12 +112,7 @@ fn rebuilding_a_cell_reuses_the_cell_it_replaces() {
 /// replaces.
 fn rebuilding_the_graph_reuses_the_graph_it_replaces() {
     let per_cell = allocations_per_cell(|applier, root, graph| {
-        let previous = std::mem::replace(
-            graph,
-            RenderGraph {
-                root: LayerNode::default(),
-            },
-        );
+        let previous = std::mem::replace(graph, RenderGraph::new(LayerNode::default()));
         *graph =
             rebuild_graph_from_applier(applier, root, 1.0, Some(previous)).expect("render graph");
     });
