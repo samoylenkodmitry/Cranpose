@@ -49,13 +49,14 @@ SOURCES = {
     'freya': 'benchmarks/compose-vs-cranpose/freya-app/src/main.rs',
     'floem': 'benchmarks/compose-vs-cranpose/floem-app/src/main.rs',
     'fyne': 'benchmarks/compose-vs-cranpose/fyne-app/main.go',
+    'uno': 'benchmarks/compose-vs-cranpose/uno-app/Gauntlet.cs',
 }
 
 # The apps each platform runs besides Cranpose's.
 PLATFORM_APPS = {
     'android': ['compose', 'views', 'flutter', 'rn', 'maui', 'avalonia', 'egui', 'slint', 'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
-                'tauri', 'dioxus', 'freya', 'floem', 'fyne'],
+                'tauri', 'dioxus', 'freya', 'floem', 'fyne', 'uno'],
 }
 
 NAMES = {
@@ -63,7 +64,7 @@ NAMES = {
     'flutter': 'Flutter', 'rn': 'React Native', 'maui': '.NET MAUI', 'avalonia': 'Avalonia',
     'egui': 'egui', 'slint': 'Slint', 'iced': 'iced', 'gpui': 'GPUI', 'swiftui': 'SwiftUI', 'appkit': 'AppKit',
     'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'freya': 'Freya', 'floem': 'Floem',
-    'fyne': 'Fyne',
+    'fyne': 'Fyne', 'uno': 'Uno Platform',
 }
 
 
@@ -203,6 +204,7 @@ PINS = {
                   cargo_update('dioxus-app')),
     'freya': Pin(['freya-app/Cargo.toml'], r'freya = \{ version = "([^"]+)"', lambda: crates_io('freya'),
                  cargo_update('freya-app')),
+    'uno': Pin(['uno-app/global.json'], r'"Uno\.Sdk": "([^"]+)"', lambda: nuget('Uno.Sdk')),
     'fyne': Pin(['fyne-app/go.mod'], r'fyne\.io/fyne/v2 v([\d.]+)', lambda: go_module('fyne.io/fyne/v2'),
                 go_tidy('fyne-app')),
     'floem': Pin(['floem-app/Cargo.toml'], r'floem(?:_renderer)? = (?:\{ version = )?"([^"]+)"',

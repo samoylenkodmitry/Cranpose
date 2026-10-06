@@ -87,6 +87,7 @@ APPS = {
     'freya': [HERE / 'freya-app/target/release/perf-compare-freya'],
     'floem': [HERE / 'floem-app/target/release/perf-compare-floem'],
     'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
+    'uno': [HERE / 'uno-app/bin/Release/net10.0-desktop/osx-arm64/publish/PerfUno'],
 }
 
 
@@ -276,7 +277,8 @@ class App:
                 kill(target, sent)
                 self.process.wait(timeout=5)
                 return
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
+                # Gone already: its group, too, or no longer ours to signal.
                 self.process.wait(timeout=5)
                 return
             except subprocess.TimeoutExpired:

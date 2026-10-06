@@ -163,6 +163,8 @@ desktop)
     done
     build avalonia avalonia-app/bin/Release/net10.0/osx-arm64/publish avalonia-app shared-cs -- \
         attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64"
+    build uno uno-app/bin/Release/net10.0-desktop/osx-arm64/publish uno-app shared-cs -- \
+        attempt uno bash -c "cd '$here/uno-app' && dotnet publish -c Release -f net10.0-desktop -r osx-arm64 --self-contained -p:UseMonoRuntime=false"
     build fyne fyne-app/build/perf-compare-fyne fyne-app -- \
         attempt fyne bash -c "cd '$here/fyne-app' && go build -o build/perf-compare-fyne ."
     build swiftui swiftui-app/build/PerfSwiftUI.app swiftui-app shared-swift -- "$here/swiftui-app/build.sh"

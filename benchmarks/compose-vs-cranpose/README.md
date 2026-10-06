@@ -491,6 +491,7 @@ slowest phone.
 | `freya` | `freya-app`: Freya on Skia |
 | `floem` | `floem-app`: Floem on its default renderer, vger; its latest release, 0.2.0, dates from November 2024 |
 | `fyne` | `fyne-app`: Fyne on OpenGL, canvas objects the app places itself |
+| `uno` | `uno-app`'s desktop head: Uno Platform's WinUI on its Skia renderer, self-contained |
 
 What each framework lacks and how its app does without:
 
@@ -531,6 +532,11 @@ What each framework lacks and how its app does without:
   sparkline's line is 47 segments, and its fading fill is a vertical
   gradient under white polygons above the line, four side by side, since
   Fyne fills a polygon of at most 16 vertices.
+- Uno's list is an ItemsRepeater whose element factory recycles each kind of
+  row; sparklines draw in a Skia canvas element. Uno's macOS window sizes its
+  content in pixels, so the app asks for 1280 x 820 times the display's scale.
+  A self-contained build runs on Mono unless told otherwise
+  (`-p:UseMonoRuntime=false`).
 - The JVM opens no window outside the login session, so `desktop.py` starts
   every app bundle through `open`. macOS then asks the user before such an
   app reads a removable volume, so the fonts and Chrome's profile sit in a
@@ -565,6 +571,7 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/freya-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/floem-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
+(cd benchmarks/compose-vs-cranpose/uno-app && dotnet publish -c Release -f net10.0-desktop -r osx-arm64 --self-contained -p:UseMonoRuntime=false)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```

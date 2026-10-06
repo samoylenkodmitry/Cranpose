@@ -1,0 +1,35 @@
+<Project Sdk="Uno.Sdk">
+
+	<!-- One project for both heads: the Android app, and the desktop app
+	     `desktop.py` runs. Both draw through Uno's Skia renderer. -->
+	<PropertyGroup>
+		<TargetFrameworks>net10.0-android;net10.0-desktop</TargetFrameworks>
+		<OutputType>Exe</OutputType>
+		<UnoSingleProject>true</UnoSingleProject>
+		<RootNamespace>PerfUno</RootNamespace>
+		<ApplicationTitle>Perf Uno</ApplicationTitle>
+		<ApplicationId>dev.perfcompare.uno</ApplicationId>
+		<ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+		<ApplicationVersion>1</ApplicationVersion>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<UnoFeatures>SkiaRenderer;Skia</UnoFeatures>
+	</PropertyGroup>
+
+	<!-- What ships, at its best: trimmed, and fully AOT-compiled as the
+	     Compose, MAUI and Avalonia apps are. -->
+	<PropertyGroup Condition="'$(Configuration)' == 'Release' And '$(TargetFramework)' == 'net10.0-android'">
+		<RuntimeIdentifier>android-arm64</RuntimeIdentifier>
+		<SupportedOSPlatformVersion>28</SupportedOSPlatformVersion>
+		<AndroidPackageFormat>apk</AndroidPackageFormat>
+		<RunAOTCompilation>true</RunAOTCompilation>
+		<AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<Compile Include="../shared-cs/PerfData.cs" Link="PerfData.cs" />
+		<!-- The Roboto files every desktop app loads; on Android the device's own. -->
+		<Content Include="../fonts/Roboto-Regular.ttf;../fonts/Roboto-Bold.ttf" Link="Assets/Fonts/%(Filename)%(Extension)" />
+	</ItemGroup>
+
+</Project>
