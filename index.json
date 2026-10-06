@@ -153,6 +153,106 @@
     }
    },
    "confirmed_regressions": {}
+  },
+  {
+   "file": "runs/2026-10-06-frameworks-manual-Apple-M3-Pro.json",
+   "kind": "frameworks",
+   "started_at": "2026-10-06T04:42:51+00:00",
+   "device": "Apple M3 Pro",
+   "main": null,
+   "release": null,
+   "subjects": [
+    {
+     "name": "compose",
+     "label": "compose"
+    },
+    {
+     "name": "cranpose",
+     "label": "cranpose"
+    },
+    {
+     "name": "egui",
+     "label": "egui"
+    },
+    {
+     "name": "slint",
+     "label": "slint"
+    },
+    {
+     "name": "iced",
+     "label": "iced"
+    },
+    {
+     "name": "gpui",
+     "label": "gpui"
+    },
+    {
+     "name": "avalonia",
+     "label": "avalonia"
+    },
+    {
+     "name": "swiftui",
+     "label": "swiftui"
+    },
+    {
+     "name": "flutter",
+     "label": "flutter"
+    },
+    {
+     "name": "web",
+     "label": "web"
+    }
+   ],
+   "duration_s": 351,
+   "scenarios": {
+    "gauntlet": {
+     "legs": 30,
+     "summary": {
+      "compose": {
+       "fps": 16.6,
+       "cpu_ms_per_frame": 97.94
+      },
+      "cranpose": {
+       "fps": 21.4,
+       "cpu_ms_per_frame": 73.33
+      },
+      "egui": {
+       "fps": 56.3,
+       "cpu_ms_per_frame": 15.68
+      },
+      "slint": {
+       "fps": 21.7,
+       "cpu_ms_per_frame": 47.23
+      },
+      "iced": {
+       "fps": 45.1,
+       "cpu_ms_per_frame": 22.83
+      },
+      "gpui": {
+       "fps": 18.4,
+       "cpu_ms_per_frame": 54.67
+      },
+      "avalonia": {
+       "fps": 17.3,
+       "cpu_ms_per_frame": 88.29
+      },
+      "swiftui": {
+       "fps": 8.6,
+       "cpu_ms_per_frame": 114.55
+      },
+      "flutter": {
+       "fps": 23.6,
+       "cpu_ms_per_frame": 66.53
+      },
+      "web": {
+       "fps": 33.8,
+       "cpu_ms_per_frame": 56.19
+      }
+     },
+     "verdicts": {}
+    }
+   },
+   "confirmed_regressions": {}
   }
  ]
 }

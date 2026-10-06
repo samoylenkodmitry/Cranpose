@@ -1,0 +1,457 @@
+{
+ "kind": "frameworks",
+ "started_at": "2026-10-06T04:42:51+00:00",
+ "device": {
+  "ro.product.model": "Apple M3 Pro"
+ },
+ "subjects": [
+  {
+   "name": "compose",
+   "label": "compose"
+  },
+  {
+   "name": "cranpose",
+   "label": "cranpose"
+  },
+  {
+   "name": "egui",
+   "label": "egui"
+  },
+  {
+   "name": "slint",
+   "label": "slint"
+  },
+  {
+   "name": "iced",
+   "label": "iced"
+  },
+  {
+   "name": "gpui",
+   "label": "gpui"
+  },
+  {
+   "name": "avalonia",
+   "label": "avalonia"
+  },
+  {
+   "name": "swiftui",
+   "label": "swiftui"
+  },
+  {
+   "name": "flutter",
+   "label": "flutter"
+  },
+  {
+   "name": "web",
+   "label": "web"
+  }
+ ],
+ "protocol": {
+  "warmup_s": 2.0,
+  "window_s": 8.0,
+  "rounds": 3,
+  "max_other_cores": 1.5
+ },
+ "scenarios": [
+  {
+   "scenario": "gauntlet",
+   "extras": "tier 16, 1280 x 820 window",
+   "legs": [
+    {
+     "subject": "compose",
+     "round": 0,
+     "fps": 17.3,
+     "frames": 148,
+     "interval_p50_ms": 66.25,
+     "interval_p99_ms": 121.28,
+     "cpu_cores": 1.66,
+     "other_cores": 0.74,
+     "cpu_ms_per_frame": 95.71
+    },
+    {
+     "subject": "cranpose",
+     "round": 0,
+     "fps": 22.5,
+     "frames": 182,
+     "interval_p50_ms": 49.89,
+     "interval_p99_ms": 99.63,
+     "cpu_cores": 1.59,
+     "other_cores": 0.45,
+     "cpu_ms_per_frame": 70.64
+    },
+    {
+     "subject": "egui",
+     "round": 0,
+     "fps": 56.3,
+     "frames": 473,
+     "interval_p50_ms": 16.77,
+     "interval_p99_ms": 33.96,
+     "cpu_cores": 0.86,
+     "other_cores": 0.6,
+     "cpu_ms_per_frame": 15.28
+    },
+    {
+     "subject": "slint",
+     "round": 0,
+     "fps": 22.0,
+     "frames": 180,
+     "interval_p50_ms": 50.0,
+     "interval_p99_ms": 83.55,
+     "cpu_cores": 1.02,
+     "other_cores": 0.75,
+     "cpu_ms_per_frame": 46.36
+    },
+    {
+     "subject": "iced",
+     "round": 0,
+     "fps": 47.0,
+     "frames": 391,
+     "interval_p50_ms": 17.63,
+     "interval_p99_ms": 50.14,
+     "cpu_cores": 1.04,
+     "other_cores": 0.65,
+     "cpu_ms_per_frame": 22.22
+    },
+    {
+     "subject": "gpui",
+     "round": 0,
+     "fps": 18.4,
+     "frames": 156,
+     "interval_p50_ms": 66.61,
+     "interval_p99_ms": 100.16,
+     "cpu_cores": 1.0,
+     "other_cores": 0.34,
+     "cpu_ms_per_frame": 54.59
+    },
+    {
+     "subject": "avalonia",
+     "round": 0,
+     "fps": 17.3,
+     "frames": 147,
+     "interval_p50_ms": 66.23,
+     "interval_p99_ms": 154.61,
+     "cpu_cores": 1.52,
+     "other_cores": 0.76,
+     "cpu_ms_per_frame": 88.29
+    },
+    {
+     "subject": "swiftui",
+     "round": 0,
+     "fps": 8.6,
+     "frames": 69,
+     "interval_p50_ms": 77.99,
+     "interval_p99_ms": 369.13,
+     "cpu_cores": 0.99,
+     "other_cores": 0.99,
+     "cpu_ms_per_frame": 114.55
+    },
+    {
+     "subject": "flutter",
+     "round": 0,
+     "fps": 23.6,
+     "frames": 191,
+     "interval_p50_ms": 49.88,
+     "interval_p99_ms": 83.59,
+     "cpu_cores": 1.57,
+     "other_cores": 0.45,
+     "cpu_ms_per_frame": 66.53
+    },
+    {
+     "subject": "web",
+     "round": 0,
+     "fps": 33.6,
+     "frames": 287,
+     "interval_p50_ms": 33.21,
+     "interval_p99_ms": 50.93,
+     "cpu_cores": 1.9,
+     "other_cores": 0.8,
+     "cpu_ms_per_frame": 56.63
+    },
+    {
+     "subject": "compose",
+     "round": 1,
+     "fps": 16.5,
+     "frames": 138,
+     "interval_p50_ms": 81.53,
+     "interval_p99_ms": 122.41,
+     "cpu_cores": 1.61,
+     "other_cores": 0.45,
+     "cpu_ms_per_frame": 97.94
+    },
+    {
+     "subject": "cranpose",
+     "round": 1,
+     "fps": 21.3,
+     "frames": 180,
+     "interval_p50_ms": 50.08,
+     "interval_p99_ms": 100.17,
+     "cpu_cores": 1.58,
+     "other_cores": 0.41,
+     "cpu_ms_per_frame": 74.19
+    },
+    {
+     "subject": "egui",
+     "round": 1,
+     "fps": 54.5,
+     "frames": 466,
+     "interval_p50_ms": 16.74,
+     "interval_p99_ms": 34.0,
+     "cpu_cores": 0.87,
+     "other_cores": 0.83,
+     "cpu_ms_per_frame": 16.03
+    },
+    {
+     "subject": "slint",
+     "round": 1,
+     "fps": 21.7,
+     "frames": 178,
+     "interval_p50_ms": 50.01,
+     "interval_p99_ms": 83.35,
+     "cpu_cores": 1.02,
+     "other_cores": 0.24,
+     "cpu_ms_per_frame": 47.23
+    },
+    {
+     "subject": "iced",
+     "round": 1,
+     "fps": 44.9,
+     "frames": 371,
+     "interval_p50_ms": 17.7,
+     "interval_p99_ms": 50.22,
+     "cpu_cores": 1.03,
+     "other_cores": 0.54,
+     "cpu_ms_per_frame": 22.99
+    },
+    {
+     "subject": "gpui",
+     "round": 1,
+     "fps": 18.4,
+     "frames": 151,
+     "interval_p50_ms": 66.76,
+     "interval_p99_ms": 100.19,
+     "cpu_cores": 1.01,
+     "other_cores": 0.44,
+     "cpu_ms_per_frame": 54.67
+    },
+    {
+     "subject": "avalonia",
+     "round": 1,
+     "fps": 17.2,
+     "frames": 145,
+     "interval_p50_ms": 66.32,
+     "interval_p99_ms": 137.47,
+     "cpu_cores": 1.53,
+     "other_cores": 0.33,
+     "cpu_ms_per_frame": 89.4
+    },
+    {
+     "subject": "swiftui",
+     "round": 1,
+     "fps": 8.7,
+     "frames": 73,
+     "interval_p50_ms": 78.97,
+     "interval_p99_ms": 368.32,
+     "cpu_cores": 0.98,
+     "other_cores": 1.17,
+     "cpu_ms_per_frame": 112.91
+    },
+    {
+     "subject": "flutter",
+     "round": 1,
+     "fps": 23.4,
+     "frames": 200,
+     "interval_p50_ms": 49.77,
+     "interval_p99_ms": 83.32,
+     "cpu_cores": 1.58,
+     "other_cores": 0.53,
+     "cpu_ms_per_frame": 67.34
+    },
+    {
+     "subject": "web",
+     "round": 1,
+     "fps": 34.0,
+     "frames": 284,
+     "interval_p50_ms": 33.2,
+     "interval_p99_ms": 50.78,
+     "cpu_cores": 1.91,
+     "other_cores": 0.53,
+     "cpu_ms_per_frame": 55.97
+    },
+    {
+     "subject": "compose",
+     "round": 2,
+     "fps": 16.6,
+     "frames": 137,
+     "interval_p50_ms": 82.11,
+     "interval_p99_ms": 120.09,
+     "cpu_cores": 1.64,
+     "other_cores": 0.71,
+     "cpu_ms_per_frame": 98.87
+    },
+    {
+     "subject": "cranpose",
+     "round": 2,
+     "fps": 21.4,
+     "frames": 180,
+     "interval_p50_ms": 50.07,
+     "interval_p99_ms": 100.56,
+     "cpu_cores": 1.57,
+     "other_cores": 0.47,
+     "cpu_ms_per_frame": 73.33
+    },
+    {
+     "subject": "egui",
+     "round": 2,
+     "fps": 56.5,
+     "frames": 475,
+     "interval_p50_ms": 16.73,
+     "interval_p99_ms": 33.39,
+     "cpu_cores": 0.89,
+     "other_cores": 0.47,
+     "cpu_ms_per_frame": 15.68
+    },
+    {
+     "subject": "slint",
+     "round": 2,
+     "fps": 21.3,
+     "frames": 175,
+     "interval_p50_ms": 50.06,
+     "interval_p99_ms": 83.51,
+     "cpu_cores": 1.02,
+     "other_cores": 0.71,
+     "cpu_ms_per_frame": 47.98
+    },
+    {
+     "subject": "iced",
+     "round": 2,
+     "fps": 45.1,
+     "frames": 375,
+     "interval_p50_ms": 17.77,
+     "interval_p99_ms": 35.33,
+     "cpu_cores": 1.03,
+     "other_cores": 0.76,
+     "cpu_ms_per_frame": 22.83
+    },
+    {
+     "subject": "gpui",
+     "round": 2,
+     "fps": 18.2,
+     "frames": 152,
+     "interval_p50_ms": 66.73,
+     "interval_p99_ms": 100.2,
+     "cpu_cores": 1.0,
+     "other_cores": 0.33,
+     "cpu_ms_per_frame": 55.03
+    },
+    {
+     "subject": "avalonia",
+     "round": 2,
+     "fps": 17.8,
+     "frames": 144,
+     "interval_p50_ms": 52.47,
+     "interval_p99_ms": 151.25,
+     "cpu_cores": 1.53,
+     "other_cores": 0.76,
+     "cpu_ms_per_frame": 86.1
+    },
+    {
+     "subject": "swiftui",
+     "round": 2,
+     "fps": 7.8,
+     "frames": 66,
+     "interval_p50_ms": 79.59,
+     "interval_p99_ms": 353.91,
+     "cpu_cores": 0.97,
+     "other_cores": 0.95,
+     "cpu_ms_per_frame": 124.98
+    },
+    {
+     "subject": "flutter",
+     "round": 2,
+     "fps": 24.1,
+     "frames": 196,
+     "interval_p50_ms": 49.85,
+     "interval_p99_ms": 83.18,
+     "cpu_cores": 1.56,
+     "other_cores": 0.41,
+     "cpu_ms_per_frame": 64.83
+    },
+    {
+     "subject": "web",
+     "round": 2,
+     "fps": 33.8,
+     "frames": 289,
+     "interval_p50_ms": 33.17,
+     "interval_p99_ms": 50.74,
+     "cpu_cores": 1.9,
+     "other_cores": 0.84,
+     "cpu_ms_per_frame": 56.19
+    }
+   ],
+   "summary": {
+    "compose": {
+     "fps": 16.6,
+     "cpu_ms_per_frame": 97.94,
+     "cpu_cores": 1.64,
+     "other_cores": 0.71
+    },
+    "cranpose": {
+     "fps": 21.4,
+     "cpu_ms_per_frame": 73.33,
+     "cpu_cores": 1.58,
+     "other_cores": 0.45
+    },
+    "egui": {
+     "fps": 56.3,
+     "cpu_ms_per_frame": 15.68,
+     "cpu_cores": 0.87,
+     "other_cores": 0.6
+    },
+    "slint": {
+     "fps": 21.7,
+     "cpu_ms_per_frame": 47.23,
+     "cpu_cores": 1.02,
+     "other_cores": 0.71
+    },
+    "iced": {
+     "fps": 45.1,
+     "cpu_ms_per_frame": 22.83,
+     "cpu_cores": 1.03,
+     "other_cores": 0.65
+    },
+    "gpui": {
+     "fps": 18.4,
+     "cpu_ms_per_frame": 54.67,
+     "cpu_cores": 1.0,
+     "other_cores": 0.34
+    },
+    "avalonia": {
+     "fps": 17.3,
+     "cpu_ms_per_frame": 88.29,
+     "cpu_cores": 1.53,
+     "other_cores": 0.76
+    },
+    "swiftui": {
+     "fps": 8.6,
+     "cpu_ms_per_frame": 114.55,
+     "cpu_cores": 0.98,
+     "other_cores": 0.99
+    },
+    "flutter": {
+     "fps": 23.6,
+     "cpu_ms_per_frame": 66.53,
+     "cpu_cores": 1.57,
+     "other_cores": 0.45
+    },
+    "web": {
+     "fps": 33.8,
+     "cpu_ms_per_frame": 56.19,
+     "cpu_cores": 1.9,
+     "other_cores": 0.8
+    }
+   },
+   "verdicts": {}
+  }
+ ],
+ "duration_s": 351
+}
