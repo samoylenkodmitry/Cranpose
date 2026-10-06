@@ -202,6 +202,9 @@ pub(crate) struct ImageDraw {
     pub color_filter: Option<ColorFilter>,
     pub sampling: ImageSampling,
     pub clip: Option<Rect>,
+    /// The corner radius of `clip` when the image takes a rounded clip in
+    /// place; `0.0` for a rect clip.
+    pub clip_radius: f32,
     pub blend_mode: BlendMode,
     pub src_rect: Option<Rect>,
     pub motion_context_animated: bool,
@@ -510,7 +513,7 @@ impl CompositorScene {
         alpha: f32,
         color_filter: Option<ColorFilter>,
         sampling: ImageSampling,
-        clip: Option<Rect>,
+        (clip, clip_radius): (Option<Rect>, f32),
         src_rect: Option<Rect>,
         blend_mode: BlendMode,
         motion_context_animated: bool,
@@ -528,6 +531,7 @@ impl CompositorScene {
             color_filter,
             sampling,
             clip,
+            clip_radius,
             blend_mode,
             src_rect,
             motion_context_animated,

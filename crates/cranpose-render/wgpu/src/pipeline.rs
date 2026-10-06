@@ -1764,6 +1764,7 @@ pub(crate) fn push_draw_primitive(
     struct SceneEmitter<'a> {
         scene: &'a mut CompositorScene,
         snap_anchor: Option<SnapAnchor>,
+        clip_radius: f32,
     }
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
@@ -1779,7 +1780,7 @@ pub(crate) fn push_draw_primitive(
                 params.alpha,
                 params.color_filter,
                 params.sampling,
-                params.clip,
+                (params.clip, self.clip_radius),
                 params.src_rect,
                 params.blend_mode,
                 params.motion_context_animated,
@@ -1818,7 +1819,11 @@ pub(crate) fn push_draw_primitive(
         }
     }
 
-    let mut emitter = SceneEmitter { scene, snap_anchor };
+    let mut emitter = SceneEmitter {
+        scene,
+        snap_anchor,
+        clip_radius,
+    };
     emit_draw_primitive(
         primitive,
         layer_bounds,
