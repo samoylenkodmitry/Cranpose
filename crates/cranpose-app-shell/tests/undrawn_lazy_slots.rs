@@ -9,93 +9,17 @@ use std::{
 };
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{MemoryApplier, MutableState, NodeId, location_key, rememberMutableStateOf};
+use cranpose_core::{MutableState, location_key, rememberMutableStateOf};
 use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_macros::composable;
-use cranpose_render_common::{
-    Renderer, SceneUpdates,
-    graph_scene::Scene,
-    scene_builder::{
-        build_graph_from_applier, build_graph_from_layout_tree, update_graph_from_applier,
-    },
-};
+use cranpose_render_common::graph_scene::Scene;
 use cranpose_ui::{
     Canvas, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Modifier, Text, TextStyle,
 };
-use cranpose_ui_graphics::{Brush, Color, Rect, Size};
+use cranpose_ui_graphics::{Brush, Color, Rect};
 
-/// Builds the scene graph from the applier, counts whole rebuilds, and
-/// checks each scoped update against a graph built from scratch.
-struct CheckingRenderer {
-    scene: Scene,
-    rebuilds: Rc<Cell<usize>>,
-    mismatches: Rc<Cell<usize>>,
-}
-
-impl Renderer for CheckingRenderer {
-    type Scene = Scene;
-    type Error = std::convert::Infallible;
-
-    fn scene(&self) -> &Scene {
-        &self.scene
-    }
-
-    fn scene_mut(&mut self) -> &mut Scene {
-        &mut self.scene
-    }
-
-    fn rebuild_scene(
-        &mut self,
-        layout_tree: &cranpose_ui::LayoutTree,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.rebuilds.set(self.rebuilds.get() + 1);
-        let graph = build_graph_from_layout_tree(layout_tree.root(), 1.0);
-        self.scene.replace_graph(graph);
-        Ok(())
-    }
-
-    fn rebuild_scene_from_applier(
-        &mut self,
-        applier: &mut MemoryApplier,
-        root: NodeId,
-        _viewport: Size,
-    ) -> Result<(), Self::Error> {
-        self.rebuilds.set(self.rebuilds.get() + 1);
-        if let Some(graph) = build_graph_from_applier(applier, root, 1.0) {
-            self.scene.replace_graph(graph);
-        }
-        Ok(())
-    }
-
-    fn update_scene_from_applier(
-        &mut self,
-        applier: &mut MemoryApplier,
-        root: NodeId,
-        viewport: Size,
-        updates: SceneUpdates<'_>,
-    ) -> Result<(), Self::Error> {
-        let updated = self
-            .scene
-            .graph
-            .as_mut()
-            .is_some_and(|graph| update_graph_from_applier(applier, graph, updates, 1.0));
-        if !updated {
-            return self.rebuild_scene_from_applier(applier, root, viewport);
-        }
-        let fresh =
-            build_graph_from_applier(applier, root, 1.0).map(|graph| graph.root.painted_text());
-        let retained = self
-            .scene
-            .graph
-            .as_ref()
-            .map(|graph| graph.root.painted_text());
-        if fresh != retained {
-            self.mismatches.set(self.mismatches.get() + 1);
-        }
-        Ok(())
-    }
-}
+mod support;
+use support::CheckingRenderer;
 
 type Captured = Rc<RefCell<Option<(LazyListState, MutableState<usize>)>>>;
 
@@ -179,7 +103,7 @@ fn a_list_scrolling_past_changing_rows_updates_its_scene_without_rebuilding_it()
         CheckingRenderer {
             scene: Scene::new(),
             rebuilds: Rc::clone(&rebuilds),
-            mismatches: Rc::clone(&mismatches),
+            mismatches: Some(Rc::clone(&mismatches)),
         },
         location_key(file!(), line!(), column!()),
         {
@@ -211,6 +135,6 @@ fn a_list_scrolling_past_changing_rows_updates_its_scene_without_rebuilding_it()
     assert_eq!(
         mismatches.get(),
         0,
-        "a scoped update painted other text than a scene built from scratch"
+        "a scoped update drew other than a scene built from scratch"
     );
 }

@@ -746,9 +746,13 @@ fn try_translate_scrolled_layer(
     .unwrap_or_else(|| translate_bail("container snapshot read failed"))
 }
 
+/// What a container keeps its children under: its node, its graphics layer
+/// and its bounds at its current size.
 struct TranslatedContainer {
     node_id: NodeId,
     graphics_layer: Option<GraphicsLayer>,
+    local_bounds: Rect,
+    node_bounds: Option<Rect>,
 }
 
 fn translated_container(
@@ -764,11 +768,8 @@ fn translated_container(
     let Some(node_id) = container.node_id else {
         return Err("no node id");
     };
-    if !layout_state.is_placed()
-        || Rect::from_size(layout_state.size()) != container.node_rect()
-        || modifier_slices.layer_bounds(layout_state.size()) != container.local_bounds
-    {
-        return Err("container unplaced, resized or its layer moved");
+    if !layout_state.is_placed() {
+        return Err("container unplaced");
     }
     let outer_count = modifier_slices.outer_draw_command_count();
     if (outer_count > 0 && !wrapped)
@@ -782,18 +783,30 @@ fn translated_container(
     if clip_to_bounds != container.clip_to_bounds {
         return Err("container clip changed");
     }
-    let graphics_layer = graphics_layer_with_shaped_clip(
-        modifier_slices.graphics_layer(),
-        clip_to_bounds,
-        modifier_slices.corner_shape(),
-        container.local_bounds,
-    );
-    if graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT) != &*container.graphics_layer {
+    // A resized container keeps its children: only its bounds and the clip
+    // shaped to them follow its size. Any other change to its graphics layer
+    // may change what its children inherit.
+    let shaped = |bounds: Rect| {
+        graphics_layer_with_shaped_clip(
+            modifier_slices.graphics_layer(),
+            clip_to_bounds,
+            modifier_slices.corner_shape(),
+            bounds,
+        )
+    };
+    if shaped(container.local_bounds)
+        .as_ref()
+        .unwrap_or(&GraphicsLayer::DEFAULT)
+        != &*container.graphics_layer
+    {
         return Err("container graphics layer changed");
     }
+    let (local_bounds, node_bounds) = layer_and_node_bounds(modifier_slices, layout_state.size());
     Ok(TranslatedContainer {
         node_id,
-        graphics_layer,
+        graphics_layer: shaped(local_bounds),
+        local_bounds,
+        node_bounds,
     })
 }
 
@@ -1051,14 +1064,13 @@ fn apply_translated_container_state(
     container: &mut LayerNode,
     modifier_slices: &ModifierNodeSlices,
     layout_state: &cranpose_ui::widgets::LayoutState,
-    graphics_layer: &GraphicsLayer,
     parent_content_offset: Point,
     geometry: TranslateGeometry,
 ) {
     container.transform_to_parent = placed_transform(
         container.local_bounds,
         layout_state.position(),
-        graphics_layer,
+        &container.graphics_layer,
         parent_content_offset,
     );
     container.content_offset = geometry.content_offset;
@@ -1148,8 +1160,15 @@ fn translate_layer_from_data(
     let TranslatedContainer {
         node_id,
         graphics_layer,
+        local_bounds,
+        node_bounds,
     } = container_plan;
-    let graphics_layer = graphics_layer.as_ref().unwrap_or(&GraphicsLayer::DEFAULT);
+    if container.local_bounds != local_bounds {
+        container.local_bounds = local_bounds;
+        container.shadow_clip = container.clip_to_bounds.then_some(local_bounds);
+        container.graphics_layer.replace(graphics_layer);
+    }
+    container.node_bounds = node_bounds;
     // The container's own draws and text are recorded again around the
     // children it keeps: an unchanged draw reuses its recording, while
     // building the container anew lowered every child layer beneath it too.
@@ -1171,7 +1190,7 @@ fn translate_layer_from_data(
 
     let geometry = TranslateGeometry::new(
         &layout_state,
-        graphics_layer,
+        &container.graphics_layer,
         container.local_bounds,
         parent_abs,
     );
@@ -1198,7 +1217,6 @@ fn translate_layer_from_data(
         container,
         &modifier_slices,
         &layout_state,
-        graphics_layer,
         parent_content_offset,
         geometry,
     );
