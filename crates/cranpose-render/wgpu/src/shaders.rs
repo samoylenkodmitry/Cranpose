@@ -84,6 +84,11 @@ pub fn offset_shader() -> String {
     )
 }
 
+/// The image shader, with the rounded-rect distance its rounded clip takes.
+pub fn image_shader() -> String {
+    format!("{SDF_ROUNDED_RECT_FN}{IMAGE_SHADER}")
+}
+
 pub fn blit_shader() -> String {
     let mut shader = format!(
         "{FULLSCREEN_QUAD_VS}{SDF_ROUNDED_RECT_FN}{}",
