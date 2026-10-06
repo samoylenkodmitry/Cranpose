@@ -1,6 +1,6 @@
 use cranpose_ui_layout::{
     Axis, Constraints, MeasurePolicy, MeasureResult, MeasureScope, ParentData, Placement,
-    bias_offset,
+    bias_offset, round_to_px,
 };
 use smallvec::SmallVec;
 
@@ -412,6 +412,88 @@ impl FlexMeasurePolicy {
         (fixed_space, max_cross_size)
     }
 
+    /// Compose's intrinsic size along the main axis: the sizes `main_size`
+    /// gives of the unweighted children, the space in which each weighted
+    /// child gets its own size, and the spacing.
+    fn intrinsic_main_size(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        main_size: impl Fn(&dyn Measurable) -> f32,
+    ) -> f32 {
+        if measurables.is_empty() {
+            return 0.0;
+        }
+        let mut fixed_space = 0.0_f32;
+        let mut weight_unit = 0.0_f32;
+        let mut total_weight = 0.0_f32;
+        for measurable in measurables {
+            let size = main_size(measurable.as_ref());
+            match child_weight(measurable.as_ref()) {
+                Some(weight) => {
+                    total_weight += weight;
+                    weight_unit = weight_unit.max(round_to_px(size / weight, self.density));
+                }
+                None => fixed_space += size,
+            }
+        }
+        round_to_px(weight_unit * total_weight, self.density)
+            + fixed_space
+            + self.get_spacing() * (measurables.len() - 1) as f32
+    }
+
+    /// Compose's intrinsic size across the main axis, in `main_available`
+    /// main-axis space: each unweighted child asks for the main-axis size
+    /// `main_size` gives it, up to what the children before it leave, and
+    /// the weighted children share the rest. `cross_size` gives a child's
+    /// cross size in the main-axis space it gets.
+    fn intrinsic_cross_size(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        main_available: f32,
+        main_size: impl Fn(&dyn Measurable, f32) -> f32,
+        cross_size: impl Fn(&dyn Measurable, f32) -> f32,
+    ) -> f32 {
+        if measurables.is_empty() {
+            return 0.0;
+        }
+        let mut fixed_space =
+            (self.get_spacing() * (measurables.len() - 1) as f32).min(main_available);
+        let mut cross = 0.0_f32;
+        let mut total_weight = 0.0_f32;
+        for measurable in measurables {
+            let measurable = measurable.as_ref();
+            if let Some(weight) = child_weight(measurable) {
+                total_weight += weight;
+                continue;
+            }
+            let space =
+                main_size(measurable, f32::INFINITY).min((main_available - fixed_space).max(0.0));
+            fixed_space += space;
+            cross = cross.max(cross_size(measurable, space));
+        }
+        if total_weight == 0.0 {
+            return cross;
+        }
+        let weight_unit = if main_available.is_finite() {
+            round_to_px(
+                (main_available - fixed_space).max(0.0) / total_weight,
+                self.density,
+            )
+        } else {
+            f32::INFINITY
+        };
+        for measurable in measurables {
+            let measurable = measurable.as_ref();
+            if let Some(weight) = child_weight(measurable) {
+                cross = cross.max(cross_size(
+                    measurable,
+                    round_to_px(weight_unit * weight, self.density),
+                ));
+            }
+        }
+        cross
+    }
+
     fn get_spacing(&self) -> f32 {
         self.main_axis_arrangement.spacing(self.density)
     }
@@ -494,6 +576,14 @@ impl FlexMeasurePolicy {
         let child_cross = self.get_cross_axis_size(placeable.width(), placeable.height());
         alignment.align(container_cross, child_cross, self.density)
     }
+}
+
+/// The weight of a child that shares the main axis by weight.
+fn child_weight(measurable: &dyn Measurable) -> Option<f32> {
+    measurable
+        .flex_parent_data()
+        .map(|data| data.weight)
+        .filter(|weight| *weight > 0.0)
 }
 
 impl MeasurePolicy for FlexMeasurePolicy {
@@ -636,93 +726,57 @@ impl MeasurePolicy for FlexMeasurePolicy {
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        let spacing = self.get_spacing();
-        let total_spacing = if measurables.len() > 1 {
-            spacing * (measurables.len() - 1) as f32
-        } else {
-            0.0
-        };
-
         match self.axis {
             Axis::Horizontal => {
-                measurables
-                    .iter()
-                    .map(|m| m.min_intrinsic_width(height))
-                    .sum::<f32>()
-                    + total_spacing
+                self.intrinsic_main_size(measurables, |m| m.min_intrinsic_width(height))
             }
-            Axis::Vertical => measurables
-                .iter()
-                .map(|m| m.min_intrinsic_width(height))
-                .fold(0.0, f32::max),
+            Axis::Vertical => self.intrinsic_cross_size(
+                measurables,
+                height,
+                |m, width| m.max_intrinsic_height(width),
+                |m, main| m.min_intrinsic_width(main),
+            ),
         }
     }
 
     fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        let spacing = self.get_spacing();
-        let total_spacing = if measurables.len() > 1 {
-            spacing * (measurables.len() - 1) as f32
-        } else {
-            0.0
-        };
-
         match self.axis {
             Axis::Horizontal => {
-                measurables
-                    .iter()
-                    .map(|m| m.max_intrinsic_width(height))
-                    .sum::<f32>()
-                    + total_spacing
+                self.intrinsic_main_size(measurables, |m| m.max_intrinsic_width(height))
             }
-            Axis::Vertical => measurables
-                .iter()
-                .map(|m| m.max_intrinsic_width(height))
-                .fold(0.0, f32::max),
+            Axis::Vertical => self.intrinsic_cross_size(
+                measurables,
+                height,
+                |m, width| m.max_intrinsic_height(width),
+                |m, main| m.max_intrinsic_width(main),
+            ),
         }
     }
 
     fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
-        let spacing = self.get_spacing();
-        let total_spacing = if measurables.len() > 1 {
-            spacing * (measurables.len() - 1) as f32
-        } else {
-            0.0
-        };
-
         match self.axis {
-            Axis::Horizontal => measurables
-                .iter()
-                .map(|m| m.min_intrinsic_height(width))
-                .fold(0.0, f32::max),
+            Axis::Horizontal => self.intrinsic_cross_size(
+                measurables,
+                width,
+                |m, height| m.max_intrinsic_width(height),
+                |m, main| m.min_intrinsic_height(main),
+            ),
             Axis::Vertical => {
-                measurables
-                    .iter()
-                    .map(|m| m.min_intrinsic_height(width))
-                    .sum::<f32>()
-                    + total_spacing
+                self.intrinsic_main_size(measurables, |m| m.min_intrinsic_height(width))
             }
         }
     }
 
     fn max_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
-        let spacing = self.get_spacing();
-        let total_spacing = if measurables.len() > 1 {
-            spacing * (measurables.len() - 1) as f32
-        } else {
-            0.0
-        };
-
         match self.axis {
-            Axis::Horizontal => measurables
-                .iter()
-                .map(|m| m.max_intrinsic_height(width))
-                .fold(0.0, f32::max),
+            Axis::Horizontal => self.intrinsic_cross_size(
+                measurables,
+                width,
+                |m, height| m.max_intrinsic_width(height),
+                |m, main| m.max_intrinsic_height(main),
+            ),
             Axis::Vertical => {
-                measurables
-                    .iter()
-                    .map(|m| m.max_intrinsic_height(width))
-                    .sum::<f32>()
-                    + total_spacing
+                self.intrinsic_main_size(measurables, |m| m.max_intrinsic_height(width))
             }
         }
     }

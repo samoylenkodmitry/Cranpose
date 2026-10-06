@@ -10,7 +10,9 @@ the CPU time of the app and every process it started, `footprint` the memory
 they hold and `macmon` the clocks the chip ran at. The apps are measured in
 turn, round after round, as `frameworks.py` measures phones, and the run is a
 `frameworks` run `scripts/perf/publish.py` publishes. A leg in which other
-processes spent more than `--max-others` cores is measured again. Each window
+processes spent more than `--max-others` cores is measured again, and a leg
+whose frame rate is more than 1.5 times off the app's earlier legs is measured
+once more, with a picture of its window kept beside the results. Each window
 is as short as the app's frame rate allows: `--min-frames` frames, within
 `--window` and `--max-window` seconds.
 
@@ -55,6 +57,11 @@ DESKTOP_WINDOW = (1280, 820)
 # The window's title bar at the display's 2x scale, which pictures leave out.
 TITLE_BAR_PIXELS = 64
 
+# A leg whose frame rate is this many times off the median of the app's
+# earlier legs was disturbed or drew something else: the app is measured once
+# more, so the median of the three decides, and the window's picture is kept.
+DISAGREEMENT = 1.5
+
 # What each app's legs are summarized by.
 SUMMARY = ('fps', 'cpu_ms_per_frame', 'cpu_cores', 'server_cores', 'other_cores', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz',
            'gpu_mhz')
@@ -84,8 +91,6 @@ APPS = {
     # The same page in Tauri, on the system's WKWebView.
     'tauri': [HERE / 'tauri-app/target/release/perf-compare-tauri', '--page={page}'],
     'dioxus': [HERE / 'dioxus-app/target/release/perf-compare-dioxus'],
-    'freya': [HERE / 'freya-app/target/release/perf-compare-freya'],
-    'floem': [HERE / 'floem-app/target/release/perf-compare-floem'],
     'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
     'uno': [HERE / 'uno-app/bin/Release/net10.0-desktop/osx-arm64/publish/PerfUno'],
 }
@@ -227,10 +232,10 @@ class App:
     no window from outside the login session, and an app it starts comes to
     the front."""
 
-    def __init__(self, name, tier, freeze, work, page, stage):
+    def __init__(self, name, tier, freeze, work, page, stage, label=None):
         self.name = name
         self.work = work
-        self.log = stage / f'{name}.log'
+        self.log = stage / f'{label or name}.log'
         profile = stage / 'chrome-profile'
         values = {'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
         command = [str(part).format(**values) for part in APPS[name]]
@@ -285,25 +290,40 @@ class App:
                 continue
 
 
-def measure(name, args, work, page, stage):
+def disagrees(fps, earlier):
+    """Whether `fps` is more than `DISAGREEMENT` times off the median of the
+    app's earlier legs' rates."""
+    if not earlier:
+        return False
+    reference = statistics.median(earlier)
+    return max(fps, reference) > DISAGREEMENT * min(fps, reference)
+
+
+def measure(name, args, work, page, stage, label, earlier):
     """One window: frames presented, CPU spent, the clocks the chip ran at and
     the memory the app held at the window's end. The window is long enough for
     `--min-frames` frames at the app's last rate, within `--window` and
-    `--max-window` seconds."""
+    `--max-window` seconds. Its frames, the app's output and, for a rate that
+    disagrees with the app's `earlier` legs, the window's picture are kept
+    under `label`."""
     window = args.windows.get(name, args.window)
-    app = App(name, args.tier, 0, work, page, stage)
+    app = App(name, args.tier, 0, work, page, stage, label)
     try:
         wait_for(app.log, 'PERF first_frame', args.timeout)
         time.sleep(args.warmup)
         clocks = Clocks()
         before, wall_before = processes(), time.monotonic()
-        out = stage / f'{name}-frames.json'
+        out = stage / f'{label}-frames.json'
         frames = framecount(app.pid, out, '--seconds', f'{window:.1f}', '--out', str(out))
         after, wall_after = processes(), time.monotonic()
         clocked = clocks.stop()
         mine = tree(app.pid, after, wall_after - app.started + 1)
         held = memory(mine, stage)
         shutil.copy(out, work / out.name)
+        if disagrees(frames['fps'], earlier):
+            shown = stage / f'{label}.png'
+            framecount(app.pid, shown, '--screenshot', str(shown))
+            shutil.copy(shown, work / shown.name)
     finally:
         app.stop()
     # FrameCount starts and stops around its window, so CPU counts as a rate
@@ -386,6 +406,18 @@ def main():
     print(json.dumps(report['scenarios'][0]['summary'] if 'scenarios' in report else report['changed_pct']))
 
 
+def undisturbed_leg(name, args, page, stage, label, earlier):
+    """A leg, measured again, up to three times, while other processes spend
+    more than `--max-others` cores in it."""
+    for attempt in range(3):
+        leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier)
+        print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} '
+              f'p99 {leg["interval_p99_ms"]} others {leg["other_cores"]}', flush=True)
+        if leg['other_cores'] <= args.max_others:
+            break
+    return leg
+
+
 def run(args, apps, page, stage):
     """The pictures and their comparison, or the measured rounds."""
     if args.parity:
@@ -417,14 +449,14 @@ def run(args, apps, page, stage):
     args.windows = {}
     for round_index in range(args.rounds):
         for name in apps:
-            for _ in range(3):
-                leg = measure(name, args, args.output, page, stage)
-                print(f'round {round_index + 1} {name:10} fps {leg["fps"]:6.1f} '
-                      f'cpu/f {leg["cpu_ms_per_frame"]} p99 {leg["interval_p99_ms"]} '
-                      f'others {leg["other_cores"]}', flush=True)
-                if leg['other_cores'] <= args.max_others:
-                    break
+            earlier = [leg['fps'] for leg in legs if leg['subject'] == name]
+            label = f'{name}-{round_index + 1}'
+            leg = undisturbed_leg(name, args, page, stage, label, earlier)
             legs.append({'subject': name, 'round': round_index, **leg})
+            if disagrees(leg['fps'], earlier):
+                print(f'{name}: {leg["fps"]} fps disagrees with its earlier legs; measuring once more', flush=True)
+                again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier)
+                legs.append({'subject': name, 'round': round_index, **again})
     summary = {name: {key: round(statistics.median(values), 2)
                       for key in SUMMARY
                       if (values := [leg[key] for leg in legs if leg['subject'] == name and leg.get(key) is not None])}

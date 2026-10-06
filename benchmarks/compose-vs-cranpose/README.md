@@ -7,7 +7,8 @@ from outside either framework. The gauntlet also runs in `views-app` (Android
 Views with RecyclerView), `flutter-app` (Flutter, which picks Impeller on
 OpenGL ES on the Mate), `rn-app` (React Native on the New Architecture with
 Hermes), `nativescript-app` (NativeScript: TypeScript on V8 driving Android
-views), `maui-app` (.NET MAUI, fully AOT-compiled), `avalonia-app` (Avalonia
+views), `lynx-app` (Lynx: ReactLynx on PrimJS driving Lynx's native
+elements), `maui-app` (.NET MAUI, fully AOT-compiled), `avalonia-app` (Avalonia
 on Skia, fully AOT-compiled), `uno-app` (Uno Platform on its Skia renderer,
 fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
 GameActivity), `slint-app` (Slint on Skia) and `web-app` (a web page in
@@ -103,7 +104,18 @@ before its Java messages, so once frames take longer than a vsync the window
 never reports its first draw. Its core layouts and labels are Android views
 that the views on screen update with only what changed, the list is a
 ListView whose two row templates each recycle their own kind, and sparklines
-are an Android view written in TypeScript. MAUI advances the
+are an Android view written in TypeScript. Lynx runs ReactLynx's frame
+loop on its background thread, so each frame is one React commit, as in
+React Native, which Lynx applies to native views on its main thread. The
+loop starts a frame only once the main thread has applied the last one:
+left alone, the background thread commits every vsync and the main thread
+falls further behind each frame. Lynx lays out on its own thread
+(`PART_ON_LAYOUT`): with layout on the UI thread, the default, the window
+never reports its first draw from tier 6 on. The list is a `<list>` of
+deferred `<list-item>` rows: a row's components exist only while it is on
+screen. Sparklines are `<svg>` elements whose markup each frame rebuilds.
+R8 keeps Lynx and Fresco, its image library, whole: under their published
+rules the sparklines and the avatars do not draw. MAUI advances the
 frame on its animation ticker; views on screen set only what changed, the
 list is a CollectionView of rows scrolled through its RecyclerView (MAUI
 scrolls to items, not offsets), sparklines and bars are GraphicsView
@@ -189,8 +201,9 @@ under the 2% gate; what the other frameworks draw differently, by design:
   `shared-cs`, and SwiftUI and AppKit share `shared-swift/PerfData.swift`.
 - **Fonts:** every app loads `/system/fonts/Roboto-Regular.ttf` and
   `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. React
-  Native registers them with its font manager, NativeScript copies them into
-  the app's `fonts` folder, where its `fontFamily` looks, MAUI serves them from its
+  Native registers them with its font manager, Lynx with its typeface cache,
+  NativeScript copies them into the app's `fonts` folder, where its
+  `fontFamily` looks, MAUI serves them from its
   own `IFontManager` and Avalonia from a font collection; the Huawei system
   font is wider. The bundled
   Noto Sans Merged declares 2.1 em of ascent plus descent, which Compose honors
@@ -445,6 +458,7 @@ and a 15 s window. Failed runs are kept in the report.
 (cd benchmarks/compose-vs-cranpose/views-app && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/flutter-app && flutter build apk --release --target-platform android-arm64)
 (cd benchmarks/compose-vs-cranpose/rn-app && npm ci && cd android && ./gradlew :app:assembleRelease)
+(cd benchmarks/compose-vs-cranpose/lynx-app/page && npm ci && npm run build && cd .. && ./gradlew :app:assembleRelease)
 (cd benchmarks/compose-vs-cranpose/nativescript-app && npm ci && npx ns build android --release --gradleArgs=-Pabis=arm64-v8a --key-store-path ~/.android/debug.keystore --key-store-password android --key-store-alias androiddebugkey --key-store-alias-password android)
 (cd benchmarks/compose-vs-cranpose/maui-app && dotnet publish -c Release -f net10.0-android)
 (cd benchmarks/compose-vs-cranpose/avalonia-app && dotnet publish -c Release -f net10.0-android)
@@ -499,8 +513,6 @@ slowest phone.
 | `web` | the web page in a Chrome app window, the engine Electron apps ship |
 | `tauri` | the same page in a Tauri window, on the system's WKWebView; the page asks the app for the tier and logs through its commands |
 | `dioxus` | `dioxus-app`: Dioxus components over the web page's CSS, on Dioxus's desktop renderer (WKWebView) |
-| `freya` | `freya-app`: Freya on Skia |
-| `floem` | `floem-app`: Floem on its default renderer, vger; its latest release, 0.2.0, dates from November 2024 |
 | `fyne` | `fyne-app`: Fyne on OpenGL, canvas objects the app places itself |
 | `uno` | `uno-app`'s desktop head: Uno Platform's WinUI on its Skia renderer, self-contained |
 
@@ -528,15 +540,6 @@ What each framework lacks and how its app does without:
   through `eval`, and serves the avatars and Roboto from a custom protocol.
   It has no list that renders only the rows on screen: rows report their
   heights through `onresize`, as iced's sensors do.
-- Freya's layout has no intrinsic height: a footer divider is the left
-  border of the counter after it. Its virtual scroll view wants one item
-  size, so rows report their heights through `on_sized`.
-- Floem's virtual list wants every row's height up front, so rows report
-  theirs through `on_resize`; its labels have no line limit, so a box as tall
-  as the lines clips a paragraph. Its default renderer, vger, clips only to
-  rectangles and places a linear gradient in window pixels: a view paints
-  white over each avatar's corners, and the sparkline passes its gradient
-  that way. Floem's Vello renderer drew a black window in 0.2.
 - Fyne sizes an object before it knows its width, so the app wraps
   paragraphs and places every object itself, as Fyne's custom widgets do. It
   rotates no object: the badge stays upright. Its canvas has no path: the
@@ -581,8 +584,6 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/web-app && npm ci && npx tsc -p tsconfig.json)
 (cd benchmarks/compose-vs-cranpose/tauri-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/dioxus-app && cargo build --release)
-(cd benchmarks/compose-vs-cranpose/freya-app && cargo build --release)
-(cd benchmarks/compose-vs-cranpose/floem-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
 (cd benchmarks/compose-vs-cranpose/uno-app && dotnet publish -c Release -f net10.0-desktop -r osx-arm64 --self-contained -p:UseMonoRuntime=false)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16

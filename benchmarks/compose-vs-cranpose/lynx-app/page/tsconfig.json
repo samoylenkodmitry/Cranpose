@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@lynx-js/react",
+    "types": ["@lynx-js/rspeedy/client"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "../../shared-ts/*.ts"]
+}

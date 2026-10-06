@@ -1,7 +1,9 @@
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 BENCHMARK = Path(__file__).resolve().parents[1]
@@ -30,6 +32,38 @@ class DesktopAccountingTest(unittest.TestCase):
             400: (1, 2.0, 5.0, '/usr/bin/other'),
         }
         self.assertEqual(desktop.tree(100, table, 11.0), {100, 101, 200})
+
+
+class DesktopRoundsTest(unittest.TestCase):
+    """`run` on legs a stand-in for `measure` returns, as the run would read
+    `FrameCount`'s rates."""
+
+    def rounds(self, rates):
+        measured = []
+
+        def measure(name, args, work, page, stage, label, earlier):
+            measured.append(label)
+            return {'fps': rates[len(measured) - 1], 'frames': 90, 'window_s': 3.0, 'interval_p50_ms': 16.7,
+                    'interval_p99_ms': 20.0, 'cpu_cores': 1.0, 'server_cores': 0.2, 'other_cores': 0.5,
+                    'cpu_ms_per_frame': 40.0}
+
+        args = SimpleNamespace(parity=False, output=Path('results'), rounds=2, max_others=1.5, main=None,
+                               release=None, tier=16, warmup=1.0, window=3.0, max_window=8.0, min_frames=40)
+        with patch.object(desktop, 'measure', measure), \
+                patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
+            report = desktop.run(args, ['fyne'], 'page', Path('stage'))
+        return measured, report['scenarios'][0]
+
+    def test_a_leg_far_off_the_earlier_ones_is_measured_once_more_and_the_median_decides(self):
+        measured, scenario = self.rounds([24.3, 60.1, 24.6])
+        self.assertEqual(measured, ['fyne-1-1', 'fyne-2-1', 'fyne-2-again-1'])
+        self.assertEqual([leg['fps'] for leg in scenario['legs']], [24.3, 60.1, 24.6])
+        self.assertEqual(scenario['summary']['fyne']['fps'], 24.6)
+
+    def test_legs_that_agree_are_measured_once_each(self):
+        measured, scenario = self.rounds([24.3, 25.9])
+        self.assertEqual(measured, ['fyne-1-1', 'fyne-2-1'])
+        self.assertEqual(len(scenario['legs']), 2)
 
 
 if __name__ == '__main__':

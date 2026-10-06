@@ -58,8 +58,6 @@ fmt:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/gpui-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/tauri-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/dioxus-app/Cargo.toml
-    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/freya-app/Cargo.toml
-    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --manifest-path benchmarks/compose-vs-cranpose/floem-app/Cargo.toml
 
 # Verify formatting without touching the tree. This is the CI gate.
 fmt-check:
@@ -73,8 +71,6 @@ fmt-check:
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/gpui-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/tauri-app/Cargo.toml
     RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/dioxus-app/Cargo.toml
-    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/freya-app/Cargo.toml
-    RUSTUP_TOOLCHAIN={{nightly}} cargo fmt --check --manifest-path benchmarks/compose-vs-cranpose/floem-app/Cargo.toml
 
 # --- lint ------------------------------------------------------------------
 
@@ -379,6 +375,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_surfaceflinger_report.py
     python3 benchmarks/compose-vs-cranpose/tests/test_clock_samples.py
     python3 benchmarks/compose-vs-cranpose/tests/test_ab_decisions.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_desktop_accounting.py
     {{benchmark_python}} benchmarks/compose-vs-cranpose/tests/test_parity_compare.py
     python3 scripts/perf/publish_test.py
 
