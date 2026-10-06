@@ -443,6 +443,8 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnAccessibilityScrollToIndex(int virtualViewId, int index);
     /** Asks the app for every record again: an update named a control this host never received. */
     private static native void nativeOnAccessibilityTreeLost();
+    /** A reader read the tree the provider holds; reported once a tree. */
+    private static native void nativeOnAccessibilityRead();
 
     private static native void nativeOnAccessibilityStateChanged(boolean enabled);
     private static native void nativeOnScreenReaderStateChanged(boolean running);
@@ -796,6 +798,13 @@ public class CranposeActivity extends NativeActivity {
         private List<CranposeAccessibilityElement> elements = Collections.emptyList();
         private int focusedId = HOST_ID;
         /**
+         * Whether a read of, or an action on, the tree the provider holds was
+         * reported: the app publishes changes quickly while a reader is in
+         * use, and less often while its trees go unread, as they do under a
+         * service that never reads window content.
+         */
+        private boolean readReported;
+        /**
          * Where a reader's move by character, word or line left its cursor in
          * the text of a control, by virtual id, until the app catches up or
          * the cursor leaves the control. Compose keeps the same place as its
@@ -848,6 +857,7 @@ public class CranposeActivity extends NativeActivity {
         void setElements(List<CranposeAccessibilityElement> elements) {
             List<CranposeAccessibilityElement> previous = this.elements;
             this.elements = elements;
+            readReported = false;
             indexElements();
             // One event for the whole tree, as a window coalesces its views'
             // changes: a service drops what it cached beneath the host and
@@ -952,8 +962,16 @@ public class CranposeActivity extends NativeActivity {
             send(focused.id, event);
         }
 
+        private void noteRead() {
+            if (!readReported) {
+                readReported = true;
+                nativeOnAccessibilityRead();
+            }
+        }
+
         @Override
         public List<AccessibilityNodeInfo> findAccessibilityNodeInfosByText(String text, int virtualViewId) {
+            noteRead();
             ArrayList<AccessibilityNodeInfo> matches = new ArrayList<>();
             if (text == null) return matches;
             String query = text.toLowerCase(Locale.ROOT);
@@ -979,6 +997,7 @@ public class CranposeActivity extends NativeActivity {
 
         @Override
         public AccessibilityNodeInfo createAccessibilityNodeInfo(int virtualViewId) {
+            noteRead();
             if (virtualViewId == HOST_ID) {
                 AccessibilityNodeInfo info = AccessibilityNodeInfo.obtain(host);
                 info.setClassName(CranposeActivity.class.getName());
@@ -1135,6 +1154,7 @@ public class CranposeActivity extends NativeActivity {
 
         @Override
         public boolean performAction(int virtualViewId, int action, Bundle arguments) {
+            noteRead();
             CranposeAccessibilityElement element = find(virtualViewId);
             if (element == null) return false;
             boolean showOnScreen = Build.VERSION.SDK_INT >= 23

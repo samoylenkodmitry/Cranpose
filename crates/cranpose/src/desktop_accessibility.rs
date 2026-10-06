@@ -161,8 +161,9 @@ impl DesktopAccessibilityBridge {
     }
 
     /// Publishes what changed to a connected reader: the whole tree when one
-    /// connects, then at most one snapshot per publish interval, as Android's
-    /// bridge and Compose do. With no reader connected nothing is built.
+    /// connects, then at most one snapshot a second, or one per interactive
+    /// interval for a while after the reader acts. With no reader connected
+    /// nothing is built.
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
         let reader_connected = self.reader_connected.load(Ordering::Relaxed);
         let reader_on = cranpose_services::AccessibilityState {
@@ -260,6 +261,11 @@ impl DesktopAccessibilityBridge {
     pub(crate) fn drain_clicks(&mut self) -> Vec<(cranpose_core::NodeId, Option<u64>)> {
         let requests =
             std::mem::take(&mut *self.actions.lock().unwrap_or_else(PoisonError::into_inner));
+        if !requests.is_empty() {
+            // The person is using the reader: what the action changes
+            // publishes at the interactive interval.
+            self.policy.note_read(Instant::now());
+        }
         requests
             .into_iter()
             .filter_map(|request| self.queue_request(request))
