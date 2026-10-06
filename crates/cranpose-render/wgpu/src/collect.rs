@@ -653,8 +653,10 @@ fn clip_holds(outer: Rect, inner: Rect) -> bool {
 }
 
 /// How `child` places under `context`: a rounded clip draws in place only
-/// where nothing above clips into it, and never inside another rounded
-/// clip, whose radius a placement could not carry beside its own.
+/// where nothing above clips into it, and inside another rounded clip only
+/// where it stays clear of that clip's corners, which the rect clip alone
+/// then leaves whole: a placement could not carry their radius beside its
+/// own.
 fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
     match child_placement(child, context.raster_scale) {
         Placement::DirectRounded(translation, radius) => {
@@ -667,7 +669,18 @@ fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
             let whole = context
                 .visual_clip
                 .is_none_or(|outer| clip.is_some_and(|clip| clip_holds(outer, clip)));
-            if whole && context.clip_radius == 0.0 {
+            let clear_of_corners = context.clip_radius == 0.0
+                || context.visual_clip.zip(clip).is_some_and(|(outer, clip)| {
+                    let corners = RoundedClipCorners::of(
+                        LayerRoundedClip {
+                            rect: outer,
+                            radii: [context.clip_radius; 4],
+                        },
+                        context.raster_scale,
+                    );
+                    stays_clear(clip, Point::default(), &corners)
+                });
+            if whole && clear_of_corners {
                 Placement::DirectRounded(translation, radius)
             } else {
                 Placement::Isolated
@@ -741,11 +754,18 @@ fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCo
 }
 
 fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
-    if !child.draws_within_bounds || child.graphics_layer.shadow_elevation > 0.0 {
+    // A child cut to its own bounds puts no pixel past them; one whose
+    // content keeps within them may antialias a little past them.
+    let clipped = child.graphics_layer.clip;
+    if !(clipped || child.draws_within_bounds) || child.graphics_layer.shadow_elevation > 0.0 {
         return false;
     }
-    let padding = cranpose_render_common::graph::CONTAINED_DRAW_SLACK
-        + child.effect().map_or(0.0, RenderEffect::output_padding);
+    let slack = if clipped {
+        0.0
+    } else {
+        cranpose_render_common::graph::CONTAINED_DRAW_SLACK
+    };
+    let padding = slack + child.effect().map_or(0.0, RenderEffect::output_padding);
     stays_clear(
         quad_bounds(
             child

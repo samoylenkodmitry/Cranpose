@@ -3,7 +3,8 @@ use cranpose_render_common::{
     image_compare::image_difference_stats,
 };
 use cranpose_ui_graphics::{
-    Color, GraphicsLayer, LayerShape, Point, Rect, RenderEffect, RoundedCornerShape, TileMode,
+    Color, CompositingStrategy, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
+    RoundedCornerShape, TileMode,
 };
 use support::{capture_graph, page_graph, region_pixels, solid_rect};
 
@@ -31,8 +32,9 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 }
 
 /// A glass layer: a blurred backdrop under rounded corners, which its
-/// full-size fill reaches. The card, which the frame cuts, keeps a surface;
-/// the button inside it draws in place, its fill taking the rounded clip.
+/// full-size fill reaches. The card keeps a surface of its own, which the
+/// frame cuts; the button inside it draws in place, its fill taking the
+/// rounded clip.
 fn glass(blur: f32) -> GraphicsLayer {
     GraphicsLayer {
         backdrop_effect: Some(RenderEffect::blur_with_edge_treatment(
@@ -45,11 +47,16 @@ fn glass(blur: f32) -> GraphicsLayer {
     }
 }
 
-fn glass_layer(bounds: Rect, at: Point, blur: f32, children: Vec<RenderNode>) -> RenderNode {
+fn glass_layer(
+    bounds: Rect,
+    at: Point,
+    layer: GraphicsLayer,
+    children: Vec<RenderNode>,
+) -> RenderNode {
     RenderNode::Layer(Box::new(shared_test_support::layer_node(
         bounds,
         ProjectiveTransform::translation(at.x, at.y),
-        glass(blur),
+        layer,
         children,
     )))
 }
@@ -66,14 +73,17 @@ fn scene(width: u32, height: u32, origin: Point, card: Point) -> RenderGraph {
     let button = glass_layer(
         button_rect,
         Point::new(170.0, 130.0),
-        BUTTON_BLUR,
+        glass(BUTTON_BLUR),
         vec![solid_rect(button_rect, Color(1.0, 1.0, 1.0, 0.25))],
     );
     let card_rect = rect(0.0, 0.0, CARD_WIDTH, CARD_HEIGHT);
     let card = glass_layer(
         card_rect,
         card,
-        CARD_BLUR,
+        GraphicsLayer {
+            compositing_strategy: CompositingStrategy::Offscreen,
+            ..glass(CARD_BLUR)
+        },
         vec![solid_rect(card_rect, Color(0.1, 0.1, 0.2, 0.35)), button],
     );
     page_graph(

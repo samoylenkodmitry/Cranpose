@@ -273,6 +273,49 @@ fn an_image_filling_a_rounded_clip_draws_in_place_as_its_surface_would() {
     }
 }
 
+/// A card clipped to `RADIUS` with a round avatar 5 in from its corner:
+/// the avatar's bounds reach into the card's corner square, its disc stays
+/// inside the card's arc. The card is drawn in place or `offscreen`.
+fn card_with_avatar(offscreen: bool) -> RenderGraph {
+    let avatar = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 24.0,
+        height: 24.0,
+    };
+    clipped(
+        vec![
+            solid_rect(CLIP, Color(0.98, 0.98, 1.0, 1.0)),
+            RenderNode::Layer(Box::new(shared_test_support::layer_node(
+                avatar,
+                ProjectiveTransform::translation(5.0, 5.0),
+                rounded(12.0, false),
+                vec![solid_rect(avatar, Color(0.2, 0.45, 0.85, 1.0))],
+            ))),
+        ],
+        offscreen,
+    )
+}
+
+#[test]
+fn a_round_avatar_by_a_cards_corner_draws_in_place_with_the_card() {
+    let Some((frames, isolated)) = both_graphs(card_with_avatar) else {
+        return;
+    };
+    assert_eq!(
+        isolated,
+        [0, 1],
+        "the card and its avatar in place, then the card through a surface"
+    );
+    let differing =
+        support::pixels_differing_beyond(WIDTH, &frames[0], &frames[1], SURFACE_ROUNDING);
+    assert!(
+        differing.is_empty(),
+        "the avatar keeps its own clip and the card's corners stay whole: {}",
+        support::describe_differing(&differing)
+    );
+}
+
 /// The workspace port's bid/ask bar in miniature: a rounded clip at a
 /// fractional place inside a panel that clips, `panel_width` wide.
 fn in_panel(panel_width: f32, offscreen: bool) -> RenderGraph {

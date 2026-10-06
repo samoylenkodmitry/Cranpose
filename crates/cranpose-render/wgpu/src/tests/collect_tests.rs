@@ -367,7 +367,7 @@ fn a_rounded_layer_with_uneven_corners_isolates_shapes_in_a_corner() {
 }
 
 #[test]
-fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() {
+fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clips_corner_isolates() {
     let layer = rounded_layer(
         20.0,
         shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
@@ -390,8 +390,14 @@ fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() 
         placement_in(&layer, &context(Some(rect(0.0, 0.0, 150.0, 400.0)), 0.0)),
         Placement::Isolated
     ));
+    // At (10, 10) the layer stays clear of an outer clip's 8-unit corners,
+    // which leave it whole, and reaches into 30-unit ones from (5, 5).
     assert!(matches!(
         placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 8.0)),
+        Placement::DirectRounded(_, radius) if radius == 20.0
+    ));
+    assert!(matches!(
+        placement_in(&layer, &context(Some(rect(5.0, 5.0, 400.0, 400.0)), 30.0)),
         Placement::Isolated
     ));
 }
