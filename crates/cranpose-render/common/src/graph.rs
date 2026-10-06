@@ -80,16 +80,14 @@ pub struct TextPrimitiveNode {
 }
 
 impl TextPrimitiveNode {
-    /// Conservative bounds for the emitted glyphs and paint. Returns `None`
-    /// when an unclipped layout or style can draw beyond its layout rectangle.
+    /// Conservative bounds for the emitted glyphs and paint: the measured
+    /// text within its clip. Returns `None` when an unclipped layout or style
+    /// can draw beyond its layout rectangle.
     pub fn draw_bounds(&self) -> Option<Rect> {
-        if let Some(clip) = self.clip {
-            return Some(clip);
-        }
         let style = &self.text_style.span_style;
         let stroked =
             |style: &SpanStyle| matches!(style.draw_style, Some(TextDrawStyle::Stroke { .. }));
-        (!matches!(self.layout_options.overflow, TextOverflow::Visible)
+        let measured = (!matches!(self.layout_options.overflow, TextOverflow::Visible)
             && style.shadow.is_none()
             && style
                 .baseline_shift
@@ -100,7 +98,11 @@ impl TextPrimitiveNode {
                 .span_styles
                 .iter()
                 .all(|span| !stroked(&span.item)))
-        .then_some(self.rect)
+        .then_some(self.rect);
+        match (self.clip, measured) {
+            (Some(clip), Some(rect)) => clip.intersect(rect).or(Some(clip)),
+            (clip, rect) => clip.or(rect),
+        }
     }
 
     fn draws_within(&self, bounds: Rect) -> bool {
