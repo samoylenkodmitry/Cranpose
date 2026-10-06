@@ -1785,6 +1785,8 @@ fn create_image_pipeline(
         (false, true) => ("image_rounded_vs_main", "image_rounded_fs_main"),
         (true, true) => ("image_rounded_vs_main", "image_mask_rounded_fs_main"),
     };
+    // A rounded image reads its clip from an instance beside its vertices.
+    let buffers = [Some(Vertex::desc()), Some(DeviceRoundedClip::desc())];
     create_render_pipeline_logged(
         device,
         cache,
@@ -1798,7 +1800,7 @@ fn create_image_pipeline(
                 module,
                 entry_point: Some(vertex_entry),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(Vertex::desc())],
+                buffers: if rounded { &buffers } else { &buffers[..1] },
             },
             fragment: Some(wgpu::FragmentState {
                 module,
@@ -1899,20 +1901,14 @@ pub(crate) struct Vertex {
     color: [f32; 4],
     uv: [f32; 2],
     uv_bounds: [f32; 4],
-    /// The device rect of a rounded clip the image takes in place, and its
-    /// corner radius: zero for an image under no rounded clip.
-    clip_rect: [f32; 4],
-    clip_radius: f32,
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
         0 => Float32x2,
         1 => Float32x4,
         2 => Float32x2,
         3 => Float32x4,
-        4 => Float32x4,
-        5 => Float32
     ];
 
     fn desc() -> wgpu::VertexBufferLayout<'static> {
@@ -2498,8 +2494,9 @@ pub(crate) struct ImageDrawCmd {
     scissor: (u32, u32, u32, u32),
     image_id: u64,
     sampling: ImageSampling,
-    /// Whether the image takes a rounded clip's coverage in place.
-    rounded: bool,
+    /// The rounded clip whose coverage the image takes in place: its index
+    /// among the pass's clip instances.
+    clip: Option<u32>,
 }
 
 /// Which glyph pipeline draws a stretch of quads: plain quads, sampled
@@ -2761,6 +2758,8 @@ struct ImageUvRect {
 pub(crate) struct ImageSlot {
     vertices: BufferUpload,
     indices: BufferUpload,
+    /// The rounded clips the pass's images take in place, one instance each.
+    clips: Option<BufferUpload>,
 }
 
 fn image_vertex_spec() -> UploadAllocatorSpec {
@@ -3046,6 +3045,7 @@ pub struct GpuRenderer {
     pub(crate) scratch_image_indices: Vec<u32>,
     pub(crate) scratch_glyph_instances: GlyphInstances,
     pub(crate) scratch_image_cmds: Vec<ImageDrawCmd>,
+    pub(crate) scratch_image_clips: Vec<DeviceRoundedClip>,
     pub(crate) scratch_glyph_cmds: Vec<GlyphDrawCmd>,
     pub(crate) scratch_glyph_moved: Vec<GlyphDrawCmd>,
     pub(crate) scratch_arena_draws: Vec<RunDrawCall>,
@@ -3396,6 +3396,7 @@ impl GpuRenderer {
             scratch_image_indices: Vec::new(),
             scratch_glyph_instances: GlyphInstances::default(),
             scratch_image_cmds: Vec::new(),
+            scratch_image_clips: Vec::new(),
             scratch_glyph_cmds: Vec::new(),
             scratch_glyph_moved: Vec::new(),
             scratch_arena_draws: Vec::new(),
@@ -5294,6 +5295,7 @@ impl GpuRenderer {
         self.viewport_uniforms.bind(pass, uniform_slot)?;
         pass.set_index_buffer(image_slot.indices.slice(), wgpu::IndexFormat::Uint32);
         pass.set_vertex_buffer(0, image_slot.vertices.slice());
+        let mut clips_bound = false;
         for cmd in cmds {
             let Some((x, y, width, height)) = bounded_scissor(cmd.scissor, bound) else {
                 continue;
@@ -5306,14 +5308,32 @@ impl GpuRenderer {
             let variant = ImageVariant {
                 depth,
                 alpha_mask: cached.alpha_mask,
-                rounded: cmd.rounded,
+                rounded: cmd.clip.is_some(),
             };
             if bound_pipeline != Some(variant) {
                 pass.set_pipeline(self.image_pipeline(blend_mode, variant));
                 bound_pipeline = Some(variant);
             }
             pass.set_bind_group(1, cached.bind_group(cmd.sampling), &[]);
-            pass.draw_indexed(cmd.index_start..(cmd.index_start + 6), 0, 0..1);
+            let instance = match cmd.clip {
+                Some(clip) => {
+                    if !clips_bound {
+                        let clips = image_slot
+                            .clips
+                            .as_ref()
+                            .ok_or_else(|| "rounded image without clip instances".to_string())?;
+                        pass.set_vertex_buffer(1, clips.slice());
+                        clips_bound = true;
+                    }
+                    clip
+                }
+                None => 0,
+            };
+            pass.draw_indexed(
+                cmd.index_start..(cmd.index_start + 6),
+                0,
+                instance..instance + 1,
+            );
         }
         Ok(())
     }
@@ -5401,8 +5421,8 @@ impl GpuRenderer {
         image_draw: &ImageDraw,
         viewport: ViewportUniformParams,
         root_scale: f32,
-        image_vertices: &mut Vec<Vertex>,
-        image_indices: &mut Vec<u32>,
+        (image_vertices, image_indices): (&mut Vec<Vertex>, &mut Vec<u32>),
+        image_clips: &mut Vec<DeviceRoundedClip>,
         image_cmds: &mut Vec<ImageDrawCmd>,
     ) -> Result<(), String> {
         let snap_delta = image_draw
@@ -5441,20 +5461,18 @@ impl GpuRenderer {
             return Ok(());
         };
         let device_quad = geometry.device_quad(root_scale);
-        let rounded_clip = DeviceRoundedClip::of(image_draw, root_scale);
-        let index_start = push_image_quad(
-            (image_vertices, image_indices),
-            device_quad,
-            tint,
-            &uv_rect,
-            rounded_clip.unwrap_or_default(),
-        );
+        let index_start =
+            push_image_quad((image_vertices, image_indices), device_quad, tint, &uv_rect);
+        let clip = DeviceRoundedClip::of(image_draw, root_scale).map(|clip| {
+            image_clips.push(clip);
+            image_clips.len() as u32 - 1
+        });
         image_cmds.push(ImageDrawCmd {
             index_start,
             scissor,
             image_id: prepared_image.id(),
             sampling: geometry.sampling,
-            rounded: rounded_clip.is_some(),
+            clip,
         });
         Ok(())
     }
@@ -5465,6 +5483,7 @@ impl GpuRenderer {
         recorder: &mut C,
         vertices: &[Vertex],
         indices: &[u32],
+        clips: &[DeviceRoundedClip],
     ) -> ImageSlot {
         ImageSlot {
             vertices: recorder.upload_buffer(
@@ -5477,6 +5496,16 @@ impl GpuRenderer {
                 &self.device,
                 bytemuck::cast_slice(indices),
             ),
+            clips: (!clips.is_empty()).then(|| {
+                recorder.upload_buffer(
+                    UploadAllocatorSpec::vertex(
+                        "Image Clip Buffer",
+                        std::mem::size_of::<DeviceRoundedClip>() as u64,
+                    ),
+                    &self.device,
+                    bytemuck::cast_slice(clips),
+                )
+            }),
         }
     }
 
@@ -6066,14 +6095,13 @@ impl GpuRenderer {
             device_quad,
             [1.0, 1.0, 1.0, 1.0],
             &uv_rect,
-            DeviceRoundedClip::default(),
         );
         image_cmds.push(ImageDrawCmd {
             index_start,
             scissor,
             image_id: image.id(),
             sampling,
-            rounded: false,
+            clip: None,
         });
         Ok(())
     }
@@ -6481,15 +6509,29 @@ fn tint_for_image(
     }
 }
 
-/// The rounded clip an image takes in place, in device pixels: zero for an
-/// image under no rounded clip.
-#[derive(Clone, Copy, Default)]
-struct DeviceRoundedClip {
+/// The rounded clip an image takes in place, in device pixels: one instance
+/// its draw reads, beside the quad's vertices.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub(crate) struct DeviceRoundedClip {
     rect: [f32; 4],
     radius: f32,
 }
 
 impl DeviceRoundedClip {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![
+        4 => Float32x4,
+        5 => Float32,
+    ];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+
     /// The rounded clip `image` takes at `root_scale`, scaled as a run's
     /// placement scales its clip.
     fn of(image: &ImageDraw, root_scale: f32) -> Option<Self> {
@@ -6518,7 +6560,6 @@ fn push_image_quad(
     device_quad: [[f32; 2]; 4],
     color: [f32; 4],
     uv_rect: &ImageUvRect,
-    clip: DeviceRoundedClip,
 ) -> u32 {
     let base_vertex = vertices.len() as u32;
     let index_start = indices.len() as u32;
@@ -6545,8 +6586,6 @@ fn push_image_quad(
                 color,
                 uv,
                 uv_bounds: uv_rect.sample_bounds,
-                clip_rect: clip.rect,
-                clip_radius: clip.radius,
             }),
     );
     index_start
