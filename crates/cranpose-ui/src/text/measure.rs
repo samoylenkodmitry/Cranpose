@@ -783,10 +783,6 @@ pub fn set_text_measurer<M: TextMeasurer>(measurer: M) {
     crate::render_state::set_current_text_measurer(Rc::new(measurer));
 }
 
-pub(crate) fn current_text_generation() -> u64 {
-    crate::render_state::with_text_service(TextService::generation)
-}
-
 pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
     with_system_font_scale(text, style, |text, style| {
         crate::render_state::with_text_service(|service| service.measure(None, text, style))
@@ -815,7 +811,7 @@ pub(crate) fn resolved_line_box(style: &TextStyle) -> Option<crate::text::LineBo
 /// its line slot (see [`TextMeasurer::glyph_line_box`]). Falls back to the
 /// full slot when the active measurer has no font metrics.
 pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
-    let style = scale_text_style_font_sizes(style, crate::current_font_scale_curve());
+    let style = system_scaled_style(style);
     crate::render_state::with_text_service(|service| {
         service.with_measurer(|m| m.glyph_line_box(&style))
     })
@@ -828,7 +824,7 @@ pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
 /// advance, its baseline and what a paragraph gives back at its edges. `None`
 /// when the active measurer carries no font metrics.
 pub fn text_line_box(style: &TextStyle) -> Option<crate::text::LineBox> {
-    let style = scale_text_style_font_sizes(style, crate::current_font_scale_curve());
+    let style = system_scaled_style(style);
     crate::render_state::with_text_service(|service| service.with_measurer(|m| m.line_box(&style)))
 }
 
@@ -836,7 +832,7 @@ pub fn text_line_box(style: &TextStyle) -> Option<crate::text::LineBox> {
 /// [`TextMeasurer::first_baseline`]). `None` when the active measurer carries
 /// no font metrics.
 pub fn first_baseline(style: &TextStyle) -> Option<f32> {
-    let style = scale_text_style_font_sizes(style, crate::current_font_scale_curve());
+    let style = system_scaled_style(style);
     crate::render_state::with_text_service(|service| {
         service.with_measurer(|m| m.first_baseline(&style))
     })
@@ -1392,12 +1388,22 @@ fn scale_text_style_font_sizes(style: &TextStyle, curve: FontScaleCurve) -> Cow<
     Cow::Owned(scaled)
 }
 
+/// `style` at the running app's font scale.
+fn system_scaled_style(style: &TextStyle) -> Cow<'_, TextStyle> {
+    match crate::render_state::current_scaling_font_scale_curve() {
+        Some(curve) => scale_text_style_font_sizes(style, curve),
+        None => Cow::Borrowed(style),
+    }
+}
+
 fn with_system_font_scale<R>(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
     block: impl FnOnce(&crate::text::AnnotatedString, &TextStyle) -> R,
 ) -> R {
-    let curve = crate::current_font_scale_curve();
+    let Some(curve) = crate::render_state::current_scaling_font_scale_curve() else {
+        return block(text, style);
+    };
     let visual_style = scale_text_style_font_sizes(style, curve);
     let visual_text = scale_annotated_font_sizes(text, curve);
     block(visual_text.as_ref(), &visual_style)

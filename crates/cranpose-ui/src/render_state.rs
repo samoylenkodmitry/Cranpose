@@ -31,6 +31,11 @@ struct RenderState {
     layout_invalidated: AtomicBool,
     density_bits: AtomicU32,
     font_scale: Mutex<crate::font_scale::FontScaleCurve>,
+    /// Whether `font_scale` leaves every size as it is, read without its lock
+    /// by every text measured.
+    font_scale_identity: AtomicBool,
+    /// `font_scale`'s fingerprint, read without its lock.
+    font_scale_fingerprint: AtomicU32,
 }
 
 #[doc(hidden)]
@@ -199,6 +204,10 @@ impl RenderState {
             layout_invalidated: AtomicBool::new(false),
             density_bits: AtomicU32::new(normalize_density(density).to_bits()),
             font_scale: Mutex::new(crate::font_scale::FontScaleCurve::linear(1.0)),
+            font_scale_identity: AtomicBool::new(true),
+            font_scale_fingerprint: AtomicU32::new(
+                crate::font_scale::FontScaleCurve::linear(1.0).fingerprint(),
+            ),
         }
     }
 }
@@ -1079,6 +1088,25 @@ pub fn current_font_scale_curve() -> crate::font_scale::FontScaleCurve {
     with_render_state(|state| *lock_font_scale(&state.font_scale))
 }
 
+/// The running app's font scale curve, or `None` when it leaves every size as
+/// it is, which the caller then need not read.
+pub(crate) fn current_scaling_font_scale_curve() -> Option<crate::font_scale::FontScaleCurve> {
+    with_render_state(|state| {
+        (!state.font_scale_identity.load(Ordering::Relaxed))
+            .then(|| *lock_font_scale(&state.font_scale))
+    })
+}
+
+/// What a prepared text layout is valid for: the text service's generation
+/// and the font scale curve's fingerprint, read in one app context access.
+pub(crate) fn text_layout_stamp() -> (u64, u32) {
+    let context = require_current_app_context("text layout stamp access");
+    (
+        context.text.generation(),
+        context.state.font_scale_fingerprint.load(Ordering::Relaxed),
+    )
+}
+
 /// A size in scale-independent pixels, in dp, through the running app's curve.
 pub fn scale_sp(sp: f32) -> f32 {
     current_font_scale_curve().sp_to_dp(sp)
@@ -1115,6 +1143,12 @@ pub fn set_font_scale_curve(curve: crate::font_scale::FontScaleCurve) {
         let mut current = lock_font_scale(&state.font_scale);
         if *current != curve {
             *current = curve;
+            state
+                .font_scale_identity
+                .store(curve.is_identity(), Ordering::Relaxed);
+            state
+                .font_scale_fingerprint
+                .store(curve.fingerprint(), Ordering::Relaxed);
             state.layout_invalidated.store(true, Ordering::Relaxed);
         }
     });

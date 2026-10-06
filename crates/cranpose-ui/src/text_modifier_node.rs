@@ -111,8 +111,7 @@ impl TextPreparedLayoutOwner {
         read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
     ) -> R {
         let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
-        let text_generation = crate::text::measure::current_text_generation();
-        let font_scale_fingerprint = crate::current_font_scale_curve().fingerprint();
+        let (text_generation, font_scale_fingerprint) = crate::render_state::text_layout_stamp();
 
         {
             let mut cache = self.cache.borrow_mut();
