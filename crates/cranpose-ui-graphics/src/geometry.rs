@@ -1170,34 +1170,6 @@ pub struct DrawScopeDefault {
     text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
 }
 
-const RECORDED_PRIMITIVE_COUNTS_LIMIT: usize = 64;
-
-thread_local! {
-    static RECORDED_PRIMITIVE_COUNTS: std::cell::RefCell<
-        std::collections::HashMap<(u32, u32), usize, crate::FxBuildHasher>,
-    > = std::cell::RefCell::new(std::collections::HashMap::default());
-}
-
-fn recorded_primitive_capacity(size: Size) -> usize {
-    RECORDED_PRIMITIVE_COUNTS.with(|counts| {
-        counts
-            .borrow()
-            .get(&(size.width.to_bits(), size.height.to_bits()))
-            .copied()
-            .unwrap_or(0)
-    })
-}
-
-fn note_recorded_primitive_count(size: Size, count: usize) {
-    RECORDED_PRIMITIVE_COUNTS.with(|counts| {
-        let mut counts = counts.borrow_mut();
-        if counts.len() >= RECORDED_PRIMITIVE_COUNTS_LIMIT {
-            counts.clear();
-        }
-        counts.insert((size.width.to_bits(), size.height.to_bits()), count);
-    });
-}
-
 impl DrawScopeDefault {
     pub fn new(size: Size) -> Self {
         Self::with_storage(size, None, CommandRecording::default())
@@ -1226,8 +1198,7 @@ impl DrawScopeDefault {
         text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
         recording: CommandRecording,
     ) -> Self {
-        let mut recording = CommandRecorder::reusing(recording);
-        recording.reserve_shapes(recorded_primitive_capacity(size));
+        let recording = CommandRecorder::reusing(recording);
         Self {
             size,
             recording,
@@ -1272,7 +1243,6 @@ impl DrawScopeDefault {
     /// The recording, in the storage it was recorded into, so the caller
     /// can lend it to the same command's next recording.
     pub fn finish(self) -> CommandRecording {
-        note_recorded_primitive_count(self.size, self.recording.len());
         self.recording.finish()
     }
 
