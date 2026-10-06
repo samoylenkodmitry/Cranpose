@@ -581,6 +581,22 @@ fn hash_text_raster_geometry_for_cache<H: Hasher>(
     }
 }
 
+/// Hashes what a text draws apart from where and how large its rect is.
+fn hash_text_draw_for_cache<H: Hasher>(
+    text_draw: &TextDraw,
+    raster_rect: Rect,
+    text_scale: f32,
+    state: &mut H,
+) {
+    text_draw.text.render_hash().hash(state);
+    text_draw.text_style.render_hash().hash(state);
+    text_draw.color.render_hash().hash(state);
+    hash_text_gradient_phase_for_cache(text_draw, raster_rect, state);
+    text_draw.font_size.to_bits().hash(state);
+    text_scale.to_bits().hash(state);
+    text_draw.layout_options.hash(state);
+}
+
 pub(crate) fn hash_text_gradient_phase_for_cache<H: Hasher>(
     text_draw: &TextDraw,
     raster_rect: Rect,
@@ -5878,8 +5894,7 @@ impl GpuRenderer {
         if !text_draw_is_visible_in_viewport(logical_rect, clip, viewport, root_scale) {
             return true;
         }
-        let run_key =
-            Self::text_glyph_run_cache_key(text_draw, raster_rect, text_scale, static_text_motion);
+        let run_key = Self::text_glyph_run_cache_key(text_draw, raster_rect, text_scale);
         let mut collected_run = std::mem::take(&mut self.scratch_text_glyph_run);
         let mut generated_entries = std::mem::take(&mut self.scratch_text_glyph_entries);
         let initial_instance_len = glyph_instances.lens();
@@ -5966,6 +5981,7 @@ impl GpuRenderer {
             return None;
         };
         let bounds = GlyphRunBounds::of(glyphs.iter());
+        self.frame_stats.record_text_glyph_run_collected();
         self.text_glyph_run_cache.put(
             run_key,
             CachedTextGlyphRun {
@@ -6323,26 +6339,24 @@ impl GpuRenderer {
         static_text_motion: bool,
     ) -> TextImageCacheKey {
         let mut state = default_hash::new();
-        text_draw.text.render_hash().hash(&mut state);
-        text_draw.text_style.render_hash().hash(&mut state);
-        text_draw.color.render_hash().hash(&mut state);
+        hash_text_draw_for_cache(text_draw, raster_rect, text_scale, &mut state);
         hash_text_raster_geometry_for_cache(raster_rect, static_text_motion, &mut state);
-        hash_text_gradient_phase_for_cache(text_draw, raster_rect, &mut state);
-        text_draw.font_size.to_bits().hash(&mut state);
-        text_scale.to_bits().hash(&mut state);
-        text_draw.layout_options.hash(&mut state);
         TextImageCacheKey(state.finish())
     }
 
+    /// The key of a static text's glyph run. A run places its glyphs from
+    /// the text's origin and aligns its lines within the text block, so the
+    /// size of the rect it draws in does not change it: only an empty rect,
+    /// which draws nothing, does.
     fn text_glyph_run_cache_key(
         text_draw: &TextDraw,
         raster_rect: Rect,
         text_scale: f32,
-        static_text_motion: bool,
     ) -> TextGlyphRunCacheKey {
-        TextGlyphRunCacheKey(
-            Self::text_image_cache_key(text_draw, raster_rect, text_scale, static_text_motion).0,
-        )
+        let mut state = default_hash::new();
+        hash_text_draw_for_cache(text_draw, raster_rect, text_scale, &mut state);
+        (raster_rect.width <= 0.0 || raster_rect.height <= 0.0).hash(&mut state);
+        TextGlyphRunCacheKey(state.finish())
     }
 
     fn rasterize_text_draw_to_image(
