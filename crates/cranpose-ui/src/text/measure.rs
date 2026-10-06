@@ -4,6 +4,7 @@ use std::{
     hash::Hash,
     ops::Range,
     rc::Rc,
+    sync::Arc,
 };
 
 use cranpose_core::{NodeId, collections::pass_aged::PassAgedCache};
@@ -384,7 +385,7 @@ pub trait TextMeasurer: 'static {
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> TextMetrics {
-        self.prepare_with_options_for_node(node_id, text, style, options, max_width)
+        prepare_text_layout_with_measurer_for_node(self, node_id, text, style, options, max_width)
             .metrics
     }
 
@@ -398,15 +399,23 @@ pub trait TextMeasurer: 'static {
         self.prepare_with_options_fallback(text, style, options, max_width)
     }
 
+    /// Lays `text` out in `style` for a node that holds both: a layout that
+    /// leaves them as they are shares them instead of copying them.
     fn prepare_with_options_for_node(
         &self,
         node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
+        text: &Rc<crate::text::AnnotatedString>,
+        style: &Arc<TextStyle>,
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> PreparedTextLayout {
-        prepare_text_layout_with_measurer_for_node(self, node_id, text, style, options, max_width)
+        prepare_layout(
+            self,
+            node_id,
+            LayoutSource::Shared { text, style },
+            options,
+            max_width,
+        )
     }
 
     fn prepare_with_options_fallback(
@@ -688,8 +697,8 @@ impl TextService {
     pub(crate) fn prepare_with_options(
         &self,
         node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
+        text: &Rc<crate::text::AnnotatedString>,
+        style: &Arc<TextStyle>,
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> Rc<PreparedTextLayout> {
@@ -882,22 +891,39 @@ pub fn prepare_text_layout(
     max_width: Option<f32>,
 ) -> PreparedTextLayout {
     Rc::unwrap_or_clone(prepare_text_layout_for_node(
-        None, text, style, options, max_width,
+        None,
+        &Rc::new(text.clone()),
+        &Arc::new(style.clone()),
+        options,
+        max_width,
     ))
 }
 
+/// Lays out `text` in `style` for `node_id`. The layout shares the text and
+/// style when it leaves them as they are.
 pub fn prepare_text_layout_for_node(
     node_id: Option<NodeId>,
-    text: &crate::text::AnnotatedString,
-    style: &TextStyle,
+    text: &Rc<crate::text::AnnotatedString>,
+    style: &Arc<TextStyle>,
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> Rc<PreparedTextLayout> {
-    with_system_font_scale(text, style, |text, style| {
+    let prepare = |text: &Rc<crate::text::AnnotatedString>, style: &Arc<TextStyle>| {
         crate::render_state::with_text_service(|service| {
             service.prepare_with_options(node_id, text, style, options.normalized(), max_width)
         })
-    })
+    };
+    let Some(curve) = crate::render_state::current_scaling_font_scale_curve() else {
+        return prepare(text, style);
+    };
+    let scaled_text = match scale_annotated_font_sizes(text, curve) {
+        Cow::Borrowed(_) => Rc::clone(text),
+        Cow::Owned(scaled) => Rc::new(scaled),
+    };
+    prepare(
+        &scaled_text,
+        &Arc::new(scale_text_style_font_sizes(style, curve).into_owned()),
+    )
 }
 
 pub fn get_offset_for_position(
@@ -1057,6 +1083,73 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> PreparedTextLayout {
+    prepare_layout(
+        measurer,
+        node_id,
+        LayoutSource::Borrowed { text, style },
+        options,
+        max_width,
+    )
+}
+
+/// The text and style a layout is prepared from: borrowed, which the layout
+/// copies, or shared with the node that holds them.
+#[derive(Clone, Copy)]
+enum LayoutSource<'a> {
+    Borrowed {
+        text: &'a crate::text::AnnotatedString,
+        style: &'a TextStyle,
+    },
+    Shared {
+        text: &'a Rc<crate::text::AnnotatedString>,
+        style: &'a Arc<TextStyle>,
+    },
+}
+
+impl LayoutSource<'_> {
+    fn text(&self) -> &crate::text::AnnotatedString {
+        match self {
+            Self::Borrowed { text, .. } => text,
+            Self::Shared { text, .. } => text,
+        }
+    }
+
+    fn style(&self) -> &TextStyle {
+        match self {
+            Self::Borrowed { style, .. } => style,
+            Self::Shared { style, .. } => style,
+        }
+    }
+
+    /// The source text as the layout's display text, when the layout left it
+    /// as it is: shared, or built from `lines` when it cannot be shared.
+    fn display_text(
+        &self,
+        lines: &[DisplayLine],
+        unchanged: bool,
+    ) -> Rc<crate::text::AnnotatedString> {
+        match self {
+            Self::Shared { text, .. } if unchanged => Rc::clone(text),
+            _ => Rc::new(build_display_annotated(self.text(), lines)),
+        }
+    }
+
+    fn visual_style(&self) -> Arc<TextStyle> {
+        match self {
+            Self::Borrowed { style, .. } => Arc::new((*style).clone()),
+            Self::Shared { style, .. } => Arc::clone(style),
+        }
+    }
+}
+
+fn prepare_layout<M: TextMeasurer + ?Sized>(
+    measurer: &M,
+    node_id: Option<NodeId>,
+    source: LayoutSource<'_>,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> PreparedTextLayout {
+    let (text, style) = (source.text(), source.style());
     let telemetry = text_layout_telemetry_enabled();
     let total_start = telemetry.then(Instant::now);
     let opts = options.normalized();
@@ -1116,7 +1209,13 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
     let overflow_ms = overflow_start.map(|start| start.elapsed().as_secs_f64() * 1000.0);
 
     let build_start = telemetry.then(Instant::now);
-    let display_annotated = build_display_annotated(text, &visible_lines);
+    // No line wrapped, was cut or elided: the display text is the source.
+    let unchanged = !did_overflow
+        && visible_lines.len() == source_line_count
+        && visible_lines
+            .iter()
+            .all(|line| matches!(line.text, DisplayLineText::Source));
+    let display_annotated = source.display_text(&visible_lines, unchanged);
     debug_assert_eq!(
         display_annotated.text,
         join_display_line_text(text, &visible_lines)
@@ -1154,8 +1253,8 @@ pub fn prepare_text_layout_with_measurer_for_node<M: TextMeasurer + ?Sized>(
         opts.min_lines,
     );
     let prepared = PreparedTextLayout {
-        text: Rc::new(display_annotated),
-        visual_style: std::sync::Arc::new(style.clone()),
+        text: display_annotated,
+        visual_style: source.visual_style(),
         alignment_lines: vertical.alignment_lines,
         metrics: TextMetrics {
             width,

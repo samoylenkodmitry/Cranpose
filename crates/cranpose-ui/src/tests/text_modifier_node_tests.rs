@@ -33,14 +33,14 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
     fn prepare_with_options_for_node(
         &self,
         node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        _style: &TextStyle,
+        text: &Rc<crate::text::AnnotatedString>,
+        _style: &std::sync::Arc<TextStyle>,
         _options: TextLayoutOptions,
         _max_width: Option<f32>,
     ) -> crate::text::PreparedTextLayout {
         self.recorded.borrow_mut().push(node_id);
         crate::text::PreparedTextLayout {
-            text: Rc::new(text.clone()),
+            text: Rc::clone(text),
             visual_style: std::sync::Arc::new(TextStyle::default()),
             metrics: crate::text::TextMetrics {
                 width: 12.0,
@@ -106,16 +106,16 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
     fn prepare_with_options_for_node(
         &self,
         _node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
+        text: &Rc<crate::text::AnnotatedString>,
+        style: &std::sync::Arc<TextStyle>,
         _options: TextLayoutOptions,
         _max_width: Option<f32>,
     ) -> crate::text::PreparedTextLayout {
         let size = style.resolve_font_size(14.0);
         self.recorded.borrow_mut().push(size);
         crate::text::PreparedTextLayout {
-            text: Rc::new(text.clone()),
-            visual_style: std::sync::Arc::new(style.clone()),
+            text: Rc::clone(text),
+            visual_style: std::sync::Arc::clone(style),
             metrics: crate::text::TextMetrics {
                 width: size,
                 height: size,
@@ -170,13 +170,13 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
     fn prepare_with_options_for_node(
         &self,
         _node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        _style: &TextStyle,
+        text: &Rc<crate::text::AnnotatedString>,
+        _style: &std::sync::Arc<TextStyle>,
         _options: TextLayoutOptions,
         _max_width: Option<f32>,
     ) -> crate::text::PreparedTextLayout {
         crate::text::PreparedTextLayout {
-            text: Rc::new(text.clone()),
+            text: Rc::clone(text),
             visual_style: std::sync::Arc::new(TextStyle::default()),
             metrics: crate::text::TextMetrics {
                 width: 24.0,
@@ -565,4 +565,44 @@ fn a_text_node_never_makes_its_subtree_modal_or_hidden() {
         crate::density::Density::new(1.0, 1.0),
     );
     assert_eq!(node.reach(), cranpose_foundation::SemanticsReach::default());
+}
+
+#[test]
+fn a_text_laid_out_as_written_shares_its_string_and_style_with_its_layout() {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let app_context = crate::AppContext::new();
+        app_context.enter(|| {
+            let source = Rc::new(AnnotatedString::from("cell 123"));
+            let node = TextModifierNode::new(
+                Rc::clone(&source),
+                TextStyle::default(),
+                TextLayoutOptions::default(),
+                crate::density::Density::new(1.0, 1.0),
+            );
+            let layout_at = |width: f32| {
+                node.layout.measure_layout(Some(width));
+                node.layout.measured_layout().expect("a measured layout")
+            };
+            // At 8.4 per character "cell 123" is 67.2 wide.
+            let whole = layout_at(200.0);
+            let wrapped = layout_at(50.0);
+            tx.send((
+                Rc::ptr_eq(&whole.text, &source),
+                Rc::ptr_eq(&wrapped.text, &source),
+                wrapped.text.text.clone(),
+                std::sync::Arc::ptr_eq(&whole.visual_style, &wrapped.visual_style),
+            ))
+            .expect("send layouts");
+        });
+    });
+    let (whole_shares, wrapped_shares, wrapped_text, style_shared) =
+        rx.recv().expect("receive layouts");
+    assert!(whole_shares, "a line that fits shares the node's string");
+    assert!(
+        !wrapped_shares,
+        "a wrapped text builds its own display string"
+    );
+    assert_eq!(wrapped_text, "cell\n123");
+    assert!(style_shared, "both layouts share the node's style");
 }

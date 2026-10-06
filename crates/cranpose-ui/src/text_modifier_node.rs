@@ -45,7 +45,7 @@ struct TextPreparedLayoutCacheEntry {
 #[derive(Debug)]
 struct TextPreparedLayoutOwner {
     text: Rc<AnnotatedString>,
-    style: TextStyle,
+    style: std::sync::Arc<TextStyle>,
     options: TextLayoutOptions,
     node_id: Cell<Option<cranpose_core::NodeId>>,
     measured_max_width: Cell<Option<Option<f32>>>,
@@ -60,7 +60,7 @@ pub(crate) struct TextPreparedLayoutHandle {
 impl TextPreparedLayoutOwner {
     fn new(
         text: Rc<AnnotatedString>,
-        style: TextStyle,
+        style: std::sync::Arc<TextStyle>,
         options: TextLayoutOptions,
         node_id: Option<cranpose_core::NodeId>,
         measured_max_width: Option<Option<f32>>,
@@ -127,7 +127,7 @@ impl TextPreparedLayoutOwner {
 
         let prepared = crate::text::prepare_text_layout_for_node(
             self.node_id(),
-            self.text.as_ref(),
+            &self.text,
             &self.style,
             self.options,
             normalized_max_width,
@@ -204,6 +204,15 @@ impl TextModifierNode {
     pub fn new(
         text: Rc<AnnotatedString>,
         style: TextStyle,
+        options: TextLayoutOptions,
+        density: Density,
+    ) -> Self {
+        Self::sharing_style(text, std::sync::Arc::new(style), options, density)
+    }
+
+    fn sharing_style(
+        text: Rc<AnnotatedString>,
+        style: std::sync::Arc<TextStyle>,
         options: TextLayoutOptions,
         density: Density,
     ) -> Self {
@@ -381,7 +390,7 @@ impl SemanticsNode for TextModifierNode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextModifierElement {
     text: Rc<AnnotatedString>,
-    style: TextStyle,
+    style: std::sync::Arc<TextStyle>,
     options: TextLayoutOptions,
     density: Density,
 }
@@ -397,7 +406,7 @@ impl TextModifierElement {
     ) -> Self {
         Self {
             text,
-            style,
+            style: std::sync::Arc::new(style),
             options: options.normalized(),
             density,
         }
@@ -417,7 +426,7 @@ impl ModifierNodeElement for TextModifierElement {
     type Node = TextModifierNode;
 
     fn create(&self) -> Self::Node {
-        TextModifierNode::new(
+        TextModifierNode::sharing_style(
             self.text.clone(),
             self.style.clone(),
             self.options,
@@ -429,7 +438,7 @@ impl ModifierNodeElement for TextModifierElement {
         node.density = self.density;
         let current = node.layout.as_ref();
         if current.text != self.text
-            || current.style != self.style
+            || *current.style != *self.style
             || current.options != self.options
         {
             let owner = TextPreparedLayoutOwner::new(
