@@ -172,43 +172,53 @@
    "subjects": [
     {
      "name": "compose",
-     "label": "compose"
+     "label": "Compose Multiplatform 1.12.1",
+     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
     },
     {
      "name": "cranpose",
-     "label": "cranpose"
+     "label": "Cranpose 0.9.7 (PR #1219)",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
     },
     {
      "name": "egui",
-     "label": "egui"
+     "label": "egui 0.36.2",
+     "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
     },
     {
      "name": "slint",
-     "label": "slint"
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
     },
     {
      "name": "iced",
-     "label": "iced"
+     "label": "iced 0.14.0",
+     "source": "benchmarks/compose-vs-cranpose/iced-app/src/main.rs"
     },
     {
      "name": "gpui",
-     "label": "gpui"
+     "label": "GPUI 0.3.8",
+     "source": "benchmarks/compose-vs-cranpose/gpui-app/src/main.rs"
     },
     {
      "name": "avalonia",
-     "label": "avalonia"
+     "label": "Avalonia 12.1.3",
+     "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"
     },
     {
      "name": "swiftui",
-     "label": "swiftui"
+     "label": "SwiftUI macOS 27.0",
+     "source": "benchmarks/compose-vs-cranpose/swiftui-app/Gauntlet.swift"
     },
     {
      "name": "flutter",
-     "label": "flutter"
+     "label": "Flutter 3.47.6",
+     "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
     },
     {
      "name": "web",
-     "label": "web"
+     "label": "Web Chrome 154.0.8037.98",
+     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"
     }
    ],
    "duration_s": 351,
