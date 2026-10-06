@@ -40,8 +40,8 @@ impl TextMeasurer for CountingPreparedTextMeasurer {
     fn prepare_with_options_for_node(
         &self,
         _node_id: Option<NodeId>,
-        text: &AnnotatedString,
-        style: &TextStyle,
+        text: &Rc<AnnotatedString>,
+        style: &std::sync::Arc<TextStyle>,
         _options: TextLayoutOptions,
         _max_width: Option<f32>,
     ) -> PreparedTextLayout {
@@ -49,8 +49,8 @@ impl TextMeasurer for CountingPreparedTextMeasurer {
             self.prepare_calls.set(self.prepare_calls.get() + 1);
         }
         PreparedTextLayout {
-            text: Rc::new(text.clone()),
-            visual_style: std::sync::Arc::new(style.clone()),
+            text: Rc::clone(text),
+            visual_style: std::sync::Arc::clone(style),
             metrics: self.measure(text, style),
             did_overflow: false,
             render_text: Default::default(),
@@ -102,14 +102,14 @@ impl TextMeasurer for TallMultilineTextMeasurer {
     fn prepare_with_options_for_node(
         &self,
         _node_id: Option<NodeId>,
-        text: &AnnotatedString,
-        style: &TextStyle,
+        text: &Rc<AnnotatedString>,
+        style: &std::sync::Arc<TextStyle>,
         _options: TextLayoutOptions,
         _max_width: Option<f32>,
     ) -> PreparedTextLayout {
         PreparedTextLayout {
-            text: Rc::new(text.clone()),
-            visual_style: std::sync::Arc::new(style.clone()),
+            text: Rc::clone(text),
+            visual_style: std::sync::Arc::clone(style),
             metrics: self.measure(text, style),
             did_overflow: false,
             render_text: Default::default(),

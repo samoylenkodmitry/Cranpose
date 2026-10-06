@@ -45,7 +45,7 @@ struct TextPreparedLayoutCacheEntry {
 #[derive(Debug)]
 struct TextPreparedLayoutOwner {
     text: Rc<AnnotatedString>,
-    style: TextStyle,
+    style: std::sync::Arc<TextStyle>,
     options: TextLayoutOptions,
     node_id: Cell<Option<cranpose_core::NodeId>>,
     measured_max_width: Cell<Option<Option<f32>>>,
@@ -60,7 +60,7 @@ pub(crate) struct TextPreparedLayoutHandle {
 impl TextPreparedLayoutOwner {
     fn new(
         text: Rc<AnnotatedString>,
-        style: TextStyle,
+        style: std::sync::Arc<TextStyle>,
         options: TextLayoutOptions,
         node_id: Option<cranpose_core::NodeId>,
         measured_max_width: Option<Option<f32>>,
@@ -111,8 +111,7 @@ impl TextPreparedLayoutOwner {
         read: impl FnOnce(&Rc<crate::text::PreparedTextLayout>) -> R,
     ) -> R {
         let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
-        let text_generation = crate::text::measure::current_text_generation();
-        let font_scale_fingerprint = crate::current_font_scale_curve().fingerprint();
+        let (text_generation, font_scale_fingerprint) = crate::render_state::text_layout_stamp();
 
         {
             let mut cache = self.cache.borrow_mut();
@@ -128,7 +127,7 @@ impl TextPreparedLayoutOwner {
 
         let prepared = crate::text::prepare_text_layout_for_node(
             self.node_id(),
-            self.text.as_ref(),
+            &self.text,
             &self.style,
             self.options,
             normalized_max_width,
@@ -210,7 +209,11 @@ impl TextModifierNode {
     ) -> Self {
         Self {
             layout: Rc::new(TextPreparedLayoutOwner::new(
-                text, style, options, None, None,
+                text,
+                std::sync::Arc::new(style),
+                options,
+                None,
+                None,
             )),
             density,
             state: NodeState::new(),
@@ -429,13 +432,18 @@ impl ModifierNodeElement for TextModifierElement {
     fn update(&self, node: &mut Self::Node) {
         node.density = self.density;
         let current = node.layout.as_ref();
-        if current.text != self.text
-            || current.style != self.style
-            || current.options != self.options
-        {
+        let same_style = *current.style == self.style;
+        if current.text != self.text || !same_style || current.options != self.options {
+            // A text that changed in the same style, as a ticker's does,
+            // keeps sharing the style it had.
+            let style = if same_style {
+                std::sync::Arc::clone(&current.style)
+            } else {
+                std::sync::Arc::new(self.style.clone())
+            };
             let owner = TextPreparedLayoutOwner::new(
                 self.text.clone(),
-                self.style.clone(),
+                style,
                 self.options,
                 current.node_id(),
                 current.measured_max_width.get(),

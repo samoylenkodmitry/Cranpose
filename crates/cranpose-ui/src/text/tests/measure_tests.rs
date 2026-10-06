@@ -26,10 +26,22 @@ fn prepared_layout_cache_distinguishes_visual_styles() {
 
     let mut style = TextStyle::default();
     style.span_style.color = Some(crate::Color(1.0, 0.0, 0.0, 1.0));
-    let red = service.prepare_with_options(None, &text, &style, options, None);
+    let red = service.prepare_with_options(
+        None,
+        &Rc::new(text.clone()),
+        &std::sync::Arc::new(style.clone()),
+        options,
+        None,
+    );
 
     style.span_style.color = Some(crate::Color(0.0, 0.0, 1.0, 1.0));
-    let blue = service.prepare_with_options(None, &text, &style, options, None);
+    let blue = service.prepare_with_options(
+        None,
+        &Rc::new(text),
+        &std::sync::Arc::new(style),
+        options,
+        None,
+    );
 
     assert_eq!(
         red.visual_style.span_style.color,
@@ -470,8 +482,8 @@ impl TextMeasurer for CountingPreparedTextMeasurer {
     fn prepare_with_options_for_node(
         &self,
         _node_id: Option<NodeId>,
-        text: &crate::text::AnnotatedString,
-        style: &TextStyle,
+        text: &Rc<crate::text::AnnotatedString>,
+        style: &std::sync::Arc<TextStyle>,
         options: TextLayoutOptions,
         max_width: Option<f32>,
     ) -> PreparedTextLayout {
@@ -568,8 +580,20 @@ fn text_service_reuses_prepared_layout_cache_across_node_ids() {
     let style = TextStyle::default();
     let options = TextLayoutOptions::default();
 
-    let first = service.prepare_with_options(Some(9), &text, &style, options, Some(120.0));
-    let second = service.prepare_with_options(Some(10), &text, &style, options, Some(120.0));
+    let first = service.prepare_with_options(
+        Some(9),
+        &Rc::new(text.clone()),
+        &std::sync::Arc::new(style.clone()),
+        options,
+        Some(120.0),
+    );
+    let second = service.prepare_with_options(
+        Some(10),
+        &Rc::new(text),
+        &std::sync::Arc::new(style),
+        options,
+        Some(120.0),
+    );
 
     assert_eq!(first.metrics, second.metrics);
     assert_eq!(prepare_calls.get(), 1);
@@ -591,11 +615,28 @@ fn prepared_text_preserves_width_variants_and_owned_edits() {
         max_lines: 1,
         ..Default::default()
     };
-    let wide = service.prepare_with_options(None, &text, &style, options, Some(1000.0));
-    let mut narrow =
-        Rc::unwrap_or_clone(service.prepare_with_options(None, &text, &style, options, Some(50.0)));
+    let wide = service.prepare_with_options(
+        None,
+        &Rc::new(text.clone()),
+        &std::sync::Arc::new(style.clone()),
+        options,
+        Some(1000.0),
+    );
+    let mut narrow = Rc::unwrap_or_clone(service.prepare_with_options(
+        None,
+        &Rc::new(text.clone()),
+        &std::sync::Arc::new(style.clone()),
+        options,
+        Some(50.0),
+    ));
     let retained = narrow.clone();
-    let cached = service.prepare_with_options(None, &text, &style, options, Some(50.0));
+    let cached = service.prepare_with_options(
+        None,
+        &Rc::new(text.clone()),
+        &std::sync::Arc::new(style.clone()),
+        options,
+        Some(50.0),
+    );
 
     assert_eq!(wide.text.as_ref(), &text);
     assert_ne!(wide.text.text, narrow.text.text);
@@ -607,7 +648,13 @@ fn prepared_text_preserves_width_variants_and_owned_edits() {
     let edited = Rc::make_mut(&mut narrow.text);
     edited.text = "edited".to_owned();
     edited.string_annotations.clear();
-    let reloaded = service.prepare_with_options(None, &text, &style, options, Some(50.0));
+    let reloaded = service.prepare_with_options(
+        None,
+        &Rc::new(text.clone()),
+        &std::sync::Arc::new(style),
+        options,
+        Some(50.0),
+    );
 
     assert_eq!(*reloaded, retained);
     assert_eq!(*cached, retained);
@@ -1656,7 +1703,7 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
     let style = TextStyle::default();
     let whole = 0..text.text.len();
     let held = DisplayLine::from_source_range(0..0);
-    let mut lines = vec![held.clone()];
+    let mut lines: DisplayLines = smallvec::smallvec![held.clone()];
     wrap_line_to_width(
         &MonospacedTextMeasurer,
         &text,
@@ -1689,7 +1736,7 @@ fn wrapped_lines_append_after_what_the_caller_holds() {
 #[test]
 fn a_line_that_cannot_balance_leaves_the_lines_as_they_were() {
     let text = crate::text::AnnotatedString::from("unbreakable");
-    let mut lines = vec![DisplayLine::from_source_range(0..0)];
+    let mut lines: DisplayLines = smallvec::smallvec![DisplayLine::from_source_range(0..0)];
     let balanced = wrap_line_with_word_balance(
         &MonospacedTextMeasurer,
         &text,
@@ -1894,7 +1941,13 @@ fn metrics_at_options_a_text_was_laid_out_at_come_from_its_prepared_layout() {
     let style = TextStyle::default();
     let options = TextLayoutOptions::default();
 
-    let prepared = service.prepare_with_options(Some(3), &text, &style, options, Some(90.0));
+    let prepared = service.prepare_with_options(
+        Some(3),
+        &Rc::new(text.clone()),
+        &std::sync::Arc::new(style.clone()),
+        options,
+        Some(90.0),
+    );
     assert!(
         service.options_metrics_cache.borrow().is_empty(),
         "laying a text out keeps its metrics in the prepared layout only"
