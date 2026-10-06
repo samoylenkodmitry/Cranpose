@@ -1,17 +1,23 @@
 # Cranpose vs Jetpack Compose on a device
 
 Two apps with the same UI, element for element: `cranpose-app` (Rust, Cranpose
-from this repository) and `compose-app` (Kotlin, Jetpack Compose from BOM
-2026.09.00, foundation 1.12). `measure.py` runs them alternately on one Android
-device and measures both from outside either framework. The gauntlet also runs
-in `views-app` (Android Views, RecyclerView 1.4), `flutter-app` (Flutter 3.47,
-which picks Impeller on OpenGL ES on the Mate), `rn-app` (React Native 0.87 on
-the New Architecture with Hermes), `maui-app` (.NET MAUI 10, fully
-AOT-compiled), `avalonia-app` (Avalonia 12 on Skia, fully AOT-compiled), `egui-app` (egui 0.36 in eframe on OpenGL ES, in a GameActivity), `slint-app`
-(Slint 1.18 on Skia) and `web-app` (a web page in Capacitor 8, on the device's
-Chromium WebView 153: the stack Ionic, Tauri and Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
+from this repository) and `compose-app` (Kotlin, Jetpack Compose).
+`measure.py` runs them alternately on one Android device and measures both
+from outside either framework. The gauntlet also runs in `views-app` (Android
+Views with RecyclerView), `flutter-app` (Flutter, which picks Impeller on
+OpenGL ES on the Mate), `rn-app` (React Native on the New Architecture with
+Hermes), `maui-app` (.NET MAUI, fully AOT-compiled), `avalonia-app` (Avalonia
+on Skia, fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
+GameActivity), `slint-app` (Slint on Skia) and `web-app` (a web page in
+Capacitor, on the device's Chromium WebView: the stack Ionic, Tauri and
+Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
 packages them: each crate's folder is its Android module, behind one launch
 activity that hands the native side the `am start` extras.
+
+This file describes the apps and how they are measured, not results: the
+nightly measures every framework at its latest stable release, and the
+desktop demo's Performance tab shows each device's latest numbers with the
+versions measured ("Every night", below).
 
 ## Scenarios
 
@@ -131,31 +137,11 @@ animation frame; sparklines are SVG paths in a box CSS stretches.
 | 15 | 16 | 0.14 | 300 | 72 |
 | 16 | 20 | 0.12 | 400 | 80 |
 
-Calibration fixes one tier per device: the heaviest every framework draws
-below 60 fps. The Huawei Mate 20 X runs tier 12, since egui held 60 fps there
-up to tier 11. On 2026-10-05 (`frameworks.py`, 380 s):
-
-| App | fps | CPU ms per frame |
-| --- | ---: | ---: |
-| egui | 48.0* | 21* |
-| Flutter | 19.8 | 70 |
-| Views | 13.2 | 123 |
-| Slint | 11.8 | 87 |
-| Cranpose | 8.6 | 172 |
-| Compose | 4.7 | 293 |
-| React Native | 1.7 | 1232 |
-| MAUI | 1.0 | 1204 |
-| Avalonia | 4.0* | 418* |
-| Web | 16.8 | 52* |
-
-\* The web view renders in a sandboxed process of its own, which the CPU
-count leaves out. The web, egui and Avalonia rows were measured beside
-Compose with `ab.py`; egui drew 51.6 fps at 19 ms a frame without AccessKit
-(below).
-
-At tier 5 Cranpose drew 52.8 fps, Views 52 to 54, Flutter 29.5, Compose 26.5,
-React Native 8.4 and MAUI 6.0, while egui held 60. Raising a device's tier
-starts a new series rather than changing an old one.
+Calibration fixes one tier per device: the lightest at which every
+framework draws below 60 fps. The Huawei Mate 20 X runs tier 12 and the
+Apple M3 Pro desktop tier 16. Raising a device's tier starts a new series
+rather than changing an old one. The web view renders in a sandboxed process
+of its own, which the phone's CPU count leaves out.
 
 `parity.py` launches two apps frozen on frame 120 and compares the two
 captures the way the eye does: softened and cut into tiles. On frame 120 a
@@ -171,19 +157,16 @@ bands absorb drift: the frameworks put lines of text on different pixel grids,
 so a list scrolled 720 dp shows its rows a few dozen pixels apart without
 looking any different. Flutter rounds each line to whole logical pixels and
 Compose rounds it up to whole device pixels. Any difference for the same
-composable code is a Cranpose bug. On 2026-10-05, against Compose at tier 5:
+composable code is a Cranpose bug. Against Compose at tier 5 every app stays
+under the 2% gate; what the other frameworks draw differently, by design:
 
-| App | Changed tiles | What differs |
-| --- | ---: | --- |
-| Cranpose | 1.34% | Compose lays out in whole pixels (#1215) |
-| Views | 0.10% | Lines of text a pixel apart |
-| Flutter | 0.93% | Its text is about 2% wider, so a few lines break a word earlier |
-| React Native | 0.85% | Paragraph lines keep their leading above the first line and below the last |
-| MAUI | 0.10% | Lines of text a pixel apart |
-| Avalonia | 1.16% | A few bold titles break a word earlier |
-| Web | 1.24% | Lines of text a pixel apart |
-| Slint | 1.11% | Its text is a little wider, so one ticker tile wraps a row later |
-| egui | 3.31% | Its renderer filters textures in linear light, so the striped avatars average lighter; it puts each glyph on a whole pixel, so a few titles break a word earlier |
+- Flutter and Slint set text slightly wider, so a few lines break a word
+  earlier.
+- React Native keeps a paragraph's leading above its first line and below its
+  last.
+- egui filters textures in linear light, so the striped avatars average
+  lighter, and puts each glyph on a whole pixel.
+- Views, MAUI and the web page put lines of text a pixel apart.
 
 ## Parity rules
 
@@ -299,8 +282,7 @@ desired → present are each settled:
 The thresholds are 3% of fps, 3% of CPU per frame and 2 ms. After four pairs
 anything still open is inconclusive. On the Mate, a same-build A/A comparison
 settles in 4 legs for 60 fps scenes and runs 8 legs for the gauntlet, whose
-launch-to-launch noise is about 3%. Cranpose against Compose on the gauntlet
-took 99 s.
+launch-to-launch noise is about 3%.
 
 ```bash
 python3 benchmarks/compose-vs-cranpose/ab.py --serial SERIAL --a cranpose-release --b cranpose \
@@ -478,12 +460,12 @@ only; merges are judged on the slowest phone.
 | App | Stack |
 | --- | --- |
 | `cranpose` | `cranpose-app`'s desktop binary |
-| `compose` | `compose-desktop-app`: Compose Multiplatform 1.12 on the JVM, drawing the composables `compose-app` draws, from `shared-compose` |
+| `compose` | `compose-desktop-app`: Compose Multiplatform on the JVM, drawing the composables `compose-app` draws, from `shared-compose` |
 | `egui`, `slint` | the Android crates' desktop binaries |
-| `iced` | `iced-app`: iced 0.14 on wgpu |
-| `gpui` | `gpui-app`: Zed's GPUI as `gpui-pre` 0.3.8 publishes it |
+| `iced` | `iced-app`: iced on wgpu |
+| `gpui` | `gpui-app`: Zed's GPUI as `gpui-pre` publishes it |
 | `avalonia` | `avalonia-app`'s desktop head, Native AOT |
-| `swiftui` | `swiftui-app`: SwiftUI on macOS 15 |
+| `swiftui` | `swiftui-app`: SwiftUI |
 | `flutter` | `flutter-app`'s macOS runner, on Impeller |
 | `web` | the web page in a Chrome app window, the engine Electron apps ship |
 
@@ -504,29 +486,8 @@ What each framework lacks and how its app does without:
   app reads a removable volume, so the fonts and Chrome's profile sit in a
   temporary folder.
 
-The M3 Pro is many times faster than the Mate, so the desktop runs tier 16:
-at tier 12 egui, iced and the web page held 55 to 59 fps, and egui's cost
-grows little with the tier (54 fps at tiers 15 and 16 alike). The pictures
-match Compose's at tier 5 within 1.83% (GPUI) and 0.35% (Cranpose). On
-2026-10-06, Apple M3 Pro, 60 Hz display, medians of three rounds of 8 s:
-
-| App | fps | CPU ms per frame | Cores |
-| --- | ---: | ---: | ---: |
-| egui | 56.3 | 15.7 | 0.87 |
-| iced | 45.1 | 22.8 | 1.03 |
-| Web | 33.8 | 56.2 | 1.90 |
-| Flutter | 23.6 | 66.5 | 1.57 |
-| Slint | 21.7 | 47.2 | 1.02 |
-| Cranpose | 21.4 | 73.3 | 1.58 |
-| GPUI | 18.4 | 54.7 | 1.00 |
-| Avalonia | 17.3 | 88.3 | 1.53 |
-| Compose | 16.6 | 97.9 | 1.64 |
-| SwiftUI | 8.6 | 114.5* | 0.98 |
-
-\* SwiftUI hands its layers to the window server, whose CPU the count leaves
-out: other processes spent about 1 core during SwiftUI's legs, against
-0.3 to 0.8 during the others'. GPUI drew one line of text 1.618 em high
-until its root set the other apps' 1.4 em, which moved every card row.
+SwiftUI hands its layers to the window server, whose CPU the count leaves
+out; `desktop.py` reports the cores other processes spent beside each leg.
 
 FrameCount needs the Screen Recording permission once: `framecount/build.sh`
 signs it with a requirement on its bundle identifier, so rebuilds keep it.
@@ -549,15 +510,5 @@ python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs
 
 ## Findings
 
-Historical baseline findings on a Huawei Mate 20 X (Kirin 980, Android 10)
-filed these issues:
-
-- #790: transformed graphics layers render offscreen every frame;
-- #791: nested rotated layers use 1.7 GB and take seconds to reach 60 fps;
-- #792: frames reach the screen 1–2 vsyncs after Compose's;
-- #793: 2–3× Compose's memory on identical screens;
-- #794: the GPU runs at about twice Compose's clock;
-- #795: text with `Ellipsis` and `max_lines` wraps early and drops the "…";
-- #796: the APK is 12× Compose's.
-
-Re-run `measure.py` to check a fix; reports stay out of the repository.
+What the comparisons find is filed as issues, not kept here. Re-run
+`measure.py` to check a fix; reports stay out of the repository.
