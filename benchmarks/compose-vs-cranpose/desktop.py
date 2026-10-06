@@ -304,6 +304,10 @@ def run(args, apps, page, stage):
         return {'kind': 'desktop-parity', 'tier': args.tier, 'freeze': args.freeze,
                 'reference': reference, 'changed_pct': results}
     started_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
+    # The versions `build_apps.sh desktop` built with, the Flutter SDK's
+    # among them.
+    built_file = HERE / 'desktop-versions.json'
+    built = json.loads(built_file.read_text()) if built_file.exists() else {}
     legs = []
     for round_index in range(args.rounds):
         for name in apps:
@@ -326,7 +330,7 @@ def run(args, apps, page, stage):
         'started_at': started_at,
         'main': args.main,
         'device': {'ro.product.model': chip},
-        'subjects': [versions.subject(name, 'desktop', release=args.release) for name in apps],
+        'subjects': [versions.subject(name, 'desktop', built, args.release) for name in apps],
         'protocol': {'warmup_s': args.warmup, 'window_s': args.seconds, 'rounds': args.rounds,
                      'max_other_cores': args.max_others},
         'scenarios': [{'scenario': 'gauntlet', 'extras': f'tier {args.tier}, {width} x {height} window',

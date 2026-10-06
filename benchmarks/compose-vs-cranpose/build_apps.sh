@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the gauntlet's apps on a Mac, as the nightly does on macm3:
 #
-#   build_apps.sh desktop        every desktop app, where desktop.py runs them
+#   build_apps.sh desktop        every desktop app, where desktop.py runs them,
+#                                with desktop-versions.json naming their versions
 #   build_apps.sh android DIR    every Android app but Cranpose's, as DIR/APP.apk,
 #                                with DIR/versions.json naming their versions
 #   build_apps.sh release TAG    Cranpose's desktop app at the release TAG, where
@@ -107,6 +108,7 @@ desktop)
     attempt compose-desktop bash -c "cd '$here/compose-desktop-app' && ./gradlew --no-daemon -q createDistributable"
     step web
     attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json"
+    python3 "$here/versions.py" write "$here/desktop-versions.json" --platform desktop
     step framecount
     # A rebuild of the same source would only sign it again.
     framecount=$HOME/Applications/FrameCount.app
