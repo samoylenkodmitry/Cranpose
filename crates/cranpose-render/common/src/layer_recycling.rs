@@ -52,14 +52,24 @@ pub(crate) fn recycle_children(layer: &mut LayerNode) {
 }
 
 /// Takes `layer`'s own primitives out of its child list, keeping its child
-/// layers in their order, and moves their text boxes into the pool.
+/// layers in their order, and moves their text boxes into the pool. A
+/// layer's own primitives come before and after its child layers, so only
+/// those ends of the list are read.
 pub(crate) fn recycle_primitives(layer: &mut LayerNode) {
+    let children = &mut layer.children;
+    let is_layer = |child: &RenderNode| matches!(child, RenderNode::Layer(_));
+    let first_layer = children.iter().position(is_layer).unwrap_or(children.len());
+    let end = children
+        .iter()
+        .rposition(is_layer)
+        .map_or(first_layer, |last| last + 1);
+    debug_assert!(
+        children[first_layer..end].iter().all(is_layer),
+        "a layer's own primitives never sit between its child layers"
+    );
     POOL.with(|pool| {
         let texts = &mut pool.borrow_mut().texts;
-        for child in layer
-            .children
-            .extract_if(.., |child| !matches!(child, RenderNode::Layer(_)))
-        {
+        let mut keep_text = |child| {
             if let RenderNode::Primitive(PrimitiveEntry {
                 node: PrimitiveNode::Text(text),
                 ..
@@ -67,7 +77,9 @@ pub(crate) fn recycle_primitives(layer: &mut LayerNode) {
             {
                 texts.push(text);
             }
-        }
+        };
+        children.drain(end..).for_each(&mut keep_text);
+        children.drain(..first_layer).for_each(keep_text);
     });
 }
 
