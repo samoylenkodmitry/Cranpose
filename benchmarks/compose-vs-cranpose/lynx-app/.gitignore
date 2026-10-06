@@ -1,0 +1,6 @@
+page/node_modules/
+page/dist/
+.gradle/
+app/build/
+build/
+local.properties

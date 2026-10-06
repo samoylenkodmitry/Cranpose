@@ -1,8 +1,7 @@
 // RGBA pixels as a PNG data URI, for the platform's own image view: one
 // stored (uncompressed) deflate block per 64 KiB of scanlines.
 
-/** Hermes provides it; React Native's types do not declare it. */
-declare function btoa(binary: string): string;
+const BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
   let c = n;
@@ -89,9 +88,17 @@ export function pngDataUri(rgba: Uint8Array, width: number, height: number): str
   png.chunk('IHDR', header.bytes);
   png.chunk('IDAT', zlibStored(raw));
   png.chunk('IEND', []);
-  let binary = '';
-  for (let start = 0; start < png.bytes.length; start += 0x8000) {
-    binary += String.fromCharCode(...png.bytes.slice(start, start + 0x8000));
+  return `data:image/png;base64,${base64(png.bytes)}`;
+}
+
+/** `bytes` in base64, as no JavaScript engine of the apps is sure to have `btoa`. */
+function base64(bytes: number[]): string {
+  let out = '';
+  for (let at = 0; at < bytes.length; at += 3) {
+    const triple = (bytes[at] << 16) | ((bytes[at + 1] ?? 0) << 8) | (bytes[at + 2] ?? 0);
+    out += BASE64[(triple >>> 18) & 63] + BASE64[(triple >>> 12) & 63];
+    out += at + 1 < bytes.length ? BASE64[(triple >>> 6) & 63] : '=';
+    out += at + 2 < bytes.length ? BASE64[triple & 63] : '=';
   }
-  return `data:image/png;base64,${btoa(binary)}`;
+  return out;
 }

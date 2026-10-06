@@ -85,6 +85,12 @@ APPS = {
         'activity': 'dev.perfcompare.nativescript/com.tns.NativeScriptActivity',
         'apk': HERE / 'nativescript-app/platforms/android/app/build/outputs/apk/release/app-release.apk',
     },
+    # Lynx 4: ReactLynx on PrimJS driving Lynx's native elements, the gauntlet only.
+    'lynx': {
+        'package': 'dev.perfcompare.lynx',
+        'activity': 'dev.perfcompare.lynx/.MainActivity',
+        'apk': HERE / 'lynx-app/app/build/outputs/apk/release/app-release.apk',
+    },
     # The web platform (Chromium's Android WebView) in Capacitor: the gauntlet only.
     'web': {
         'package': 'dev.perfcompare.web',
