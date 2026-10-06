@@ -5,11 +5,14 @@ Each app runs alone in a 1280 x 820 window (`perf-data`'s `DESKTOP_WINDOW`),
 with the tier in `PERF_TIER`, the frame to freeze on in `PERF_FREEZE` and the
 Roboto files in `PERF_FONTS`; Cranpose takes them as `--tier=N` arguments and
 the web page in its address. `FrameCount.app` counts the frames the app's
-window presents, the way SurfaceFlinger counts a phone app's, and `ps`
-counts the CPU time of the app and every process it started. The apps are
-measured in turn, round after round, as `frameworks.py` measures phones, and
-the run is a `frameworks` run `scripts/perf/publish.py` publishes. A leg in
-which other processes spent more than `--max-others` cores is measured again.
+window presents, the way SurfaceFlinger counts a phone app's, `ps` counts
+the CPU time of the app and every process it started, `footprint` the memory
+they hold and `macmon` the clocks the chip ran at. The apps are measured in
+turn, round after round, as `frameworks.py` measures phones, and the run is a
+`frameworks` run `scripts/perf/publish.py` publishes. A leg in which other
+processes spent more than `--max-others` cores is measured again. Each window
+is as short as the app's frame rate allows: `--min-frames` frames, within
+`--window` and `--max-window` seconds.
 
   python3 desktop.py --output results/desktop --tier 12
   python3 desktop.py --output results/desktop-parity --parity --tier 5
@@ -44,11 +47,17 @@ import versions
 HERE = Path(__file__).resolve().parent
 FONTS = HERE / 'fonts'
 FRAMECOUNT = Path.home() / 'Applications/FrameCount.app'
+MACMON = shutil.which('macmon')
+CLOCK_INTERVAL_MS = 250
 CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 # `perf-data`'s `DESKTOP_WINDOW`, in points.
 DESKTOP_WINDOW = (1280, 820)
 # The window's title bar at the display's 2x scale, which pictures leave out.
 TITLE_BAR_PIXELS = 64
+
+# What each app's legs are summarized by.
+SUMMARY = ('fps', 'cpu_ms_per_frame', 'cpu_cores', 'server_cores', 'other_cores', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz',
+           'gpu_mhz')
 
 # Each app's command: `{tier}`, `{freeze}`, `{page}` and `{profile}` are
 # filled in for the run.
@@ -64,6 +73,7 @@ APPS = {
     'gpui': [HERE / 'gpui-app/target/release/perf-compare-gpui'],
     'avalonia': [HERE / 'avalonia-app/bin/Release/net10.0/osx-arm64/publish/PerfAvalonia'],
     'swiftui': [HERE / 'swiftui-app/build/PerfSwiftUI.app/Contents/MacOS/PerfSwiftUI'],
+    'appkit': [HERE / 'appkit-app/build/PerfAppKit.app/Contents/MacOS/PerfAppKit'],
     'flutter': [HERE / 'flutter-app/build/macos/Build/Products/Release/perf_flutter.app/Contents/MacOS/perf_flutter'],
     'compose': [HERE / 'compose-desktop-app/build/compose/binaries/main/app/PerfCompose.app/Contents/MacOS/PerfCompose'],
     # Chrome, the engine Electron apps ship, in an app window of its own
@@ -71,6 +81,12 @@ APPS = {
     'web': [CHROME, '--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
             '--enable-logging=stderr', '--window-size=1280,852',
             '--app={page}?tier={tier}&freeze={freeze}'],
+    # The same page in Tauri, on the system's WKWebView.
+    'tauri': [HERE / 'tauri-app/target/release/perf-compare-tauri', '--page={page}'],
+    'dioxus': [HERE / 'dioxus-app/target/release/perf-compare-dioxus'],
+    'freya': [HERE / 'freya-app/target/release/perf-compare-freya'],
+    'floem': [HERE / 'floem-app/target/release/perf-compare-floem'],
+    'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
 }
 
 
@@ -93,24 +109,90 @@ def serve_page():
     return f'http://127.0.0.1:{server.server_address[1]}/index.html'
 
 
-def cpu_seconds(root):
-    """CPU time of `root` and every process below it, and of all processes."""
-    table = subprocess.run(['ps', '-A', '-o', 'pid=,ppid=,time='], capture_output=True, text=True,
-                           check=True).stdout
-    children, times = {}, {}
+# The services a WKWebView runs its page in. launchd starts them, outside the
+# app's process tree, for the app that asked.
+WEBKIT_SERVICE = 'com.apple.WebKit.'
+# The window server composites every window, and renders the layer trees
+# SwiftUI, AppKit and WebKit hand it; a Metal app hands it one surface.
+WINDOW_SERVER = '/WindowServer'
+
+
+def seconds(clock):
+    """`ps` time, `[[days-]hours:]minutes:seconds`, in seconds."""
+    days, _, rest = clock.rpartition('-')
+    total = 0.0
+    for part in rest.split(':'):
+        total = total * 60 + float(part)
+    return total + (int(days) * 86_400 if days else 0)
+
+
+def processes():
+    """Every process: its parent, its CPU seconds, how long ago it started and
+    its command."""
+    table = subprocess.run(['ps', '-A', '-o', 'pid=,ppid=,time=,etime=,comm='], capture_output=True,
+                           text=True, check=True).stdout
+    found = {}
     for line in table.splitlines():
-        pid, ppid, clock = line.split()
-        children.setdefault(int(ppid), []).append(int(pid))
-        seconds = 0.0
-        for part in clock.split(':'):
-            seconds = seconds * 60 + float(part)
-        times[int(pid)] = seconds
-    total, pending = 0.0, [root]
+        pid, ppid, clock, elapsed, command = line.split(None, 4)
+        found[int(pid)] = (int(ppid), seconds(clock), seconds(elapsed), command)
+    return found
+
+
+def tree(root, table, age):
+    """`root`, every process below it, and the WebKit services started in the
+    `age` seconds since the app started, which do a WKWebView's work."""
+    children = {}
+    for pid, (ppid, *_) in table.items():
+        children.setdefault(ppid, []).append(pid)
+    services = [pid for pid, (_, _, elapsed, command) in table.items()
+                if WEBKIT_SERVICE in command and elapsed <= age]
+    found, pending = set(), [root, *services]
     while pending:
         pid = pending.pop()
-        total += times.get(pid, 0.0)
-        pending.extend(children.get(pid, []))
-    return total, sum(times.values())
+        if pid not in found:
+            found.add(pid)
+            pending.extend(children.get(pid, []))
+    return found
+
+
+MB = 1024 * 1024
+
+
+def memory(pids, stage):
+    """What the app's processes hold in memory, as macOS counts a process's
+    footprint, and the part of it that is the GPU's: Metal's buffers and
+    textures (`IOAccelerator`) and the surfaces the window server composites
+    (`IOSurface`)."""
+    out = stage / 'footprint.json'
+    targets = [part for pid in sorted(pids) for part in ('-p', str(pid))]
+    subprocess.run(['footprint', '-f', 'bytes', '-j', str(out), *targets], capture_output=True,
+                   check=True, timeout=60)
+    report = json.loads(out.read_text())
+    graphics = sum(values['dirty'] + values['swapped'] for category, values in report['summary'].items()
+                   if category.startswith(('IOAccelerator', 'IOSurface')) or '(graphics)' in category)
+    return {'ram_mb': round(report['total footprint'] / MB, 1), 'gpu_ram_mb': round(graphics / MB, 1)}
+
+
+class Clocks:
+    """The performance cores' and the GPU's clocks over a window, as `macmon`
+    reads them from the chip's own counters without root. Without `macmon`
+    the run has no clocks."""
+
+    def __init__(self):
+        self.process = subprocess.Popen(
+            [MACMON, 'pipe', '-i', str(CLOCK_INTERVAL_MS)], stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True) if MACMON else None
+
+    def stop(self):
+        if not self.process:
+            return {}
+        self.process.terminate()
+        output, _ = self.process.communicate(timeout=10)
+        samples = [json.loads(line) for line in output.splitlines() if line.startswith('{')]
+        if not samples:
+            return {}
+        return {'cpu_mhz': round(statistics.mean(sample['pcpu_freq_mhz'] for sample in samples)),
+                'gpu_mhz': round(statistics.mean(sample['gpu_freq_mhz'] for sample in samples))}
 
 
 def wait_for(log, text, timeout):
@@ -154,6 +236,7 @@ class App:
         variables = {'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze), 'PERF_FONTS': str(stage / 'fonts')}
         executable, arguments = command[0], command[1:]
         self.log.write_text('')
+        self.started = time.monotonic()
         if '.app/Contents/MacOS/' not in executable:
             with self.log.open('w') as output:
                 self.process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
@@ -201,31 +284,48 @@ class App:
 
 
 def measure(name, args, work, page, stage):
-    """One window of `args.seconds`: frames presented and CPU spent."""
+    """One window: frames presented, CPU spent, the clocks the chip ran at and
+    the memory the app held at the window's end. The window is long enough for
+    `--min-frames` frames at the app's last rate, within `--window` and
+    `--max-window` seconds."""
+    window = args.windows.get(name, args.window)
     app = App(name, args.tier, 0, work, page, stage)
     try:
         wait_for(app.log, 'PERF first_frame', args.timeout)
         time.sleep(args.warmup)
-        (app_before, all_before), wall_before = cpu_seconds(app.pid), time.monotonic()
+        clocks = Clocks()
+        before, wall_before = processes(), time.monotonic()
         out = stage / f'{name}-frames.json'
-        frames = framecount(app.pid, out, '--seconds', str(args.seconds), '--out', str(out))
-        (app_after, all_after), wall_after = cpu_seconds(app.pid), time.monotonic()
+        frames = framecount(app.pid, out, '--seconds', f'{window:.1f}', '--out', str(out))
+        after, wall_after = processes(), time.monotonic()
+        clocked = clocks.stop()
+        mine = tree(app.pid, after, wall_after - app.started + 1)
+        held = memory(mine, stage)
         shutil.copy(out, work / out.name)
     finally:
         app.stop()
     # FrameCount starts and stops around its window, so CPU counts as a rate
     # over the whole span and divides by the frame rate. What every other
     # process spent in the span, FrameCount's capture included, tells a run
-    # that something else disturbed.
+    # that something else disturbed; a process that ended within the span
+    # counts for neither.
     wall = wall_after - wall_before
-    cores = (app_after - app_before) / wall
-    others = (all_after - all_before) / wall - cores
+    spent = {pid: cpu - before.get(pid, (0, 0.0))[1] for pid, (_, cpu, _, _) in after.items()}
+    server = {pid for pid, (_, _, _, command) in after.items() if command.endswith(WINDOW_SERVER)}
+    server_cores = sum(spent[pid] for pid in server) / wall
+    # The window server's work counts toward the app in front: its layers
+    # are what the window server renders.
+    cores = sum(value for pid, value in spent.items() if pid in mine) / wall + server_cores
+    others = sum(value for pid, value in spent.items() if pid not in mine and pid not in server) / wall
     fps = frames['fps']
-    return {'fps': round(fps, 1), 'frames': frames['frames'],
+    wanted = args.min_frames / fps if fps > 0 else args.max_window
+    args.windows[name] = min(args.max_window, max(args.window, wanted))
+    return {'fps': round(fps, 1), 'frames': frames['frames'], 'window_s': round(window, 1),
             'interval_p50_ms': round(frames['interval_p50_ms'], 2),
             'interval_p99_ms': round(frames['interval_p99_ms'], 2),
-            'cpu_cores': round(cores, 2), 'other_cores': round(others, 2),
-            'cpu_ms_per_frame': round(cores * 1000 / fps, 2) if fps else None}
+            'cpu_cores': round(cores, 2), 'server_cores': round(server_cores, 2), 'other_cores': round(others, 2),
+            'cpu_ms_per_frame': round(cores * 1000 / fps, 2) if fps else None,
+            **held, **clocked}
 
 
 def picture(name, args, work, page, stage):
@@ -250,9 +350,12 @@ def main():
     parser.add_argument('--apps', help='the apps to run; by default every app that is built')
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     parser.add_argument('--tier', type=int, default=12)
-    parser.add_argument('--rounds', type=int, default=3)
-    parser.add_argument('--seconds', type=float, default=5.0)
-    parser.add_argument('--warmup', type=float, default=2.0)
+    parser.add_argument('--rounds', type=int, default=2)
+    parser.add_argument('--warmup', type=float, default=1.0)
+    parser.add_argument('--window', type=float, default=3.0, help='the shortest window, in seconds')
+    parser.add_argument('--max-window', type=float, default=8.0, help='the longest window, in seconds')
+    parser.add_argument('--min-frames', type=int, default=40,
+                        help='frames a window should hold at the app\'s last rate')
     parser.add_argument('--timeout', type=float, default=60.0)
     parser.add_argument('--main', help='the commit the Cranpose app was built at, recorded with the run')
     parser.add_argument('--max-others', type=float, default=1.5,
@@ -309,6 +412,7 @@ def run(args, apps, page, stage):
     built_file = HERE / 'desktop-versions.json'
     built = json.loads(built_file.read_text()) if built_file.exists() else {}
     legs = []
+    args.windows = {}
     for round_index in range(args.rounds):
         for name in apps:
             for _ in range(3):
@@ -319,8 +423,9 @@ def run(args, apps, page, stage):
                 if leg['other_cores'] <= args.max_others:
                     break
             legs.append({'subject': name, 'round': round_index, **leg})
-    summary = {name: {key: round(statistics.median(leg[key] or 0 for leg in legs if leg['subject'] == name), 2)
-                      for key in ('fps', 'cpu_ms_per_frame', 'cpu_cores', 'other_cores')}
+    summary = {name: {key: round(statistics.median(values), 2)
+                      for key in SUMMARY
+                      if (values := [leg[key] for leg in legs if leg['subject'] == name and leg.get(key) is not None])}
                for name in apps}
     chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
                           check=True).stdout.strip()
@@ -331,8 +436,8 @@ def run(args, apps, page, stage):
         'main': args.main,
         'device': {'ro.product.model': chip},
         'subjects': [versions.subject(name, 'desktop', built, args.release) for name in apps],
-        'protocol': {'warmup_s': args.warmup, 'window_s': args.seconds, 'rounds': args.rounds,
-                     'max_other_cores': args.max_others},
+        'protocol': {'warmup_s': args.warmup, 'window_s': args.window, 'max_window_s': args.max_window,
+                     'min_frames': args.min_frames, 'rounds': args.rounds, 'max_other_cores': args.max_others},
         'scenarios': [{'scenario': 'gauntlet', 'extras': f'tier {args.tier}, {width} x {height} window',
                        'legs': legs, 'summary': summary, 'verdicts': {}}],
     }

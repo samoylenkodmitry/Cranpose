@@ -42,19 +42,28 @@ SOURCES = {
     'iced': 'benchmarks/compose-vs-cranpose/iced-app/src/main.rs',
     'gpui': 'benchmarks/compose-vs-cranpose/gpui-app/src/main.rs',
     'swiftui': 'benchmarks/compose-vs-cranpose/swiftui-app/Gauntlet.swift',
+    'appkit': 'benchmarks/compose-vs-cranpose/appkit-app/Gauntlet.swift',
     'web': 'benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts',
+    'tauri': 'benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts',
+    'dioxus': 'benchmarks/compose-vs-cranpose/dioxus-app/src/main.rs',
+    'freya': 'benchmarks/compose-vs-cranpose/freya-app/src/main.rs',
+    'floem': 'benchmarks/compose-vs-cranpose/floem-app/src/main.rs',
+    'fyne': 'benchmarks/compose-vs-cranpose/fyne-app/main.go',
 }
 
 # The apps each platform runs besides Cranpose's.
 PLATFORM_APPS = {
     'android': ['compose', 'views', 'flutter', 'rn', 'maui', 'avalonia', 'egui', 'slint', 'web'],
-    'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'flutter', 'web'],
+    'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
+                'tauri', 'dioxus', 'freya', 'floem', 'fyne'],
 }
 
 NAMES = {
     'cranpose': 'Cranpose', 'cranpose-release': 'Cranpose', 'compose': 'Compose', 'views': 'Views',
     'flutter': 'Flutter', 'rn': 'React Native', 'maui': '.NET MAUI', 'avalonia': 'Avalonia',
-    'egui': 'egui', 'slint': 'Slint', 'iced': 'iced', 'gpui': 'GPUI', 'swiftui': 'SwiftUI', 'web': 'Web',
+    'egui': 'egui', 'slint': 'Slint', 'iced': 'iced', 'gpui': 'GPUI', 'swiftui': 'SwiftUI', 'appkit': 'AppKit',
+    'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'freya': 'Freya', 'floem': 'Floem',
+    'fyne': 'Fyne',
 }
 
 
@@ -155,6 +164,15 @@ def egui_update():
             cargo_update('egui-app')()
 
 
+def go_module(module):
+    """The latest release the Go module proxy knows of `module`."""
+    return json.loads(fetch(f'https://proxy.golang.org/{module}/@latest'))['Version'].lstrip('v')
+
+
+def go_tidy(app_dir):
+    return lambda: run('go', 'mod', 'tidy', cwd=HERE / app_dir)
+
+
 def npm_lock(app_dir):
     return lambda: run('npm', 'install', '--package-lock-only', '--no-audit', '--no-fund', cwd=HERE / app_dir)
 
@@ -179,11 +197,36 @@ PINS = {
     'rn': Pin(['rn-app/package.json'], r'"react-native": "([^"]+)"', lambda: npm('react-native'), npm_lock('rn-app')),
     'web': Pin(['web-app/package.json'], r'"@capacitor/(?:core|android|cli)": "([^"]+)"',
                lambda: npm('@capacitor/core'), npm_lock('web-app')),
+    'tauri': Pin(['tauri-app/Cargo.toml'], r'tauri = \{ version = "([^"]+)"', lambda: crates_io('tauri'),
+                 cargo_update('tauri-app')),
+    'dioxus': Pin(['dioxus-app/Cargo.toml'], r'dioxus = \{ version = "([^"]+)"', lambda: crates_io('dioxus'),
+                  cargo_update('dioxus-app')),
+    'freya': Pin(['freya-app/Cargo.toml'], r'freya = \{ version = "([^"]+)"', lambda: crates_io('freya'),
+                 cargo_update('freya-app')),
+    'fyne': Pin(['fyne-app/go.mod'], r'fyne\.io/fyne/v2 v([\d.]+)', lambda: go_module('fyne.io/fyne/v2'),
+                go_tidy('fyne-app')),
+    'floem': Pin(['floem-app/Cargo.toml'], r'floem(?:_renderer)? = (?:\{ version = )?"([^"]+)"',
+                 lambda: crates_io('floem'), cargo_update('floem-app')),
 }
+
+# Each Rust app's folder and the crate whose locked version names its
+# framework.
+RUST_CRATES = {
+    'egui': ('egui-app', 'eframe'), 'slint': ('slint-app', 'slint'), 'iced': ('iced-app', 'iced'),
+    'gpui': ('gpui-app', 'gpui-pre'), 'tauri': ('tauri-app', 'tauri'), 'dioxus': ('dioxus-app', 'dioxus'),
+    'freya': ('freya-app', 'freya'), 'floem': ('floem-app', 'floem'),
+}
+# Apps that draw in the system's WKWebView on the desktop.
+WEBKIT = {'tauri', 'dioxus'}
 
 def chrome_version():
     plist = Path('/Applications/Google Chrome.app/Contents/Info.plist')
     return run('defaults', 'read', str(plist.with_suffix('')), 'CFBundleShortVersionString')
+
+
+def safari_version():
+    """The WebKit of the system: Safari's version."""
+    return run('defaults', 'read', '/Applications/Safari.app/Contents/Info', 'CFBundleShortVersionString')
 
 
 def flutter_version():
@@ -211,17 +254,14 @@ def version(app, platform, release=None):
     if app == 'compose':
         return (f'BOM {PINS["compose"].current()}' if platform == 'android'
                 else f'Multiplatform {PINS["compose-desktop"].current()}')
-    if app == 'egui':
-        return locked('egui-app', 'eframe')
-    if app in ('slint', 'iced'):
-        return locked(f'{app}-app', app)
-    if app == 'gpui':
-        return locked('gpui-app', 'gpui-pre')
+    if app in RUST_CRATES:
+        found = locked(*RUST_CRATES[app])
+        return f'{found}, WKWebView {safari_version()}' if app in WEBKIT and platform == 'desktop' else found
     if app == 'flutter':
         return flutter_version()
     if app == 'maui':
         return maui_version()
-    if app == 'swiftui':
+    if app in ('swiftui', 'appkit'):
         return f'macOS {run("sw_vers", "-productVersion")}'
     if app == 'web':
         capacitor = PINS['web'].current()
@@ -230,8 +270,16 @@ def version(app, platform, release=None):
 
 
 def subject(app, platform, versions=None, release=None):
-    """A run's subject: the app, its framework and version, and its source."""
-    found = (versions or {}).get(app) or version(app, platform, release)
+    """A run's subject: the app, its framework and version, and its source.
+    A version no file or tool on this machine names reads as unknown, so a
+    night's measurements are kept."""
+    found = (versions or {}).get(app)
+    if not found:
+        try:
+            found = version(app, platform, release)
+        except (OSError, subprocess.CalledProcessError) as error:
+            print(f'{app}: no version: {error}', flush=True)
+            found = 'unknown'
     return {'name': app, 'label': f'{NAMES[app]} {found}', 'version': found, 'source': SOURCES[app]}
 
 

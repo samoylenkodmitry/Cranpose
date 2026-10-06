@@ -36,7 +36,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from measure import APPS, HEAVY, REMOTE_WINDOW, HERE, Device, device_lock, frame_rate, launch, measure_run
+from measure import (APPS, HEAVY, REMOTE_WINDOW, HERE, Device, device_lock, frame_rate, launch, measure_run,
+                     memory_mb)
 
 # Metric: (threshold, whether the threshold is relative, whether more is better).
 DECIDING = {
@@ -44,7 +45,7 @@ DECIDING = {
     'cpu_ms_per_frame': (0.03, True, False),
     'desired_to_present_p50_ms': (2.0, False, False),
 }
-REPORTED = ['janky_pct', 'interval_p99_ms', 'gpu_mhz', 'pss_mb']
+REPORTED = ['janky_pct', 'interval_p99_ms', 'cpu_mhz', 'gpu_mhz', 'ram_mb', 'gpu_ram_mb']
 
 
 def metric_values(legs, subject, metric):
@@ -81,9 +82,11 @@ def leg_record(run, subject, order):
         'janky_pct': run['janky_pct'],
         'interval_p99_ms': run['interval_p99_ms'],
         'cpu_ms_per_frame': run['cpu_ms_per_frame'],
+        # The big cores run the UI and render threads.
+        'cpu_mhz': run.get('cpu_big_mhz'),
         'gpu_mhz': run.get('gpu_mhz'),
         'desired_to_present_p50_ms': run.get('desired_to_present_p50_ms'),
-        'pss_mb': run['memory'].get('total_pss_kb', 0) / 1024,
+        **memory_mb(run['memory']),
         'throttled': run['throttled'],
         'temperature_before': run['temperature_before'],
         'temperature_after': run['temperature_after'],

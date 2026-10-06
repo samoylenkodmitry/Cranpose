@@ -32,16 +32,42 @@ import {
   widthFraction,
 } from '../../shared-ts/data.js';
 
-/** The app's plugin: what `am start` asked, and `PERF` lines under the other apps' log tag. */
+interface Launch {
+  tier: number;
+  freeze: number;
+}
+
+/** The Android app's plugin: what `am start` asked, and `PERF` lines under the other apps' log tag. */
 interface LaunchPlugin {
-  get(): Promise<{ tier: number; freeze: number }>;
+  get(): Promise<Launch>;
   log(options: { message: string }): Promise<void>;
 }
 
 declare global {
   interface Window {
     Capacitor?: { Plugins: { Launch?: LaunchPlugin } };
+    /** The Tauri app's commands: the same two. */
+    __TAURI__?: { core: { invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> } };
   }
+}
+
+/** What the app around the page asked, and where its `PERF` lines go: the
+ * Android app's plugin, the Tauri app's commands, or in a desktop browser the
+ * page's address and the console `desktop.py` reads. */
+function host(): { launch: Promise<Launch>; log(message: string): void } {
+  const plugin = window.Capacitor?.Plugins.Launch;
+  if (plugin) {
+    return { launch: plugin.get(), log: (message) => void plugin.log({ message }) };
+  }
+  const tauri = window.__TAURI__?.core;
+  if (tauri) {
+    return { launch: tauri.invoke<Launch>('launch'), log: (message) => void tauri.invoke('log', { message }) };
+  }
+  const query = new URLSearchParams(location.search);
+  return {
+    launch: Promise.resolve({ tier: Number(query.get('tier') ?? 5), freeze: Number(query.get('freeze') ?? 0) }),
+    log: (message) => console.log(message),
+  };
 }
 
 /** Blocks of five card rows and a cluster: no measurement window reaches the end. */
@@ -244,13 +270,8 @@ interface Row {
 }
 
 async function main() {
-  const plugin = window.Capacitor?.Plugins.Launch;
-  // In a desktop browser `desktop.py` asks for the tier in the page's address.
-  const query = new URLSearchParams(location.search);
-  const launch = plugin
-    ? await plugin.get()
-    : { tier: Number(query.get('tier') ?? 5), freeze: Number(query.get('freeze') ?? 0) };
-  const log = (message: string) => (plugin ? plugin.log({ message }) : Promise.resolve(console.log(message)));
+  const { launch: launched, log } = host();
+  const launch = await launched;
   const tier = gauntletTier(launch.tier);
   document.documentElement.style.setProperty('--s', String(tier.scale));
 
@@ -350,8 +371,8 @@ async function main() {
   };
   fill(0, 0);
   requestAnimationFrame(tick);
-  if (!plugin) {
-    // In a desktop browser nothing else reports the first frame.
+  if (!window.Capacitor?.Plugins.Launch) {
+    // Outside the Android app nothing else reports the first frame.
     requestAnimationFrame(() => log('PERF first_frame'));
   }
 }

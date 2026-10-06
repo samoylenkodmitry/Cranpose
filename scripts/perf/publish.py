@@ -17,7 +17,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 DATA_BRANCH = 'perf-data'
-SUMMARY_METRICS = ['fps', 'cpu_ms_per_frame', 'desired_to_present_p50_ms', 'janky_pct', 'pss_mb']
+SUMMARY_METRICS = ['fps', 'cpu_ms_per_frame', 'desired_to_present_p50_ms', 'janky_pct', 'ram_mb',
+                   'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
 
 
 def git(*args, cwd):

@@ -21,8 +21,10 @@ def run():
         'scenarios': [{
             'scenario': 'gauntlet',
             'legs': [{}, {}, {}, {}],
-            'summary': {'cranpose-release': {'fps': 50.0, 'cpu_ms_per_frame': 33.0, 'gpu_mhz': 139},
-                        'cranpose': {'fps': 52.8, 'cpu_ms_per_frame': 32.0, 'gpu_mhz': 139}},
+            'summary': {'cranpose-release': {'fps': 50.0, 'cpu_ms_per_frame': 33.0, 'gpu_mhz': 139,
+                                             'interval_p99_ms': 41.0},
+                        'cranpose': {'fps': 52.8, 'cpu_ms_per_frame': 32.0, 'gpu_mhz': 139,
+                                     'interval_p99_ms': 38.0}},
             'verdicts': {'fps': 'better', 'cpu_ms_per_frame': 'same', 'desired_to_present_p50_ms': 'same'},
         }],
         'confirmed_regressions': {},
@@ -35,7 +37,8 @@ class IndexEntryTest(unittest.TestCase):
         gauntlet = entry['scenarios']['gauntlet']
         self.assertEqual(gauntlet['legs'], 4)
         self.assertEqual(gauntlet['summary']['cranpose']['fps'], 52.8)
-        self.assertNotIn('gpu_mhz', gauntlet['summary']['cranpose'], 'only the charted metrics')
+        self.assertEqual(gauntlet['summary']['cranpose']['gpu_mhz'], 139)
+        self.assertNotIn('interval_p99_ms', gauntlet['summary']['cranpose'], 'only the charted metrics')
         self.assertEqual(gauntlet['verdicts']['fps'], 'better')
         self.assertEqual(entry['device'], 'EVR-AL00')
         self.assertEqual([subject['label'] for subject in entry['subjects']], ['v0.9.7', 'abc123def'])

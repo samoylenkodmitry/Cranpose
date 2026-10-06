@@ -360,6 +360,13 @@ def meminfo(device, package):
     return result
 
 
+def memory_mb(memory):
+    """What `meminfo` read, in MB: the app's PSS, and the part of it the GPU's
+    buffers hold (GL and EGL mtrack)."""
+    return {'ram_mb': memory.get('total_pss_kb', 0) / 1024,
+            'gpu_ram_mb': (memory.get('GL mtrack', 0) + memory.get('EGL mtrack', 0)) / 1024}
+
+
 def launch(device, app, scenario, extra=()):
     for spec in APPS.values():
         device.shell('am', 'force-stop', spec['package'])

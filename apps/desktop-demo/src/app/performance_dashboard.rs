@@ -172,6 +172,92 @@ fn figure(value: Option<f64>) -> String {
     value.map_or_else(|| "–".to_string(), |value| format!("{value:.1}"))
 }
 
+/// What the trend and the framework bars show of each run's medians.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Metric {
+    Fps,
+    CpuPerFrame,
+    Ram,
+    GpuRam,
+    CpuClock,
+    GpuClock,
+}
+
+impl Metric {
+    const ALL: [Self; 6] = [
+        Self::Fps,
+        Self::CpuPerFrame,
+        Self::Ram,
+        Self::GpuRam,
+        Self::CpuClock,
+        Self::GpuClock,
+    ];
+
+    /// The median's name in the run index.
+    fn key(self) -> &'static str {
+        match self {
+            Self::Fps => "fps",
+            Self::CpuPerFrame => "cpu_ms_per_frame",
+            Self::Ram => "ram_mb",
+            Self::GpuRam => "gpu_ram_mb",
+            Self::CpuClock => "cpu_mhz",
+            Self::GpuClock => "gpu_mhz",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Fps => "fps",
+            Self::CpuPerFrame => "CPU ms per frame",
+            Self::Ram => "RAM MB",
+            Self::GpuRam => "GPU RAM MB",
+            Self::CpuClock => "CPU MHz",
+            Self::GpuClock => "GPU MHz",
+        }
+    }
+
+    /// How each platform measures it.
+    fn about(self) -> &'static str {
+        match self {
+            Self::Fps => {
+                "Frames the display showed each second, counted outside the app; 60 at most."
+            }
+            Self::CpuPerFrame => {
+                "CPU time of the app and every process it started, per frame shown."
+            }
+            Self::Ram => {
+                "Memory the app holds at the window's end: PSS on Android, the footprint of the \
+                 app and every process it started on macOS."
+            }
+            Self::GpuRam => {
+                "The GPU's part of that memory: GL and EGL mtrack on Android; Metal buffers, \
+                 textures and window surfaces on macOS."
+            }
+            Self::CpuClock => {
+                "Mean clock over the window of the big cores on Android, the performance cores \
+                 on macOS."
+            }
+            Self::GpuClock => "Mean GPU clock over the window.",
+        }
+    }
+
+    fn format(self, value: f64) -> String {
+        match self {
+            Self::Fps | Self::CpuPerFrame => format!("{value:.1}"),
+            Self::Ram | Self::GpuRam | Self::CpuClock | Self::GpuClock => format!("{value:.0}"),
+        }
+    }
+
+    /// What a full bar stands for: the display's 60 fps for the frame rate,
+    /// the run's largest value for the rest.
+    fn full_scale(self, values: &[Option<f64>]) -> f64 {
+        match self {
+            Self::Fps => 60.0,
+            _ => values.iter().flatten().copied().fold(0.0, f64::max),
+        }
+    }
+}
+
 async fn load_index(client: &HttpClientRef) -> Result<PerfIndex, String> {
     let json = client
         .get_text(INDEX_URL)
@@ -232,6 +318,7 @@ pub fn PerformanceDashboard(index: Rc<PerfIndex>, refresh: Option<MutableState<u
     let palette = Palette::new(isSystemInDarkTheme());
     let scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     let selected = cranpose_core::rememberMutableStateOf(|| "gauntlet".to_string());
+    let metric = cranpose_core::rememberMutableStateOf(|| Metric::Fps);
     Column(
         Modifier::empty()
             .fill_max_size()
@@ -245,7 +332,7 @@ pub fn PerformanceDashboard(index: Rc<PerfIndex>, refresh: Option<MutableState<u
             match nightly.last() {
                 Some(latest) => {
                     LatestNightly(palette, latest.clone());
-                    Trend(palette, Rc::new(nightly.clone()), selected);
+                    Trend(palette, Rc::new(nightly.clone()), selected, metric);
                 }
                 None => {
                     Text(
@@ -424,50 +511,83 @@ fn TableRow(cells: Vec<String>, colors: Vec<Color>, header: bool) {
 }
 
 #[composable]
-fn Trend(palette: Palette, nightly: Rc<Vec<PerfRun>>, selected: MutableState<String>) {
+fn Trend(
+    palette: Palette,
+    nightly: Rc<Vec<PerfRun>>,
+    selected: MutableState<String>,
+    metric: MutableState<Metric>,
+) {
     let scenario = selected.get();
-    let title = format!("{scenario}: frames per second, night by night");
+    let title = format!("{scenario}: {}, night by night", metric.get().name());
     Card(palette, title, move || {
-        ScenarioChips(palette, nightly.clone(), selected);
+        let names: Vec<String> = nightly
+            .last()
+            .map(|run| run.scenarios.keys().cloned().collect())
+            .unwrap_or_default();
+        let chosen = names.iter().position(|name| *name == selected.get());
+        let choices = names.clone();
+        Chips(palette, names, chosen, move |index| {
+            selected.set(choices[index].clone());
+        });
+        MetricChips(palette, metric);
         let scenario = selected.get();
-        let release: Vec<f32> = nightly
-            .iter()
-            .map(|run| run.median(&scenario, 0, "fps").unwrap_or(f64::NAN) as f32)
-            .collect();
-        let main: Vec<f32> = nightly
-            .iter()
-            .map(|run| run.median(&scenario, 1, "fps").unwrap_or(f64::NAN) as f32)
-            .collect();
+        let shown = metric.get();
+        let series = |subject: usize| -> Vec<f32> {
+            nightly
+                .iter()
+                .map(|run| {
+                    run.median(&scenario, subject, shown.key())
+                        .unwrap_or(f64::NAN) as f32
+                })
+                .collect()
+        };
         let regressed: Vec<bool> = nightly
             .iter()
             .map(|run| run.confirmed_regressions.contains_key(&scenario))
             .collect();
-        LineChart(palette, release, main, regressed);
+        LineChart(palette, series(0), series(1), regressed);
         Text(
-            "Grey: the release; blue: main; red dots: confirmed regressions. The phone shows \
-             60 fps at most, so a scene that holds 60 is flat at the top.",
+            format!(
+                "Grey: the release; blue: main; red dots: confirmed regressions. {}",
+                shown.about()
+            ),
             Modifier::empty(),
             text_style(12.0, palette.muted, false),
         );
     });
 }
 
+/// The metrics, the one shown highlighted.
 #[composable]
-fn ScenarioChips(palette: Palette, nightly: Rc<Vec<PerfRun>>, selected: MutableState<String>) {
-    let names: Vec<String> = nightly
-        .last()
-        .map(|run| run.scenarios.keys().cloned().collect())
-        .unwrap_or_default();
+fn MetricChips(palette: Palette, metric: MutableState<Metric>) {
+    let shown = metric.get();
+    Chips(
+        palette,
+        Metric::ALL.map(|metric| metric.name().to_string()).to_vec(),
+        Metric::ALL.iter().position(|candidate| *candidate == shown),
+        move |index| metric.set(Metric::ALL[index]),
+    );
+}
+
+/// A row of choices, the `chosen` one highlighted.
+#[composable]
+fn Chips(
+    palette: Palette,
+    names: Vec<String>,
+    chosen: Option<usize>,
+    choose: impl Fn(usize) + 'static,
+) {
+    let choose: Rc<dyn Fn(usize)> = Rc::new(choose);
     Row(
         Modifier::empty().fill_max_width(),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(6.0)),
         move || {
-            for name in &names {
-                let chosen = selected.get() == *name;
-                let value = name.clone();
+            for (index, name) in names.iter().enumerate() {
+                let highlighted = chosen == Some(index);
+                let choose = Rc::clone(&choose);
                 Button(
                     Modifier::empty()
-                        .background(if chosen {
+                        .background(if highlighted {
                             palette.accent
                         } else {
                             palette.background
@@ -475,7 +595,7 @@ fn ScenarioChips(palette: Palette, nightly: Rc<Vec<PerfRun>>, selected: MutableS
                         .rounded_corners(12.0)
                         .padding_symmetric(10.0, 4.0),
                     ButtonSpec::default(),
-                    move || selected.set(value.clone()),
+                    move || choose(index),
                     {
                         let name = name.clone();
                         move || {
@@ -484,7 +604,11 @@ fn ScenarioChips(palette: Palette, nightly: Rc<Vec<PerfRun>>, selected: MutableS
                                 Modifier::empty(),
                                 text_style(
                                     12.0,
-                                    if chosen { Color::WHITE } else { palette.text },
+                                    if highlighted {
+                                        Color::WHITE
+                                    } else {
+                                        palette.text
+                                    },
                                     false,
                                 ),
                             );
@@ -556,20 +680,27 @@ fn Frameworks(palette: Palette, run: PerfRun) {
         run.subjects.iter().cloned().enumerate().collect();
     subjects.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
     let commit = run.main.clone().unwrap_or_else(|| "main".to_string());
+    let metric = cranpose_core::rememberMutableStateOf(|| Metric::Fps);
     let title = format!(
-        "Frameworks on the {}, {}: frames per second (60 at most)",
+        "Frameworks on the {}, {}",
         run.device,
         &run.started_at[..run.started_at.len().min(10)]
     );
     Card(palette, title, move || {
+        MetricChips(palette, metric);
+        let shown = metric.get();
         for scenario in run.scenarios.keys() {
             Text(
                 scenario.clone(),
                 Modifier::empty(),
                 text_style(13.0, palette.text, true),
             );
-            for (index, subject) in &subjects {
-                let fps = run.median(scenario, *index, "fps").unwrap_or(0.0) as f32;
+            let values: Vec<Option<f64>> = subjects
+                .iter()
+                .map(|(index, _)| run.median(scenario, *index, shown.key()))
+                .collect();
+            let full = shown.full_scale(&values);
+            for ((_, subject), value) in subjects.iter().zip(&values) {
                 let color = if subject.name == "compose" {
                     palette.baseline
                 } else {
@@ -579,16 +710,33 @@ fn Frameworks(palette: Palette, run: PerfRun) {
                     .source
                     .as_ref()
                     .map(|source| format!("{SOURCE_URL}/{commit}/{source}"));
-                FpsBar(palette, subject.label.clone(), url, fps, color);
+                let share = match value {
+                    Some(value) if full > 0.0 => (value / full) as f32,
+                    _ => 0.0,
+                };
+                let text = value.map_or_else(|| "–".to_string(), |value| shown.format(value));
+                MetricBar(palette, subject.label.clone(), url, share, text, color);
             }
         }
+        Text(
+            shown.about(),
+            Modifier::empty(),
+            text_style(12.0, palette.muted, false),
+        );
     });
 }
 
-/// A framework, which opens its source when it has one, and its frame rate as
-/// a bar with the number on it.
+/// A framework, which opens its source when it has one, and its value as a
+/// bar `share` of the full length with the number on it.
 #[composable]
-fn FpsBar(palette: Palette, label: String, url: Option<String>, fps: f32, color: Color) {
+fn MetricBar(
+    palette: Palette,
+    label: String,
+    url: Option<String>,
+    share: f32,
+    value: String,
+    color: Color,
+) {
     let uri_handler = local_uri_handler().current();
     Row(
         Modifier::empty().fill_max_width(),
@@ -614,6 +762,7 @@ fn FpsBar(palette: Palette, label: String, url: Option<String>, fps: f32, color:
                     Text(label.clone(), name, text_style(12.0, palette.muted, false));
                 }
             }
+            let value = value.clone();
             Box(
                 Modifier::empty().weight(1.0).height(18.0),
                 BoxSpec::new().content_alignment(Alignment::CENTER_START),
@@ -634,7 +783,7 @@ fn FpsBar(palette: Palette, label: String, url: Option<String>, fps: f32, color:
                             cranpose_ui::Rect {
                                 x: 0.0,
                                 y: 0.0,
-                                width: size.width * (fps / 60.0).clamp(0.0, 1.0),
+                                width: size.width * share.clamp(0.0, 1.0),
                                 height: size.height,
                             },
                             Brush::solid(color),
@@ -642,7 +791,7 @@ fn FpsBar(palette: Palette, label: String, url: Option<String>, fps: f32, color:
                         );
                     });
                     Text(
-                        format!("{fps:.1}"),
+                        value.clone(),
                         Modifier::empty().padding_horizontal(8.0),
                         text_style(11.0, palette.text, true),
                     );

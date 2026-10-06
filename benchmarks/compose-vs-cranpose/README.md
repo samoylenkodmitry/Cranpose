@@ -171,11 +171,13 @@ under the 2% gate; what the other frameworks draw differently, by design:
 ## Parity rules
 
 - **Data:** `data.rs`, `shared-kotlin/dev/perfcompare/shared/PerfData.kt` (the
-  Compose and Views apps), `flutter-app/lib/data.dart`, `rn-app/src/data.ts`
-  and `shared-cs/PerfData.cs` implement the same xorshift generator, so every
+  Compose and Views apps), `flutter-app/lib/data.dart`, `rn-app/src/data.ts`,
+  `shared-cs/PerfData.cs`, `shared-swift/PerfData.swift` and
+  `fyne-app/data.go` implement the same xorshift generator, so every
   post, comment, quote and particle is identical. `data.rs` is `perf-data`,
   which the Cranpose, egui and Slint apps share; React Native and the web page
-  share `shared-ts/data.ts`, and MAUI and Avalonia share `shared-cs`.
+  share `shared-ts/data.ts`, MAUI and Avalonia share `shared-cs`, and SwiftUI
+  and AppKit share `shared-swift/PerfData.swift`.
 - **Fonts:** every app loads `/system/fonts/Roboto-Regular.ttf` and
   `Roboto-Bold.ttf` from the device and sets a 1.4 em line height. React
   Native registers them with its font manager, MAUI serves them from its
@@ -296,7 +298,11 @@ launch.
 
 `frameworks.py` measures every framework's app on the gauntlet for the
 dashboard: each launched once unmeasured, then two rounds of one leg each,
-the order reversed in the second. `--install DIR` first installs each app's
+the order reversed in the second. A leg lasts as long as the app's frame rate
+needs for 30 frames, from 4 to 15 seconds, so a night with every framework
+stays short. Each leg records the app's frame rate and CPU per frame, its
+PSS and the part of it GPU buffers hold (GL and EGL mtrack), and the mean
+clocks of the big cores and the GPU. `--install DIR` first installs each app's
 `APP.apk` from DIR and compiles every app's Java with `speed`, as the Compose
 app's best case.
 
@@ -315,7 +321,10 @@ release (`cranpose-release`, once a release draws the gauntlet) and main.
    app but Cranpose's, and the release's desktop app, and `desktop.py`
    measures the desktop apps at tier 16. A moved pin that does not build is
    put back. The run goes to the dashboard, and the pins that moved and
-   built go to the pull request `perf/framework-versions`.
+   built go to the pull request `perf/framework-versions`. `build_apps.sh`
+   keeps each app's last build with a stamp of the files, pin and
+   toolchains it read, so a night builds again only the apps that moved and
+   Cranpose's.
 2. On the Mac the Mate 20 X is attached to, `scripts/perf/nightly.py`
    compares the latest release with main, and `just perf-frameworks` installs
    macm3's Android builds beside Cranpose's release and main and runs
@@ -323,14 +332,16 @@ release (`cranpose-release`, once a release draws the gauntlet) and main.
 
 Each run names the version of every framework it measured: the pins
 `versions.py` reads, the Flutter SDK and .NET MAUI workload `build_apps.sh`
-keeps at their latest, the phone's WebView or the Mac's Chrome, and the
-macOS SwiftUI ships with. `python3 versions.py check` lists each pin beside
+keeps at their latest, the phone's WebView, the Mac's Chrome or Safari's
+WebKit, and the macOS SwiftUI and AppKit ship with. `python3 versions.py check` lists each pin beside
 its registry's latest release.
 
 The Performance tab of the desktop demo reads the runs from the `perf-data`
 branch: the latest night's release against main, the trend, and the latest
-framework comparison of each device. Each framework there opens its
-gauntlet's source at the commit measured.
+framework comparison of each device. Chips choose what the trend and each
+comparison show: frames per second, CPU per frame, memory, GPU memory, or
+the CPU and GPU clocks. Each framework there opens its gauntlet's source at
+the commit measured.
 
 ### Long comparisons
 
@@ -454,8 +465,14 @@ Roboto files from `PERF_FONTS`; Cranpose takes `--tier=N` arguments and the
 web page reads its address. `framecount/FrameCount.app` counts the frames the
 window presents through ScreenCaptureKit, as SurfaceFlinger counts a phone
 app's, and takes the pictures `--parity` compares. `ps` counts the CPU time
-of the app and every process it started. Desktop numbers feed the dashboard
-only; merges are judged on the slowest phone.
+of the app and every process it started, `footprint` the memory they hold at
+the window's end and the part of it that is the GPU's (Metal's buffers and
+textures, and the surfaces the window server composites), and `macmon` the
+mean clocks of the performance cores and the GPU over the window, from the
+chip's own counters and without root. Two rounds measure each app once each;
+a window lasts as long as the app's frame rate needs for 40 frames, from 3 to
+8 seconds. Desktop numbers feed the dashboard only; merges are judged on the
+slowest phone.
 
 | App | Stack |
 | --- | --- |
@@ -466,8 +483,14 @@ only; merges are judged on the slowest phone.
 | `gpui` | `gpui-app`: Zed's GPUI as `gpui-pre` publishes it |
 | `avalonia` | `avalonia-app`'s desktop head, Native AOT |
 | `swiftui` | `swiftui-app`: SwiftUI |
+| `appkit` | `appkit-app`: AppKit's layer-backed views, laid out by hand, with a list that recycles its rows |
 | `flutter` | `flutter-app`'s macOS runner, on Impeller |
 | `web` | the web page in a Chrome app window, the engine Electron apps ship |
+| `tauri` | the same page in a Tauri window, on the system's WKWebView; the page asks the app for the tier and logs through its commands |
+| `dioxus` | `dioxus-app`: Dioxus components over the web page's CSS, on Dioxus's desktop renderer (WKWebView) |
+| `freya` | `freya-app`: Freya on Skia |
+| `floem` | `floem-app`: Floem on its default renderer, vger; its latest release, 0.2.0, dates from November 2024 |
+| `fyne` | `fyne-app`: Fyne on OpenGL, canvas objects the app places itself |
 
 What each framework lacks and how its app does without:
 
@@ -481,16 +504,48 @@ What each framework lacks and how its app does without:
   GPUI slows a window that is not in front to 30 fps; the app turns that off.
 - Slint's Skia renderer draws through wgpu on macOS and tells the rendering
   notifier that a frame was drawn only with the `unstable-wgpu-30` feature.
+- AppKit's views cost too much to move thousands each frame: a card, a row
+  and a cluster are views, and what they show are Core Animation layers. A
+  text layer draws again only when its text changes or a new width wraps or
+  cuts it; sparklines are shape layers over a masked gradient.
+- Tauri and Dioxus run their pages in WebKit services that launchd starts
+  outside the app's process tree; `desktop.py` counts them as the app's.
+  Tauri lets the page `desktop.py` serves call its commands through a
+  capability for that address.
+- Dioxus advances the frame on the page's animation frame, which it hears
+  through `eval`, and serves the avatars and Roboto from a custom protocol.
+  It has no list that renders only the rows on screen: rows report their
+  heights through `onresize`, as iced's sensors do.
+- Freya's layout has no intrinsic height: a footer divider is the left
+  border of the counter after it. Its virtual scroll view wants one item
+  size, so rows report their heights through `on_sized`.
+- Floem's virtual list wants every row's height up front, so rows report
+  theirs through `on_resize`; its labels have no line limit, so a box as tall
+  as the lines clips a paragraph. Its default renderer, vger, clips only to
+  rectangles and places a linear gradient in window pixels: a view paints
+  white over each avatar's corners, and the sparkline passes its gradient
+  that way. Floem's Vello renderer drew a black window in 0.2.
+- Fyne sizes an object before it knows its width, so the app wraps
+  paragraphs and places every object itself, as Fyne's custom widgets do. It
+  rotates no object: the badge stays upright. Its canvas has no path: the
+  sparkline's line is 47 segments, and its fading fill is a vertical
+  gradient under white polygons above the line, four side by side, since
+  Fyne fills a polygon of at most 16 vertices.
 - The JVM opens no window outside the login session, so `desktop.py` starts
   every app bundle through `open`. macOS then asks the user before such an
   app reads a removable volume, so the fonts and Chrome's profile sit in a
   temporary folder.
 
-SwiftUI hands its layers to the window server, whose CPU the count leaves
-out; `desktop.py` reports the cores other processes spent beside each leg.
+An app's CPU counts every process it started, the WebKit services launchd
+starts for a WKWebView (Tauri and Dioxus), and the window server: SwiftUI,
+AppKit and WebKit hand it layer trees to render, where a Metal app hands it
+one surface. Each leg also records the window server's share alone, and the
+cores every other process spent beside it.
 
 FrameCount needs the Screen Recording permission once: `framecount/build.sh`
 signs it with a requirement on its bundle identifier, so rebuilds keep it.
+`macmon` comes from Homebrew (`brew install macmon`); without it a run has no
+clocks.
 
 ```bash
 sh benchmarks/compose-vs-cranpose/framecount/build.sh
@@ -501,9 +556,15 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/gpui-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/avalonia-app && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64)
 (cd benchmarks/compose-vs-cranpose/swiftui-app && ./build.sh)
+(cd benchmarks/compose-vs-cranpose/appkit-app && ./build.sh)
 (cd benchmarks/compose-vs-cranpose/flutter-app && flutter build macos --release)
 (cd benchmarks/compose-vs-cranpose/compose-desktop-app && ./gradlew createDistributable)
 (cd benchmarks/compose-vs-cranpose/web-app && npm ci && npx tsc -p tsconfig.json)
+(cd benchmarks/compose-vs-cranpose/tauri-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/dioxus-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/freya-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/floem-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```

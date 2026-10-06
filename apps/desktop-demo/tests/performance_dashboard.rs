@@ -3,7 +3,10 @@
 
 use std::rc::Rc;
 
-use cranpose_testing::ComposeTestRule;
+use cranpose_testing::{
+    robot::{create_headless_robot_test, RobotTestRule, TestRenderer},
+    ComposeTestRule,
+};
 use cranpose_ui::Size;
 use desktop_app::app::performance_dashboard::{PerfIndex, PerformanceDashboard};
 
@@ -48,7 +51,9 @@ const INDEX: &str = r#"{"runs": [
     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"},
    {"name": "avalonia", "label": "Avalonia 12.1.3", "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"}],
   "scenarios": {"gauntlet": {"legs": 6,
-    "summary": {"compose": {"fps": 17.1}, "egui": {"fps": 55.7}, "avalonia": {"fps": 17.3}}, "verdicts": {}}}}
+    "summary": {"compose": {"fps": 17.1, "ram_mb": 412.0, "gpu_ram_mb": 96.4},
+                "egui": {"fps": 55.7, "ram_mb": 120.4, "gpu_ram_mb": 33.0},
+                "avalonia": {"fps": 17.3, "ram_mb": 180.2}}, "verdicts": {}}}}
 ]}"#;
 
 fn labels() -> Vec<String> {
@@ -131,5 +136,60 @@ fn frameworks_show_their_versions_in_alphabetical_order() {
         labels[egui + 1],
         "55.7",
         "the frame rate sits on the framework's bar: {labels:?}"
+    );
+}
+
+fn dashboard() -> RobotTestRule<TestRenderer> {
+    let index = Rc::new(PerfIndex::parse(INDEX).expect("the fixture parses"));
+    create_headless_robot_test(1100, 4000, move || {
+        PerformanceDashboard(index.clone(), None);
+    })
+}
+
+/// Clicks the `nth` chip named `name`, counted from the top.
+fn choose(robot: &mut RobotTestRule<TestRenderer>, name: &str, nth: usize) {
+    let chips: Vec<cranpose_ui::Rect> = robot
+        .get_all_rects()
+        .into_iter()
+        .filter(|(_, text)| text.as_deref() == Some(name))
+        .map(|(bounds, _)| bounds)
+        .collect();
+    let chip = chips
+        .get(nth)
+        .unwrap_or_else(|| panic!("no chip {nth} named {name}: {chips:?}"));
+    assert!(robot.click_at(chip.x + chip.width / 2.0, chip.y + chip.height / 2.0));
+}
+
+#[test]
+fn a_framework_card_shows_the_metric_chosen_and_leaves_a_dash_where_a_run_has_none() {
+    let mut robot = dashboard();
+    // The trend's chips come first, then the newest framework card's: the
+    // desktop's.
+    choose(&mut robot, "RAM MB", 1);
+    let texts = robot.get_all_text();
+    for value in ["412", "120", "180"] {
+        assert!(texts.iter().any(|text| text == value), "{value}: {texts:?}");
+    }
+    assert!(
+        !texts.iter().any(|text| text == "55.7"),
+        "the desktop card no longer shows frame rates: {texts:?}"
+    );
+    choose(&mut robot, "GPU RAM MB", 1);
+    let texts = robot.get_all_text();
+    for value in ["96", "33", "–"] {
+        assert!(texts.iter().any(|text| text == value), "{value}: {texts:?}");
+    }
+}
+
+#[test]
+fn the_trend_follows_the_metric_chosen() {
+    let mut robot = dashboard();
+    choose(&mut robot, "CPU MHz", 0);
+    let texts = robot.get_all_text();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text == "gauntlet: CPU MHz, night by night"),
+        "{texts:?}"
     );
 }

@@ -5,7 +5,8 @@ framework comparison.
 Each app is launched once unmeasured, then measured in rounds, every app once
 a round, the order reversed each round so heat and time fall on all alike.
 Legs are `ab.py`'s: a warm-up, then a window long enough for `--min-frames`
-frames, from 5 to 30 seconds. Writes `frameworks.json` in the dashboard's run
+frames, from 4 to 15 seconds, kept short so a night's run of every framework
+stays short. Writes `frameworks.json` in the dashboard's run
 format, kind `frameworks`: device, subjects, every leg and per-app medians.
 `--install DIR` first installs each app's `APP.apk` from DIR, as the
 nightly hands over the builds macm3 made.
@@ -94,11 +95,11 @@ def main():
     parser.add_argument('--apps', default=DEFAULT_APPS)
     parser.add_argument('--scenario', default='gauntlet')
     parser.add_argument('--rounds', type=int, default=2)
-    parser.add_argument('--warmup', type=float, default=2.0)
-    parser.add_argument('--window', type=float, default=5.0)
-    parser.add_argument('--min-frames', type=int, default=40)
-    parser.add_argument('--max-window', type=float, default=30.0)
-    parser.add_argument('--prime', type=float, default=3.0)
+    parser.add_argument('--warmup', type=float, default=1.5)
+    parser.add_argument('--window', type=float, default=4.0)
+    parser.add_argument('--min-frames', type=int, default=30)
+    parser.add_argument('--max-window', type=float, default=15.0)
+    parser.add_argument('--prime', type=float, default=2.0)
     parser.add_argument('--interval', type=float, default=0.5)
     parser.add_argument('--clock-ticks', type=int, default=100)
     parser.add_argument('--extra', default='', help='more `am start` extras')
