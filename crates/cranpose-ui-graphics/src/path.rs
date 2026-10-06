@@ -20,6 +20,22 @@ pub struct PathContour {
     pub closed: bool,
 }
 
+impl PathContour {
+    /// Points a contour holds before it first grows: room for a chart's
+    /// few dozen points in a few growths instead of one per doubling from
+    /// one.
+    const INITIAL_POINTS: usize = 16;
+
+    fn starting_at(point: Point) -> Self {
+        let mut points = Vec::with_capacity(Self::INITIAL_POINTS);
+        points.push(point);
+        Self {
+            points,
+            closed: false,
+        }
+    }
+}
+
 /// A path built from lines and curves: Compose's `Path`.
 ///
 /// Example: a sparkline, stroked by [`crate::DrawScope::draw_path`]:
@@ -47,10 +63,7 @@ impl Path {
 
     /// Starts a new contour at `point`.
     pub fn move_to(&mut self, point: Point) {
-        self.contours.push(PathContour {
-            points: vec![point],
-            closed: false,
-        });
+        self.contours.push(PathContour::starting_at(point));
         self.pen = point;
     }
 
@@ -142,10 +155,7 @@ impl Path {
     /// otherwise a new one starting at the pen.
     fn open_contour(&mut self) -> &mut Vec<Point> {
         if self.contours.last().is_none_or(|contour| contour.closed) {
-            self.contours.push(PathContour {
-                points: vec![self.pen],
-                closed: false,
-            });
+            self.contours.push(PathContour::starting_at(self.pen));
         }
         let last = self.contours.len() - 1;
         &mut self.contours[last].points
