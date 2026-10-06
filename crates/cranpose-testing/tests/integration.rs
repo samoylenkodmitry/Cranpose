@@ -9,6 +9,7 @@ mod keyboard_routing_test;
 mod modifier_offset_test;
 mod modifier_reuse_test;
 mod modifier_size_position_test;
+mod offset_updates_test;
 mod placed_semantics_test;
 mod pointer_hover_gradient_test;
 mod pointer_icon_end_to_end_test;

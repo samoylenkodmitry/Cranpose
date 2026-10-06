@@ -260,7 +260,7 @@ impl Drop for ApplierSlotGuard<'_> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct ModifierChainInputs {
     density: crate::density::Density,
     window_root: bool,
@@ -2822,11 +2822,30 @@ struct CoordinatorChain {
     nodes: Vec<CoordinatorNode>,
     /// The size the node's own measure policy measured its content at.
     inner_size: Cell<Size>,
+    /// The chain revision the nodes were last synced at and the inputs it
+    /// gave: a node whose modifiers did not change since measures again
+    /// without walking its chain.
+    synced: Option<(u64, ModifierChainInputs)>,
 }
 
 impl CoordinatorChain {
     fn sync(&mut self, node: &LayoutNode) -> ModifierChainInputs {
         let density = node.density();
+        let revision = node.modifier_chain().revision();
+        if let Some((synced, inputs)) = self.synced
+            && synced == revision
+            && inputs.density == density
+        {
+            return inputs;
+        }
+        let inputs = self.walk(node, density);
+        self.synced = Some((revision, inputs));
+        inputs
+    }
+
+    /// Syncs the nodes with the layout nodes of `node`'s chain and sums
+    /// its offsets.
+    fn walk(&mut self, node: &LayoutNode, density: crate::density::Density) -> ModifierChainInputs {
         let mut inputs = ModifierChainInputs {
             density,
             window_root: node.is_window_root(),
