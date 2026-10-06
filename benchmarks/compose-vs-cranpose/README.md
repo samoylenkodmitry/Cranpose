@@ -171,8 +171,9 @@ under the 2% gate; what the other frameworks draw differently, by design:
 ## Parity rules
 
 - **Data:** `data.rs`, `shared-kotlin/dev/perfcompare/shared/PerfData.kt` (the
-  Compose and Views apps), `flutter-app/lib/data.dart`, `rn-app/src/data.ts`
-  and `shared-cs/PerfData.cs` implement the same xorshift generator, so every
+  Compose and Views apps), `flutter-app/lib/data.dart`, `rn-app/src/data.ts`,
+  `shared-cs/PerfData.cs`, `shared-swift/PerfData.swift` and
+  `fyne-app/data.go` implement the same xorshift generator, so every
   post, comment, quote and particle is identical. `data.rs` is `perf-data`,
   which the Cranpose, egui and Slint apps share; React Native and the web page
   share `shared-ts/data.ts`, MAUI and Avalonia share `shared-cs`, and SwiftUI
@@ -489,6 +490,7 @@ slowest phone.
 | `dioxus` | `dioxus-app`: Dioxus components over the web page's CSS, on Dioxus's desktop renderer (WKWebView) |
 | `freya` | `freya-app`: Freya on Skia |
 | `floem` | `floem-app`: Floem on its default renderer, vger; its latest release, 0.2.0, dates from November 2024 |
+| `fyne` | `fyne-app`: Fyne on OpenGL, canvas objects the app places itself |
 
 What each framework lacks and how its app does without:
 
@@ -523,6 +525,12 @@ What each framework lacks and how its app does without:
   rectangles and places a linear gradient in window pixels: a view paints
   white over each avatar's corners, and the sparkline passes its gradient
   that way. Floem's Vello renderer drew a black window in 0.2.
+- Fyne sizes an object before it knows its width, so the app wraps
+  paragraphs and places every object itself, as Fyne's custom widgets do. It
+  rotates no object: the badge stays upright. Its canvas has no path: the
+  sparkline's line is 47 segments, and its fading fill is a vertical
+  gradient under white polygons above the line, four side by side, since
+  Fyne fills a polygon of at most 16 vertices.
 - The JVM opens no window outside the login session, so `desktop.py` starts
   every app bundle through `open`. macOS then asks the user before such an
   app reads a removable volume, so the fonts and Chrome's profile sit in a
@@ -556,6 +564,7 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/dioxus-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/freya-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/floem-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```

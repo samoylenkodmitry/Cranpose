@@ -17,7 +17,7 @@
 # Build caches live under PERF_BUILD_CACHE, which survives the checkout's
 # cleaning between jobs: each Rust app's target (linked in as its `target`),
 # the Flutter SDK on its stable channel, .NET with its Android workload,
-# NuGet's packages and npm's cache. Each app's last build is kept there too,
+# NuGet's packages, npm's cache and Go's. Each app's last build is kept there too,
 # with a stamp of what it read: an app whose files, pin and toolchains did not
 # change since is not built again, so a night builds only what moved.
 set -euo pipefail
@@ -33,6 +33,7 @@ export PATH="$DOTNET_ROOT:$PATH"
 export DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
 export NUGET_PACKAGES=$cache/nuget
 export npm_config_cache=$cache/npm
+export GOMODCACHE=$cache/go/mod GOCACHE=$cache/go/build
 # The Android SDK the apps' platforms are installed in.
 if [[ -d $HOME/Library/Android/sdk/platforms ]]; then
     export ANDROID_HOME=$HOME/Library/Android/sdk
@@ -101,6 +102,7 @@ toolchains() {
         dotnet workload list
         xcodebuild -version
         node -v
+        go version
         /usr/libexec/java_home -V
     } 2>&1 | shasum -a 256 | cut -c1-16
 }
@@ -161,6 +163,8 @@ desktop)
     done
     build avalonia avalonia-app/bin/Release/net10.0/osx-arm64/publish avalonia-app shared-cs -- \
         attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64"
+    build fyne fyne-app/build/perf-compare-fyne fyne-app -- \
+        attempt fyne bash -c "cd '$here/fyne-app' && go build -o build/perf-compare-fyne ."
     build swiftui swiftui-app/build/PerfSwiftUI.app swiftui-app shared-swift -- "$here/swiftui-app/build.sh"
     build appkit appkit-app/build/PerfAppKit.app appkit-app shared-swift -- "$here/appkit-app/build.sh"
     build flutter flutter-app/build/macos/Build/Products/Release/perf_flutter.app flutter-app -- \

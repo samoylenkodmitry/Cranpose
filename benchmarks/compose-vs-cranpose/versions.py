@@ -48,13 +48,14 @@ SOURCES = {
     'dioxus': 'benchmarks/compose-vs-cranpose/dioxus-app/src/main.rs',
     'freya': 'benchmarks/compose-vs-cranpose/freya-app/src/main.rs',
     'floem': 'benchmarks/compose-vs-cranpose/floem-app/src/main.rs',
+    'fyne': 'benchmarks/compose-vs-cranpose/fyne-app/main.go',
 }
 
 # The apps each platform runs besides Cranpose's.
 PLATFORM_APPS = {
     'android': ['compose', 'views', 'flutter', 'rn', 'maui', 'avalonia', 'egui', 'slint', 'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
-                'tauri', 'dioxus', 'freya', 'floem'],
+                'tauri', 'dioxus', 'freya', 'floem', 'fyne'],
 }
 
 NAMES = {
@@ -62,6 +63,7 @@ NAMES = {
     'flutter': 'Flutter', 'rn': 'React Native', 'maui': '.NET MAUI', 'avalonia': 'Avalonia',
     'egui': 'egui', 'slint': 'Slint', 'iced': 'iced', 'gpui': 'GPUI', 'swiftui': 'SwiftUI', 'appkit': 'AppKit',
     'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'freya': 'Freya', 'floem': 'Floem',
+    'fyne': 'Fyne',
 }
 
 
@@ -162,6 +164,15 @@ def egui_update():
             cargo_update('egui-app')()
 
 
+def go_module(module):
+    """The latest release the Go module proxy knows of `module`."""
+    return json.loads(fetch(f'https://proxy.golang.org/{module}/@latest'))['Version'].lstrip('v')
+
+
+def go_tidy(app_dir):
+    return lambda: run('go', 'mod', 'tidy', cwd=HERE / app_dir)
+
+
 def npm_lock(app_dir):
     return lambda: run('npm', 'install', '--package-lock-only', '--no-audit', '--no-fund', cwd=HERE / app_dir)
 
@@ -192,6 +203,8 @@ PINS = {
                   cargo_update('dioxus-app')),
     'freya': Pin(['freya-app/Cargo.toml'], r'freya = \{ version = "([^"]+)"', lambda: crates_io('freya'),
                  cargo_update('freya-app')),
+    'fyne': Pin(['fyne-app/go.mod'], r'fyne\.io/fyne/v2 v([\d.]+)', lambda: go_module('fyne.io/fyne/v2'),
+                go_tidy('fyne-app')),
     'floem': Pin(['floem-app/Cargo.toml'], r'floem(?:_renderer)? = (?:\{ version = )?"([^"]+)"',
                  lambda: crates_io('floem'), cargo_update('floem-app')),
 }

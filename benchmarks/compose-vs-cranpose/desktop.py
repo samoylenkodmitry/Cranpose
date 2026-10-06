@@ -86,6 +86,7 @@ APPS = {
     'dioxus': [HERE / 'dioxus-app/target/release/perf-compare-dioxus'],
     'freya': [HERE / 'freya-app/target/release/perf-compare-freya'],
     'floem': [HERE / 'floem-app/target/release/perf-compare-floem'],
+    'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
 }
 
 

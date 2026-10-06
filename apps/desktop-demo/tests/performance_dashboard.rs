@@ -142,7 +142,7 @@ fn frameworks_show_their_versions_in_alphabetical_order() {
 fn dashboard() -> RobotTestRule<TestRenderer> {
     let index = Rc::new(PerfIndex::parse(INDEX).expect("the fixture parses"));
     create_headless_robot_test(1100, 4000, move || {
-        PerformanceDashboard(index.clone(), None)
+        PerformanceDashboard(index.clone(), None);
     })
 }
 

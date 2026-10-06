@@ -66,6 +66,8 @@ jobs:
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
           # The CPU and GPU clocks each desktop leg records.
           command -v macmon >/dev/null || brew install macmon
+          # Fyne's apps build with Go.
+          command -v go >/dev/null || brew install go
 
       - name: Move every framework to its latest release
         if: steps.published.outputs.measured != 'yes'
