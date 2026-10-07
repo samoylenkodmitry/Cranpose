@@ -55,7 +55,7 @@ impl<T> IdlePool<T> {
             .retain(|(_, returned)| *returned >= oldest_kept);
     }
 
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &T> {
         self.available.iter().map(|(item, _)| item)
     }
 

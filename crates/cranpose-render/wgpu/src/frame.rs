@@ -1912,9 +1912,9 @@ const KEPT_SURFACE_ATLAS_SIZES: usize = 4;
 /// frame's members, an atlas took a new size whenever a resize moved them
 /// by a step, and the transient pool, which reuses a texture only at its
 /// exact size, then kept a texture and a depth buffer for every size a
-/// frame had used. An atlas now takes the smallest recent size that holds
-/// it within [`SURFACE_ATLAS_SLACK`] times its area, or grows the nearest
-/// one, so frames keep drawing into one texture.
+/// frame had used. An atlas now takes the newest recent size that holds it,
+/// grown to fit where that stays within [`SURFACE_ATLAS_SLACK`] times its
+/// area, so frames keep drawing into one texture.
 #[derive(Default)]
 pub(crate) struct SurfaceAtlasSizes {
     recent: crate::idle_pool::IdlePool<(u32, u32)>,
@@ -1925,12 +1925,14 @@ impl SurfaceAtlasSizes {
     fn settle(&mut self, size: (u32, u32)) -> (u32, u32) {
         let area = |(width, height): (u32, u32)| u64::from(width) * u64::from(height);
         let limit = area(size).saturating_mul(SURFACE_ATLAS_SLACK);
+        // The newest size first: requests that fit two sizes keep taking
+        // the one in use, so the other goes idle and is dropped.
         let settled = self
             .recent
             .iter()
+            .rev()
             .map(|recent| (recent.0.max(size.0), recent.1.max(size.1)))
-            .filter(|grown| area(*grown) <= limit)
-            .min_by_key(|grown| area(*grown))
+            .find(|grown| area(*grown) <= limit)
             .unwrap_or(size);
         let _ = self.recent.take(|recent| *recent == settled);
         self.recent
