@@ -130,7 +130,7 @@ fn draw_queued(renderer: &mut GpuRenderer, commands: &[GlyphDrawCmd]) -> wgpu::T
         );
         renderer.draw_glyph_cmds(
             &mut pass,
-            (None, None),
+            crate::render::GlyphSlots::default(),
             0,
             commands,
             None,
@@ -225,7 +225,11 @@ fn queued_glyph_draw_keeps_its_quads_after_cache_eviction() {
     let moved = test_run(4);
     let glyphs = run_glyphs(&moved);
     let quads = run_quads(&renderer, &glyphs, &moved);
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), quads));
+    assert!(
+        renderer
+            .retained_text_glyph_run(TextGlyphRunCacheKey(2), quads)
+            .is_some()
+    );
     assert!(
         renderer
             .text_glyph_gpu_run_cache
@@ -242,6 +246,43 @@ fn queued_glyph_draw_keeps_its_quads_after_cache_eviction() {
 }
 
 #[test]
+fn queued_glyph_draws_keep_their_quads_when_the_arena_grows() {
+    let (_lock, mut renderer) = test_renderer();
+    whiten_atlas(&renderer);
+    let mut commands = Vec::new();
+    queue_glyph(&mut renderer, 1, 0.0, &mut commands);
+    draw_queued(&mut renderer, &commands);
+    renderer
+        .text_glyph_run_arena
+        .begin_frame(&renderer.device, 0);
+    queue_glyph(&mut renderer, 2, 4.0, &mut commands);
+    let buffer_size = |renderer: &GpuRenderer| {
+        renderer
+            .text_glyph_run_arena
+            .instance_buffer()
+            .map_or(0, wgpu::Buffer::size)
+    };
+    let size = buffer_size(&renderer);
+    let quads = size as usize / std::mem::size_of::<GlyphInstance>();
+    let filler = renderer
+        .text_glyph_run_arena
+        .insert(
+            &renderer.device,
+            std::iter::repeat_n(bytemuck::Zeroable::zeroed(), quads),
+        )
+        .expect("the arena grows for a run it cannot hold");
+    assert!(buffer_size(&renderer) > size);
+    let target = draw_queued(&mut renderer, &commands);
+    assert_white_columns(
+        &renderer,
+        &target,
+        |x| x < 2 || (4..6).contains(&x),
+        "a run from an earlier frame and one staged before the arena grew both move into its new buffer",
+    );
+    drop(filler);
+}
+
+#[test]
 fn retained_glyph_runs_draw_together_and_again_on_later_frames() {
     let (_lock, mut renderer) = test_renderer();
     whiten_atlas(&renderer);
@@ -255,7 +296,9 @@ fn retained_glyph_runs_draw_together_and_again_on_later_frames() {
         |x| x < 2 || (4..6).contains(&x),
         "both runs",
     );
-    renderer.text_glyph_run_arena.begin_frame();
+    renderer
+        .text_glyph_run_arena
+        .begin_frame(&renderer.device, 0);
     let mut second = Vec::new();
     queue_glyph(&mut renderer, 2, 4.0, &mut second);
     let target = draw_queued(&mut renderer, &second);
@@ -444,13 +487,21 @@ fn a_retained_run_no_frame_draws_gives_its_quads_back() {
     let run = test_run(0);
     let glyphs = run_glyphs(&run);
     let quads = run_quads(&renderer, &glyphs, &run);
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(1), quads));
-    assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), quads));
+    assert!(
+        renderer
+            .retained_text_glyph_run(TextGlyphRunCacheKey(1), quads)
+            .is_some()
+    );
+    assert!(
+        renderer
+            .retained_text_glyph_run(TextGlyphRunCacheKey(2), quads)
+            .is_some()
+    );
     for _ in 0..TEXT_GLYPH_RUN_IDLE_FRAMES {
         renderer.begin_text_glyph_run_frame();
         assert!(
             renderer
-                .retained_text_glyph_run(TextGlyphRunCacheKey(2))
+                .retained_text_glyph_run(TextGlyphRunCacheKey(2), quads)
                 .is_some()
         );
     }
@@ -507,7 +558,7 @@ fn consecutive_shared_glyph_quads_draw_as_one_until_a_state_changes() {
 
     let draws: Vec<_> = GlyphDraws::new(&cmds)
         .map(|draw| match draw.step {
-            GlyphDrawStep::Shared(instances, _) => (Some(instances), draw.scissor),
+            GlyphDrawStep::Stretch(instances, _) => (Some(instances), draw.scissor),
             GlyphDrawStep::Retained { .. } => (None, draw.scissor),
         })
         .collect();
@@ -605,7 +656,9 @@ fn draw_scene(renderer: &mut GpuRenderer, scene: &CompositorScene) -> (Vec<u8>, 
     let view = target.create_view(&Default::default());
     renderer.viewport_uniforms.begin_frame();
     renderer.run_store.begin_frame(false);
-    renderer.text_glyph_run_arena.begin_frame();
+    renderer
+        .text_glyph_run_arena
+        .begin_frame(&renderer.device, 0);
     renderer.frame_stats.draw_calls.set(0);
     let segments = [crate::draw_pass::PassSegment {
         scene,

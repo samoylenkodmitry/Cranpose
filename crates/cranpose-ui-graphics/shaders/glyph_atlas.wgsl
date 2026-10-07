@@ -126,17 +126,21 @@ struct AlignedVertexOutput {
     @location(1) uv: vec2<f32>,
 }
 
-@vertex
-fn glyph_atlas_aligned_vs_main(
-    @builtin(vertex_index) corner: u32,
-    glyph: GlyphInstance,
-) -> AlignedVertexOutput {
+fn aligned_glyph_vertex(corner: u32, glyph: GlyphInstance) -> AlignedVertexOutput {
     let placed = glyph_vertex(corner, glyph, vec4<f32>(1.0, 0.0, 0.0, 1.0), vec2<f32>(0.0));
     var output: AlignedVertexOutput;
     output.clip_position = placed.clip_position;
     output.color = placed.color;
     output.uv = placed.uv;
     return output;
+}
+
+@vertex
+fn glyph_atlas_aligned_vs_main(
+    @builtin(vertex_index) corner: u32,
+    glyph: GlyphInstance,
+) -> AlignedVertexOutput {
+    return aligned_glyph_vertex(corner, glyph);
 }
 
 @fragment

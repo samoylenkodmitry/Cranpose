@@ -291,6 +291,8 @@ impl GpuRenderer {
                 .then(|| self.upload_glyph_instances(recorder, &scratch.glyph_instances.plain)),
             turned_glyphs: (!scratch.glyph_instances.turned.is_empty())
                 .then(|| self.upload_turned_glyphs(recorder, &scratch.glyph_instances.turned)),
+            pulled_glyphs: (!scratch.glyph_instances.pulled.is_empty())
+                .then(|| self.upload_pulled_glyphs(recorder, &scratch.glyph_instances.pulled)),
         }
     }
 
@@ -465,7 +467,11 @@ impl GpuRenderer {
                 } => {
                     self.draw_glyph_cmds(
                         pass,
-                        (buffers.glyphs.as_ref(), buffers.turned_glyphs.as_ref()),
+                        crate::render::GlyphSlots {
+                            plain: buffers.glyphs.as_ref(),
+                            turned: buffers.turned_glyphs.as_ref(),
+                            pulled: buffers.pulled_glyphs.as_ref(),
+                        },
                         *uniform_slot,
                         &cmds.glyphs[range.clone()],
                         *scissor,
@@ -829,6 +835,7 @@ struct PassBuffers {
     shadows: Option<crate::frame_graph::BufferUpload>,
     glyphs: Option<crate::frame_graph::BufferUpload>,
     turned_glyphs: Option<crate::frame_graph::BufferUpload>,
+    pulled_glyphs: Option<crate::frame_graph::BufferUpload>,
 }
 
 struct PassScratch {

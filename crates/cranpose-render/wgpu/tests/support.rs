@@ -233,6 +233,14 @@ pub fn headless_renderer_configured(
 }
 
 pub fn headless_renderer_without(flags: wgpu::DownlevelFlags) -> Result<LockedRenderer, String> {
+    let (lock, renderer) = headless_renderer_parts_without(flags)?;
+    Ok(with_app_context(renderer, Some(lock)))
+}
+
+/// A renderer on a device that lacks `flags`, with the GPU test lock.
+pub fn headless_renderer_parts_without(
+    flags: wgpu::DownlevelFlags,
+) -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     let device = device::HeadlessDevice::request(
         wgpu::Backends::all(),
@@ -246,7 +254,7 @@ pub fn headless_renderer_without(flags: wgpu::DownlevelFlags) -> Result<LockedRe
         wgpu::TextureFormat::Bgra8UnormSrgb,
         device::Pipelines::Inline,
     );
-    Ok(with_app_context(renderer, Some(lock)))
+    Ok((lock, renderer))
 }
 
 pub fn headless_renderer_unencoded() -> Result<LockedRenderer, String> {
@@ -362,8 +370,6 @@ fn create_headless_renderer_configured(
     Ok(renderer)
 }
 
-/// Composes `page` in an app shell over a fresh headless renderer, laid out
-/// and updated twice so caches are warm, or `None` when no GPU is available.
 /// Everything a composable page test imports: the page widgets and the
 /// frame helpers below.
 pub mod page {
@@ -497,6 +503,8 @@ pub fn render_target(
     (texture, view)
 }
 
+/// Composes `page` in an app shell over a fresh headless renderer, laid out
+/// and updated twice so caches are warm, or `None` when no GPU is available.
 pub fn app_shell_for(
     page: fn(),
     width: u32,
@@ -504,7 +512,36 @@ pub fn app_shell_for(
     display_format: wgpu::TextureFormat,
     configure: impl FnOnce(&mut WgpuRenderer),
 ) -> Option<(MutexGuard<'static, ()>, AppShell<WgpuRenderer>)> {
-    let (lock, mut renderer) = match headless_renderer_parts_with_display_format(display_format) {
+    app_shell_over(
+        headless_renderer_parts_with_display_format(display_format),
+        page,
+        (width, height),
+        configure,
+    )
+}
+
+/// [`app_shell_for`] over a device that lacks `flags`.
+pub fn app_shell_without(
+    flags: wgpu::DownlevelFlags,
+    page: fn(),
+    width: u32,
+    height: u32,
+) -> Option<(MutexGuard<'static, ()>, AppShell<WgpuRenderer>)> {
+    app_shell_over(
+        headless_renderer_parts_without(flags),
+        page,
+        (width, height),
+        |_| {},
+    )
+}
+
+fn app_shell_over(
+    parts: Result<(MutexGuard<'static, ()>, WgpuRenderer), String>,
+    page: fn(),
+    (width, height): (u32, u32),
+    configure: impl FnOnce(&mut WgpuRenderer),
+) -> Option<(MutexGuard<'static, ()>, AppShell<WgpuRenderer>)> {
+    let (lock, mut renderer) = match parts {
         Ok(parts) => parts,
         Err(err) => {
             eprintln!("skipping (headless WGPU init failed): {err}");

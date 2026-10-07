@@ -338,54 +338,6 @@ fn cached_text_glyph_runs_recover_missing_gpu_atlas_entries() {
 }
 
 #[test]
-fn cached_visible_text_glyph_runs_promote_large_runs_to_retained_buffers() {
-    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let render_source = std::fs::read_to_string(crate_dir.join("src/render.rs"))
-        .expect("failed to read WGPU renderer source");
-
-    assert!(
-        render_source.contains("fn emit_retained_text_glyph_run_if_ready("),
-        "cached visible text rendering should promote large paragraph/code runs through a single retained-buffer helper"
-    );
-    assert!(
-        render_source.contains("self.retained_text_glyph_run(cache_key)")
-            && render_source.contains("self.ensure_retained_text_glyph_run(cache_key, quads)"),
-        "retained text promotion must reuse ready GPU runs and create missing runs through the retained helper"
-    );
-    assert!(
-        render_source
-            .matches("emit_retained_text_glyph_run_if_ready(")
-            .count()
-            >= 2,
-        "the visible cached glyph path should use retained-buffer promotion"
-    );
-    let cached_branch_start = render_source
-        .find("if let Some(entries) = run.entries.as_ref()")
-        .expect("cached visible glyph branch exists");
-    let cached_branch_end = render_source[cached_branch_start..]
-        .find("let instance_start = glyph_instances.len_of(turned);")
-        .map(|offset| cached_branch_start + offset)
-        .expect("cached visible glyph branch boundary exists");
-    assert!(
-        render_source[cached_branch_start..cached_branch_end]
-            .contains("self.emit_retained_text_glyph_run_if_ready("),
-        "cached visible glyph runs should use retained-buffer promotion"
-    );
-    let miss_branch_start = render_source
-        .find("let Ok(entries) = self.prepare_text_glyph_entries(")
-        .expect("visible miss glyph preparation branch exists");
-    let miss_branch_end = render_source[miss_branch_start..]
-        .find("if instance_end > instance_start {")
-        .map(|offset| miss_branch_start + offset)
-        .expect("visible miss glyph preparation branch boundary exists");
-    assert!(
-        !render_source[miss_branch_start..miss_branch_end]
-            .contains("emit_retained_text_glyph_run_if_ready"),
-        "newly prepared visible misses must not synchronously create retained buffers in the slow frame"
-    );
-}
-
-#[test]
 fn frame_graph_executor_runs_recorded_pass_nodes() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let frame_graph_source = std::fs::read_to_string(crate_dir.join("src/frame_graph.rs"))

@@ -11,6 +11,9 @@ pub const SHAPE_WGSL: &str = framework_wgsl!("shape.wgsl");
 pub const ARC_TRIG_FILL_WGSL: &str = framework_wgsl!("arc_trig_fill.wgsl");
 pub const IMAGE_WGSL: &str = framework_wgsl!("image.wgsl");
 pub const GLYPH_ATLAS_WGSL: &str = framework_wgsl!("glyph_atlas.wgsl");
+/// Glyphs drawn from the retained runs' glyph arena, appended to the glyph
+/// shader on a device whose vertex stage reads storage buffers.
+pub const GLYPH_PULLED_WGSL: &str = framework_wgsl!("glyph_pulled.wgsl");
 /// Elevation shadows drawn straight into a pass: Skia's round rect shadow
 /// at each pixel.
 pub const RRECT_SHADOW_WGSL: &str = framework_wgsl!("rrect_shadow.wgsl");

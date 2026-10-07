@@ -61,6 +61,7 @@ mod present_runtime_contract;
 mod probe_passes;
 mod projected_sample_phase;
 mod projective_layer_clip;
+mod pulled_text_parity;
 mod queued_surface_frames;
 mod raster_cache;
 mod record_path_goldens;

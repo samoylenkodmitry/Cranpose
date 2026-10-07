@@ -976,6 +976,16 @@ pub(crate) trait FrameCommandRecorder {
         bytes: &[u8],
     ) -> FrameCommandStats;
 
+    /// Copies the first `size` bytes of `source` into `destination` before
+    /// the frame's passes, after the frame buffer copies staged so far.
+    fn copy_frame_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        source: &wgpu::Buffer,
+        destination: &wgpu::Buffer,
+        size: u64,
+    );
+
     fn stage_buffer_copy(
         &mut self,
         device: &wgpu::Device,
@@ -1104,6 +1114,17 @@ impl FrameCommandRecorder for PassContext<'_> {
     ) -> FrameCommandStats {
         self.uploads
             .stage_frame_buffer_copy(device, buffer, offset, bytes)
+    }
+
+    fn copy_frame_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        source: &wgpu::Buffer,
+        destination: &wgpu::Buffer,
+        size: u64,
+    ) {
+        self.uploads
+            .copy_frame_buffer(device, source, destination, size);
     }
 
     fn stage_buffer_copy(
@@ -1328,6 +1349,17 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
     ) -> FrameCommandStats {
         self.uploads
             .stage_frame_buffer_copy(device, buffer, offset, bytes)
+    }
+
+    fn copy_frame_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        source: &wgpu::Buffer,
+        destination: &wgpu::Buffer,
+        size: u64,
+    ) {
+        self.uploads
+            .copy_frame_buffer(device, source, destination, size);
     }
 
     fn stage_buffer_copy(
@@ -1931,6 +1963,18 @@ impl FrameUploadAllocators {
             upload_writes: u32::from(!bytes.is_empty()),
             ..FrameCommandStats::default()
         }
+    }
+
+    fn copy_frame_buffer(
+        &mut self,
+        device: &wgpu::Device,
+        source: &wgpu::Buffer,
+        destination: &wgpu::Buffer,
+        size: u64,
+    ) {
+        self.buffers
+            .before_passes(device)
+            .copy_buffer_to_buffer(source, 0, destination, 0, size);
     }
 
     fn encode_pending(&mut self, device: &wgpu::Device) -> FrameCommandStats {
