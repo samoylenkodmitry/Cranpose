@@ -282,7 +282,6 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
             12.0, 8.0,
         ),
         hit_test: Some(cranpose_render_common::graph::HitTestNode {
-            shape: None,
             handlers: Rc::new(cranpose_ui::collect_slices_from_modifier(
                 &cranpose_ui::Modifier::empty().clickable(|_point| {}),
             )),

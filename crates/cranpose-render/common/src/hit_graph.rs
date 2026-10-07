@@ -32,7 +32,7 @@ impl HitGraphSink for Scene {
             capture_path,
             geometry,
             HitTargetSpec {
-                shape: hit.shape,
+                shape: None,
                 handlers: &hit.handlers,
             },
         );
