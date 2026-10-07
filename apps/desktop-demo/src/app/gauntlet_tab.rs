@@ -59,7 +59,8 @@ fn TierChips(tier: MutableState<usize>) {
                     Modifier::empty()
                         .background(if chosen { CHOSEN } else { CHIP })
                         .rounded_corners(10.0)
-                        .padding_symmetric(8.0, 4.0),
+                        // Tall enough to be a touch target the audit accepts.
+                        .padding_symmetric(8.0, 7.0),
                     ButtonSpec::default(),
                     move || choose(chip),
                     move || {

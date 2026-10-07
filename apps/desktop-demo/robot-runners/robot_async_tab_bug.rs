@@ -10,7 +10,7 @@ pub(crate) fn main() {
 
     const TEST_TIMEOUT_SECS: u64 = 60;
 
-    robot_launch::launch("Robot Async Tab Bug Test", 800, 600)
+    robot_launch::launch("Robot Async Tab Bug Test", 1024, 768)
         .with_test_driver(|robot| {
             robot_exit::arm_timeout(TEST_TIMEOUT_SECS);
 
