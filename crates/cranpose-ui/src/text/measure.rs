@@ -1798,6 +1798,24 @@ impl PreparedWidths {
         }
     }
 
+    /// The max widths of constraints this layout comes out the same for,
+    /// as a range: an unbounded max is infinite. Each end steps in from the
+    /// edge [`Self::hold`] draws, so a width the range holds never rounds
+    /// to the other side of it.
+    pub(crate) fn max_width_range(self) -> cranpose_ui_layout::BoundRange {
+        match self {
+            Self::Exact(None) => cranpose_ui_layout::BoundRange::exactly(f32::INFINITY),
+            Self::Exact(Some(bits)) => {
+                cranpose_ui_layout::BoundRange::exactly(f32::from_bits(bits))
+            }
+            Self::AtLeast(min) => cranpose_ui_layout::BoundRange::from(min.next_up()),
+            Self::Wrapped(hold) => cranpose_ui_layout::BoundRange {
+                low: (hold.fits - WRAP_EPSILON).next_up(),
+                high: (hold.pulls_up - WRAP_EPSILON).next_down().next_down(),
+            },
+        }
+    }
+
     /// Whether preparing at `max_width` gives the same layout.
     pub(crate) fn hold(self, max_width: Option<f32>) -> bool {
         let max_width = normalize_max_width(max_width);

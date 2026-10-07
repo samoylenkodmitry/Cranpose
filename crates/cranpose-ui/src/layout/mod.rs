@@ -275,6 +275,8 @@ struct ModifierChainMeasurement {
     offset: Point,
     window_root: bool,
     uses_chain: bool,
+    /// The incoming constraints this measurement holds for besides its own.
+    hold: Option<cranpose_ui_layout::ConstraintsHold>,
 }
 
 struct ScratchVecPool<T> {
@@ -2094,8 +2096,11 @@ impl LayoutBuilderState {
 
         self.with_applier_result(|applier| {
             applier.with_node::<LayoutNode, _>(node_id, |node| {
-                node.cache_handles()
-                    .store_measurement(constraints, Rc::clone(&measured));
+                node.cache_handles().store_held_measurement(
+                    constraints,
+                    Rc::clone(&measured),
+                    measurement.hold,
+                );
                 runtime_state.write_node_geometry(node_id, node, &measurement);
                 node.clear_needs_measure();
                 node.clear_needs_layout();
@@ -2458,6 +2463,15 @@ impl LayoutBuilderState {
                 offset: chain.offset,
                 window_root: chain.window_root,
                 uses_chain: false,
+                hold: if chain.window_root {
+                    None
+                } else {
+                    runtime_state.measure_policy.measure_hold(
+                        runtime_state.child_measurables.as_slice(),
+                        constraints,
+                        measurement.size,
+                    )
+                },
             };
         }
 
@@ -2505,6 +2519,15 @@ impl LayoutBuilderState {
             offset: chain.offset,
             window_root: chain.window_root,
             uses_chain: true,
+            hold: if chain.window_root {
+                None
+            } else {
+                runtime_state.coordinator_chain.measured_hold(
+                    cranpose_ui_layout::MeasureScope::density(&scope),
+                    runtime_state.measure_policy.as_ref(),
+                    runtime_state.child_measurables.as_slice(),
+                )
+            },
         }
     }
 }
@@ -2785,6 +2808,8 @@ struct CoordinatorNode {
     modifier_index: usize,
     node: Rc<RefCell<dyn cranpose_foundation::ModifierNode>>,
     measured_size: Cell<Size>,
+    /// The constraints this node last measured under.
+    measured_constraints: Cell<Constraints>,
     accumulated_offset: Cell<Point>,
 }
 
@@ -2797,6 +2822,7 @@ impl CoordinatorNode {
             modifier_index,
             node,
             measured_size: Cell::new(Size::default()),
+            measured_constraints: Cell::new(Constraints::tight(0.0, 0.0)),
             accumulated_offset: Cell::new(Point::default()),
         }
     }
@@ -2820,6 +2846,8 @@ struct CoordinatorChain {
     nodes: Vec<CoordinatorNode>,
     /// The size the node's own measure policy measured its content at.
     inner_size: Cell<Size>,
+    /// The constraints the node's own measure policy last measured under.
+    inner_constraints: Cell<Option<Constraints>>,
     /// The chain revision the nodes were last synced at and the inputs it
     /// gave: a node whose modifiers did not change since measures again
     /// without walking its chain.
@@ -2911,6 +2939,37 @@ impl CoordinatorChain {
         });
     }
 
+    /// What the last measure through this chain holds for: the policy's own
+    /// range, then each layout modifier from the innermost out turns its
+    /// content's range into its own; any other node passes its constraints
+    /// through.
+    fn measured_hold(
+        &self,
+        density: f32,
+        policy: &dyn MeasurePolicy,
+        measurables: &[Box<dyn Measurable>],
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        let inner_size = self.inner_size.get();
+        let mut wrapped = cranpose_ui_layout::WrappedHold {
+            size: inner_size,
+            hold: self
+                .inner_constraints
+                .get()
+                .and_then(|constraints| policy.measure_hold(measurables, constraints, inner_size)),
+        };
+        for node in self.nodes.iter().rev() {
+            let size = node.measured_size.get();
+            let hold = match node.node.borrow().as_layout_node() {
+                Some(layout) => {
+                    layout.measure_hold(density, node.measured_constraints.get(), size, wrapped)
+                }
+                None => wrapped.hold,
+            };
+            wrapped = cranpose_ui_layout::WrappedHold { size, hold };
+        }
+        wrapped.hold
+    }
+
     fn measure_from(
         &self,
         index: usize,
@@ -2926,6 +2985,7 @@ impl CoordinatorChain {
                 &mut placements,
             );
             self.inner_size.set(measurement.size);
+            self.inner_constraints.set(Some(constraints));
             return Placeable::value(
                 measurement.size.width,
                 measurement.size.height,
@@ -2943,6 +3003,7 @@ impl CoordinatorChain {
 
         let wrapped = CoordinatorLink::new(self, frame, index + 1);
         let node_borrow = node.node.borrow();
+        node.measured_constraints.set(constraints);
 
         let Some(layout_node) = node_borrow.as_layout_node() else {
             let placeable = wrapped.measure(constraints);

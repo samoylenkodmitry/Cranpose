@@ -244,6 +244,8 @@ impl LayoutState {
 struct MeasurementCacheEntry {
     constraints: Constraints,
     measured: Rc<MeasuredNode>,
+    /// The other incoming constraints the measurement holds for.
+    hold: Option<cranpose_ui_layout::ConstraintsHold>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -347,12 +349,18 @@ impl LayoutNodeCacheHandles {
         self.state.borrow().epoch
     }
 
+    /// The measurement the cache holds for `constraints`: one made under
+    /// them, or one whose hold contains them. A caller asks only while the
+    /// node and everything below it are clean.
     pub(crate) fn get_measurement(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
         let state = self.state.borrow();
         state
             .measurement
             .as_ref()
-            .filter(|entry| entry.constraints == constraints)
+            .filter(|entry| {
+                entry.constraints == constraints
+                    || entry.hold.is_some_and(|hold| hold.contains(constraints))
+            })
             .map(|entry| Rc::clone(&entry.measured))
     }
 
@@ -370,10 +378,34 @@ impl LayoutNodeCacheHandles {
         self.state.borrow().intrinsics_read
     }
 
+    /// Stores `measured` for `constraints`. The hold of a measurement the
+    /// cache already has stays with it.
     pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {
+        let mut state = self.state.borrow_mut();
+        let hold = state
+            .measurement
+            .as_ref()
+            .filter(|entry| Rc::ptr_eq(&entry.measured, &measured))
+            .and_then(|entry| entry.hold);
+        state.measurement = Some(MeasurementCacheEntry {
+            constraints,
+            measured,
+            hold,
+        });
+    }
+
+    /// Stores `measured` for `constraints` and the other constraints `hold`
+    /// says it holds for.
+    pub(crate) fn store_held_measurement(
+        &self,
+        constraints: Constraints,
+        measured: Rc<MeasuredNode>,
+        hold: Option<cranpose_ui_layout::ConstraintsHold>,
+    ) {
         self.state.borrow_mut().measurement = Some(MeasurementCacheEntry {
             constraints,
             measured,
+            hold,
         });
     }
 

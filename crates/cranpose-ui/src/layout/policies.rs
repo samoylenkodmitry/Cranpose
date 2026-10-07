@@ -39,6 +39,19 @@ impl MeasurePolicy for BoxMeasurePolicy {
         MeasureResult::new(measurement, placements)
     }
 
+    fn measure_hold(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        size: crate::modifier::Size,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        if measurables.is_empty() {
+            empty_layout_hold(constraints, size)
+        } else {
+            None
+        }
+    }
+
     fn measure_into(
         &self,
         scope: &dyn MeasureScope,
@@ -1062,6 +1075,15 @@ impl MeasurePolicy for EmptyMeasurePolicy {
         crate::modifier::Size { width, height }.into()
     }
 
+    fn measure_hold(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        size: crate::modifier::Size,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        empty_layout_hold(constraints, size)
+    }
+
     fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
         0.0
     }
@@ -1082,3 +1104,14 @@ impl MeasurePolicy for EmptyMeasurePolicy {
 #[cfg(test)]
 #[path = "tests/policies_tests.rs"]
 mod tests;
+
+/// What a layout with nothing in it holds for: it takes its min
+/// constraints, so any constraints with the same mins and a max that allows
+/// them size it the same.
+fn empty_layout_hold(
+    constraints: Constraints,
+    size: crate::modifier::Size,
+) -> Option<cranpose_ui_layout::ConstraintsHold> {
+    (size.width == constraints.min_width && size.height == constraints.min_height)
+        .then(|| cranpose_ui_layout::ConstraintsHold::at_min(size.width, size.height))
+}

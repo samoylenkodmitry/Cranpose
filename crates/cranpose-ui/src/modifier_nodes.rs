@@ -229,6 +229,25 @@ macro_rules! impl_sink_reporter_element {
     };
 }
 
+/// One axis of what a size modifier that enforces incoming constraints
+/// holds for: a fixed size that fit holds while the bounds allow it, and an
+/// axis it leaves unsized passes the bounds to its content and holds what
+/// the content holds.
+fn size_axis_hold(
+    (min, max): (Option<f32>, Option<f32>),
+    target: f32,
+    size: f32,
+    wrapped: Option<cranpose_ui_layout::AxisHold>,
+) -> Option<cranpose_ui_layout::AxisHold> {
+    match (min, max) {
+        (Some(min), Some(max)) if min == max && size == target => {
+            Some(cranpose_ui_layout::AxisHold::sized(target))
+        }
+        (None, None) => wrapped,
+        _ => None,
+    }
+}
+
 fn measure_pass_through(
     measurable: &dyn Measurable,
     constraints: Constraints,
@@ -324,6 +343,33 @@ impl DelegatableNode for PaddingNode {
 impl_layout_modifier_node!(PaddingNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for PaddingNode {
+    fn measure_hold(
+        &self,
+        density: f32,
+        _constraints: Constraints,
+        size: Size,
+        wrapped: cranpose_ui_layout::WrappedHold,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        let inner = wrapped.hold?;
+        let padding = device_padding(self.padding, density);
+        let horizontal = padding.horizontal_sum();
+        let vertical = padding.vertical_sum();
+        // A padded size the bounds cut changes with them.
+        if size.width != wrapped.size.width + horizontal
+            || size.height != wrapped.size.height + vertical
+        {
+            return None;
+        }
+        cranpose_ui_layout::ConstraintsHold {
+            width: inner.width.outset(horizontal),
+            height: inner.height.outset(vertical),
+        }
+        .intersect(cranpose_ui_layout::ConstraintsHold::sized(
+            size.width,
+            size.height,
+        ))
+    }
+
     fn measure(
         &self,
         context: &mut dyn ModifierNodeContext,
@@ -963,6 +1009,33 @@ impl DelegatableNode for SizeNode {
 impl_layout_modifier_node!(SizeNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for SizeNode {
+    fn measure_hold(
+        &self,
+        density: f32,
+        _constraints: Constraints,
+        size: Size,
+        wrapped: cranpose_ui_layout::WrappedHold,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        if !self.enforce_incoming {
+            return None;
+        }
+        let target = self.target_constraints(density);
+        Some(cranpose_ui_layout::ConstraintsHold {
+            width: size_axis_hold(
+                (self.min_width, self.max_width),
+                target.min_width,
+                size.width,
+                wrapped.hold.map(|hold| hold.width),
+            )?,
+            height: size_axis_hold(
+                (self.min_height, self.max_height),
+                target.min_height,
+                size.height,
+                wrapped.hold.map(|hold| hold.height),
+            )?,
+        })
+    }
+
     fn measure(
         &self,
         context: &mut dyn ModifierNodeContext,
@@ -2127,6 +2200,16 @@ impl DelegatableNode for OffsetNode {
 impl_layout_modifier_node!(OffsetNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for OffsetNode {
+    fn measure_hold(
+        &self,
+        _density: f32,
+        _constraints: Constraints,
+        _size: Size,
+        wrapped: cranpose_ui_layout::WrappedHold,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        wrapped.hold
+    }
+
     fn measure(
         &self,
         context: &mut dyn ModifierNodeContext,
@@ -2226,6 +2309,16 @@ impl DelegatableNode for FractionalOffsetNode {
 impl_layout_modifier_node!(FractionalOffsetNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for FractionalOffsetNode {
+    fn measure_hold(
+        &self,
+        _density: f32,
+        _constraints: Constraints,
+        _size: Size,
+        wrapped: cranpose_ui_layout::WrappedHold,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        wrapped.hold
+    }
+
     fn measure(
         &self,
         _context: &mut dyn ModifierNodeContext,

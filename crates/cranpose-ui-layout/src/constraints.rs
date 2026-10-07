@@ -142,3 +142,167 @@ impl Constraints {
 #[cfg(test)]
 #[path = "tests/constraints_tests.rs"]
 mod tests;
+
+/// The values one bound of incoming constraints may take, both ends
+/// included.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BoundRange {
+    pub low: f32,
+    pub high: f32,
+}
+
+impl BoundRange {
+    /// Only `value`.
+    pub const fn exactly(value: f32) -> Self {
+        Self {
+            low: value,
+            high: value,
+        }
+    }
+
+    /// Every value up to `value`.
+    pub const fn up_to(value: f32) -> Self {
+        Self {
+            low: f32::NEG_INFINITY,
+            high: value,
+        }
+    }
+
+    /// Every value from `value` up.
+    pub const fn from(value: f32) -> Self {
+        Self {
+            low: value,
+            high: f32::INFINITY,
+        }
+    }
+
+    pub fn contains(self, value: f32) -> bool {
+        self.low <= value && value <= self.high
+    }
+
+    /// The values both ranges hold; `None` when they share none.
+    pub fn intersect(self, other: Self) -> Option<Self> {
+        let range = Self {
+            low: self.low.max(other.low),
+            high: self.high.min(other.high),
+        };
+        (range.low <= range.high).then_some(range)
+    }
+
+    /// The range of a bound that reaches content `inset` less, floored at
+    /// zero, as padding hands its content: the range content held, in the
+    /// bound around it.
+    pub fn outset(self, inset: f32) -> Self {
+        Self {
+            low: if self.low <= 0.0 {
+                f32::NEG_INFINITY
+            } else {
+                self.low + inset
+            },
+            high: self.high + inset,
+        }
+    }
+}
+
+/// The incoming constraints of one axis a measurement holds for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AxisHold {
+    pub min: BoundRange,
+    pub max: BoundRange,
+}
+
+impl AxisHold {
+    /// Every min and max that keeps `size` within them: what a layout
+    /// whose size does not depend on the bounds holds for.
+    pub const fn sized(size: f32) -> Self {
+        Self {
+            min: BoundRange::up_to(size),
+            max: BoundRange::from(size),
+        }
+    }
+
+    /// Constraints whose min is `size` and whose max allows it: a layout
+    /// that takes its min, as an empty one does.
+    pub const fn at_min(size: f32) -> Self {
+        Self {
+            min: BoundRange::exactly(size),
+            max: BoundRange::from(size),
+        }
+    }
+
+    pub fn contains(self, min: f32, max: f32) -> bool {
+        self.min.contains(min) && self.max.contains(max)
+    }
+
+    /// The constraints both holds allow; `None` when they share none.
+    pub fn intersect(self, other: Self) -> Option<Self> {
+        Some(Self {
+            min: self.min.intersect(other.min)?,
+            max: self.max.intersect(other.max)?,
+        })
+    }
+
+    /// This hold of content inside `inset` of padding, in the constraints
+    /// around the padding.
+    pub fn outset(self, inset: f32) -> Self {
+        Self {
+            min: self.min.outset(inset),
+            max: self.max.outset(inset),
+        }
+    }
+}
+
+/// The incoming constraints a measurement stays the same under. A node
+/// whose inputs did not change answers any constraints inside with the
+/// measurement it has, instead of measuring again: an animated width
+/// otherwise measured again every fixed-size box and every text it does not
+/// wrap.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ConstraintsHold {
+    pub width: AxisHold,
+    pub height: AxisHold,
+}
+
+impl ConstraintsHold {
+    /// Every constraints that keeps `width` by `height` within them.
+    pub const fn sized(width: f32, height: f32) -> Self {
+        Self {
+            width: AxisHold::sized(width),
+            height: AxisHold::sized(height),
+        }
+    }
+
+    /// Constraints whose mins are `width` by `height`: what a layout that
+    /// takes its min constraints holds for.
+    pub const fn at_min(width: f32, height: f32) -> Self {
+        Self {
+            width: AxisHold::at_min(width),
+            height: AxisHold::at_min(height),
+        }
+    }
+
+    pub fn contains(&self, constraints: Constraints) -> bool {
+        self.width
+            .contains(constraints.min_width, constraints.max_width)
+            && self
+                .height
+                .contains(constraints.min_height, constraints.max_height)
+    }
+
+    /// The constraints both holds allow; `None` when they share none.
+    pub fn intersect(self, other: Self) -> Option<Self> {
+        Some(Self {
+            width: self.width.intersect(other.width)?,
+            height: self.height.intersect(other.height)?,
+        })
+    }
+}
+
+/// What the content a layout modifier wraps measured: its size and the
+/// constraints that measure holds for, `None` when only the constraints it
+/// had.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WrappedHold {
+    pub size: cranpose_ui_graphics::Size,
+    pub hold: Option<ConstraintsHold>,
+}

@@ -254,6 +254,19 @@ pub trait MeasurePolicy {
         }
     }
 
+    /// The incoming constraints the measure that sized the layout `size`
+    /// under `constraints` holds for, when the policy can tell: see
+    /// [`crate::ConstraintsHold`]. `None`, the default, holds for
+    /// `constraints` alone.
+    fn measure_hold(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        _constraints: Constraints,
+        _size: Size,
+    ) -> Option<crate::ConstraintsHold> {
+        None
+    }
+
     /// Computes the minimum intrinsic width of this policy.
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32;
 
