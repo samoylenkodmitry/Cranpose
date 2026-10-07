@@ -173,3 +173,76 @@ fn surfaces_at_different_scales_share_one_atlas_pass_and_draw_as_they_do_alone()
         &half(&both, true),
     );
 }
+
+/// Tiles each composited through a surface of its own, `side` points square.
+#[composable]
+fn Tiles(side: MutableState<f32>) {
+    Box(
+        Modifier::empty()
+            .size_points(WIDTH as f32, HEIGHT as f32)
+            .background(PAGE),
+        BoxSpec::default(),
+        move || {
+            for index in 0..6u8 {
+                let side = side.get();
+                Box(
+                    Modifier::empty()
+                        .offset(8.0 + f32::from(index) * 38.0, 20.0)
+                        .size_points(side, side)
+                        .graphics_layer_value(GraphicsLayer {
+                            compositing_strategy: CompositingStrategy::Offscreen,
+                            ..Default::default()
+                        })
+                        .background(Color(0.15 * f32::from(index), 0.4, 0.8, 1.0))
+                        .rounded_corners(6.0),
+                    BoxSpec::default(),
+                    || {},
+                );
+            }
+        },
+    );
+}
+
+fn tiles_shell(renderer: WgpuRenderer, side: f32) -> (AppShell<WgpuRenderer>, MutableState<f32>) {
+    let state: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
+    let state_for_app = Rc::clone(&state);
+    let mut shell = AppShell::new(
+        renderer,
+        location_key(file!(), line!(), column!()),
+        move || {
+            let side = cranpose_core::rememberMutableStateOf(|| side);
+            *state_for_app.borrow_mut() = Some(side);
+            Tiles(side);
+        },
+    );
+    shell.set_viewport(WIDTH as f32, HEIGHT as f32);
+    shell.set_buffer_size(WIDTH, HEIGHT);
+    shell.update();
+    let side = state.borrow().as_ref().copied().expect("side captured");
+    (shell, side)
+}
+
+#[test]
+fn an_atlas_whose_surfaces_shrink_a_step_draws_into_the_texture_it_had() {
+    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let (mut shell, side) = tiles_shell(renderer, 36.0);
+    support::settle(|| support::update_and_capture(&mut shell, WIDTH, HEIGHT));
+    support::wait_for_background_compiler_idle();
+    shell.debug_enter_app_context(|| side.set(28.0));
+    let (stats, shrunk) = support::update_and_capture(&mut shell, WIDTH, HEIGHT);
+    assert_eq!(stats.isolated_layer_renders, 6);
+    assert_eq!(
+        stats.offscreen_news, 0,
+        "the smaller atlas takes the texture the larger one drew into: {stats:?}"
+    );
+
+    let (mut fresh, _) = tiles_shell(
+        support::headless_renderer_beside_locked().expect("reference renderer"),
+        28.0,
+    );
+    let reference = support::settle(|| support::update_and_capture(&mut fresh, WIDTH, HEIGHT));
+    support::assert_same_bytes("shrunk tiles", WIDTH, &reference.pixels, &shrunk.pixels);
+}
