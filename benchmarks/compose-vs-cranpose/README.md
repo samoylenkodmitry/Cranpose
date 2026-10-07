@@ -205,14 +205,15 @@ so a list scrolled 720 dp shows its rows a few dozen pixels apart without
 looking any different. Flutter rounds each line to whole logical pixels and
 Compose rounds it up to whole device pixels. Any difference for the same
 composable code is a Cranpose bug. Against Compose at tier 5 every app but
-Flutter and NativeScript stays under the 2% gate; what the other frameworks
-draw differently, by design:
+Flutter, NativeScript and Slint stays under the 2% gate; what the other
+frameworks draw differently, by design:
 
 - The stacked panels lie still over a list that drifts as each framework
   rounds its lines: where a tilted panel's edge crosses the list, the list
   beneath it has moved. Flutter's and NativeScript's lists drift the most,
   about 50 pixels under the second panel's edge, so the row of tiles along
-  that edge changes: 2.9% and 3.4% of tiles.
+  that edge changes: 2.9% and 3.4% of tiles. Slint's ticker strip breaks
+  into one more line, so its panels and its list sit a line lower: 2.9%.
 
 - Flutter and Slint set text slightly wider, so a few lines break a word
   earlier.
