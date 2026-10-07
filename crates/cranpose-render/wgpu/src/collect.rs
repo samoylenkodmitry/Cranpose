@@ -723,9 +723,7 @@ fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCo
                     stays_clear(rect, offset, corners)
                 })
             }
-            PrimitiveNode::Text(text) => text
-                .draw_bounds()
-                .is_some_and(|rect| stays_clear(rect, offset, corners)),
+            PrimitiveNode::Text(_) => true,
         },
         RenderNode::DrawRun(run) => run_takes_corners(run, offset, corners),
         RenderNode::Layer(child) => child_takes_corners(child, offset, corners),
@@ -751,8 +749,12 @@ fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorn
     if !child.draws_within_bounds || child.graphics_layer.shadow_elevation > 0.0 {
         return false;
     }
-    let padding = cranpose_render_common::graph::CONTAINED_DRAW_SLACK
-        + child.effect().map_or(0.0, RenderEffect::output_padding);
+    let slack = if child.visual_clip_rect().is_some() && child.effect().is_none() {
+        0.0
+    } else {
+        cranpose_render_common::graph::CONTAINED_DRAW_SLACK
+    };
+    let padding = slack + child.effect().map_or(0.0, RenderEffect::output_padding);
     stays_clear(
         quad_bounds(
             child
