@@ -48,16 +48,20 @@ class DesktopRoundsTest(unittest.TestCase):
     """`run` on legs a stand-in for `measure` returns, as the run would read
     `FrameCount`'s rates."""
 
-    def rounds(self, rates):
+    def rounds(self, rates, rounds=2):
+        """A rate is a leg; a `RuntimeError` is an attempt that failed."""
         measured = []
 
         def measure(name, args, work, page, stage, label, earlier):
             measured.append(label)
-            return {'fps': rates[len(measured) - 1], 'frames': 90, 'window_s': 3.0, 'interval_p50_ms': 16.7,
+            rate = rates[len(measured) - 1]
+            if isinstance(rate, Exception):
+                raise rate
+            return {'fps': rate, 'frames': 90, 'window_s': 3.0, 'interval_p50_ms': 16.7,
                     'interval_p99_ms': 20.0, 'cpu_cores': 1.0, 'server_cores': 0.2, 'other_cores': 0.5,
                     'cpu_ms_per_frame': 40.0}
 
-        args = SimpleNamespace(parity=False, output=Path('results'), rounds=2, max_others=1.5, main=None,
+        args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5, main=None,
                                release=None, tier=16, warmup=1.0, window=3.0, max_window=8.0, min_frames=40)
         with patch.object(desktop, 'measure', measure), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
@@ -69,6 +73,18 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(measured, ['fyne-1-1', 'fyne-2-1', 'fyne-2-again-1'])
         self.assertEqual([leg['fps'] for leg in scenario['legs']], [24.3, 60.1, 24.6])
         self.assertEqual(scenario['summary']['fyne']['fps'], 24.6)
+
+    def test_a_failed_attempt_is_measured_again(self):
+        measured, scenario = self.rounds([RuntimeError('FrameCount: process 1 shows no window'), 24.3, 24.6])
+        self.assertEqual(measured, ['fyne-1-1', 'fyne-1-2', 'fyne-2-1'])
+        self.assertEqual([leg['fps'] for leg in scenario['legs']], [24.3, 24.6])
+
+    def test_an_app_no_attempt_measured_leaves_its_leg_out_and_the_run_goes_on(self):
+        failure = RuntimeError('fyne.log: no "PERF first_frame" within 60 s')
+        measured, scenario = self.rounds([failure, failure, failure], rounds=1)
+        self.assertEqual(measured, ['fyne-1-1', 'fyne-1-2', 'fyne-1-3'])
+        self.assertEqual(scenario['legs'], [])
+        self.assertEqual(scenario['summary']['fyne'], {}, 'no values: the dashboard shows a dash')
 
     def test_legs_that_agree_are_measured_once_each(self):
         measured, scenario = self.rounds([24.3, 25.9])

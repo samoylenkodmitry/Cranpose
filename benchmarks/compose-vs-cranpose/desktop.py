@@ -9,8 +9,9 @@ window presents, the way SurfaceFlinger counts a phone app's, `ps` counts
 the CPU time of the app and every process it started, `footprint` the memory
 they hold and `macmon` the clocks the chip ran at. The apps are measured in
 turn, round after round, as `frameworks.py` measures phones, and the run is a
-`frameworks` run `scripts/perf/publish.py` publishes. A leg in which other
-processes spent more than `--max-others` cores is measured again, and a leg
+`frameworks` run `scripts/perf/publish.py` publishes. A leg that fails, or in
+which other processes spent more than `--max-others` cores, is measured again,
+up to three times; an app no attempt measured leaves its leg out. A leg
 whose frame rate is more than 1.5 times off the app's earlier legs is measured
 once more, with a picture of its window kept beside the results. Each window
 is as short as the app's frame rate allows: `--min-frames` frames, within
@@ -238,13 +239,16 @@ class App:
         self.name = name
         self.work = work
         self.log = stage / f'{label or name}.log'
-        profile = stage / 'chrome-profile'
+        # A profile for each launch: helpers of an earlier launch's Chrome may
+        # outlive it, and must not pass for this one's.
+        profile = stage / f'chrome-profile-{label or name}'
         values = {'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
         command = [str(part).format(**values) for part in APPS[name]]
         variables = {'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze), 'PERF_FONTS': str(stage / 'fonts')}
         executable, arguments = command[0], command[1:]
         self.log.write_text('')
         self.started = time.monotonic()
+        self.profile = None
         if '.app/Contents/MacOS/' not in executable:
             with self.log.open('w') as output:
                 self.process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT,
@@ -256,9 +260,10 @@ class App:
         self.process = subprocess.Popen(['open', '-n', '-W', *environment, '--stdout', str(self.log),
                                          '--stderr', str(self.log), bundle, '--args', *arguments])
         # Chrome's helpers share its path's start, and the user's own Chrome
-        # its path: this run's Chrome is the oldest process of its profile.
+        # its path: this launch's Chrome is the oldest process of its profile.
         chrome = executable == CHROME
-        pattern = f'--user-data-dir={profile}' if chrome else executable
+        self.profile = f'--user-data-dir={profile}' if chrome else None
+        pattern = self.profile or executable
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             found = subprocess.run(['pgrep', '-o' if chrome else '-n', '-f', '--', pattern], capture_output=True,
@@ -275,21 +280,28 @@ class App:
         shutil.copy(self.log, self.work / self.log.name)
 
     def end(self):
-        if '-W' not in self.process.args:
-            target, kill = self.process.pid, os.killpg
-        else:
-            target, kill = self.pid, os.kill
+        """Ends the app: its process group, or the app `open` started and,
+        for Chrome, every process of its profile."""
+        group = '-W' not in self.process.args
         for sent in (signal.SIGTERM, signal.SIGKILL):
             try:
-                kill(target, sent)
-                self.process.wait(timeout=5)
-                return
+                if group:
+                    os.killpg(self.process.pid, sent)
+                else:
+                    os.kill(self.pid, sent)
             except (ProcessLookupError, PermissionError):
-                # Gone already: its group, too, or no longer ours to signal.
+                pass  # Gone already, or no longer ours to signal.
+            if self.profile:
+                subprocess.run(['pkill', f'-{sent.name.removeprefix("SIG")}', '-f', '--', self.profile],
+                               capture_output=True)
+            try:
                 self.process.wait(timeout=5)
                 return
             except subprocess.TimeoutExpired:
                 continue
+        # `open -W` still waits on an app that did not end: stop waiting.
+        self.process.kill()
+        self.process.wait(timeout=5)
 
 
 def disagrees(fps, earlier):
@@ -410,9 +422,15 @@ def main():
 
 def undisturbed_leg(name, args, page, stage, label, earlier):
     """A leg, measured again, up to three times, while other processes spend
-    more than `--max-others` cores in it."""
+    more than `--max-others` cores in it or it fails; none when every attempt
+    failed, so one app cannot end the run."""
+    leg = None
     for attempt in range(3):
-        leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier)
+        try:
+            leg = measure(name, args, args.output, page, stage, f'{label}-{attempt + 1}', earlier)
+        except (RuntimeError, subprocess.SubprocessError) as failure:
+            print(f'{label:16} failed: {failure}', flush=True)
+            continue
         print(f'{label:16} fps {leg["fps"]:6.1f} cpu/f {leg["cpu_ms_per_frame"]} '
               f'p99 {leg["interval_p99_ms"]} others {leg["other_cores"]}', flush=True)
         if leg['other_cores'] <= args.max_others:
@@ -454,11 +472,14 @@ def run(args, apps, page, stage):
             earlier = [leg['fps'] for leg in legs if leg['subject'] == name]
             label = f'{name}-{round_index + 1}'
             leg = undisturbed_leg(name, args, page, stage, label, earlier)
+            if leg is None:
+                continue
             legs.append({'subject': name, 'round': round_index, **leg})
             if disagrees(leg['fps'], earlier):
                 print(f'{name}: {leg["fps"]} fps disagrees with its earlier legs; measuring once more', flush=True)
                 again = undisturbed_leg(name, args, page, stage, f'{label}-again', earlier)
-                legs.append({'subject': name, 'round': round_index, **again})
+                if again is not None:
+                    legs.append({'subject': name, 'round': round_index, **again})
     summary = {name: {key: round(statistics.median(values), 2)
                       for key in SUMMARY
                       if (values := [leg[key] for leg in legs if leg['subject'] == name and leg.get(key) is not None])}
