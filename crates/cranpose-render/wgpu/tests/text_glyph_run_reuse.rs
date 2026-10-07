@@ -37,6 +37,7 @@ fn text_node(node_id: usize, text: &str, rect: Rect, font_size: f32) -> RenderNo
             font_size,
             layout_options: TextLayoutOptions::default(),
             clip: None,
+            paint: Default::default(),
         })),
     })
 }

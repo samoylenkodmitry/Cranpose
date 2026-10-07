@@ -86,6 +86,7 @@ pub fn build_dev_overlay_graph(
                     font_size,
                     layout_options: cranpose_ui::TextLayoutOptions::default(),
                     clip: None,
+                    paint: Default::default(),
                 })),
             }),
         ],

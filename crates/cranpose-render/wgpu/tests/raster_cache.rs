@@ -430,6 +430,7 @@ fn text_layer(node_id: NodeId, x: f32, y: f32, text_value: &str) -> LayerNode {
             font_size: 14.0,
             layout_options: TextLayoutOptions::default(),
             clip: None,
+            paint: Default::default(),
         })),
     };
     support::contract_layer(

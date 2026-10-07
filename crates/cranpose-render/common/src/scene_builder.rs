@@ -24,6 +24,7 @@ use crate::{
         layer_scales_or_rotates, layer_transform_to_parent, layer_transform_to_window,
     },
     style_shared::{DrawPlacement, recording_for_placement_reusing},
+    text_paint::{TextPaint, TextPaintCache},
 };
 
 const TEXT_CLIP_PAD: f32 = 1.0;
@@ -2266,6 +2267,11 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         font_size,
         layout_options: options,
         clip,
+        paint: TextPaintCache::holding(TextPaint::of(
+            visual_style,
+            &prepared.text.span_styles,
+            font_size,
+        )),
     })
 }
 

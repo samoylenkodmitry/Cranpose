@@ -557,6 +557,7 @@ fn text_node_with_style(
             font_size: 14.0,
             layout_options: TextLayoutOptions::default(),
             clip,
+            paint: Default::default(),
         })),
     })
 }

@@ -937,6 +937,7 @@ fn text_root(style: cranpose_ui::TextStyle) -> (LayerNode, std::sync::Arc<cranpo
         font_size: 14.0,
         layout_options: cranpose_ui::TextLayoutOptions::default(),
         clip: None,
+        paint: Default::default(),
     };
     let root = LayerNode {
         local_bounds: rect(0.0, 0.0, 100.0, 100.0),
