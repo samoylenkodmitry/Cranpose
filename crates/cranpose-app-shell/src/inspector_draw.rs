@@ -91,6 +91,7 @@ impl Canvas {
                 font_size,
                 layout_options: TextLayoutOptions::default(),
                 clip: Some(rect),
+                paint: Default::default(),
             })),
         }));
     }

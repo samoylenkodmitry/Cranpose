@@ -24,7 +24,7 @@ use cranpose_ui::measure_text;
 use cranpose_ui::prepare_text_layout;
 use cranpose_ui::{
     LayoutBox, TextLayoutOptions,
-    text::{RangeStyle, SpanStyle, TextDecoration, TextDrawStyle, TextStyle},
+    text::{TextDecoration, TextDrawStyle, TextStyle},
     text_layout_result::TextLayoutResult,
 };
 use cranpose_ui_graphics::{
@@ -37,7 +37,13 @@ use crate::scene::{
 };
 
 mod style;
-use cranpose_render_common::style_shared::resolve_layer_brush;
+use cranpose_render_common::{
+    style_shared::resolve_layer_brush,
+    text_paint::{
+        TextPaint, has_visible_decoration, resolve_text_color_without_gradient_fallback,
+        spans_override_foreground, spans_override_foreground_color,
+    },
+};
 use style::{apply_layer_to_brush, apply_layer_to_color, scale_corner_radii};
 
 const GPU_TEXT_BRUSH_EFFECT_MAX_STOPS: usize = 16;
@@ -113,21 +119,6 @@ pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene,
         None,
     );
     scene.replace_graph(graph);
-}
-
-fn resolve_text_color_without_gradient_fallback(text_style: &TextStyle, default: Color) -> Color {
-    let mut color = text_style
-        .span_style
-        .color
-        .or(match text_style.span_style.brush.as_ref() {
-            Some(Brush::Solid(color)) => Some(*color),
-            _ => None,
-        })
-        .unwrap_or(default);
-    if let Some(alpha) = text_style.span_style.alpha {
-        color.3 *= alpha.clamp(0.0, 1.0);
-    }
-    color
 }
 
 fn tile_mode_to_shader_uniform(tile_mode: TileMode) -> f32 {
@@ -424,30 +415,6 @@ fn gpu_text_effect_for_style(
 
     let material = gpu_text_material_for_style(text_style, fallback_color, text_scale);
     build_gpu_text_effect(&material, text_rect)
-}
-
-fn span_has_foreground_override(span_style: &cranpose_ui::text::SpanStyle) -> bool {
-    matches!(
-        span_style.brush.as_ref(),
-        Some(
-            cranpose_ui::Brush::LinearGradient { .. }
-                | cranpose_ui::Brush::RadialGradient { .. }
-                | cranpose_ui::Brush::SweepGradient { .. }
-        )
-    ) || span_style.alpha.is_some()
-        || span_style.draw_style.is_some()
-}
-
-fn spans_override_foreground(spans: &[RangeStyle<SpanStyle>]) -> bool {
-    spans
-        .iter()
-        .any(|span| span_has_foreground_override(&span.item))
-}
-
-fn spans_override_foreground_color(spans: &[RangeStyle<SpanStyle>]) -> bool {
-    spans.iter().any(|span| {
-        span.item.color.is_some() || matches!(span.item.brush, Some(cranpose_ui::Brush::Solid(_)))
-    })
 }
 
 fn text_for_gpu_mask(
@@ -1169,6 +1136,9 @@ fn push_text_draw<S: TextStyleDrawSink>(
     );
 }
 
+/// Pushes a text's draws: its glyphs in the paint's colour when the paint
+/// is plain, without reading the style, and every draw its style asks for
+/// otherwise.
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn push_text_style_draws(
     scene: &mut CompositorScene,
@@ -1181,12 +1151,31 @@ pub(crate) fn push_text_style_draws(
         &Rc<cranpose_ui::text::AnnotatedString>,
         &Arc<cranpose_ui::text::RenderString>,
     ),
-    text_style: &Arc<TextStyle>,
+    (text_style, paint): (&Arc<TextStyle>, TextPaint),
     font_size: f32,
     options: TextLayoutOptions,
     text_clip: Option<Rect>,
     snap_anchor: Option<SnapAnchor>,
 ) {
+    if paint.plain {
+        let shifted_text_rect = Rect {
+            y: text_rect.y + paint.baseline_shift,
+            ..text_rect
+        };
+        push_text_draw(
+            scene,
+            node_id,
+            apply_layer_to_rect(shifted_text_rect, rect, content_layer),
+            Arc::clone(render_text),
+            apply_layer_to_color(paint.color, content_layer),
+            Arc::clone(text_style),
+            font_size,
+            layer_uniform_scale(content_layer),
+            options,
+            text_clip,
+        );
+        return;
+    }
     emit_text_style_draws(
         scene,
         text_layout,
@@ -1325,22 +1314,6 @@ fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
         width,
         height: thickness.ceil().max(1.0),
     }
-}
-
-fn has_visible_decoration(spans: &[RangeStyle<SpanStyle>], global_style: &TextStyle) -> bool {
-    if global_style
-        .span_style
-        .text_decoration
-        .is_some_and(|decoration| decoration != TextDecoration::NONE)
-    {
-        return true;
-    }
-
-    spans.iter().any(|span| {
-        span.item
-            .text_decoration
-            .is_some_and(|decoration| decoration != TextDecoration::NONE)
-    })
 }
 
 #[derive(Clone, Debug, PartialEq)]

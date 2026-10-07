@@ -37,6 +37,7 @@ mod text_cache_key;
 pub mod text_hyphenation;
 pub mod text_mask_gamma;
 pub mod text_measure;
+pub mod text_paint;
 #[cfg(feature = "text-shaping")]
 mod text_shaping;
 

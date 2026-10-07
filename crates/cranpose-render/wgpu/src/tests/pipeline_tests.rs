@@ -117,7 +117,14 @@ fn push_text_style_draws_for_test(
             text_rect,
             content_layer,
             (&text, &render_text),
-            &std::sync::Arc::new(text_style.clone()),
+            (
+                &std::sync::Arc::new(text_style.clone()),
+                cranpose_render_common::text_paint::TextPaint::of(
+                    text_style,
+                    &text.span_styles,
+                    font_size,
+                ),
+            ),
             font_size,
             options,
             text_clip,

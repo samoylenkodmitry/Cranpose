@@ -1916,6 +1916,7 @@ fn gradient_dstout_alpha_fixture() -> RenderGraph {
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
+                    paint: Default::default(),
                 })),
             }),
             gradient_dstout_rect(
@@ -2779,6 +2780,7 @@ fn translation_only_wrapper_with_plain_text_only_fixture(
                 font_size: 16.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
+                paint: Default::default(),
             })),
         })],
     );
@@ -3067,6 +3069,7 @@ fn translation_only_wrapper_with_text_style_fixture(
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
+                    paint: Default::default(),
                 })),
             }),
         ],
@@ -3138,6 +3141,7 @@ fn translation_only_wrapper_with_multispan_showcase_text_fixture(
                 font_size: 16.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
+                paint: Default::default(),
             })),
         })],
     );
@@ -3216,6 +3220,7 @@ fn showcase_card_wrapper(wrapper_translation: Point) -> cranpose_render_common::
                     font_size: 16.0,
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
+                    paint: Default::default(),
                 })),
             }),
         ],
@@ -3281,6 +3286,7 @@ fn translation_only_wrapper_with_padded_multispan_showcase_text_fixture(
                 font_size: 16.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
+                paint: Default::default(),
             })),
         })],
     );
@@ -3349,6 +3355,7 @@ fn gradient_stroke_text_fixture() -> RenderGraph {
                 font_size: 20.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
+                paint: Default::default(),
             })),
         })],
     );
@@ -3439,6 +3446,7 @@ fn alpha_icon_text_surface_fixture(translation: Point) -> RenderGraph {
                 font_size: 15.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
+                paint: Default::default(),
             })),
         })],
     );

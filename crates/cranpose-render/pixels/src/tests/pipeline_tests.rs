@@ -112,6 +112,7 @@ fn snapped_text_leaf_root(animated: bool, translated_content_context: bool) -> R
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
                     clip: None,
+                    paint: Default::default(),
                 })),
             }),
         ],
