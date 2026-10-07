@@ -526,7 +526,7 @@ impl LayoutNode {
             layout_runtime_state,
             coordinator_geometry: Rc::default(),
         };
-        node.sync_modifier_chain();
+        node.sync_modifier_chain(false);
         node
     }
 
@@ -549,15 +549,24 @@ impl LayoutNode {
             return;
         }
         let modifier_changed = !self.modifier.structural_eq(&modifier);
+        // A text that changed and nothing else, as a ticker's does, keeps
+        // the slices the chain gave: only their text moves to the new layout.
+        let text_only = modifier_changed
+            && self
+                .modifier
+                .differs_only_in::<crate::text_modifier_node::TextModifierElement>(&modifier);
         self.modifier = modifier;
-        self.sync_modifier_chain();
+        self.sync_modifier_chain(text_only);
         if modifier_changed {
             self.cache.clear();
             self.request_semantics_update();
         }
     }
 
-    fn sync_modifier_chain(&mut self) {
+    /// Reconciles the chain with the node's modifier. `text_only` says the
+    /// modifier changed only in its text elements: current slices are then
+    /// kept, with their text pointed at the new layout.
+    fn sync_modifier_chain(&mut self, text_only: bool) {
         let prev_caps = self.modifier_capabilities();
         let start_parent = self.parent();
         let mut resolver = move |token: &ModifierLocalToken| {
@@ -577,12 +586,41 @@ impl LayoutNode {
             self.note_semantics_layout_change();
         }
         self.forget_semantics_reach();
-        self.modifier_slices_dirty.set(true);
+        let keep_slices =
+            text_only && !self.modifier_slices_dirty.get() && self.point_slices_at_text();
+        if !keep_slices {
+            self.modifier_slices_dirty.set(true);
+        }
 
         let mut invalidations = self.modifier_chain.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
-        self.dispatch_modifier_invalidations_with_prev(&invalidations, prev_caps);
+        self.dispatch_modifier_invalidations_with_prev(&invalidations, prev_caps, keep_slices);
         self.refresh_registry_state();
+    }
+
+    /// Points the current slices' text at the chain's text node, and
+    /// returns whether the chain has one.
+    fn point_slices_at_text(&self) -> bool {
+        let mut layout = None;
+        self.modifier_chain.chain().for_each_forward_matching(
+            NodeCapabilities::LAYOUT,
+            |node_ref| {
+                node_ref.with_node(|node| {
+                    if layout.is_none()
+                        && let Some(text) = node
+                            .as_any()
+                            .downcast_ref::<crate::text_modifier_node::TextModifierNode>()
+                    {
+                        layout = Some(text.prepared_layout_handle());
+                    }
+                });
+            },
+        );
+        let Some(layout) = layout else {
+            return false;
+        };
+        Rc::make_mut(&mut *self.modifier_slices_snapshot.borrow_mut()).replace_text_layout(layout);
+        true
     }
 
     fn update_modifier_slices_cache(&self) {
@@ -608,17 +646,26 @@ impl LayoutNode {
 
     #[cfg(test)]
     fn dispatch_modifier_invalidations(&self, invalidations: &[ModifierInvalidation]) {
-        self.dispatch_modifier_invalidations_with_prev(invalidations, NodeCapabilities::empty());
+        self.dispatch_modifier_invalidations_with_prev(
+            invalidations,
+            NodeCapabilities::empty(),
+            false,
+        );
     }
 
+    /// Applies `invalidations` to the node. Each marks the slices for a
+    /// rebuild unless `keep_slices`.
     fn dispatch_modifier_invalidations_with_prev(
         &self,
         invalidations: &[ModifierInvalidation],
         prev_caps: NodeCapabilities,
+        keep_slices: bool,
     ) {
         let curr_caps = self.modifier_capabilities();
         for invalidation in invalidations {
-            self.modifier_slices_dirty.set(true);
+            if !keep_slices {
+                self.modifier_slices_dirty.set(true);
+            }
             let has_capability =
                 |capability| curr_caps.contains(capability) || prev_caps.contains(capability);
             match invalidation.kind() {
@@ -839,7 +886,11 @@ impl LayoutNode {
 
         self.modifier_chain.set_node_id(Some(id));
         let invalidations = self.modifier_chain.take_invalidations();
-        self.dispatch_modifier_invalidations_with_prev(&invalidations, NodeCapabilities::empty());
+        self.dispatch_modifier_invalidations_with_prev(
+            &invalidations,
+            NodeCapabilities::empty(),
+            false,
+        );
         // The slices carry the node's id; they are collected again when next read.
         self.modifier_slices_dirty.set(true);
     }
@@ -1104,7 +1155,7 @@ impl Clone for LayoutNode {
             layout_runtime_state: self.layout_runtime_state.clone(),
             coordinator_geometry: Rc::clone(&self.coordinator_geometry),
         };
-        node.sync_modifier_chain();
+        node.sync_modifier_chain(false);
         node
     }
 }
@@ -1317,7 +1368,7 @@ impl Node for LayoutNode {
         compact.layout_state = layout_state;
         compact.layout_runtime_state = layout_runtime_state;
         compact.coordinator_geometry = coordinator_geometry;
-        compact.sync_modifier_chain();
+        compact.sync_modifier_chain(false);
         if let Some(id) = node_id {
             let owner_context_id = register_layout_node(id, &compact);
             compact.owner_context_id.set(Some(owner_context_id));

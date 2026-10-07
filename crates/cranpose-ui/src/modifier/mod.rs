@@ -1234,6 +1234,24 @@ impl Modifier {
         self.eq_internal(other, false)
     }
 
+    /// Whether `other` has this modifier's elements in the same order, equal
+    /// except elements of type `E`, which may differ.
+    pub(crate) fn differs_only_in<E: 'static>(&self, other: &Self) -> bool {
+        if self.element_count != other.element_count {
+            return false;
+        }
+        let differing = std::any::TypeId::of::<E>();
+        self.iter_elements()
+            .zip(other.iter_elements())
+            .all(|(a, b)| {
+                if a.element_type() == differing {
+                    b.element_type() == differing
+                } else {
+                    a.equals_element(&**b)
+                }
+            })
+    }
+
     fn eq_internal(&self, other: &Self, consider_always_update: bool) -> bool {
         if self.element_count != other.element_count {
             return false;
