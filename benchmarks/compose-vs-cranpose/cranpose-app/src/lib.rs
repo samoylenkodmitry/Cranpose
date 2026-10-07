@@ -65,6 +65,7 @@ impl Scenario {
 /// the Compose app loads, so both frameworks shape and measure identical
 /// fonts; on a desktop the ones in the folder `PERF_FONTS` names, which
 /// every desktop app loads. Read once and kept for the life of the process.
+#[cfg(any(target_os = "android", feature = "desktop"))]
 fn roboto_faces() -> &'static [&'static [u8]] {
     let faces: Vec<&'static [u8]> = ["Roboto-Regular.ttf", "Roboto-Medium.ttf", "Roboto-Bold.ttf"]
         .iter()
@@ -101,6 +102,7 @@ pub fn run_desktop() -> Result<(), cranpose::LaunchError> {
 /// A phone-sized window, or for the trading workspace the 1280 × 820
 /// window gpui-fast's showcase opens, the size every desktop app gives the
 /// gauntlet too.
+#[cfg(any(target_os = "android", feature = "desktop"))]
 fn launcher() -> AppLauncher {
     let (width, height) = match launch_args().string("scenario") {
         Some("workspace" | "gauntlet") => perf_data::DESKTOP_WINDOW,
