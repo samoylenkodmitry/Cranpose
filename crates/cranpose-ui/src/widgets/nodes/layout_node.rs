@@ -401,49 +401,60 @@ impl LayoutNodeCacheHandles {
     }
 }
 
+/// A node of the layout tree.
+///
+/// Its fields keep the order they are declared in: what a layout pass reads
+/// for every child it binds comes first and fits one cache line, then what
+/// measuring the node reads, then what composition reads. Layout reads
+/// thousands of nodes a frame, and on a phone its cost is the lines it loads.
+#[repr(C)]
 pub struct LayoutNode {
-    /// Composable definitions responsible for this node, captured only for inspection builds.
-    #[cfg(feature = "inspection")]
-    pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
-    pub modifier: Modifier,
-    modifier_chain: ModifierChainHandle,
-    pub measure_policy: Rc<dyn MeasurePolicy>,
-    density: crate::density::Density,
+    cache: LayoutNodeCacheHandles,
+    layout_state: Rc<RefCell<LayoutState>>,
+    layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
     /// The actual children of this node (folded view - includes virtual nodes as-is)
     pub children: Vec<NodeId>,
-    cache: LayoutNodeCacheHandles,
+    /// What the chain tells the parent's policy about this node: its
+    /// weight and alignments, kept beside the binding fields.
+    parent_data: Cell<cranpose_ui_layout::ParentData>,
     needs_measure: Cell<bool>,
     needs_layout: Cell<bool>,
     /// A node below this one needs layout or measure.
     descendant_dirt: Cell<DescendantDirt>,
+
+    pub measure_policy: Rc<dyn MeasurePolicy>,
+    /// Where the chain's layout modifiers put their content, written by
+    /// layout and read by the draws and text the slices collect.
+    coordinator_geometry: Rc<crate::modifier::CoordinatorGeometry>,
+    density: crate::density::Density,
+    is_virtual: bool,
     needs_semantics: Cell<bool>,
     /// The semantics tree has to read this node again, though its own
     /// semantics are unchanged: a node below it changed, or its placement
     /// or children did.
     descendant_needs_semantics: Cell<bool>,
+    needs_redraw: Cell<bool>,
+    needs_pointer_pass: Cell<bool>,
+    needs_focus_sync: Cell<bool>,
+    modifier_slices_dirty: Cell<bool>,
+    debug_modifiers: Cell<bool>,
+
+    id: Cell<Option<NodeId>>,
+    parent: Cell<Option<NodeId>>,
+    folded_parent: Cell<Option<NodeId>>,
+    modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
+
     /// The chain's modal and hidden flags, read by the modal count and the
     /// modal walk: dropped whenever the chain syncs or semantics are
     /// invalidated, the two ways its semantics change.
     semantics_reach: Cell<Option<cranpose_foundation::SemanticsReach>>,
-    needs_redraw: Cell<bool>,
-    needs_pointer_pass: Cell<bool>,
-    needs_focus_sync: Cell<bool>,
-    parent: Cell<Option<NodeId>>,
-    folded_parent: Cell<Option<NodeId>>,
-    id: Cell<Option<NodeId>>,
-    owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
-    debug_modifiers: Cell<bool>,
-    is_virtual: bool,
     virtual_children_count: Cell<usize>,
-
-    modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
-    modifier_slices_dirty: Cell<bool>,
-
-    layout_state: Rc<RefCell<LayoutState>>,
-    layout_runtime_state: Rc<RefCell<LayoutRuntimeState>>,
-    /// Where the chain's layout modifiers put their content, written by
-    /// layout and read by the draws and text the slices collect.
-    coordinator_geometry: Rc<crate::modifier::CoordinatorGeometry>,
+    owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
+    modifier_chain: ModifierChainHandle,
+    pub modifier: Modifier,
+    /// Composable definitions responsible for this node, captured only for inspection builds.
+    #[cfg(feature = "inspection")]
+    pub source_trace: Rc<[cranpose_core::source_trace::SourceLocation]>,
 }
 
 pub(crate) const RECYCLED_LAYOUT_NODE_POOL_LIMIT: usize = 128;
@@ -508,6 +519,7 @@ impl LayoutNode {
             needs_measure: Cell::new(true),
             needs_layout: Cell::new(true),
             descendant_dirt: Cell::default(),
+            parent_data: Cell::default(),
             needs_semantics: Cell::new(true),
             descendant_needs_semantics: Cell::new(false),
             semantics_reach: Cell::new(None),
@@ -584,8 +596,11 @@ impl LayoutNode {
         let modifier_local_invalidations = if in_place {
             ModifierInvalidations::new()
         } else {
-            self.modifier_chain
-                .update_with_resolver(&self.modifier, &mut resolver)
+            let invalidations = self
+                .modifier_chain
+                .update_with_resolver(&self.modifier, &mut resolver);
+            self.refresh_parent_data();
+            invalidations
         };
         if prev_caps.contains(NodeCapabilities::WINDOW_ROOT)
             != self
@@ -754,6 +769,7 @@ impl LayoutNode {
     /// Updates relative modifier placement for this node's composition scope.
     pub fn set_layout_direction(&mut self, direction: crate::LayoutDirection) {
         if self.modifier_chain.set_layout_direction(direction) {
+            self.refresh_parent_data();
             self.cache.clear();
             self.modifier_slices_dirty.set(true);
             self.mark_needs_measure();
@@ -944,6 +960,19 @@ impl LayoutNode {
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         self.modifier_chain.resolved_modifiers()
+    }
+
+    /// What the chain tells the parent's measure policy about this node.
+    pub(crate) fn parent_data(&self) -> cranpose_ui_layout::ParentData {
+        self.parent_data.get()
+    }
+
+    /// Copies the parent data out of the chain's resolved modifiers, after
+    /// they were computed again.
+    fn refresh_parent_data(&self) {
+        self.parent_data.set(crate::layout::parent_data_of(
+            self.modifier_chain.resolved_modifiers().layout_properties(),
+        ));
     }
 
     pub fn modifier_capabilities(&self) -> NodeCapabilities {
@@ -1149,6 +1178,7 @@ impl Clone for LayoutNode {
             needs_measure: Cell::new(self.needs_measure.get()),
             needs_layout: Cell::new(self.needs_layout.get()),
             descendant_dirt: Cell::new(self.descendant_dirt.get()),
+            parent_data: Cell::new(self.parent_data.get()),
             needs_semantics: Cell::new(self.needs_semantics.get()),
             descendant_needs_semantics: Cell::new(self.descendant_needs_semantics.get()),
             semantics_reach: Cell::new(None),
