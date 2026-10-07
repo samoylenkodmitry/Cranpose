@@ -34,6 +34,16 @@ class DesktopAccountingTest(unittest.TestCase):
         self.assertEqual(desktop.tree(100, table, 11.0), {100, 101, 200})
 
 
+class DesktopClocksTest(unittest.TestCase):
+    def test_a_line_macmon_left_unfinished_when_stopped_is_not_a_sample(self):
+        clocks = desktop.Clocks.__new__(desktop.Clocks)
+        output = ('{"pcpu_freq_mhz": 4000, "gpu_freq_mhz": 500}\n'
+                  '{"pcpu_freq_mhz": 4100, "gpu_freq_mhz": 700}\n'
+                  '{"pcpu_freq_mhz": 41')
+        clocks.process = SimpleNamespace(terminate=lambda: None, communicate=lambda timeout: (output, None))
+        self.assertEqual(clocks.stop(), {'cpu_mhz': 4050, 'gpu_mhz': 600})
+
+
 class DesktopRoundsTest(unittest.TestCase):
     """`run` on legs a stand-in for `measure` returns, as the run would read
     `FrameCount`'s rates."""
