@@ -167,7 +167,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 31] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 32] = [
     DemoTabInfo {
         tab: DemoTab::Guide,
         label: "Cranpose Guide",
