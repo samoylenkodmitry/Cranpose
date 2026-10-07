@@ -24,7 +24,7 @@ use cranpose_ui::measure_text;
 use cranpose_ui::prepare_text_layout;
 use cranpose_ui::{
     LayoutBox, TextLayoutOptions,
-    text::{TextDecoration, TextDrawStyle, TextStyle},
+    text::{RangeStyle, SpanStyle, TextDecoration, TextDrawStyle, TextStyle},
     text_layout_result::TextLayoutResult,
 };
 use cranpose_ui_graphics::{
@@ -438,14 +438,14 @@ fn span_has_foreground_override(span_style: &cranpose_ui::text::SpanStyle) -> bo
         || span_style.draw_style.is_some()
 }
 
-fn text_has_span_foreground_overrides(text: &cranpose_ui::text::AnnotatedString) -> bool {
-    text.span_styles
+fn spans_override_foreground(spans: &[RangeStyle<SpanStyle>]) -> bool {
+    spans
         .iter()
         .any(|span| span_has_foreground_override(&span.item))
 }
 
-fn text_spans_override_foreground_color(text: &cranpose_ui::text::AnnotatedString) -> bool {
-    text.span_styles.iter().any(|span| {
+fn spans_override_foreground_color(spans: &[RangeStyle<SpanStyle>]) -> bool {
+    spans.iter().any(|span| {
         span.item.color.is_some() || matches!(span.item.brush, Some(cranpose_ui::Brush::Solid(_)))
     })
 }
@@ -1004,7 +1004,11 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         );
     }
 
-    let has_span_foreground_overrides = text_has_span_foreground_overrides(text);
+    // The spans are read from the render string, whose header the draw
+    // touches anyway: a text without spans never loads `text`.
+    let spans = render_text.span_styles();
+    let decorated = !render_text.is_empty() && has_visible_decoration(spans, text_style);
+    let has_span_foreground_overrides = spans_override_foreground(spans);
     if has_span_foreground_overrides
         && push_span_gpu_text_material_draws(
             sink,
@@ -1020,18 +1024,20 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             text_clip,
         )
     {
-        push_text_decorations(
-            sink,
-            text_layout,
-            rect,
-            shifted_text_rect,
-            content_layer,
-            text,
-            text_style,
-            &text_brush,
-            text_clip,
-            snap_anchor,
-        );
+        if decorated {
+            push_text_decorations(
+                sink,
+                text_layout,
+                rect,
+                shifted_text_rect,
+                content_layer,
+                text,
+                text_style,
+                &text_brush,
+                text_clip,
+                snap_anchor,
+            );
+        }
         return;
     }
 
@@ -1043,7 +1049,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             text_scale,
         )
     {
-        if text_spans_override_foreground_color(text)
+        if spans_override_foreground_color(spans)
             && push_span_gpu_text_material_draws(
                 sink,
                 node_id,
@@ -1091,18 +1097,20 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
             z_start,
             z_end,
         );
-        push_text_decorations(
-            sink,
-            text_layout,
-            rect,
-            shifted_text_rect,
-            content_layer,
-            text,
-            text_style,
-            &text_brush,
-            text_clip,
-            snap_anchor,
-        );
+        if decorated {
+            push_text_decorations(
+                sink,
+                text_layout,
+                rect,
+                shifted_text_rect,
+                content_layer,
+                text,
+                text_style,
+                &text_brush,
+                text_clip,
+                snap_anchor,
+            );
+        }
         return;
     }
 
@@ -1119,18 +1127,20 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         text_clip,
     );
 
-    push_text_decorations(
-        sink,
-        text_layout,
-        rect,
-        shifted_text_rect,
-        content_layer,
-        text,
-        text_style,
-        &text_brush,
-        text_clip,
-        snap_anchor,
-    );
+    if decorated {
+        push_text_decorations(
+            sink,
+            text_layout,
+            rect,
+            shifted_text_rect,
+            content_layer,
+            text,
+            text_style,
+            &text_brush,
+            text_clip,
+            snap_anchor,
+        );
+    }
 }
 
 #[expect(clippy::too_many_arguments)]
@@ -1240,10 +1250,6 @@ fn push_text_decorations<S: TextStyleDrawSink>(
     text_clip: Option<Rect>,
     snap_anchor: Option<SnapAnchor>,
 ) {
-    if annotated_text.is_empty() || !text_has_visible_decoration(annotated_text, global_style) {
-        return;
-    }
-
     let layout = text_layout.layout_text(annotated_text, global_style);
     let mut segments =
         decoration_segments_from_glyph_layouts(annotated_text, global_style, &layout);
@@ -1321,10 +1327,7 @@ fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
     }
 }
 
-fn text_has_visible_decoration(
-    text: &cranpose_ui::text::AnnotatedString,
-    global_style: &TextStyle,
-) -> bool {
+fn has_visible_decoration(spans: &[RangeStyle<SpanStyle>], global_style: &TextStyle) -> bool {
     if global_style
         .span_style
         .text_decoration
@@ -1333,7 +1336,7 @@ fn text_has_visible_decoration(
         return true;
     }
 
-    text.span_styles.iter().any(|span| {
+    spans.iter().any(|span| {
         span.item
             .text_decoration
             .is_some_and(|decoration| decoration != TextDecoration::NONE)

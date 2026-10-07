@@ -755,7 +755,7 @@ fn populate_draws_from_graph(
     let shadow_clip = resolve_clip(
         context.parent_visual_clip,
         layer
-            .shadow_clip
+            .shadow_clip()
             .map(|clip| transform.bounds_for_rect(clip)),
     );
     push_layer_shadow(

@@ -338,6 +338,12 @@ impl ModifierNodeSlices {
             .map(|reader| reader())
     }
 
+    /// Points the text slice at a text node's new layout, after an update
+    /// that changed only the text node's element.
+    pub(crate) fn replace_text_layout(&mut self, layout: TextPreparedLayoutHandle) {
+        self.text = Some(SliceText::Text(layout));
+    }
+
     pub fn text_content(&self) -> Option<&str> {
         self.annotated_text().map(|text| text.text.as_str())
     }
