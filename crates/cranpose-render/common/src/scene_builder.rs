@@ -1060,19 +1060,15 @@ fn write_own_content_around_children(
     {
         return;
     }
-    let mut layers = std::mem::replace(
-        &mut container.children,
-        crate::layer_recycling::child_list(0),
-    );
+    let kept = container.children.len();
     write_node_content(
         &mut container.children,
         node_id,
         modifier_slices,
         size,
-        layers.len(),
-        |list| list.append(&mut layers),
+        (kept, 0),
+        |_| {},
     );
-    crate::layer_recycling::recycle_list(layers);
 }
 
 fn apply_translated_container_state(
@@ -1507,21 +1503,24 @@ fn placed_transform(
     }
 }
 
+/// Writes a node's own draws and text around its child layers: `kept`
+/// layers already end `list`, and `write_children` appends `written` more.
 fn write_node_content(
     list: &mut Vec<RenderNode>,
     node_id: NodeId,
     slices: &ModifierNodeSlices,
     size: Size,
-    child_count: usize,
+    (kept, written): (usize, usize),
     write_children: impl FnOnce(&mut Vec<RenderNode>),
 ) {
     let outer_count = slices.outer_draw_command_count();
     let commands = &slices.draw_commands()[outer_count..];
     list.reserve(layer_node_capacity(
         commands,
-        child_count,
+        written,
         slices.annotated_text().is_some(),
     ));
+    let first_kept = list.len() - kept;
     let first_draw = list.len();
     append_draw_nodes(
         list,
@@ -1545,6 +1544,9 @@ fn write_node_content(
             node: PrimitiveNode::Text(crate::layer_recycling::boxed_text(text)),
         }));
     }
+    // The kept layers go after the draws and text just written.
+    list[first_kept..].rotate_left(kept);
+    let first_draw = first_draw - kept;
     write_children(list);
     append_draw_nodes(
         list,
@@ -1619,7 +1621,7 @@ fn write_snapshot_layer(
         placement,
         context.parent_content_offset,
         |list| {
-            write_node_content(list, node_id, &slices, size, children.len(), |list| {
+            write_node_content(list, node_id, &slices, size, (0, children.len()), |list| {
                 for child in children {
                     let mut layer = crate::layer_recycling::layer_box();
                     write_snapshot_layer(child, child_context, &mut layer);
@@ -1849,7 +1851,7 @@ fn write_node_layer(
         placement,
         context.parent_content_offset,
         |list| {
-            write_node_content(list, node_id, &slices, size, children.len(), |list| {
+            write_node_content(list, node_id, &slices, size, (0, children.len()), |list| {
                 for &child_id in children {
                     if let Some(child) = lower_child(applier, child_id, child_context) {
                         list.push(RenderNode::Layer(child));
