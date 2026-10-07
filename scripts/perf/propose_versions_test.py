@@ -20,9 +20,10 @@ def git(*args, cwd):
                           env=ENV).stdout.strip()
 
 
-# A test run from a git hook inherits the hook's repository; the scratch
-# repositories must not.
+# The scratch repositories take nothing from the machine's git: not a hook's
+# repository a test run inherits, nor global signing or hooks.
 ENV = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+ENV.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
 
 
 class ProposeVersionsTest(unittest.TestCase):
