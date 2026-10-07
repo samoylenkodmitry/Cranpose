@@ -2,9 +2,10 @@
 """Opens, or updates, the pull request that moves the gauntlet's frameworks
 to the releases the night built and measured.
 
-Reads `versions.py bump`'s record: the pins that moved and still built are
-committed on `perf/framework-versions` and proposed against main; a pin put
-back because its build failed is listed as not moved.
+Reads `versions.py bump`'s record: the pins that moved and still built, with
+the rest of their app folders, are committed on `perf/framework-versions` and
+proposed against main; a pin put back because its build failed is listed as
+not moved.
 Usage: propose_versions.py --record FILE
 """
 
@@ -16,6 +17,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 BRANCH = 'perf/framework-versions'
+BENCHMARK = 'benchmarks/compose-vs-cranpose'
 TITLE = "Move the gauntlet's frameworks to their latest releases"
 
 
@@ -51,7 +53,10 @@ def main():
     run('git', 'config', 'user.name', 'github-actions[bot]')
     run('git', 'config', 'user.email', '41898282+github-actions[bot]@users.noreply.github.com')
     run('git', 'checkout', '-q', '-B', BRANCH)
-    run('git', 'add', '-u', 'benchmarks/compose-vs-cranpose')
+    # The moved pins' own app folders, their lock files included: what the
+    # night's builds rewrote elsewhere is not part of the proposal.
+    folders = sorted({f'{BENCHMARK}/{Path(file).parts[0]}' for change in moved.values() for file in change['files']})
+    run('git', 'add', '-u', '--', *folders)
     run('git', 'commit', '-q', '-m', TITLE, '-m', '\n'.join(lines))
     run('git', 'push', '-q', '-f', 'origin', BRANCH)
     existing = run('gh', 'pr', 'list', '--head', BRANCH, '--state', 'open', '--json', 'number', '--jq', '.[0].number')
