@@ -1568,6 +1568,17 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
     )
     .with_clip_radius(clip_radius);
     let recording = &*run.recording;
+    // A run of shapes alone draws as one run, read without its segments.
+    if run.summary.shapes_only() {
+        out.scene.push_run(RunDraw::of(
+            recording,
+            run.command,
+            run.segments.clone(),
+            placement,
+        ));
+        assign_snap_anchor_since(&mut out.scene, counts, snap_anchor);
+        return;
+    }
     let mut shapes_from: Option<u32> = None;
     let flush_shapes = |out: &mut LayerScene, end: u32, from: &mut Option<u32>| {
         if let Some(start) = from.take() {
