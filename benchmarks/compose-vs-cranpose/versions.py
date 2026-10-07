@@ -236,8 +236,10 @@ def flutter_version():
 
 
 def maui_version():
-    assets = json.loads(read('maui-app/obj/project.assets.json'))
-    return next(name.split('/')[1] for name in assets['libraries'] if name.startswith('Microsoft.Maui.Controls/'))
+    """The MAUI the installed workload builds the app with: the project's
+    `MauiVersion`, which MSBuild reads without restoring, so a build the cache
+    kept names it too."""
+    return run('dotnet', 'msbuild', '-getProperty:MauiVersion', cwd=HERE / 'maui-app')
 
 
 def cranpose_version(platform, release=None):
