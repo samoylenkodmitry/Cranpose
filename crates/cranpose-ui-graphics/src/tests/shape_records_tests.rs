@@ -74,8 +74,9 @@ fn columns_preserve_every_record_bit_and_gpu_field() {
     assert_eq!(records.curves()[0].arc_normalized, record.arc_normalized);
     assert_eq!(std::mem::size_of::<ShapeRecordBody>(), 64);
     assert_eq!(std::mem::size_of::<ShapeRecordCurve>(), 32);
+    // The sources hold each record's index, then its arguments.
     assert_eq!(
-        &records.source_bytes()[..16],
+        &records.source_bytes()[4..20],
         bytemuck::bytes_of(&[15.0f32, 16.0, 17.0, 18.0])
     );
 }
@@ -98,4 +99,49 @@ fn clearing_and_reserving_keep_columns_aligned_without_reallocating() {
     assert_eq!(records.len(), records.curves().len());
     assert_eq!(records.get(0), Some(sample()));
     assert_eq!(records.clone(), records);
+}
+
+#[test]
+fn records_with_and_without_arguments_keep_their_own_in_both_directions() {
+    let mut records = ShapeRecords::default();
+    let body = {
+        append_sample(&mut records);
+        records.bodies()[0]
+    };
+    let curve = records.curves()[0];
+    let arguments = [
+        [0.0; 4],
+        [-0.0, 0.0, 0.0, 0.0],
+        [0.0; 4],
+        [1.0, 2.0, 3.0, 4.0],
+        [0.0; 4],
+    ];
+    records.clear();
+    for source in arguments {
+        records.push(body, curve, source);
+    }
+    let bits = |source: [f32; 4]| source.map(f32::to_bits);
+    for (index, source) in arguments.into_iter().enumerate() {
+        let record = records.get(index).expect("recorded");
+        assert_eq!(
+            bits([
+                record.arc[2],
+                record.arc[3],
+                record.arc_band[0],
+                record.arc_band[1]
+            ]),
+            bits(source)
+        );
+    }
+    let forward: Vec<_> = records
+        .iter()
+        .map(|record| record.arc_band[0].to_bits())
+        .collect();
+    let mut backward: Vec<_> = records
+        .iter()
+        .rev()
+        .map(|record| record.arc_band[0].to_bits())
+        .collect();
+    backward.reverse();
+    assert_eq!(forward, backward);
 }
