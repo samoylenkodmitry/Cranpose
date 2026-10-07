@@ -9,6 +9,7 @@ Add Cranpose screens to an existing Android Compose or UIKit app, or place nativ
 controls inside a Cranpose screen.
 
 [Cranpose Guide](https://samoylenkodmitry.github.io/Cranpose/?tab=guide) ·
+[Performance results](https://samoylenkodmitry.github.io/Cranpose/?tab=performance) ·
 [API reference](https://docs.rs/cranpose/latest/cranpose/) ·
 [Project template](https://github.com/samoylenkodmitry/cranpose-showcase) ·
 [Releases](https://github.com/samoylenkodmitry/Cranpose/releases)
