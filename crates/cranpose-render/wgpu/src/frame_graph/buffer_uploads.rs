@@ -18,18 +18,28 @@ impl BufferUploads {
         offset: u64,
         bytes: &[u8],
     ) -> u64 {
-        let Some(size) = wgpu::BufferSize::new(bytes.len() as u64) else {
+        if bytes.is_empty() {
             return 0;
-        };
+        }
         let encoder = encoder.unwrap_or_else(|| before_passes_in(&mut self.before_passes, device));
-        self.belt
-            .get_or_insert_with(|| {
-                wgpu::util::StagingBelt::new(device.clone(), STAGING_CHUNK_BYTES)
-            })
-            .write_buffer(encoder, destination, offset, size)
-            .copy_from_slice(bytes);
-        self.frame_bytes += size.get();
-        size.get()
+        let belt = self.belt.get_or_insert_with(|| {
+            wgpu::util::StagingBelt::new(device.clone(), STAGING_CHUNK_BYTES)
+        });
+        // A write larger than a chunk would get a chunk of its own size,
+        // which later writes of other sizes rarely fit: the belt kept every
+        // such chunk, so pieces of one chunk keep all chunks reusable.
+        let mut piece_offset = offset;
+        for piece in bytes.chunks(STAGING_CHUNK_BYTES as usize) {
+            let Some(size) = wgpu::BufferSize::new(piece.len() as u64) else {
+                continue;
+            };
+            belt.write_buffer(encoder, destination, piece_offset, size)
+                .copy_from_slice(piece);
+            piece_offset += size.get();
+        }
+        let written = bytes.len() as u64;
+        self.frame_bytes += written;
+        written
     }
 
     pub(crate) fn before_passes(&mut self, device: &wgpu::Device) -> &mut wgpu::CommandEncoder {
