@@ -32,6 +32,16 @@ pub(crate) const PLACEMENT_CHUNK: usize = 4;
 /// consecutive runs share a draw.
 pub(crate) const STORE_RUN_MIN_RECORDS: u32 = 64;
 const STORE_IDLE_FRAMES: u64 = 120;
+/// What a stored run's buffers start at in the uniform mode, where the
+/// shader's chunked tables bind them; with storage buffers a run takes what
+/// it holds (see [`stored_capacity`]).
+const UNIFORM_STORE_CAPACITIES: [usize; BUFFER_COUNT] = [
+    INITIAL_STORE_RECORDS,
+    INITIAL_STORE_RECORDS,
+    INITIAL_BRUSHES,
+    INITIAL_STOPS,
+    STORE_PLACEMENTS,
+];
 const INITIAL_STORE_RECORDS: usize = 256;
 const INITIAL_ARENA_RECORDS: usize = 1024;
 const INITIAL_BRUSHES: usize = 64;
@@ -303,20 +313,48 @@ const LABELS: [&str; BUFFER_COUNT] = [
     "Run Placements",
 ];
 
+/// Brush, stop and placement tables of no entries, which every stored run
+/// whose own table is empty binds: most runs paint solid colours, and the
+/// store tier never reads its placement. On Metal each buffer, however
+/// small, took a page of its own.
+pub(crate) struct EmptyRunTables {
+    buffers: [Option<wgpu::Buffer>; BUFFER_COUNT],
+}
+
+impl EmptyRunTables {
+    fn new(device: &wgpu::Device, mode: RunBufferMode) -> Self {
+        let buffers = std::array::from_fn(|index| {
+            matches!(index, BRUSH_BUFFER | STOP_BUFFER | PLACEMENT_BUFFER).then(|| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(LABELS[index]),
+                    size: (ELEMENT_SIZES[index] * stored_capacity(mode, index, 1)) as u64,
+                    usage: buffer_usage(mode, index),
+                    mapped_at_creation: false,
+                })
+            })
+        });
+        Self { buffers }
+    }
+}
+
 impl RunBuffers {
+    /// A stored run's buffers for `capacities` elements; a table of none
+    /// binds `empty`'s.
     fn new(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         mode: RunBufferMode,
         capacities: [usize; BUFFER_COUNT],
+        empty: &EmptyRunTables,
     ) -> Self {
-        let buffers = std::array::from_fn(|index| {
-            device.create_buffer(&wgpu::BufferDescriptor {
+        let buffers = std::array::from_fn(|index| match &empty.buffers[index] {
+            Some(shared) if capacities[index] == 0 => shared.clone(),
+            _ => device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(LABELS[index]),
-                size: (ELEMENT_SIZES[index] * capacities[index]) as u64,
+                size: (ELEMENT_SIZES[index] * capacities[index].max(1)) as u64,
                 usage: buffer_usage(mode, index),
                 mapped_at_creation: false,
-            })
+            }),
         });
         let bind_group = Self::bind(device, layout, &buffers);
         Self {
@@ -358,7 +396,7 @@ impl RunBuffers {
         let mut fresh = [false; BUFFER_COUNT];
         for index in 0..BUFFER_COUNT {
             if needed[index] > self.capacities[index] {
-                let capacity = needed[index].next_power_of_two();
+                let capacity = stored_capacity(self.mode, index, needed[index]);
                 self.buffers[index] = device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some(LABELS[index]),
                     size: (ELEMENT_SIZES[index] * capacity) as u64,
@@ -491,6 +529,35 @@ impl RunBuffers {
     }
 }
 
+/// The elements each of a stored run's buffers holds for `tables`: none
+/// for an empty brush or stop table, and none for the placement, which the
+/// store tier binds but never reads.
+fn stored_needs(tables: &RecordTables) -> [usize; BUFFER_COUNT] {
+    [
+        tables.shapes.len().max(1),
+        tables.shapes.len().max(1),
+        tables.brushes.len(),
+        tables.stops.len(),
+        0,
+    ]
+}
+
+/// The elements a stored run's buffer `index` takes for `needed`: a quarter
+/// more, so a run that grows a little keeps its buffer, in whole groups of
+/// 16. A run of 70 records took 256 at the start and the next power of two
+/// after: 341 runs held 20 MB of tables on the desktop gauntlet.
+fn stored_capacity(mode: RunBufferMode, index: usize, needed: usize) -> usize {
+    if needed == 0 {
+        return 0;
+    }
+    let grown = (needed + needed / 4).next_multiple_of(16);
+    if mode.storage {
+        grown
+    } else {
+        grown.max(UNIFORM_STORE_CAPACITIES[index])
+    }
+}
+
 fn buffer_usage(mode: RunBufferMode, index: usize) -> wgpu::BufferUsages {
     if index == BODY_BUFFER || index == CURVE_BUFFER {
         let records = wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX;
@@ -527,6 +594,33 @@ pub(crate) struct StoredRun {
     fill_offset_bits: [u32; 2],
     fill_window: [u32; 4],
     last_used_frame: u64,
+}
+
+impl StoredRun {
+    /// A run not yet uploaded, with buffers for tables of `needed` elements.
+    fn new(
+        device: &wgpu::Device,
+        (layout, mode, empty): (&wgpu::BindGroupLayout, RunBufferMode, &EmptyRunTables),
+        needed: [usize; BUFFER_COUNT],
+        paint: PaintKey,
+    ) -> Self {
+        Self {
+            buffers: RunBuffers::new(
+                device,
+                layout,
+                mode,
+                std::array::from_fn(|index| stored_capacity(mode, index, needed[index])),
+                empty,
+            ),
+            recorder: Arc::default(),
+            paint,
+            fill: None,
+            fill_scale_bits: 0,
+            fill_offset_bits: [0; 2],
+            fill_window: [0; 4],
+            last_used_frame: 0,
+        }
+    }
 }
 
 const JOINED_PLAIN_RECORDS: u32 = 16;
@@ -954,6 +1048,7 @@ pub(crate) struct RunStore {
     mode: RunBufferMode,
     layout: wgpu::BindGroupLayout,
     stored: HashMap<DrawCommandId, StoredRun>,
+    empty_tables: EmptyRunTables,
     arena: ArenaTables,
     scratch_stops: Vec<GradientStopRecord>,
     strip_indices: [StripIndexBuffer; ARC_BUCKETS],
@@ -989,6 +1084,7 @@ impl RunStore {
             mode,
             layout,
             stored: HashMap::default(),
+            empty_tables: EmptyRunTables::new(device, mode),
             arena: ArenaTables::new(mode, alignment),
             fill_stats: false,
             scratch_stops: Vec::new(),
@@ -1171,27 +1267,12 @@ impl RunStore {
         let mode = self.mode;
         let trig_fill = active_fill(mode, self.trig_fill.as_ref());
         let scratch_stops = &mut self.scratch_stops;
-        let entry = self.stored.entry(command).or_insert_with(|| StoredRun {
-            buffers: RunBuffers::new(
-                device,
-                layout,
-                mode,
-                [
-                    INITIAL_STORE_RECORDS,
-                    INITIAL_STORE_RECORDS,
-                    INITIAL_BRUSHES,
-                    INITIAL_STOPS,
-                    STORE_PLACEMENTS,
-                ],
-            ),
-            recorder: Arc::default(),
-            paint,
-            fill: None,
-            fill_scale_bits: 0,
-            fill_offset_bits: [0; 2],
-            fill_window: [0; 4],
-            last_used_frame: 0,
-        });
+        let empty = &self.empty_tables;
+        let needed = stored_needs(run.tables());
+        let entry = self
+            .stored
+            .entry(command)
+            .or_insert_with(|| StoredRun::new(device, (layout, mode, empty), needed, paint));
         let first_use = entry.last_used_frame == 0;
         entry.last_used_frame = frame;
         let same_paint = entry.paint == paint;
@@ -1199,17 +1280,7 @@ impl RunStore {
         let mut stops_changed = first_use;
         if first_use || !Arc::ptr_eq(&entry.recorder, &run.recorder) {
             let tables = run.tables();
-            let fresh = entry.buffers.ensure(
-                device,
-                layout,
-                [
-                    tables.shapes.len().max(1),
-                    tables.shapes.len().max(1),
-                    tables.brushes.len().max(1),
-                    tables.stops.len().max(1),
-                    STORE_PLACEMENTS,
-                ],
-            );
+            let fresh = entry.buffers.ensure(device, layout, needed);
             let previous = entry.recorder.tables();
             stats += entry.buffers.upload_records(
                 device,
