@@ -378,6 +378,19 @@ impl LayoutNodeCacheHandles {
         self.state.borrow().intrinsics_read
     }
 
+    /// The hold of the measurement the cache has, when it is `measured`.
+    pub(crate) fn hold_of(
+        &self,
+        measured: &Rc<MeasuredNode>,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        self.state
+            .borrow()
+            .measurement
+            .as_ref()
+            .filter(|entry| Rc::ptr_eq(&entry.measured, measured))
+            .and_then(|entry| entry.hold)
+    }
+
     /// Stores `measured` for `constraints`. The hold of a measurement the
     /// cache already has stays with it.
     pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {

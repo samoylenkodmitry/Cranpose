@@ -152,6 +152,12 @@ pub struct BoundRange {
 }
 
 impl BoundRange {
+    /// Every value.
+    pub const ANY: Self = Self {
+        low: f32::NEG_INFINITY,
+        high: f32::INFINITY,
+    };
+
     /// Only `value`.
     pub const fn exactly(value: f32) -> Self {
         Self {

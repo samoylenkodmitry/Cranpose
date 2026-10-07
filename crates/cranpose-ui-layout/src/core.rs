@@ -65,6 +65,13 @@ pub trait Measurable {
     /// Measures the child with the provided constraints, returning a [`Placeable`].
     fn measure(&self, constraints: Constraints) -> Placeable;
 
+    /// The size the last measure gave its parent and the incoming
+    /// constraints that measurement holds for: see
+    /// [`crate::ConstraintsHold`]. `None`, the default, when it cannot tell.
+    fn measured_hold(&self) -> Option<(Size, crate::ConstraintsHold)> {
+        None
+    }
+
     /// Returns the minimum width achievable for the given height.
     fn min_intrinsic_width(&self, height: f32) -> f32;
 

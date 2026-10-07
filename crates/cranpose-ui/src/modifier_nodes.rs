@@ -248,6 +248,31 @@ fn size_axis_hold(
     }
 }
 
+/// One axis of what a fill modifier holds for: see
+/// [`FillNode::measure_hold`].
+fn fill_axis_hold(
+    fills: bool,
+    (max, size): (f32, f32),
+    (fraction, density): (f32, f32),
+    wrapped: Option<cranpose_ui_layout::AxisHold>,
+) -> Option<cranpose_ui_layout::AxisHold> {
+    use cranpose_ui_layout::{AxisHold, BoundRange};
+    if !fills {
+        return wrapped;
+    }
+    if max == f32::INFINITY {
+        let wrapped = wrapped?;
+        return Some(AxisHold {
+            min: wrapped.min,
+            max: wrapped.max.intersect(BoundRange::exactly(f32::INFINITY))?,
+        });
+    }
+    (size == cranpose_ui_layout::round_to_px(max * fraction, density)).then_some(AxisHold {
+        min: BoundRange::up_to(size),
+        max: BoundRange::exactly(max),
+    })
+}
+
 fn measure_pass_through(
     measurable: &dyn Measurable,
     constraints: Constraints,
@@ -2432,6 +2457,32 @@ impl DelegatableNode for FillNode {
 impl_layout_modifier_node!(FillNode, invalidate = InvalidationKind::Layout);
 
 impl LayoutModifierNode for FillNode {
+    /// A filled axis holds while the same max fills it the same; an axis
+    /// the node leaves alone passes the bounds on and holds what its content
+    /// holds.
+    fn measure_hold(
+        &self,
+        density: f32,
+        constraints: Constraints,
+        size: Size,
+        wrapped: cranpose_ui_layout::WrappedHold,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        Some(cranpose_ui_layout::ConstraintsHold {
+            width: fill_axis_hold(
+                self.direction != FillDirection::Vertical,
+                (constraints.max_width, size.width),
+                (self.fraction, density),
+                wrapped.hold.map(|hold| hold.width),
+            )?,
+            height: fill_axis_hold(
+                self.direction != FillDirection::Horizontal,
+                (constraints.max_height, size.height),
+                (self.fraction, density),
+                wrapped.hold.map(|hold| hold.height),
+            )?,
+        })
+    }
+
     fn measure(
         &self,
         context: &mut dyn ModifierNodeContext,

@@ -3635,6 +3635,13 @@ impl PlaceTarget for LayoutChildMeasureState {
 }
 
 impl Measurable for LayoutChildMeasurable {
+    fn measured_hold(&self) -> Option<(Size, cranpose_ui_layout::ConstraintsHold)> {
+        let measured = self.state.measured.borrow();
+        let measured = measured.as_ref()?;
+        let hold = self.state.cache.borrow().hold_of(measured)?;
+        Some((measured.size_for_parent(), hold))
+    }
+
     fn measure(&self, constraints: Constraints) -> Placeable {
         let state = &self.state;
         let measured = state.measure_cached(constraints);

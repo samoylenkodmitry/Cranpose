@@ -11,8 +11,8 @@ use cranpose_ui_layout::{
 };
 
 use crate::{
-    Alignment, Box, BoxSpec, Column, ColumnSpec, Layout, LazyColumn, LazyColumnSpec, Modifier, Row,
-    RowSpec, Size, Text, TextStyle,
+    Alignment, Box, BoxSpec, Column, ColumnSpec, Layout, LazyColumn, LazyColumnSpec,
+    LinearArrangement, Modifier, Row, RowSpec, Size, Text, TextStyle,
     layout::{MeasureLayoutOptions, build_layout_tree_from_applier},
     measure_layout_with_options, rememberLazyListState,
     widgets::BoxWithConstraints,
@@ -349,6 +349,39 @@ fn ResizedLeavesScreen(tick: MutableState<usize>) {
                     Text("tail", Modifier::empty(), TextStyle::default());
                 },
             );
+            // Containers that size to their children: a spaced row that
+            // runs out of room at the narrowest widths, a box around two
+            // children, and a bar filling the height of a fixed row.
+            Row(
+                Modifier::empty(),
+                RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(6.0)),
+                || {
+                    for label in ["one", "two", "three"] {
+                        Text(label, Modifier::empty().padding(2.0), TextStyle::default());
+                    }
+                    Box(
+                        Modifier::empty().size_points(20.0, 6.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+            Box(Modifier::empty(), BoxSpec::default(), || {
+                Text("boxed", Modifier::empty(), TextStyle::default());
+                Box(
+                    Modifier::empty().size_points(14.0, 30.0),
+                    BoxSpec::default(),
+                    || {},
+                );
+            });
+            Row(Modifier::empty().height(18.0), RowSpec::default(), || {
+                Box(
+                    Modifier::empty().width(3.0).fill_max_height(),
+                    BoxSpec::default(),
+                    || {},
+                );
+                Text("beside", Modifier::empty(), TextStyle::default());
+            });
         },
     );
 }
