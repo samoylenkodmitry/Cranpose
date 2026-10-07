@@ -15,10 +15,12 @@ SCROLL = 300
 GATE = 2.0
 
 
-def scene(row_height, blocks=lambda row, block: True, color=lambda rgb: rgb):
+def scene(row_height, blocks=lambda row, block: True, color=lambda rgb: rgb, panel=None):
     """A still header above a list scrolled `SCROLL` pixels: row after row of
     white cards, each holding blocks placed by the row's own seed. A list of
-    shorter rows shows the same cards drifting up the screen."""
+    shorter rows shows the same cards drifting up the screen. With `panel`,
+    a still translucent panel lies over the list, holding the cells `panel`
+    keeps of its grid."""
     rows = (SCROLL + HEIGHT) // row_height + 2
     content = Image.new('RGB', (WIDTH, rows * row_height), (238, 240, 245))
     draw = ImageDraw.Draw(content)
@@ -37,6 +39,16 @@ def scene(row_height, blocks=lambda row, block: True, color=lambda rgb: rgb):
     for tile in range(8):
         header.rectangle((12 + 64 * tile, 70, 60 + 64 * tile, 100), fill=(226, 232, 240))
     picture.paste(content.crop((0, SCROLL, WIDTH, SCROLL + HEIGHT - HEADER)), (0, HEADER))
+    if panel:
+        overlay = Image.new('RGBA', picture.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        draw.rounded_rectangle((40, 260, 400, 820), 24, fill=(30, 41, 59, 192))
+        for cell in range(48):
+            if panel(cell):
+                left, top = 64 + 52 * (cell % 6), 290 + 64 * (cell // 6)
+                rgb = random.Random(cell).choice([(239, 68, 68), (34, 197, 94), (59, 130, 246)])
+                draw.rounded_rectangle((left, top, left + 44, top + 44), 8, fill=rgb + (255,))
+        picture = Image.alpha_composite(picture.convert('RGBA'), overlay).convert('RGB')
     return picture
 
 
@@ -64,6 +76,15 @@ class ParityCompareTest(unittest.TestCase):
         self.assertGreater(changed(scene(100), missing), changed(scene(100), scene(97)))
         self.assertGreater(changed(missing, scene(100)), changed(scene(97), scene(100)))
         self.assertGreater(changed_one_way(scene(100), missing), changed_one_way(scene(100), scene(97)))
+
+    def test_still_panels_over_a_drifting_list_look_the_same(self):
+        every = lambda cell: True
+        self.assertLessEqual(changed(scene(100, panel=every), scene(97, panel=every)), GATE)
+
+    def test_a_missing_cell_on_a_still_panel_is_changed(self):
+        every, gap = (lambda cell: True), (lambda cell: cell != 20)
+        self.assertGreater(changed(scene(100, panel=every), scene(97, panel=gap)),
+                           changed(scene(100, panel=every), scene(97, panel=every)))
 
     def test_other_colors_are_changed(self):
         swapped = scene(97, color=lambda rgb: (rgb[2], rgb[1], rgb[0]))

@@ -15,8 +15,12 @@ status bar, as the eye compares them:
 - each tile is then matched at every offset up to `--shift` pixels around its
   band's and its neighbours', for the rounding within the band. Where the
   neighbouring bands drifted differently, as where still content meets a
-  scrolled list, each quarter of the tile may also take their offsets, to
-  within 3 pixels;
+  scrolled list, each half of each quarter of the tile may also take their
+  offsets, to within 3 pixels;
+- a band with tiles that still changed, such as one where still panels lie
+  over a scrolled list, matches them again at every offset at which a whole
+  band matched and halfway between neighbouring ones: the list beside the
+  panels drifted as the list above and below them did;
 - a band that matches nowhere is left out when the nearest band above or
   below that does match puts it past the other capture's edge or behind its
   still content, such as above the top of a list: the other app does not
@@ -59,8 +63,8 @@ def capture(device, app, scenario, extras, destination, timeout_s):
 
 
 COARSE = 4
-# Strips a tile is matched in where its band meets another offset, and how
-# far each may move from that offset.
+# Strips a tile is matched in where its band meets another offset, each in a
+# left and a right half, and how far each may move from that offset.
 STRIPS = 4
 STRIP_SLACK = 3
 
@@ -134,19 +138,12 @@ def compare(first, second, top, shift, tile, tile_delta, drift):
                 return True
         return False
 
-    best = Image.new('L', (columns, rows))
-    beyond = set()
-    for row, (band, (x, y)) in enumerate(zip(bands, places)):
-        offset, mean = found[row]
-        if mean > tile_delta and hidden(row):
-            beyond.add(row)
-            continue
-        # Each tile is matched whole around its band's offset and its
-        # neighbours'. Where they drifted differently, as where still content
-        # meets a scrolled list, each quarter of a tile may also take any of
-        # those offsets, to within a few pixels, so it cannot slip past an
-        # element.
-        candidates = {found[near][0] for near in (row - 1, row, row + 1) if 0 <= near < rows}
+    def match(row, candidates):
+        """Each tile's best residual around the candidate offsets: whole, and,
+        where the candidates differ, by the halves of its quarters, to within
+        a few pixels, so a tile cannot slip past an element: an edge of still
+        content can cross a tile either way."""
+        band, (x, y) = bands[row], places[row]
         band_best = None
         for candidate in candidates:
             for dy in range(candidate - shift, candidate + shift + 1):
@@ -158,10 +155,36 @@ def compare(first, second, top, shift, tile, tile_delta, drift):
             for candidate in candidates:
                 for dy in range(candidate - STRIP_SLACK, candidate + STRIP_SLACK + 1):
                     for dx in range(-shift, shift + 1):
-                        residual = tile_residuals(band, other, x + dx, y + dy, columns, STRIPS)
+                        residual = tile_residuals(band, other, x + dx, y + dy, columns * 2, STRIPS)
                         quarters = residual if quarters is None else ImageChops.darker(quarters, residual)
             band_best = ImageChops.darker(band_best, quarters.resize((columns, 1), Image.Resampling.BOX))
-        best.paste(band_best, (0, row))
+        return band_best
+
+    # Each tile is matched around its band's offset and its neighbours'.
+    beyond = set()
+    matched = {}
+    for row in range(rows):
+        if found[row][1] > tile_delta and hidden(row):
+            beyond.add(row)
+            continue
+        matched[row] = match(row, {found[near][0] for near in (row - 1, row, row + 1)
+                                   if 0 <= near < rows})
+    # A band can hold still content over a scrolled list, such as panels
+    # stacked over it: it matches at the still content's offset, while the
+    # list beside the panels drifted as the list above and below them did.
+    # Its tiles that changed are matched again around every offset at which
+    # a band matched whole, a motion the screen shows, and halfway between
+    # neighbouring ones, as the list's drift grows down the screen.
+    whole = sorted({found[row][0] for row, residuals in matched.items()
+                    if residuals.getextrema()[1] <= tile_delta})
+    motions = set(whole) | {round((low + high) / 2 / COARSE) * COARSE
+                            for low, high in zip(whole, whole[1:])}
+    for row, residuals in matched.items():
+        if residuals.getextrema()[1] > tile_delta:
+            matched[row] = ImageChops.darker(residuals, match(row, motions | {found[row][0]}))
+    best = Image.new('L', (columns, rows))
+    for row, residuals in matched.items():
+        best.paste(residuals, (0, row))
     tiles = [best.getpixel((column, row)) for row in range(rows) if row not in beyond
              for column in range(columns)]
     changed = sum(1 for value in tiles if value > tile_delta)

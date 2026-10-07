@@ -195,8 +195,10 @@ captures the way the eye does: softened and cut into tiles. On frame 120 a
 cluster sits mid-screen; on frame 240 one sits at the top of the list, where
 its look-alike levels make the drift ambiguous. Each band of tiles
 is found in the other capture up to 160 pixels higher or lower. Each tile is
-then matched at the best offset within 8 pixels of its band's, quarter by
-quarter of the neighbouring bands' where they drifted differently. A tile
+then matched at the best offset within 8 pixels of its band's, by halves of
+its quarters at the neighbouring bands' where they drifted differently. A
+band whose tiles changed, as where the still stacked panels lie over the
+list, matches them again at every offset a whole band matched at. A tile
 that still differs on average is changed; a band that has drifted past the
 other capture's edge, or behind its still content, is left out. Each
 capture's tiles are found in the other, and the worse way decides. The
@@ -204,8 +206,15 @@ bands absorb drift: the frameworks put lines of text on different pixel grids,
 so a list scrolled 720 dp shows its rows a few dozen pixels apart without
 looking any different. Flutter rounds each line to whole logical pixels and
 Compose rounds it up to whole device pixels. Any difference for the same
-composable code is a Cranpose bug. Against Compose at tier 5 every app stays
-under the 2% gate; what the other frameworks draw differently, by design:
+composable code is a Cranpose bug. Against Compose at tier 5 every app but
+Flutter and NativeScript stays under the 2% gate; what the other frameworks
+draw differently, by design:
+
+- The stacked panels lie still over a list that drifts as each framework
+  rounds its lines: where a tilted panel's edge crosses the list, the list
+  beneath it has moved. Flutter's and NativeScript's lists drift the most,
+  about 50 pixels under the second panel's edge, so the row of tiles along
+  that edge changes: 2.9% and 3.4% of tiles.
 
 - Flutter and Slint set text slightly wider, so a few lines break a word
   earlier.
