@@ -378,6 +378,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_desktop_accounting.py
     {{benchmark_python}} benchmarks/compose-vs-cranpose/tests/test_parity_compare.py
     python3 scripts/perf/publish_test.py
+    python3 scripts/perf/propose_versions_test.py
 
 # Covers the shared/exclusive lock that keeps builds off the machine while a
 # measurement runs, and the turnstile that keeps a stream of builds from
