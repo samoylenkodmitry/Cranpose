@@ -182,7 +182,7 @@ fn a_framework_card_shows_the_metric_chosen_and_leaves_a_dash_where_a_run_has_no
 }
 
 /// Where each of `texts` first appears on the dashboard.
-fn order(robot: &RobotTestRule<TestRenderer>, texts: &[&str]) -> Vec<usize> {
+fn order(robot: &mut RobotTestRule<TestRenderer>, texts: &[&str]) -> Vec<usize> {
     let shown = robot.get_all_text();
     texts
         .iter()
@@ -204,13 +204,13 @@ fn memory_puts_the_least_first_and_a_framework_without_a_value_last() {
         "Compose Multiplatform 1.12.1",
     ];
     choose(&mut robot, "RAM MB", 1);
-    let at = order(&robot, &frameworks);
+    let at = order(&mut robot, &frameworks);
     assert!(
         at[0] < at[1] && at[1] < at[2],
         "egui 120, Avalonia 180, Compose 412: {at:?}"
     );
     choose(&mut robot, "GPU RAM MB", 1);
-    let at = order(&robot, &frameworks);
+    let at = order(&mut robot, &frameworks);
     assert!(
         at[0] < at[2] && at[2] < at[1],
         "egui 33, Compose 96, Avalonia none: {at:?}"
