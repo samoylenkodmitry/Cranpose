@@ -13,6 +13,7 @@ Usage: publish.py --run RUN_JSON [--tree DIR] [--no-push]
 import argparse
 import json
 import subprocess
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -21,9 +22,17 @@ SUMMARY_METRICS = ['fps', 'cpu_ms_per_frame', 'desired_to_present_p50_ms', 'jank
                    'gpu_ram_mb', 'cpu_mhz', 'gpu_mhz']
 
 
+# Attempts at a push GitHub refuses, and the seconds between them, times the
+# attempt: on 2026-10-07 a push failed on an Internal Server Error.
+PUSH_ATTEMPTS = 3
+PUSH_DELAY_S = 2
+
+
 def git(*args, cwd):
-    return subprocess.run(['git', *args], cwd=cwd, check=True, capture_output=True,
-                          text=True).stdout.strip()
+    result = subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f'git {" ".join(args)} failed: {result.stderr.strip()}')
+    return result.stdout.strip()
 
 
 def index_entry(run, file):
@@ -61,10 +70,12 @@ def published_runs():
 
 
 def data_tree(tree):
-    """A worktree on the data branch, starting the branch when it is new."""
-    fetched = subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=REPO).returncode == 0
+    """A worktree on the data branch's latest commit, starting the branch
+    when it is new. Fetched in the tree: it may be a worktree of another
+    clone than this script's."""
     if not (tree / '.git').exists():
         git('worktree', 'add', '-q', '--force', '--detach', str(tree), 'HEAD', cwd=REPO)
+    fetched = subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=tree).returncode == 0
     if fetched:
         # Detached at the data branch's head: the branch may be checked out in
         # another worktree, and the push names it.
@@ -96,10 +107,29 @@ def main():
     if run.get('skipped'):
         print('nothing to publish:', run['skipped'])
         return
-    tree = data_tree(args.tree)
     stamp = run['started_at'][:10]
     device = run['device']['ro.product.model'].replace(' ', '-')
     file = f"runs/{stamp}-{run['kind']}-{(run.get('main') or 'manual')[:9]}-{device}.json"
+    # A refused push commits again on the branch's latest commit and tries
+    # once more.
+    for attempt in range(1, PUSH_ATTEMPTS + 1):
+        tree = data_tree(args.tree)
+        commit_run(tree, run, file, stamp, device)
+        if args.no_push:
+            break
+        try:
+            git('push', '-q', 'origin', f'HEAD:{DATA_BRANCH}', cwd=tree)
+            break
+        except RuntimeError as refused:
+            if attempt == PUSH_ATTEMPTS:
+                raise
+            print(f'{refused}; trying again', flush=True)
+            time.sleep(PUSH_DELAY_S * attempt)
+    print('published', file)
+
+
+def commit_run(tree, run, file, stamp, device):
+    """Adds `run` as `file` and to the index, and commits both."""
     (tree / file).parent.mkdir(parents=True, exist_ok=True)
     (tree / file).write_text(json.dumps(run, indent=1) + '\n')
     index = json.loads((tree / 'index.json').read_text())
@@ -113,9 +143,6 @@ def main():
     else:
         what = ', '.join(subject['name'] for subject in run['subjects'])
     git('commit', '-q', '-m', f"{run['kind']} {stamp}: {what} on {device}", cwd=tree)
-    if not args.no_push:
-        git('push', '-q', 'origin', f'HEAD:{DATA_BRANCH}', cwd=tree)
-    print('published', file)
 
 
 if __name__ == '__main__':

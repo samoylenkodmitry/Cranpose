@@ -30,6 +30,7 @@ mod documentation;
 pub mod flame_window;
 mod floating_input;
 mod floating_windows;
+mod gauntlet_tab;
 mod glass_feed;
 mod glass_tiles;
 mod guide_previews;
@@ -138,6 +139,7 @@ pub enum DemoTab {
     RecompositionLab,
     HackerNews,
     Performance,
+    Gauntlet,
     Images,
     Text,
     Wsz,
@@ -165,7 +167,7 @@ pub struct DemoTabInfo {
     pub startup_aliases: &'static [&'static str],
 }
 
-pub const DEMO_TAB_INFO: [DemoTabInfo; 31] = [
+pub const DEMO_TAB_INFO: [DemoTabInfo; 32] = [
     DemoTabInfo {
         tab: DemoTab::Guide,
         label: "Cranpose Guide",
@@ -281,6 +283,13 @@ pub const DEMO_TAB_INFO: [DemoTabInfo; 31] = [
         slug: "performance",
         source_path: "apps/desktop-demo/src/app/performance_dashboard.rs",
         startup_aliases: &["perf", "performance"],
+    },
+    DemoTabInfo {
+        tab: DemoTab::Gauntlet,
+        label: "Gauntlet",
+        slug: "gauntlet",
+        source_path: "apps/desktop-demo/src/app/gauntlet_tab.rs",
+        startup_aliases: &["gauntlet"],
     },
     DemoTabInfo {
         tab: DemoTab::Images,
@@ -429,10 +438,11 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
         .unwrap_or(DEFAULT_INITIAL_TAB)
 }
 
-pub const DEMO_TABS: [DemoTab; 31] = [
+pub const DEMO_TABS: [DemoTab; 32] = [
     DemoTab::Guide,
     DemoTab::Performance,
     DemoTab::Liquid,
+    DemoTab::Gauntlet,
     DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
@@ -1030,6 +1040,7 @@ fn tab_requires_scroll(tab: DemoTab) -> bool {
         tab,
         DemoTab::HackerNews
             | DemoTab::Performance
+            | DemoTab::Gauntlet
             | DemoTab::WebView
             | DemoTab::Guide
             | DemoTab::LazyList
@@ -1064,6 +1075,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state: 
         DemoTab::Wear => wear::wear_tab(),
         DemoTab::HackerNews
         | DemoTab::Performance
+        | DemoTab::Gauntlet
         | DemoTab::Images
         | DemoTab::Text
         | DemoTab::Wsz
@@ -1083,6 +1095,7 @@ fn render_showcase_tab(active: DemoTab, startup: StartupSelection, wsz_tab_state
     match active {
         DemoTab::HackerNews => HackerNewsTab(),
         DemoTab::Performance => performance_dashboard::PerformanceTab(),
+        DemoTab::Gauntlet => gauntlet_tab::GauntletTab(),
         DemoTab::Images => images_tab(),
         DemoTab::Text => TextShowcaseTab(),
         DemoTab::Wsz => WszTab(wsz_tab_state),
