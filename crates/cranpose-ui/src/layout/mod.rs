@@ -2394,9 +2394,7 @@ impl LayoutBuilderState {
                 LayoutChildBinding {
                     cache: child.cache_handles(),
                     layout_state: Some(child.layout_state_handle()),
-                    parent_data: Some(parent_data_of(
-                        child.resolved_modifiers().layout_properties(),
-                    )),
+                    parent_data: Some(child.parent_data()),
                     dirty: child.needs_layout() || child.needs_measure(),
                     descendant_dirty: Node::descendant_needs_layout(child),
                 },
@@ -3356,7 +3354,9 @@ fn measures_the_same_for_parent(previous: &MeasuredNode, measured: &MeasuredNode
         && before.last_baseline() == after.last_baseline()
 }
 
-fn parent_data_of(props: crate::modifier::LayoutProperties) -> cranpose_ui_layout::ParentData {
+pub(crate) fn parent_data_of(
+    props: crate::modifier::LayoutProperties,
+) -> cranpose_ui_layout::ParentData {
     let weight = props.weight().unwrap_or_default();
     cranpose_ui_layout::ParentData {
         weight: weight.weight,
