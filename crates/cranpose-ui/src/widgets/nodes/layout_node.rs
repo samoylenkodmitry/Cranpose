@@ -293,9 +293,21 @@ impl Hash for IntrinsicKind {
 struct NodeCacheState {
     epoch: u64,
     measurement: Option<MeasurementCacheEntry>,
+    /// The measurement the cache last dropped, until the node is measured
+    /// again: a measure that comes out the same takes it back instead of a
+    /// new allocation, which also leaves its children's counts alone.
+    retired: Option<Rc<MeasuredNode>>,
     intrinsics: Vec<(IntrinsicKind, f32)>,
     /// Whether a parent read intrinsic sizes since the cache was cleared.
     intrinsics_read: bool,
+}
+
+impl NodeCacheState {
+    fn retire_measurement(&mut self) {
+        if let Some(entry) = self.measurement.take() {
+            self.retired = Some(entry.measured);
+        }
+    }
 }
 
 #[derive(Default)]
@@ -320,7 +332,7 @@ impl Clone for LayoutNodeCacheHandles {
 impl LayoutNodeCacheHandles {
     pub(crate) fn clear(&self) {
         let mut state = self.state.borrow_mut();
-        state.measurement = None;
+        state.retire_measurement();
         state.intrinsics.clear();
         state.intrinsics_read = false;
         state.epoch = 0;
@@ -329,7 +341,7 @@ impl LayoutNodeCacheHandles {
     pub(crate) fn activate(&self, epoch: u64) {
         let mut state = self.state.borrow_mut();
         if state.epoch != epoch {
-            state.measurement = None;
+            state.retire_measurement();
             state.intrinsics.clear();
             state.intrinsics_read = false;
             state.epoch = epoch;
@@ -371,10 +383,32 @@ impl LayoutNodeCacheHandles {
     }
 
     pub(crate) fn store_measurement(&self, constraints: Constraints, measured: Rc<MeasuredNode>) {
-        self.state.borrow_mut().measurement = Some(MeasurementCacheEntry {
+        let mut state = self.state.borrow_mut();
+        state.retired = None;
+        state.measurement = Some(MeasurementCacheEntry {
             constraints,
             measured,
         });
+    }
+
+    /// Stores what a measure of the node under `constraints` produced and
+    /// returns it shared: the retired measurement when it is the same,
+    /// otherwise `fresh` in a new allocation.
+    pub(crate) fn settle_measurement(
+        &self,
+        constraints: Constraints,
+        fresh: MeasuredNode,
+    ) -> Rc<MeasuredNode> {
+        let mut state = self.state.borrow_mut();
+        let measured = match state.retired.take() {
+            Some(retired) if retired.same_as(&fresh) => retired,
+            _ => Rc::new(fresh),
+        };
+        state.measurement = Some(MeasurementCacheEntry {
+            constraints,
+            measured: Rc::clone(&measured),
+        });
+        measured
     }
 
     pub(crate) fn get_intrinsic(&self, kind: &IntrinsicKind) -> Option<f32> {

@@ -2076,36 +2076,39 @@ impl LayoutBuilderState {
             return Err(err);
         }
 
-        let measured = Rc::new(
-            MeasuredNode::new(
-                node_id,
-                measurement.size,
-                measurement.offset,
+        let fresh = MeasuredNode::new(
+            node_id,
+            measurement.size,
+            measurement.offset,
+            measurement.content_offset,
+            runtime_state.measured_children(
+                &pools.placements,
+                &pools.child_ids,
                 measurement.content_offset,
-                runtime_state.measured_children(
-                    &pools.placements,
-                    &pools.child_ids,
-                    measurement.content_offset,
-                ),
-            )
-            .with_alignment_lines(measurement.alignment_lines)
-            .with_window_root(measurement.window_root),
-        );
+            ),
+        )
+        .with_alignment_lines(measurement.alignment_lines)
+        .with_window_root(measurement.window_root);
 
-        self.with_applier_result(|applier| {
-            applier.with_node::<LayoutNode, _>(node_id, |node| {
-                node.cache_handles()
-                    .store_measurement(constraints, Rc::clone(&measured));
-                runtime_state.write_node_geometry(node_id, node, &measurement);
-                node.clear_needs_measure();
-                node.clear_needs_layout();
-                node.set_measured_size(measurement.size);
-                node.set_content_offset(measurement.content_offset);
+        let mut fresh = Some(fresh);
+        let settled = self
+            .with_applier_result(|applier| {
+                applier.with_node::<LayoutNode, _>(node_id, |node| {
+                    let measured = fresh
+                        .take()
+                        .map(|fresh| node.cache_handles().settle_measurement(constraints, fresh));
+                    runtime_state.write_node_geometry(node_id, node, &measurement);
+                    node.clear_needs_measure();
+                    node.clear_needs_layout();
+                    node.set_measured_size(measurement.size);
+                    node.set_content_offset(measurement.content_offset);
+                    measured
+                })
             })
-        })
-        .ok();
+            .ok()
+            .flatten();
 
-        Ok(Some(measured))
+        Ok(settled.or_else(|| fresh.map(Rc::new)))
     }
 
     /// The intrinsic size `kind` names of a layout node, through its modifier
@@ -2646,6 +2649,26 @@ impl MeasuredNode {
 
     pub(crate) fn size(&self) -> Size {
         self.size
+    }
+
+    /// Whether `other` measures the same: every field equal, and the same
+    /// child measurements at the same offsets.
+    pub(crate) fn same_as(&self, other: &Self) -> bool {
+        self.node_id == other.node_id
+            && self.size == other.size
+            && self.offset == other.offset
+            && self.content_offset == other.content_offset
+            && self.alignment_lines == other.alignment_lines
+            && self.window_root == other.window_root
+            && self.children.len() == other.children.len()
+            && self
+                .children
+                .iter()
+                .zip(&other.children)
+                .all(|(mine, theirs)| {
+                    mine.offset == theirs.offset
+                        && Rc::ptr_eq(&mine.node.borrow(), &theirs.node.borrow())
+                })
     }
 }
 
