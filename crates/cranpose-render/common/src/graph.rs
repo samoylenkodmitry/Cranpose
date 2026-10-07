@@ -172,54 +172,64 @@ impl PartialEq for LayerProperties {
     }
 }
 
+/// A layer of the render graph.
+///
+/// Its fields keep the order they are declared in. Collect and the scene
+/// update walk every layer each frame, and on a phone their cost is the
+/// cache lines they load, so what they read of a plain layer comes first:
+/// its placement and bounds in the first line, its children and the facts
+/// that decide how it composites in the second.
 #[derive(Clone)]
+#[repr(C)]
 pub struct LayerNode {
+    pub transform_to_parent: ProjectiveTransform,
+    /// The bounds of the node's layer, where its clip cuts, its transforms
+    /// pivot and an offscreen pass draws it.
+    pub local_bounds: Rect,
+    pub clip_to_bounds: bool,
+    pub motion_context_animated: bool,
+    pub translated_content_context: bool,
+    /// Whether everything this layer and its subtree draw lies within its
+    /// `local_bounds`, give or take [`CONTAINED_DRAW_SLACK`], so a renderer
+    /// may skip the whole subtree where those bounds are clipped away. Scene
+    /// building keeps it current; `false` promises nothing.
+    pub draws_within_bounds: bool,
+    pub graphics_layer: LayerProperties,
+
+    pub children: Vec<RenderNode>,
+    /// The node's own rect, `(0, 0, size)`, where its pointer handlers are,
+    /// when it differs from `local_bounds`: a clip or graphics layer that
+    /// wraps a coordinator a later padding or offset moves bounds the layer
+    /// there instead, as in Compose. `None` when the two agree.
+    pub node_bounds: Option<Rect>,
+    pub isolation: IsolationReasons,
+    pub cache_policy: CachePolicy,
+    /// Whether this subtree publishes live window origins (a text field's
+    /// popup anchor, a scroll container's viewport rect). Those sinks are
+    /// written during a full lowering, so the scroll fast path may translate
+    /// a retained subtree in place only when this is false.
+    pub has_origin_sinks: bool,
+    pub has_hit_targets: bool,
+    /// Where layout placed this layer within its parent's content, before the
+    /// parent's content offset. Scene updates add these up from the root, with
+    /// each layer's content offset and graphics-layer translation, to find the
+    /// window origin of a subtree they rebuild.
+    pub origin_in_parent: Point,
+
     pub node_id: Option<NodeId>,
     /// Set on the synthetic layer that holds a node's outer draws, those chained
     /// before its graphics layer, around that node's own layer. Scene updates
     /// address the node through this id because the node's layer has none of the
     /// outer draws and the wrapper has no node id of its own.
     pub wraps: Option<NodeId>,
-    /// The bounds of the node's layer, where its clip cuts, its transforms
-    /// pivot and an offscreen pass draws it.
-    pub local_bounds: Rect,
-    /// The node's own rect, `(0, 0, size)`, where its pointer handlers are,
-    /// when it differs from `local_bounds`: a clip or graphics layer that
-    /// wraps a coordinator a later padding or offset moves bounds the layer
-    /// there instead, as in Compose. `None` when the two agree.
-    pub node_bounds: Option<Rect>,
-    pub transform_to_parent: ProjectiveTransform,
     pub content_offset: Point,
-    pub motion_context_animated: bool,
-    pub translated_content_context: bool,
     pub translated_content_offset: Point,
-    /// Where layout placed this layer within its parent's content, before the
-    /// parent's content offset. Scene updates add these up from the root, with
-    /// each layer's content offset and graphics-layer translation, to find the
-    /// window origin of a subtree they rebuild.
-    pub origin_in_parent: Point,
-    pub graphics_layer: LayerProperties,
-    pub clip_to_bounds: bool,
     pub hit_test: Option<HitTestNode>,
-    pub has_hit_targets: bool,
-    /// Whether this subtree publishes live window origins (a text field's
-    /// popup anchor, a scroll container's viewport rect). Those sinks are
-    /// written during a full lowering, so the scroll fast path may translate
-    /// a retained subtree in place only when this is false.
-    pub has_origin_sinks: bool,
-    /// Whether everything this layer and its subtree draw lies within its
-    /// `local_bounds`, give or take [`CONTAINED_DRAW_SLACK`], so a renderer
-    /// may skip the whole subtree where those bounds are clipped away. Scene
-    /// building keeps it current; `false` promises nothing.
-    pub draws_within_bounds: bool,
-    pub isolation: IsolationReasons,
-    pub cache_policy: CachePolicy,
     /// The raster cache hashes, computed the first time a renderer asks and
     /// kept until the layer or a layer beneath it changes.
     pub cache_hashes: Cell<Option<LayerRasterCacheHashes>>,
     /// The scene updates that changed what the layer draws.
     pub content_changes: ContentChanges,
-    pub children: Vec<RenderNode>,
 }
 
 /// The last scene update that changed what a layer draws, and how many
