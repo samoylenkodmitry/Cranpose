@@ -423,6 +423,8 @@ component Cluster inherits Rectangle {
 
 /// A translucent panel stacked over the list. Its content never changes:
 /// only its position and its and its nested card's rotations read the frame.
+/// The rotation is on a rectangle inside the component: Slint left the
+/// component's own root upright inside the clipping list area.
 component StackedLayer inherits Rectangle {
     in property <int> layer;
     in property <int> rows;
@@ -431,58 +433,62 @@ component StackedLayer inherits Rectangle {
     y: Gauntlet.layer-y(layer, Clock.frame);
     width: 220px;
     height: content.preferred-height;
-    transform-rotation: degrees * 1deg;
-    background: #1E293BC0;
-    border-radius: 12px;
-    content := VerticalLayout {
-        padding: 10px;
-        spacing: 8px;
-        Text {
-            text: "Layer \{layer + 1}";
-            font-size: 13px;
-            font-weight: 700;
-            color: white;
-        }
-        VerticalLayout {
-            spacing: 3px;
-            for row in rows: HorizontalLayout {
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        transform-rotation: degrees * 1deg;
+        background: #1E293BC0;
+        border-radius: 12px;
+        content := VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            Text {
+                text: "Layer \{layer + 1}";
+                font-size: 13px;
+                font-weight: 700;
+                color: white;
+            }
+            VerticalLayout {
                 spacing: 3px;
-                alignment: start;
-                for column in 8: Rectangle {
-                    width: 22px;
-                    height: 22px;
-                    border-radius: 4px;
-                    background: Gauntlet.palette[mod(layer * 3 + row * 8 + column, 8)];
-                    Text {
-                        width: parent.width;
-                        height: parent.height;
-                        text: "\{row * 8 + column + 1}";
-                        font-size: 9px;
-                        color: white;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                for row in rows: HorizontalLayout {
+                    spacing: 3px;
+                    alignment: start;
+                    for column in 8: Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 4px;
+                        background: Gauntlet.palette[mod(layer * 3 + row * 8 + column, 8)];
+                        Text {
+                            width: parent.width;
+                            height: parent.height;
+                            text: "\{row * 8 + column + 1}";
+                            font-size: 9px;
+                            color: white;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
-        }
-        Rectangle {
-            height: nested.preferred-height;
-            transform-rotation: -degrees * 1deg;
-            background: #FFFFFFE6;
-            border-radius: 8px;
-            nested := VerticalLayout {
-                padding: 8px;
-                spacing: 2px;
-                Text {
-                    text: "Nested in layer \{layer + 1}";
-                    font-size: 11px;
-                    font-weight: 700;
-                    color: Ink.ink;
-                }
-                Text {
-                    text: "Tilts against its panel";
-                    font-size: 11px;
-                    color: Ink.body;
+            Rectangle {
+                height: nested.preferred-height;
+                transform-rotation: -degrees * 1deg;
+                background: #FFFFFFE6;
+                border-radius: 8px;
+                nested := VerticalLayout {
+                    padding: 8px;
+                    spacing: 2px;
+                    Text {
+                        text: "Nested in layer \{layer + 1}";
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: Ink.ink;
+                    }
+                    Text {
+                        text: "Tilts against its panel";
+                        font-size: 11px;
+                        color: Ink.body;
+                    }
                 }
             }
         }
