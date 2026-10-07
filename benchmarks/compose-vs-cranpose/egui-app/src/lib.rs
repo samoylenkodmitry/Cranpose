@@ -244,7 +244,7 @@ fn rounded_outline(rect: Rect, radius: f32, place: impl Fn(Pos2) -> Pos2) -> Vec
 
 /// Reports `rect` as the text `label` to accessibility services, as a
 /// toolkit's text widget does.
-fn announce(ui: &Ui, rect: Rect, id: impl std::hash::Hash, label: &str) {
+fn announce(ui: &Ui, rect: Rect, id: impl std::hash::Hash + std::fmt::Debug, label: &str) {
     ui.interact(rect, ui.id().with(id), Sense::hover())
         .widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, label));
 }
