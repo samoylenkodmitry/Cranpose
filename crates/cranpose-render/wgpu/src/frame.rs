@@ -1940,10 +1940,12 @@ impl SurfaceAtlasSizes {
             .rev()
             .map(|recent| (recent.0.max(size.0), recent.1.max(size.1)))
             .find(|grown| area(*grown) <= served)
-            .unwrap_or((
-                padded_dimension(size.0.saturating_add(1), limit),
-                padded_dimension(size.1.saturating_add(1), limit),
-            ));
+            .unwrap_or_else(|| {
+                (
+                    padded_dimension(size.0.saturating_add(1), limit),
+                    padded_dimension(size.1.saturating_add(1), limit),
+                )
+            });
         let _ = self.recent.take(|recent| *recent == settled);
         self.recent
             .put(settled, KEPT_SURFACE_ATLAS_SIZES, u64::MAX, |_| 0);
