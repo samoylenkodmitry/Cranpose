@@ -1324,7 +1324,7 @@ fn collect_child(
                             .visual_clip_rect()
                             .map(|clip| clip.translate(child_offset.x, child_offset.y)),
                     ),
-                    radius,
+                    0.0 * radius,
                 ),
                 _ => (context.visual_clip, context.clip_radius),
             };
