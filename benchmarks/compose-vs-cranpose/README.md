@@ -159,7 +159,8 @@ the panel layer's position and transform; the web page and Dioxus set a CSS
 transform on an element that `will-change` keeps on a compositor layer of
 its own; Slint binds the panel's position and rotation to the frame, and
 Freya the panel element's position and rotation, its content a component
-that reads no state. egui,
+that reads no state; Xilem memoizes the panel's content and sets only its
+box's transform. egui,
 iced and gpui lay out and paint every panel again each frame, turning each
 shape; gpui turns text as glyph outlines, as it draws no turned text. Fyne
 draws no turned object, so its panels only drift.
@@ -539,6 +540,7 @@ slowest phone.
 | `tauri` | the same page in a Tauri window, on the system's WKWebView; the page asks the app for the tier and logs through its commands |
 | `dioxus` | `dioxus-app`: Dioxus components over the web page's CSS, on Dioxus's desktop renderer (WKWebView) |
 | `freya` | `freya-app`: Freya on Skia |
+| `xilem` | `xilem-app`: Xilem's views over Masonry's widgets, drawn by Vello on wgpu |
 | `fyne` | `fyne-app`: Fyne on OpenGL, canvas objects the app places itself |
 | `uno` | `uno-app`'s desktop head: Uno Platform's WinUI on its Skia renderer, self-contained |
 
@@ -569,6 +571,13 @@ What each framework lacks and how its app does without:
 - Freya's layout has no intrinsic height: a footer divider is the left
   border of the counter after it. Its virtual scroll view wants one item
   size, so rows report their heights through `on_sized`.
+- Xilem has no wrapping row, no box that clips, scrolls or turns about its
+  centre, no canvas, and shadows only on buttons and text inputs: the app
+  adds Masonry widgets for these, with a view for each, and a widget that
+  hands each animation frame to the app logic. Its labels keep the font's
+  own line height and have no line limit, so a box as tall as the lines
+  clips a paragraph, and the subtitle is three labels in a row. Its virtual
+  scroll moves by whole rows, so rows report their heights, as Freya's do.
 - Fyne sizes an object before it knows its width, so the app wraps
   paragraphs and places every object itself, as Fyne's custom widgets do. It
   rotates no object: the badge stays upright. Its canvas has no path: the
@@ -614,6 +623,7 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/tauri-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/dioxus-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/freya-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/xilem-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
 (cd benchmarks/compose-vs-cranpose/uno-app && dotnet publish -c Release -f net10.0-desktop -r osx-arm64 --self-contained -p:UseMonoRuntime=false)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16

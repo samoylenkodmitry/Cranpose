@@ -47,6 +47,7 @@ SOURCES = {
     'tauri': 'benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts',
     'dioxus': 'benchmarks/compose-vs-cranpose/dioxus-app/src/main.rs',
     'freya': 'benchmarks/compose-vs-cranpose/freya-app/src/main.rs',
+    'xilem': 'benchmarks/compose-vs-cranpose/xilem-app/src/main.rs',
     'fyne': 'benchmarks/compose-vs-cranpose/fyne-app/main.go',
     'uno': 'benchmarks/compose-vs-cranpose/uno-app/Gauntlet.cs',
     'nativescript': 'benchmarks/compose-vs-cranpose/nativescript-app/app/app.ts',
@@ -58,14 +59,14 @@ PLATFORM_APPS = {
     'android': ['compose', 'views', 'flutter', 'rn', 'nativescript', 'lynx', 'maui', 'avalonia', 'uno', 'egui',
                 'slint', 'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
-                'tauri', 'dioxus', 'freya', 'fyne', 'uno'],
+                'tauri', 'dioxus', 'freya', 'xilem', 'fyne', 'uno'],
 }
 
 NAMES = {
     'cranpose': 'Cranpose', 'cranpose-release': 'Cranpose', 'compose': 'Compose', 'views': 'Views',
     'flutter': 'Flutter', 'rn': 'React Native', 'maui': '.NET MAUI', 'avalonia': 'Avalonia',
     'egui': 'egui', 'slint': 'Slint', 'iced': 'iced', 'gpui': 'GPUI', 'swiftui': 'SwiftUI', 'appkit': 'AppKit',
-    'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'freya': 'Freya',
+    'web': 'Web', 'tauri': 'Tauri', 'dioxus': 'Dioxus', 'freya': 'Freya', 'xilem': 'Xilem',
     'fyne': 'Fyne', 'uno': 'Uno Platform', 'nativescript': 'NativeScript', 'lynx': 'Lynx',
 }
 
@@ -210,6 +211,8 @@ PINS = {
                   cargo_update('dioxus-app')),
     'freya': Pin(['freya-app/Cargo.toml'], r'freya = \{ version = "([^"]+)"', lambda: crates_io('freya'),
                  cargo_update('freya-app')),
+    'xilem': Pin(['xilem-app/Cargo.toml'], r'xilem = \{ version = "([^"]+)"', lambda: crates_io('xilem'),
+                 cargo_update('xilem-app')),
     'uno': Pin(['uno-app/global.json'], r'"Uno\.Sdk": "([^"]+)"', lambda: nuget('Uno.Sdk')),
     'fyne': Pin(['fyne-app/go.mod'], r'fyne\.io/fyne/v2 v([\d.]+)', lambda: go_module('fyne.io/fyne/v2'),
                 go_tidy('fyne-app')),
@@ -220,7 +223,7 @@ PINS = {
 RUST_CRATES = {
     'egui': ('egui-app', 'eframe'), 'slint': ('slint-app', 'slint'), 'iced': ('iced-app', 'iced'),
     'gpui': ('gpui-app', 'gpui-pre'), 'tauri': ('tauri-app', 'tauri'), 'dioxus': ('dioxus-app', 'dioxus'),
-    'freya': ('freya-app', 'freya'),
+    'freya': ('freya-app', 'freya'), 'xilem': ('xilem-app', 'xilem'),
 }
 # Apps that draw in the system's WKWebView on the desktop.
 WEBKIT = {'tauri', 'dioxus'}
