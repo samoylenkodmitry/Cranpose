@@ -1,4 +1,4 @@
-use cranpose_ui_graphics::Color;
+use cranpose_ui_graphics::{Brush, Color, Point};
 
 use crate::support;
 
@@ -89,4 +89,61 @@ fn a_stored_run_draws_every_record_the_recording_changed() {
     );
     assert_eq!(pixel_at_record(&shorter, RECORDS), background);
     assert!(is_red(pixel_at_record(&shorter, RECORDS - 2)));
+}
+
+#[test]
+fn stored_runs_that_take_gradients_after_solid_frames_paint_their_own() {
+    const TALL: u32 = 160;
+    const PER_RUN: usize = 64;
+    const BLUE: Color = Color(0.2, 0.3, 0.9, 1.0);
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping run store upload: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    let present = |renderer: &mut support::LockedRenderer, runs: [Vec<Brush>; 2]| {
+        support::present_and_read(
+            renderer,
+            WIDTH,
+            TALL,
+            support::stored_runs_graph_of(WIDTH, TALL, runs),
+        )
+    };
+    let at = |pixels: &[u8], index: usize| {
+        let rect = support::stored_run_rect(index);
+        let x = (rect.x + rect.width * 0.5) as usize;
+        let y = (rect.y + rect.height * 0.5) as usize;
+        let at = (y * WIDTH as usize + x) * 4;
+        [pixels[at + 2], pixels[at + 1], pixels[at]]
+    };
+    let gradient = |index: usize, color: Color| {
+        let rect = support::stored_run_rect(index);
+        Brush::linear_gradient_range(
+            vec![color, color],
+            Point::new(rect.x, rect.y),
+            Point::new(rect.x + rect.width, rect.y),
+        )
+    };
+    let solid = || vec![Brush::solid(RED); PER_RUN];
+    // Solid records only: both runs bind the store's empty brush table.
+    let first = present(&mut renderer, [solid(), solid()]);
+    assert!(is_red(at(&first, 10)) && is_red(at(&first, PER_RUN + 10)));
+
+    let mut green = solid();
+    green[10] = gradient(10, GREEN);
+    let mut blue = solid();
+    blue[10] = gradient(PER_RUN + 10, BLUE);
+    let second = present(&mut renderer, [green, blue]);
+    assert!(
+        is_green(at(&second, 10)),
+        "the first run paints its gradient from a brush table of its own"
+    );
+    let second_blue = at(&second, PER_RUN + 10);
+    assert!(
+        second_blue[2] > 200 && second_blue[1] < 160,
+        "the second run paints its own gradient, not the first's: {second_blue:?}"
+    );
+    assert!(is_red(at(&second, 0)) && is_red(at(&second, PER_RUN)));
 }

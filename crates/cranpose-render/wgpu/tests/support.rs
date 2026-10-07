@@ -1462,13 +1462,51 @@ pub fn stored_run_rect(index: usize) -> Rect {
 /// colour of `colors`: enough records for the run store to retain the
 /// command's tables when there are as many as a stored run needs.
 pub fn stored_run_graph(width: u32, height: u32, colors: &[Color]) -> RenderGraph {
-    let primitives = colors
-        .iter()
+    stored_run_graph_of(width, height, colors.iter().copied().map(Brush::solid))
+}
+
+/// [`stored_run_graph`] with one rect painted by each of `brushes`.
+pub fn stored_run_graph_of(
+    width: u32,
+    height: u32,
+    brushes: impl IntoIterator<Item = Brush>,
+) -> RenderGraph {
+    stored_runs_graph_of(width, height, [brushes.into_iter().collect()])
+}
+
+/// One command, and so one stored run, per entry of `runs`, each recording
+/// a rect per brush: the records of later runs follow the earlier runs'
+/// in [`stored_run_rect`]'s order.
+pub fn stored_runs_graph_of<const RUNS: usize>(
+    width: u32,
+    height: u32,
+    runs: [Vec<Brush>; RUNS],
+) -> RenderGraph {
+    let mut first_record = 0;
+    let commands = runs
+        .into_iter()
         .enumerate()
-        .map(|(index, color)| DrawPrimitive::Rect {
-            rect: stored_run_rect(index),
-            brush: Brush::solid(*color),
-            stroke: None,
+        .map(|(command_index, brushes)| {
+            let start = first_record;
+            first_record += brushes.len();
+            let primitives = brushes
+                .into_iter()
+                .enumerate()
+                .map(|(index, brush)| DrawPrimitive::Rect {
+                    rect: stored_run_rect(start + index),
+                    brush,
+                    stroke: None,
+                })
+                .collect();
+            RenderNode::DrawRun(DrawRunNode::for_command(
+                PrimitivePhase::BeforeChildren,
+                Some(DrawCommandId {
+                    node_id: STORED_RUN_NODE,
+                    command_index: command_index as u32,
+                    placement: DrawPlacement::Behind,
+                }),
+                primitives,
+            ))
         })
         .collect();
     RenderGraph::new(contract_layer(
@@ -1481,15 +1519,7 @@ pub fn stored_run_graph(width: u32, height: u32, colors: &[Color]) -> RenderGrap
             height: height as f32,
         },
         ProjectiveTransform::identity(),
-        vec![RenderNode::DrawRun(DrawRunNode::for_command(
-            PrimitivePhase::BeforeChildren,
-            Some(DrawCommandId {
-                node_id: STORED_RUN_NODE,
-                command_index: 0,
-                placement: DrawPlacement::Behind,
-            }),
-            primitives,
-        ))],
+        commands,
     ))
 }
 
