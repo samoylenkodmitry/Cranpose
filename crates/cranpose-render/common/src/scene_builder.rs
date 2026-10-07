@@ -904,6 +904,13 @@ fn check_retained_children(
     children_unchanged: bool,
     old_index_by_id: &HashMap<NodeId, usize>,
 ) -> Result<(), &'static str> {
+    // The checks below read every child layer; reading each one first keeps
+    // their cache misses in flight together.
+    for child in &container.children {
+        if let RenderNode::Layer(layer) = child {
+            std::hint::black_box(layer.has_origin_sinks);
+        }
+    }
     for (fresh_index, (child_id, state)) in placed_fresh.iter().enumerate() {
         let old_index = if children_unchanged {
             fresh_index

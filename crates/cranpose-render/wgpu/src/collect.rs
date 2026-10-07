@@ -1193,6 +1193,7 @@ fn collect_into(
     let mut first_deferred = layer.children.len();
     let mut has_pixel_sensitive_subtree = false;
 
+    touch_children(&layer.children);
     for (index, child) in layer.children.iter().enumerate() {
         match child {
             RenderNode::Layer(child_layer) => {
@@ -1233,6 +1234,35 @@ fn collect_into(
         }
     }
     has_pixel_sensitive_subtree
+}
+
+/// Starts the loads each child's walk begins with: its node, the head of
+/// its own child list and a run's recording. The loads do not depend on one
+/// another, so the core keeps their cache misses in flight together, and
+/// the walk then finds each child in cache instead of waiting on one miss
+/// per child.
+fn touch_children(children: &[RenderNode]) {
+    for child in children {
+        match child {
+            RenderNode::Layer(layer) => {
+                std::hint::black_box((
+                    layer.node_id,
+                    layer.children.first().map(std::mem::discriminant),
+                ));
+            }
+            RenderNode::DrawRun(run) => {
+                std::hint::black_box(run.recording.bounds());
+            }
+            RenderNode::Primitive(entry) => match &entry.node {
+                PrimitiveNode::Text(text) => {
+                    std::hint::black_box(text.rect);
+                }
+                PrimitiveNode::Draw(draw) => {
+                    std::hint::black_box(draw.clip);
+                }
+            },
+        }
+    }
 }
 
 /// Where a layer's own primitives land: the layer's bounds and local

@@ -2372,6 +2372,7 @@ impl LayoutBuilderState {
     ) -> Result<(), NodeError> {
         let mut runtime_state = runtime_state.borrow_mut();
         runtime_state.frame.bind(self, pass);
+        applier.touch_nodes(child_ids);
         let mut bound = 0;
         for &child_id in child_ids {
             if self.bind_layout_child(applier, &mut runtime_state, bound, child_id)? {

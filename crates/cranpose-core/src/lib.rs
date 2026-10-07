@@ -3530,6 +3530,22 @@ pub struct MemoryApplierDebugStats {
 }
 
 impl MemoryApplier {
+    /// Reads whether each node of `ids` needs layout. The reads do not
+    /// depend on one another, so a walk that visits these nodes next finds
+    /// their cache misses already in flight together instead of waiting on
+    /// one miss per node.
+    pub fn touch_nodes(&self, ids: &[NodeId]) {
+        for &id in ids {
+            if let Some(node) = self
+                .resolve_node_index(id)
+                .and_then(|index| self.nodes.get(index))
+                .and_then(Option::as_deref)
+            {
+                std::hint::black_box(node.needs_layout());
+            }
+        }
+    }
+
     const EAGER_COMPACT_NODE_LEN: usize = 1_024;
     const HIGH_ID_THRESHOLD: NodeId = 1_000_000_000;
     const INVALID_STABLE_ID: u32 = u32::MAX;
