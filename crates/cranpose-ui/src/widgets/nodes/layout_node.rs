@@ -8,7 +8,8 @@ use std::{
 
 use cranpose_core::{Node, NodeId};
 use cranpose_foundation::{
-    InvalidationKind, ModifierInvalidation, NodeCapabilities, SemanticsConfiguration,
+    InvalidationKind, ModifierInvalidation, ModifierInvalidations, NodeCapabilities,
+    SemanticsConfiguration,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy};
 
@@ -575,9 +576,18 @@ impl LayoutNode {
         self.modifier_chain
             .set_debug_logging(self.debug_modifiers.get());
         self.modifier_chain.set_node_id(self.id.get());
-        let modifier_local_invalidations = self
-            .modifier_chain
-            .update_with_resolver(&self.modifier, &mut resolver);
+        let in_place = text_only
+            && self
+                .modifier_chain
+                .update_elements_in_place::<crate::text_modifier_node::TextModifierElement>(
+                    &self.modifier,
+                );
+        let modifier_local_invalidations = if in_place {
+            ModifierInvalidations::new()
+        } else {
+            self.modifier_chain
+                .update_with_resolver(&self.modifier, &mut resolver)
+        };
         if prev_caps.contains(NodeCapabilities::WINDOW_ROOT)
             != self
                 .modifier_capabilities()

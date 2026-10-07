@@ -1039,6 +1039,11 @@ impl Modifier {
         }
     }
 
+    /// How many elements the modifier holds.
+    pub(crate) fn element_count(&self) -> usize {
+        self.element_count
+    }
+
     pub(crate) fn iter_elements(&self) -> ModifierElementIterator<'_> {
         match &self.kind {
             ModifierKind::Empty => ModifierElementIterator { inner: [].iter() },

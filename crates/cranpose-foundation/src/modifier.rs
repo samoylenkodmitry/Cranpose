@@ -2715,6 +2715,31 @@ impl ModifierNodeChain {
     ///
     /// This is the preferred method as it avoids requiring a collected slice,
     /// enabling zero-allocation traversal of modifier trees.
+    /// Updates in place the entries whose elements are of `element_type`,
+    /// for `elements` that differ from the chain's only in those: entries and
+    /// elements line up one to one, and every other entry stays as it is.
+    /// `false` when they do not line up or an entry cannot take its element;
+    /// a full update then reconciles the chain.
+    pub fn update_entries_of_type<'a, I>(
+        &mut self,
+        elements: I,
+        element_count: usize,
+        element_type: TypeId,
+        context: &mut dyn ModifierNodeContext,
+    ) -> bool
+    where
+        I: Iterator<Item = &'a DynModifierElement>,
+    {
+        if element_count != self.entries.len() {
+            return false;
+        }
+        self.entries
+            .iter_mut()
+            .zip(elements)
+            .filter(|(_, element)| element.element_type() == element_type)
+            .all(|(entry, element)| update_entry_in_place(entry, element, context))
+    }
+
     pub fn update_from_ref_iter<'a, I>(
         &mut self,
         elements: I,

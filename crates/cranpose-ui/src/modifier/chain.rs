@@ -119,6 +119,27 @@ impl ModifierChainHandle {
         self.update_with_resolver(modifier, &mut resolver)
     }
 
+    /// Updates in place the chain's elements of type `E`, for a modifier
+    /// that differs from the last one only in those, as a text's string
+    /// does: the elements must not change the chain's capabilities, links,
+    /// offsets or resolved layout properties. `false` when the chain cannot
+    /// take it so; the caller then updates the whole chain.
+    pub(crate) fn update_elements_in_place<E: 'static>(&mut self, modifier: &Modifier) -> bool {
+        // A chain that reads modifier locals syncs them on every update.
+        if self
+            .capabilities
+            .contains(NodeCapabilities::MODIFIER_LOCALS)
+        {
+            return false;
+        }
+        self.chain.update_entries_of_type(
+            modifier.iter_elements(),
+            modifier.element_count(),
+            std::any::TypeId::of::<E>(),
+            &mut *self.context.borrow_mut(),
+        )
+    }
+
     pub fn update_with_resolver(
         &mut self,
         modifier: &Modifier,
