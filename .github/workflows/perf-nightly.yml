@@ -11,6 +11,10 @@ name: perf nightly
 # opens a perf-regression issue.
 
 on:
+  # GitHub's schedule did not fire this workflow on its first nights, so a
+  # crontab on samarch-1 dispatches it at 02:00 UTC as well. Whichever trigger
+  # arrives second does next to nothing: each job skips a main it already
+  # measured.
   schedule:
     - cron: '30 1 * * *'
   workflow_dispatch:
