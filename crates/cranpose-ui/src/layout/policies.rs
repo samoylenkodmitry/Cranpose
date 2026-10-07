@@ -39,6 +39,41 @@ impl MeasurePolicy for BoxMeasurePolicy {
         MeasureResult::new(measurement, placements)
     }
 
+    /// A box holds while every child holds under the constraints it hands
+    /// on and the largest child, which sizes the box, still fits.
+    fn measure_hold(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        size: crate::modifier::Size,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        if measurables.is_empty() {
+            return empty_layout_hold(constraints, size);
+        }
+        let mut width = cranpose_ui_layout::BoundRange::ANY;
+        let mut height = cranpose_ui_layout::BoundRange::ANY;
+        let mut held = cranpose_ui_layout::ConstraintsHold::sized(size.width, size.height);
+        let mut largest = crate::modifier::Size::default();
+        for measurable in measurables {
+            let (child, hold) = measurable.measured_hold()?;
+            if self.propagate_min_constraints {
+                held = held.intersect(hold)?;
+            } else {
+                width = width.intersect(hold.width.max)?;
+                height = height.intersect(hold.height.max)?;
+            }
+            largest.width = largest.width.max(child.width);
+            largest.height = largest.height.max(child.height);
+        }
+        // Bounds that cut or stretched the box size it from themselves.
+        if size != largest {
+            return None;
+        }
+        held.width.max = held.width.max.intersect(width)?;
+        held.height.max = held.height.max.intersect(height)?;
+        Some(held)
+    }
+
     fn measure_into(
         &self,
         scope: &dyn MeasureScope,
@@ -578,6 +613,30 @@ impl FlexMeasurePolicy {
     }
 }
 
+/// The parent main-axis max range over which a held child keeps its size
+/// after `fixed_space` taken by the children before it, with `spacing`
+/// still fitting after it.
+fn child_main_range(
+    child_max: cranpose_ui_layout::BoundRange,
+    max_main: f32,
+    fixed_space: f32,
+    child_main: f32,
+    spacing: f32,
+) -> Option<cranpose_ui_layout::BoundRange> {
+    use cranpose_ui_layout::BoundRange;
+    if !max_main.is_finite() {
+        return child_max
+            .contains(f32::INFINITY)
+            .then_some(BoundRange::exactly(f32::INFINITY));
+    }
+    if (max_main - fixed_space).max(0.0) - child_main < spacing {
+        return None;
+    }
+    child_max
+        .outset(fixed_space)
+        .intersect(BoundRange::from(fixed_space + child_main + spacing))
+}
+
 /// The weight of a child that shares the main axis by weight.
 fn child_weight(measurable: &dyn Measurable) -> Option<f32> {
     measurable
@@ -596,6 +655,78 @@ impl MeasurePolicy for FlexMeasurePolicy {
         let mut placements = Vec::new();
         let measurement = self.measure_into(scope, measurables, constraints, &mut placements);
         MeasureResult::new(measurement, placements)
+    }
+
+    /// A row or column of unweighted children holds while each child holds
+    /// under the main-axis space the ones before it leave, the spacing
+    /// after each keeps its full width, and the bounds still fit the sum.
+    fn measure_hold(
+        &self,
+        measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        size: crate::modifier::Size,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        use cranpose_ui_layout::{AxisHold, BoundRange, ConstraintsHold};
+        if measurables.is_empty() {
+            return empty_layout_hold(constraints, size);
+        }
+        if measurables
+            .iter()
+            .any(|measurable| measurable.parent_data().has_weight())
+        {
+            return None;
+        }
+        let (_, max_main, _, _) = self.get_axis_constraints(constraints);
+        let spacing = self.get_spacing();
+        let mut main = BoundRange::ANY;
+        let mut cross = BoundRange::ANY;
+        let mut fixed_space = 0.0_f32;
+        let mut total_main = 0.0_f32;
+        let mut cross_size = 0.0_f32;
+        for measurable in measurables {
+            let (child, hold) = measurable.measured_hold()?;
+            let (main_hold, cross_hold) = match self.axis {
+                Axis::Horizontal => (hold.width, hold.height),
+                Axis::Vertical => (hold.height, hold.width),
+            };
+            let child_main = self.get_main_axis_size(child.width, child.height);
+            main = main.intersect(child_main_range(
+                main_hold.max,
+                max_main,
+                fixed_space,
+                child_main,
+                spacing,
+            )?)?;
+            cross = cross.intersect(cross_hold.max)?;
+            fixed_space += child_main + spacing;
+            total_main += child_main;
+            cross_size = cross_size.max(self.get_cross_axis_size(child.width, child.height));
+        }
+        total_main += spacing * (measurables.len() - 1) as f32;
+        let size_main = self.get_main_axis_size(size.width, size.height);
+        let size_cross = self.get_cross_axis_size(size.width, size.height);
+        // Bounds that cut or stretched the layout size it from themselves.
+        if size_main != total_main || size_cross != cross_size {
+            return None;
+        }
+        let main = AxisHold {
+            min: BoundRange::up_to(size_main),
+            max: main.intersect(BoundRange::from(size_main))?,
+        };
+        let cross = AxisHold {
+            min: BoundRange::up_to(size_cross),
+            max: cross.intersect(BoundRange::from(size_cross))?,
+        };
+        Some(match self.axis {
+            Axis::Horizontal => ConstraintsHold {
+                width: main,
+                height: cross,
+            },
+            Axis::Vertical => ConstraintsHold {
+                width: cross,
+                height: main,
+            },
+        })
     }
 
     fn measure_into(
@@ -1062,6 +1193,15 @@ impl MeasurePolicy for EmptyMeasurePolicy {
         crate::modifier::Size { width, height }.into()
     }
 
+    fn measure_hold(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+        size: crate::modifier::Size,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        empty_layout_hold(constraints, size)
+    }
+
     fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
         0.0
     }
@@ -1082,3 +1222,14 @@ impl MeasurePolicy for EmptyMeasurePolicy {
 #[cfg(test)]
 #[path = "tests/policies_tests.rs"]
 mod tests;
+
+/// What a layout with nothing in it holds for: it takes its min
+/// constraints, so any constraints with the same mins and a max that allows
+/// them size it the same.
+fn empty_layout_hold(
+    constraints: Constraints,
+    size: crate::modifier::Size,
+) -> Option<cranpose_ui_layout::ConstraintsHold> {
+    (size.width == constraints.min_width && size.height == constraints.min_height)
+        .then(|| cranpose_ui_layout::ConstraintsHold::at_min(size.width, size.height))
+}

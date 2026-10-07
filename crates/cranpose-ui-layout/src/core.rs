@@ -65,6 +65,13 @@ pub trait Measurable {
     /// Measures the child with the provided constraints, returning a [`Placeable`].
     fn measure(&self, constraints: Constraints) -> Placeable;
 
+    /// The size the last measure gave its parent and the incoming
+    /// constraints that measurement holds for: see
+    /// [`crate::ConstraintsHold`]. `None`, the default, when it cannot tell.
+    fn measured_hold(&self) -> Option<(Size, crate::ConstraintsHold)> {
+        None
+    }
+
     /// Returns the minimum width achievable for the given height.
     fn min_intrinsic_width(&self, height: f32) -> f32;
 
@@ -252,6 +259,19 @@ pub trait MeasurePolicy {
             size: result.size,
             alignment_lines: result.alignment_lines,
         }
+    }
+
+    /// The incoming constraints the measure that sized the layout `size`
+    /// under `constraints` holds for, when the policy can tell: see
+    /// [`crate::ConstraintsHold`]. `None`, the default, holds for
+    /// `constraints` alone.
+    fn measure_hold(
+        &self,
+        _measurables: &[Box<dyn Measurable>],
+        _constraints: Constraints,
+        _size: Size,
+    ) -> Option<crate::ConstraintsHold> {
+        None
     }
 
     /// Computes the minimum intrinsic width of this policy.

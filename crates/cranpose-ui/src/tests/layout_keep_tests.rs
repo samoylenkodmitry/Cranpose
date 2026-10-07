@@ -11,8 +11,8 @@ use cranpose_ui_layout::{
 };
 
 use crate::{
-    Alignment, Box, BoxSpec, Column, ColumnSpec, Layout, LazyColumn, LazyColumnSpec, Modifier, Row,
-    RowSpec, Size, Text, TextStyle,
+    Alignment, Box, BoxSpec, Column, ColumnSpec, Layout, LazyColumn, LazyColumnSpec,
+    LinearArrangement, Modifier, Row, RowSpec, Size, Text, TextStyle,
     layout::{MeasureLayoutOptions, build_layout_tree_from_applier},
     measure_layout_with_options, rememberLazyListState,
     widgets::BoxWithConstraints,
@@ -311,6 +311,81 @@ fn SameSizeRow(tick: MutableState<usize>, row: usize) {
     );
 }
 
+/// Leaves inside a parent whose width moves every frame: a text that wraps
+/// at some widths, a fixed box, a padded text and an offset box. Each keeps
+/// its measurement while the width it gets leaves it unchanged, and
+/// measures again where the text wraps differently.
+#[composable]
+fn ResizedLeavesScreen(tick: MutableState<usize>) {
+    let width = 40.0 + (tick.get() % 13) as f32 * 23.0;
+    Column(
+        Modifier::empty().width(width),
+        ColumnSpec::default(),
+        move || {
+            Text(
+                "a few words that wrap at narrow widths",
+                Modifier::empty(),
+                TextStyle::default(),
+            );
+            Box(
+                Modifier::empty().size_points(30.0, 12.0),
+                BoxSpec::default(),
+                || {},
+            );
+            Text(
+                "padded",
+                Modifier::empty().padding(3.0),
+                TextStyle::default(),
+            );
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::default(),
+                || {
+                    Box(
+                        Modifier::empty().offset(4.0, 2.0).size_points(8.0, 8.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                    Text("tail", Modifier::empty(), TextStyle::default());
+                },
+            );
+            // Containers that size to their children: a spaced row that
+            // runs out of room at the narrowest widths, a box around two
+            // children, and a bar filling the height of a fixed row.
+            Row(
+                Modifier::empty(),
+                RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(6.0)),
+                || {
+                    for label in ["one", "two", "three"] {
+                        Text(label, Modifier::empty().padding(2.0), TextStyle::default());
+                    }
+                    Box(
+                        Modifier::empty().size_points(20.0, 6.0),
+                        BoxSpec::default(),
+                        || {},
+                    );
+                },
+            );
+            Box(Modifier::empty(), BoxSpec::default(), || {
+                Text("boxed", Modifier::empty(), TextStyle::default());
+                Box(
+                    Modifier::empty().size_points(14.0, 30.0),
+                    BoxSpec::default(),
+                    || {},
+                );
+            });
+            Row(Modifier::empty().height(18.0), RowSpec::default(), || {
+                Box(
+                    Modifier::empty().width(3.0).fill_max_height(),
+                    BoxSpec::default(),
+                    || {},
+                );
+                Text("beside", Modifier::empty(), TextStyle::default());
+            });
+        },
+    );
+}
+
 /// Every node's rect and content offset bits, in tree order.
 fn layout(composition: &mut Composition<MemoryApplier>, root: NodeId) -> Vec<[u32; 6]> {
     fn flatten(node: &crate::LayoutBox, out: &mut Vec<[u32; 6]>) {
@@ -393,4 +468,9 @@ fn incremental_layout_matches_a_fresh_composition() {
 #[test]
 fn incremental_lazy_list_layout_matches_a_fresh_composition() {
     assert_incremental_layout_matches_fresh_compositions(KeptListScreen);
+}
+
+#[test]
+fn leaves_in_a_resized_parent_match_a_fresh_composition() {
+    assert_incremental_layout_matches_fresh_compositions(ResizedLeavesScreen);
 }

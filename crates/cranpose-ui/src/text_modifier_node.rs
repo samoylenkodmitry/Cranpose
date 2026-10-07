@@ -153,6 +153,30 @@ impl TextPreparedLayoutOwner {
         read(&cache[0].layout)
     }
 
+    /// The size of the layout the cache holds for `max_width` and the max
+    /// widths that layout holds for; `None` when the cache holds none.
+    fn cached_widths(
+        &self,
+        max_width: Option<f32>,
+    ) -> Option<(Size, crate::text::measure::PreparedWidths)> {
+        let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
+        let (text_generation, font_scale_fingerprint) = crate::render_state::text_layout_stamp();
+        self.cache
+            .borrow()
+            .iter()
+            .find(|entry| {
+                entry.widths.hold(normalized_max_width)
+                    && entry.text_generation == text_generation
+                    && entry.font_scale_fingerprint == font_scale_fingerprint
+            })
+            .map(|entry| {
+                (
+                    Size::new(entry.layout.metrics.width, entry.layout.metrics.height),
+                    entry.widths,
+                )
+            })
+    }
+
     fn measure_text_content(&self, max_width: Option<f32>) -> Size {
         self.with_prepared(max_width, |prepared| Size {
             width: prepared.metrics.width,
@@ -303,6 +327,34 @@ impl ModifierNode for TextModifierNode {
 }
 
 impl LayoutModifierNode for TextModifierNode {
+    /// A text holds while its layout does and the bounds keep its size: it
+    /// measures nothing it wraps.
+    fn measure_hold(
+        &self,
+        _density: f32,
+        constraints: Constraints,
+        size: Size,
+        _wrapped: cranpose_ui_layout::WrappedHold,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        let max_width = constraints
+            .max_width
+            .is_finite()
+            .then_some(constraints.max_width);
+        let (text_size, widths) = self.layout.cached_widths(max_width)?;
+        let text_size = self.pixel_size(text_size);
+        if size != text_size {
+            return None;
+        }
+        Some(cranpose_ui_layout::ConstraintsHold {
+            width: cranpose_ui_layout::AxisHold {
+                min: cranpose_ui_layout::BoundRange::up_to(text_size.width),
+                max: cranpose_ui_layout::BoundRange::from(text_size.width)
+                    .intersect(widths.max_width_range())?,
+            },
+            height: cranpose_ui_layout::AxisHold::sized(text_size.height),
+        })
+    }
+
     fn measure(
         &self,
         _context: &mut dyn ModifierNodeContext,

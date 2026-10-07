@@ -488,6 +488,22 @@ pub trait LayoutModifierNode: ModifierNode {
         })
     }
 
+    /// The incoming constraints the last measure of this node, which gave
+    /// `size` under `constraints`, holds for: every constraints inside give
+    /// the same result. `wrapped` is what the content this node wraps
+    /// measured. `None`, the default, holds for `constraints` alone; a node
+    /// that tells must give the range its own measure keeps its result and
+    /// hands its content constraints that `wrapped` holds for.
+    fn measure_hold(
+        &self,
+        _density: f32,
+        _constraints: Constraints,
+        _size: Size,
+        _wrapped: cranpose_ui_layout::WrappedHold,
+    ) -> Option<cranpose_ui_layout::ConstraintsHold> {
+        None
+    }
+
     /// Returns the minimum intrinsic width of this modifier node. The default is
     /// the wrapped content's, for a node that keeps the content's size.
     fn min_intrinsic_width(&self, measurable: &dyn Measurable, height: f32, _density: f32) -> f32 {
