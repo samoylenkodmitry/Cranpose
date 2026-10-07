@@ -1187,6 +1187,7 @@ fn collect_into(
         local_layer: &local_layer,
         visual_clip,
         clip_radius,
+        raster_scale: context.raster_scale,
         anchor: layer_anchor,
         motion_context_animated: layer.motion_context_animated || translated,
     };
@@ -1244,8 +1245,37 @@ struct ContentContext<'a> {
     local_layer: &'a GraphicsLayer,
     visual_clip: Option<Rect>,
     clip_radius: f32,
+    raster_scale: RasterScale,
     anchor: Option<SnapAnchor>,
     motion_context_animated: bool,
+}
+
+impl ContentContext<'_> {
+    /// The rounded clip's radius for content whose pixels lie within
+    /// `bounds`, in the layer's local space: none where they stay inside the
+    /// rounded rect, whose corners then cut nothing the rect clip leaves, so
+    /// the content keeps the plain pipelines and its opaque interiors.
+    fn radius_for(&self, bounds: Option<Rect>) -> f32 {
+        let (Some(clip), Some(bounds)) = (self.visual_clip, bounds) else {
+            return self.clip_radius;
+        };
+        if self.clip_radius <= 0.0 {
+            return self.clip_radius;
+        }
+        let corners = RoundedClipCorners::of(
+            LayerRoundedClip {
+                rect: clip,
+                radii: [self.clip_radius; 4],
+            },
+            self.raster_scale,
+        );
+        let placed = bounds.translate(self.layer_bounds.x, self.layer_bounds.y);
+        if corners.admits(expand_rect(placed, corners.aa_margin)) {
+            0.0
+        } else {
+            self.clip_radius
+        }
+    }
 }
 
 fn content_phase(node: &RenderNode) -> PrimitivePhase {
@@ -1482,9 +1512,9 @@ fn push_primitive(
         layer_bounds,
         local_layer,
         visual_clip,
-        clip_radius,
         anchor: snap_anchor,
         motion_context_animated,
+        ..
     } = *content;
     let counts = scene_counts(&out.scene);
     match &entry.node {
@@ -1505,7 +1535,7 @@ fn push_primitive(
                 local_layer,
                 clip,
                 if clip == visual_clip {
-                    clip_radius
+                    content.radius_for(primitive_coverage_rect(&draw.primitive))
                 } else {
                     0.0
                 },
@@ -1555,11 +1585,12 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
         layer_bounds,
         local_layer,
         visual_clip,
-        clip_radius,
         anchor: snap_anchor,
         motion_context_animated,
+        ..
     } = *content;
     let counts = scene_counts(&out.scene);
+    let clip_radius = content.radius_for(run.recording.bounds());
     let placement = RunPlacement::painted(
         Point::new(layer_bounds.x, layer_bounds.y),
         snap_anchor,
