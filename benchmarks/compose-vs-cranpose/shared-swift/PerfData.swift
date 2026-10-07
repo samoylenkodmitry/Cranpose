@@ -105,19 +105,23 @@ enum PerfData {
         let scale: CGFloat
         let tickers: Int
         let depth: Int
+        /// Translucent panels stacked over the list.
+        let layers: Int
+        /// Rows of `layerColumns` cells in each stacked panel.
+        let layerRows: Int
     }
 
     static let tiers = [
-        Tier(columns: 1, scale: 1.0, tickers: 8, depth: 6), Tier(columns: 2, scale: 0.85, tickers: 12, depth: 8),
-        Tier(columns: 2, scale: 0.7, tickers: 16, depth: 10), Tier(columns: 3, scale: 0.6, tickers: 20, depth: 12),
-        Tier(columns: 3, scale: 0.5, tickers: 28, depth: 14), Tier(columns: 4, scale: 0.45, tickers: 36, depth: 16),
-        Tier(columns: 4, scale: 0.4, tickers: 44, depth: 20), Tier(columns: 5, scale: 0.35, tickers: 56, depth: 24),
-        Tier(columns: 6, scale: 0.3, tickers: 72, depth: 28), Tier(columns: 7, scale: 0.27, tickers: 96, depth: 32),
-        Tier(columns: 8, scale: 0.25, tickers: 120, depth: 40), Tier(columns: 10, scale: 0.2, tickers: 160, depth: 48),
-        Tier(columns: 12, scale: 0.18, tickers: 200, depth: 56),
-        Tier(columns: 14, scale: 0.16, tickers: 240, depth: 64),
-        Tier(columns: 16, scale: 0.14, tickers: 300, depth: 72),
-        Tier(columns: 20, scale: 0.12, tickers: 400, depth: 80),
+        Tier(columns: 1, scale: 1.0, tickers: 8, depth: 6, layers: 1, layerRows: 2), Tier(columns: 2, scale: 0.85, tickers: 12, depth: 8, layers: 1, layerRows: 2),
+        Tier(columns: 2, scale: 0.7, tickers: 16, depth: 10, layers: 2, layerRows: 3), Tier(columns: 3, scale: 0.6, tickers: 20, depth: 12, layers: 2, layerRows: 3),
+        Tier(columns: 3, scale: 0.5, tickers: 28, depth: 14, layers: 2, layerRows: 4), Tier(columns: 4, scale: 0.45, tickers: 36, depth: 16, layers: 3, layerRows: 4),
+        Tier(columns: 4, scale: 0.4, tickers: 44, depth: 20, layers: 3, layerRows: 5), Tier(columns: 5, scale: 0.35, tickers: 56, depth: 24, layers: 3, layerRows: 5),
+        Tier(columns: 6, scale: 0.3, tickers: 72, depth: 28, layers: 4, layerRows: 6), Tier(columns: 7, scale: 0.27, tickers: 96, depth: 32, layers: 4, layerRows: 6),
+        Tier(columns: 8, scale: 0.25, tickers: 120, depth: 40, layers: 4, layerRows: 7), Tier(columns: 10, scale: 0.2, tickers: 160, depth: 48, layers: 5, layerRows: 7),
+        Tier(columns: 12, scale: 0.18, tickers: 200, depth: 56, layers: 5, layerRows: 8),
+        Tier(columns: 14, scale: 0.16, tickers: 240, depth: 64, layers: 5, layerRows: 8),
+        Tier(columns: 16, scale: 0.14, tickers: 300, depth: 72, layers: 6, layerRows: 9),
+        Tier(columns: 20, scale: 0.12, tickers: 400, depth: 80, layers: 6, layerRows: 10),
     ]
 
     /// Tier 1 to 16; anything else is clamped into that range.
@@ -178,6 +182,27 @@ enum PerfData {
     static func badgeDegrees(_ card: Int, _ frame: Int) -> Double {
         Double(Float(triangle(frame * 2 + card * 30, 40)) * 0.5 - 5)
     }
+
+    /// Cells in each row of a stacked panel's grid.
+    static let layerColumns = 8
+
+    /// The left edge of the stacked panel on the frame before its tilt, in points from the list's left edge.
+    static func layerX(_ layer: Int, _ frame: Int) -> CGFloat {
+        CGFloat(48 + 28 * layer + triangle(frame * 2 + layer * 37, 160) - 40)
+    }
+
+    /// The top edge of the stacked panel on the frame before its tilt, in points from the list's top edge.
+    static func layerY(_ layer: Int, _ frame: Int) -> CGFloat {
+        CGFloat(48 + 72 * layer + triangle(frame + layer * 53, 120) - 30)
+    }
+
+    /// The tilt of the stacked panel about its center on the frame, in degrees: -6 to 6.
+    static func layerDegrees(_ layer: Int, _ frame: Int) -> Double {
+        Double(Float(triangle(frame + layer * 29, 48)) * 0.5 - 6)
+    }
+
+    /// The palette index of a cell in a stacked panel.
+    static func layerCellColor(_ layer: Int, _ cell: Int) -> Int { (layer * 3 + cell) % paletteRGB.count }
 
     /// The content's share of the window width on the frame: 0.92 to 1.
     static func widthFraction(_ frame: Int) -> CGFloat {

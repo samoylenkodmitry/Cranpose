@@ -135,12 +135,16 @@ type gauntletTier struct {
 	scale   float32
 	tickers int
 	depth   int
+	// layers is how many translucent panels stack over the list.
+	layers int
+	// layerRows is how many rows of layerColumns cells each stacked panel holds.
+	layerRows int
 }
 
 var tiers = []gauntletTier{
-	{1, 1.0, 8, 6}, {2, 0.85, 12, 8}, {2, 0.7, 16, 10}, {3, 0.6, 20, 12}, {3, 0.5, 28, 14}, {4, 0.45, 36, 16},
-	{4, 0.4, 44, 20}, {5, 0.35, 56, 24}, {6, 0.3, 72, 28}, {7, 0.27, 96, 32}, {8, 0.25, 120, 40},
-	{10, 0.2, 160, 48}, {12, 0.18, 200, 56}, {14, 0.16, 240, 64}, {16, 0.14, 300, 72}, {20, 0.12, 400, 80},
+	{1, 1.0, 8, 6, 1, 2}, {2, 0.85, 12, 8, 1, 2}, {2, 0.7, 16, 10, 2, 3}, {3, 0.6, 20, 12, 2, 3}, {3, 0.5, 28, 14, 2, 4}, {4, 0.45, 36, 16, 3, 4},
+	{4, 0.4, 44, 20, 3, 5}, {5, 0.35, 56, 24, 3, 5}, {6, 0.3, 72, 28, 4, 6}, {7, 0.27, 96, 32, 4, 6}, {8, 0.25, 120, 40, 4, 7},
+	{10, 0.2, 160, 48, 5, 7}, {12, 0.18, 200, 56, 5, 8}, {14, 0.16, 240, 64, 5, 8}, {16, 0.14, 300, 72, 6, 9}, {20, 0.12, 400, 80, 6, 10},
 }
 
 func tierOf(tier int) gauntletTier {
@@ -214,6 +218,27 @@ func progressPermille(card, frame int) int { return (frame*3 + card*37) % 1_000 
 func badgeDegrees(card, frame int) float32 {
 	return float32(triangle(frame*2+card*30, 40))*0.5 - 5
 }
+
+// layerColumns is how many cells each row of a stacked panel's grid holds.
+const layerColumns = 8
+
+// layerX is the left edge of the stacked panel on the frame before its tilt, in dp from the list's left edge.
+func layerX(layer, frame int) float32 {
+	return float32(48 + 28*layer + triangle(frame*2+layer*37, 160) - 40)
+}
+
+// layerY is the top edge of the stacked panel on the frame before its tilt, in dp from the list's top edge.
+func layerY(layer, frame int) float32 {
+	return float32(48 + 72*layer + triangle(frame+layer*53, 120) - 30)
+}
+
+// layerDegrees is the tilt of the stacked panel about its center on the frame, in degrees: -6 to 6.
+func layerDegrees(layer, frame int) float32 {
+	return float32(triangle(frame+layer*29, 48))*0.5 - 6
+}
+
+// layerCellColor is the palette index of a cell in a stacked panel.
+func layerCellColor(layer, cell int) int { return (layer*3 + cell) % len(paletteRGB) }
 
 func widthFraction(frame int) float32 {
 	return 0.92 + 0.08*float32(triangle(frame*3, 200))/100

@@ -113,26 +113,32 @@ class GauntletTier {
   final int tickers;
   final int depth;
 
-  const GauntletTier(this.columns, this.scale, this.tickers, this.depth);
+  /// Translucent panels stacked over the list.
+  final int layers;
+
+  /// Rows of [layerColumns] cells in each stacked panel.
+  final int layerRows;
+
+  const GauntletTier(this.columns, this.scale, this.tickers, this.depth, this.layers, this.layerRows);
 }
 
 const gauntletTiers = [
-  GauntletTier(1, 1.0, 8, 6),
-  GauntletTier(2, 0.85, 12, 8),
-  GauntletTier(2, 0.7, 16, 10),
-  GauntletTier(3, 0.6, 20, 12),
-  GauntletTier(3, 0.5, 28, 14),
-  GauntletTier(4, 0.45, 36, 16),
-  GauntletTier(4, 0.4, 44, 20),
-  GauntletTier(5, 0.35, 56, 24),
-  GauntletTier(6, 0.3, 72, 28),
-  GauntletTier(7, 0.27, 96, 32),
-  GauntletTier(8, 0.25, 120, 40),
-  GauntletTier(10, 0.2, 160, 48),
-  GauntletTier(12, 0.18, 200, 56),
-  GauntletTier(14, 0.16, 240, 64),
-  GauntletTier(16, 0.14, 300, 72),
-  GauntletTier(20, 0.12, 400, 80),
+  GauntletTier(1, 1.0, 8, 6, 1, 2),
+  GauntletTier(2, 0.85, 12, 8, 1, 2),
+  GauntletTier(2, 0.7, 16, 10, 2, 3),
+  GauntletTier(3, 0.6, 20, 12, 2, 3),
+  GauntletTier(3, 0.5, 28, 14, 2, 4),
+  GauntletTier(4, 0.45, 36, 16, 3, 4),
+  GauntletTier(4, 0.4, 44, 20, 3, 5),
+  GauntletTier(5, 0.35, 56, 24, 3, 5),
+  GauntletTier(6, 0.3, 72, 28, 4, 6),
+  GauntletTier(7, 0.27, 96, 32, 4, 6),
+  GauntletTier(8, 0.25, 120, 40, 4, 7),
+  GauntletTier(10, 0.2, 160, 48, 5, 7),
+  GauntletTier(12, 0.18, 200, 56, 5, 8),
+  GauntletTier(14, 0.16, 240, 64, 5, 8),
+  GauntletTier(16, 0.14, 300, 72, 6, 9),
+  GauntletTier(20, 0.12, 400, 80, 6, 10),
 ];
 
 GauntletTier gauntletTier(int tier) => gauntletTiers[tier.clamp(1, gauntletTiers.length) - 1];
@@ -187,6 +193,21 @@ String changeText(Quote ticker, int cents) {
 int progressPermille(int card, int frame) => (frame * 3 + card * 37) % 1000;
 
 double badgeDegrees(int card, int frame) => _triangle(frame * 2 + card * 30, 40) * 0.5 - 5.0;
+
+/// Cells in each row of a stacked panel's grid.
+const layerColumns = 8;
+
+/// The left edge of stacked panel [layer] on [frame] before its tilt, in dp from the list's left edge.
+double layerX(int layer, int frame) => (48 + 28 * layer + _triangle(frame * 2 + layer * 37, 160) - 40).toDouble();
+
+/// The top edge of stacked panel [layer] on [frame] before its tilt, in dp from the list's top edge.
+double layerY(int layer, int frame) => (48 + 72 * layer + _triangle(frame + layer * 53, 120) - 30).toDouble();
+
+/// The tilt of stacked panel [layer] about its center on [frame], in degrees: -6 to 6.
+double layerDegrees(int layer, int frame) => _triangle(frame + layer * 29, 48) * 0.5 - 6.0;
+
+/// The palette index of [cell] in stacked panel [layer].
+int layerCellColor(int layer, int cell) => (layer * 3 + cell) % paletteArgb.length;
 
 double widthFraction(int frame) => 0.92 + 0.08 * _triangle(frame * 3, 200) / 100.0;
 

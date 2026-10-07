@@ -8,7 +8,9 @@
 //! - the content width follows `k`, so every visible node is measured again;
 //! - the list scrolls a fixed distance;
 //! - ticker prices, card progress and their labels change;
-//! - sparklines and badge tilts are drawn from `k` without recomposing.
+//! - sparklines and badge tilts are drawn from `k` without recomposing;
+//! - stacked panels over the list move and tilt in their graphics layers,
+//!   their content never changing.
 
 use std::rc::Rc;
 
@@ -22,7 +24,7 @@ use cranpose_ui::{
 use super::{clamped_text_options, text_style};
 use crate::data::{
     self, AVATAR_COUNT, AVATAR_SIZE, CHIP_BACKGROUND, GAUNTLET_SPARK_POINTS, GRADIENT_END,
-    GauntletRow, GauntletTier, PALETTE, Post, Ticker,
+    GauntletRow, GauntletTier, LAYER_COLUMNS, PALETTE, Post, Ticker,
 };
 
 const INK: Color = Color::from_rgb_u8(0x11, 0x18, 0x27);
@@ -32,6 +34,8 @@ const HAIRLINE: Color = Color::from_rgb_u8(0xE5, 0xE7, 0xEB);
 const PANEL: Color = Color::from_rgb_u8(0xE2, 0xE8, 0xF0);
 const UP: Color = Color::from_rgb_u8(0x16, 0xA3, 0x4A);
 const DOWN: Color = Color::from_rgb_u8(0xDC, 0x26, 0x26);
+const LAYER_BACKGROUND: Color = Color::from_rgba_u8(0x1E, 0x29, 0x3B, 0xC0);
+const NESTED_BACKGROUND: Color = Color::from_rgba_u8(0xFF, 0xFF, 0xFF, 0xE6);
 const LEVEL_BACKGROUND: [Color; 2] = [
     Color::from_rgb_u8(0xF1, 0xF5, 0xF9),
     Color::from_rgb_u8(0xCB, 0xD5, 0xE1),
@@ -115,36 +119,50 @@ pub fn GauntletScreen(load: GauntletLoad) {
 
 #[composable]
 fn GauntletBody(shared: Shared, list_state: LazyListState) {
-    let s = shared.tier.scale;
     Column(
         Modifier::empty().fill_max_size(),
         ColumnSpec::default(),
         move || {
             TickerPanel(shared.clone());
-            let rows = shared.clone();
-            LazyColumn(
+            let stack = shared.clone();
+            Box(
                 Modifier::empty().fill_max_width().weight(1.0),
-                list_state,
-                LazyColumnSpec::new()
-                    .vertical_arrangement(LinearArrangement::spaced_by(8.0 * s))
-                    .content_padding_all(8.0 * s),
-                move |scope| {
-                    let rows = rows.clone();
-                    let columns = rows.tier.columns;
-                    scope.items(
-                        LazyItems::new(ROWS)
-                            .key(|index| index as u64)
-                            .content_type(move |index| match data::gauntlet_row(index, columns) {
-                                GauntletRow::Cards(_) => 0,
-                                GauntletRow::Cluster(_) => 1,
-                            }),
-                        move |row| match data::gauntlet_row(row, columns) {
-                            GauntletRow::Cards(first) => CardRow(rows.clone(), first),
-                            GauntletRow::Cluster(cluster) => {
-                                DeepCluster(cluster, rows.tier.depth, rows.tier.scale)
-                            }
-                        },
-                    );
+                BoxSpec::default(),
+                move || {
+                    CardList(stack.clone(), list_state);
+                    for layer in 0..stack.tier.layers {
+                        StackedLayer(layer, stack.tier.layer_rows, stack.frame);
+                    }
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+fn CardList(shared: Shared, list_state: LazyListState) {
+    let s = shared.tier.scale;
+    LazyColumn(
+        Modifier::empty().fill_max_size(),
+        list_state,
+        LazyColumnSpec::new()
+            .vertical_arrangement(LinearArrangement::spaced_by(8.0 * s))
+            .content_padding_all(8.0 * s),
+        move |scope| {
+            let rows = shared.clone();
+            let columns = rows.tier.columns;
+            scope.items(
+                LazyItems::new(ROWS)
+                    .key(|index| index as u64)
+                    .content_type(move |index| match data::gauntlet_row(index, columns) {
+                        GauntletRow::Cards(_) => 0,
+                        GauntletRow::Cluster(_) => 1,
+                    }),
+                move |row| match data::gauntlet_row(row, columns) {
+                    GauntletRow::Cards(first) => CardRow(rows.clone(), first),
+                    GauntletRow::Cluster(cluster) => {
+                        DeepCluster(cluster, rows.tier.depth, rows.tier.scale)
+                    }
                 },
             );
         },
@@ -613,6 +631,103 @@ fn Level(cluster: usize, remaining: usize, s: f32) {
             if remaining > 0 {
                 Level(cluster, remaining - 1, s);
             }
+        },
+    );
+}
+
+/// A translucent panel stacked over the list. Its content never changes:
+/// each frame its graphics layer moves and tilts it, and its nested card's
+/// tilts the card back the other way, so nothing is composed or measured
+/// again.
+#[composable]
+fn StackedLayer(layer: usize, rows: usize, frame: MutableState<u32>) {
+    Column(
+        Modifier::empty()
+            .width(220.0)
+            .graphics_layer(move || {
+                let frame = frame.get();
+                GraphicsLayer {
+                    translation_x: data::layer_x(layer, frame),
+                    translation_y: data::layer_y(layer, frame),
+                    rotation_z: data::layer_degrees(layer, frame),
+                    ..Default::default()
+                }
+            })
+            .background(LAYER_BACKGROUND)
+            .rounded_corners(12.0)
+            .padding(10.0),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(8.0)),
+        move || {
+            Text(
+                format!("Layer {}", layer + 1),
+                Modifier::empty(),
+                text_style(13.0, Color::WHITE, true),
+            );
+            Column(
+                Modifier::empty(),
+                ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(3.0)),
+                move || {
+                    for row in 0..rows {
+                        LayerCells(layer, row);
+                    }
+                },
+            );
+            NestedCard(layer, frame);
+        },
+    );
+}
+
+/// One row of a stacked panel's numbered cells.
+#[composable]
+fn LayerCells(layer: usize, row: usize) {
+    Row(
+        Modifier::empty(),
+        RowSpec::new().horizontal_arrangement(LinearArrangement::spaced_by(3.0)),
+        move || {
+            for cell in row * LAYER_COLUMNS..(row + 1) * LAYER_COLUMNS {
+                Box(
+                    Modifier::empty()
+                        .size_points(22.0, 22.0)
+                        .background(PALETTE[data::layer_cell_color(layer, cell)])
+                        .rounded_corners(4.0),
+                    BoxSpec::new().content_alignment(Alignment::CENTER),
+                    move || {
+                        Text(
+                            (cell + 1).to_string(),
+                            Modifier::empty(),
+                            text_style(9.0, Color::WHITE, false),
+                        );
+                    },
+                );
+            }
+        },
+    );
+}
+
+#[composable]
+fn NestedCard(layer: usize, frame: MutableState<u32>) {
+    Column(
+        Modifier::empty()
+            .fill_max_width()
+            .graphics_layer(move || GraphicsLayer {
+                rotation_z: -data::layer_degrees(layer, frame.get()),
+                ..Default::default()
+            })
+            .background(NESTED_BACKGROUND)
+            .rounded_corners(8.0)
+            .padding(8.0),
+        ColumnSpec::new().vertical_arrangement(LinearArrangement::spaced_by(2.0)),
+        move || {
+            Text(
+                format!("Nested in layer {}", layer + 1),
+                Modifier::empty(),
+                text_style(11.0, INK, true),
+            );
+            Text(
+                "Tilts against its panel",
+                Modifier::empty(),
+                text_style(11.0, BODY, false),
+            );
         },
     );
 }

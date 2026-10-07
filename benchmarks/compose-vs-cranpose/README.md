@@ -60,7 +60,7 @@ Knobs:
 - `workspace`: `--es mode quotes`, `scroll` or `hover` (default `quotes`);
 - `--ez still true` holds the feed still, or starts the workspace at tick zero
   with its stream, automatic scrolling and synthetic hover stopped;
-- `gauntlet`: `--ei tier` (1 to 8) and `--ei freeze K`, which stops on frame K
+- `gauntlet`: `--ei tier` (1 to 16) and `--ei freeze K`, which stops on frame K
   for picture comparisons.
 
 ### Gauntlet
@@ -80,6 +80,15 @@ so both apps show the same digits on the same frame.
   counters split by dividers in an `IntrinsicSize.Min` row. Every fifth card
   carries a translucent badge tilting in its graphics layer.
 - **Deep clusters:** after every five card rows, a cluster of nested levels.
+- **Stacked layers:** translucent dark panels stacked over the list, each
+  220 dp wide, with a title, rows of eight numbered colored cells and a
+  translucent white nested card with two lines of text. A panel's content
+  never changes: each frame it drifts and tilts up to 6 degrees about its
+  center, and its nested card tilts as far the other way. The panels overlap
+  one another and the list, so every pixel under them blends several times.
+  A framework that keeps a panel's drawing and only moves it does little
+  work here; one that draws or lays it out again each frame pays for every
+  cell.
 - **Width:** the whole content's width follows `k` between 92% and 100%, so
   every visible node is measured again each frame.
 
@@ -88,7 +97,9 @@ line. Compose uses `LazyVerticalGrid` with full-span clusters, reads the
 width in `Modifier.layout`, and isolates every per-frame read in its own small
 composable or draw lambda. Cranpose uses `LazyColumn` rows (it has no lazy
 grid yet, #1165), reads the width at the screen root above one argument-stable
-call, and isolates the same reads. Views uses a `RecyclerView` of card rows
+call, and isolates the same reads. Both move and tilt each stacked panel in a
+graphics layer whose block reads the frame, so the frame records no panel
+again. Views uses a `RecyclerView` of card rows
 and clusters, measures the width in a parent `onMeasure`, and redraws bars and
 sparklines in `onDraw`. Flutter uses a `ListView` of rows, lays the width out
 in a `SingleChildLayoutDelegate` that relayouts on the frame, rebuilds only the
@@ -139,24 +150,24 @@ The web page lays everything out in CSS, trims paragraph leading with
 scroll off behind a spacer as tall, and sets only what changed each
 animation frame; sparklines are SVG paths in a box CSS stretches.
 
-| Tier | Columns | Scale | Ticker tiles | Cluster depth |
-| --- | ---: | ---: | ---: | ---: |
-| 1 | 1 | 1.0 | 8 | 6 |
-| 2 | 2 | 0.85 | 12 | 8 |
-| 3 | 2 | 0.7 | 16 | 10 |
-| 4 | 3 | 0.6 | 20 | 12 |
-| 5 | 3 | 0.5 | 28 | 14 |
-| 6 | 4 | 0.45 | 36 | 16 |
-| 7 | 4 | 0.4 | 44 | 20 |
-| 8 | 5 | 0.35 | 56 | 24 |
-| 9 | 6 | 0.3 | 72 | 28 |
-| 10 | 7 | 0.27 | 96 | 32 |
-| 11 | 8 | 0.25 | 120 | 40 |
-| 12 | 10 | 0.2 | 160 | 48 |
-| 13 | 12 | 0.18 | 200 | 56 |
-| 14 | 14 | 0.16 | 240 | 64 |
-| 15 | 16 | 0.14 | 300 | 72 |
-| 16 | 20 | 0.12 | 400 | 80 |
+| Tier | Columns | Scale | Ticker tiles | Cluster depth | Layers | Cell rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 1.0 | 8 | 6 | 1 | 2 |
+| 2 | 2 | 0.85 | 12 | 8 | 1 | 2 |
+| 3 | 2 | 0.7 | 16 | 10 | 2 | 3 |
+| 4 | 3 | 0.6 | 20 | 12 | 2 | 3 |
+| 5 | 3 | 0.5 | 28 | 14 | 2 | 4 |
+| 6 | 4 | 0.45 | 36 | 16 | 3 | 4 |
+| 7 | 4 | 0.4 | 44 | 20 | 3 | 5 |
+| 8 | 5 | 0.35 | 56 | 24 | 3 | 5 |
+| 9 | 6 | 0.3 | 72 | 28 | 4 | 6 |
+| 10 | 7 | 0.27 | 96 | 32 | 4 | 6 |
+| 11 | 8 | 0.25 | 120 | 40 | 4 | 7 |
+| 12 | 10 | 0.2 | 160 | 48 | 5 | 7 |
+| 13 | 12 | 0.18 | 200 | 56 | 5 | 8 |
+| 14 | 14 | 0.16 | 240 | 64 | 5 | 8 |
+| 15 | 16 | 0.14 | 300 | 72 | 6 | 9 |
+| 16 | 20 | 0.12 | 400 | 80 | 6 | 10 |
 
 Calibration fixes one tier per device: the lightest at which every
 framework draws below 60 fps. The Huawei Mate 20 X runs tier 12 and the
