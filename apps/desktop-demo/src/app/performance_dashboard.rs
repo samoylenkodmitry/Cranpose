@@ -2,7 +2,7 @@
 //! main, and Cranpose against other frameworks, read from the `perf-data`
 //! branch that `scripts/perf/publish.py` writes.
 
-use std::{collections::BTreeMap, rc::Rc};
+use std::{cmp::Ordering, collections::BTreeMap, rc::Rc};
 
 use cranpose_core::{self, MutableState};
 use cranpose_services::{isSystemInDarkTheme, local_http_client, local_uri_handler, HttpClientRef};
@@ -245,6 +245,18 @@ impl Metric {
         match self {
             Self::Fps | Self::CpuPerFrame => format!("{value:.1}"),
             Self::Ram | Self::GpuRam | Self::CpuClock | Self::GpuClock => format!("{value:.0}"),
+        }
+    }
+
+    /// Orders two values best first: the higher frame rate, the lower of the
+    /// rest, which cost time, memory or power; a value before none.
+    fn best_first(self, a: Option<f64>, b: Option<f64>) -> Ordering {
+        match (a, b) {
+            (Some(a), Some(b)) if self == Self::Fps => b.total_cmp(&a),
+            (Some(a), Some(b)) => a.total_cmp(&b),
+            (Some(_), None) => Ordering::Less,
+            (None, Some(_)) => Ordering::Greater,
+            (None, None) => Ordering::Equal,
         }
     }
 
@@ -674,8 +686,9 @@ fn LineChart(palette: Palette, release: Vec<f32>, main: Vec<f32>, regressed: Vec
 
 #[composable]
 fn Frameworks(palette: Palette, run: PerfRun) {
-    // Alphabetical, each with the version measured and a link to its source
-    // at the commit the run measured.
+    // Best first for the metric shown, alphabetical among equals, each with
+    // the version measured and a link to its source at the commit the run
+    // measured. Cranpose's bars carry the accent.
     let mut subjects: Vec<(usize, PerfSubject)> =
         run.subjects.iter().cloned().enumerate().collect();
     subjects.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
@@ -700,11 +713,15 @@ fn Frameworks(palette: Palette, run: PerfRun) {
                 .map(|(index, _)| run.median(scenario, *index, shown.key()))
                 .collect();
             let full = shown.full_scale(&values);
-            for ((_, subject), value) in subjects.iter().zip(&values) {
-                let color = if subject.name == "compose" {
-                    palette.baseline
-                } else {
+            let mut order: Vec<usize> = (0..subjects.len()).collect();
+            order.sort_by(|&a, &b| shown.best_first(values[a], values[b]));
+            for position in order {
+                let (_, subject) = &subjects[position];
+                let value = &values[position];
+                let color = if subject.name.starts_with("cranpose") {
                     palette.accent
+                } else {
+                    palette.baseline
                 };
                 let url = subject
                     .source

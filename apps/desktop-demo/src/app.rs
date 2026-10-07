@@ -431,8 +431,9 @@ pub fn startup_tab_from_args(args: impl IntoIterator<Item = String>) -> DemoTab 
 
 pub const DEMO_TABS: [DemoTab; 31] = [
     DemoTab::Guide,
-    DemoTab::Counter,
+    DemoTab::Performance,
     DemoTab::Liquid,
+    DemoTab::Counter,
     DemoTab::CompositionLocal,
     DemoTab::Async,
     DemoTab::Animations,
@@ -445,7 +446,6 @@ pub const DEMO_TABS: [DemoTab; 31] = [
     DemoTab::Mineswapper2,
     DemoTab::RecompositionLab,
     DemoTab::HackerNews,
-    DemoTab::Performance,
     DemoTab::Images,
     DemoTab::Text,
     DemoTab::Wsz,
