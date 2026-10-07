@@ -1240,7 +1240,8 @@ impl Modifier {
     }
 
     /// Whether `other` has this modifier's elements in the same order, equal
-    /// except elements of type `E`, which may differ.
+    /// except elements of type `E`, which may differ. An element that asks
+    /// for an update on every set counts as different.
     pub(crate) fn differs_only_in<E: 'static>(&self, other: &Self) -> bool {
         if self.element_count != other.element_count {
             return false;
@@ -1249,7 +1250,9 @@ impl Modifier {
         self.iter_elements()
             .zip(other.iter_elements())
             .all(|(a, b)| {
-                if a.element_type() == differing {
+                if a.requires_update() || b.requires_update() {
+                    false
+                } else if a.element_type() == differing {
                     b.element_type() == differing
                 } else {
                     a.equals_element(&**b)

@@ -549,13 +549,12 @@ impl LayoutNode {
         {
             return;
         }
-        let modifier_changed = !self.modifier.structural_eq(&modifier);
         // A text that changed and nothing else, as a ticker's does, keeps
         // the slices the chain gave: only their text moves to the new layout.
-        let text_only = modifier_changed
-            && self
-                .modifier
-                .differs_only_in::<crate::text_modifier_node::TextModifierElement>(&modifier);
+        let text_only = self
+            .modifier
+            .differs_only_in::<crate::text_modifier_node::TextModifierElement>(&modifier);
+        let modifier_changed = text_only || !self.modifier.structural_eq(&modifier);
         self.modifier = modifier;
         self.sync_modifier_chain(text_only);
         if modifier_changed {
@@ -605,7 +604,11 @@ impl LayoutNode {
         let mut invalidations = self.modifier_chain.take_invalidations();
         invalidations.extend(modifier_local_invalidations);
         self.dispatch_modifier_invalidations_with_prev(&invalidations, prev_caps, keep_slices);
-        self.refresh_registry_state();
+        // An update in place leaves the node's parent, capabilities and
+        // modifier locals as the registry holds them.
+        if !in_place {
+            self.refresh_registry_state();
+        }
     }
 
     /// Points the current slices' text at the chain's text node, and
