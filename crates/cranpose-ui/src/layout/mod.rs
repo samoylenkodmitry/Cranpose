@@ -3551,6 +3551,13 @@ impl LayoutChildMeasureState {
         if !self.force_remeasure.get()
             && let Some(cached) = cache.get_measurement(constraints)
         {
+            // A measure clears the placed flag the parent's placement sets
+            // again; a child it no longer places then leaves the scene.
+            if self.frame.measures()
+                && let Some(state) = self.layout_state.borrow().as_ref()
+            {
+                state.borrow_mut().clear_placed();
+            }
             return Some(cached);
         }
 
