@@ -248,6 +248,17 @@ fn scan_summary(primitives: &[DrawPrimitive]) -> RecordingSummary {
     summary
 }
 
+/// The facts of `summary` a scan of primitive kinds finds, without the
+/// lanes the recording put them in.
+fn kinds_of(summary: RecordingSummary) -> RecordingSummary {
+    RecordingSummary {
+        has_shapes: false,
+        has_others: false,
+        has_content_markers: false,
+        ..summary
+    }
+}
+
 #[test]
 fn every_primitive_round_trips_through_the_record_byte_for_byte() {
     let primitives = every_primitive();
@@ -564,14 +575,14 @@ fn segment_iteration_preserves_order_bounds_and_marker_filtering() {
 fn summary_and_bounds_are_what_a_scan_of_the_primitives_finds() {
     let primitives = every_primitive();
     let recording = CommandRecording::from_primitives(primitives.clone());
-    assert_eq!(recording.summary(), scan_summary(&primitives));
+    assert_eq!(kinds_of(recording.summary()), scan_summary(&primitives));
     let expected_bounds = primitives
         .iter()
         .filter_map(primitive_coverage_rect)
         .reduce(|a, b| a.union(b));
     assert_eq!(recording.bounds(), expected_bounds);
     assert_eq!(
-        recording.summary_in(&recording.content_split(false)),
+        kinds_of(recording.summary_in(&recording.content_split(false))),
         scan_summary(&primitives[primitives.len() - 1..])
     );
     let rects: Vec<Rect> = recording.coverage_rects(recording.all_segments()).collect();
@@ -619,6 +630,7 @@ fn a_shadow_only_recording_summarises_as_shadow() {
         recording.summary(),
         RecordingSummary {
             has_shadow: true,
+            has_others: true,
             ..RecordingSummary::default()
         }
     );
@@ -1161,5 +1173,38 @@ fn a_blended_line_keeps_its_blend_mode() {
             }),
             blend_mode: BlendMode::Plus,
         }]
+    );
+}
+
+#[test]
+fn only_a_run_of_shapes_alone_reads_as_shapes_only() {
+    let shape = || DrawPrimitive::Rect {
+        rect: rect(0.0, 0.0, 2.0, 2.0),
+        brush: solid(),
+        stroke: None,
+    };
+    let shapes = CommandRecording::from_primitives([shape(), shape()]);
+    assert!(shapes.summary().shapes_only());
+
+    let with_text = CommandRecording::from_primitives([shape(), text(), shape()]);
+    assert!(!with_text.summary().shapes_only());
+    assert!(
+        !with_text
+            .summary_in(&with_text.all_segments())
+            .shapes_only()
+    );
+
+    let with_content =
+        CommandRecording::from_primitives([shape(), DrawPrimitive::Content, shape()]);
+    assert!(!with_content.summary().shapes_only());
+    let behind = with_content.content_split(true);
+    let overlay = with_content.content_split(false);
+    assert!(with_content.summary_in(&behind).shapes_only());
+    assert!(with_content.summary_in(&overlay).shapes_only());
+
+    assert!(
+        !CommandRecording::from_primitives([text()])
+            .summary()
+            .shapes_only()
     );
 }
