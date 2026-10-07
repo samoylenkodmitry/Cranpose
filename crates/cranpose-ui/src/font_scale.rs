@@ -34,9 +34,7 @@
 ///
 /// The platform's own table has ten, and collapsing the points that sit on a
 /// straight line through their neighbours leaves fewer, so this is headroom
-/// rather than a limit anyone is expected to reach. It is a hard cap because a
-/// curve is `Copy` and rides inside a type that is passed by value on the
-/// measurement path.
+/// rather than a limit anyone is expected to reach.
 pub const MAX_FONT_SCALE_KNOTS: usize = 12;
 
 const COLLINEAR_EPSILON_DP: f32 = 1.0e-3;
@@ -48,12 +46,15 @@ const COLLINEAR_EPSILON_DP: f32 = 1.0e-3;
 /// that end — which is how the platform extends its own table, so a size below
 /// the first knot scales by the plain setting and one above the last keeps the
 /// last knot's ratio.
+///
+/// A curve is `Copy` and rides in every [`crate::Density`], which each layout
+/// node keeps and the measurement path passes by value, so its knots live in
+/// a table shared by every curve with the same knots: a curve is 24 bytes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FontScaleCurve {
     scale: f32,
-    knots: [(f32, f32); MAX_FONT_SCALE_KNOTS],
-    len: usize,
     fingerprint: u32,
+    knots: &'static [(f32, f32)],
 }
 
 impl Default for FontScaleCurve {
@@ -68,9 +69,8 @@ impl FontScaleCurve {
     pub const fn linear(scale: f32) -> Self {
         Self {
             scale,
-            knots: [(0.0, 0.0); MAX_FONT_SCALE_KNOTS],
-            len: 0,
             fingerprint: 0,
+            knots: &[],
         }
     }
 
@@ -96,13 +96,11 @@ impl FontScaleCurve {
         {
             return Self::linear(scale);
         }
-        let mut curve = Self::linear(scale);
-        for (index, knot) in kept.iter().enumerate() {
-            curve.knots[index] = *knot;
+        Self {
+            scale,
+            fingerprint: fingerprint(scale, &kept),
+            knots: shared_knots(kept),
         }
-        curve.len = kept.len();
-        curve.fingerprint = fingerprint(scale, &kept);
-        curve
     }
 
     /// The setting itself — what the user chose, whatever the table then does
@@ -114,7 +112,7 @@ impl FontScaleCurve {
 
     /// Whether this is the plain multiplier, with no table behind it.
     pub fn is_linear(self) -> bool {
-        self.len == 0
+        self.knots.is_empty()
     }
 
     /// Whether resolving an `Sp` through this curve changes nothing at all.
@@ -123,22 +121,22 @@ impl FontScaleCurve {
     /// hands back a table while the setting sits at 1.0 hands back a table
     /// whose every knot maps a size to itself, and that is still nothing to do.
     pub fn is_identity(self) -> bool {
-        if self.len == 0 {
+        if self.knots.is_empty() {
             return (self.scale - 1.0).abs() <= f32::EPSILON;
         }
-        self.knots[..self.len]
+        self.knots
             .iter()
             .all(|(sp, dp)| (dp - sp).abs() <= COLLINEAR_EPSILON_DP)
     }
 
     /// The knots, ascending by sp. Empty for a linear curve.
-    pub fn knots(self) -> [(f32, f32); MAX_FONT_SCALE_KNOTS] {
+    pub fn knots(self) -> &'static [(f32, f32)] {
         self.knots
     }
 
-    /// How many of [`FontScaleCurve::knots`] are used.
+    /// How many [`FontScaleCurve::knots`] there are.
     pub fn knot_count(self) -> usize {
-        self.len
+        self.knots.len()
     }
 
     /// A cheap identity for cache keys: two curves that convert identically
@@ -157,17 +155,17 @@ impl FontScaleCurve {
         if !sp.is_finite() {
             return sp;
         }
-        if self.len == 0 {
+        let knots = self.knots;
+        let (Some(&(first_sp, first_dp)), Some(&(last_sp, last_dp))) =
+            (knots.first(), knots.last())
+        else {
             return sp * self.scale;
-        }
+        };
         let magnitude = sp.abs();
         let sign = if sp.is_sign_negative() { -1.0 } else { 1.0 };
-        let knots = &self.knots[..self.len];
-        let (first_sp, first_dp) = knots[0];
         if magnitude <= first_sp {
             return sign * magnitude * (first_dp / first_sp);
         }
-        let (last_sp, last_dp) = knots[self.len - 1];
         if magnitude >= last_sp {
             return sign * magnitude * (last_dp / last_sp);
         }
@@ -211,6 +209,22 @@ fn compress(samples: &[(f32, f32)]) -> Option<Vec<(f32, f32)>> {
         return None;
     }
     Some(kept)
+}
+
+/// The table holding `knots`, shared with every curve that has the same
+/// knots. A process meets one table per font scale setting the user picks, so
+/// the tables are kept for its life.
+fn shared_knots(knots: Vec<(f32, f32)>) -> &'static [(f32, f32)] {
+    static TABLES: std::sync::Mutex<Vec<&'static [(f32, f32)]>> = std::sync::Mutex::new(Vec::new());
+    let mut tables = TABLES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(table) = tables.iter().find(|table| ***table == knots[..]) {
+        return table;
+    }
+    let table: &'static [(f32, f32)] = Box::leak(knots.into_boxed_slice());
+    tables.push(table);
+    table
 }
 
 fn fingerprint(scale: f32, knots: &[(f32, f32)]) -> u32 {
