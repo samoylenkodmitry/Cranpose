@@ -791,6 +791,12 @@ pub struct RecordingSummary {
     /// Any image or text, including inside a blend: content that resamples
     /// badly on a fractionally offset surface.
     pub has_pixel_sensitive: bool,
+    /// Any entry in the shape tables.
+    pub has_shapes: bool,
+    /// Any primitive outside the shape tables.
+    pub has_others: bool,
+    /// Any marker where a with-content command draws its node's content.
+    pub has_content_markers: bool,
 }
 
 impl RecordingSummary {
@@ -819,6 +825,15 @@ impl RecordingSummary {
         self.has_shadow |= other.has_shadow;
         self.has_non_shadow |= other.has_non_shadow;
         self.has_pixel_sensitive |= other.has_pixel_sensitive;
+        self.has_shapes |= other.has_shapes;
+        self.has_others |= other.has_others;
+        self.has_content_markers |= other.has_content_markers;
+    }
+
+    /// Whether the entries are shapes alone, with no other primitive or
+    /// content marker between them, so one run draws them all.
+    pub fn shapes_only(&self) -> bool {
+        self.has_shapes && !self.has_others && !self.has_content_markers
     }
 }
 
@@ -1859,13 +1874,18 @@ impl CommandRecording {
         let mut summary = RecordingSummary::default();
         for segment in self.segments_in(segments) {
             match segment.lane {
-                RecordLane::Shapes if segment.count > 0 => summary.has_non_shadow = true,
+                RecordLane::Shapes if segment.count > 0 => {
+                    summary.has_non_shadow = true;
+                    summary.has_shapes = true;
+                }
                 RecordLane::Others => {
+                    summary.has_others = true;
                     for primitive in &self.content.others[segment.range()] {
                         summary.note(primitive);
                     }
                 }
-                RecordLane::Shapes | RecordLane::Content => {}
+                RecordLane::Content => summary.has_content_markers = true,
+                RecordLane::Shapes => {}
             }
         }
         summary
@@ -2166,6 +2186,7 @@ impl CommandRecorder {
     /// Records a content marker at the current command position.
     pub fn push_content(&mut self) {
         self.content.content_markers += 1;
+        self.content.summary.has_content_markers = true;
         self.shapes.push_content_segment();
     }
 
@@ -2185,6 +2206,7 @@ impl CommandRecorder {
     #[inline]
     fn note_shape(&mut self) {
         self.content.summary.has_non_shadow = true;
+        self.content.summary.has_shapes = true;
     }
 
     fn include_bounds(&mut self, rect: Rect) {
@@ -2268,6 +2290,7 @@ impl CommandRecorder {
 
     /// Records a primitive in the non-shape lane and updates its metadata.
     pub fn push_other(&mut self, primitive: DrawPrimitive) {
+        self.content.summary.has_others = true;
         self.content.summary.note(&primitive);
         if let Some(rect) = primitive_coverage_rect(&primitive) {
             self.include_bounds(rect);
