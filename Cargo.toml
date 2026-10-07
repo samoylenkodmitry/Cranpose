@@ -43,7 +43,9 @@ members = [
 ]
 # Upstream crates Cranpose ships patched under its own names; see
 # forks/README.md. They build as path dependencies, outside the workspace.
-exclude = ["forks"]
+# The benchmark apps are workspaces of their own: the desktop demo reaches
+# the gauntlet through a path dependency without making them members.
+exclude = ["forks", "benchmarks"]
 resolver = "2"
 
 [workspace.package]
