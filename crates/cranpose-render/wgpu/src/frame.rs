@@ -1903,6 +1903,50 @@ impl Atlas {
     }
 }
 
+/// How many times a request's area a recent atlas size may hold and still
+/// serve it.
+const SURFACE_ATLAS_SLACK: u64 = 2;
+const KEPT_SURFACE_ATLAS_SIZES: usize = 4;
+
+/// The layer surface atlas sizes recent frames drew into. Sized to each
+/// frame's members, an atlas took a new size whenever a resize moved them
+/// by a step, and the transient pool, which reuses a texture only at its
+/// exact size, then kept a texture and a depth buffer for every size a
+/// frame had used. An atlas now takes the newest recent size that holds it,
+/// grown to fit where that stays within [`SURFACE_ATLAS_SLACK`] times its
+/// area, so frames keep drawing into one texture.
+#[derive(Default)]
+pub(crate) struct SurfaceAtlasSizes {
+    recent: crate::idle_pool::IdlePool<(u32, u32)>,
+}
+
+impl SurfaceAtlasSizes {
+    /// The size an atlas whose members pack into `size` takes this frame.
+    fn settle(&mut self, size: (u32, u32)) -> (u32, u32) {
+        let area = |(width, height): (u32, u32)| u64::from(width) * u64::from(height);
+        let limit = area(size).saturating_mul(SURFACE_ATLAS_SLACK);
+        // The newest size first: requests that fit two sizes keep taking
+        // the one in use, so the other goes idle and is dropped.
+        let settled = self
+            .recent
+            .iter()
+            .rev()
+            .map(|recent| (recent.0.max(size.0), recent.1.max(size.1)))
+            .find(|grown| area(*grown) <= limit)
+            .unwrap_or(size);
+        let _ = self.recent.take(|recent| *recent == settled);
+        self.recent
+            .put(settled, KEPT_SURFACE_ATLAS_SIZES, u64::MAX, |_| 0);
+        settled
+    }
+
+    /// Ends a frame, forgetting the sizes no frame has drawn into for
+    /// [`crate::idle_pool::IDLE_FRAMES`].
+    pub(crate) fn end_frame(&mut self) {
+        self.recent.end_frame();
+    }
+}
+
 fn padded_dimension(value: u32, limit: u32) -> u32 {
     let step = (value.max(ATLAS_SIZE_STEP).next_power_of_two() / 8).max(ATLAS_SIZE_STEP);
     value.max(1).div_ceil(step).saturating_mul(step).min(limit)
@@ -4721,7 +4765,11 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let sizes: Vec<(u32, u32)> = packer
             .atlases
             .iter()
-            .map(|atlas| atlas.padded_size(limit))
+            .map(|atlas| {
+                self.renderer
+                    .surface_atlas_sizes
+                    .settle(atlas.padded_size(limit))
+            })
             .collect();
         let atlases: Vec<Rc<OffscreenTarget>> = sizes
             .into_iter()

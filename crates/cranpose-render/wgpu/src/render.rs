@@ -3035,8 +3035,11 @@ pub struct GpuRenderer {
     glyph_atlas_shader: SharedShader,
     rrect_shadow_shader: SharedShader,
     /// Transient depth buffers by target size, for passes that lay opaque
-    /// interiors down first.
-    depth_targets: Vec<((u32, u32), wgpu::TextureView)>,
+    /// interiors down first, dropped once no frame has used them for
+    /// [`crate::idle_pool::IDLE_FRAMES`].
+    depth_targets: crate::idle_pool::IdlePool<((u32, u32), wgpu::TextureView)>,
+    /// The layer surface atlas sizes recent frames drew into.
+    pub(crate) surface_atlas_sizes: crate::frame::SurfaceAtlasSizes,
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     image_bind_group_layout: wgpu::BindGroupLayout,
     image_nearest_sampler: wgpu::Sampler,
@@ -3392,7 +3395,8 @@ impl GpuRenderer {
             image_shader,
             glyph_atlas_shader,
             rrect_shadow_shader,
-            depth_targets: Vec::new(),
+            depth_targets: crate::idle_pool::IdlePool::default(),
+            surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::default(),
             uniform_bind_group_layout,
             image_bind_group_layout,
             image_nearest_sampler,
@@ -3708,19 +3712,19 @@ impl GpuRenderer {
     }
 
     /// The transient depth buffer for a target of `size`, created on first
-    /// use; a few sizes are kept, the most recent first.
+    /// use; the few sizes recent frames used are kept.
     pub(crate) fn depth_target(&mut self, size: (u32, u32)) -> wgpu::TextureView {
         const KEPT_DEPTH_TARGETS: usize = 4;
-        if let Some(index) = self
-            .depth_targets
-            .iter()
-            .position(|(kept, _)| *kept == size)
-        {
-            let entry = self.depth_targets.remove(index);
-            let view = entry.1.clone();
-            self.depth_targets.insert(0, entry);
-            return view;
-        }
+        let view = match self.depth_targets.take(|(kept, _)| *kept == size) {
+            Some((_, view)) => view,
+            None => self.create_depth_target(size),
+        };
+        self.depth_targets
+            .put((size, view.clone()), KEPT_DEPTH_TARGETS, u64::MAX, |_| 0);
+        view
+    }
+
+    fn create_depth_target(&self, size: (u32, u32)) -> wgpu::TextureView {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Opaque interior depth"),
             size: wgpu::Extent3d {
@@ -3741,10 +3745,7 @@ impl GpuRenderer {
             },
             view_formats: &[],
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.depth_targets.insert(0, (size, view.clone()));
-        self.depth_targets.truncate(KEPT_DEPTH_TARGETS);
-        view
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
     /// The binding a draw of `image` sampled by `sampling` takes, uploading
@@ -3983,6 +3984,8 @@ impl GpuRenderer {
         }
         self.effect_renderer.end_offscreen_frame();
         self.frame_graph_executor.end_transient_frame();
+        self.depth_targets.end_frame();
+        self.surface_atlas_sizes.end_frame();
     }
 
     fn insert_cached_shadow_surface(
