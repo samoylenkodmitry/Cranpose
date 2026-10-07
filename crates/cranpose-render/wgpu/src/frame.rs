@@ -1904,8 +1904,11 @@ impl Atlas {
 }
 
 /// How many times a request's area a recent atlas size may hold and still
-/// serve it.
-const SURFACE_ATLAS_SLACK: u64 = 2;
+/// serve it. Cards that a resize narrows ask for a third of the area they
+/// had: at twice the area each such step took a new texture and depth
+/// buffer, and the pools kept four sizes at once for their idle frames. The
+/// unused area costs no fragments, and its tiles store compressed.
+const SURFACE_ATLAS_SLACK: u64 = 4;
 const KEPT_SURFACE_ATLAS_SIZES: usize = 4;
 
 /// The layer surface atlas sizes recent frames drew into. Sized to each
