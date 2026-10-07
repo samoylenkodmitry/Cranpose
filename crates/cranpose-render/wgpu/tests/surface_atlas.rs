@@ -246,3 +246,28 @@ fn an_atlas_whose_surfaces_shrink_to_a_third_draws_into_the_texture_it_had() {
     let reference = support::settle(|| support::update_and_capture(&mut fresh, WIDTH, HEIGHT));
     support::assert_same_bytes("shrunk tiles", WIDTH, &reference.pixels, &shrunk.pixels);
 }
+
+#[test]
+fn an_atlas_whose_surfaces_grow_a_little_draws_into_the_texture_it_had() {
+    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let (mut shell, side) = tiles_shell(renderer, 36.0);
+    support::settle(|| support::update_and_capture(&mut shell, WIDTH, HEIGHT));
+    support::wait_for_background_compiler_idle();
+    shell.debug_enter_app_context(|| side.set(40.0));
+    let (stats, grown) = support::update_and_capture(&mut shell, WIDTH, HEIGHT);
+    assert_eq!(stats.isolated_layer_renders, 6);
+    assert_eq!(
+        stats.offscreen_news, 0,
+        "the first atlas had room for a step of growth: {stats:?}"
+    );
+
+    let (mut fresh, _) = tiles_shell(
+        support::headless_renderer_beside_locked().expect("reference renderer"),
+        40.0,
+    );
+    let reference = support::settle(|| support::update_and_capture(&mut fresh, WIDTH, HEIGHT));
+    support::assert_same_bytes("grown tiles", WIDTH, &reference.pixels, &grown.pixels);
+}
