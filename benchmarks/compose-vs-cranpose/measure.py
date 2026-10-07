@@ -139,9 +139,41 @@ HEAVY = {
 }
 
 
+# How long an install may take: seconds for the largest APK, unless adb hangs.
+INSTALL_TIMEOUT_S = 180
+# How long the phone gets to come back after the adb server restarts.
+RECONNECT_TIMEOUT_S = 60
+
+
 class Device:
     def __init__(self, serial):
         self.serial = serial
+
+    def run(self, args, timeout):
+        """Runs `adb -s SERIAL args`. A command that hangs past `timeout` runs
+        once more after the adb server restarts: on 2026-10-07 a stuck server
+        hung two nightly installs for their whole timeout."""
+        for attempt in range(2):
+            try:
+                return subprocess.run(['adb', '-s', self.serial, *args], capture_output=True, text=True,
+                                      timeout=timeout)
+            except subprocess.TimeoutExpired:
+                if attempt == 1:
+                    raise RuntimeError(f'adb {" ".join(args)} hung for {timeout} s twice, '
+                                       'with a restart of the adb server between') from None
+                print(f'adb {" ".join(args[:2])} hung for {timeout} s; restarting the adb server', flush=True)
+                self.restart_adb()
+
+    def restart_adb(self):
+        """Restarts the adb server, ending it by force when it does not answer,
+        and waits for the phone."""
+        try:
+            subprocess.run(['adb', 'kill-server'], capture_output=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            subprocess.run(['pkill', '-KILL', '-f', 'adb .*fork-server'], capture_output=True)
+        subprocess.run(['adb', 'start-server'], capture_output=True, timeout=30)
+        subprocess.run(['adb', '-s', self.serial, 'wait-for-device'], capture_output=True,
+                       timeout=RECONNECT_TIMEOUT_S)
 
     def install(self, app, apk):
         """Installs `apk` as `app`, in place of an install signed by another
@@ -149,8 +181,7 @@ class Device:
         best case, for every app alike."""
         package = APPS[app]['package']
         for attempt in range(2):
-            result = subprocess.run(['adb', '-s', self.serial, 'install', '-r', '-d', str(apk)],
-                                    capture_output=True, text=True, timeout=600)
+            result = self.run(['install', '-r', '-d', str(apk)], INSTALL_TIMEOUT_S)
             if result.returncode == 0:
                 break
             if attempt == 0 and 'INSTALL_FAILED_UPDATE_INCOMPATIBLE' in result.stdout + result.stderr:
@@ -160,8 +191,7 @@ class Device:
         self.shell('cmd', 'package', 'compile', '-m', 'speed', '-f', package)
 
     def adb(self, *args, timeout=120, check=True):
-        result = subprocess.run(['adb', '-s', self.serial, *args], capture_output=True,
-                                text=True, timeout=timeout)
+        result = self.run(args, timeout)
         if check and result.returncode != 0:
             raise RuntimeError(f'adb {" ".join(args)} failed (exit {result.returncode}): '
                                f'{result.stderr.strip()} | stdout tail: {result.stdout[-400:]!r}')
