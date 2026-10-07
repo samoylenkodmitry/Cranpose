@@ -114,6 +114,12 @@ fn the_buffer_takes_the_room_its_runs_need_and_gives_back_twice_that() {
         13 * MIN_QUADS,
         "a quarter more than the last frame's runs, in whole steps"
     );
+    arena.begin_frame(&device, 12_000);
+    assert_eq!(
+        arena.spans.capacity(),
+        13 * MIN_QUADS,
+        "demand inside the room keeps the buffer"
+    );
     let kept = arena.insert(&device, quads(9_000)).expect("a run");
     let dropped = arena.insert(&device, quads(9_000)).expect("a run");
     assert_eq!(

@@ -276,9 +276,9 @@ impl GlyphRunArena {
 
     /// Opens a frame: spans dropped by now are free again, and the buffer
     /// takes the room that the quads in use or `demand`, the quads of the
-    /// runs the last frame drew, need: it grows to that room, so a screen's
-    /// runs fill one buffer instead of each that a frame outgrows, and
-    /// shrinks to it once it holds twice that.
+    /// runs the last frame drew, need once they no longer fit, so a
+    /// screen's runs fill one buffer instead of each that a frame outgrows.
+    /// It shrinks to that room once it holds twice that.
     pub(crate) fn begin_frame(&mut self, device: &wgpu::Device, demand: u32) {
         for span in self.retired.take() {
             self.spans.release(span);
@@ -289,7 +289,7 @@ impl GlyphRunArena {
         }
         let room = room_for(needed).min(self.max_quads);
         let capacity = self.spans.capacity();
-        if room > capacity || room.saturating_mul(2) < capacity {
+        if needed > capacity || room.saturating_mul(2) < capacity {
             self.move_to(device, room);
         }
     }

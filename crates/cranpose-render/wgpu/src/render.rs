@@ -2186,6 +2186,14 @@ impl TurnedGlyph {
     }
 }
 
+/// Shrinks `items` to twice `peak` when it holds room for more than four
+/// times that.
+fn give_back_room<T>(items: &mut Vec<T>, peak: usize) {
+    if items.capacity() > peak.saturating_mul(4) {
+        items.shrink_to(peak.saturating_mul(2));
+    }
+}
+
 /// The glyph quads a pass draws from its shared buffers: the plain ones and
 /// those of layers drawn in place under a turn.
 #[derive(Default)]
@@ -2195,13 +2203,36 @@ pub(crate) struct GlyphInstances {
     /// Glyphs drawn from retained runs: each a place in the arena's
     /// buffer, the run's origin and the text's scissor.
     pub(crate) pulled: Vec<PulledGlyph>,
+    /// The most glyphs of each kind a pass of this frame drew.
+    peak: (usize, usize, usize),
 }
 
 impl GlyphInstances {
     pub(crate) fn clear(&mut self) {
+        self.note_peak();
         self.plain.clear();
         self.turned.clear();
         self.pulled.clear();
+    }
+
+    /// Gives back room past four times the most glyphs of each kind a pass
+    /// of the frame drew: a screen's first frame writes every text's glyphs
+    /// whole, later frames name most of them in the glyph arena.
+    pub(crate) fn end_frame(&mut self) {
+        self.note_peak();
+        let (plain, turned, pulled) = std::mem::take(&mut self.peak);
+        give_back_room(&mut self.plain, plain);
+        give_back_room(&mut self.turned, turned);
+        give_back_room(&mut self.pulled, pulled);
+    }
+
+    fn note_peak(&mut self) {
+        let (plain, turned, pulled) = self.lens();
+        self.peak = (
+            self.peak.0.max(plain),
+            self.peak.1.max(turned),
+            self.peak.2.max(pulled),
+        );
     }
 
     fn lens(&self) -> (usize, usize, usize) {
@@ -5059,6 +5090,7 @@ impl GpuRenderer {
             .text_glyph_run_arena
             .stage_pending(&self.device, recorder);
         self.run_store.fill_arena_trig(&self.device, recorder);
+        self.scratch_glyph_instances.end_frame();
         self.frame_stats.record_command_stats(upload);
     }
     /// Claims this frame's next viewport uniform slot for `params`.
