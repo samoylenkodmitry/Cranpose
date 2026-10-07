@@ -9,7 +9,10 @@ mod screens;
 use std::cell::Cell;
 
 use cranpose::prelude::*;
-pub use screens::workspace::{FRAME_OBSERVER, WorkspaceFrame, WorkspaceMode};
+pub use screens::{
+    gauntlet::{GauntletLoad, GauntletScreen},
+    workspace::{FRAME_OBSERVER, WorkspaceFrame, WorkspaceMode},
+};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scenario {
@@ -85,7 +88,7 @@ pub fn create_app() -> AppLauncher<AppFonts> {
 
 /// Runs the app in a desktop window, in the Roboto files every desktop app
 /// loads, or without them in the embedded face.
-#[cfg(not(target_os = "android"))]
+#[cfg(all(not(target_os = "android"), feature = "desktop"))]
 pub fn run_desktop() -> Result<(), cranpose::LaunchError> {
     let faces = roboto_faces();
     if faces.is_empty() {

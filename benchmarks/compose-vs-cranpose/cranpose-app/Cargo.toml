@@ -19,11 +19,13 @@ required-features = ["desktop"]
 [features]
 default = ["renderer-wgpu", "desktop"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
-desktop = ["cranpose/desktop"]
+# The embedded face is what the desktop app draws in when `PERF_FONTS` names
+# no Roboto files.
+desktop = ["cranpose/desktop", "cranpose/embedded-default-font"]
 android = ["cranpose/android", "cranpose/release-log-info"]
 
 [dependencies]
-cranpose = { path = "../../../crates/cranpose" }
+cranpose = { path = "../../../crates/cranpose", default-features = false }
 cranpose-core = { path = "../../../crates/cranpose-core" }
 cranpose-ui = { path = "../../../crates/cranpose-ui" }
 cranpose-foundation = { path = "../../../crates/cranpose-foundation" }
