@@ -1661,6 +1661,10 @@ pub(crate) fn place_upload(
 struct UploadGeneration {
     buffer: wgpu::Buffer,
     capacity: u64,
+    /// The end of the generation's uploads so far.
+    cursor: u64,
+    /// The uploads of a staged ring, copied in one write at the frame's
+    /// end; empty in a ring that writes each upload as it comes.
     bytes: Vec<u8>,
     bind_groups: [Option<wgpu::BindGroup>; UploadAllocatorId::COUNT],
 }
@@ -1669,19 +1673,26 @@ struct UploadGeneration {
 /// fills mid-frame is kept beside a larger one until the frame ends, so
 /// every draw already recorded keeps the buffer it was bound to, and the
 /// next frame starts in the larger one alone.
+///
+/// A staged ring gathers its uploads and writes them in one copy when the
+/// frame ends, for the many small uploads of uniforms. Vertex and index
+/// uploads are few and large: their caller writes each one through the
+/// staging belt as it comes, so the frame's bytes are not held twice.
 struct UploadRing {
     usage: wgpu::BufferUsages,
     label: &'static str,
     alignment: u64,
+    staged: bool,
     generations: Vec<UploadGeneration>,
 }
 
 impl UploadRing {
-    fn new(usage: wgpu::BufferUsages, label: &'static str, alignment: u64) -> Self {
+    fn new(usage: wgpu::BufferUsages, label: &'static str, alignment: u64, staged: bool) -> Self {
         Self {
             usage,
             label,
             alignment,
+            staged,
             generations: Vec::new(),
         }
     }
@@ -1690,7 +1701,7 @@ impl UploadRing {
         let len = bytes.len() as u64;
         let current = self.generations.last();
         let placement = place_upload(
-            current.map_or(0, |generation| generation.bytes.len() as u64),
+            current.map_or(0, |generation| generation.cursor),
             len,
             binding,
             self.alignment,
@@ -1707,16 +1718,24 @@ impl UploadRing {
                         mapped_at_creation: false,
                     }),
                     capacity,
-                    bytes: Vec::with_capacity(capacity as usize),
+                    cursor: 0,
+                    bytes: if self.staged {
+                        Vec::with_capacity(capacity as usize)
+                    } else {
+                        Vec::new()
+                    },
                     bind_groups: Default::default(),
                 });
                 0
             }
         };
         let generation = self.generations.len() - 1;
-        let target = &mut self.generations[generation].bytes;
-        target.resize(offset as usize, 0);
-        target.extend_from_slice(bytes);
+        let target = &mut self.generations[generation];
+        target.cursor = offset + len;
+        if self.staged {
+            target.bytes.resize(offset as usize, 0);
+            target.bytes.extend_from_slice(bytes);
+        }
         (generation, offset)
     }
 
@@ -1739,7 +1758,7 @@ impl UploadRing {
         let staged = self
             .generations
             .iter()
-            .map(|generation| generation.bytes.len() as u64)
+            .map(|generation| generation.cursor)
             .sum();
         let keep = self.generations.len().saturating_sub(1);
         self.generations.drain(..keep);
@@ -1749,8 +1768,34 @@ impl UploadRing {
             self.generations.clear();
         }
         for generation in &mut self.generations {
+            generation.cursor = 0;
             generation.bytes.clear();
         }
+    }
+}
+
+/// Writes `bytes` at `offset` of `buffer` through the staging belt, with a
+/// last partial word padded by zeros to the copy alignment: an upload's
+/// span in its ring is padded so, and copies move whole words.
+fn write_aligned(
+    buffers: &mut BufferUploads,
+    device: &wgpu::Device,
+    buffer: &wgpu::Buffer,
+    offset: u64,
+    bytes: &[u8],
+) -> FrameCommandStats {
+    const WORD: usize = wgpu::COPY_BUFFER_ALIGNMENT as usize;
+    let whole = bytes.len() - bytes.len() % WORD;
+    let mut upload_bytes = buffers.write(device, None, buffer, offset, &bytes[..whole]);
+    if whole < bytes.len() {
+        let mut tail = [0u8; WORD];
+        tail[..bytes.len() - whole].copy_from_slice(&bytes[whole..]);
+        upload_bytes += buffers.write(device, None, buffer, offset + whole as u64, &tail);
+    }
+    FrameCommandStats {
+        upload_bytes,
+        upload_writes: u32::from(!bytes.is_empty()),
+        ..FrameCommandStats::default()
     }
 }
 
@@ -1763,6 +1808,9 @@ fn ring_outlives_frame(capacity: u64, staged: u64) -> bool {
 pub(crate) struct FrameUploadAllocators {
     buffers: BufferUploads,
     rings: [UploadRing; 3],
+    /// The frame's writes of unstaged rings so far, reported with the
+    /// staged ones.
+    written: FrameCommandStats,
 }
 
 impl Default for FrameUploadAllocators {
@@ -1774,18 +1822,22 @@ impl Default for FrameUploadAllocators {
                     wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                     "Frame Uniform Uploads",
                     0,
+                    true,
                 ),
                 UploadRing::new(
                     wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                     "Frame Vertex Uploads",
                     wgpu::COPY_BUFFER_ALIGNMENT,
+                    false,
                 ),
                 UploadRing::new(
                     wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                     "Frame Index Uploads",
                     wgpu::COPY_BUFFER_ALIGNMENT,
+                    false,
                 ),
             ],
+            written: FrameCommandStats::default(),
         }
     }
 }
@@ -1845,8 +1897,12 @@ impl FrameUploadAllocators {
         );
         let ring = &mut self.rings[spec.kind.ring()];
         let (generation, offset) = ring.upload(device, spec.size, bytes);
+        let buffer = ring.generations[generation].buffer.clone();
+        if !ring.staged {
+            self.written += write_aligned(&mut self.buffers, device, &buffer, offset, bytes);
+        }
         BufferUpload {
-            buffer: ring.generations[generation].buffer.clone(),
+            buffer,
             offset,
             len: bytes.len() as u64,
         }
@@ -1856,7 +1912,7 @@ impl FrameUploadAllocators {
         &mut self,
         mut write: impl FnMut(&wgpu::Buffer, u64, &[u8]) -> FrameCommandStats,
     ) -> FrameCommandStats {
-        let mut stats = FrameCommandStats::default();
+        let mut stats = std::mem::take(&mut self.written);
         for ring in &mut self.rings {
             stats += ring.stage_pending(&mut write);
         }
@@ -1879,7 +1935,7 @@ impl FrameUploadAllocators {
 
     fn encode_pending(&mut self, device: &wgpu::Device) -> FrameCommandStats {
         let buffers = &mut self.buffers;
-        let mut stats = FrameCommandStats::default();
+        let mut stats = std::mem::take(&mut self.written);
         for ring in &mut self.rings {
             stats += ring.stage_pending(&mut |buffer, offset, bytes| FrameCommandStats {
                 upload_bytes: buffers.write(device, None, buffer, offset, bytes),
