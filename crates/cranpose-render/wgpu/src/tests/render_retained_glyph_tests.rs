@@ -263,7 +263,7 @@ fn queued_glyph_draws_keep_their_quads_when_the_arena_grows() {
             .map_or(0, wgpu::Buffer::size)
     };
     let size = buffer_size(&renderer);
-    let quads = size as usize / std::mem::size_of::<GlyphInstance>();
+    let quads = size as usize / std::mem::size_of::<RetainedGlyph>();
     let filler = renderer
         .text_glyph_run_arena
         .insert(

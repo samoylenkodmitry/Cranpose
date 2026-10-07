@@ -143,6 +143,65 @@ fn glyph_atlas_aligned_vs_main(
     return aligned_glyph_vertex(corner, glyph);
 }
 
+// A glyph of a retained run as the glyph arena holds it, read as vertex
+// attributes where the vertex stage cannot read storage buffers: its color,
+// its place from the run's raster origin and size in pixels, and its mask's
+// texels in the atlas.
+struct RetainedGlyphInput {
+    @location(0) color: vec4<f32>,
+    @location(1) origin: vec2<i32>,
+    @location(2) size: vec2<u32>,
+    @location(3) texel: vec2<u32>,
+    @location(4) texel_size: vec2<u32>,
+}
+
+// The glyph quad at `origin` of `size` pixels drawing the atlas texels at
+// `texel`: its atlas coordinates and sample bounds as `glyph_atlas_uv_rect`
+// computes them. Atlas sides are powers of two, so the divisions are exact.
+fn retained_instance(
+    origin: vec2<f32>,
+    size: vec2<f32>,
+    texel: vec2<f32>,
+    texel_size: vec2<f32>,
+    color: vec4<f32>,
+) -> GlyphInstance {
+    let atlas = vec2<f32>(textureDimensions(glyph_texture));
+    let center_min = (texel + 0.5) / atlas;
+    let center_max = max(texel + texel_size - 0.5, texel + 0.5) / atlas;
+    return GlyphInstance(
+        vec4<f32>(origin, origin + size),
+        vec4<f32>(texel / atlas, (texel + texel_size) / atlas),
+        vec4<f32>(center_min, center_max),
+        color,
+    );
+}
+
+fn retained_input_instance(glyph: RetainedGlyphInput) -> GlyphInstance {
+    return retained_instance(
+        vec2<f32>(glyph.origin),
+        vec2<f32>(glyph.size),
+        vec2<f32>(glyph.texel),
+        vec2<f32>(glyph.texel_size),
+        glyph.color,
+    );
+}
+
+@vertex
+fn glyph_atlas_retained_vs_main(
+    @builtin(vertex_index) corner: u32,
+    glyph: RetainedGlyphInput,
+) -> VertexOutput {
+    return glyph_vertex(corner, retained_input_instance(glyph), vec4<f32>(1.0, 0.0, 0.0, 1.0), vec2<f32>(0.0));
+}
+
+@vertex
+fn glyph_atlas_retained_aligned_vs_main(
+    @builtin(vertex_index) corner: u32,
+    glyph: RetainedGlyphInput,
+) -> AlignedVertexOutput {
+    return aligned_glyph_vertex(corner, retained_input_instance(glyph));
+}
+
 @fragment
 fn glyph_atlas_aligned_fs_main(input: AlignedVertexOutput) -> @location(0) vec4<f32> {
     let coverage = textureSample(glyph_texture, glyph_sampler, input.uv).r;

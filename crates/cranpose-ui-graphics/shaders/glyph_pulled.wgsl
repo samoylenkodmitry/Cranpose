@@ -3,13 +3,27 @@
 // of the glyph arena, its run's origin this frame and the scissor the
 // glyph is cut to.
 
-// A glyph of a retained run as the glyph arena holds it, at the run's
-// raster origin.
+// A glyph of a retained run as the glyph arena holds it: its color, then
+// pairs of 16-bit halves, low half first: its place from the run's raster
+// origin (signed), its size in pixels, and its mask's texels and their size
+// in the atlas.
 struct RetainedGlyph {
-    rect: vec4<f32>,
-    uv: vec4<f32>,
-    uv_bounds: vec4<f32>,
     color: vec4<f32>,
+    origin: u32,
+    size: u32,
+    texel: u32,
+    texel_size: u32,
+}
+
+fn signed_halves(packed: u32) -> vec2<f32> {
+    return vec2<f32>(
+        f32(bitcast<i32>(packed << 16u) >> 16u),
+        f32(bitcast<i32>(packed) >> 16u),
+    );
+}
+
+fn unsigned_halves(packed: u32) -> vec2<f32> {
+    return vec2<f32>(f32(packed & 0xffffu), f32(packed >> 16u));
 }
 
 @group(2) @binding(0)
@@ -30,8 +44,15 @@ struct PulledGlyph {
 // written whole. An edge the cut leaves keeps its coordinate exactly; a
 // glyph cut away collapses to no area.
 fn pulled_glyph(pulled: PulledGlyph) -> GlyphInstance {
-    let glyph = retained_glyphs[pulled.index];
-    let rect = glyph.rect + vec4<f32>(pulled.origin, pulled.origin);
+    let stored = retained_glyphs[pulled.index];
+    let glyph = retained_instance(
+        signed_halves(stored.origin) + pulled.origin,
+        unsigned_halves(stored.size),
+        unsigned_halves(stored.texel),
+        unsigned_halves(stored.texel_size),
+        stored.color,
+    );
+    let rect = glyph.rect;
     let edges = vec4<f32>(pulled.cut)
         + vec4<f32>(uniforms.viewport_offset, uniforms.viewport_offset);
     let near = max(rect.xy, edges.xy);

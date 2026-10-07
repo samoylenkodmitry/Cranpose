@@ -1,7 +1,7 @@
 use super::*;
 use crate::frame_graph::upload_test_device;
 
-fn quads(count: usize) -> Vec<GlyphInstance> {
+fn quads(count: usize) -> Vec<RetainedGlyph> {
     vec![bytemuck::Zeroable::zeroed(); count]
 }
 

@@ -7,7 +7,7 @@ use std::{cell::Cell, ops::Range, rc::Rc};
 
 use crate::{
     frame_graph::{FrameCommandRecorder, FrameCommandStats},
-    render::GlyphInstance,
+    render::RetainedGlyph,
 };
 /// The fewest quads the buffer holds, and the step its size is rounded up
 /// to.
@@ -193,7 +193,7 @@ pub(crate) struct GlyphRunArena {
     store: Option<Store>,
     spans: SpanAllocator,
     left: Vec<LeftStore>,
-    staged_instances: Vec<GlyphInstance>,
+    staged_instances: Vec<RetainedGlyph>,
     staged: Vec<StagedSpan>,
     retired: Rc<RetiredSpans>,
 }
@@ -213,7 +213,7 @@ impl GlyphRunArena {
         } else {
             limits.max_buffer_size
         };
-        let max_quads = bytes / std::mem::size_of::<GlyphInstance>() as u64;
+        let max_quads = bytes / std::mem::size_of::<RetainedGlyph>() as u64;
         Self::empty(binding_layout, u32::try_from(max_quads).unwrap_or(u32::MAX))
     }
 
@@ -251,7 +251,7 @@ impl GlyphRunArena {
     /// or more than the device lets the buffer hold.
     pub(crate) fn insert<I>(&mut self, device: &wgpu::Device, quads: I) -> Option<GlyphRunSpan>
     where
-        I: IntoIterator<Item = GlyphInstance>,
+        I: IntoIterator<Item = RetainedGlyph>,
     {
         let start = self.staged_instances.len();
         self.staged_instances.extend(quads);
@@ -403,7 +403,7 @@ fn write_spans(
     recorder: &mut impl FrameCommandRecorder,
     buffer: &wgpu::Buffer,
     spans: &[StagedSpan],
-    instances: &[GlyphInstance],
+    instances: &[RetainedGlyph],
 ) -> FrameCommandStats {
     let mut stats = FrameCommandStats::default();
     let mut index = 0;
@@ -445,7 +445,7 @@ fn span_quads(span: &StagedSpan) -> u32 {
 }
 
 fn instance_offset(quads: u32) -> u64 {
-    u64::from(quads) * std::mem::size_of::<GlyphInstance>() as u64
+    u64::from(quads) * std::mem::size_of::<RetainedGlyph>() as u64
 }
 
 #[cfg(test)]
