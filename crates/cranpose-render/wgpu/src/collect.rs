@@ -1301,7 +1301,7 @@ fn collect_child(
             let shadow_clip = resolve_clip(
                 context.visual_clip,
                 child
-                    .shadow_clip
+                    .shadow_clip()
                     .map(|clip| clip.translate(child_offset.x, child_offset.y)),
             );
             let shadows_before = out.scene.rrect_shadows.len();
@@ -1353,7 +1353,7 @@ fn collect_child(
             let shadow_clip = resolve_clip(
                 context.visual_clip,
                 child
-                    .shadow_clip
+                    .shadow_clip()
                     .map(|clip| quad_bounds(transform.map_rect(clip))),
             );
             let shadows_before = out.scene.rrect_shadows.len();

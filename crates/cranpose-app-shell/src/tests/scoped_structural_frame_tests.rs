@@ -196,7 +196,7 @@ fn scene_picture(layer: &LayerNode, depth: usize, out: &mut Vec<String>) {
         layer.content_offset,
         layer.origin_in_parent,
         layer.clip_to_bounds,
-        layer.shadow_clip,
+        layer.shadow_clip(),
         layer.graphics_layer,
         layer.translated_content_context,
         layer.translated_content_offset,

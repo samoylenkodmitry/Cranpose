@@ -7,8 +7,8 @@ use std::{
 
 use cranpose_core::{NodeId, collections::map::HashSet};
 use cranpose_ui::{
-    GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, RoundedCornerShape,
-    TextLayoutOptions, TextOverflow, TextStyle,
+    GraphicsLayer, ModifierNodeSlices, Point, Rect, RenderEffect, TextLayoutOptions, TextOverflow,
+    TextStyle,
     text::{AnnotatedString, RenderString, SpanStyle, TextDrawStyle},
 };
 pub use cranpose_ui_graphics::transform::{ProjectiveTransform, quad_bounds};
@@ -48,7 +48,6 @@ pub enum CachePolicy {
 
 #[derive(Clone)]
 pub struct HitTestNode {
-    pub shape: Option<RoundedCornerShape>,
     /// The node's modifier slices, shared rather than copied: they hold its
     /// pointer inputs and the pointer icon it asks for while hovered. A node
     /// that only names an icon is still a hit target, which is how a
@@ -201,7 +200,6 @@ pub struct LayerNode {
     pub origin_in_parent: Point,
     pub graphics_layer: LayerProperties,
     pub clip_to_bounds: bool,
-    pub shadow_clip: Option<Rect>,
     pub hit_test: Option<HitTestNode>,
     pub has_hit_targets: bool,
     /// Whether this subtree publishes live window origins (a text field's
@@ -266,7 +264,6 @@ impl Default for LayerNode {
             origin_in_parent: Point::default(),
             graphics_layer: LayerProperties::default(),
             clip_to_bounds: false,
-            shadow_clip: None,
             hit_test: None,
             has_hit_targets: false,
             has_origin_sinks: false,
@@ -369,6 +366,12 @@ impl LayerNode {
 
     pub fn clip_rect(&self) -> Option<Rect> {
         (self.clip_to_bounds || self.graphics_layer.clip).then_some(self.local_bounds)
+    }
+
+    /// Where the layer's own shadow is cut: its bounds when it clips its
+    /// content to them. A graphics-layer clip leaves the shadow whole.
+    pub fn shadow_clip(&self) -> Option<Rect> {
+        self.clip_to_bounds.then_some(self.local_bounds)
     }
 
     /// Where the layer's drawing is cut: its clip or, when it composites
