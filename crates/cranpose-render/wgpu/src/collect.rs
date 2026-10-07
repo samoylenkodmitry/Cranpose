@@ -1255,7 +1255,10 @@ fn touch_children(children: &[RenderNode]) {
             }
             RenderNode::Primitive(entry) => match &entry.node {
                 PrimitiveNode::Text(text) => {
-                    std::hint::black_box(text.rect);
+                    std::hint::black_box((
+                        text.render_text.is_empty(),
+                        text.text_style.span_style.font_size,
+                    ));
                 }
                 PrimitiveNode::Draw(draw) => {
                     std::hint::black_box(draw.clip);
