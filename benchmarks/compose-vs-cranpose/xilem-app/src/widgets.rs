@@ -20,7 +20,7 @@ use xilem::{
         },
         kurbo::{Affine, BezPath, Circle, Point, Rect, RoundedRect, Size, Stroke, Vec2},
         peniko::{Fill, Gradient, ImageAlphaType, ImageData},
-        properties::BoxShadow,
+        properties::{BoxShadow, types::UnitPoint},
         vello::Scene,
     },
 };
@@ -141,8 +141,12 @@ pub enum Hold {
     /// As big as the parent allows; the child as tall as it needs, moved
     /// down by `shift` and clipped to the holder.
     Viewport { shift: f64 },
-    /// As big as the parent allows, the child as big too, clipped to it.
+    /// As big as the parent allows, the child clipped to it.
     Clip,
+    /// As big as the parent allows, the child at its own size, placed at
+    /// `UnitPoint` of the room left: Masonry's sized box puts its child at
+    /// the top left.
+    Align(UnitPoint),
     /// As big as the child, at most `max` tall, clipped to that.
     Clamp { max: f64 },
     /// As big as the child, moved by `offset` and turned `radians` about its
@@ -167,6 +171,7 @@ impl Hold {
             Hold::Measure
             | Hold::Viewport { .. }
             | Hold::Clip
+            | Hold::Align(_)
             | Hold::Clamp { .. }
             | Hold::Shadow { .. } => Affine::IDENTITY,
         }
@@ -230,6 +235,14 @@ impl Widget for Holder {
                 ctx.run_layout(&mut self.child, &BoxConstraints::tight(size));
                 ctx.place_child(&mut self.child, Point::ORIGIN);
                 ctx.set_clip_path(size.to_rect());
+                size
+            }
+            Hold::Align(point) => {
+                let size = bc.max();
+                let child = ctx.run_layout(&mut self.child, &bc.loosen());
+                let room = size - child;
+                let origin = point.resolve(Rect::new(0.0, 0.0, room.width, room.height));
+                ctx.place_child(&mut self.child, origin);
                 size
             }
             Hold::Clamp { max } => {

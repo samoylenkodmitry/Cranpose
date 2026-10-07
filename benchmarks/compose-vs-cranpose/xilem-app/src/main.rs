@@ -168,11 +168,15 @@ fn app_logic(app: &mut App) -> impl WidgetView<App> + use<> {
     .cross_axis_alignment(CrossAxisAlignment::Fill);
     flex_col((
         frame_clock(App::advance),
-        sized_box(text("Gauntlet", 20.0, Color::WHITE, true))
-            .expand_width()
-            .height(px(56.0))
-            .padding(Padding::horizontal(16.0))
-            .background_color(TOP_BAR),
+        sized_box(hold(
+            text("Gauntlet", 20.0, Color::WHITE, true),
+            Hold::Align(UnitPoint::LEFT),
+            ignore_height,
+        ))
+        .expand_width()
+        .height(px(56.0))
+        .padding(Padding::horizontal(16.0))
+        .background_color(TOP_BAR),
         sized_box(content)
             .width(px((width as f32 * width_fraction(app.frame)).round()))
             .flex(1.0),
@@ -543,11 +547,15 @@ fn layer_cells(layer: usize, rows: usize) -> impl WidgetView<App> + use<> {
             flex_row(
                 (row * LAYER_COLUMNS..(row + 1) * LAYER_COLUMNS)
                     .map(|cell| {
-                        sized_box(text((cell + 1).to_string(), 9.0, Color::WHITE, false))
-                            .width(px(22.0))
-                            .height(px(22.0))
-                            .corner_radius(4.0)
-                            .background_color(palette(layer_cell_color(layer, cell)))
+                        sized_box(hold(
+                            text((cell + 1).to_string(), 9.0, Color::WHITE, false),
+                            Hold::Align(UnitPoint::CENTER),
+                            ignore_height,
+                        ))
+                        .width(px(22.0))
+                        .height(px(22.0))
+                        .corner_radius(4.0)
+                        .background_color(palette(layer_cell_color(layer, cell)))
                     })
                     .collect::<Vec<_>>(),
             )
