@@ -34,7 +34,7 @@ pub fn GauntletTab() {
                 GauntletScreen(GauntletLoad {
                     tier: chosen,
                     freeze: 0,
-                })
+                });
             });
         },
     );
