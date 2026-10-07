@@ -73,6 +73,7 @@ pub fn update_scene(
                     content: &content,
                     layers: &layers,
                     moved: &moved,
+                    unplaced: Default::default(),
                 },
                 1.0,
             ),

@@ -941,10 +941,11 @@ fn finish_placement(applier: &mut MemoryApplier, root: NodeId) {
     }
 }
 
-/// Names to the scene phase the parent of every node `pass` found placed and
-/// left unplaced: nothing about the node itself changed, so the geometry
-/// setters had nothing to report, yet its layer has to leave the scene. A
-/// pass unplaces nodes rarely, so it pays for this walk only when it did.
+/// Names to the scene phase every node `pass` found placed and left
+/// unplaced, and its parent: nothing about the node itself changed, so the
+/// geometry setters had nothing to report, yet its layer has to leave the
+/// scene. A pass unplaces nodes rarely, so it pays for this walk only when
+/// it did.
 fn record_unplaced_parents(applier: &mut MemoryApplier, root: NodeId, pass: u64) {
     let mut parents = vec![root];
     let mut children = Vec::new();
@@ -958,7 +959,10 @@ fn record_unplaced_parents(applier: &mut MemoryApplier, root: NodeId, pass: u64)
         }
         for &child in &children {
             match read_layout_node(applier, child, |state, _| state.unplaced_in(pass)) {
-                Ok(Some(true)) => crate::render_state::record_geometry_scene_node(parent),
+                Ok(Some(true)) => {
+                    crate::render_state::record_geometry_scene_node(parent);
+                    crate::render_state::record_unplaced_scene_node(child);
+                }
                 Ok(Some(false)) => parents.push(child),
                 Ok(None) | Err(_) => {}
             }

@@ -126,6 +126,7 @@ struct SurfaceDirt {
     layer_property_nodes: Vec<NodeId>,
     layout_dirty_nodes: Vec<NodeId>,
     moved_nodes: Vec<NodeId>,
+    unplaced_nodes: Vec<NodeId>,
     structural_parents: Vec<NodeId>,
     partial_dirty_nodes: Vec<NodeId>,
     draw_repass_pending: bool,
@@ -157,6 +158,7 @@ impl SurfaceDirt {
         let cranpose_ui::GeometrySceneNodes {
             reshaped: layout_dirty_nodes,
             moved: moved_nodes,
+            unplaced: unplaced_nodes,
         } = layout;
         let structural_dirty = !structural_parents.is_empty();
         partial_dirty_nodes.clear();
@@ -195,6 +197,7 @@ impl SurfaceDirt {
             layer_property_nodes,
             layout_dirty_nodes,
             moved_nodes,
+            unplaced_nodes,
             structural_parents,
             partial_dirty_nodes,
             draw_repass_pending,
@@ -532,6 +535,13 @@ where
             SurfaceDirtyLane::Moved,
             &mut self.routing_scratch,
         );
+        route_nodes_by_surface(
+            &mut self.app,
+            &mut self.surfaces,
+            self.geometry_scene_nodes.unplaced.iter().copied(),
+            SurfaceDirtyLane::Unplaced,
+            &mut self.routing_scratch,
+        );
     }
 
     fn run_post_layout_recomposition(&mut self) -> bool {
@@ -775,6 +785,7 @@ where
     let layout = cranpose_ui::GeometrySceneNodes {
         reshaped: std::mem::take(&mut surface.scoped_layout_scene_nodes),
         moved: std::mem::take(&mut surface.scoped_moved_scene_nodes),
+        unplaced: std::mem::take(&mut surface.scoped_unplaced_scene_nodes),
     };
     let partial_dirty_nodes = std::mem::take(&mut surface.partial_scene_nodes);
     let scene_dirty = surface.scene_dirty;
@@ -803,6 +814,7 @@ where
         );
         surface.scoped_layout_scene_nodes = dirt.layout_dirty_nodes;
         surface.scoped_moved_scene_nodes = dirt.moved_nodes;
+        surface.scoped_unplaced_scene_nodes = dirt.unplaced_nodes;
         surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
         surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
         surface.structural_scene_nodes = dirt.structural_parents;
@@ -828,6 +840,8 @@ where
     dirt.layout_dirty_nodes.clear();
     dirt.moved_nodes.clear();
     surface.scoped_moved_scene_nodes = dirt.moved_nodes;
+    dirt.unplaced_nodes.clear();
+    surface.scoped_unplaced_scene_nodes = dirt.unplaced_nodes;
     surface.scoped_draw_nodes = dirt.draw_dirty_nodes;
     surface.scoped_layer_property_nodes = dirt.layer_property_nodes;
     surface.structural_scene_nodes = dirt.structural_parents;
@@ -869,6 +883,7 @@ fn rebuild_surface_scene<R>(
                 content: &dirt.partial_dirty_nodes,
                 layers: &dirt.layer_property_nodes,
                 moved: &dirt.moved_nodes,
+                unplaced: &dirt.unplaced_nodes,
             },
         )
     } else if dirt.use_partial_update() {
@@ -880,6 +895,7 @@ fn rebuild_surface_scene<R>(
                 content: &dirt.partial_dirty_nodes,
                 layers: &dirt.layer_property_nodes,
                 moved: &dirt.moved_nodes,
+                unplaced: &dirt.unplaced_nodes,
             },
         )
     } else {

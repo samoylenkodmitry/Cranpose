@@ -22,6 +22,7 @@ struct RenderState {
     modifier_slice_repasses: RefCell<DirtyNodeSet>,
     geometry_scene_nodes: RefCell<DirtyNodeSet>,
     moved_scene_nodes: RefCell<DirtyNodeSet>,
+    unplaced_scene_nodes: RefCell<DirtyNodeSet>,
     render_invalidated: Cell<bool>,
     pointer_invalidated: Cell<bool>,
     focus_invalidated: Cell<bool>,
@@ -195,6 +196,7 @@ impl RenderState {
             modifier_slice_repasses: RefCell::new(DirtyNodeSet::new()),
             geometry_scene_nodes: RefCell::new(DirtyNodeSet::new()),
             moved_scene_nodes: RefCell::new(DirtyNodeSet::new()),
+            unplaced_scene_nodes: RefCell::new(DirtyNodeSet::new()),
             render_invalidated: Cell::new(false),
             pointer_invalidated: Cell::new(false),
             focus_invalidated: Cell::new(false),
@@ -1012,6 +1014,15 @@ pub(crate) fn record_moved_scene_node(node_id: NodeId) {
     });
 }
 
+pub(crate) fn record_unplaced_scene_node(node_id: NodeId) {
+    with_render_state(|state| {
+        state
+            .unplaced_scene_nodes
+            .borrow_mut()
+            .schedule_repass(node_id);
+    });
+}
+
 /// The nodes whose geometry a layout pass changed, by what the scene redoes
 /// for them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1022,12 +1033,15 @@ pub struct GeometrySceneNodes {
     /// Nodes that moved in their parent: the scene moves what it drew for
     /// them, unless they are also reshaped or drawn again.
     pub moved: Vec<NodeId>,
+    /// Nodes the pass found placed and left unplaced: the scene drops what
+    /// it drew for them. Their parents are among `reshaped`.
+    pub unplaced: Vec<NodeId>,
 }
 
 impl GeometrySceneNodes {
     /// Whether the pass changed no node's geometry.
     pub fn is_empty(&self) -> bool {
-        self.reshaped.is_empty() && self.moved.is_empty()
+        self.reshaped.is_empty() && self.moved.is_empty() && self.unplaced.is_empty()
     }
 }
 
@@ -1062,6 +1076,10 @@ pub fn take_geometry_scene_nodes_into(output: &mut GeometrySceneNodes) {
             .moved_scene_nodes
             .borrow_mut()
             .take_dirty_nodes_into(&mut output.moved);
+        state
+            .unplaced_scene_nodes
+            .borrow_mut()
+            .take_dirty_nodes_into(&mut output.unplaced);
     });
 }
 

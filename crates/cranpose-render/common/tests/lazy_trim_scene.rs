@@ -147,6 +147,7 @@ fn dropping_leading_keyed_lazy_rows_one_at_a_time_repaints_the_survivors() {
                     content: &dirty,
                     layers: &[],
                     moved: &moved,
+                    unplaced: Default::default(),
                 },
                 1.0,
             )

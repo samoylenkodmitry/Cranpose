@@ -218,6 +218,7 @@ fn layer_only_update_keeps_outer_draw_and_child_canvas_recordings() {
             content: &[],
             layers: &[parent],
             moved: &[],
+            unplaced: Default::default(),
         },
     );
     assert_eq!(
@@ -282,6 +283,7 @@ fn parent_layer_update_republishes_child_text_viewport_geometry() {
             content: &[],
             layers: &[parent],
             moved: &[],
+            unplaced: Default::default(),
         },
     );
     let after = sink.get();
@@ -356,6 +358,7 @@ fn parent_layer_and_child_content_dirt_are_both_applied() {
             content: &[child],
             layers: &[parent],
             moved: &[],
+            unplaced: Default::default(),
         },
     );
     assert_ne!(
@@ -432,6 +435,7 @@ fn parent_content_and_child_layer_dirt_match_a_fresh_rebuild() {
             content: &[parent],
             layers: &[child],
             moved: &[],
+            unplaced: Default::default(),
         },
     );
     assert_ne!(

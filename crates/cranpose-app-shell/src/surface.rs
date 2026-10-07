@@ -63,6 +63,8 @@ pub struct RootSurface<R: Renderer> {
     pub(crate) scoped_layout_scene_nodes: Vec<NodeId>,
     /// Nodes the layout pass only moved: the scene moves their layers.
     pub(crate) scoped_moved_scene_nodes: Vec<NodeId>,
+    /// Nodes the layout pass left unplaced: the scene drops their layers.
+    pub(crate) scoped_unplaced_scene_nodes: Vec<NodeId>,
     pub(crate) scoped_draw_nodes: Vec<NodeId>,
     pub(crate) scoped_layer_property_nodes: Vec<NodeId>,
     pub(crate) structural_scene_nodes: Vec<NodeId>,
@@ -108,6 +110,7 @@ impl<R: Renderer> RootSurface<R> {
             scene_dirty: true,
             scoped_layout_scene_nodes: Vec::new(),
             scoped_moved_scene_nodes: Vec::new(),
+            scoped_unplaced_scene_nodes: Vec::new(),
             scoped_draw_nodes: Vec::new(),
             scoped_layer_property_nodes: Vec::new(),
             structural_scene_nodes: Vec::new(),
@@ -184,6 +187,7 @@ impl<R: Renderer> RootSurface<R> {
         self.scoped_layout_scene_nodes.clear();
         self.scoped_layout_scene_nodes.extend(root);
         self.scoped_moved_scene_nodes.clear();
+        self.scoped_unplaced_scene_nodes.clear();
         self.scoped_draw_nodes.clear();
         self.scoped_layer_property_nodes.clear();
         self.structural_scene_nodes.clear();
@@ -407,6 +411,7 @@ impl PlatformTextInputHandler for TextInputRouter {
 pub(crate) enum SurfaceDirtyLane {
     Layout,
     Moved,
+    Unplaced,
     Draw,
     LayerProperties,
     Structural,
@@ -432,6 +437,12 @@ fn append_surface_dirty_node(
                 surface.scoped_moved_scene_nodes.push(node);
             }
         }
+        SurfaceDirtyLane::Unplaced => {
+            surface.scene_dirty = true;
+            if seen.insert((surface_index, node)) {
+                surface.scoped_unplaced_scene_nodes.push(node);
+            }
+        }
         SurfaceDirtyLane::Draw => surface.scoped_draw_nodes.push(node),
         SurfaceDirtyLane::LayerProperties => surface.scoped_layer_property_nodes.push(node),
         SurfaceDirtyLane::Structural => {
@@ -448,6 +459,7 @@ fn queued_scene_nodes<R: Renderer>(surface: &RootSurface<R>, lane: SurfaceDirtyL
     match lane {
         SurfaceDirtyLane::Layout => &surface.scoped_layout_scene_nodes,
         SurfaceDirtyLane::Moved => &surface.scoped_moved_scene_nodes,
+        SurfaceDirtyLane::Unplaced => &surface.scoped_unplaced_scene_nodes,
         SurfaceDirtyLane::Draw
         | SurfaceDirtyLane::LayerProperties
         | SurfaceDirtyLane::Structural => &[],

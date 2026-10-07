@@ -63,6 +63,7 @@ use cranpose_ui_graphics::Size;
 ///     content: &[1],
 ///     layers: &[2],
 ///     moved: &[3],
+///     unplaced: &[],
 /// };
 /// assert!(!updates.is_empty());
 /// ```
@@ -75,6 +76,10 @@ pub struct SceneUpdates<'a> {
     /// Nodes that moved in their parent and kept their size: the scene moves
     /// what it drew for them unless another list names them too.
     pub moved: &'a [cranpose_core::NodeId],
+    /// Nodes a layout pass found placed and left unplaced: the scene drops
+    /// what it drew for them, whatever another list says. Their parents are
+    /// among `content`.
+    pub unplaced: &'a [cranpose_core::NodeId],
 }
 
 impl<'a> SceneUpdates<'a> {
@@ -84,12 +89,16 @@ impl<'a> SceneUpdates<'a> {
             content: nodes,
             layers: &[],
             moved: &[],
+            unplaced: &[],
         }
     }
 
     /// Returns whether the update contains no dirty nodes.
     pub const fn is_empty(self) -> bool {
-        self.content.is_empty() && self.layers.is_empty() && self.moved.is_empty()
+        self.content.is_empty()
+            && self.layers.is_empty()
+            && self.moved.is_empty()
+            && self.unplaced.is_empty()
     }
 }
 

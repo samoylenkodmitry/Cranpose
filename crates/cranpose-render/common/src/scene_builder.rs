@@ -193,13 +193,16 @@ enum NodeUpdate {
     /// The node moved and its layer properties changed: its layer moves,
     /// takes the new properties and keeps what it drew.
     MovedLayer,
+    /// A layout pass left the node unplaced: its layer leaves the scene.
+    Unplaced,
 }
 
-/// Each dirty node with the update it needs: content wins over the others,
-/// and a moved node whose layer properties changed too moves with them.
+/// Each dirty node with the update it needs: an unplaced node leaves
+/// whatever else changed, content wins over the rest, and a moved node
+/// whose layer properties changed too moves with them.
 fn dirty_node_updates(updates: SceneUpdates<'_>) -> HashMap<NodeId, NodeUpdate> {
     let mut dirty = HashMap::with_capacity_and_hasher(
-        updates.moved.len() + updates.layers.len() + updates.content.len(),
+        updates.moved.len() + updates.layers.len() + updates.content.len() + updates.unplaced.len(),
         Default::default(),
     );
     dirty.extend(updates.moved.iter().map(|&id| (id, NodeUpdate::Moved)));
@@ -211,6 +214,12 @@ fn dirty_node_updates(updates: SceneUpdates<'_>) -> HashMap<NodeId, NodeUpdate> 
         dirty.insert(id, kind);
     }
     dirty.extend(updates.content.iter().map(|&id| (id, NodeUpdate::Content)));
+    dirty.extend(
+        updates
+            .unplaced
+            .iter()
+            .map(|&id| (id, NodeUpdate::Unplaced)),
+    );
     dirty
 }
 
@@ -568,6 +577,9 @@ fn try_update_retained_layer(
         }
         NodeUpdate::Layer => update_layer_properties(applier, layer, root, false, ancestors),
         NodeUpdate::MovedLayer => update_layer_properties(applier, layer, root, true, ancestors),
+        // Its parent's update drops the layer; one reached alone is built
+        // again from its parent.
+        NodeUpdate::Unplaced => None,
     }
 }
 
@@ -588,7 +600,7 @@ fn move_retained_layer(
         return None;
     }
     let previous = HitGraphState::of(layer);
-    translate_retained_child(layer, &state, parent_content_offset);
+    translate_retained_child(layer, state.position(), parent_content_offset);
     Some(previous.dirty_against(&HitGraphState::of(layer)))
 }
 
@@ -825,8 +837,9 @@ fn translated_container(
 /// between steps, so it holds no layer.
 #[derive(Default)]
 struct TranslateScratch {
-    /// The placed children, in their new order.
-    placed_fresh: Vec<(NodeId, cranpose_ui::widgets::LayoutState)>,
+    /// The placed children, in their new order, with the layout state read
+    /// for those whose placement changed.
+    placed_fresh: Vec<(NodeId, Option<cranpose_ui::widgets::LayoutState>)>,
     old_index_by_id: HashMap<NodeId, usize>,
     /// The container's previous children by their index, until each is
     /// kept or recycled.
@@ -852,6 +865,23 @@ fn translated_children(
     fresh_children: &[NodeId],
     scratch: &mut TranslateScratch,
 ) -> Result<bool, &'static str> {
+    if kept_children_in_order(
+        applier,
+        container,
+        dirty_nodes,
+        fresh_children,
+        &mut scratch.placed_fresh,
+    ) {
+        scratch.old_index_by_id.clear();
+        check_retained_children(
+            container,
+            dirty_nodes,
+            &scratch.placed_fresh,
+            true,
+            &scratch.old_index_by_id,
+        )?;
+        return Ok(true);
+    }
     let placed_fresh = &mut scratch.placed_fresh;
     placed_fresh.clear();
     for child_id in fresh_children {
@@ -861,7 +891,7 @@ fn translated_children(
         if !state.is_placed() {
             continue;
         }
-        placed_fresh.push((*child_id, state));
+        placed_fresh.push((*child_id, Some(state)));
     }
     let children_unchanged = container.children.len() == placed_fresh.len()
         && container
@@ -894,12 +924,54 @@ fn translated_children(
     Ok(children_unchanged)
 }
 
+/// Fills `placed_fresh` when every placed child of `container` keeps its
+/// layer in the same order, and returns whether they did. A child whose
+/// own content or layer update follows is not read here: that update reads
+/// its node, and layout names a node it leaves unplaced. A child that
+/// enters or leaves needs the full reconciliation.
+fn kept_children_in_order(
+    applier: &MemoryApplier,
+    container: &LayerNode,
+    dirty_nodes: &HashMap<NodeId, NodeUpdate>,
+    fresh_children: &[NodeId],
+    placed_fresh: &mut Vec<(NodeId, Option<cranpose_ui::widgets::LayoutState>)>,
+) -> bool {
+    placed_fresh.clear();
+    let mut layers = container.children.iter().peekable();
+    for child_id in fresh_children {
+        let holds_child = |child: &&RenderNode| matches!(child, RenderNode::Layer(layer) if layer_identity(layer) == Some(*child_id));
+        match dirty_nodes.get(child_id) {
+            Some(NodeUpdate::Unplaced) => {
+                if layers.peek().is_some_and(holds_child) {
+                    return false;
+                }
+                continue;
+            }
+            kind => {
+                if layers.next_if(holds_child).is_none() {
+                    return false;
+                }
+                let state = match kind {
+                    Some(NodeUpdate::Content | NodeUpdate::Layer) => None,
+                    _ => match scene_layout_state(applier, *child_id) {
+                        Some(state) if state.is_placed() => Some(state),
+                        _ => return false,
+                    },
+                };
+                placed_fresh.push((*child_id, state));
+            }
+        }
+    }
+    layers.next().is_none()
+}
+
 /// Checks that every child kept as it is still fits its layer. A moved child
-/// that no longer fits is drawn again: it becomes a content update.
+/// that no longer fits is drawn again: it becomes a content update. A child
+/// with no state read is one its own update draws again.
 fn check_retained_children(
     container: &LayerNode,
     dirty_nodes: &mut HashMap<NodeId, NodeUpdate>,
-    placed_fresh: &[(NodeId, cranpose_ui::widgets::LayoutState)],
+    placed_fresh: &[(NodeId, Option<cranpose_ui::widgets::LayoutState>)],
     children_unchanged: bool,
     old_index_by_id: &HashMap<NodeId, usize>,
 ) -> Result<(), &'static str> {
@@ -914,9 +986,12 @@ fn check_retained_children(
         let RenderNode::Layer(layer) = &container.children[old_index] else {
             return Err("retained child slot is not a layer");
         };
-        let fits = !layer.has_origin_sinks && Rect::from_size(state.size()) == layer.node_rect();
+        let fits = !layer.has_origin_sinks
+            && state
+                .as_ref()
+                .is_none_or(|state| Rect::from_size(state.size()) == layer.node_rect());
         match dirty_nodes.get_mut(child_id) {
-            Some(NodeUpdate::Content | NodeUpdate::Layer) => {}
+            Some(NodeUpdate::Content | NodeUpdate::Layer | NodeUpdate::Unplaced) => {}
             Some(kind @ (NodeUpdate::Moved | NodeUpdate::MovedLayer)) => {
                 if !fits {
                     *kind = NodeUpdate::Content;
@@ -1113,8 +1188,10 @@ fn reconcile_translated_children(
             let RenderNode::Layer(layer) = child else {
                 unreachable!("retained child identities were checked");
             };
-            if keeps_retained_child(dirty_nodes, *child_id) {
-                translate_retained_child(layer, state, geometry.content_offset);
+            if keeps_retained_child(dirty_nodes, *child_id)
+                && let Some(state) = state
+            {
+                translate_retained_child(layer, state.position(), geometry.content_offset);
             }
         }
         return;
@@ -1122,8 +1199,10 @@ fn reconcile_translated_children(
     let mut entering = scratch.entering.drain(..).peekable();
     for ((child_id, state), kept) in scratch.placed_fresh.iter().zip(scratch.kept.drain(..)) {
         if let Some(mut layer) = kept {
-            if keeps_retained_child(dirty_nodes, *child_id) {
-                translate_retained_child(&mut layer, state, geometry.content_offset);
+            if keeps_retained_child(dirty_nodes, *child_id)
+                && let Some(state) = state
+            {
+                translate_retained_child(&mut layer, state.position(), geometry.content_offset);
             }
             container.children.push(RenderNode::Layer(layer));
         } else if let Some((_, lowered)) = entering.next_if(|(id, _)| id == child_id) {
@@ -1258,22 +1337,22 @@ fn keeps_retained_child(dirty_nodes: &mut HashMap<NodeId, NodeUpdate>, child_id:
             dirty_nodes.remove(&child_id);
             true
         }
-        Some(NodeUpdate::Content | NodeUpdate::Layer | NodeUpdate::MovedLayer) => false,
+        Some(
+            NodeUpdate::Content | NodeUpdate::Layer | NodeUpdate::MovedLayer | NodeUpdate::Unplaced,
+        ) => false,
     }
 }
 
-fn translate_retained_child(
-    layer: &mut LayerNode,
-    state: &cranpose_ui::widgets::LayoutState,
-    content_offset: Point,
-) {
+/// Places a kept child's layer at `position` in a parent whose content
+/// sits at `content_offset`.
+fn translate_retained_child(layer: &mut LayerNode, position: Point, content_offset: Point) {
     layer.transform_to_parent = placed_transform(
         layer.local_bounds,
-        state.position(),
+        position,
         &layer.graphics_layer,
         content_offset,
     );
-    layer.origin_in_parent = state.position();
+    layer.origin_in_parent = position;
 }
 
 #[derive(PartialEq)]

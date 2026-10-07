@@ -546,6 +546,7 @@ fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
         crate::GeometrySceneNodes {
             reshaped: Vec::new(),
             moved: vec![7],
+            unplaced: Default::default(),
         },
         "a move is reported apart from a reshape"
     );
@@ -560,6 +561,7 @@ fn a_node_its_pass_clears_and_places_where_it_was_reports_nothing() {
         crate::GeometrySceneNodes {
             reshaped: vec![7],
             moved: vec![7],
+            unplaced: Default::default(),
         },
         "a node that moved and resized is reported as both"
     );
