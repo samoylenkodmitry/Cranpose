@@ -92,6 +92,7 @@ APPS = {
     # The same page in Tauri, on the system's WKWebView.
     'tauri': [HERE / 'tauri-app/target/release/perf-compare-tauri', '--page={page}'],
     'dioxus': [HERE / 'dioxus-app/target/release/perf-compare-dioxus'],
+    'freya': [HERE / 'freya-app/target/release/perf-compare-freya'],
     'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
     'uno': [HERE / 'uno-app/bin/Release/net10.0-desktop/osx-arm64/publish/PerfUno'],
 }
