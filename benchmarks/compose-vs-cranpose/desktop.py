@@ -194,7 +194,9 @@ class Clocks:
             return {}
         self.process.terminate()
         output, _ = self.process.communicate(timeout=10)
-        samples = [json.loads(line) for line in output.splitlines() if line.startswith('{')]
+        # Stopped, `macmon` may leave its last line unfinished: only the lines
+        # it ended are samples.
+        samples = [json.loads(line) for line in output.split('\n')[:-1] if line.startswith('{')]
         if not samples:
             return {}
         return {'cpu_mhz': round(statistics.mean(sample['pcpu_freq_mhz'] for sample in samples)),
