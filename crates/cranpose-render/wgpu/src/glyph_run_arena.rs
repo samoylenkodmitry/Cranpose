@@ -246,8 +246,15 @@ impl GlyphRunArena {
             }
             index = next;
         }
+        // A screen's first frame stages every run it draws, later frames
+        // the few that change: room for four times this frame's quads is
+        // given back.
+        let room = self.staged_instances.len().max(MIN_CHUNK_QUADS as usize);
         self.staged.clear();
         self.staged_instances.clear();
+        if self.staged_instances.capacity() > 4 * room {
+            self.staged_instances.shrink_to(room);
+        }
         stats
     }
 

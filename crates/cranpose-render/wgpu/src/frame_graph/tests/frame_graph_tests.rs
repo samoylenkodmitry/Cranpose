@@ -182,6 +182,7 @@ fn frame_uploads_preserve_bytes_across_growth_and_reset() {
         wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
         "Upload Growth Test",
         256,
+        true,
     );
     let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 4 + 4];
     let small = [1; 16];
@@ -213,6 +214,59 @@ fn frame_uploads_preserve_bytes_across_growth_and_reset() {
     assert_eq!(
         super::read_uploaded_bytes(&device, &readback, submission),
         [&small[..], &large[..16], &last[..]].concat()
+    );
+}
+
+#[test]
+fn vertex_uploads_written_as_they_come_land_whole_across_growth() {
+    let (_lock, device, queue) = super::upload_test_device();
+    // The frame's rings, readable back for the test.
+    let readable = wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
+    let mut allocators = super::FrameUploadAllocators {
+        rings: [
+            super::UploadRing::new(readable, "Uniforms", 256, true),
+            super::UploadRing::new(readable, "Vertices", wgpu::COPY_BUFFER_ALIGNMENT, false),
+            super::UploadRing::new(readable, "Indices", wgpu::COPY_BUFFER_ALIGNMENT, false),
+        ],
+        ..super::FrameUploadAllocators::default()
+    };
+    let odd: Vec<u8> = (1..=13).collect();
+    let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 2];
+    let last = [3; 16];
+    let spec = super::UploadAllocatorSpec::vertex("Direct Upload Test", 0);
+    let uploads: Vec<_> = [&odd[..], &large, &last[..]]
+        .into_iter()
+        .map(|bytes| allocators.upload_buffer(spec, &device, bytes))
+        .collect();
+    let stats = allocators.stage_pending(|_, _, _| super::FrameCommandStats::default());
+    assert_eq!(stats.upload_writes, 3, "each upload is written once");
+    allocators.buffers.finish();
+    let mut encoder = allocators
+        .buffers
+        .take_before_passes()
+        .expect("the uploads were written before the passes");
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 48,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    for (index, upload) in uploads.iter().enumerate() {
+        encoder.copy_buffer_to_buffer(
+            &upload.buffer,
+            upload.offset,
+            &readback,
+            index as u64 * 16,
+            16,
+        );
+    }
+    let submission = queue.submit([encoder.finish()]);
+    allocators.buffers.recall();
+    let mut odd_word = odd;
+    odd_word.extend([0, 0, 0]);
+    assert_eq!(
+        super::read_uploaded_bytes(&device, &readback, submission),
+        [&odd_word[..], &large[..16], &last[..]].concat()
     );
 }
 

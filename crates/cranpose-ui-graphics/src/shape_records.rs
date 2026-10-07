@@ -42,15 +42,27 @@ pub struct ShapeRecordCurve {
     pub arc_normalized: [f32; 4],
 }
 
+/// A record's original line or arc arguments, kept on the CPU only for the
+/// records that have any.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Pod, Zeroable)]
+struct RecordSource {
+    index: u32,
+    arguments: [f32; 4],
+}
+
 /// Recorded shapes stored in parallel columns, ready for GPU upload.
 ///
-/// Angle changes leave the body column intact. Original arc arguments remain
-/// on the CPU so materialisation preserves exactly what the caller supplied.
+/// Angle changes leave the body column intact. Original line and arc
+/// arguments remain on the CPU so materialisation preserves exactly what
+/// the caller supplied; the rects, round rects and path slices that make up
+/// most recordings have none, and keep no column for them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ShapeRecords {
     bodies: Vec<ShapeRecordBody>,
     curves: Vec<ShapeRecordCurve>,
-    sources: Vec<[f32; 4]>,
+    /// By record index.
+    sources: Vec<RecordSource>,
 }
 
 impl ShapeRecords {
@@ -58,7 +70,7 @@ impl ShapeRecords {
         Self {
             bodies: Vec::with_capacity(capacity),
             curves: Vec::with_capacity(capacity),
-            sources: Vec::with_capacity(capacity),
+            sources: Vec::new(),
         }
     }
 
@@ -96,7 +108,7 @@ impl ShapeRecords {
     pub fn get(&self, index: usize) -> Option<ShapeRecord> {
         self.bodies
             .get(index)
-            .map(|body| reconstruct(body, &self.curves[index], self.sources[index]))
+            .map(|body| reconstruct(body, &self.curves[index], self.source(index)))
     }
 
     /// Iterates over complete records in draw order without allocating.
@@ -104,21 +116,29 @@ impl ShapeRecords {
         self.bodies
             .iter()
             .zip(&self.curves)
-            .zip(&self.sources)
-            .map(|((body, curve), &source)| reconstruct(body, curve, source))
+            .enumerate()
+            .map(|(index, (body, curve))| reconstruct(body, curve, self.source(index)))
+    }
+
+    /// The original arguments of record `index`: zeros for a record kept
+    /// without any.
+    fn source(&self, index: usize) -> [f32; 4] {
+        let Ok(index) = u32::try_from(index) else {
+            return [0.0; 4];
+        };
+        self.sources
+            .binary_search_by_key(&index, |source| source.index)
+            .map_or([0.0; 4], |found| self.sources[found].arguments)
     }
 
     pub(crate) fn capacity(&self) -> usize {
-        self.bodies
-            .capacity()
-            .min(self.curves.capacity())
-            .min(self.sources.capacity())
+        self.bodies.capacity().min(self.curves.capacity())
     }
 
     pub(crate) fn heap_bytes(&self) -> usize {
         self.bodies.capacity() * std::mem::size_of::<ShapeRecordBody>()
             + self.curves.capacity() * std::mem::size_of::<ShapeRecordCurve>()
-            + self.sources.capacity() * std::mem::size_of::<[f32; 4]>()
+            + self.sources.capacity() * std::mem::size_of::<RecordSource>()
     }
 
     pub(crate) fn source_bytes(&self) -> &[u8] {
@@ -134,7 +154,6 @@ impl ShapeRecords {
     pub(crate) fn reserve(&mut self, additional: usize) {
         self.bodies.reserve(additional);
         self.curves.reserve(additional);
-        self.sources.reserve(additional);
     }
 
     pub(crate) fn push(
@@ -143,9 +162,16 @@ impl ShapeRecords {
         curve: ShapeRecordCurve,
         source: [f32; 4],
     ) {
+        if source.iter().any(|argument| argument.to_bits() != 0)
+            && let Ok(index) = u32::try_from(self.bodies.len())
+        {
+            self.sources.push(RecordSource {
+                index,
+                arguments: source,
+            });
+        }
         self.bodies.push(body);
         self.curves.push(curve);
-        self.sources.push(source);
     }
 }
 
