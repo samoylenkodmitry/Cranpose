@@ -7,19 +7,18 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{MemoryApplier, MutableState, NodeId};
+use cranpose_core::{MutableState, NodeId};
 use cranpose_render_common::{
-    SceneUpdates,
     graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderGraph, RenderNode},
-    scene_builder::{
-        build_graph_from_applier, clear_command_recordings_for_tests, update_graph_from_applier,
-    },
+    scene_builder::{build_graph_from_applier, clear_command_recordings_for_tests},
 };
 use cranpose_ui::{
     Box, BoxSpec, Brush, Canvas, Color, Column, ColumnSpec, GraphicsLayer, LayoutEngine, Modifier,
     Size, TestComposition, Text, TextStyle, composable, run_test_composition,
 };
 use cranpose_ui_graphics::{DrawPrimitive, Rect};
+
+use crate::scene_probe::fresh_graph;
 
 const VIEWPORT: Size = Size::new(240.0, 240.0);
 
@@ -92,20 +91,8 @@ fn moving_column(probe: Rc<RefCell<Probe>>, draws: Rc<Cell<usize>>) -> TestCompo
     })
 }
 
-fn with_applier<R>(
-    composition: &mut TestComposition,
-    read: impl FnOnce(&mut MemoryApplier) -> R,
-) -> R {
-    let runtime = composition.runtime_handle();
-    let mut applier = composition.applier_mut();
-    applier.set_runtime_handle(runtime);
-    let result = read(&mut applier);
-    applier.clear_runtime_handle();
-    result
-}
-
 fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
-    with_applier(composition, |applier| {
+    crate::scene_probe::with_applier(composition, |applier| {
         applier.compute_layout(root, VIEWPORT).expect("layout");
         let graph = build_graph_from_applier(applier, root, 1.0).expect("initial graph");
         let _ = cranpose_ui::take_geometry_scene_nodes();
@@ -115,48 +102,12 @@ fn initial_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph
     })
 }
 
-/// Recomposes, lays out and updates `graph` with the nodes the app shell
-/// would route: content for reshaped, redrawn and restructured nodes, the
-/// nodes whose layer properties changed and the moved ones apart. Returns
-/// the moved nodes.
 fn update_frame(
     composition: &mut TestComposition,
     root: NodeId,
     graph: &mut RenderGraph,
 ) -> Vec<NodeId> {
-    while composition.process_invalid_scopes().expect("recompose") {}
-    with_applier(composition, |applier| {
-        applier.compute_layout(root, VIEWPORT).expect("relayout");
-        let geometry = cranpose_ui::take_geometry_scene_nodes();
-        let mut content = geometry.reshaped;
-        content.extend(cranpose_ui::take_draw_repass_nodes());
-        content.extend(applier.take_structural_change_parents_attached_to(root));
-        content.sort_unstable();
-        content.dedup();
-        let moved = geometry.moved;
-        let mut layers = Vec::new();
-        cranpose_ui::take_layer_property_repass_nodes_into(&mut layers);
-        assert!(
-            update_graph_from_applier(
-                applier,
-                graph,
-                SceneUpdates {
-                    content: &content,
-                    layers: &layers,
-                    moved: &moved,
-                },
-                1.0,
-            ),
-            "the scoped update applies"
-        );
-        moved
-    })
-}
-
-fn fresh_graph(composition: &mut TestComposition, root: NodeId) -> RenderGraph {
-    with_applier(composition, |applier| {
-        build_graph_from_applier(applier, root, 1.0).expect("fresh graph")
-    })
+    crate::scene_probe::update_scene(composition, root, VIEWPORT, graph)
 }
 
 /// Every solid rectangle and text the graph paints, in window space.
