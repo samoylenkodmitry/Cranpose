@@ -34,6 +34,7 @@ import {
   CARD_ROWS_PER_CLUSTER,
   CHIP_BACKGROUND,
   GRADIENT_END,
+  LAYER_COLUMNS,
   PALETTE,
   POST_COUNT,
   Post,
@@ -44,6 +45,10 @@ import {
   centsText,
   changeText,
   gauntletTier,
+  layerCellColor,
+  layerDegrees,
+  layerX,
+  layerY,
   posts,
   progressPermille,
   sparkValue,
@@ -68,6 +73,8 @@ const WHITE = new Color('#FFFFFF');
 const UP = new Color('#16A34A');
 const DOWN = new Color('#DC2626');
 const LEVEL_BACKGROUND = [new Color('#F1F5F9'), new Color('#CBD5E1')];
+const LAYER_BACKGROUND = new Color(0xc0, 0x1e, 0x29, 0x3b);
+const NESTED_BACKGROUND = new Color(0xe6, 0xff, 0xff, 0xff);
 const PALETTE_COLORS = PALETTE.map((color) => new Color(color));
 const CHIP_COLORS = CHIP_BACKGROUND.map((color) => new Color(color));
 const GRADIENT_COLORS = GRADIENT_END.map((color) => new Color(color));
@@ -494,6 +501,66 @@ function avatarSource(index: number): ImageSource {
   return new ImageSource(bitmap);
 }
 
+/** A translucent panel stacked over the list. Its views never change: each
+ * frame sets only the panel's translation and rotation and its nested card's
+ * rotation, which Android applies to their render nodes. */
+function stackedLayer(layer: number, rows: number): View {
+  const panel = new StackLayout();
+  panel.width = 220;
+  panel.horizontalAlignment = 'left';
+  panel.verticalAlignment = 'top';
+  panel.padding = 10;
+  panel.borderRadius = 12;
+  panel.backgroundColor = LAYER_BACKGROUND;
+  const title = text(13, 1, WHITE, true);
+  title.text = `Layer ${layer + 1}`;
+  panel.addChild(title);
+  for (let row = 0; row < rows; row++) {
+    const cells = new StackLayout();
+    cells.orientation = 'horizontal';
+    cells.marginTop = row === 0 ? 8 : 3;
+    for (let column = 0; column < LAYER_COLUMNS; column++) {
+      const cell = row * LAYER_COLUMNS + column;
+      const box = new GridLayout();
+      box.width = 22;
+      box.height = 22;
+      box.marginLeft = column === 0 ? 0 : 3;
+      box.borderRadius = 4;
+      box.backgroundColor = PALETTE_COLORS[layerCellColor(layer, cell)];
+      const label = text(9, 1, WHITE);
+      label.text = `${cell + 1}`;
+      label.horizontalAlignment = 'center';
+      label.verticalAlignment = 'middle';
+      box.addChild(label);
+      cells.addChild(box);
+    }
+    panel.addChild(cells);
+  }
+  const nested = new StackLayout();
+  nested.marginTop = 8;
+  nested.padding = 8;
+  nested.borderRadius = 8;
+  nested.backgroundColor = NESTED_BACKGROUND;
+  const heading = text(11, 1, INK, true);
+  heading.text = `Nested in layer ${layer + 1}`;
+  const line = text(11, 1, BODY);
+  line.text = 'Tilts against its panel';
+  line.marginTop = 2;
+  nested.addChild(heading);
+  nested.addChild(line);
+  panel.addChild(nested);
+  const place = (frame: number) => {
+    const degrees = layerDegrees(layer, frame);
+    panel.translateX = layerX(layer, frame);
+    panel.translateY = layerY(layer, frame);
+    panel.rotate = degrees;
+    nested.rotate = -degrees;
+  };
+  place(0);
+  clock.follow(panel, place);
+  return panel;
+}
+
 function gauntlet(): View {
   const intent = Application.android.startActivity?.getIntent();
   const tierIndex = intent?.getIntExtra('tier', 5) ?? 5;
@@ -558,8 +625,13 @@ function gauntlet(): View {
   content.addRow(new ItemSpec(1, 'auto'));
   content.addRow(new ItemSpec(1, 'star'));
   content.addChild(panel);
-  GridLayout.setRow(list, 1);
-  content.addChild(list);
+  // The panels stack over the list and show only over it, as every app clips them.
+  const area = new GridLayout();
+  area.clipToBounds = true;
+  area.addChild(list);
+  for (let layer = 0; layer < tier.layers; layer++) area.addChild(stackedLayer(layer, tier.layerRows));
+  GridLayout.setRow(area, 1);
+  content.addChild(area);
   GridLayout.setRow(content, 1);
   root.addChild(content);
 

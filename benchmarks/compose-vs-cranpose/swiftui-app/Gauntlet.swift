@@ -387,6 +387,83 @@ struct GauntletList: View {
     }
 }
 
+/// A translucent panel stacked over the list. Its content never changes:
+/// only the two small views that carry its own and its nested card's
+/// transforms read the frame.
+struct StackedLayer: View {
+    let layer: Int
+    let rows: Int
+    let clock: Clock
+
+    var body: some View {
+        LayerTilt(layer: layer, clock: clock) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Layer \(layer + 1)").font(roboto(13, 1, bold: true)).foregroundStyle(.white)
+                LayerCells(layer: layer, rows: rows)
+                NestedTilt(layer: layer, clock: clock) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Nested in layer \(layer + 1)").font(roboto(11, 1, bold: true))
+                            .foregroundStyle(Color.ink)
+                        Text("Tilts against its panel").font(roboto(11, 1)).foregroundStyle(Color.body)
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color(rgb: 0xFFFFFF).opacity(230.0 / 255)))
+                }
+            }
+            .padding(10)
+            .frame(width: 220, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color(rgb: 0x1E293B).opacity(192.0 / 255)))
+        }
+    }
+}
+
+/// A stacked panel's rows of numbered cells.
+struct LayerCells: View {
+    let layer: Int
+    let rows: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: 3) {
+                    ForEach(row * PerfData.layerColumns..<(row + 1) * PerfData.layerColumns, id: \.self) { cell in
+                        Text("\(cell + 1)").font(roboto(9, 1)).foregroundStyle(.white)
+                            .frame(width: 22, height: 22)
+                            .background(RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.palette(PerfData.layerCellColor(layer, cell))))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The panel moved and tilted on this frame.
+struct LayerTilt<Content: View>: View {
+    let layer: Int
+    let clock: Clock
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        let frame = clock.frame
+        content
+            .rotationEffect(.degrees(PerfData.layerDegrees(layer, frame)))
+            .offset(x: PerfData.layerX(layer, frame), y: PerfData.layerY(layer, frame))
+    }
+}
+
+/// The nested card tilted against its panel on this frame.
+struct NestedTilt<Content: View>: View {
+    let layer: Int
+    let clock: Clock
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content.rotationEffect(.degrees(-PerfData.layerDegrees(layer, clock.frame)))
+    }
+}
+
 /// The content's width follows the frame.
 struct WidthFollowsFrame<Content: View>: View {
     let clock: Clock
@@ -417,7 +494,15 @@ struct GauntletView: View {
                     }
                     .padding(6 * s)
                     .background(Color.panel)
-                    GauntletList(model: model, clock: clock)
+                    // The panels stack over the list and show only over it,
+                    // as every app clips them.
+                    ZStack(alignment: .topLeading) {
+                        GauntletList(model: model, clock: clock)
+                        ForEach(0..<model.tier.layers, id: \.self) { layer in
+                            StackedLayer(layer: layer, rows: model.tier.layerRows, clock: clock)
+                        }
+                    }
+                    .clipped()
                 }
             }
         }

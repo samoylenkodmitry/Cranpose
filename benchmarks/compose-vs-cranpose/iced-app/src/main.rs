@@ -43,6 +43,8 @@ const TOP_BAR: Color = rgb([0x1E, 0x2A, 0x4A]);
 const UP: Color = rgb([0x16, 0xA3, 0x4A]);
 const DOWN: Color = rgb([0xDC, 0x26, 0x26]);
 const LEVEL_BACKGROUND: [Color; 2] = [rgb([0xF1, 0xF5, 0xF9]), rgb([0xCB, 0xD5, 0xE1])];
+const LAYER_BACKGROUND: Color = Color::from_rgba8(0x1E, 0x29, 0x3B, 0xC0 as f32 / 255.0);
+const NESTED_BACKGROUND: Color = Color::from_rgba8(0xFF, 0xFF, 0xFF, 0xE6 as f32 / 255.0);
 const FOOTER_LABELS: [&str; 3] = ["likes", "replies", "shares"];
 
 const ROBOTO: Font = Font::with_name("Roboto");
@@ -77,6 +79,8 @@ struct Gauntlet {
     heights: HashMap<usize, f32>,
     /// The badge's size, measured once.
     badge: OnceCell<Size>,
+    /// The heights of a stacked panel's 13 px and 11 px lines, measured once.
+    layer_lines: OnceCell<(f32, f32)>,
     list: iced::widget::Id,
 }
 
@@ -97,6 +101,7 @@ impl Gauntlet {
             anchor: (0, 8.0 * tier.scale),
             heights: HashMap::new(),
             badge: OnceCell::new(),
+            layer_lines: OnceCell::new(),
             list: iced::widget::Id::unique(),
         }
     }
@@ -172,8 +177,21 @@ impl Gauntlet {
             .align_y(alignment::Vertical::Center)
             .style(|_| fill(TOP_BAR));
         let (width, _) = perf_data::DESKTOP_WINDOW;
-        let content = column![self.ticker_panel(), self.list()]
-            .width(width as f32 * width_fraction(self.frame));
+        // The panels stack over the list and show only over it, as every
+        // app clips them.
+        let layers = canvas(Layers {
+            layers: self.tier.layers,
+            rows: self.tier.layer_rows,
+            frame: self.frame,
+            lines: &self.layer_lines,
+        })
+        .width(Length::Fill)
+        .height(Length::Fill);
+        let content = column![
+            self.ticker_panel(),
+            container(stack![self.list(), layers]).clip(true)
+        ]
+        .width(width as f32 * width_fraction(self.frame));
         container(column![top_bar, content])
             .width(Length::Fill)
             .height(Length::Fill)
@@ -571,21 +589,9 @@ impl canvas::Program<Message> for Badge<'_> {
         _: Cursor,
     ) -> Vec<canvas::Geometry> {
         let s = self.s;
-        let label = *self.size.get_or_init(|| {
-            let paragraph =
-                <Renderer as core_text::Renderer>::Paragraph::with_text(core_text::Text {
-                    content: "HOT",
-                    bounds: Size::INFINITE,
-                    size: Pixels(9.0 * s),
-                    line_height: text::LineHeight::default(),
-                    font: ROBOTO_BOLD,
-                    align_x: core_text::Alignment::Left,
-                    align_y: alignment::Vertical::Top,
-                    shaping: core_text::Shaping::Basic,
-                    wrapping: core_text::Wrapping::None,
-                });
-            paragraph.min_bounds()
-        });
+        let label = *self
+            .size
+            .get_or_init(|| measure("HOT", 9.0 * s, ROBOTO_BOLD));
         let size = Size::new(label.width + 12.0 * s, label.height + 4.0 * s);
         let center = Point::new(
             bounds.width - 6.0 * s - size.width / 2.0,
@@ -608,6 +614,134 @@ impl canvas::Program<Message> for Badge<'_> {
             font: ROBOTO_BOLD,
             ..canvas::Text::default()
         });
+        vec![frame.into_geometry()]
+    }
+}
+
+/// The size of one line of `content`.
+fn measure(content: &str, size: f32, font: Font) -> Size {
+    <Renderer as core_text::Renderer>::Paragraph::with_text(core_text::Text {
+        content,
+        bounds: Size::INFINITE,
+        size: Pixels(size),
+        line_height: text::LineHeight::default(),
+        font,
+        align_x: core_text::Alignment::Left,
+        align_y: alignment::Vertical::Top,
+        shaping: core_text::Shaping::Basic,
+        wrapping: core_text::Wrapping::None,
+    })
+    .min_bounds()
+}
+
+/// The translucent panels stacked over the list, drawn again each frame as
+/// the view is built again: each panel turned about its centre, and its
+/// nested card turned back about its own.
+struct Layers<'a> {
+    layers: usize,
+    rows: usize,
+    frame: u32,
+    lines: &'a OnceCell<(f32, f32)>,
+}
+
+impl canvas::Program<Message> for Layers<'_> {
+    type State = ();
+
+    fn draw(
+        &self,
+        _: &(),
+        renderer: &Renderer,
+        _: &Theme,
+        bounds: Rectangle,
+        _: Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let (title, line) = *self.lines.get_or_init(|| {
+            (
+                measure("Layer", 13.0, ROBOTO_BOLD).height,
+                measure("Nested", 11.0, ROBOTO).height,
+            )
+        });
+        let label =
+            |content: String, position: Point, color: Color, size: f32, font: Font| canvas::Text {
+                content,
+                position,
+                color,
+                size: Pixels(size),
+                font,
+                ..canvas::Text::default()
+            };
+        let cells_top = 10.0 + title + 8.0;
+        let nested_top = cells_top + self.rows as f32 * 25.0 - 3.0 + 8.0;
+        let nested = Size::new(200.0, 8.0 + line + 2.0 + line + 8.0);
+        let panel = Size::new(220.0, nested_top + nested.height + 10.0);
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        for layer in 0..self.layers {
+            let angle = layer_degrees(layer, self.frame).to_radians();
+            frame.with_save(|frame| {
+                frame.translate(Vector::new(
+                    layer_x(layer, self.frame) + panel.width / 2.0,
+                    layer_y(layer, self.frame) + panel.height / 2.0,
+                ));
+                frame.rotate(angle);
+                frame.translate(Vector::new(-panel.width / 2.0, -panel.height / 2.0));
+                frame.fill(
+                    &canvas::Path::rounded_rectangle(Point::ORIGIN, panel, 12.0.into()),
+                    LAYER_BACKGROUND,
+                );
+                frame.fill_text(label(
+                    format!("Layer {}", layer + 1),
+                    Point::new(10.0, 10.0),
+                    Color::WHITE,
+                    13.0,
+                    ROBOTO_BOLD,
+                ));
+                for cell in 0..self.rows * LAYER_COLUMNS {
+                    let corner = Point::new(
+                        10.0 + (cell % LAYER_COLUMNS) as f32 * 25.0,
+                        cells_top + (cell / LAYER_COLUMNS) as f32 * 25.0,
+                    );
+                    frame.fill(
+                        &canvas::Path::rounded_rectangle(corner, Size::new(22.0, 22.0), 4.0.into()),
+                        palette(layer_cell_color(layer, cell)),
+                    );
+                    frame.fill_text(canvas::Text {
+                        align_x: core_text::Alignment::Center,
+                        align_y: alignment::Vertical::Center,
+                        ..label(
+                            (cell + 1).to_string(),
+                            corner + Vector::new(11.0, 11.0),
+                            Color::WHITE,
+                            9.0,
+                            ROBOTO,
+                        )
+                    });
+                }
+                frame.translate(Vector::new(
+                    10.0 + nested.width / 2.0,
+                    nested_top + nested.height / 2.0,
+                ));
+                frame.rotate(-angle);
+                frame.translate(Vector::new(-nested.width / 2.0, -nested.height / 2.0));
+                frame.fill(
+                    &canvas::Path::rounded_rectangle(Point::ORIGIN, nested, 8.0.into()),
+                    NESTED_BACKGROUND,
+                );
+                frame.fill_text(label(
+                    format!("Nested in layer {}", layer + 1),
+                    Point::new(8.0, 8.0),
+                    INK,
+                    11.0,
+                    ROBOTO_BOLD,
+                ));
+                frame.fill_text(label(
+                    "Tilts against its panel".to_owned(),
+                    Point::new(8.0, 8.0 + line + 2.0),
+                    BODY,
+                    11.0,
+                    ROBOTO,
+                ));
+            });
+        }
         vec![frame.into_geometry()]
     }
 }

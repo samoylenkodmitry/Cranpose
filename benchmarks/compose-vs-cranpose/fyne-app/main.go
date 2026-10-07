@@ -269,6 +269,9 @@ type screen struct {
 	panel     *fyne.Container
 	panelBack *canvas.Rectangle
 	list      *fyne.Container
+	layers    []*stackedLayer
+	// area holds the list and the panels stacked over it.
+	area      *fyne.Container
 	shown     map[int]*rowView
 	spare     []*rowView
 	spareLv   []*rowView
@@ -313,7 +316,61 @@ func newScreen() *screen {
 		sc.panel.Objects = append(sc.panel.Objects, tile.symbol, tile.price, tile.change, tile.bar.track, tile.bar.fill)
 	}
 	sc.list = container.NewWithoutLayout()
+	sc.area = container.NewWithoutLayout(sc.list)
+	for layer := range tier.layers {
+		l := newStackedLayer(layer, tier.layerRows)
+		sc.layers = append(sc.layers, l)
+		sc.area.Add(l.box)
+	}
 	return sc
+}
+
+// stackedLayer is a translucent panel stacked over the list. Fyne draws no
+// rotated object: the panel and its nested card stay upright, and each frame
+// only moves the panel.
+type stackedLayer struct {
+	layer int
+	box   *fyne.Container
+}
+
+func newStackedLayer(layer, rows int) *stackedLayer {
+	title, cell, heading, line := style{13, true}, style{9, false}, style{11, true}, style{11, false}
+	back := canvas.NewRectangle(color.NRGBA{0x1E, 0x29, 0x3B, 0xC0})
+	back.CornerRadius = 12
+	name := newText(fmt.Sprintf("Layer %d", layer+1), white, title)
+	box := container.NewWithoutLayout(back, name)
+	placeText(name, 10, 10, title)
+	cellsTop := 10 + measure(name.Text, title).Height + 8
+	for index := range rows * layerColumns {
+		x := 10 + float32(index%layerColumns)*25
+		y := cellsTop + float32(index/layerColumns)*25
+		square := canvas.NewRectangle(palette(layerCellColor(layer, index)))
+		square.CornerRadius = 4
+		place(square, x, y, 22, 22)
+		number := newText(strconv.Itoa(index+1), white, cell)
+		size := measure(number.Text, cell)
+		place(number, x+(22-size.Width)/2, y+(22-size.Height)/2, size.Width, size.Height)
+		box.Objects = append(box.Objects, square, number)
+	}
+	nestedTop := cellsTop + float32(rows)*25 - 3 + 8
+	top := newText(fmt.Sprintf("Nested in layer %d", layer+1), ink, heading)
+	bottom := newText("Tilts against its panel", bodyColor, line)
+	topHeight := measure(top.Text, heading).Height
+	nestedHeight := 8 + topHeight + 2 + measure(bottom.Text, line).Height + 8
+	nested := canvas.NewRectangle(color.NRGBA{0xFF, 0xFF, 0xFF, 0xE6})
+	nested.CornerRadius = 8
+	place(nested, 10, nestedTop, 200, nestedHeight)
+	placeText(top, 18, nestedTop+8, heading)
+	placeText(bottom, 18, nestedTop+8+topHeight+2, line)
+	box.Objects = append(box.Objects, nested, top, bottom)
+	height := nestedTop + nestedHeight + 10
+	place(back, 0, 0, 220, height)
+	box.Resize(fyne.NewSize(220, height))
+	return &stackedLayer{layer: layer, box: box}
+}
+
+func (l *stackedLayer) place(frame int) {
+	l.box.Move(fyne.NewPos(layerX(l.layer, frame), layerY(l.layer, frame)))
 }
 
 // placePanel sets the tiles' values and wraps them `width` wide; returns
@@ -734,7 +791,13 @@ func (sc *screen) layout(topBar *canvas.Rectangle, heading *canvas.Text, clip fy
 	place(sc.panel, 0, 56, width, panelHeight)
 	listHeight := windowHeight - 56 - panelHeight
 	place(clip, 0, 56+panelHeight, width, listHeight)
+	place(sc.list, 0, 0, width, listHeight)
 	sc.placeList(width, listHeight)
+	// Moving a panel repaints the window without drawing its content
+	// again: a refresh would draw every text of it anew.
+	for _, l := range sc.layers {
+		l.place(sc.frame)
+	}
 	sc.panel.Refresh()
 	sc.list.Refresh()
 }
@@ -758,7 +821,9 @@ func main() {
 	sc := newScreen()
 	topBar := canvas.NewRectangle(rgb(0x1E2A4A))
 	heading := newText("Gauntlet", white, style{20, true})
-	clip := container.NewScroll(sc.list)
+	// The panels stack over the list and show only over it, as every app
+	// clips them.
+	clip := container.NewScroll(sc.area)
 	clip.Direction = container.ScrollNone
 	background := canvas.NewRectangle(rgb(0xEEF0F5))
 	place(background, 0, 0, windowWidth, windowHeight)

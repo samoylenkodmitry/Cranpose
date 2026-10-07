@@ -38,6 +38,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
@@ -137,10 +138,12 @@ fun ColumnScope.GauntletScreen(load: GauntletLoad) {
             },
     ) {
         TickerPanel(tickers, frame, s)
+        // The panels show only over the grid, as every app clips them.
         Box(
             Modifier
                 .fillMaxWidth()
-                .weight(1f),
+                .weight(1f)
+                .clipToBounds(),
         ) {
             CardGrid(tier, posts, avatars, state, frame)
             repeat(tier.layers) { layer -> StackedLayer(layer, tier.layerRows, frame) }

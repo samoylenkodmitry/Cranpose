@@ -150,6 +150,18 @@ The web page lays everything out in CSS, trims paragraph leading with
 scroll off behind a spacer as tall, and sets only what changed each
 animation frame; sparklines are SVG paths in a box CSS stretches.
 
+Each app moves and tilts the stacked panels in its own way. Views sets
+each panel's render node properties; Flutter turns a `Transform` over a
+`RepaintBoundary`, so the panel paints once; React Native, Lynx and
+NativeScript set the panel view's transform; MAUI, Avalonia and Uno set its
+render transform; SwiftUI applies rotation and offset effects; AppKit sets
+the panel layer's position and transform; the web page and Dioxus set a CSS
+transform on an element that `will-change` keeps on a compositor layer of
+its own; Slint binds the panel's position and rotation to the frame. egui,
+iced and gpui lay out and paint every panel again each frame, turning each
+shape; gpui turns text as glyph outlines, as it draws no turned text. Fyne
+draws no turned object, so its panels only drift.
+
 | Tier | Columns | Scale | Ticker tiles | Cluster depth | Layers | Cell rows |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | 1 | 1 | 1.0 | 8 | 6 | 1 | 2 |

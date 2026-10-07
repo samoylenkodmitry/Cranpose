@@ -125,8 +125,12 @@ fn GauntletBody(shared: Shared, list_state: LazyListState) {
         move || {
             TickerPanel(shared.clone());
             let stack = shared.clone();
+            // The panels show only over the list, as every app clips them.
             Box(
-                Modifier::empty().fill_max_width().weight(1.0),
+                Modifier::empty()
+                    .fill_max_width()
+                    .weight(1.0)
+                    .clip_to_bounds(),
                 BoxSpec::default(),
                 move || {
                     CardList(stack.clone(), list_state);

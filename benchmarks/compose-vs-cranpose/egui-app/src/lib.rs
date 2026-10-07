@@ -14,6 +14,7 @@ use eframe::egui::{
     self, Align, Color32, ColorImage, FontData, FontDefinitions, FontFamily, FontId, Galley,
     Layout, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui,
     UiBuilder, Vec2, WidgetInfo, WidgetType,
+    emath::Rot2,
     epaint::{Mesh, RectShape, TextShape},
     pos2,
     text::{LayoutJob, TextFormat, TextWrapping},
@@ -39,6 +40,8 @@ const LEVEL_BACKGROUND: [Color32; 2] = [
     Color32::from_rgb(0xF1, 0xF5, 0xF9),
     Color32::from_rgb(0xCB, 0xD5, 0xE1),
 ];
+const LAYER_BACKGROUND: Color32 = Color32::from_rgba_unmultiplied_const(0x1E, 0x29, 0x3B, 0xC0);
+const NESTED_BACKGROUND: Color32 = Color32::from_rgba_unmultiplied_const(0xFF, 0xFF, 0xFF, 0xE6);
 const FOOTER_LABELS: [&str; 3] = ["likes", "replies", "shares"];
 
 const fn colors(rgb: [[u8; 3]; 8]) -> [Color32; 8] {
@@ -217,6 +220,35 @@ fn boxed(
 }
 
 /// A rounded track filled to `share` in `fill`.
+/// A rounded rectangle's outline, each point passed through `place`: what
+/// egui fills as a convex polygon for a box it turns.
+fn rounded_outline(rect: Rect, radius: f32, place: impl Fn(Pos2) -> Pos2) -> Vec<Pos2> {
+    let radius = radius.min(rect.height() / 2.0).min(rect.width() / 2.0);
+    let corners = [
+        (pos2(rect.right() - radius, rect.top() + radius), -90.0_f32),
+        (pos2(rect.right() - radius, rect.bottom() - radius), 0.0),
+        (pos2(rect.left() + radius, rect.bottom() - radius), 90.0),
+        (pos2(rect.left() + radius, rect.top() + radius), 180.0),
+    ];
+    corners
+        .iter()
+        .flat_map(|&(corner, start)| {
+            (0..=6).map(move |step| {
+                let at = (start + step as f32 * 15.0).to_radians();
+                corner + vec2(at.cos(), at.sin()) * radius
+            })
+        })
+        .map(place)
+        .collect()
+}
+
+/// Reports `rect` as the text `label` to accessibility services, as a
+/// toolkit's text widget does.
+fn announce(ui: &Ui, rect: Rect, id: impl std::hash::Hash, label: &str) {
+    ui.interact(rect, ui.id().with(id), Sense::hover())
+        .widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, label));
+}
+
 fn bar(rect: Rect, radius: f32, share: f32, fill: Color32) -> [Shape; 2] {
     let filled = Rect::from_min_size(rect.min, vec2(rect.width() * share, rect.height()));
     [
@@ -404,6 +436,108 @@ impl Gauntlet {
             }
             top += height + gap;
             row += 1;
+        }
+        self.layers(&list, area);
+    }
+
+    /// The translucent panels stacked over the list, laid out and painted
+    /// again each frame as immediate mode does: every shape turned about its
+    /// panel's center, and the nested card's turned back about its own.
+    fn layers(&self, ui: &Ui, area: Rect) {
+        let plain = Look {
+            s: 1.0,
+            bold: bold(),
+        };
+        let rows = self.tier.layer_rows;
+        for layer in 0..self.tier.layers {
+            let title = format!("Layer {}", layer + 1);
+            let title = galley(
+                ui,
+                &[(&title, plain.format(13.0, Color32::WHITE, true))],
+                f32::INFINITY,
+                1,
+            );
+            let heading = format!("Nested in layer {}", layer + 1);
+            let heading = galley(
+                ui,
+                &[(&heading, plain.format(11.0, INK, true))],
+                f32::INFINITY,
+                1,
+            );
+            let line = galley(
+                ui,
+                &[("Tilts against its panel", plain.format(11.0, BODY, false))],
+                f32::INFINITY,
+                1,
+            );
+            let cells_top = 10.0 + title.size().y + 8.0;
+            let nested_top = cells_top + rows as f32 * 25.0 - 3.0 + 8.0;
+            let nested_height = 8.0 + heading.size().y + 2.0 + line.size().y + 8.0;
+            let origin = area.min + vec2(layer_x(layer, self.frame), layer_y(layer, self.frame));
+            let panel = Rect::from_min_size(origin, vec2(220.0, nested_top + nested_height + 10.0));
+            let nested =
+                Rect::from_min_size(origin + vec2(10.0, nested_top), vec2(200.0, nested_height));
+            let angle = layer_degrees(layer, self.frame).to_radians();
+            let (center, turn) = (panel.center(), Rot2::from_angle(angle));
+            let place = |point: Pos2| center + turn * (point - center);
+            // Turned back about its own center, the nested card stays upright
+            // where its panel moved that center.
+            let shift = place(nested.center()) - nested.center();
+            let place_nested = |point: Pos2| point + shift;
+            let painter = ui.painter();
+            painter.add(Shape::convex_polygon(
+                rounded_outline(panel, 12.0, place),
+                LAYER_BACKGROUND,
+                Stroke::NONE,
+            ));
+            let at = origin + vec2(10.0, 10.0);
+            announce(
+                ui,
+                Rect::from_min_size(at, title.size()),
+                ("layer", layer),
+                title.text(),
+            );
+            painter.add(TextShape::new(place(at), title, Color32::PLACEHOLDER).with_angle(angle));
+            for cell in 0..rows * LAYER_COLUMNS {
+                let at = origin
+                    + vec2(
+                        10.0 + (cell % LAYER_COLUMNS) as f32 * 25.0,
+                        cells_top + (cell / LAYER_COLUMNS) as f32 * 25.0,
+                    );
+                let rect = Rect::from_min_size(at, Vec2::splat(22.0));
+                painter.add(Shape::convex_polygon(
+                    rounded_outline(rect, 4.0, place),
+                    PALETTE[layer_cell_color(layer, cell)],
+                    Stroke::NONE,
+                ));
+                let number = (cell + 1).to_string();
+                let label = galley(
+                    ui,
+                    &[(&number, plain.format(9.0, Color32::WHITE, false))],
+                    f32::INFINITY,
+                    1,
+                );
+                announce(ui, rect, ("cell", layer, cell), &number);
+                let at = rect.center() - label.size() / 2.0;
+                painter
+                    .add(TextShape::new(place(at), label, Color32::PLACEHOLDER).with_angle(angle));
+            }
+            painter.add(Shape::convex_polygon(
+                rounded_outline(nested, 8.0, place_nested),
+                NESTED_BACKGROUND,
+                Stroke::NONE,
+            ));
+            let mut at = nested.min + vec2(8.0, 8.0);
+            for (index, text) in [heading, line].into_iter().enumerate() {
+                let rect = Rect::from_min_size(at, text.size());
+                announce(ui, rect, ("nested", layer, index), text.text());
+                at.y += text.size().y + 2.0;
+                painter.add(TextShape::new(
+                    place_nested(rect.min),
+                    text,
+                    Color32::PLACEHOLDER,
+                ));
+            }
         }
     }
 
@@ -642,30 +776,12 @@ impl Gauntlet {
             pos2(card.right() - 6.0 * s - size.x, card.top() + 6.0 * s),
             size,
         );
-        ui.interact(rect, ui.id().with(("badge", index)), Sense::hover())
-            .widget_info(|| WidgetInfo::labeled(WidgetType::Label, true, "HOT"));
+        announce(ui, rect, ("badge", index), "HOT");
         let (center, angle) = (rect.center(), degrees.to_radians());
-        let rotate = |point: Pos2| center + egui::emath::Rot2::from_angle(angle) * (point - center);
-        let radius = (8.0 * s).min(size.y / 2.0);
-        let corners = [
-            (pos2(rect.right() - radius, rect.top() + radius), -90.0_f32),
-            (pos2(rect.right() - radius, rect.bottom() - radius), 0.0),
-            (pos2(rect.left() + radius, rect.bottom() - radius), 90.0),
-            (pos2(rect.left() + radius, rect.top() + radius), 180.0),
-        ];
-        let outline = corners
-            .iter()
-            .flat_map(|&(corner, start)| {
-                (0..=6).map(move |step| {
-                    let at = (start + step as f32 * 15.0).to_radians();
-                    corner + vec2(at.cos(), at.sin()) * radius
-                })
-            })
-            .map(rotate)
-            .collect();
+        let rotate = |point: Pos2| center + Rot2::from_angle(angle) * (point - center);
         let painter = ui.painter();
         painter.add(Shape::convex_polygon(
-            outline,
+            rounded_outline(rect, 8.0 * s, rotate),
             PALETTE[0].gamma_multiply(0.9),
             Stroke::NONE,
         ));

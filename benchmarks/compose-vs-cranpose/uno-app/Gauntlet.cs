@@ -314,8 +314,14 @@ public sealed class GauntletView : Grid
         content.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         content.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         content.Children.Add(panel);
-        SetRow(scroller, 1);
-        content.Children.Add(scroller);
+        // The panels stack over the list and show only over it, as every app clips them.
+        var area = new Grid();
+        area.SizeChanged += (_, size) =>
+            area.Clip = new RectangleGeometry { Rect = new Rect(0, 0, size.NewSize.Width, size.NewSize.Height) };
+        area.Children.Add(scroller);
+        for (var layer = 0; layer < tier.Layers; layer++) area.Children.Add(new StackedLayer(layer, tier.LayerRows));
+        SetRow(area, 1);
+        content.Children.Add(area);
         SetRow(content, 1);
         Children.Add(content);
         Loaded += (_, _) => CompositionTarget.Rendering += OnFrame;
@@ -397,6 +403,80 @@ sealed class RowFactory(Look look, int columns, int depth, Post[] posts, ImageSo
                 spareClusters.Push(cluster);
                 break;
         }
+    }
+}
+
+/// <summary>A translucent panel stacked over the list. Its elements never change: each frame sets
+/// only the panel's translation and tilt and its nested card's tilt, which the compositor applies
+/// to their retained drawing.</summary>
+sealed class StackedLayer : Border
+{
+    static readonly Brush LayerBackground = new SolidColorBrush(Look.ColorOf(0xC01E293B));
+    static readonly Brush NestedBackground = new SolidColorBrush(Look.ColorOf(0xE6FFFFFF));
+
+    readonly int layer;
+    readonly CompositeTransform place = new();
+    readonly RotateTransform nestedTilt = new();
+
+    public StackedLayer(int layer, int rows)
+    {
+        this.layer = layer;
+        var look = new Look(1);
+        Width = 220;
+        HorizontalAlignment = HorizontalAlignment.Left;
+        VerticalAlignment = VerticalAlignment.Top;
+        Background = LayerBackground;
+        CornerRadius = new CornerRadius(12);
+        Padding = new Thickness(10);
+        var title = look.Text(13, Look.White, bold: true);
+        title.Text = $"Layer {layer + 1}";
+        var cells = new StackPanel { Spacing = 3 };
+        for (var row = 0; row < rows; row++)
+        {
+            var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
+            for (var column = 0; column < LayerColumns; column++)
+            {
+                var cell = row * LayerColumns + column;
+                var label = look.Text(9, Look.White);
+                label.Text = $"{cell + 1}";
+                label.HorizontalAlignment = HorizontalAlignment.Center;
+                label.VerticalAlignment = VerticalAlignment.Center;
+                var box = Look.Rounded(Look.Palette[LayerCellColor(layer, cell)], 4, new Thickness(0), label);
+                box.Width = 22;
+                box.Height = 22;
+                line.Children.Add(box);
+            }
+            cells.Children.Add(line);
+        }
+        var heading = look.Text(11, Look.Ink, bold: true);
+        heading.Text = $"Nested in layer {layer + 1}";
+        var body = look.Text(11, Look.Body);
+        body.Text = "Tilts against its panel";
+        var lines = new StackPanel { Spacing = 2 };
+        lines.Children.Add(heading);
+        lines.Children.Add(body);
+        var nested = Look.Rounded(NestedBackground, 8, new Thickness(8), lines);
+        nested.RenderTransformOrigin = new Point(0.5, 0.5);
+        nested.RenderTransform = nestedTilt;
+        var stack = new StackPanel { Spacing = 8 };
+        stack.Children.Add(title);
+        stack.Children.Add(cells);
+        stack.Children.Add(nested);
+        Child = stack;
+        // Tilted about its center, then moved.
+        RenderTransformOrigin = new Point(0.5, 0.5);
+        RenderTransform = place;
+        OnFrame(0);
+        Clock.Follow(this, OnFrame);
+    }
+
+    void OnFrame(int frame)
+    {
+        var degrees = LayerDegrees(layer, frame);
+        place.Rotation = degrees;
+        place.TranslateX = LayerX(layer, frame);
+        place.TranslateY = LayerY(layer, frame);
+        nestedTilt.Angle = -degrees;
     }
 }
 

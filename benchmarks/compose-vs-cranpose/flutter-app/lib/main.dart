@@ -25,6 +25,8 @@ const _up = Color(0xFF16A34A);
 const _down = Color(0xFFDC2626);
 const _white = Color(0xFFFFFFFF);
 const _levelBackground = [Color(0xFFF1F5F9), Color(0xFFCBD5E1)];
+const _layerBackground = Color(0xC01E293B);
+const _nestedBackground = Color(0xE6FFFFFF);
 final _palette = [for (final argb in paletteArgb) Color(argb)];
 final _chipBackground = [for (final argb in chipBackgroundArgb) Color(argb)];
 final _gradientEnd = [for (final argb in gradientEndArgb) Color(argb)];
@@ -216,28 +218,36 @@ class _GauntletState extends State<Gauntlet> with SingleTickerProviderStateMixin
             ),
           ),
           Expanded(
-            child: ListView.separated(
-              controller: _scroll,
-              padding: EdgeInsets.all(8 * s),
-              itemCount: _blocks * (cardRowsPerCluster + 1),
-              separatorBuilder: (context, index) => SizedBox(height: 8 * s),
-              itemBuilder: (context, row) {
-                final block = row ~/ (cardRowsPerCluster + 1);
-                final within = row % (cardRowsPerCluster + 1);
-                if (within == cardRowsPerCluster) return _Level(block, tier.depth, s);
-                final first = (block * cardRowsPerCluster + within) * tier.columns;
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  spacing: 8 * s,
-                  children: [
-                    for (var card = first; card < first + tier.columns; card++)
-                      Expanded(
-                        child: _Card(widget.posts[card % postCount],
-                            widget.avatars[card % avatarCount], card, _frame, s),
-                      ),
-                  ],
-                );
-              },
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: ListView.separated(
+                    controller: _scroll,
+                    padding: EdgeInsets.all(8 * s),
+                    itemCount: _blocks * (cardRowsPerCluster + 1),
+                    separatorBuilder: (context, index) => SizedBox(height: 8 * s),
+                    itemBuilder: (context, row) {
+                      final block = row ~/ (cardRowsPerCluster + 1);
+                      final within = row % (cardRowsPerCluster + 1);
+                      if (within == cardRowsPerCluster) return _Level(block, tier.depth, s);
+                      final first = (block * cardRowsPerCluster + within) * tier.columns;
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        spacing: 8 * s,
+                        children: [
+                          for (var card = first; card < first + tier.columns; card++)
+                            Expanded(
+                              child: _Card(widget.posts[card % postCount],
+                                  widget.avatars[card % avatarCount], card, _frame, s),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+                for (var layer = 0; layer < tier.layers; layer++)
+                  Positioned(left: 0, top: 0, width: 220, child: _StackedLayer(layer, tier.layerRows, _frame)),
+              ],
             ),
           ),
         ],
@@ -606,4 +616,88 @@ class _Level extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A translucent panel stacked over the list. Its content never changes and
+/// paints once into its own layer: each frame moves and tilts that layer, and
+/// its nested card's layer the other way, without building, laying out or
+/// painting anything again.
+class _StackedLayer extends StatelessWidget {
+  final int layer;
+  final int rows;
+  final ValueListenable<int> frame;
+
+  const _StackedLayer(this.layer, this.rows, this.frame);
+
+  @override
+  Widget build(BuildContext context) {
+    final nested = RepaintBoundary(
+      child: ValueListenableBuilder(
+        valueListenable: frame,
+        builder: (context, frame, card) => Transform.rotate(angle: -layerDegrees(layer, frame) * math.pi / 180, child: card),
+        child: RepaintBoundary(
+          child: DecoratedBox(
+            decoration: BoxDecoration(color: _nestedBackground, borderRadius: BorderRadius.circular(8)),
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                spacing: 2,
+                children: [
+                  Text('Nested in layer ${layer + 1}', style: _text(11, _ink, bold: true)),
+                  Text('Tilts against its panel', style: _text(11, _body)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    return ValueListenableBuilder(
+      valueListenable: frame,
+      builder: (context, frame, panel) => Transform(
+        alignment: Alignment.center,
+        transform: Matrix4.translationValues(layerX(layer, frame), layerY(layer, frame), 0)
+          ..rotateZ(layerDegrees(layer, frame) * math.pi / 180),
+        child: panel,
+      ),
+      child: RepaintBoundary(
+        child: DecoratedBox(
+          decoration: BoxDecoration(color: _layerBackground, borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Layer ${layer + 1}', style: _text(13, _white, bold: true)),
+                const SizedBox(height: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  spacing: 3,
+                  children: [for (var row = 0; row < rows; row++) _cells(row)],
+                ),
+                const SizedBox(height: 8),
+                nested,
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _cells(int row) => Row(
+        spacing: 3,
+        children: [
+          for (var cell = row * layerColumns; cell < (row + 1) * layerColumns; cell++)
+            SizedBox.square(
+              dimension: 22,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                    color: _palette[layerCellColor(layer, cell)], borderRadius: BorderRadius.circular(4)),
+                child: Center(child: Text('${cell + 1}', style: _text(9, _white))),
+              ),
+            ),
+        ],
+      );
 }
