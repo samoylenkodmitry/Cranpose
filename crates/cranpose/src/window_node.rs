@@ -101,8 +101,10 @@ impl DelegatableNode for NativeWindowNode {
 impl ModifierNode for NativeWindowNode {
     fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
         self.root.on_attach(context);
+        // A node builds its chain before the applier gives it an id, and
+        // attaches the chain again once it has one: the window is requested
+        // on that attach.
         let Some(node) = context.node_id() else {
-            log::error!("window modifier attached to a node without an id; no window requested");
             return;
         };
         self.key.set(Some(WindowId::from_node(node)));
