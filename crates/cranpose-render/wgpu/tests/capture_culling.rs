@@ -87,6 +87,7 @@ fn straddling_page() -> Vec<RenderNode> {
                 font_size: 18.0,
                 layout_options: TextLayoutOptions::default(),
                 clip: None,
+                paint: Default::default(),
             })),
         }),
         support::draw_node(

@@ -29,16 +29,16 @@ web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-logger"]
 logging = ["dep:env_logger"]
 
 [dependencies]
-coroflow = "0.9.8"
-cranpose = { version = "0.9.8" }
+coroflow = "0.9.9"
+cranpose = { version = "0.9.9" }
 log = "0.4"
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-logger = { version = "0.2", optional = true }
-cranpose-core = "0.9.8"
-cranpose-coroflow = "0.9.8"
-cranpose-navigation = "0.9.8"
-cranpose-ui = "0.9.8"
-cranpose-foundation = "0.9.8"
+cranpose-core = "0.9.9"
+cranpose-coroflow = "0.9.9"
+cranpose-navigation = "0.9.9"
+cranpose-ui = "0.9.9"
+cranpose-foundation = "0.9.9"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.11", optional = true }

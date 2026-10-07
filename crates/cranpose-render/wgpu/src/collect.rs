@@ -1535,7 +1535,7 @@ fn push_primitive(
                 text_rect,
                 local_layer,
                 (&text.text, &text.render_text),
-                &text.text_style,
+                (&text.text_style, text.paint()),
                 text.font_size,
                 text.layout_options,
                 text_clip,

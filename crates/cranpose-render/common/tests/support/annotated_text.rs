@@ -46,6 +46,7 @@ pub fn text_graph(
                 text_style: Arc::new(style),
                 layout_options: Default::default(),
                 clip: Some(viewport),
+                paint: Default::default(),
             })),
         })],
         ..Default::default()

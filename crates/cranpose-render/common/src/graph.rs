@@ -16,7 +16,11 @@ use cranpose_ui_graphics::{
     BlendMode, ColorFilter, CommandRecording, DrawPrimitive, RecordingSummary, ShadowPrimitive,
 };
 
-use crate::{raster_cache::LayerRasterCacheHashes, style_shared::DrawPlacement};
+use crate::{
+    raster_cache::LayerRasterCacheHashes,
+    style_shared::DrawPlacement,
+    text_paint::{TextPaint, TextPaintCache},
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct IsolationReasons {
@@ -77,9 +81,23 @@ pub struct TextPrimitiveNode {
     pub font_size: f32,
     pub layout_options: TextLayoutOptions,
     pub clip: Option<Rect>,
+    /// What a renderer reads of `text_style` and `text`'s spans to draw the
+    /// glyphs, so that drawing a plain text does not load the style.
+    pub paint: TextPaintCache,
 }
 
 impl TextPrimitiveNode {
+    /// The paint of the node's glyphs.
+    pub fn paint(&self) -> TextPaint {
+        self.paint.get_or(|| {
+            TextPaint::of(
+                &self.text_style,
+                self.render_text.span_styles(),
+                self.font_size,
+            )
+        })
+    }
+
     /// Conservative bounds for the emitted glyphs and paint. Returns `None`
     /// when an unclipped layout or style can draw beyond its layout rectangle.
     pub fn draw_bounds(&self) -> Option<Rect> {
