@@ -89,7 +89,7 @@ fn hash_child_layer_contribution<H: Hasher>(
     };
     hash_projective_transform(transform, state);
     layer.translated_content_context.hash(state);
-    hash_optional_rect(layer.shadow_clip, state);
+    hash_optional_rect(layer.shadow_clip(), state);
     hash_child_shadow_state(layer, state);
     layer.graphics_layer.clip.hash(state);
     hash_optional_render_effect_to(layer.effect(), state);

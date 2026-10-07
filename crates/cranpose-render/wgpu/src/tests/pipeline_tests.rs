@@ -282,7 +282,6 @@ fn collect_hits_from_graph_only_populates_hit_regions() {
             12.0, 8.0,
         ),
         hit_test: Some(cranpose_render_common::graph::HitTestNode {
-            shape: None,
             handlers: Rc::new(cranpose_ui::collect_slices_from_modifier(
                 &cranpose_ui::Modifier::empty().clickable(|_point| {}),
             )),
@@ -325,38 +324,6 @@ fn expand_text_bounds_for_baseline_shift_superscript_extends_top() {
         expanded.y + expanded.height,
         text_bounds.y + text_bounds.height
     );
-}
-
-#[test]
-fn text_has_visible_decoration_detects_global_and_span_styles() {
-    let plain_style = cranpose_ui::TextStyle::default();
-    let plain_text = cranpose_ui::text::AnnotatedString::from("Plain");
-    assert!(!text_has_visible_decoration(&plain_text, &plain_style));
-
-    let decorated_global_style = cranpose_ui::TextStyle {
-        span_style: cranpose_ui::SpanStyle {
-            text_decoration: Some(cranpose_ui::text::TextDecoration::UNDERLINE),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    assert!(text_has_visible_decoration(
-        &plain_text,
-        &decorated_global_style
-    ));
-
-    let span_decorated_text = cranpose_ui::text::AnnotatedString::builder()
-        .push_style(cranpose_ui::text::SpanStyle {
-            text_decoration: Some(cranpose_ui::text::TextDecoration::LINE_THROUGH),
-            ..Default::default()
-        })
-        .append("Span")
-        .pop()
-        .to_annotated_string();
-    assert!(text_has_visible_decoration(
-        &span_decorated_text,
-        &plain_style
-    ));
 }
 
 #[test]

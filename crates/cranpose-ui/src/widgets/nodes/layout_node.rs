@@ -609,7 +609,11 @@ impl LayoutNode {
         {
             self.note_semantics_layout_change();
         }
-        self.forget_semantics_reach();
+        // A text element reaches nothing, so an update in place leaves the
+        // chain's reach as it was, and the modal count does not read it again.
+        if !in_place {
+            self.forget_semantics_reach();
+        }
         let keep_slices =
             text_only && !self.modifier_slices_dirty.get() && self.point_slices_at_text();
         if !keep_slices {

@@ -1179,7 +1179,6 @@ fn translate_layer_from_data(
     } = container_plan;
     if container.local_bounds != local_bounds {
         container.local_bounds = local_bounds;
-        container.shadow_clip = container.clip_to_bounds.then_some(local_bounds);
         container.graphics_layer.replace(graphics_layer);
     }
     container.node_bounds = node_bounds;
@@ -1379,7 +1378,6 @@ struct LayerHead {
     origin_in_parent: Point,
     graphics_layer: Option<GraphicsLayer>,
     clip_to_bounds: bool,
-    shadow_clip: Option<Rect>,
     hit_test: Option<HitTestNode>,
     has_origin_sinks: bool,
     isolation: IsolationReasons,
@@ -1430,7 +1428,6 @@ fn node_layer_head(
         isolation,
         graphics_layer,
         clip_to_bounds,
-        shadow_clip: clip_to_bounds.then_some(frame.local_bounds),
         hit_test: hit_test_from_slices(slices),
         has_origin_sinks: modifier_slices_have_origin_sinks(slices),
     }
@@ -1450,7 +1447,6 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
         origin_in_parent,
         graphics_layer,
         clip_to_bounds,
-        shadow_clip,
         hit_test,
         has_hit_targets,
         has_origin_sinks,
@@ -1476,7 +1472,6 @@ fn assign_layer(layer: &mut LayerNode, head: LayerHead) {
     *origin_in_parent = head.origin_in_parent;
     graphics_layer.replace(head.graphics_layer);
     *clip_to_bounds = head.clip_to_bounds;
-    *shadow_clip = head.shadow_clip;
     *hit_test = head.hit_test;
     *has_hit_targets = false;
     *has_origin_sinks = head.has_origin_sinks || children_have_origin_sinks(children);
@@ -1747,7 +1742,6 @@ fn read_node_data<R>(
 
 fn hit_test_from_slices(slices: &Rc<ModifierNodeSlices>) -> Option<HitTestNode> {
     slices_hit_something(slices).then(|| HitTestNode {
-        shape: None,
         handlers: Rc::clone(slices),
     })
 }
@@ -2156,7 +2150,6 @@ fn write_wrapper(
         origin_in_parent: placement,
         graphics_layer,
         clip_to_bounds: false,
-        shadow_clip: None,
         hit_test: None,
         has_origin_sinks: false,
         isolation: IsolationReasons::default(),

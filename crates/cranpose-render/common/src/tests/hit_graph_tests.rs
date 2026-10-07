@@ -66,7 +66,6 @@ fn test_layer(node_id: NodeId, transform_to_parent: ProjectiveTransform) -> Laye
         transform_to_parent,
         clip_to_bounds: true,
         hit_test: Some(HitTestNode {
-            shape: None,
             handlers: handlers(clickable()),
         }),
         has_hit_targets: true,

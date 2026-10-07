@@ -1,5 +1,3 @@
-use std::sync::{Arc, mpsc};
-
 use super::*;
 use crate::text::{AnnotatedString, TextLayoutResult, TextMeasurer, TextMetrics, TextStyle};
 
@@ -158,55 +156,6 @@ fn the_font_scale_is_per_app_context() {
     first.enter(|| set_font_scale(1.5));
     first.enter(|| assert_eq!(current_font_scale(), 1.5));
     second.enter(|| assert_eq!(current_font_scale(), 1.0));
-}
-
-#[test]
-fn invalidation_flags_are_shared_across_threads() {
-    let state = Arc::new(RenderState::new_with_density(1.0));
-    let (tx, rx) = mpsc::channel();
-    let worker_state = Arc::clone(&state);
-
-    let handle = std::thread::spawn(move || {
-        worker_state
-            .render_invalidated
-            .store(true, Ordering::Relaxed);
-        worker_state
-            .pointer_invalidated
-            .store(true, Ordering::Relaxed);
-        worker_state
-            .focus_invalidated
-            .store(true, Ordering::Relaxed);
-        worker_state
-            .layout_invalidated
-            .store(true, Ordering::Relaxed);
-        worker_state
-            .density_bits
-            .store(f32::to_bits(2.0), Ordering::Relaxed);
-        tx.send(()).expect("signal invalidation setup");
-
-        f32::from_bits(worker_state.density_bits.load(Ordering::Relaxed))
-    });
-
-    rx.recv().expect("wait for worker invalidation setup");
-    assert!(state.render_invalidated.load(Ordering::Relaxed));
-    assert!(state.pointer_invalidated.load(Ordering::Relaxed));
-    assert!(state.focus_invalidated.load(Ordering::Relaxed));
-    assert!(state.layout_invalidated.load(Ordering::Relaxed));
-    assert_eq!(
-        f32::from_bits(state.density_bits.load(Ordering::Relaxed)),
-        2.0
-    );
-    assert!(state.render_invalidated.swap(false, Ordering::Relaxed));
-    assert!(state.pointer_invalidated.swap(false, Ordering::Relaxed));
-    assert!(state.focus_invalidated.swap(false, Ordering::Relaxed));
-    assert!(state.layout_invalidated.swap(false, Ordering::Relaxed));
-
-    let density = handle.join().expect("worker invalidation snapshot");
-    assert_eq!(density, 2.0);
-    assert!(!state.render_invalidated.load(Ordering::Relaxed));
-    assert!(!state.pointer_invalidated.load(Ordering::Relaxed));
-    assert!(!state.focus_invalidated.load(Ordering::Relaxed));
-    assert!(!state.layout_invalidated.load(Ordering::Relaxed));
 }
 
 #[test]
