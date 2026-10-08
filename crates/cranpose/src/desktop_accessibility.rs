@@ -89,7 +89,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     pending_jumps: Vec<(NodeId, usize)>,
     pending_expansions: Vec<(NodeId, bool)>,
     previous: accessibility::AccessibilitySnapshot,
-    seen_revision: Option<u64>,
+    watch: accessibility::TreeWatch,
     announcement: Option<Announcement>,
     announcement_turn: bool,
     options: crate::desktop_accessibility_options::OptionsProbe,
@@ -133,7 +133,7 @@ impl DesktopAccessibilityBridge {
             pending_jumps: Vec::new(),
             pending_expansions: Vec::new(),
             previous: accessibility::AccessibilitySnapshot::default(),
-            seen_revision: None,
+            watch: accessibility::TreeWatch::default(),
             announcement: None,
             announcement_turn: false,
             options: crate::desktop_accessibility_options::OptionsProbe::start(
@@ -161,9 +161,9 @@ impl DesktopAccessibilityBridge {
     }
 
     /// Publishes what changed to a connected reader: the whole tree when one
-    /// connects, then at most one snapshot a second, or one per interactive
-    /// interval for a while after the reader acts. With no reader connected
-    /// nothing is built.
+    /// connects, a focus move or typed text at once, and any other change at
+    /// most once a second, or once per interactive interval for a while after
+    /// the reader acts. With no reader connected nothing is built.
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
         let reader_connected = self.reader_connected.load(Ordering::Relaxed);
         let reader_on = cranpose_services::AccessibilityState {
@@ -175,17 +175,19 @@ impl DesktopAccessibilityBridge {
         let mut announcements = accessibility::drain_app_announcements();
         let tree_owed = self.tree_owed.swap(false, Ordering::Relaxed);
         if self.policy.update_enabled(reader_connected) || tree_owed {
-            self.seen_revision = None;
+            self.watch.forget();
         }
         if !reader_connected {
             return;
         }
         let mut changed = std::mem::take(&mut self.geometry_changed) || tree_owed;
-        let elements = if tree_owed || self.policy.try_begin_publish(Instant::now()) {
-            accessibility::snapshot_if_changed(shell, &mut self.seen_revision, &mut self.previous)
-        } else {
-            None
-        };
+        let elements = self.watch.elements_due(
+            shell,
+            &mut self.policy,
+            Instant::now(),
+            tree_owed,
+            &mut self.previous,
+        );
         let mut replaced = None;
         if let Some(elements) = elements.and_then(|elements| self.previous.changed(elements, false))
         {

@@ -185,3 +185,20 @@ fn a_change_waits_for_the_interval_unless_a_reader_needs_it_now() {
         "the next change waits a whole interval after it"
     );
 }
+
+#[test]
+fn an_unchanged_tree_arms_no_wake_inside_the_interval() {
+    let start = Instant::now();
+    let mut policy = policy_enabled_at(start);
+    let inside = start + ACCESSIBILITY_PUBLISH_INTERVAL / 2;
+    assert!(
+        !policy.try_publish_change(inside, false, true),
+        "a focus move or an edit that left the tree as published builds nothing"
+    );
+    assert!(!policy.try_publish_change(inside, false, false));
+    assert_eq!(
+        policy.wake_deadline(),
+        None,
+        "the frames after a burst bring no wake for a tree already published"
+    );
+}

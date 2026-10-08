@@ -530,8 +530,55 @@ impl Default for AccessibilityElement {
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
     all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
 ))]
+#[derive(Default)]
+pub(crate) struct TreeWatch {
+    revision: Option<u64>,
+    focus: Option<NodeId>,
+    edits: u64,
+}
+
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios")
+))]
+impl TreeWatch {
+    pub(crate) fn forget(&mut self) {
+        self.revision = None;
+    }
+
+    pub(crate) fn elements_due<R>(
+        &mut self,
+        shell: &mut AppShell<R>,
+        policy: &mut crate::accessibility_publish_policy::AccessibilityPublishPolicy,
+        now: web_time::Instant,
+        at_once: bool,
+        published: &mut AccessibilitySnapshot,
+    ) -> Option<Vec<AccessibilityElement>>
+    where
+        R: Renderer,
+        R::Error: Debug,
+    {
+        let (focus, edits) = shell.app_context().enter(|| {
+            (
+                cranpose_ui::active_focus_target(),
+                cranpose_ui::text_field_focus::edit_count(),
+            )
+        });
+        let at_once = at_once || focus != self.focus || edits != self.edits;
+        let changed = self.revision != Some(shell.semantics_snapshot_revision());
+        if !policy.try_publish_change(now, changed, at_once) {
+            return None;
+        }
+        self.focus = focus;
+        self.edits = edits;
+        snapshot_if_changed(shell, &mut self.revision, published)
+    }
+}
+
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn snapshot_if_changed<R>(
     shell: &mut AppShell<R>,
     seen_revision: &mut Option<u64>,
@@ -553,8 +600,7 @@ where
 /// The elements a reader reaches, written over the elements `published`
 /// holds no longer: a snapshot like the one before reuses their strings and
 /// lists instead of allocating its own.
-#[cfg_attr(test, allow(dead_code))]
-pub(crate) fn snapshot<R>(
+fn snapshot<R>(
     shell: &mut AppShell<R>,
     published: &mut AccessibilitySnapshot,
 ) -> Vec<AccessibilityElement>

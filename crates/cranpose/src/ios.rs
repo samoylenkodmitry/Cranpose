@@ -99,29 +99,51 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
     fn pump_off_screen(&mut self, event_loop: &dyn ActiveEventLoop) {
         if !cranpose_services::background_active() || !crate::ios_background::app_is_off_screen() {
-            if self.next_off_screen_render.take().is_some() {
-                event_loop.set_control_flow(ControlFlow::Wait);
+            self.next_off_screen_render = None;
+        } else {
+            let pending_ui = self
+                .shell
+                .as_ref()
+                .is_some_and(cranpose_app_shell::AppShell::has_pending_ui);
+            let due = self
+                .next_off_screen_render
+                .is_some_and(|at| at <= Instant::now());
+            if pending_ui || due {
+                self.render();
+                self.next_off_screen_render =
+                    pending_ui.then(|| Instant::now() + OFF_SCREEN_RENDER_PERIOD);
             }
-            return;
         }
-        let pending_ui = self
-            .shell
+        self.schedule_wake(event_loop);
+    }
+
+    fn schedule_wake(&self, event_loop: &dyn ActiveEventLoop) {
+        let accessibility = self
+            .accessibility
             .as_ref()
-            .is_some_and(cranpose_app_shell::AppShell::has_pending_ui);
-        let due = self
+            .and_then(crate::ios_accessibility::IosAccessibilityBridge::wake_deadline);
+        let wake = self
             .next_off_screen_render
-            .is_some_and(|at| at <= Instant::now());
-        if !pending_ui && !due {
+            .into_iter()
+            .chain(accessibility)
+            .min();
+        event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+    }
+
+    fn publish_held_accessibility(&mut self) {
+        let (Some(accessibility), Some(shell)) = (self.accessibility.as_mut(), self.shell.as_mut())
+        else {
             return;
-        }
-        self.render();
-        self.next_off_screen_render = match pending_ui {
-            true => Some(Instant::now() + OFF_SCREEN_RENDER_PERIOD),
-            false => None,
         };
-        match self.next_off_screen_render {
-            Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
-            None => event_loop.set_control_flow(ControlFlow::Wait),
+        if accessibility
+            .wake_deadline()
+            .is_some_and(|deadline| deadline <= Instant::now())
+        {
+            accessibility.sync(
+                shell,
+                #[cfg(feature = "webview")]
+                &self.webviews,
+            );
         }
     }
 
@@ -311,6 +333,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
 
     fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: winit::event::StartCause) {
         if matches!(cause, winit::event::StartCause::ResumeTimeReached { .. }) {
+            self.publish_held_accessibility();
             self.pump_off_screen(event_loop);
         }
     }
@@ -561,6 +584,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             }
             WindowEvent::RedrawRequested => {
                 self.render();
+                self.schedule_wake(event_loop);
             }
             WindowEvent::CloseRequested => {
                 event_loop.exit();

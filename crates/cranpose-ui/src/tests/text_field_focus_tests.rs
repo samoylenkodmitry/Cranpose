@@ -348,3 +348,38 @@ fn text_field_focus_is_scoped_by_app_context() {
         clear_focus();
     });
 }
+
+#[test]
+fn edit_count_moves_for_edits_and_not_for_reads_or_unhandled_keys() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let focus = Rc::new(RefCell::new(false));
+    let start = edit_count();
+    assert!(!dispatch_paste("ignored"), "no field holds focus");
+    assert_eq!(
+        edit_count(),
+        start,
+        "input with no focused field is no edit"
+    );
+
+    request_focus(Rc::clone(&focus), mock_handler(), 0);
+    let key = KeyEvent::new(
+        crate::KeyCode::A,
+        "a",
+        crate::Modifiers::NONE,
+        crate::KeyEventType::KeyDown,
+    );
+    assert!(!dispatch_key_event(&key));
+    assert_eq!(dispatch_copy(), None);
+    let _ = focused_editor_state();
+    assert_eq!(
+        edit_count(),
+        start,
+        "a key the field leaves, a copy and a state read are no edits"
+    );
+
+    assert!(dispatch_paste("typed"));
+    assert!(dispatch_ime_set_selection(0, 1));
+    assert_eq!(edit_count(), start + 2, "text and a caret move are edits");
+
+    clear_focus();
+}

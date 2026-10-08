@@ -164,6 +164,7 @@ pub(crate) struct TextFieldFocusState {
     focused_field: RefCell<Option<Weak<RefCell<bool>>>>,
     focused_handler: RefCell<Option<Rc<dyn FocusedTextFieldHandler>>>,
     focused_modal_depth: Cell<usize>,
+    edits: Cell<u64>,
 }
 
 impl TextFieldFocusState {
@@ -172,6 +173,7 @@ impl TextFieldFocusState {
             focused_field: RefCell::new(None),
             focused_handler: RefCell::new(None),
             focused_modal_depth: Cell::new(0),
+            edits: Cell::new(0),
         }
     }
 
@@ -252,16 +254,30 @@ impl TextFieldFocusState {
         self.focused_handler.borrow().as_ref().cloned()
     }
 
-    fn dispatch_key_event(&self, event: &KeyEvent) -> bool {
-        if let Some(handler) = self.focused_handler() {
-            handler.handle_key(event)
-        } else {
-            false
+    fn editing_handler(&self) -> Option<Rc<dyn FocusedTextFieldHandler>> {
+        let handler = self.focused_handler();
+        if handler.is_some() {
+            self.note_edit();
         }
+        handler
+    }
+
+    fn note_edit(&self) {
+        self.edits.set(self.edits.get().wrapping_add(1));
+    }
+
+    fn dispatch_key_event(&self, event: &KeyEvent) -> bool {
+        let handled = self
+            .focused_handler()
+            .is_some_and(|handler| handler.handle_key(event));
+        if handled {
+            self.note_edit();
+        }
+        handled
     }
 
     fn dispatch_paste(&self, text: &str) -> bool {
-        if let Some(handler) = self.focused_handler() {
+        if let Some(handler) = self.editing_handler() {
             handler.insert_text(text);
             true
         } else {
@@ -270,7 +286,7 @@ impl TextFieldFocusState {
     }
 
     fn dispatch_delete_surrounding(&self, before_bytes: usize, after_bytes: usize) -> bool {
-        if let Some(handler) = self.focused_handler() {
+        if let Some(handler) = self.editing_handler() {
             handler.delete_surrounding(before_bytes, after_bytes);
             true
         } else {
@@ -284,12 +300,12 @@ impl TextFieldFocusState {
     }
 
     fn dispatch_cut(&self) -> Option<String> {
-        self.focused_handler()
+        self.editing_handler()
             .and_then(|handler| handler.cut_selection())
     }
 
     fn dispatch_select_all(&self) -> bool {
-        if let Some(handler) = self.focused_handler() {
+        if let Some(handler) = self.editing_handler() {
             handler.select_all();
             true
         } else {
@@ -298,7 +314,7 @@ impl TextFieldFocusState {
     }
 
     fn dispatch_ime_preedit(&self, text: &str, cursor: Option<(usize, usize)>) -> bool {
-        if let Some(handler) = self.focused_handler() {
+        if let Some(handler) = self.editing_handler() {
             handler.set_composition(text, cursor);
             true
         } else {
@@ -307,7 +323,7 @@ impl TextFieldFocusState {
     }
 
     fn dispatch_ime_finish_composing(&self) -> bool {
-        if let Some(handler) = self.focused_handler() {
+        if let Some(handler) = self.editing_handler() {
             handler.finish_composition();
             true
         } else {
@@ -316,7 +332,7 @@ impl TextFieldFocusState {
     }
 
     fn dispatch_ime_set_composing_region(&self, start_bytes: usize, end_bytes: usize) -> bool {
-        if let Some(handler) = self.focused_handler() {
+        if let Some(handler) = self.editing_handler() {
             handler.set_composing_region(start_bytes, end_bytes);
             true
         } else {
@@ -325,7 +341,7 @@ impl TextFieldFocusState {
     }
 
     fn dispatch_ime_set_selection(&self, start_bytes: usize, end_bytes: usize) -> bool {
-        if let Some(handler) = self.focused_handler() {
+        if let Some(handler) = self.editing_handler() {
             handler.set_selection(start_bytes, end_bytes);
             true
         } else {
@@ -514,6 +530,14 @@ pub fn dispatch_ime_set_selection(start_bytes: usize, end_bytes: usize) -> bool 
     crate::render_state::with_text_field_focus(|state| {
         state.dispatch_ime_set_selection(start_bytes, end_bytes)
     })
+}
+
+/// How many edits the focused text fields of the current app context took
+/// from platform input: typed, pasted, cut or composed text, deletions and
+/// caret or selection moves. A platform accessibility bridge compares two
+/// counts to tell whether a person typed between them.
+pub fn edit_count() -> u64 {
+    crate::render_state::with_text_field_focus(|state| state.edits.get())
 }
 
 /// Returns a snapshot of the focused text field's editable state for

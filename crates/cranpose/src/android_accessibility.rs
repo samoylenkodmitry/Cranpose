@@ -269,15 +269,16 @@ pub(crate) fn sync(
     density: f32,
     previous: &mut AccessibilitySnapshot,
     wire: &mut AccessibilityWire,
-    seen_revision: &mut Option<u64>,
+    watch: &mut accessibility::TreeWatch,
     policy: &mut AccessibilityPublishPolicy,
 ) -> Result<(), String> {
     let host_lost_tree = HOST_TREE_LOST.swap(false, Ordering::Relaxed);
     if host_lost_tree {
         wire.forget();
     }
-    if policy.update_enabled(accessibility_bridge_enabled()) || host_lost_tree {
-        *seen_revision = None;
+    let enabled = accessibility_bridge_enabled();
+    if policy.update_enabled(enabled) || host_lost_tree {
+        watch.forget();
     }
     let reader_on = cranpose_services::AccessibilityState {
         screen_reader_on: screen_reader_running(),
@@ -291,8 +292,8 @@ pub(crate) fn sync(
     }
     accessibility::apply_accessibility_options(shell, system_options());
     let mut announcements = accessibility::drain_app_announcements();
-    let elements = if policy.try_begin_publish(now) {
-        accessibility::snapshot_if_changed(shell, seen_revision, previous)
+    let elements = if enabled {
+        watch.elements_due(shell, policy, now, host_lost_tree, previous)
     } else {
         None
     };
