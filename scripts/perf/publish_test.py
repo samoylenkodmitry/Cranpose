@@ -1,3 +1,4 @@
+import base64
 import importlib.util
 import json
 import os
@@ -67,40 +68,82 @@ def git(*args, cwd):
                           env=ENV).stdout.strip()
 
 
+# Stands in for git on the path: a push writes down the configuration the
+# environment hands it, then the real git runs.
+RECORD_PUSH = """#!/bin/sh
+if [ "$1" = push ]; then env | grep '^GIT_CONFIG_' > "$PUSH_RECORD"; fi
+exec "$REAL_GIT" "$@"
+"""
+
+
+def scratch_repo(root):
+    """A clone of this script's repository with the data branch already
+    holding an earlier run, and the bare origin it pushes to."""
+    origin, repo = root / 'origin.git', root / 'repo'
+    git('init', '-q', '--bare', str(origin), cwd=root)
+    git('init', '-q', '-b', 'main', str(repo), cwd=root)
+    (repo / 'scripts/perf').mkdir(parents=True)
+    shutil.copy(Path(__file__).resolve().parent / 'publish.py', repo / 'scripts/perf/publish.py')
+    git('add', '-A', cwd=repo)
+    git('commit', '-q', '-m', 'start', cwd=repo)
+    git('remote', 'add', 'origin', str(origin), cwd=repo)
+    git('push', '-q', 'origin', 'main', cwd=repo)
+    git('checkout', '-q', '--orphan', 'perf-data', cwd=repo)
+    git('rm', '-q', '-r', '-f', '--cached', '.', cwd=repo)
+    earlier = {'file': 'runs/earlier.json', 'started_at': '2026-10-04T01:30:00+00:00'}
+    (repo / 'index.json').write_text(json.dumps({'runs': [earlier]}))
+    git('add', 'index.json', cwd=repo)
+    git('commit', '-q', '-m', 'earlier', cwd=repo)
+    git('push', '-q', 'origin', 'perf-data', cwd=repo)
+    git('checkout', '-q', '-f', 'main', cwd=repo)
+    (root / 'run.json').write_text(json.dumps(run()))
+    return origin, repo
+
+
+def publish_run(root, repo, environment=ENV):
+    return subprocess.run(
+        ['python3', 'scripts/perf/publish.py', '--run', str(root / 'run.json'), '--tree', str(root / 'tree')],
+        cwd=repo, capture_output=True, text=True, env=environment)
+
+
 class PublishPushTest(unittest.TestCase):
     def test_a_refused_push_is_made_again_on_the_latest_data_commit(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            origin, repo = root / 'origin.git', root / 'repo'
-            git('init', '-q', '--bare', str(origin), cwd=root)
-            git('init', '-q', '-b', 'main', str(repo), cwd=root)
-            (repo / 'scripts/perf').mkdir(parents=True)
-            shutil.copy(Path(__file__).resolve().parent / 'publish.py', repo / 'scripts/perf/publish.py')
-            git('add', '-A', cwd=repo)
-            git('commit', '-q', '-m', 'start', cwd=repo)
-            git('remote', 'add', 'origin', str(origin), cwd=repo)
-            git('push', '-q', 'origin', 'main', cwd=repo)
-            # The data branch already holds an earlier run.
-            git('checkout', '-q', '--orphan', 'perf-data', cwd=repo)
-            git('rm', '-q', '-r', '-f', '--cached', '.', cwd=repo)
-            earlier = {'file': 'runs/earlier.json', 'started_at': '2026-10-04T01:30:00+00:00'}
-            (repo / 'index.json').write_text(json.dumps({'runs': [earlier]}))
-            git('add', 'index.json', cwd=repo)
-            git('commit', '-q', '-m', 'earlier', cwd=repo)
-            git('push', '-q', 'origin', 'perf-data', cwd=repo)
-            git('checkout', '-q', '-f', 'main', cwd=repo)
+            origin, repo = scratch_repo(root)
             hook = origin / 'hooks/pre-receive'
             hook.write_text(REFUSE_ONCE)
             hook.chmod(0o755)
-            (root / 'run.json').write_text(json.dumps(run()))
-            published = subprocess.run(
-                ['python3', 'scripts/perf/publish.py', '--run', str(root / 'run.json'), '--tree', str(root / 'tree')],
-                cwd=repo, capture_output=True, text=True, env=ENV)
+            published = publish_run(root, repo)
             self.assertEqual(published.returncode, 0, published.stderr)
             self.assertIn('Internal Server Error', published.stdout)
             index = json.loads(git('show', 'perf-data:index.json', cwd=origin))
             self.assertEqual([entry['file'] for entry in index['runs']],
                              ['runs/earlier.json', 'runs/2026-10-05-nightly-abc123def-EVR-AL00.json'])
+
+    def test_a_job_with_a_token_pushes_with_it_and_without_the_keychain_helper(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin, repo = scratch_repo(root)
+            tools = root / 'tools'
+            tools.mkdir()
+            (tools / 'git').write_text(RECORD_PUSH)
+            (tools / 'git').chmod(0o755)
+            record = root / 'push-record'
+            environment = {**ENV, 'PATH': f'{tools}{os.pathsep}{ENV["PATH"]}', 'REAL_GIT': shutil.which('git'),
+                           'PUSH_RECORD': str(record)}
+            self.assertEqual(publish_run(root, repo, environment).returncode, 0)
+            self.assertFalse(record.exists() and 'extraheader' in record.read_text(),
+                             'a job without a token pushes as the machine does')
+            (root / 'run.json').write_text(json.dumps({**run(), 'main': 'def456abc789'}))
+            published = publish_run(root, repo, {**environment, 'GH_TOKEN': 'job-token'})
+            self.assertEqual(published.returncode, 0, published.stderr)
+            pushed = dict(line.split('=', 1) for line in record.read_text().splitlines())
+            self.assertEqual(pushed['GIT_CONFIG_KEY_0'], 'credential.helper')
+            self.assertEqual(pushed['GIT_CONFIG_VALUE_0'], '')
+            self.assertEqual(pushed['GIT_CONFIG_KEY_1'], 'http.https://github.com/.extraheader')
+            token = base64.b64encode(b'x-access-token:job-token').decode()
+            self.assertEqual(pushed['GIT_CONFIG_VALUE_1'], f'AUTHORIZATION: basic {token}')
 
 
 if __name__ == '__main__':
