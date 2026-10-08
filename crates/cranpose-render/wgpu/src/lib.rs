@@ -101,13 +101,22 @@ pub use render::{
 pub use scene::{HitRegion, Scene};
 
 /// The optional device features the renderer exploits when the adapter
-/// offers them: pipeline caching (see `pipeline_disk_cache`) and the
-/// timestamp queries behind `CRANPOSE_GPU_PASS_TIMING`. Every platform's
+/// offers them: pipeline caching (see `pipeline_disk_cache`), the
+/// timestamp queries behind `CRANPOSE_GPU_PASS_TIMING`, and, on a GPU
+/// that shares the host's memory, vertex and uniform buffers the CPU
+/// writes directly, so a frame's uploads need no copy. Every platform's
 /// `request_device` passes this so a profiling toggle never needs a rebuilt
 /// binary; intersecting with the adapter's own features keeps the request
 /// valid on adapters without them.
 pub fn optional_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
-    adapter.features() & (wgpu::Features::PIPELINE_CACHE | wgpu::Features::TIMESTAMP_QUERY)
+    let mut wanted = wgpu::Features::PIPELINE_CACHE | wgpu::Features::TIMESTAMP_QUERY;
+    if matches!(
+        adapter.get_info().device_type,
+        wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::Cpu
+    ) {
+        wanted |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
+    }
+    adapter.features() & wanted
 }
 
 #[doc(hidden)]
