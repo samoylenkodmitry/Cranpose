@@ -357,7 +357,7 @@
         async function init() {
             try {
                 const params = new URLSearchParams(window.location.search);
-                const backend = params.get('backend') || 'gl';
+                const backend = params.get('backend') || 'auto';
                 const initialTab = params.get('tab');
                 const initialShaderSection = params.get('shader_section');
                 updateAppState('initializing', { backend, initialTab, initialShaderSection });

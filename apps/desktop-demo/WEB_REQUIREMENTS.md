@@ -1,12 +1,11 @@
 # Web build and browser backends
 
-The desktop demo's WebAssembly build uses wgpu. WebGL2 is the default browser
-backend. WebGPU requires browser and adapter support. The URL query selects
-the backend:
+The desktop demo's WebAssembly build uses wgpu. WebGPU requires browser and
+adapter support. The URL query selects the backend:
 
-- default URL or `?backend=gl`: use WebGL2;
-- `?backend=webgpu`: select browser WebGPU;
-- `?backend=auto`: try browser WebGPU, then fall back to WebGL2.
+- default URL: use WebGPU where the browser offers it, WebGL2 otherwise;
+- `?backend=gl`: use WebGL2;
+- `?backend=webgpu`: use browser WebGPU.
 
 ## Build and run
 

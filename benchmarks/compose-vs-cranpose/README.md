@@ -646,7 +646,7 @@ it. `build_apps.sh browser DIR` makes `DIR/APP/index.html`:
 
 | App | In the browser |
 | --- | --- |
-| `cranpose` | `cranpose-app` with `--features web`, on wgpu's WebGL2 (`?backend=webgpu` asks for WebGPU), the query string read as its launch arguments |
+| `cranpose` | `cranpose-app` with `--features web`, on wgpu: WebGPU where the browser has it, WebGL2 where not (`?backend=gl` or `?backend=webgpu` forces one), the query string read as its launch arguments |
 | `compose` | `compose-browser-app`: Compose Multiplatform compiled to Kotlin/Wasm, the composables of `shared-compose`, drawn by Skia |
 | `flutter` | `flutter build web --wasm`: skwasm, and the JavaScript build for a browser without WasmGC |
 | `egui` | eframe on glow, which is WebGL2 there; no AccessKit tree to keep |
@@ -694,7 +694,9 @@ On the desktop the heaviest tier, 16, already keeps egui, the fastest, under
 leaves three pages at about 2 fps. Chrome on the Mate has no WebGPU
 (Android 10), so every page that can draws on WebGL2. iced's WebGL fragment
 shader for gradients does not compile on the Mate's GPU driver, and its page
-stops at start. Raising a browser's tier starts a new series.
+stops at start. Raising a browser's tier starts a new series. The Cranpose
+column above ran on WebGL2, before the page took WebGPU where the browser has
+it.
 
 ## Findings
 

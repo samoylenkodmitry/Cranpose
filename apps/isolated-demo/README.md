@@ -92,9 +92,9 @@ Build and serve the demo from this directory:
 python3 -m http.server 8080
 ```
 
-Open <http://localhost:8080>. The default browser backend is WebGL2. To force
-WebGPU, open <http://localhost:8080/?backend=webgpu>; to force WebGL2, use
-`?backend=gl`. Install Binaryen (`wasm-opt`) if you want the size optimizer
+Open <http://localhost:8080>. The page uses WebGPU where the browser offers it
+and WebGL2 otherwise. Add `?backend=gl` or `?backend=webgpu` to the URL to force
+one. Install Binaryen (`wasm-opt`) if you want the size optimizer
 used by the web build to be available.
 
 ## Project layout

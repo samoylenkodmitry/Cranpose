@@ -50,8 +50,8 @@ Gradle files and `just android` recipe for the current build configuration.
 
 ### Web
 
-The demo uses WebGL2 by default. Select browser WebGPU with `?backend=webgpu`
-or try WebGPU with WebGL2 fallback through `?backend=auto`.
+The demo uses WebGPU where the browser offers it and WebGL2 otherwise. Add
+`?backend=gl` or `?backend=webgpu` to the URL to force one.
 
 1. **Prerequisites:**
    ```bash
