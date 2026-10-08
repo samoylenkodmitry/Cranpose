@@ -9,8 +9,7 @@ OpenGL ES on the Mate), `rn-app` (React Native on the New Architecture with
 Hermes), `nativescript-app` (NativeScript: TypeScript on V8 driving Android
 views), `lynx-app` (Lynx: ReactLynx on PrimJS driving Lynx's native
 elements), `maui-app` (.NET MAUI, fully AOT-compiled), `avalonia-app` (Avalonia
-on Skia, fully AOT-compiled), `uno-app` (Uno Platform on its Skia renderer,
-fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
+on Skia, fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
 GameActivity), `slint-app` (Slint on Skia) and `web-app` (a web page in
 Capacitor, on the device's Chromium WebView: the stack Ionic, Tauri and
 Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
@@ -153,7 +152,7 @@ animation frame; sparklines are SVG paths in a box CSS stretches.
 Each app moves and tilts the stacked panels in its own way. Views sets
 each panel's render node properties; Flutter turns a `Transform` over a
 `RepaintBoundary`, so the panel paints once; React Native, Lynx and
-NativeScript set the panel view's transform; MAUI, Avalonia and Uno set its
+NativeScript set the panel view's transform; MAUI and Avalonia set its
 render transform; SwiftUI applies rotation and offset effects; AppKit sets
 the panel layer's position and transform; the web page and Dioxus set a CSS
 transform on an element that `will-change` keeps on a compositor layer of
@@ -534,7 +533,7 @@ a window lasts as long as the app's frame rate needs for 40 frames, from 3 to
 slowest phone.
 
 At tier 5 against Compose Multiplatform, SwiftUI and AppKit change 0.0% of
-tiles, Flutter 0.1%, the web page, Tauri and Uno 0.2%, Dioxus and egui 0.3%,
+tiles, Flutter 0.1%, the web page and Tauri 0.2%, Dioxus and egui 0.3%,
 Cranpose 0.35%, Avalonia 0.5%, Slint 0.7%, GPUI 0.9% and iced 1.1%. Fyne
 changes 2.7%: its panels only drift. Xilem changes 5.6%: its labels keep the
 font's own line height, so its cards are shorter and its list drifts further,
@@ -556,7 +555,6 @@ and the panels lie over a different part of the cluster's look-alike levels.
 | `dioxus` | `dioxus-app`: Dioxus components over the web page's CSS, on Dioxus's desktop renderer (WKWebView) |
 | `xilem` | `xilem-app`: Xilem's views over Masonry's widgets, drawn by Vello on wgpu |
 | `fyne` | `fyne-app`: Fyne on OpenGL, canvas objects the app places itself |
-| `uno` | `uno-app`'s desktop head: Uno Platform's WinUI on its Skia renderer, self-contained |
 
 What each framework lacks and how its app does without:
 
@@ -595,13 +593,6 @@ What each framework lacks and how its app does without:
   sparkline's line is 47 segments, and its fading fill is a vertical
   gradient under white polygons above the line, four side by side, since
   Fyne fills a polygon of at most 16 vertices.
-- Uno's list is an ItemsRepeater whose element factory recycles each kind of
-  row; sparklines draw in a Skia canvas element. Uno's macOS window sizes its
-  content in pixels, so the app asks for 1280 x 820 times the display's scale.
-  A self-contained build runs on Mono unless told otherwise
-  (`-p:UseMonoRuntime=false`). Its time per frame grows faster than its
-  element count: on the M3 Pro about 0.1 s at tier 5, 0.8 s at tier 10 and
-  over 2 s at tier 12, so at tier 16 a window may hold no frame.
 - The JVM opens no window outside the login session, so `desktop.py` starts
   every app bundle through `open`. macOS then asks the user before such an
   app reads a removable volume, so the fonts and Chrome's profile sit in a
@@ -635,7 +626,6 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/dioxus-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/xilem-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
-(cd benchmarks/compose-vs-cranpose/uno-app && dotnet publish -c Release -f net10.0-desktop -r osx-arm64 --self-contained -p:UseMonoRuntime=false)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```

@@ -94,7 +94,6 @@ APPS = {
     'dioxus': [HERE / 'dioxus-app/target/release/perf-compare-dioxus'],
     'xilem': [HERE / 'xilem-app/target/release/perf-compare-xilem'],
     'fyne': [HERE / 'fyne-app/build/perf-compare-fyne'],
-    'uno': [HERE / 'uno-app/bin/Release/net10.0-desktop/osx-arm64/publish/PerfUno'],
 }
 
 

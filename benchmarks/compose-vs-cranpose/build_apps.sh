@@ -163,8 +163,6 @@ desktop)
     done
     build avalonia avalonia-app/bin/Release/net10.0/osx-arm64/publish avalonia-app shared-cs -- \
         attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0 -p:TargetFrameworks=net10.0 -r osx-arm64"
-    build uno uno-app/bin/Release/net10.0-desktop/osx-arm64/publish uno-app shared-cs -- \
-        attempt uno bash -c "cd '$here/uno-app' && dotnet publish -c Release -f net10.0-desktop -r osx-arm64 --self-contained -p:UseMonoRuntime=false"
     build fyne fyne-app/build/perf-compare-fyne fyne-app -- \
         attempt fyne bash -c "cd '$here/fyne-app' && go build -o build/perf-compare-fyne ."
     build swiftui swiftui-app/build/PerfSwiftUI.app swiftui-app shared-swift -- "$here/swiftui-app/build.sh"
@@ -221,10 +219,6 @@ android)
         avalonia-app shared-cs -- \
         attempt avalonia bash -c "cd '$here/avalonia-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"
     cp "$here/avalonia-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.avalonia-Signed.apk" "$out/avalonia.apk"
-    build uno-android uno-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.uno-Signed.apk \
-        uno-app shared-cs -- \
-        attempt uno bash -c "cd '$here/uno-app' && dotnet publish -c Release -f net10.0-android -p:AndroidSdkDirectory='$ANDROID_HOME'"
-    cp "$here/uno-app/bin/Release/net10.0-android/android-arm64/publish/dev.perfcompare.uno-Signed.apk" "$out/uno.apk"
     for app in egui slint; do
         rust_target "$app-app"
         build "$app-android" "$app-app/build/outputs/apk/release/$app-release.apk" "$app-app" perf-data rust-android -- \
