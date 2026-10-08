@@ -1,4 +1,3 @@
-import base64
 import importlib.util
 import json
 import os
@@ -71,7 +70,7 @@ def git(*args, cwd):
 # Stands in for git on the path: a push writes down the configuration the
 # environment hands it, then the real git runs.
 RECORD_PUSH = """#!/bin/sh
-if [ "$1" = push ]; then env | grep '^GIT_CONFIG_' > "$PUSH_RECORD"; fi
+if [ "$1" = push ]; then env | grep -E '^GIT_CONFIG_(COUNT|KEY|VALUE)' > "$PUSH_RECORD"; fi
 exec "$REAL_GIT" "$@"
 """
 
@@ -121,7 +120,7 @@ class PublishPushTest(unittest.TestCase):
             self.assertEqual([entry['file'] for entry in index['runs']],
                              ['runs/earlier.json', 'runs/2026-10-05-nightly-abc123def-EVR-AL00.json'])
 
-    def test_a_job_with_a_token_pushes_with_it_and_without_the_keychain_helper(self):
+    def test_a_job_with_a_token_answers_git_with_it_in_place_of_the_machines_helper(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             origin, repo = scratch_repo(root)
@@ -130,20 +129,47 @@ class PublishPushTest(unittest.TestCase):
             (tools / 'git').write_text(RECORD_PUSH)
             (tools / 'git').chmod(0o755)
             record = root / 'push-record'
+            machine = root / 'machine-gitconfig'
+            machine.write_text('[credential]\n\thelper = !echo password=the-keychain\n')
             environment = {**ENV, 'PATH': f'{tools}{os.pathsep}{ENV["PATH"]}', 'REAL_GIT': shutil.which('git'),
-                           'PUSH_RECORD': str(record)}
+                           'PUSH_RECORD': str(record), 'GIT_CONFIG_GLOBAL': str(machine)}
             self.assertEqual(publish_run(root, repo, environment).returncode, 0)
-            self.assertFalse(record.exists() and 'extraheader' in record.read_text(),
-                             'a job without a token pushes as the machine does')
+            self.assertFalse(record.exists() and record.read_text(), 'a job without a token pushes as the machine does')
             (root / 'run.json').write_text(json.dumps({**run(), 'main': 'def456abc789'}))
             published = publish_run(root, repo, {**environment, 'GH_TOKEN': 'job-token'})
             self.assertEqual(published.returncode, 0, published.stderr)
+            # What git is asked for with the push's environment: the job's token.
             pushed = dict(line.split('=', 1) for line in record.read_text().splitlines())
-            self.assertEqual(pushed['GIT_CONFIG_KEY_0'], 'credential.helper')
-            self.assertEqual(pushed['GIT_CONFIG_VALUE_0'], '')
-            self.assertEqual(pushed['GIT_CONFIG_KEY_1'], 'http.https://github.com/.extraheader')
-            token = base64.b64encode(b'x-access-token:job-token').decode()
-            self.assertEqual(pushed['GIT_CONFIG_VALUE_1'], f'AUTHORIZATION: basic {token}')
+            asked = subprocess.run(['git', 'credential', 'fill'], input='protocol=https\nhost=github.com\n\n',
+                                   capture_output=True, text=True, check=True,
+                                   env={**environment, **pushed, 'GH_TOKEN': 'job-token'}).stdout
+            self.assertIn('username=x-access-token', asked)
+            self.assertIn('password=job-token', asked)
+            self.assertNotIn('the-keychain', asked)
+
+    def test_a_data_branch_that_cannot_be_fetched_is_not_started_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin, repo = scratch_repo(root)
+            publish_run(root, repo)
+            git('remote', 'set-url', 'origin', str(root / 'gone.git'), cwd=repo)
+            (root / 'run.json').write_text(json.dumps({**run(), 'main': 'def456abc789'}))
+            published = publish_run(root, repo)
+            self.assertNotEqual(published.returncode, 0)
+            self.assertIn('git fetch origin perf-data failed', published.stderr)
+            self.assertNotIn('already exists', published.stderr)
+
+    def test_a_data_branch_the_remote_lacks_is_started(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin, repo = scratch_repo(root)
+            git('push', '-q', 'origin', '--delete', 'perf-data', cwd=repo)
+            git('branch', '-q', '-D', 'perf-data', cwd=repo)
+            published = publish_run(root, repo)
+            self.assertEqual(published.returncode, 0, published.stderr)
+            index = json.loads(git('show', 'perf-data:index.json', cwd=origin))
+            self.assertEqual([entry['file'] for entry in index['runs']],
+                             ['runs/2026-10-05-nightly-abc123def-EVR-AL00.json'])
 
 
 if __name__ == '__main__':
