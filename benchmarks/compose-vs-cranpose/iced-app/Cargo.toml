@@ -6,12 +6,27 @@ description = "The gauntlet of the framework comparison in iced"
 license = "Apache-2.0 OR MIT"
 publish = false
 
+# wasm-pack's wasm-opt reads the instructions rustc emits for the browser.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O3", "--all-features"]
+
+[lib]
+name = "perf_iced"
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 # iced's default wgpu renderer, with the canvas for sparklines and the tilted
-# badge, images for avatars, and its text API to measure the badge.
-iced = { version = "0.14", features = ["canvas", "image", "advanced"] }
+# badge, images for avatars, and its text API to measure the badge. In a
+# browser wgpu falls back to WebGL where the browser has no WebGPU.
+iced = { version = "0.14", features = ["canvas", "image", "advanced", "webgl"] }
 log = "0.4"
 perf-data = { path = "../perf-data" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-logger = "0.2"
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = ["Window", "Location"] }
 
 # Its own workspace, like a real application, built as the Cranpose app is.
 [workspace]

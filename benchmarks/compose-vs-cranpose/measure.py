@@ -249,14 +249,15 @@ def parse_stat(line):
 
 
 def parse_snap(lines):
-    """Reads the STAT/TASK block at the start of `lines`, stopping at its end."""
-    process = None
+    """Reads the STAT/TASK block at the start of `lines`, stopping at its end:
+    the CPU ticks of every process in it, and of each thread."""
+    process = 0
     threads = {}
     for line in lines:
         if not line.startswith(('STAT ', 'TASK ')):
             break
-        if line.startswith('STAT '):
-            process = parse_stat(line[5:])[1]
+        if line.startswith('STAT ') and len(line) > 5:
+            process += parse_stat(line[5:])[1]
         elif line.startswith('TASK ') and len(line) > 5:
             tid = line[5:].split()[0]
             name, ticks = parse_stat(line[5:])
@@ -481,12 +482,12 @@ def clock_summary(freqs):
     return summary
 
 
-def frame_rate(device, app):
-    """The app's recent frame rate, from the presents SurfaceFlinger keeps for
-    its layer; 0 when it has presented fewer than two frames."""
+def frame_rate(device, layer):
+    """A layer's recent frame rate, from the presents SurfaceFlinger keeps for
+    it; 0 when it has presented fewer than two frames."""
     presents = sorted(
         int(fields[1]) for fields in (line.split() for line in
-                                      device.shell('dumpsys', 'SurfaceFlinger', '--latency', app_layer(device, app))
+                                      device.shell('dumpsys', 'SurfaceFlinger', '--latency', layer)
                                       .splitlines()[1:])
         if len(fields) == 3 and 0 < int(fields[1]) < PENDING)
     if len(presents) < 2:
@@ -494,34 +495,123 @@ def frame_rate(device, app):
     return (len(presents) - 1) / ((presents[-1] - presents[0]) / 1e9)
 
 
+class AppTarget:
+    """An installed Android app, started by its activity."""
+
+    def __init__(self, app):
+        self.name = app
+        self.package = APPS[app]['package']
+        self.gfx = app == 'compose'
+
+    def launch(self, device, scenario, extras):
+        times, pid = launch(device, self.name, scenario, extras)
+        return times, [pid]
+
+    def layer(self, device):
+        return app_layer(device, self.name)
+
+    def memory(self, device, pids):
+        return meminfo(device, self.package)
+
+    def log(self, device):
+        return app_log(device, self.name)
+
+    def stop(self, device):
+        device.shell('am', 'force-stop', self.package)
+
+
+CHROME = 'com.android.chrome'
+# Chrome composites a page into a surface of its own; the window's layer only
+# holds the toolbar.
+CHROME_LAYER = 'com.android.chrome/ChromeChildSurface#0'
+# How long a page gets to download, compile and draw its first frame.
+PAGE_TIMEOUT_S = 120
+
+
+class PageTarget:
+    """An app built for the browser, open in Chrome on the phone and served
+    from the host over `adb reverse`. The browser, its renderer and its GPU
+    process are the app."""
+    package = CHROME
+    gfx = False
+
+    def __init__(self, server, app, tier):
+        self.server = server
+        self.name = app
+        self.tier = tier
+
+    def launch(self, device, scenario, extras):
+        device.shell('am', 'force-stop', CHROME)
+        time.sleep(1.0)
+        device.shell('input', 'keyevent', 'KEYCODE_WAKEUP')
+        mark = self.server.mark()
+        url = f'http://localhost:{self.server.port}/{self.name}/index.html?tier={self.tier}&freeze=0'
+        out = device.shell('am', 'start', '-W', '-a', 'android.intent.action.VIEW', '-d', url,
+                           '-n', f'{CHROME}/com.google.android.apps.chrome.Main')
+        if 'Status: ok' not in out:
+            raise RuntimeError('launch failed: ' + out)
+        times = {key: int(value) for key, value in re.findall(r'(TotalTime|WaitTime): (\d+)', out)}
+        self.server.wait_for('PERF first_frame', PAGE_TIMEOUT_S, mark)
+        return times, self.pids(device)
+
+    def pids(self, device):
+        """Chrome's processes, the browser's own first; the zygote that
+        forks them does no work."""
+        found = {}
+        for line in device.shell('ps', '-A', '-o', 'PID,NAME').splitlines()[1:]:
+            pid, _, name = line.strip().partition(' ')
+            if name.startswith(CHROME) and not name.endswith('_zygote'):
+                found[name] = int(pid)
+        if CHROME not in found:
+            raise RuntimeError('Chrome did not start')
+        return [found.pop(CHROME), *found.values()]
+
+    def layer(self, device):
+        return CHROME_LAYER
+
+    def memory(self, device, pids):
+        """What every one of Chrome's processes holds, summed."""
+        total = {}
+        for pid in pids:
+            for key, value in meminfo(device, str(pid)).items():
+                total[key] = total.get(key, 0) + value
+        return total
+
+    def log(self, device):
+        return '\n'.join(self.server.heard)
+
+    def stop(self, device):
+        device.shell('am', 'force-stop', CHROME)
+
+
 def measure_run(device, app, scenario, args, destination, window=None):
     """One cold launch measured over `window` seconds after the warm-up
-    (`args.window` unless given)."""
+    (`args.window` unless given). `app` is an installed app's name, or the
+    target of a page in the browser."""
+    target = AppTarget(app) if isinstance(app, str) else app
     window = window or args.window
-    package = APPS[app]['package']
-    run = {'app': app, 'scenario': scenario, 'temperature_before': device.temperatures()}
+    run = {'app': target.name, 'scenario': scenario, 'temperature_before': device.temperatures()}
     extras = (HEAVY.get(scenario, '') if args.load == 'heavy' else '') + ' ' + args.extra
     run['extras'] = extras.strip()
-    run['launch'], pid = launch(device, app, scenario, extras.split())
+    run['launch'], pids = target.launch(device, scenario, extras.split())
     run['started_s'] = round(time.monotonic() - args.started, 1)
     time.sleep(args.warmup)
-    layer = app_layer(device, app)
+    layer = target.layer(device)
     samples = int(window / args.interval)
-    output = device.shell('sh', REMOTE_WINDOW, str(pid), package, layer, str(samples),
-                          str(args.interval), '1' if app == 'compose' else '0',
-                          timeout=window + 60)
-    (destination / f'{app}-{scenario}-{int(time.time())}.txt').write_text(output)
+    output = device.shell('sh', REMOTE_WINDOW, ','.join(map(str, pids)), target.package, layer, str(samples),
+                          str(args.interval), '1' if target.gfx else '0', timeout=window + 60)
+    (destination / f'{target.name}-{scenario}-{int(time.time())}.txt').write_text(output)
     lines = output.splitlines()
     if any(line.strip() == 'STAT' for line in lines):
-        raise RuntimeError(f'{package} exited during the window')
+        raise RuntimeError(f'{target.package} exited during the window')
     t0 = float(next(line for line in lines if line.startswith('T0 ')).split()[1])
     t1 = float(next(line for line in lines if line.startswith('T1 ')).split()[1])
     t0_index = next(i for i, line in enumerate(lines) if line.startswith('T0 '))
     t1_index = next(i for i, line in enumerate(lines) if line.startswith('T1 '))
     first_proc, first_threads = parse_snap(lines[t0_index + 1:])
     last_proc, last_threads = parse_snap(lines[t1_index + 1:])
-    if device.shell('pidof', package, check=False).strip() != str(pid):
-        raise RuntimeError(f'{package} restarted or died during the window')
+    if str(pids[0]) not in device.shell('pidof', target.package, check=False).split():
+        raise RuntimeError(f'{target.package} restarted or died during the window')
     elapsed = t1 - t0
     frames, calibration, vsync_ms, poll_gaps = presents(output)
     # /proc/uptime counts suspended time and SurfaceFlinger's monotonic clock
@@ -540,7 +630,7 @@ def measure_run(device, app, scenario, args, destination, window=None):
         threads.append({'name': name, 'cpu_s': (ticks - before) / ticks_per_s})
     threads.sort(key=lambda thread: -thread['cpu_s'])
     run.update(
-        pid=pid,
+        pid=pids[0],
         window_s=elapsed,
         layer=layer,
         clock_offset_s=offset,
@@ -553,23 +643,23 @@ def measure_run(device, app, scenario, args, destination, window=None):
         **clock_summary(freqs),
         **mali_clock_summary(freqs, mali_khz),
         thermal=thermal_summary(thermal_series(output)),
-        memory=meminfo(device, package),
+        memory=target.memory(device, pids),
     )
     run['throttled'] = (min(run['cap_pct'].values(), default=100.0) < 100.0
                         or any(value['max'] > 0 for name, value in run['thermal'].items()
                                if name.startswith('cooling_')))
-    if app == 'compose':
+    if target.gfx:
         run['gfxinfo'] = gfxinfo_summary(output.split('GFX_BEGIN', 1)[1].split('GFX_END', 1)[0])
-    log = app_log(device, app)
+    log = target.log(device)
     run['app_log'] = [line for line in log.splitlines() if 'PERF' in line]
     if args.screenshots:
-        shot = destination / f'{app}-{scenario}.png'
+        shot = destination / f'{target.name}-{scenario}.png'
         if not shot.exists():
             with open(shot, 'wb') as handle:
                 subprocess.run(['adb', '-s', device.serial, 'exec-out', 'screencap', '-p'],
                                stdout=handle, check=True, timeout=30)
     run['temperature_after'] = device.temperatures()
-    device.shell('am', 'force-stop', package)
+    target.stop(device)
     return run
 
 

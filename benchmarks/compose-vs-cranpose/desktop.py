@@ -19,6 +19,10 @@ is as short as the app's frame rate allows: `--min-frames` frames, within
 
   python3 desktop.py --output results/desktop --tier 12
   python3 desktop.py --output results/desktop-parity --parity --tier 5
+  python3 desktop.py --output results/browser --browser DIST --tier 6
+
+`--browser DIST` runs the apps `build_apps.sh browser DIST` built for the
+browser, each in a Chrome window of its own profile, at the browser's own tier.
 
 `--parity` freezes every app on frame 120, takes a picture of each window
 with `FrameCount.app` and compares each with Compose's picture, as
@@ -45,6 +49,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import versions
+from browser import BrowserServer
 
 
 HERE = Path(__file__).resolve().parent
@@ -67,6 +72,11 @@ DISAGREEMENT = 1.5
 SUMMARY = ('fps', 'cpu_ms_per_frame', 'cpu_cores', 'server_cores', 'other_cores', 'ram_mb', 'gpu_ram_mb', 'cpu_mhz',
            'gpu_mhz')
 
+# Chrome, the engine Electron apps ship, in an app window of its own profile.
+# Its title bar is part of the window size it is given.
+CHROME_APP = [CHROME, '--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
+              '--enable-logging=stderr', '--window-size=1280,852', '--app={page}?tier={tier}&freeze={freeze}']
+
 # Each app's command: `{tier}`, `{freeze}`, `{page}` and `{profile}` are
 # filled in for the run.
 APPS = {
@@ -84,11 +94,7 @@ APPS = {
     'appkit': [HERE / 'appkit-app/build/PerfAppKit.app/Contents/MacOS/PerfAppKit'],
     'flutter': [HERE / 'flutter-app/build/macos/Build/Products/Release/perf_flutter.app/Contents/MacOS/perf_flutter'],
     'compose': [HERE / 'compose-desktop-app/build/compose/binaries/main/app/PerfCompose.app/Contents/MacOS/PerfCompose'],
-    # Chrome, the engine Electron apps ship, in an app window of its own
-    # profile. Its title bar is part of the window size it is given.
-    'web': [CHROME, '--user-data-dir={profile}', '--no-first-run', '--no-default-browser-check',
-            '--enable-logging=stderr', '--window-size=1280,852',
-            '--app={page}?tier={tier}&freeze={freeze}'],
+    'web': CHROME_APP,
     # The same page in Tauri, on the system's WKWebView.
     'tauri': [HERE / 'tauri-app/target/release/perf-compare-tauri', '--page={page}'],
     'dioxus': [HERE / 'dioxus-app/target/release/perf-compare-dioxus'],
@@ -235,15 +241,18 @@ class App:
     no window from outside the login session, and an app it starts comes to
     the front."""
 
-    def __init__(self, name, tier, freeze, work, page, stage, label=None):
+    def __init__(self, name, args, freeze, work, page, stage, label=None):
+        tier = args.tier
         self.name = name
         self.work = work
         self.log = stage / f'{label or name}.log'
         # A profile for each launch: helpers of an earlier launch's Chrome may
         # outlive it, and must not pass for this one's.
         profile = stage / f'chrome-profile-{label or name}'
+        # In the browser every app is the same Chrome, opened on its own page.
+        template, page = (CHROME_APP, f'{page}/{name}/index.html') if args.browser else (APPS[name], page)
         values = {'tier': tier, 'freeze': freeze, 'page': page, 'profile': profile}
-        command = [str(part).format(**values) for part in APPS[name]]
+        command = [str(part).format(**values) for part in template]
         variables = {'PERF_TIER': str(tier), 'PERF_FREEZE': str(freeze), 'PERF_FONTS': str(stage / 'fonts')}
         executable, arguments = command[0], command[1:]
         self.log.write_text('')
@@ -321,7 +330,7 @@ def measure(name, args, work, page, stage, label, earlier):
     disagrees with the app's `earlier` legs, the window's picture are kept
     under `label`."""
     window = args.windows.get(name, args.window)
-    app = App(name, args.tier, 0, work, page, stage, label)
+    app = App(name, args, 0, work, page, stage, label)
     try:
         wait_for(app.log, 'PERF first_frame', args.timeout)
         time.sleep(args.warmup)
@@ -366,7 +375,7 @@ def measure(name, args, work, page, stage, label, earlier):
 
 def picture(name, args, work, page, stage):
     """The window frozen on frame `args.freeze`."""
-    app = App(name, args.tier, args.freeze, work, page, stage)
+    app = App(name, args, args.freeze, work, page, stage)
     try:
         wait_for(app.log, 'PERF frozen', args.timeout)
         time.sleep(0.5)
@@ -384,6 +393,8 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--apps', help='the apps to run; by default every app that is built')
+    parser.add_argument('--browser', type=Path, metavar='DIST',
+                        help='run the apps `build_apps.sh browser DIST` built, in Chrome')
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     parser.add_argument('--tier', type=int, default=12)
     parser.add_argument('--rounds', type=int, default=2)
@@ -403,14 +414,19 @@ def main():
     parser.add_argument('--tile', type=int, default=48)
     parser.add_argument('--tile-delta', type=float, default=12.0)
     args = parser.parse_args()
-    if args.apps:
+    if args.browser:
+        built = [name for name in versions.BROWSER_APPS if (args.browser / name / 'index.html').exists()]
+        apps = args.apps.split(',') if args.apps else built
+        print('not built:', ', '.join(name for name in versions.BROWSER_APPS if name not in built) or 'none',
+              flush=True)
+    elif args.apps:
         apps = args.apps.split(',')
     else:
         apps = [name for name in APPS if name == 'web' or Path(APPS[name][0]).exists()]
         print('not built:', ', '.join(name for name in APPS if name not in apps) or 'none', flush=True)
     args.output.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    page = serve_page()
+    page = BrowserServer(args.browser).base if args.browser else serve_page()
     with tempfile.TemporaryDirectory(prefix='gauntlet-') as folder:
         stage = Path(folder)
         shutil.copytree(FONTS, stage / 'fonts')
@@ -446,7 +462,7 @@ def run(args, apps, page, stage):
         from parity import compare_pair
         pictures = {name: picture(name, args, args.output, page, stage) for name in apps}
         # Compose's picture is the one the others are held to.
-        reference = 'compose' if 'compose' in apps else apps[0]
+        reference = next((name for name in ('compose', 'web') if name in apps), apps[0])
         results = {}
         for name in (name for name in apps if name != reference):
             (_, changed_a, first, second, heat_a), (_, changed_b, _, _, heat_b) = compare_pair(
@@ -487,15 +503,19 @@ def run(args, apps, page, stage):
     chip = subprocess.run(['sysctl', '-n', 'machdep.cpu.brand_string'], capture_output=True, text=True,
                           check=True).stdout.strip()
     width, height = DESKTOP_WINDOW
+    platform = 'browser' if args.browser else 'desktop'
+    if args.browser:
+        chip = f'{chip} · Chrome {versions.chrome_version().split(".")[0]}'
     return {
-        'kind': 'frameworks',
+        'kind': platform if args.browser else 'frameworks',
         'started_at': started_at,
         'main': args.main,
         'device': {'ro.product.model': chip},
-        'subjects': [versions.subject(name, 'desktop', built, args.release) for name in apps],
+        'subjects': [versions.subject(name, platform, built, args.release) for name in apps],
         'protocol': {'warmup_s': args.warmup, 'window_s': args.window, 'max_window_s': args.max_window,
                      'min_frames': args.min_frames, 'rounds': args.rounds, 'max_other_cores': args.max_others},
-        'scenarios': [{'scenario': 'gauntlet', 'extras': f'tier {args.tier}, {width} x {height} window',
+        'scenarios': [{'scenario': 'gauntlet',
+                       'extras': f'tier {args.tier}, {width} x {height} {"browser " if args.browser else ""}window',
                        'legs': legs, 'summary': summary, 'verdicts': {}}],
     }
 

@@ -5,3 +5,5 @@ results/
 **/.kotlin/
 **/local.properties
 desktop-versions.json
+browser-dist/
+**/pkg/

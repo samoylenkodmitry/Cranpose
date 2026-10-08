@@ -6,7 +6,6 @@
 // from wall time, so every framework does the same work per frame.
 
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -15,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 import 'data.dart';
+import 'host.dart';
 
 const _ink = Color(0xFF111827);
 const _body = Color(0xFF374151);
@@ -40,19 +40,6 @@ const _scrollPerFrame = 3.0;
 /// The family the device's Roboto files load under, the files the other apps use.
 const _roboto = 'PerfRoboto';
 
-/// Carries `PERF` lines to the platform log, under the other apps' tag.
-const _log = MethodChannel('perfcompare/log');
-
-/// Writes a `PERF` line: to Android's log, or on a desktop to standard
-/// output, where `desktop.py` reads it.
-void _perf(String line) {
-  if (Platform.isAndroid) {
-    _log.invokeMethod<void>('log', line);
-  } else {
-    stdout.writeln(line);
-  }
-}
-
 /// What `am start` asked of the gauntlet: tier and freeze frame, as arguments.
 class GauntletLoad {
   /// Load tier, 1 to 16.
@@ -64,35 +51,23 @@ class GauntletLoad {
   const GauntletLoad(this.tier, this.freeze);
 
   factory GauntletLoad.parse(List<String> args) {
-    int arg(int index, int fallback) =>
-        index < args.length ? int.tryParse(args[index]) ?? fallback : fallback;
-    return GauntletLoad(gauntletTier(arg(0, 5)), arg(1, 0));
+    final (tier, freeze) = launchOf(args);
+    return GauntletLoad(gauntletTier(tier), freeze);
   }
 }
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final fonts = FontLoader(_roboto)
-    ..addFont(_systemFont('Roboto-Regular.ttf'))
-    ..addFont(_systemFont('Roboto-Bold.ttf'));
+    ..addFont(robotoFont('Roboto-Regular.ttf'))
+    ..addFont(robotoFont('Roboto-Bold.ttf'));
   final avatars = Future.wait(List.generate(avatarCount, _avatar));
   await fonts.load();
-  // On a desktop `desktop.py` asks in `PERF_TIER` and `PERF_FREEZE`.
-  final environment = Platform.environment;
-  final load = Platform.isAndroid
-      ? GauntletLoad.parse(args)
-      : GauntletLoad.parse([environment['PERF_TIER'] ?? '', environment['PERF_FREEZE'] ?? '']);
+  final load = GauntletLoad.parse(args);
   runApp(GauntletApp(load, posts(), await avatars));
-  if (!Platform.isAndroid) {
-    WidgetsBinding.instance.addPostFrameCallback((_) => _perf('PERF first_frame'));
+  if (logsFirstFrame) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => perf('PERF first_frame'));
   }
-}
-
-/// A Roboto file: the device's own on Android, elsewhere the one in the
-/// folder `PERF_FONTS` names, which every desktop app loads.
-Future<ByteData> _systemFont(String file) async {
-  final folder = Platform.isAndroid ? '/system/fonts' : Platform.environment['PERF_FONTS'] ?? 'fonts';
-  return ByteData.sublistView(await File('$folder/$file').readAsBytes());
 }
 
 Future<ui.Image> _avatar(int index) {
@@ -180,7 +155,7 @@ class _GauntletState extends State<Gauntlet> with SingleTickerProviderStateMixin
     final freeze = widget.load.freeze;
     if (freeze > 0 && index >= freeze) {
       _ticker.stop();
-      _perf('PERF frozen frame=$index');
+      perf('PERF frozen frame=$index');
     }
   }
 

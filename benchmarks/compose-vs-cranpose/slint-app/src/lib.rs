@@ -212,7 +212,7 @@ fn android_main(app: slint::android::AndroidApp) {
 }
 
 /// Runs the gauntlet in a desktop window, as `desktop.py` asks for it.
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
 pub fn run_desktop(launch: Launch) -> Result<(), PlatformError> {
     register_roboto();
     let (width, height) = perf_data::DESKTOP_WINDOW;
@@ -222,14 +222,41 @@ pub fn run_desktop(launch: Launch) -> Result<(), PlatformError> {
     )
 }
 
-/// Roboto is no desktop system font: the app registers the files every
-/// desktop app loads, which the markup's `Roboto` family then finds.
+/// Draws the gauntlet in the page's `canvas`, the query string its launch.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn run_web() {
+    wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
+    console_error_panic_hook::set_once();
+    let page = web_sys::window();
+    let query = page
+        .as_ref()
+        .and_then(|window| window.location().search().ok())
+        .unwrap_or_default();
+    // The canvas takes the root layout's preferred size, which is not the
+    // page's: the window is the viewport.
+    let viewport = page.as_ref().and_then(|window| {
+        let side = |value: Result<wasm_bindgen::JsValue, _>| value.ok()?.as_f64();
+        Some(slint::LogicalSize::new(
+            side(window.inner_width())? as f32,
+            side(window.inner_height())? as f32,
+        ))
+    });
+    register_roboto();
+    if let Err(error) = run(Launch::from_query(&query), viewport) {
+        log::error!("Slint stopped: {error}");
+    }
+}
+
+/// Roboto is no system font where the app runs but Android: the app registers
+/// the files every desktop app loads, or the page's copy, which the markup's
+/// `Roboto` family then finds.
 #[cfg(not(target_os = "android"))]
 fn register_roboto() {
     use slint::fontique_011::fontique;
     let mut collection = slint::fontique_011::shared_collection();
     for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
-        match std::fs::read(perf_data::font_path(file)) {
+        match perf_data::font_bytes(file) {
             Ok(bytes) => {
                 collection.register_fonts(fontique::Blob::new(std::sync::Arc::new(bytes)), None);
             }

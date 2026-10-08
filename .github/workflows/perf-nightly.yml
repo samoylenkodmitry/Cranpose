@@ -6,9 +6,10 @@ name: perf nightly
 # moves every framework's pin to its latest stable release, builds every
 # framework's apps, measures the desktop ones and opens a pull request with
 # the pins that moved; the Mac the phone is attached to builds Cranpose's and
-# measures them all on the phone. Results go to the perf-data branch the
-# desktop demo's Performance tab reads; a regression found twice in a row
-# opens a perf-regression issue.
+# measures them all on the phone. The frameworks that target the browser run
+# there too, in Chrome on the Mac desktop and in Chrome on the phone. Results
+# go to the perf-data branch the desktop demo's Performance tab reads; a
+# regression found twice in a row opens a perf-regression issue.
 
 on:
   # GitHub's schedule did not fire this workflow on its first nights, so a
@@ -41,6 +42,7 @@ jobs:
     outputs:
       measured: ${{ steps.published.outputs.measured }}
       apks: ${{ steps.apks.outputs.handed }}
+      browser: ${{ steps.pages.outputs.handed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,8 +59,10 @@ jobs:
       - name: Skip a main this Mac already measured
         id: published
         run: |
-          if python3 scripts/perf/publish.py --published frameworks \
-              "$(sysctl -n machdep.cpu.brand_string)" "$(git rev-parse HEAD)"; then
+          chip="$(sysctl -n machdep.cpu.brand_string)"
+          chrome="$(defaults read '/Applications/Google Chrome.app/Contents/Info' CFBundleShortVersionString | cut -d. -f1)"
+          if python3 scripts/perf/publish.py --published frameworks "$chip" "$(git rev-parse HEAD)" \
+              && python3 scripts/perf/publish.py --published browser "$chip · Chrome $chrome" "$(git rev-parse HEAD)"; then
             echo "measured=yes" >> "$GITHUB_OUTPUT"
           fi
 
@@ -87,6 +91,7 @@ jobs:
           export PERF_BUMPS="$RUNNER_TEMP/bumps.json"
           benchmarks/compose-vs-cranpose/build_apps.sh desktop
           benchmarks/compose-vs-cranpose/build_apps.sh android "$RUNNER_TEMP/gauntlet-apks"
+          benchmarks/compose-vs-cranpose/build_apps.sh browser "$RUNNER_TEMP/gauntlet-browser"
           benchmarks/compose-vs-cranpose/build_apps.sh release "$(git describe --tags --abbrev=0 --match 'v*')"
 
       - name: Hand the Android apps to the phone's job
@@ -98,9 +103,23 @@ jobs:
           path: ${{ runner.temp }}/gauntlet-apks/
           retention-days: 2
 
+      - name: Hand the browser builds to the phone's job
+        if: steps.published.outputs.measured != 'yes'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gauntlet-browser
+          # Each app's page and `versions.json`, the version each was built with.
+          path: ${{ runner.temp }}/gauntlet-browser/
+          retention-days: 2
+
       # The phone measures the apps whatever becomes of the desktop run.
       - name: Note the handover
         id: apks
+        if: steps.published.outputs.measured != 'yes'
+        run: echo "handed=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Note the browser handover
+        id: pages
         if: steps.published.outputs.measured != 'yes'
         run: echo "handed=yes" >> "$GITHUB_OUTPUT"
 
@@ -117,6 +136,18 @@ jobs:
         if: steps.published.outputs.measured != 'yes'
         run: just perf-publish "$RUNNER_TEMP/desktop/report.json"
 
+      - name: Measure the browser apps in Chrome
+        if: steps.published.outputs.measured != 'yes'
+        shell: bash --noprofile --norc -eo pipefail {0}
+        run: |
+          scripts/ci/with_host_lock.sh --exclusive python3 benchmarks/compose-vs-cranpose/desktop.py \
+            --output "$RUNNER_TEMP/desktop-browser" --browser "$RUNNER_TEMP/gauntlet-browser" --tier 16 \
+            --main "$(git rev-parse HEAD)"
+
+      - name: Publish the browser run
+        if: steps.published.outputs.measured != 'yes'
+        run: just perf-publish "$RUNNER_TEMP/desktop-browser/report.json"
+
       - name: Propose the pins that moved
         if: steps.published.outputs.measured != 'yes'
         env:
@@ -128,7 +159,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: perf-nightly-desktop
-          path: ${{ runner.temp }}/desktop/*.json
+          path: ${{ runner.temp }}/desktop*/*.json
           retention-days: 30
 
   android:
@@ -192,6 +223,19 @@ jobs:
         run: |
           just perf-frameworks "$PERF_SERIAL" "$PERF_OUTPUT/frameworks" "$RUNNER_TEMP/gauntlet-apks"
           just perf-publish "$PERF_OUTPUT/frameworks/frameworks.json"
+
+      - name: Fetch the browser builds
+        if: ${{ !cancelled() && needs.desktop.outputs.browser == 'yes' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: gauntlet-browser
+          path: ${{ runner.temp }}/gauntlet-browser
+
+      - name: Compare the browser apps in Chrome on the phone
+        if: ${{ !cancelled() && needs.desktop.outputs.browser == 'yes' }}
+        run: |
+          just perf-browser "$PERF_SERIAL" "$PERF_OUTPUT/browser" "$RUNNER_TEMP/gauntlet-browser"
+          just perf-publish "$PERF_OUTPUT/browser/frameworks.json"
 
       - name: Keep the run
         if: ${{ !cancelled() }}

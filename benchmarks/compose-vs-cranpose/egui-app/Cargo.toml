@@ -6,17 +6,30 @@ description = "The gauntlet of the framework comparison in egui"
 license = "Apache-2.0 OR MIT"
 publish = false
 
+# wasm-pack's wasm-opt reads the instructions rustc emits for the browser.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O3", "--all-features"]
+
 [lib]
 name = "perf_egui"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+log = "0.4"
+perf-data = { path = "../perf-data" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # egui's own native shell with its default renderer (glow) and fonts, and
 # AccessKit for accessibility services, as the Android toolkits serve them.
 # AccessKit's Android adapter attaches to GameActivity's view.
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "accesskit", "android-game-activity"] }
-log = "0.4"
-perf-data = { path = "../perf-data" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The same shell in a browser, on the same renderer: glow is WebGL2 there.
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Location"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 # egui-winit leaves AccessKit's Android adapter out, so Android would get the

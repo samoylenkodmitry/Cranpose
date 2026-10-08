@@ -6,6 +6,10 @@ description = "The gauntlet of the framework comparison in Slint"
 license = "Apache-2.0 OR MIT"
 publish = false
 
+# wasm-pack's wasm-opt reads the instructions rustc emits for the browser.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O3", "--all-features"]
+
 [lib]
 name = "perf_slint"
 crate-type = ["cdylib", "rlib"]
@@ -23,8 +27,17 @@ android_logger = "0.15"
 # collection to register the Roboto files the other desktop apps load. Skia
 # draws through wgpu there, and Slint tells the rendering notifier a frame
 # was drawn only with wgpu's API exposed.
-[target.'cfg(not(target_os = "android"))'.dependencies]
+[target.'cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))'.dependencies]
 slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "unstable-fontique-011", "unstable-wgpu-30"] }
+
+# In a browser: winit's canvas and Slint's FemtoVG renderer on WebGL2, which
+# Skia does not run on, and the same fontique collection for Roboto.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+slint = { version = "1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "unstable-fontique-011"] }
+wasm-bindgen = "0.2"
+wasm-logger = "0.2"
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = ["Window", "Location"] }
 
 [build-dependencies]
 slint-build = "1.18.1"

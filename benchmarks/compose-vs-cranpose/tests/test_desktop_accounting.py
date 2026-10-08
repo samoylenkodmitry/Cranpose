@@ -48,7 +48,7 @@ class DesktopRoundsTest(unittest.TestCase):
     """`run` on legs a stand-in for `measure` returns, as the run would read
     `FrameCount`'s rates."""
 
-    def rounds(self, rates, rounds=2):
+    def rounds(self, rates, rounds=2, browser=None, app='fyne'):
         """A rate is a leg; a `RuntimeError` is an attempt that failed."""
         measured = []
 
@@ -62,11 +62,12 @@ class DesktopRoundsTest(unittest.TestCase):
                     'cpu_ms_per_frame': 40.0}
 
         args = SimpleNamespace(parity=False, output=Path('results'), rounds=rounds, max_others=1.5, main=None,
-                               release=None, tier=16, warmup=1.0, window=3.0, max_window=8.0, min_frames=40)
+                               release=None, tier=16, warmup=1.0, window=3.0, max_window=8.0, min_frames=40,
+                               browser=browser)
         with patch.object(desktop, 'measure', measure), \
                 patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout='Apple M3 Pro')):
-            report = desktop.run(args, ['fyne'], 'page', Path('stage'))
-        return measured, report['scenarios'][0]
+            report = desktop.run(args, [app], 'page', Path('stage'))
+        return measured, report['scenarios'][0] if browser is None else report
 
     def test_a_leg_far_off_the_earlier_ones_is_measured_once_more_and_the_median_decides(self):
         measured, scenario = self.rounds([24.3, 60.1, 24.6])
@@ -85,6 +86,14 @@ class DesktopRoundsTest(unittest.TestCase):
         self.assertEqual(measured, ['fyne-1-1', 'fyne-1-2', 'fyne-1-3'])
         self.assertEqual(scenario['legs'], [])
         self.assertEqual(scenario['summary']['fyne'], {}, 'no values: the dashboard shows a dash')
+
+    def test_a_browser_run_is_a_run_of_its_own_kind_on_a_device_named_for_the_browser(self):
+        with patch.object(desktop.versions, 'chrome_version', return_value='154.0.8037.98'):
+            _, report = self.rounds([24.3, 24.6], browser=Path('dist'), app='web')
+        self.assertEqual(report['kind'], 'browser')
+        self.assertEqual(report['device']['ro.product.model'], 'Apple M3 Pro · Chrome 154')
+        self.assertEqual(report['scenarios'][0]['extras'], 'tier 16, 1280 x 820 browser window')
+        self.assertEqual(report['subjects'][0]['label'], 'Web Chrome 154.0.8037.98')
 
     def test_legs_that_agree_are_measured_once_each(self):
         measured, scenario = self.rounds([24.3, 25.9])

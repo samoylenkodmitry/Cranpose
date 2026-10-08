@@ -19,6 +19,12 @@ public static class Launch
 
     /// <summary>Writes a `PERF` line where `measure.py` reads it.</summary>
     public static Action<string> Log { get; set; } = _ => { };
+
+    /// <summary>The bytes of a Roboto file: the device's own on Android, elsewhere the one in the
+    /// folder `PERF_FONTS` names; a page reads its own copy.</summary>
+    public static Func<string, byte[]> ReadFont { get; set; } = file => File.ReadAllBytes(
+        Path.Combine(OperatingSystem.IsAndroid() ? "/system/fonts"
+            : Environment.GetEnvironmentVariable("PERF_FONTS") ?? "fonts", file));
 }
 
 public sealed class App : Avalonia.Application
@@ -40,6 +46,10 @@ public sealed class App : Avalonia.Application
         {
             activity.MainViewFactory = () => new GauntletView(Launch.Tier, Launch.Freeze);
         }
+        else if (ApplicationLifetime is ISingleViewApplicationLifetime page)
+        {
+            page.MainView = new GauntletView(Launch.Tier, Launch.Freeze);
+        }
         else if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             desktop.MainWindow = new Window
@@ -56,8 +66,7 @@ public sealed class App : Avalonia.Application
 }
 
 /// <summary>
-/// Roboto from the files the other apps load: the device's own on Android,
-/// elsewhere the ones in the folder `PERF_FONTS` names.
+/// Roboto from the files the other apps load, as <see cref="Launch.ReadFont"/> reads them.
 /// </summary>
 sealed class DeviceRoboto : FontCollectionBase
 {
@@ -69,13 +78,9 @@ sealed class DeviceRoboto : FontCollectionBase
         foreach (var file in new[] { "Roboto-Regular.ttf", "Roboto-Bold.ttf" })
         {
             // The typeface reads its stream for as long as it lives.
-            TryAddGlyphTypeface(new MemoryStream(File.ReadAllBytes(Path.Combine(Folder, file))), out _);
+            TryAddGlyphTypeface(new MemoryStream(Launch.ReadFont(file)), out _);
         }
     }
-
-    static string Folder => OperatingSystem.IsAndroid()
-        ? "/system/fonts"
-        : Environment.GetEnvironmentVariable("PERF_FONTS") ?? "fonts";
 
     public override Uri Key => Source;
 }

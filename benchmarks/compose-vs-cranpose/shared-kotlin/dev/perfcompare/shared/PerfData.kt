@@ -64,7 +64,7 @@ class Rng(seed: Int) {
         return x
     }
 
-    fun below(bound: Int): Int = Integer.remainderUnsigned(next(), bound)
+    fun below(bound: Int): Int = (next().toUInt() % bound.toUInt()).toInt()
 
     fun unit(): Float = (next() ushr 8).toFloat() / 16_777_216f
 }
@@ -192,7 +192,7 @@ fun tickers(count: Int): List<Ticker> {
 
 /** A triangle wave over [period]: 0 at the ends, `period / 2` in the middle. */
 private fun triangle(value: Int, period: Int): Int {
-    val position = Math.floorMod(value, period)
+    val position = value.mod(period)
     return period / 2 - abs(position - period / 2)
 }
 

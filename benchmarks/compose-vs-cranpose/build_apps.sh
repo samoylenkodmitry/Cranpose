@@ -7,6 +7,8 @@
 #                                with DIR/versions.json naming their versions
 #   build_apps.sh release TAG    Cranpose's desktop app at the release TAG, where
 #                                desktop.py runs it as `cranpose-release`
+#   build_apps.sh browser DIR    every app that targets the browser, as DIR/APP/index.html
+#                                with DIR/versions.json naming their versions
 #
 # Cranpose's Android apps are not here: the nightly builds them on the Mac the
 # phone is attached to, signed by the key its earlier builds carry.
@@ -24,7 +26,7 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 cache=${PERF_BUILD_CACHE:-$HOME/ci-cache/gauntlet}
-mode=${1:?usage: build_apps.sh desktop | android DIR | release TAG}
+mode=${1:?usage: build_apps.sh desktop | android DIR | release TAG | browser DIR}
 mkdir -p "$cache"
 
 export PATH="$cache/flutter/bin:/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
@@ -70,7 +72,8 @@ flutter_ready() {
     flutter --version
 }
 
-# The latest .NET 10 and MAUI Android workload.
+# The latest .NET 10, its MAUI Android workload, and the WebAssembly tools
+# that compile Avalonia's browser build ahead of time.
 dotnet_ready() {
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$cache/dotnet-install.sh"
     bash "$cache/dotnet-install.sh" --channel 10.0 --install-dir "$DOTNET_ROOT"
@@ -79,6 +82,7 @@ dotnet_ready() {
     else
         dotnet workload install maui-android
     fi
+    dotnet workload list | grep -q wasm-tools || dotnet workload install wasm-tools
 }
 
 # Each Rust app builds into its own target in the cache; the checkout links it
@@ -90,6 +94,25 @@ rust_target() {
 
 cargo_app() {
     (cd "$here/$1" && env -u CARGO_TARGET_DIR cargo build --release)
+}
+
+# An app built to WebAssembly: wasm-pack puts its module in pkg/, and the page
+# that loads it goes beside that in the app's folder of browser-dist.
+wasm_page() {
+    local name=$1 app=$2
+    shift 2
+    mkdir -p "$here/browser-dist/$name"
+    (cd "$here/$app" && env -u CARGO_TARGET_DIR wasm-pack build --target web --release "$@")
+    cp "$here/$app/index.html" "$here/browser-dist/$name/index.html"
+    ditto "$here/$app/pkg" "$here/browser-dist/$name/pkg"
+}
+
+# Dioxus's page draws with the web page's CSS, which names Roboto beside it.
+dioxus_page() {
+    wasm_page dioxus dioxus-app
+    cp "$here/web-app/www/style.css" "$here/browser-dist/dioxus/style.css"
+    mkdir -p "$here/browser-dist/dioxus/fonts"
+    cp "$here/fonts/"*.ttf "$here/browser-dist/dioxus/fonts/"
 }
 
 # What every build runs: Rust, Flutter, .NET and its workloads, Xcode, Node
@@ -232,6 +255,50 @@ android)
     cp "$here/web-app/android/app/build/outputs/apk/release/app-release.apk" "$out/web.apk"
     python3 "$here/versions.py" write "$out/versions.json" --platform android
     ;;
+browser)
+    out=${2:?usage: build_apps.sh browser DIR}
+    dist=$here/browser-dist
+    mkdir -p "$out" "$dist"
+    flutter_ready
+    dotnet_ready
+    tools=$(toolchains)
+    # Cranpose's app reads the whole workspace, which moves every night.
+    step cranpose-web
+    rust_target cranpose-app
+    wasm_page cranpose cranpose-app --no-default-features --features web,renderer-wgpu
+    # egui's shell on WebGL2, as on the phone's OpenGL ES.
+    rust_target egui-app
+    build egui-browser browser-dist/egui egui-app perf-data fonts -- \
+        attempt egui wasm_page egui egui-app
+    # Slint's FemtoVG renderer on WebGL2: Skia does not run in a browser.
+    rust_target slint-app
+    build slint-browser browser-dist/slint slint-app perf-data fonts -- \
+        attempt slint wasm_page slint slint-app
+    # iced on wgpu, which takes WebGPU where the browser has it.
+    rust_target iced-app
+    build iced-browser browser-dist/iced iced-app perf-data fonts -- \
+        attempt iced wasm_page iced iced-app
+    # Flutter's WebAssembly build, which falls back to JavaScript in a browser
+    # without WasmGC, with Roboto in its assets.
+    build flutter-browser browser-dist/flutter flutter-app fonts -- \
+        bash -c "cd '$here/flutter-app' && cp '$here/fonts/'*.ttf assets/fonts/ && flutter build web --wasm --release --base-href /flutter/ && rm -rf '$dist/flutter' && ditto build/web '$dist/flutter'"
+    # Avalonia's WebAssembly build, compiled ahead of time.
+    build avalonia-browser browser-dist/avalonia avalonia-app shared-cs fonts -- \
+        attempt avalonia bash -c "cd '$here/avalonia-app/Browser' && dotnet publish -c Release && rm -rf '$dist/avalonia' && ditto bin/Release/net10.0-browser/publish/wwwroot '$dist/avalonia'"
+    # Compose Multiplatform for the web, compiled to WebAssembly: the
+    # composables the Android app draws, with Roboto fetched beside the page.
+    build compose-browser browser-dist/compose compose-browser-app shared-compose shared-kotlin fonts -- \
+        attempt compose-desktop bash -c "cd '$here/compose-browser-app' && ./gradlew --no-daemon -q wasmJsBrowserDistribution && rm -rf '$dist/compose' && mkdir -p '$dist/compose/fonts' && ditto build/dist/wasmJs/productionExecutable '$dist/compose' && cp '$here/fonts/'*.ttf '$dist/compose/fonts/'"
+    # Dioxus on its DOM renderer, with the web page's CSS and Roboto.
+    rust_target dioxus-app
+    build dioxus-browser browser-dist/dioxus dioxus-app perf-data web-app/www/style.css fonts -- \
+        attempt dioxus dioxus_page
+    # The page, with the Roboto files its style names.
+    build web-browser browser-dist/web web-app shared-ts -- \
+        attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json && rm -rf '$dist/web' && mkdir -p '$dist/web/fonts' && cp -R www/. '$dist/web/' && cp '$here/fonts/'*.ttf '$dist/web/fonts/'"
+    ditto "$dist" "$out"
+    python3 "$here/versions.py" write "$out/versions.json" --platform browser
+    ;;
 release)
     tag=${2:?usage: build_apps.sh release TAG}
     tree=$cache/release-tree
@@ -253,7 +320,7 @@ release)
     ln -sfn "$cache/targets/cranpose-release" "$here/cranpose-app/target-release"
     ;;
 *)
-    echo "usage: build_apps.sh desktop | android DIR | release TAG" >&2
+    echo "usage: build_apps.sh desktop | android DIR | release TAG | browser DIR" >&2
     exit 2
     ;;
 esac

@@ -39,7 +39,7 @@ SOURCES = {
     'avalonia': 'benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs',
     'egui': 'benchmarks/compose-vs-cranpose/egui-app/src/lib.rs',
     'slint': 'benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint',
-    'iced': 'benchmarks/compose-vs-cranpose/iced-app/src/main.rs',
+    'iced': 'benchmarks/compose-vs-cranpose/iced-app/src/lib.rs',
     'gpui': 'benchmarks/compose-vs-cranpose/gpui-app/src/main.rs',
     'swiftui': 'benchmarks/compose-vs-cranpose/swiftui-app/Gauntlet.swift',
     'appkit': 'benchmarks/compose-vs-cranpose/appkit-app/Gauntlet.swift',
@@ -52,12 +52,17 @@ SOURCES = {
     'lynx': 'benchmarks/compose-vs-cranpose/lynx-app/page/src/Gauntlet.tsx',
 }
 
+# The apps built for the browser, in the order a run lists them: Cranpose's
+# first, the plain page last.
+BROWSER_APPS = ['cranpose', 'compose', 'flutter', 'egui', 'slint', 'iced', 'dioxus', 'avalonia', 'web']
+
 # The apps each platform runs besides Cranpose's.
 PLATFORM_APPS = {
     'android': ['compose', 'views', 'flutter', 'rn', 'nativescript', 'lynx', 'maui', 'avalonia', 'egui',
                 'slint', 'web'],
     'desktop': ['compose', 'egui', 'slint', 'iced', 'gpui', 'avalonia', 'swiftui', 'appkit', 'flutter', 'web',
                 'tauri', 'dioxus', 'xilem', 'fyne'],
+    'browser': BROWSER_APPS[1:],
 }
 
 NAMES = {
@@ -271,7 +276,7 @@ def version(app, platform, release=None):
         return f'macOS {run("sw_vers", "-productVersion")}'
     if app == 'web':
         capacitor = PINS['web'].current()
-        return f'Chrome {chrome_version()}' if platform == 'desktop' else f'Capacitor {capacitor}'
+        return f'Chrome {chrome_version()}' if platform in ('desktop', 'browser') else f'Capacitor {capacitor}'
     return PINS[app].current()
 
 
@@ -294,7 +299,7 @@ def main():
     parser.add_argument('command', choices=['check', 'bump', 'revert', 'write'])
     parser.add_argument('target', nargs='?', help='the pin to revert, or the file to write')
     parser.add_argument('--record', type=Path)
-    parser.add_argument('--platform', choices=['android', 'desktop'])
+    parser.add_argument('--platform', choices=['android', 'desktop', 'browser'])
     args = parser.parse_args()
 
     if args.command == 'write':
