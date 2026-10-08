@@ -147,6 +147,22 @@ class PublishPushTest(unittest.TestCase):
             self.assertIn('password=job-token', asked)
             self.assertNotIn('the-keychain', asked)
 
+    def test_a_data_tree_the_checkout_lost_its_record_of_is_made_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin, repo = scratch_repo(root)
+            self.assertEqual(publish_run(root, repo).returncode, 0)
+            # actions/checkout makes the checkout's .git again and the tree,
+            # which lives beside it, no longer belongs to any repository.
+            shutil.rmtree(repo / '.git/worktrees')
+            self.assertNotEqual(subprocess.run(['git', 'status'], cwd=root / 'tree', env=ENV,
+                                               capture_output=True).returncode, 0)
+            (root / 'run.json').write_text(json.dumps({**run(), 'main': 'def456abc789'}))
+            published = publish_run(root, repo)
+            self.assertEqual(published.returncode, 0, published.stderr)
+            index = json.loads(git('show', 'perf-data:index.json', cwd=origin))
+            self.assertEqual(len(index['runs']), 3)
+
     def test_a_data_branch_that_cannot_be_fetched_is_not_started_again(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

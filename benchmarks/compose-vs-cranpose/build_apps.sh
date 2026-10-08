@@ -302,11 +302,14 @@ browser)
 release)
     tag=${2:?usage: build_apps.sh release TAG}
     tree=$cache/release-tree
-    if [[ -e $tree/.git ]]; then
-        git -C "$tree" checkout -q --detach "$tag"
-    else
+    # A tree whose repository record is gone (`actions/checkout` made the
+    # checkout's .git again) is made again.
+    if ! git -C "$tree" rev-parse --git-dir >/dev/null 2>&1; then
+        rm -rf "$tree"
+        git -C "$here" worktree prune
         git -C "$here" worktree add -q --force --detach "$tree" "$tag"
     fi
+    git -C "$tree" checkout -q --detach "$tag"
     app=$tree/benchmarks/compose-vs-cranpose/cranpose-app
     # A release before the desktop gauntlet has no `cranpose-release` to run.
     if ! grep -q 'pub fn run_desktop' "$app/src/lib.rs" 2>/dev/null; then
