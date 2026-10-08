@@ -62,6 +62,13 @@ fn texture_uploads_are_owned_by_frame_graph_executor() {
     assert_frame_graph_owns_calls(&[".write_texture("], Some("pub(crate) fn upload_texture("));
 }
 
+/// The web writes buffers through the queue, ahead of the whole submit; the
+/// frame graph decides which writes may land so.
+#[test]
+fn buffer_writes_are_owned_by_frame_graph_executor() {
+    assert_frame_graph_owns_calls(&[".write_buffer("], None);
+}
+
 #[test]
 fn frame_graph_executor_does_not_export_submit_or_encoder_creation_helpers() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));

@@ -76,6 +76,54 @@ impl BufferUploads {
     }
 }
 
+/// What a frame's writes that land before its passes go through.
+pub(crate) trait BeforePassWriter {
+    /// Writes `bytes` at `offset` of `destination` for every pass of the
+    /// frame's submit to read, and returns how many bytes it wrote.
+    fn write_before_passes(
+        &self,
+        belt: &mut BufferUploads,
+        destination: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> u64;
+}
+
+/// Through the staging belt, into the encoder the device makes for the
+/// copies submitted ahead of the frame's passes.
+impl BeforePassWriter for wgpu::Device {
+    fn write_before_passes(
+        &self,
+        belt: &mut BufferUploads,
+        destination: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> u64 {
+        belt.write(self, None, destination, offset, bytes)
+    }
+}
+
+/// Through the queue, whose writes land before every command buffer of its
+/// next submit. The web's frame encoder writes so. On the web a mapped belt
+/// chunk is a JS `ArrayBuffer`: each write copies wasm memory into it, and
+/// the unmap copies it again. `writeBuffer` reads the bytes from wasm memory
+/// once.
+impl BeforePassWriter for wgpu::Queue {
+    fn write_before_passes(
+        &self,
+        _belt: &mut BufferUploads,
+        destination: &wgpu::Buffer,
+        offset: u64,
+        bytes: &[u8],
+    ) -> u64 {
+        if bytes.is_empty() {
+            return 0;
+        }
+        self.write_buffer(destination, offset, bytes);
+        bytes.len() as u64
+    }
+}
+
 fn before_passes_in<'a>(
     before_passes: &'a mut Option<wgpu::CommandEncoder>,
     device: &wgpu::Device,
