@@ -18,11 +18,12 @@ pub(crate) enum AccessibilityIdentityError {
         test,
         target_os = "android",
         target_os = "ios",
-        all(feature = "desktop-shell", feature = "renderer-wgpu")
+        all(feature = "desktop-shell", feature = "renderer-wgpu"),
+        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
     )),
     allow(
         dead_code,
-        reason = "only the Android, iOS and desktop bridges diff against what an update replaced"
+        reason = "only the Android, iOS, desktop and web bridges diff against what an update replaced"
     )
 )]
 pub(crate) struct Replaced {

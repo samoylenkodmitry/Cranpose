@@ -3922,7 +3922,7 @@ fn a_dialog_takes_the_reader_along_when_it_opens() {
     let web_source = crate_source("src/web_accessibility.rs");
     assert!(
         web_source.contains("accessibility::opened_dialog(")
-            && web_source.contains("if opened_dialog == Some(element.node_id) {"),
+            && web_source.contains("let opened = opened_dialog == Some(element.node_id);"),
         "the web mirror focuses the dialog node that opened"
     );
 }

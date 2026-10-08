@@ -8,7 +8,9 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_app_shell::{AppShell, PlatformFrameDriver, PointerSource, default_root_key};
+use cranpose_app_shell::{
+    AppShell, FrameSchedule, PlatformFrameDriver, PointerSource, default_root_key,
+};
 use cranpose_platform_web::WebPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use wasm_bindgen::{JsCast, prelude::*};
@@ -197,6 +199,27 @@ struct WebPlatformFrameDriver<'a> {
     frame_timer: &'a Rc<WebFrameTimer>,
     frame_pending: &'a Rc<Cell<bool>>,
     render_loop: &'a RenderLoop,
+}
+
+impl WebPlatformFrameDriver<'_> {
+    /// Asks for a frame at `wake` too, unless the app's own schedule brings
+    /// one sooner. The accessibility mirror holds back changes until its next
+    /// sync, and a frame must come then even when the app asks for none.
+    fn also_wake_at(&self, schedule: FrameSchedule, wake: Option<web_time::Instant>) {
+        let Some(wake) = wake else {
+            return;
+        };
+        if schedule.needs_frame
+            || schedule.needs_update
+            || schedule
+                .next_deadline
+                .is_some_and(|deadline| deadline <= wake)
+        {
+            return;
+        }
+        self.clear_wake();
+        self.request_wake_at(wake);
+    }
 }
 
 impl PlatformFrameDriver for WebPlatformFrameDriver<'_> {
@@ -892,7 +915,8 @@ pub async fn run(
             frame_pending: &frame_pending,
             render_loop: &render_loop_for_deadline,
         };
-        app.borrow().schedule_platform_frame(&frame_driver);
+        let schedule = app.borrow().schedule_platform_frame(&frame_driver);
+        frame_driver.also_wake_at(schedule, accessibility.borrow().sync_wake());
     }) as Box<dyn FnMut()>));
 
     request_frame();

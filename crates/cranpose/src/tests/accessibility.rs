@@ -2088,3 +2088,73 @@ fn a_projection_like_the_last_one_reuses_its_strings() {
     );
     assert_eq!(moved, project_semantics(&busy_screen(12.5)));
 }
+
+#[test]
+fn a_mirror_shows_focus_typing_and_dialogs_at_once_and_holds_back_the_rest() {
+    let field = AccessibilityElement {
+        node_id: 2,
+        role: AccessibilityRole::TextField,
+        value: Some("a".into()),
+        details: Some(Box::new(AccessibilityDetails {
+            text_selection: Some((1, 1)),
+            ..Default::default()
+        })),
+        ..element_with(2, None)
+    };
+    let applied = vec![element_with(1, None), field];
+
+    let mut moved = applied.clone();
+    moved[0].bounds.x += 40.0;
+    assert!(moved[0].same_but_bounds(&applied[0]));
+    assert_ne!(moved[0], applied[0]);
+    assert!(!mirror_at_once(&applied, &moved), "a move waits");
+
+    let mut renamed = applied.clone();
+    renamed[0].label = "Other".into();
+    assert!(!renamed[0].same_but_bounds(&applied[0]));
+    assert!(!mirror_at_once(&applied, &renamed), "a new label waits");
+
+    let mut focused = applied.clone();
+    focused[0].focused = true;
+    assert!(
+        mirror_at_once(&applied, &focused),
+        "a focus move shows at once"
+    );
+
+    let mut typed = applied.clone();
+    typed[1].value = Some("ab".into());
+    typed[1].update_details(|details| details.text_selection = Some((2, 2)));
+    assert!(mirror_at_once(&applied, &typed), "typing shows at once");
+
+    let mut dialog = applied.clone();
+    dialog.push(AccessibilityElement {
+        role: AccessibilityRole::Dialog,
+        ..element_with(3, None)
+    });
+    assert!(mirror_at_once(&applied, &dialog), "a dialog shows at once");
+
+    assert!(
+        mirror_at_once(&[], &applied),
+        "the first controls show at once"
+    );
+}
+
+#[test]
+fn a_held_back_change_applies_once_its_interval_is_over() {
+    let start = web_time::Instant::now();
+    let due = start + std::time::Duration::from_secs(1);
+    assert!(sync_now(false, start, None), "a mirror that never synced");
+    let before = start + std::time::Duration::from_millis(999);
+    assert!(
+        !sync_now(false, before, Some(due)),
+        "a change waits for the interval"
+    );
+    assert!(
+        sync_now(false, due, Some(due)),
+        "the boundary itself is due"
+    );
+    assert!(
+        sync_now(true, start, Some(due)),
+        "a change a reader needs now"
+    );
+}
