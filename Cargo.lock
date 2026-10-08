@@ -4673,12 +4673,15 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 name = "perf-compare-cranpose"
 version = "0.1.0"
 dependencies = [
+ "console_error_panic_hook",
  "cranpose",
  "cranpose-core",
  "cranpose-foundation",
  "cranpose-ui",
  "log",
  "perf-data",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

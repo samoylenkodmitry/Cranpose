@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+
+	<!-- The browser head: the gauntlet's views and data, linked from the
+	     other heads' project, compiled ahead of time to WebAssembly. -->
+	<PropertyGroup>
+		<TargetFramework>net10.0-browser</TargetFramework>
+		<OutputType>Exe</OutputType>
+		<AssemblyName>PerfAvalonia</AssemblyName>
+		<RootNamespace>PerfAvalonia</RootNamespace>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<InvariantGlobalization>true</InvariantGlobalization>
+		<WasmMainJSPath>wwwroot/main.js</WasmMainJSPath>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)' == 'Release'">
+		<RunAOTCompilation>true</RunAOTCompilation>
+		<WasmStripILAfterAOT>true</WasmStripILAfterAOT>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Avalonia.Browser" Version="12.1.3" />
+		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.3" />
+		<Compile Include="../App.cs" Link="App.cs" />
+		<Compile Include="../Gauntlet.cs" Link="Gauntlet.cs" />
+		<Compile Include="../../shared-cs/PerfData.cs" Link="PerfData.cs" />
+		<!-- A page has no files to read: Roboto travels in the assembly. -->
+		<AvaloniaResource Include="../../fonts/Roboto-Regular.ttf" Link="Fonts/Roboto-Regular.ttf" />
+		<AvaloniaResource Include="../../fonts/Roboto-Bold.ttf" Link="Fonts/Roboto-Bold.ttf" />
+	</ItemGroup>
+
+</Project>

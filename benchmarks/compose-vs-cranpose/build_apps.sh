@@ -72,7 +72,8 @@ flutter_ready() {
     flutter --version
 }
 
-# The latest .NET 10 and MAUI Android workload.
+# The latest .NET 10, its MAUI Android workload, and the WebAssembly tools
+# that compile Avalonia's browser build ahead of time.
 dotnet_ready() {
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$cache/dotnet-install.sh"
     bash "$cache/dotnet-install.sh" --channel 10.0 --install-dir "$DOTNET_ROOT"
@@ -81,6 +82,7 @@ dotnet_ready() {
     else
         dotnet workload install maui-android
     fi
+    dotnet workload list | grep -q wasm-tools || dotnet workload install wasm-tools
 }
 
 # Each Rust app builds into its own target in the cache; the checkout links it
@@ -258,6 +260,7 @@ browser)
     dist=$here/browser-dist
     mkdir -p "$out" "$dist"
     flutter_ready
+    dotnet_ready
     tools=$(toolchains)
     # Cranpose's app reads the whole workspace, which moves every night.
     step cranpose-web
@@ -275,6 +278,17 @@ browser)
     rust_target iced-app
     build iced-browser browser-dist/iced iced-app perf-data fonts -- \
         attempt iced wasm_page iced iced-app
+    # Flutter's WebAssembly build, which falls back to JavaScript in a browser
+    # without WasmGC, with Roboto in its assets.
+    build flutter-browser browser-dist/flutter flutter-app fonts -- \
+        bash -c "cd '$here/flutter-app' && cp '$here/fonts/'*.ttf assets/fonts/ && flutter build web --wasm --release --base-href /flutter/ && rm -rf '$dist/flutter' && ditto build/web '$dist/flutter'"
+    # Avalonia's WebAssembly build, compiled ahead of time.
+    build avalonia-browser browser-dist/avalonia avalonia-app shared-cs fonts -- \
+        attempt avalonia bash -c "cd '$here/avalonia-app/Browser' && dotnet publish -c Release && rm -rf '$dist/avalonia' && ditto bin/Release/net10.0-browser/publish/wwwroot '$dist/avalonia'"
+    # Compose Multiplatform for the web, compiled to WebAssembly: the
+    # composables the Android app draws, with Roboto fetched beside the page.
+    build compose-browser browser-dist/compose compose-browser-app shared-compose shared-kotlin fonts -- \
+        attempt compose-desktop bash -c "cd '$here/compose-browser-app' && ./gradlew --no-daemon -q wasmJsBrowserDistribution && rm -rf '$dist/compose' && mkdir -p '$dist/compose/fonts' && ditto build/dist/wasmJs/productionExecutable '$dist/compose' && cp '$here/fonts/'*.ttf '$dist/compose/fonts/'"
     # Dioxus on its DOM renderer, with the web page's CSS and Roboto.
     rust_target dioxus-app
     build dioxus-browser browser-dist/dioxus dioxus-app perf-data web-app/www/style.css fonts -- \
