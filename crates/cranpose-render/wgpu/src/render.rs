@@ -4421,6 +4421,7 @@ impl GpuRenderer {
         let mut executor = std::mem::take(&mut self.frame_graph_executor);
         let execution = executor.execute_recorded_graph(&device, &queue, graph);
         self.frame_graph_executor = executor;
+        self.viewport_uniforms.uploads.recall();
         let execution = execution.map_err(|error| error.to_string())?;
         let submission_index = execution.submission;
         let copy_stats = execution.stats;
@@ -4515,6 +4516,7 @@ impl GpuRenderer {
             let execution = executor.execute_recorded_graph(&device, &queue, frame_graph);
             let after_execute = Instant::now();
             self.frame_graph_executor = executor;
+            self.viewport_uniforms.uploads.recall();
             if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
                 log::warn!(
                     "[wgpu-render-stage:graph] total_ms={total_ms:.2} build_ms={:.2} execute_ms={:.2}",

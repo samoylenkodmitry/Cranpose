@@ -175,99 +175,166 @@ fn a_ring_at_the_floor_and_a_ring_after_an_empty_frame_stay() {
     assert!(ring_outlives_frame(16 * MIN_UPLOAD_BUFFER_BYTES, 0));
 }
 
-#[test]
-fn frame_uploads_preserve_bytes_across_growth_and_reset() {
-    let (_lock, device, queue) = super::upload_test_device();
-    let mut ring = super::UploadRing::new(
-        wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-        "Upload Growth Test",
-        256,
-        true,
-    );
-    let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 4 + 4];
-    let small = [1; 16];
-    let last = [3; 16];
-    let mut sources = Vec::new();
-    for bytes in [&small[..], &large, &last[..]] {
-        let (generation, offset) = ring.upload(&device, bytes.len() as u64, bytes);
-        sources.push((ring.generations[generation].buffer.clone(), offset));
+/// The modes the test device offers: the copied one always, the mapped
+/// one when the device maps its primary buffers.
+fn upload_modes(device: &wgpu::Device) -> Vec<super::UploadMode> {
+    let mut modes = vec![super::UploadMode::Copied];
+    if super::UploadMode::for_device(device) == super::UploadMode::Mapped {
+        modes.push(super::UploadMode::Mapped);
     }
-    let mut encoder = device.create_command_encoder(&Default::default());
-    let mut uploads = super::BufferUploads::default();
-    ring.stage_pending(&mut |buffer, offset, bytes| super::FrameCommandStats {
-        upload_bytes: uploads.write(&device, Some(&mut encoder), buffer, offset, bytes),
-        ..Default::default()
-    });
-    ring.reset();
+    modes
+}
+
+/// Runs the frame's copies and then reads 16 bytes at each source's
+/// offset, in order.
+fn read_sources(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    belt: &mut super::BufferUploads,
+    sources: &[(wgpu::Buffer, u64)],
+) -> Vec<u8> {
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
-        size: 48,
+        size: 16 * sources.len() as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
-    for (index, (source, offset)) in sources.into_iter().enumerate() {
-        encoder.copy_buffer_to_buffer(&source, offset, &readback, index as u64 * 16, 16);
+    let mut encoder = device.create_command_encoder(&Default::default());
+    for (index, (source, offset)) in sources.iter().enumerate() {
+        encoder.copy_buffer_to_buffer(source, *offset, &readback, index as u64 * 16, 16);
     }
-    uploads.finish();
-    let submission = queue.submit([encoder.finish()]);
-    uploads.recall();
-    assert_eq!(
-        super::read_uploaded_bytes(&device, &readback, submission),
-        [&small[..], &large[..16], &last[..]].concat()
-    );
+    belt.finish();
+    let copies = belt.take_before_passes().map(wgpu::CommandEncoder::finish);
+    let submission = queue.submit(copies.into_iter().chain([encoder.finish()]));
+    belt.recall();
+    super::read_uploaded_bytes(device, &readback, submission)
+}
+
+/// Stages the ring's copied bytes through `belt` and ends its frame.
+fn stage_through_belt(
+    device: &wgpu::Device,
+    ring: &mut super::UploadRing,
+    belt: &mut super::BufferUploads,
+) {
+    ring.stage_pending(&mut |buffer, offset, bytes| super::FrameCommandStats {
+        upload_bytes: belt.write(device, None, buffer, offset, bytes),
+        ..Default::default()
+    });
+    ring.finish_frame();
+}
+
+#[test]
+fn frame_uploads_preserve_bytes_across_growth_and_frames() {
+    let (_lock, device, queue) = super::upload_test_device();
+    for mode in upload_modes(&device) {
+        let mut belt = super::BufferUploads::default();
+        let mut ring = super::UploadRing::new(
+            wgpu::BufferUsages::COPY_SRC,
+            "Upload Growth Test",
+            256,
+            true,
+            mode,
+        );
+        let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 4 + 4];
+        let small = [1; 16];
+        let last = [3; 16];
+        let mut sources = Vec::new();
+        for bytes in [&small[..], &large, &last[..]] {
+            let (generation, offset) = ring.upload(&device, &mut belt, bytes.len() as u64, bytes);
+            sources.push((ring.generations[generation].buffer.clone(), offset));
+        }
+        stage_through_belt(&device, &mut ring, &mut belt);
+        assert_eq!(
+            read_sources(&device, &queue, &mut belt, &sources),
+            [&small[..], &large[..16], &last[..]].concat(),
+            "{mode:?}"
+        );
+        ring.recall();
+        // A second frame fits one buffer; the third writes the same buffer:
+        // a copied ring kept it, a mapped ring got it back once the GPU
+        // was done with it.
+        let next = vec![4; 300_000];
+        let mut buffers = Vec::new();
+        for _ in 0..2 {
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: None,
+                })
+                .expect("idle device");
+            ring.reset();
+            let (generation, offset) = ring.upload(&device, &mut belt, 16, &next);
+            let buffer = ring.generations[generation].buffer.clone();
+            stage_through_belt(&device, &mut ring, &mut belt);
+            assert_eq!(
+                read_sources(&device, &queue, &mut belt, &[(buffer.clone(), offset)]),
+                next[..16],
+                "{mode:?}"
+            );
+            ring.recall();
+            buffers.push(buffer);
+        }
+        assert_eq!(
+            buffers[0], buffers[1],
+            "{mode:?}: the third frame writes the second frame's buffer"
+        );
+    }
 }
 
 #[test]
 fn vertex_uploads_written_as_they_come_land_whole_across_growth() {
     let (_lock, device, queue) = super::upload_test_device();
-    // The frame's rings, readable back for the test.
-    let readable = wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
-    let mut allocators = super::FrameUploadAllocators {
-        rings: [
-            super::UploadRing::new(readable, "Uniforms", 256, true),
-            super::UploadRing::new(readable, "Vertices", wgpu::COPY_BUFFER_ALIGNMENT, false),
-            super::UploadRing::new(readable, "Indices", wgpu::COPY_BUFFER_ALIGNMENT, false),
-        ],
-        ..super::FrameUploadAllocators::default()
-    };
-    let odd: Vec<u8> = (1..=13).collect();
-    let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 2];
-    let last = [3; 16];
-    let spec = super::UploadAllocatorSpec::vertex("Direct Upload Test", 0);
-    let uploads: Vec<_> = [&odd[..], &large, &last[..]]
-        .into_iter()
-        .map(|bytes| allocators.upload_buffer(spec, &device, bytes))
-        .collect();
-    let stats = allocators.stage_pending(|_, _, _| super::FrameCommandStats::default());
-    assert_eq!(stats.upload_writes, 3, "each upload is written once");
-    allocators.buffers.finish();
-    let mut encoder = allocators
-        .buffers
-        .take_before_passes()
-        .expect("the uploads were written before the passes");
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: 48,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    for (index, upload) in uploads.iter().enumerate() {
-        encoder.copy_buffer_to_buffer(
-            &upload.buffer,
-            upload.offset,
-            &readback,
-            index as u64 * 16,
-            16,
+    for mode in upload_modes(&device) {
+        // The frame's rings, readable back for the test.
+        let readable = wgpu::BufferUsages::COPY_SRC;
+        let mut allocators = super::FrameUploadAllocators {
+            rings: Some([
+                super::UploadRing::new(readable, "Uniforms", 256, true, mode),
+                super::UploadRing::new(
+                    readable,
+                    "Vertices",
+                    wgpu::COPY_BUFFER_ALIGNMENT,
+                    false,
+                    mode,
+                ),
+                super::UploadRing::new(
+                    readable,
+                    "Indices",
+                    wgpu::COPY_BUFFER_ALIGNMENT,
+                    false,
+                    mode,
+                ),
+            ]),
+            ..super::FrameUploadAllocators::default()
+        };
+        let odd: Vec<u8> = (1..=13).collect();
+        let large = vec![2; MIN_UPLOAD_BUFFER_BYTES as usize * 2];
+        let last = [3; 16];
+        let spec = super::UploadAllocatorSpec::vertex("Direct Upload Test", 0);
+        let uploads: Vec<_> = [&odd[..], &large, &last[..]]
+            .into_iter()
+            .map(|bytes| allocators.upload_buffer(spec, &device, bytes))
+            .collect();
+        let stats = allocators.encode_pending(&device);
+        allocators.buffers.finish();
+        allocators.finish_frame();
+        assert_eq!(
+            stats.upload_writes, 3,
+            "{mode:?}: each upload is written once"
         );
+        let sources: Vec<_> = uploads
+            .iter()
+            .map(|upload| (upload.buffer.clone(), upload.offset))
+            .collect();
+        let mut odd_word = odd.clone();
+        odd_word.extend([0, 0, 0]);
+        assert_eq!(
+            read_sources(&device, &queue, &mut allocators.buffers, &sources),
+            [&odd_word[..], &large[..16], &last[..]].concat(),
+            "{mode:?}"
+        );
+        allocators.recall();
     }
-    let submission = queue.submit([encoder.finish()]);
-    allocators.buffers.recall();
-    let mut odd_word = odd;
-    odd_word.extend([0, 0, 0]);
-    assert_eq!(
-        super::read_uploaded_bytes(&device, &readback, submission),
-        [&odd_word[..], &large[..16], &last[..]].concat()
-    );
 }
 
 #[test]

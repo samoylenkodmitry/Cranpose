@@ -746,7 +746,7 @@ impl WgpuFrameGraphExecutor {
         }
         let (submission, upload_writes) =
             Self::submit_frame(queue, encoder, before_passes, self.pass_timer.as_ref());
-        self.upload_allocators.buffers.recall();
+        self.upload_allocators.recall();
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
         let (transient_acquires, transient_news) = self.transient_textures.take_counts();
@@ -1245,7 +1245,7 @@ impl WgpuFrameEncoder<'_> {
             before_passes,
             self.pass_timer,
         );
-        self.uploads.buffers.recall();
+        self.uploads.recall();
         transient_releases.release_pending();
         let retained_texture_bytes = transient_releases.retained_texture_bytes();
         let (transient_acquires, transient_news) = transient_releases.take_counts();
@@ -1637,6 +1637,12 @@ pub(crate) enum UploadPlacement {
     Grow(u64),
 }
 
+/// The bytes an upload of `len` read through a binding of `binding`
+/// bytes takes in a ring: whole copy words.
+fn upload_span(len: u64, binding: u64) -> u64 {
+    align_u64_to(len.max(binding).max(1), wgpu::COPY_BUFFER_ALIGNMENT)
+}
+
 /// Places `len` bytes read through a binding of `binding` bytes after
 /// `cursor` in a buffer of `capacity`: aligned to `alignment`, and in a
 /// new buffer of at least double the capacity when they do not fit.
@@ -1648,7 +1654,7 @@ pub(crate) fn place_upload(
     capacity: Option<u64>,
 ) -> UploadPlacement {
     let offset = align_u64_to(cursor, alignment);
-    let span = align_u64_to(len.max(binding).max(1), wgpu::COPY_BUFFER_ALIGNMENT);
+    let span = upload_span(len, binding);
     match capacity {
         Some(capacity) if offset + span <= capacity => UploadPlacement::At(offset),
         _ => UploadPlacement::Grow(
@@ -1663,41 +1669,162 @@ struct UploadGeneration {
     capacity: u64,
     /// The end of the generation's uploads so far.
     cursor: u64,
-    /// The uploads of a staged ring, copied in one write at the frame's
-    /// end; empty in a ring that writes each upload as it comes.
-    bytes: Vec<u8>,
+    /// Where the generation's bytes start in a staged ring's staging.
+    staged_at: usize,
     bind_groups: [Option<wgpu::BindGroup>; UploadAllocatorId::COUNT],
 }
 
+/// How a frame's uploads reach the GPU: written by the CPU into buffers it
+/// keeps mapped, on devices that read their vertex and uniform buffers
+/// from host memory at full speed, or copied by the GPU from the staging
+/// belt into device buffers elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UploadMode {
+    Copied,
+    Mapped,
+}
+
+impl UploadMode {
+    /// The mode of a device, from the features `optional_device_features`
+    /// asked for it. The fence profile submits parts of a frame as they
+    /// are recorded, which a mapped buffer cannot join: it copies.
+    pub(crate) fn for_device(device: &wgpu::Device) -> Self {
+        if !fence_profile::enabled()
+            && device
+                .features()
+                .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)
+        {
+            Self::Mapped
+        } else {
+            Self::Copied
+        }
+    }
+}
+
+/// The buffers a mapped ring is not writing. A frame's buffers are
+/// unmapped before its submit and asked to map again after it, which
+/// completes once the frame's draws are done with them; the ring takes
+/// them back from the channel when it next opens a buffer.
+struct MappedChunks {
+    free: Vec<UploadGeneration>,
+    /// The frame's buffers between its submit and their map requests.
+    submitted: Vec<UploadGeneration>,
+    sender: std::sync::mpsc::Sender<UploadGeneration>,
+    receiver: std::sync::mpsc::Receiver<UploadGeneration>,
+}
+
+impl MappedChunks {
+    fn new() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        Self {
+            free: Vec::new(),
+            submitted: Vec::new(),
+            sender,
+            receiver,
+        }
+    }
+
+    /// The largest free buffer of at least `fit` bytes. Buffers under half
+    /// of it would not serve a frame like the last and are dropped.
+    fn take(&mut self, fit: u64) -> Option<UploadGeneration> {
+        self.free.extend(self.receiver.try_iter());
+        self.free.retain(|chunk| chunk.capacity >= fit / 2);
+        let largest = self
+            .free
+            .iter()
+            .enumerate()
+            .filter(|(_, chunk)| chunk.capacity >= fit)
+            .max_by_key(|(_, chunk)| chunk.capacity)
+            .map(|(slot, _)| slot)?;
+        Some(self.free.swap_remove(largest))
+    }
+
+    fn recall(&mut self) {
+        for generation in self.submitted.drain(..) {
+            let sender = self.sender.clone();
+            let buffer = generation.buffer.clone();
+            buffer.map_async(wgpu::MapMode::Write, .., move |result| {
+                if result.is_ok() {
+                    let _ = sender.send(generation);
+                }
+            });
+        }
+    }
+}
+
 /// One usage's uploads of a frame, in order, in one buffer: a buffer that
-/// fills mid-frame is kept beside a larger one until the frame ends, so
-/// every draw already recorded keeps the buffer it was bound to, and the
-/// next frame starts in the larger one alone.
+/// fills mid-frame is kept beside another until the frame ends, so every
+/// draw already recorded keeps the buffer it was bound to.
 ///
-/// A staged ring gathers its uploads and writes them in one copy when the
-/// frame ends, for the many small uploads of uniforms. Vertex and index
-/// uploads are few and large: their caller writes each one through the
-/// staging belt as it comes, so the frame's bytes are not held twice.
+/// A staged ring gathers its uploads and writes them in one copy per
+/// buffer, for the many small uploads of uniforms. Vertex and index
+/// uploads are few and large: the ring writes each one as it comes, so
+/// the frame's bytes are not held twice.
+///
+/// A copied ring keeps its last buffer from frame to frame, since the
+/// copies into it queue behind the draws that read it. A mapped ring's
+/// buffers cycle through `MappedChunks`: the CPU writes the next frame
+/// while the GPU may still read the last.
 struct UploadRing {
     usage: wgpu::BufferUsages,
     label: &'static str,
     alignment: u64,
     staged: bool,
     generations: Vec<UploadGeneration>,
+    /// A staged ring's uploads of the frame, each buffer's from its
+    /// `staged_at`, padded to the copy alignment when the buffer fills.
+    /// A copied ring writes them when the frame is staged; a mapped ring
+    /// writes a buffer's as soon as it fills and starts over.
+    staging: Vec<u8>,
+    /// A mapped ring's buffers out of use; a copied ring has none.
+    chunks: Option<MappedChunks>,
+    /// The bytes the last frame uploaded: a mapped ring opens a frame in
+    /// a buffer that holds at least them.
+    last_total: u64,
+    /// What a mapped ring makes a new buffer at: the last frame's bytes
+    /// with room to grow.
+    frame_need: u64,
+    /// The frame's writes so far, reported when the frame is staged.
+    written: FrameCommandStats,
 }
 
 impl UploadRing {
-    fn new(usage: wgpu::BufferUsages, label: &'static str, alignment: u64, staged: bool) -> Self {
+    fn new(
+        usage: wgpu::BufferUsages,
+        label: &'static str,
+        alignment: u64,
+        staged: bool,
+        mode: UploadMode,
+    ) -> Self {
+        let (usage, alignment, chunks) = match mode {
+            UploadMode::Copied => (usage | wgpu::BufferUsages::COPY_DST, alignment, None),
+            UploadMode::Mapped => (
+                usage | wgpu::BufferUsages::MAP_WRITE,
+                alignment.max(wgpu::MAP_ALIGNMENT),
+                Some(MappedChunks::new()),
+            ),
+        };
         Self {
             usage,
             label,
             alignment,
             staged,
             generations: Vec::new(),
+            staging: Vec::new(),
+            chunks,
+            last_total: 0,
+            frame_need: MIN_UPLOAD_BUFFER_BYTES,
+            written: FrameCommandStats::default(),
         }
     }
 
-    fn upload(&mut self, device: &wgpu::Device, binding: u64, bytes: &[u8]) -> (usize, u64) {
+    fn upload(
+        &mut self,
+        device: &wgpu::Device,
+        belt: &mut BufferUploads,
+        binding: u64,
+        bytes: &[u8],
+    ) -> (usize, u64) {
         let len = bytes.len() as u64;
         let current = self.generations.last();
         let placement = place_upload(
@@ -1710,67 +1837,215 @@ impl UploadRing {
         let offset = match placement {
             UploadPlacement::At(offset) => offset,
             UploadPlacement::Grow(capacity) => {
-                self.generations.push(UploadGeneration {
-                    buffer: device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some(self.label),
-                        size: capacity,
-                        usage: self.usage,
-                        mapped_at_creation: false,
-                    }),
-                    capacity,
-                    cursor: 0,
-                    bytes: if self.staged {
-                        Vec::with_capacity(capacity as usize)
-                    } else {
-                        Vec::new()
-                    },
-                    bind_groups: Default::default(),
-                });
+                if self.staged {
+                    self.close_staging();
+                }
+                let generation = self.open(device, upload_span(len, binding), capacity);
+                self.generations.push(generation);
                 0
             }
         };
-        let generation = self.generations.len() - 1;
-        let target = &mut self.generations[generation];
-        target.cursor = offset + len;
+        let slot = self.generations.len() - 1;
+        let generation = &mut self.generations[slot];
+        generation.cursor = offset + len;
         if self.staged {
-            target.bytes.resize(offset as usize, 0);
-            target.bytes.extend_from_slice(bytes);
+            self.staging
+                .resize(generation.staged_at + offset as usize, 0);
+            self.staging.extend_from_slice(bytes);
+        } else {
+            self.written += write_upload(
+                self.chunks.is_some(),
+                belt,
+                device,
+                &generation.buffer,
+                offset,
+                bytes,
+            );
         }
-        (generation, offset)
+        (slot, offset)
     }
 
+    /// A buffer for an upload of `span` bytes. A copied ring makes one of
+    /// `capacity`. A mapped ring reuses a free one: at a frame's start one
+    /// that held the last frame, later one that holds the upload; it makes
+    /// one at the frame's need when none is free.
+    fn open(&mut self, device: &wgpu::Device, span: u64, capacity: u64) -> UploadGeneration {
+        let staged_at = self.staging.len();
+        let Some(chunks) = &mut self.chunks else {
+            return self.create(device, capacity, staged_at);
+        };
+        let fit = if self.generations.is_empty() {
+            self.last_total.max(span)
+        } else {
+            span
+        };
+        let taken = chunks.take(fit).or_else(|| {
+            // The buffers of the frame before last are back once the GPU
+            // finished it: a poll collects them before a new one is made.
+            let _ = device.poll(wgpu::PollType::Poll);
+            chunks.take(fit)
+        });
+        match taken {
+            Some(mut generation) => {
+                generation.cursor = 0;
+                generation.staged_at = staged_at;
+                generation
+            }
+            None => self.create(device, span.max(self.frame_need), staged_at),
+        }
+    }
+
+    fn create(&self, device: &wgpu::Device, capacity: u64, staged_at: usize) -> UploadGeneration {
+        UploadGeneration {
+            buffer: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(self.label),
+                size: capacity,
+                usage: self.usage,
+                mapped_at_creation: self.chunks.is_some(),
+            }),
+            capacity,
+            cursor: 0,
+            staged_at,
+            bind_groups: Default::default(),
+        }
+    }
+
+    /// Ends the last buffer's staged bytes, padded to the copy alignment:
+    /// a mapped ring writes them into the buffer now and starts over; a
+    /// copied ring keeps them for the frame's copies.
+    fn close_staging(&mut self) {
+        let padded = align_u64_to(self.staging.len() as u64, wgpu::COPY_BUFFER_ALIGNMENT);
+        self.staging.resize(padded as usize, 0);
+        if self.chunks.is_none() {
+            return;
+        }
+        if let Some(generation) = self.generations.last() {
+            self.written +=
+                write_mapped(&generation.buffer, 0, &self.staging[generation.staged_at..]);
+        }
+        self.staging.clear();
+    }
+
+    /// Writes what the frame still holds and reports the frame's writes:
+    /// a copied ring's staged bytes go through `write`, one copy per
+    /// buffer. Nothing is written after this, so a mapped ring ends its
+    /// frame here: its buffers must be unmapped before any submit.
     fn stage_pending(
         &mut self,
         write: &mut impl FnMut(&wgpu::Buffer, u64, &[u8]) -> FrameCommandStats,
     ) -> FrameCommandStats {
-        let mut stats = FrameCommandStats::default();
-        for generation in &mut self.generations {
-            let padded = align_u64_to(generation.bytes.len() as u64, wgpu::COPY_BUFFER_ALIGNMENT);
-            generation.bytes.resize(padded as usize, 0);
-            if !generation.bytes.is_empty() {
-                stats += write(&generation.buffer, 0, &generation.bytes);
+        if self.staged {
+            self.close_staging();
+        }
+        let mut stats = std::mem::take(&mut self.written);
+        if self.chunks.is_some() {
+            self.finish_frame();
+        } else if self.staged {
+            let mut generations = self.generations.iter().peekable();
+            while let Some(generation) = generations.next() {
+                let end = generations
+                    .peek()
+                    .map_or(self.staging.len(), |next| next.staged_at);
+                let bytes = &self.staging[generation.staged_at..end];
+                if !bytes.is_empty() {
+                    stats += write(&generation.buffer, 0, bytes);
+                }
             }
         }
         stats
     }
 
-    fn reset(&mut self) {
+    /// Ends the frame before its submit: a copied ring keeps its last
+    /// buffer, unless the frame used a small part of it; a mapped ring
+    /// unmaps the frame's buffers, to map them again after the submit,
+    /// and drops those the frame used a small part of.
+    fn finish_frame(&mut self) {
         let staged = self
             .generations
             .iter()
             .map(|generation| generation.cursor)
             .sum();
+        match &mut self.chunks {
+            Some(chunks) => {
+                for generation in self.generations.drain(..) {
+                    generation.buffer.unmap();
+                    if ring_outlives_frame(generation.capacity, staged) {
+                        chunks.submitted.push(generation);
+                    }
+                }
+                if staged > 0 {
+                    self.last_total = staged;
+                    self.frame_need = align_u64_to(staged + staged / 4, MIN_UPLOAD_BUFFER_BYTES);
+                }
+            }
+            None => {
+                let keep = self.generations.len().saturating_sub(1);
+                self.generations.drain(..keep);
+                if let Some(last) = self.generations.last()
+                    && !ring_outlives_frame(last.capacity, staged)
+                {
+                    self.generations.clear();
+                }
+            }
+        }
+        self.reset();
+    }
+
+    fn recall(&mut self) {
+        if let Some(chunks) = &mut self.chunks {
+            chunks.recall();
+        }
+    }
+
+    /// Opens a frame. Buffers of a frame that never finished stay usable:
+    /// a copied ring's since nothing was copied into them, a mapped
+    /// ring's since nothing was submitted.
+    fn reset(&mut self) {
         let keep = self.generations.len().saturating_sub(1);
         self.generations.drain(..keep);
-        if let Some(last) = self.generations.last()
-            && !ring_outlives_frame(last.capacity, staged)
-        {
-            self.generations.clear();
-        }
         for generation in &mut self.generations {
             generation.cursor = 0;
-            generation.bytes.clear();
+            generation.staged_at = 0;
         }
+        self.staging.clear();
+        self.written = FrameCommandStats::default();
+    }
+}
+
+/// Writes `bytes` at `offset` of a ring's `buffer`: into its mapped
+/// memory, or through the staging belt.
+fn write_upload(
+    mapped: bool,
+    belt: &mut BufferUploads,
+    device: &wgpu::Device,
+    buffer: &wgpu::Buffer,
+    offset: u64,
+    bytes: &[u8],
+) -> FrameCommandStats {
+    if mapped {
+        write_mapped(buffer, offset, bytes)
+    } else {
+        write_aligned(belt, device, buffer, offset, bytes)
+    }
+}
+
+/// Writes `bytes` at `offset` of a mapped `buffer`, with a last partial
+/// word padded by zeros: a mapped range covers whole words.
+fn write_mapped(buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]) -> FrameCommandStats {
+    if bytes.is_empty() {
+        return FrameCommandStats::default();
+    }
+    let span = align_u64_to(bytes.len() as u64, wgpu::COPY_BUFFER_ALIGNMENT);
+    let mut view = buffer
+        .slice(offset..offset + span)
+        .get_mapped_range_mut()
+        .expect("a mapped ring's buffer stays mapped until its frame is finished");
+    view.slice(..bytes.len()).copy_from_slice(bytes);
+    view.slice(bytes.len()..).fill(0);
+    FrameCommandStats {
+        upload_bytes: bytes.len() as u64,
+        upload_writes: 1,
+        ..FrameCommandStats::default()
     }
 }
 
@@ -1805,41 +2080,39 @@ fn ring_outlives_frame(capacity: u64, staged: u64) -> bool {
         || staged.saturating_mul(UPLOAD_SHRINK_FACTOR) >= capacity
 }
 
+#[derive(Default)]
 pub(crate) struct FrameUploadAllocators {
     buffers: BufferUploads,
-    rings: [UploadRing; 3],
-    /// The frame's writes of unstaged rings so far, reported with the
-    /// staged ones.
-    written: FrameCommandStats,
+    /// Made on the first upload, once the device says how uploads reach it.
+    rings: Option<[UploadRing; 3]>,
 }
 
-impl Default for FrameUploadAllocators {
-    fn default() -> Self {
-        Self {
-            buffers: BufferUploads::default(),
-            rings: [
-                UploadRing::new(
-                    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    "Frame Uniform Uploads",
-                    0,
-                    true,
-                ),
-                UploadRing::new(
-                    wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    "Frame Vertex Uploads",
-                    wgpu::COPY_BUFFER_ALIGNMENT,
-                    false,
-                ),
-                UploadRing::new(
-                    wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                    "Frame Index Uploads",
-                    wgpu::COPY_BUFFER_ALIGNMENT,
-                    false,
-                ),
-            ],
-            written: FrameCommandStats::default(),
-        }
-    }
+fn frame_rings(device: &wgpu::Device, mode: UploadMode) -> [UploadRing; 3] {
+    let uniform_alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment)
+        .max(wgpu::COPY_BUFFER_ALIGNMENT);
+    [
+        UploadRing::new(
+            wgpu::BufferUsages::UNIFORM,
+            "Frame Uniform Uploads",
+            uniform_alignment,
+            true,
+            mode,
+        ),
+        UploadRing::new(
+            wgpu::BufferUsages::VERTEX,
+            "Frame Vertex Uploads",
+            wgpu::COPY_BUFFER_ALIGNMENT,
+            false,
+            mode,
+        ),
+        UploadRing::new(
+            wgpu::BufferUsages::INDEX,
+            "Frame Index Uploads",
+            wgpu::COPY_BUFFER_ALIGNMENT,
+            false,
+            mode,
+        ),
+    ]
 }
 
 impl FrameUploadAllocators {
@@ -1856,13 +2129,12 @@ impl FrameUploadAllocators {
             UploadAllocatorKind::Uniform,
             "upload_uniform requires a uniform allocator spec"
         );
-        let ring = &mut self.rings[UploadAllocatorKind::Uniform.ring()];
-        if ring.alignment == 0 {
-            ring.alignment = u64::from(device.limits().min_uniform_buffer_offset_alignment)
-                .max(wgpu::COPY_BUFFER_ALIGNMENT);
-        }
         let binding = align_u64_to(spec.size.max(bytes.len() as u64), 16);
-        let (generation, offset) = ring.upload(device, binding, bytes);
+        let Self { buffers, rings } = self;
+        let ring = &mut rings
+            .get_or_insert_with(|| frame_rings(device, UploadMode::for_device(device)))
+            [UploadAllocatorKind::Uniform.ring()];
+        let (generation, offset) = ring.upload(device, buffers, binding, bytes);
         let generation = &mut ring.generations[generation];
         let bind_group = generation.bind_groups[id.index()].get_or_insert_with(|| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1895,25 +2167,26 @@ impl FrameUploadAllocators {
             UploadAllocatorKind::Uniform,
             "upload_buffer takes a vertex or index allocator spec"
         );
-        let ring = &mut self.rings[spec.kind.ring()];
-        let (generation, offset) = ring.upload(device, spec.size, bytes);
-        let buffer = ring.generations[generation].buffer.clone();
-        if !ring.staged {
-            self.written += write_aligned(&mut self.buffers, device, &buffer, offset, bytes);
-        }
+        let Self { buffers, rings } = self;
+        let ring = &mut rings
+            .get_or_insert_with(|| frame_rings(device, UploadMode::for_device(device)))
+            [spec.kind.ring()];
+        let (generation, offset) = ring.upload(device, buffers, spec.size, bytes);
         BufferUpload {
-            buffer,
+            buffer: ring.generations[generation].buffer.clone(),
             offset,
             len: bytes.len() as u64,
         }
     }
 
+    /// Writes what the frame's rings still hold, the copied ones' staged
+    /// bytes through `write`, and reports the frame's writes.
     pub(crate) fn stage_pending(
         &mut self,
         mut write: impl FnMut(&wgpu::Buffer, u64, &[u8]) -> FrameCommandStats,
     ) -> FrameCommandStats {
-        let mut stats = std::mem::take(&mut self.written);
-        for ring in &mut self.rings {
+        let mut stats = FrameCommandStats::default();
+        for ring in self.rings.iter_mut().flatten() {
             stats += ring.stage_pending(&mut write);
         }
         stats
@@ -1935,8 +2208,8 @@ impl FrameUploadAllocators {
 
     fn encode_pending(&mut self, device: &wgpu::Device) -> FrameCommandStats {
         let buffers = &mut self.buffers;
-        let mut stats = std::mem::take(&mut self.written);
-        for ring in &mut self.rings {
+        let mut stats = FrameCommandStats::default();
+        for ring in self.rings.iter_mut().flatten() {
             stats += ring.stage_pending(&mut |buffer, offset, bytes| FrameCommandStats {
                 upload_bytes: buffers.write(device, None, buffer, offset, bytes),
                 upload_writes: u32::from(!bytes.is_empty()),
@@ -1946,15 +2219,24 @@ impl FrameUploadAllocators {
         stats
     }
 
+    /// Ends the frame's uploads before its submit, once they are staged.
     pub(crate) fn finish_frame(&mut self) {
-        for ring in &mut self.rings {
-            ring.reset();
+        for ring in self.rings.iter_mut().flatten() {
+            ring.finish_frame();
+        }
+    }
+
+    /// Asks the frame's buffers back after its submit.
+    pub(crate) fn recall(&mut self) {
+        self.buffers.recall();
+        for ring in self.rings.iter_mut().flatten() {
+            ring.recall();
         }
     }
 
     pub(crate) fn reset(&mut self) {
         self.buffers.reset();
-        for ring in &mut self.rings {
+        for ring in self.rings.iter_mut().flatten() {
             ring.reset();
         }
     }
@@ -1974,6 +2256,7 @@ pub(crate) fn upload_test_device() -> (
     let adapter = pollster::block_on(instance.request_adapter(&Default::default()))
         .expect("headless adapter");
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        required_features: crate::optional_device_features(&adapter),
         required_limits: adapter.limits(),
         ..Default::default()
     }))
