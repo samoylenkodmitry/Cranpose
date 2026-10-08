@@ -19,7 +19,10 @@ mod identity;
 ))]
 pub(crate) use identity::AccessibilityIdentityError;
 pub(crate) use identity::AccessibilitySnapshot;
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
 pub(crate) use identity::Replaced;
 
 #[cfg(any(
@@ -40,6 +43,82 @@ pub(crate) fn opened_dialog(
                 })
         })
         .map(|element| element.node_id)
+}
+
+/// Whether a mirror must show `next` at once instead of with its next sync
+/// of everything that changed: the first controls it shows, a focus move, a
+/// dialog that opened, or a field a person types in that changed its text or
+/// caret.
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn mirror_at_once(
+    applied: &[AccessibilityElement],
+    next: &[AccessibilityElement],
+) -> bool {
+    applied.is_empty()
+        || !focused_controls(applied).eq(focused_controls(next))
+        || !same_typed_fields(applied, next)
+        || opened_dialog(applied, next).is_some()
+}
+
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+fn focused_controls(
+    elements: &[AccessibilityElement],
+) -> impl Iterator<Item = (NodeId, u32, Option<u64>)> {
+    elements
+        .iter()
+        .filter(|element| element.focused)
+        .map(AccessibilityElement::identity_key)
+}
+
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+fn same_typed_fields(applied: &[AccessibilityElement], next: &[AccessibilityElement]) -> bool {
+    let mut applied = applied.iter().filter(|element| edits_text(element));
+    let mut next = next.iter().filter(|element| edits_text(element));
+    loop {
+        match (applied.next(), next.next()) {
+            (None, None) => return true,
+            (Some(old), Some(new))
+                if old.identity_key() == new.identity_key()
+                    && old.value == new.value
+                    && old.details == new.details => {}
+            _ => return false,
+        }
+    }
+}
+
+/// Whether a mirror applies a snapshot that differs from the one it shows at
+/// `now`: at once when a reader must meet it now, and otherwise once `due`
+/// has come, so the latest snapshot of a busy second wins.
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn sync_now(
+    immediate: bool,
+    now: web_time::Instant,
+    due: Option<web_time::Instant>,
+) -> bool {
+    immediate || due.is_none_or(|due| now >= due)
+}
+
+/// Whether a person edits the text of this field through the mirror: a text
+/// field with a caret, or one that holds a secret.
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+pub(crate) fn edits_text(element: &AccessibilityElement) -> bool {
+    element.role.is_text_field()
+        && (element.details().text_selection.is_some() || element.details().password)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -438,6 +517,50 @@ impl AccessibilityElement {
 
     pub(crate) fn details(&self) -> &AccessibilityDetails {
         rare(&self.details)
+    }
+
+    /// Whether two elements describe the same control in the same state,
+    /// wherever each of them sits.
+    #[cfg(any(
+        test,
+        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    ))]
+    pub(crate) fn same_but_bounds(&self, other: &Self) -> bool {
+        let Self {
+            node_id,
+            node_generation,
+            canvas_key,
+            label,
+            value,
+            bounds: _,
+            role,
+            clickable,
+            selected,
+            toggled,
+            enabled,
+            focusable,
+            tab_stop,
+            focused,
+            scroll_parent,
+            collection_item,
+            details,
+        } = self;
+        *node_id == other.node_id
+            && *node_generation == other.node_generation
+            && *canvas_key == other.canvas_key
+            && *role == other.role
+            && *clickable == other.clickable
+            && *selected == other.selected
+            && *toggled == other.toggled
+            && *enabled == other.enabled
+            && *focusable == other.focusable
+            && *tab_stop == other.tab_stop
+            && *focused == other.focused
+            && *scroll_parent == other.scroll_parent
+            && *collection_item == other.collection_item
+            && *label == other.label
+            && *value == other.value
+            && *details == other.details
     }
 
     pub(crate) fn update_details(&mut self, update: impl FnOnce(&mut AccessibilityDetails)) {

@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt::Write, rc::Rc, time::Duration};
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -8,8 +8,16 @@ use web_sys::{
     Document, Element, HtmlCanvasElement, HtmlElement, HtmlInputElement, HtmlTextAreaElement,
     MouseEvent,
 };
+use web_time::Instant;
 
-use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
+use crate::accessibility::{
+    self, AccessibilityElement, AccessibilityRect, AccessibilityRole, Replaced, edits_text,
+};
+
+/// How often the mirror takes on a change no reader needs at once. A screen
+/// reader reads where a control sits only when it moves onto the control, so
+/// the mirror may trail an animation by this much.
+const SYNC_INTERVAL: Duration = Duration::from_secs(1);
 
 fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
     if (element.role != AccessibilityRole::StaticText || element.details().pane_title.is_some())
@@ -55,6 +63,7 @@ fn apply_progress(node: &HtmlElement, element: &AccessibilityElement) -> Result<
 
 /// The scroll container an element sits in: its virtual id, the move one page
 /// on makes, and the last row a reader may ask the container for.
+#[derive(Clone, Copy, PartialEq)]
 struct PageTarget {
     container: i32,
     dx: f32,
@@ -289,11 +298,6 @@ fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Resul
         node.set_attribute("aria-disabled", "true")?;
     }
     Ok(())
-}
-
-fn edits_text(element: &AccessibilityElement) -> bool {
-    element.role.is_text_field()
-        && (element.details().text_selection.is_some() || element.details().password)
 }
 
 fn is_mirror_container(element: &AccessibilityElement) -> bool {
@@ -542,8 +546,6 @@ fn tab_index(element: &AccessibilityElement) -> &'static str {
     }
 }
 
-/// Puts the mirrored element over the control it stands for, so a reader's
-/// cursor and a touch exploration land in the same place.
 /// Where the canvas sits on the page and how its logical pixels map onto it.
 struct Placement {
     left: f64,
@@ -552,39 +554,17 @@ struct Placement {
     scale_y: f64,
 }
 
-fn place_node(
-    node: &HtmlElement,
-    element: &AccessibilityElement,
-    placement: &Placement,
-) -> Result<(), JsValue> {
-    let Placement {
-        left,
-        top,
-        scale_x,
-        scale_y,
-    } = *placement;
-    let style = node.style();
-    style.set_property("position", "fixed")?;
-    style.set_property(
-        "left",
-        &format!("{}px", left + element.bounds.x as f64 * scale_x),
-    )?;
-    style.set_property(
-        "top",
-        &format!("{}px", top + element.bounds.y as f64 * scale_y),
-    )?;
-    style.set_property(
-        "width",
-        &format!("{}px", element.bounds.width as f64 * scale_x),
-    )?;
-    style.set_property(
-        "height",
-        &format!("{}px", element.bounds.height as f64 * scale_y),
-    )?;
-    style.set_property("opacity", "0.001")?;
-    style.set_property("pointer-events", "none")?;
-    style.set_property("overflow", "hidden")?;
-    Ok(())
+impl Placement {
+    /// Where the mirror node for a control with these bounds goes: its left,
+    /// top, width and height in CSS pixels.
+    fn rect(&self, bounds: AccessibilityRect) -> [f64; 4] {
+        [
+            self.left + f64::from(bounds.x) * self.scale_x,
+            self.top + f64::from(bounds.y) * self.scale_y,
+            f64::from(bounds.width) * self.scale_x,
+            f64::from(bounds.height) * self.scale_y,
+        ]
+    }
 }
 
 /// Hands a Tab landing or a screen reader focus on the mirror back to the app.
@@ -961,21 +941,37 @@ impl cranpose_app_shell::PlatformTextInputHandler for WebTextInput {
 struct MirrorEntry {
     node: HtmlElement,
     actions: Vec<HtmlElement>,
+    /// The paging data the node carries.
+    page: Option<PageTarget>,
+    /// Where the node and its action buttons were put last, or nothing while
+    /// one of them has no place yet.
+    placed: Option<[f64; 4]>,
 }
 
 impl MirrorEntry {
+    fn new(document: &Document, element: &AccessibilityElement) -> Result<Self, JsValue> {
+        Ok(Self {
+            node: document
+                .create_element(mirror_tag(element))?
+                .dyn_into::<HtmlElement>()?,
+            actions: Vec::new(),
+            page: None,
+            placed: None,
+        })
+    }
+
     fn update(
         &mut self,
         document: &Document,
         id: i32,
         element: &AccessibilityElement,
         page: Option<PageTarget>,
-        placement: &Placement,
     ) -> Result<(), JsValue> {
         let template = mirror_node(document, id, element, page)?;
         if self.node.tag_name() != template.tag_name() {
             self.node.remove();
             self.node = template;
+            self.placed = None;
         } else {
             patch_attributes(&self.node, &template)?;
             if !is_mirror_container(element)
@@ -990,8 +986,30 @@ impl MirrorEntry {
             }
             apply_field_text(&self.node, element)?;
         }
-        place_node(&self.node, element, placement)?;
-        self.update_actions(document, id, element, placement)
+        self.page = page;
+        self.update_actions(document, id, element)
+    }
+
+    /// Puts the node and its action buttons over the control they stand for,
+    /// so a reader's cursor and a touch exploration land in the same place.
+    /// Nothing is written when they sit there already.
+    fn place(&mut self, rect: [f64; 4], css: &mut String) -> Result<(), JsValue> {
+        if self.placed == Some(rect) {
+            return Ok(());
+        }
+        let [left, top, width, height] = rect;
+        css.clear();
+        write!(
+            css,
+            "position:fixed;left:{left}px;top:{top}px;width:{width}px;height:{height}px;\
+             opacity:0.001;pointer-events:none;overflow:hidden"
+        )
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        for node in std::iter::once(&self.node).chain(&self.actions) {
+            node.style().set_css_text(css);
+        }
+        self.placed = Some(rect);
+        Ok(())
     }
 
     fn update_actions(
@@ -999,7 +1017,6 @@ impl MirrorEntry {
         document: &Document,
         id: i32,
         element: &AccessibilityElement,
-        placement: &Placement,
     ) -> Result<(), JsValue> {
         let named = accessibility::reader_actions(element).len();
         let actions = accessibility::listed_actions(element);
@@ -1010,6 +1027,7 @@ impl MirrorEntry {
                         .create_element("button")?
                         .dyn_into::<HtmlElement>()?,
                 );
+                self.placed = None;
             }
             let button = &self.actions[index];
             let label = if element.label.is_empty() {
@@ -1026,7 +1044,6 @@ impl MirrorEntry {
             } else {
                 button.remove_attribute("data-cranpose-canvas")?;
             }
-            place_node(button, element, placement)?;
         }
         for button in self.actions.drain(actions.len()..) {
             button.remove();
@@ -1064,6 +1081,13 @@ fn patch_attributes(node: &HtmlElement, template: &HtmlElement) -> Result<(), Js
     Ok(())
 }
 
+/// The element the mirror showed for the control at `index` of the new
+/// snapshot, when it showed one.
+fn shown_element(shown: Option<&Replaced>, index: usize) -> Option<&AccessibilityElement> {
+    let shown = shown?;
+    shown.elements.get((*shown.was.get(index)?)?)
+}
+
 fn reconcile_children(parent: &HtmlElement, children: &[HtmlElement]) -> Result<(), JsValue> {
     let mut cursor = parent.first_child();
     for child in children {
@@ -1082,7 +1106,15 @@ fn reconcile_children(parent: &HtmlElement, children: &[HtmlElement]) -> Result<
 pub(crate) struct WebAccessibilityBridge {
     root: HtmlElement,
     canvas: HtmlCanvasElement,
+    /// The elements the mirror shows.
     previous: accessibility::AccessibilitySnapshot,
+    /// The newest elements, while they differ from the ones the mirror shows
+    /// and wait for its next sync.
+    pending: Option<Vec<AccessibilityElement>>,
+    /// When the mirror may next take on a change no reader needs at once.
+    sync_due: Option<Instant>,
+    /// Room for the declarations that place one mirror node.
+    css: String,
     dirty: bool,
     entries: HashMap<i32, MirrorEntry>,
     node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
@@ -1122,6 +1154,9 @@ impl WebAccessibilityBridge {
             root,
             canvas,
             previous: accessibility::AccessibilitySnapshot::default(),
+            pending: None,
+            sync_due: None,
+            css: String::new(),
             dirty: false,
             entries: HashMap::new(),
             node_ids,
@@ -1139,20 +1174,22 @@ impl WebAccessibilityBridge {
         self.text_input.clone()
     }
 
+    /// When a frame must come to sync the mirror with elements it holds back,
+    /// if it holds any.
+    pub(crate) fn sync_wake(&self) -> Option<Instant> {
+        self.pending.as_ref().and(self.sync_due)
+    }
+
     /// Puts text a screen reader reads out into the live region that matches
     /// how urgent it is. The same text twice in a row carries a trailing space
     /// one time out of two, because a reader reads a live region only when its
-    /// text changes.
+    /// text changes. Every frame speaks, against the elements of the frame
+    /// before, while the mirror itself may trail them.
     fn speak(&mut self, next: &[AccessibilityElement]) {
+        let heard = self.pending.as_deref().unwrap_or(&self.previous.elements);
         let mut announcements = accessibility::drain_app_announcements();
-        announcements.extend(accessibility::live_region_announcements(
-            &self.previous.elements,
-            next,
-        ));
-        announcements.extend(accessibility::pane_title_announcements(
-            &self.previous.elements,
-            next,
-        ));
+        announcements.extend(accessibility::live_region_announcements(heard, next));
+        announcements.extend(accessibility::pane_title_announcements(heard, next));
         for announcement in announcements {
             self.announcement_turn = !self.announcement_turn;
             let text = if self.announcement_turn {
@@ -1194,8 +1231,24 @@ impl WebAccessibilityBridge {
         let elements = accessibility::snapshot(shell, &mut self.previous);
         self.speak(&elements);
         let Some(elements) = self.previous.changed(elements, self.dirty) else {
+            if let Some(pending) = self.pending.take() {
+                self.previous.recycle(pending);
+            }
             return self.sync_password(shell, &self.previous.elements);
         };
+        let now = Instant::now();
+        let immediate =
+            self.dirty || accessibility::mirror_at_once(&self.previous.elements, &elements);
+        if !accessibility::sync_now(immediate, now, self.sync_due) {
+            if let Some(pending) = self.pending.replace(elements) {
+                self.previous.recycle(pending);
+            }
+            return self.sync_password(shell, &self.previous.elements);
+        }
+        if let Some(pending) = self.pending.take() {
+            self.previous.recycle(pending);
+        }
+        self.sync_due = Some(now + SYNC_INTERVAL);
         let opened_dialog = accessibility::opened_dialog(&self.previous.elements, &elements);
         let held = reader_focus(document).filter(|_| opened_dialog.is_none());
         let app_focus_before = self.focused_element;
@@ -1208,28 +1261,35 @@ impl WebAccessibilityBridge {
             scale_y: canvas_rect.height() / viewport.1.max(1.0) as f64,
         };
         let mut next_snapshot = std::mem::take(&mut self.previous);
-        match next_snapshot.update(elements) {
-            Ok(replaced) => next_snapshot.recycle(replaced.elements),
+        let replaced = match next_snapshot.update(elements) {
+            Ok(replaced) => replaced,
             Err(error) => {
                 self.previous = next_snapshot;
                 return Err(JsValue::from_str(&error.to_string()));
             }
-        }
+        };
+        // After a failed sync the mirror may hold anything, so every node is
+        // written again.
+        let shown = (!self.dirty).then_some(&replaced);
         let mut result = (|| {
-            self.reconcile(document, &next_snapshot, &placement)?;
+            self.reconcile(document, &next_snapshot, shown, &placement)?;
             self.sync_password(shell, &next_snapshot.elements)?;
-            for id in &next_snapshot.ids {
-                let Some(element) = next_snapshot.element(*id) else {
+            for (id, element) in next_snapshot.ids.iter().zip(&next_snapshot.elements) {
+                let opened = opened_dialog == Some(element.node_id);
+                if !element.focused && !opened {
+                    continue;
+                }
+                let Some(node) = self.entries.get(id).map(|entry| entry.node.clone()) else {
                     continue;
                 };
-                let node = self.entries[id].node.clone();
                 self.follow_app_focus(&node, element, *id)?;
-                if opened_dialog == Some(element.node_id) {
+                if opened {
                     node.focus()?;
                 }
             }
             Ok(())
         })();
+        next_snapshot.recycle(replaced.elements);
         self.previous = next_snapshot;
         if result.is_ok() {
             result = self.settle_focus(held, app_focus_before);
@@ -1266,10 +1326,14 @@ impl WebAccessibilityBridge {
         Ok(())
     }
 
+    /// Brings the mirror to `snapshot`. A control the mirror shows as it was
+    /// in `shown`, the update it replaced, keeps its node as written and at
+    /// most moves.
     fn reconcile(
         &mut self,
         document: &Document,
         snapshot: &accessibility::AccessibilitySnapshot,
+        shown: Option<&Replaced>,
         placement: &Placement,
     ) -> Result<(), JsValue> {
         let elements = &snapshot.elements;
@@ -1284,17 +1348,21 @@ impl WebAccessibilityBridge {
         let mut children: HashMap<Option<i32>, Vec<HtmlElement>> = HashMap::new();
         self.node_ids.borrow_mut().clear();
         self.text_input.fields.borrow_mut().clear();
-        for ((id, element), page) in ids.iter().copied().zip(elements).zip(pages) {
+        for (index, ((id, element), page)) in
+            ids.iter().copied().zip(elements).zip(pages).enumerate()
+        {
             let entry = match self.entries.entry(id) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => entry.insert(MirrorEntry {
-                    node: document
-                        .create_element(mirror_tag(element))?
-                        .dyn_into::<HtmlElement>()?,
-                    actions: Vec::new(),
-                }),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(MirrorEntry::new(document, element)?)
+                }
             };
-            entry.update(document, id, element, page, placement)?;
+            let unchanged = entry.page == page
+                && shown_element(shown, index).is_some_and(|old| old.same_but_bounds(element));
+            if !unchanged {
+                entry.update(document, id, element, page)?;
+            }
+            entry.place(placement.rect(element.bounds), &mut self.css)?;
             self.node_ids.borrow_mut().insert(id, element.node_id);
             if edits_text(element) {
                 self.text_input
@@ -1314,7 +1382,7 @@ impl WebAccessibilityBridge {
             reconcile_children(parent, &children)?;
         }
         self.entries.retain(|id, entry| {
-            if ids.contains(id) {
+            if snapshot.element(*id).is_some() {
                 true
             } else {
                 entry.node.remove();
