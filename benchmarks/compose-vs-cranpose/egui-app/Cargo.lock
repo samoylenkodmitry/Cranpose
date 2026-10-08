@@ -1991,6 +1991,9 @@ dependencies = [
  "eframe",
  "log",
  "perf-data",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "winit",
 ]
 

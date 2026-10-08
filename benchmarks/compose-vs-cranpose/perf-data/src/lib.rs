@@ -520,6 +520,22 @@ impl Launch {
         Self::parse(text.as_deref().unwrap_or_default())
     }
 
+    /// The launch a page's query string asks for: `?tier=12&freeze=120`, the
+    /// defaults for anything missing.
+    pub fn from_query(query: &str) -> Self {
+        let value = |name: &str| {
+            query
+                .trim_start_matches('?')
+                .split('&')
+                .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
+                .and_then(|value| value.parse::<u32>().ok())
+        };
+        Self {
+            tier: value("tier").unwrap_or(5) as usize,
+            freeze: value("freeze").unwrap_or(0),
+        }
+    }
+
     /// The launch `desktop.py` asked for in `PERF_TIER` and `PERF_FREEZE`.
     pub fn from_env() -> Self {
         let var = |name: &str, default: u32| {
@@ -532,6 +548,24 @@ impl Launch {
             tier: var("PERF_TIER", 5) as usize,
             freeze: var("PERF_FREEZE", 0),
         }
+    }
+}
+
+/// A Roboto file's bytes: the file `font_path` names, or on the web, where an
+/// app has no files to read, the copy the page carries.
+pub fn font_bytes(file: &str) -> Result<Vec<u8>, String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        match file {
+            "Roboto-Regular.ttf" => Ok(include_bytes!("../../fonts/Roboto-Regular.ttf").to_vec()),
+            "Roboto-Medium.ttf" => Ok(include_bytes!("../../fonts/Roboto-Medium.ttf").to_vec()),
+            "Roboto-Bold.ttf" => Ok(include_bytes!("../../fonts/Roboto-Bold.ttf").to_vec()),
+            _ => Err(format!("no {file} in the page")),
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::read(font_path(file)).map_err(|error| error.to_string())
     }
 }
 
@@ -577,11 +611,20 @@ pub struct Gauntlet {
     pub tickers: Vec<Ticker>,
 }
 
-/// The desktop gauntlet's data, made on first use from `PERF_TIER`.
+static LAUNCH: OnceLock<Launch> = OnceLock::new();
+
+/// Fixes the launch where the environment cannot carry it, as a page's query
+/// string does; before the first [`desktop_gauntlet`].
+pub fn set_launch(launch: Launch) {
+    let _ = LAUNCH.set(launch);
+}
+
+/// The desktop gauntlet's data, made on first use from `PERF_TIER`, or the
+/// launch [`set_launch`] fixed.
 pub fn desktop_gauntlet() -> &'static Gauntlet {
     static GAUNTLET: OnceLock<Gauntlet> = OnceLock::new();
     GAUNTLET.get_or_init(|| {
-        let launch = Launch::from_env();
+        let launch = LAUNCH.get().copied().unwrap_or_else(Launch::from_env);
         let tier = gauntlet_tier(launch.tier);
         Gauntlet {
             launch,

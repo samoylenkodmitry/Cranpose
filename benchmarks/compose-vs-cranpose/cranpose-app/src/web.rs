@@ -10,13 +10,6 @@ use wasm_bindgen::prelude::*;
 
 use crate::PerfCompareApp;
 
-/// The Roboto faces every app draws in, which a page cannot read from files.
-const ROBOTO: &[&[u8]] = &[
-    include_bytes!("../../fonts/Roboto-Regular.ttf"),
-    include_bytes!("../../fonts/Roboto-Medium.ttf"),
-    include_bytes!("../../fonts/Roboto-Bold.ttf"),
-];
-
 #[wasm_bindgen(start)]
 pub fn start() {
     wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
@@ -50,7 +43,7 @@ pub async fn run_gauntlet(canvas_id: &str) -> Result<(), JsValue> {
     AppLauncher::new()
         .with_title("Gauntlet")
         .with_log_tag("PerfCompare")
-        .with_fonts(ROBOTO)
+        .with_fonts(crate::roboto_faces())
         .run_web(canvas_id, PerfCompareApp)
         .await
 }

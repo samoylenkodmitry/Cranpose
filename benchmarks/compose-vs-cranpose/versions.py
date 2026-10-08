@@ -39,7 +39,7 @@ SOURCES = {
     'avalonia': 'benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs',
     'egui': 'benchmarks/compose-vs-cranpose/egui-app/src/lib.rs',
     'slint': 'benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint',
-    'iced': 'benchmarks/compose-vs-cranpose/iced-app/src/main.rs',
+    'iced': 'benchmarks/compose-vs-cranpose/iced-app/src/lib.rs',
     'gpui': 'benchmarks/compose-vs-cranpose/gpui-app/src/main.rs',
     'swiftui': 'benchmarks/compose-vs-cranpose/swiftui-app/Gauntlet.swift',
     'appkit': 'benchmarks/compose-vs-cranpose/appkit-app/Gauntlet.swift',

@@ -71,7 +71,7 @@ pub fn roboto() -> FontDefinitions {
         ("roboto", "Roboto-Regular.ttf", FontFamily::Proportional),
         ("roboto-bold", "Roboto-Bold.ttf", bold()),
     ] {
-        match std::fs::read(perf_data::font_path(file)) {
+        match perf_data::font_bytes(file) {
             Ok(bytes) => {
                 fonts
                     .font_data
@@ -282,6 +282,9 @@ impl Gauntlet {
         ctx.set_theme(egui::Theme::Light);
         // The device runs an accessibility service, so the Android toolkits
         // keep their accessibility trees current every frame: egui does too.
+        // A page's canvas has no accessibility tree to keep: no toolkit's
+        // browser backend builds one either.
+        #[cfg(not(target_arch = "wasm32"))]
         ctx.enable_accesskit();
         // Rows as tall as their content: nothing here is a button to keep
         // tall enough to touch.
@@ -875,6 +878,7 @@ impl eframe::App for Gauntlet {
 }
 
 /// Runs the gauntlet in eframe's window with `options`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(options: eframe::NativeOptions, load: Launch) {
     let result = eframe::run_native(
         "Gauntlet",
@@ -903,4 +907,31 @@ fn android_main(app: winit::platform::android::activity::AndroidApp) {
         },
         load,
     );
+}
+
+/// Draws the gauntlet in a browser's canvas: `index.html` calls it with the
+/// page's query string, which is the launch.
+#[cfg(target_arch = "wasm32")]
+mod web {
+    use wasm_bindgen::{JsCast as _, JsValue, prelude::wasm_bindgen};
+
+    use super::{Gauntlet, Launch};
+
+    #[wasm_bindgen]
+    pub async fn run_gauntlet(canvas_id: &str, query: &str) -> Result<(), JsValue> {
+        eframe::WebLogger::init(log::LevelFilter::Info).ok();
+        let load = Launch::from_query(query);
+        let canvas = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.get_element_by_id(canvas_id))
+            .and_then(|element| element.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+            .ok_or_else(|| JsValue::from_str("no canvas"))?;
+        eframe::WebRunner::new()
+            .start(
+                canvas,
+                eframe::WebOptions::default(),
+                Box::new(move |creation| Ok(Box::new(Gauntlet::new(&creation.egui_ctx, load)))),
+            )
+            .await
+    }
 }

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gauntlet</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #EEF0F5; }
+body { position: fixed; inset: 0; }
+canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<script type="module">
+import init from './pkg/perf_iced.js';
+// The module starts the gauntlet when it loads.
+await init();
+</script>
+</body>
+</html>

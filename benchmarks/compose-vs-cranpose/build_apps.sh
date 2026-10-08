@@ -94,6 +94,25 @@ cargo_app() {
     (cd "$here/$1" && env -u CARGO_TARGET_DIR cargo build --release)
 }
 
+# An app built to WebAssembly: wasm-pack puts its module in pkg/, and the page
+# that loads it goes beside that in the app's folder of browser-dist.
+wasm_page() {
+    local name=$1 app=$2
+    shift 2
+    mkdir -p "$here/browser-dist/$name"
+    (cd "$here/$app" && env -u CARGO_TARGET_DIR wasm-pack build --target web --release "$@")
+    cp "$here/$app/index.html" "$here/browser-dist/$name/index.html"
+    ditto "$here/$app/pkg" "$here/browser-dist/$name/pkg"
+}
+
+# Dioxus's page draws with the web page's CSS, which names Roboto beside it.
+dioxus_page() {
+    wasm_page dioxus dioxus-app
+    cp "$here/web-app/www/style.css" "$here/browser-dist/dioxus/style.css"
+    mkdir -p "$here/browser-dist/dioxus/fonts"
+    cp "$here/fonts/"*.ttf "$here/browser-dist/dioxus/fonts/"
+}
+
 # What every build runs: Rust, Flutter, .NET and its workloads, Xcode, Node
 # and the JDKs. A change to any of them builds every app again.
 toolchains() {
@@ -243,11 +262,23 @@ browser)
     # Cranpose's app reads the whole workspace, which moves every night.
     step cranpose-web
     rust_target cranpose-app
-    (cd "$here/cranpose-app" && env -u CARGO_TARGET_DIR wasm-pack build --target web --release \
-        --no-default-features --features web,renderer-wgpu)
-    mkdir -p "$dist/cranpose"
-    cp "$here/cranpose-app/index.html" "$dist/cranpose/index.html"
-    ditto "$here/cranpose-app/pkg" "$dist/cranpose/pkg"
+    wasm_page cranpose cranpose-app --no-default-features --features web,renderer-wgpu
+    # egui's shell on WebGL2, as on the phone's OpenGL ES.
+    rust_target egui-app
+    build egui-browser browser-dist/egui egui-app perf-data fonts -- \
+        attempt egui wasm_page egui egui-app
+    # Slint's FemtoVG renderer on WebGL2: Skia does not run in a browser.
+    rust_target slint-app
+    build slint-browser browser-dist/slint slint-app perf-data fonts -- \
+        attempt slint wasm_page slint slint-app
+    # iced on wgpu, which takes WebGPU where the browser has it.
+    rust_target iced-app
+    build iced-browser browser-dist/iced iced-app perf-data fonts -- \
+        attempt iced wasm_page iced iced-app
+    # Dioxus on its DOM renderer, with the web page's CSS and Roboto.
+    rust_target dioxus-app
+    build dioxus-browser browser-dist/dioxus dioxus-app perf-data web-app/www/style.css fonts -- \
+        attempt dioxus dioxus_page
     # The page, with the Roboto files its style names.
     build web-browser browser-dist/web web-app shared-ts -- \
         attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json && rm -rf '$dist/web' && mkdir -p '$dist/web/fonts' && cp -R www/. '$dist/web/' && cp '$here/fonts/'*.ttf '$dist/web/fonts/'"

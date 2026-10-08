@@ -67,11 +67,15 @@ impl Scenario {
 /// the Compose app loads, so both frameworks shape and measure identical
 /// fonts; on a desktop the ones in the folder `PERF_FONTS` names, which
 /// every desktop app loads. Read once and kept for the life of the process.
-#[cfg(any(target_os = "android", feature = "desktop"))]
+#[cfg(any(
+    target_os = "android",
+    feature = "desktop",
+    all(feature = "web", target_arch = "wasm32")
+))]
 fn roboto_faces() -> &'static [&'static [u8]] {
     let faces: Vec<&'static [u8]> = ["Roboto-Regular.ttf", "Roboto-Medium.ttf", "Roboto-Bold.ttf"]
         .iter()
-        .filter_map(|file| match std::fs::read(perf_data::font_path(file)) {
+        .filter_map(|file| match perf_data::font_bytes(file) {
             Ok(bytes) => Some(&*Box::leak(bytes.into_boxed_slice())),
             Err(error) => {
                 log::warn!("font {file} unavailable: {error}");

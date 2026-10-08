@@ -33,8 +33,12 @@ PERF_SCRIPT = """\
       original.apply(null, arguments);
     };
   });
-  window.addEventListener('error', function (event) { report('PERF error ' + event.message); });
-  window.addEventListener('unhandledrejection', function (event) { report('PERF error ' + event.reason); });
+  // winit on the web leaves its event loop's run by throwing: not a failure.
+  var failure = function (text) {
+    if (String(text).indexOf('Using exceptions for control flow') < 0) report('PERF error ' + text);
+  };
+  window.addEventListener('error', function (event) { failure(event.message); });
+  window.addEventListener('unhandledrejection', function (event) { failure(event.reason); });
 })();
 """
 SCRIPT_TAG = b'<script src="/__perf.js"></script>'
