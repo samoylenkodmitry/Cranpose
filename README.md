@@ -1,5 +1,7 @@
 # Cranpose
 
+<img align="right" width="180" alt="Cranpose logo" src="docs/images/logo.webp" />
+
 [![crates.io](https://img.shields.io/crates/v/cranpose.svg)](https://crates.io/crates/cranpose)
 [![docs.rs](https://img.shields.io/docsrs/cranpose)](https://docs.rs/cranpose/latest/cranpose/)
 [![CI](https://github.com/samoylenkodmitry/Cranpose/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/samoylenkodmitry/Cranpose/actions/workflows/rust.yml)
