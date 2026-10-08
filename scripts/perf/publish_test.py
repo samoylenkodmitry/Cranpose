@@ -99,7 +99,15 @@ def scratch_repo(root):
     return origin, repo
 
 
-def publish_run(root, repo, environment=ENV):
+# A Mac whose git signs every commit with a key only a person can unlock.
+SIGNING = '[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n'
+
+
+def publish_run(root, repo, environment=None):
+    if environment is None:
+        machine = root / 'machine-gitconfig'
+        machine.write_text(SIGNING)
+        environment = {**ENV, 'GIT_CONFIG_GLOBAL': str(machine)}
     return subprocess.run(
         ['python3', 'scripts/perf/publish.py', '--run', str(root / 'run.json'), '--tree', str(root / 'tree')],
         cwd=repo, capture_output=True, text=True, env=environment)
@@ -130,7 +138,7 @@ class PublishPushTest(unittest.TestCase):
             (tools / 'git').chmod(0o755)
             record = root / 'push-record'
             machine = root / 'machine-gitconfig'
-            machine.write_text('[credential]\n\thelper = !echo password=the-keychain\n')
+            machine.write_text(SIGNING + '[credential]\n\thelper = !echo password=the-keychain\n')
             environment = {**ENV, 'PATH': f'{tools}{os.pathsep}{ENV["PATH"]}', 'REAL_GIT': shutil.which('git'),
                            'PUSH_RECORD': str(record), 'GIT_CONFIG_GLOBAL': str(machine)}
             self.assertEqual(publish_run(root, repo, environment).returncode, 0)

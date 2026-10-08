@@ -57,7 +57,9 @@ def main():
     # night's builds rewrote elsewhere is not part of the proposal.
     folders = sorted({f'{BENCHMARK}/{Path(file).parts[0]}' for change in moved.values() for file in change['files']})
     run('git', 'add', '-u', '--', *folders)
-    run('git', 'commit', '-q', '-m', TITLE, '-m', '\n'.join(lines))
+    # Unsigned: the author is the bot, and a Mac that signs the user's commits
+    # has no one to answer its pinentry at night.
+    run('git', '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', TITLE, '-m', '\n'.join(lines))
     run('git', 'push', '-q', '-f', 'origin', BRANCH)
     existing = run('gh', 'pr', 'list', '--head', BRANCH, '--state', 'open', '--json', 'number', '--jq', '.[0].number')
     if existing:
