@@ -24,7 +24,7 @@ controls inside a Cranpose screen.
 [Releases](https://github.com/samoylenkodmitry/Cranpose/releases) ·
 [Discussions](https://github.com/samoylenkodmitry/Cranpose/discussions)
 
-<img width="1800" height="820" alt="Cranamp on a desktop, CranScan on a phone, Orbit Breaker on a watch and the Cranpose showcase in a browser" src="docs/images/apps.webp" />
+<img width="2000" height="820" alt="CranScan on macOS, Cranamp on an Android phone, Orbit Breaker on a Wear OS watch and the Cranpose showcase in a browser, each recorded while in use" src="docs/images/apps.webp" />
 
 On a Huawei Mate 20 X from 2018, the [gauntlet benchmark](benchmarks/compose-vs-cranpose/README.md)
 draws 53 frames per second in Cranpose and 4.5 in Jetpack Compose. Both apps
