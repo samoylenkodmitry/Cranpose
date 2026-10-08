@@ -35,7 +35,7 @@ sys.path.insert(0, str(REPO / 'scripts'))
 sys.path.insert(0, str(REPO / BENCH))
 from android_robot_device import device_lock  # noqa: E402
 from measure import Device  # noqa: E402
-from publish import published_runs  # noqa: E402
+from publish import published_runs, worktree  # noqa: E402
 
 
 def git(*args, cwd=REPO):
@@ -53,10 +53,8 @@ def release_has(tag, path, needle):
 
 
 def release_tree_at(tree, tag):
-    if (tree / '.git').exists():
-        git('checkout', '-q', '--detach', tag, cwd=tree)
-    else:
-        git('worktree', 'add', '-q', '--force', '--detach', str(tree), tag)
+    worktree(tree, tag)
+    git('checkout', '-q', '--detach', tag, cwd=tree)
     return tree
 
 

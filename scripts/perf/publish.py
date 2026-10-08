@@ -13,6 +13,7 @@ Usage: publish.py --run RUN_JSON [--tree DIR] [--no-push]
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -94,12 +95,24 @@ def published_runs():
     return json.loads(git('show', f'origin/{DATA_BRANCH}:index.json', cwd=REPO))['runs']
 
 
+def worktree(tree, revision):
+    """`tree` as a worktree of this checkout, made at `revision` when it is
+    not one. A tree whose record the checkout lost, because `actions/checkout`
+    made the checkout's .git again (macm3, 2026-10-08), is made again: git
+    says "not a git repository" in it."""
+    if (tree / '.git').exists() and subprocess.run(
+            ['git', 'rev-parse', '--git-dir'], cwd=tree, capture_output=True).returncode == 0:
+        return
+    shutil.rmtree(tree, ignore_errors=True)
+    git('worktree', 'prune', cwd=REPO)
+    git('worktree', 'add', '-q', '--force', '--detach', str(tree), revision, cwd=REPO)
+
+
 def data_tree(tree):
     """A worktree on the data branch's latest commit, starting the branch
     when it is new. Fetched in the tree: it may be a worktree of another
     clone than this script's."""
-    if not (tree / '.git').exists():
-        git('worktree', 'add', '-q', '--force', '--detach', str(tree), 'HEAD', cwd=REPO)
+    worktree(tree, 'HEAD')
     fetched = fetch_data_branch(tree)
     if fetched.returncode == 0:
         # Detached at the data branch's head: the branch may be checked out in
