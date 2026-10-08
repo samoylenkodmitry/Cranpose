@@ -1,3 +1,5 @@
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
+
 use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::{
     geometry::{blur_reach, blur_reach_for_minimum_scale},
@@ -372,16 +374,7 @@ impl RoundedClipCorners {
         }
     }
 
-    /// Whether `region` lies inside the rounded rect: for every corner square
-    /// it enters, its point farthest from that corner's circle centre is still
-    /// within the circle.
-    pub(crate) fn admits(&self, region: Rect) -> bool {
-        if ![region.x, region.y, region.width, region.height]
-            .into_iter()
-            .all(f32::is_finite)
-        {
-            return false;
-        }
+    fn corners(&self) -> [ClipCorner; 4] {
         let Rect {
             x,
             y,
@@ -390,48 +383,195 @@ impl RoundedClipCorners {
         } = self.rect;
         let right = x + width;
         let bottom = y + height;
-        let corners = [
-            (self.radii[0], x, y, 1.0, 1.0),
-            (self.radii[1], right, y, -1.0, 1.0),
-            (self.radii[2], x, bottom, 1.0, -1.0),
-            (self.radii[3], right, bottom, -1.0, -1.0),
-        ];
-        let region_right = region.x + region.width;
-        let region_bottom = region.y + region.height;
-        for (radius, corner_x, corner_y, sign_x, sign_y) in corners {
-            if radius <= 0.0 {
-                continue;
-            }
-            let square_left = corner_x.min(corner_x + sign_x * radius);
-            let square_right = corner_x.max(corner_x + sign_x * radius);
-            let square_top = corner_y.min(corner_y + sign_y * radius);
-            let square_bottom = corner_y.max(corner_y + sign_y * radius);
-            let overlap_left = region.x.max(square_left);
-            let overlap_right = region_right.min(square_right);
-            let overlap_top = region.y.max(square_top);
-            let overlap_bottom = region_bottom.min(square_bottom);
-            if overlap_left >= overlap_right || overlap_top >= overlap_bottom {
-                continue;
-            }
-            let centre_x = corner_x + sign_x * radius;
-            let centre_y = corner_y + sign_y * radius;
-            let farthest_x = if sign_x > 0.0 {
-                overlap_left
-            } else {
-                overlap_right
-            };
-            let farthest_y = if sign_y > 0.0 {
-                overlap_top
-            } else {
-                overlap_bottom
-            };
-            let dx = farthest_x - centre_x;
-            let dy = farthest_y - centre_y;
-            if dx * dx + dy * dy > radius * radius {
-                return false;
-            }
+        [
+            ClipCorner::new(self.radii[0], x, y, 1.0, 1.0),
+            ClipCorner::new(self.radii[1], right, y, -1.0, 1.0),
+            ClipCorner::new(self.radii[2], x, bottom, 1.0, -1.0),
+            ClipCorner::new(self.radii[3], right, bottom, -1.0, -1.0),
+        ]
+    }
+
+    /// Whether `region` lies inside the rounded rect: for every corner square
+    /// it enters, its point farthest from that corner's circle centre is still
+    /// within the circle.
+    pub(crate) fn admits(&self, region: Rect) -> bool {
+        rect_is_finite(region)
+            && self
+                .corners()
+                .into_iter()
+                .all(|corner| corner.admits_rect(region))
+    }
+
+    /// Whether the rounded rect `region`, its corners all rounded at
+    /// `radius`, lies inside the rounded rect: for every corner square it
+    /// enters, its arc nearest that corner stays within the corner's circle.
+    pub(crate) fn admits_rounded(&self, region: Rect, radius: f32) -> bool {
+        let arc = radius.min(region.width * 0.5).min(region.height * 0.5);
+        if radius <= 0.0 || arc <= 0.0 {
+            return self.admits(region);
         }
-        true
+        rect_is_finite(region)
+            && arc.is_finite()
+            && self
+                .corners()
+                .into_iter()
+                .all(|corner| corner.admits_arc(region, arc))
+    }
+}
+
+fn rect_is_finite(rect: Rect) -> bool {
+    [rect.x, rect.y, rect.width, rect.height]
+        .into_iter()
+        .all(f32::is_finite)
+}
+
+/// One corner of a rounded clip: its radius, its point, and the signs that
+/// lead from that point into the clip.
+#[derive(Clone, Copy)]
+struct ClipCorner {
+    radius: f32,
+    x: f32,
+    y: f32,
+    sign_x: f32,
+    sign_y: f32,
+}
+
+impl ClipCorner {
+    fn new(radius: f32, x: f32, y: f32, sign_x: f32, sign_y: f32) -> Self {
+        Self {
+            radius,
+            x,
+            y,
+            sign_x,
+            sign_y,
+        }
+    }
+
+    fn centre(self) -> Point {
+        Point::new(
+            self.x + self.sign_x * self.radius,
+            self.y + self.sign_y * self.radius,
+        )
+    }
+
+    /// The part of `region` inside the corner square, the square between the
+    /// corner and its circle centre, when that part has an area.
+    fn overlap(self, region: Rect) -> Option<Rect> {
+        if self.radius <= 0.0 {
+            return None;
+        }
+        let centre = self.centre();
+        let left = region.x.max(self.x.min(centre.x));
+        let right = (region.x + region.width).min(self.x.max(centre.x));
+        let top = region.y.max(self.y.min(centre.y));
+        let bottom = (region.y + region.height).min(self.y.max(centre.y));
+        (left < right && top < bottom).then_some(Rect {
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
+        })
+    }
+
+    /// `point` in the corner's own frame, where the circle centre is the
+    /// origin and the corner square spans `-radius..=0` on both axes.
+    fn local(self, point: Point) -> Point {
+        let centre = self.centre();
+        Point::new(
+            self.sign_x * (point.x - centre.x),
+            self.sign_y * (point.y - centre.y),
+        )
+    }
+
+    /// Whether the part of `region` in the corner square stays within the
+    /// circle: its point nearest the corner does.
+    fn admits_rect(self, region: Rect) -> bool {
+        let Some(overlap) = self.overlap(region) else {
+            return true;
+        };
+        let nearest = Point::new(
+            if self.sign_x > 0.0 {
+                overlap.x
+            } else {
+                overlap.x + overlap.width
+            },
+            if self.sign_y > 0.0 {
+                overlap.y
+            } else {
+                overlap.y + overlap.height
+            },
+        );
+        let local = self.local(nearest);
+        local.x * local.x + local.y * local.y <= self.radius * self.radius
+    }
+
+    /// Whether the part of the rounded `region`, its arcs of radius `arc`, in
+    /// the corner square stays within the circle. For every point of the
+    /// region in the corner's quadrant, its arc nearest the corner has a
+    /// point in that quadrant at least as far from the circle centre: the
+    /// ends of its straight edges are that arc's ends, and its other arcs
+    /// lie nearer the centre.
+    fn admits_arc(self, region: Rect, arc: f32) -> bool {
+        if self.overlap(region).is_none() {
+            return true;
+        }
+        let near = self.local(Point::new(
+            if self.sign_x > 0.0 {
+                region.x + arc
+            } else {
+                region.x + region.width - arc
+            },
+            if self.sign_y > 0.0 {
+                region.y + arc
+            } else {
+                region.y + region.height - arc
+            },
+        ));
+        arc_in_quadrant(near, arc).is_none_or(|(from, to)| {
+            farthest_on_arc(near, arc, from, to) <= self.radius * self.radius
+        })
+    }
+}
+
+/// The angles, within `PI..=3 * PI / 2`, at which the quarter arc of
+/// radius `arc` around `centre` that faces the corner lies in the quadrant
+/// at or below zero on both axes, which holds the corner square; `None`
+/// where it never does. Over those angles the cosine rises and the sine
+/// falls.
+fn arc_in_quadrant(centre: Point, arc: f32) -> Option<(f32, f32)> {
+    let cos_bound = -centre.x / arc;
+    let sin_bound = -centre.y / arc;
+    if cos_bound < -1.0 || sin_bound < -1.0 {
+        return None;
+    }
+    let from = if sin_bound < 0.0 {
+        PI - sin_bound.asin()
+    } else {
+        PI
+    };
+    let to = if cos_bound < 0.0 {
+        TAU - cos_bound.acos()
+    } else {
+        PI + FRAC_PI_2
+    };
+    (from <= to).then_some((from, to))
+}
+
+/// The largest squared distance from the origin of the arc of radius `arc`
+/// around `centre` between the angles `from` and `to`: at the angle that
+/// points away from the origin where the span holds it, and otherwise at
+/// one of the span's ends.
+fn farthest_on_arc(centre: Point, arc: f32, from: f32, to: f32) -> f32 {
+    let squared = |angle: f32| {
+        let x = centre.x + arc * angle.cos();
+        let y = centre.y + arc * angle.sin();
+        x * x + y * y
+    };
+    let away = centre.y.atan2(centre.x).rem_euclid(TAU);
+    if (from..=to).contains(&away) {
+        squared(away)
+    } else {
+        squared(from).max(squared(to))
     }
 }
 
@@ -660,8 +800,9 @@ fn clip_holds(outer: Rect, inner: Rect) -> bool {
 }
 
 /// How `child` places under `context`: a rounded clip draws in place only
-/// where nothing above clips into it, and never inside another rounded
-/// clip, whose radius a placement could not carry beside its own.
+/// where nothing above clips into it, and inside another rounded clip only
+/// where its own rounded rect stays inside that one, which then cuts
+/// nothing of it: a placement carries one radius.
 fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
     match child_placement(child, context.raster_scale) {
         Placement::DirectRounded(translation, radius) => {
@@ -674,7 +815,19 @@ fn placement_in(child: &LayerNode, context: &WalkContext) -> Placement {
             let whole = context
                 .visual_clip
                 .is_none_or(|outer| clip.is_some_and(|clip| clip_holds(outer, clip)));
-            if whole && context.clip_radius == 0.0 {
+            let uncut = context.clip_radius == 0.0
+                || context.visual_clip.zip(clip).is_some_and(|(outer, clip)| {
+                    let outer = LayerRoundedClip {
+                        rect: outer,
+                        radii: [context.clip_radius; 4],
+                    };
+                    rounded_stays_clear(
+                        clip,
+                        radius,
+                        &RoundedClipCorners::of(outer, context.raster_scale),
+                    )
+                });
+            if whole && uncut {
                 Placement::DirectRounded(translation, radius)
             } else {
                 Placement::Isolated
@@ -695,19 +848,23 @@ fn content_takes_rounded_clip(
     clip: LayerRoundedClip,
     raster_scale: RasterScale,
 ) -> Option<f32> {
+    uniform_radius(clip).filter(|_| {
+        layer.visual_clip_rect() == Some(clip.rect)
+            && layer_takes_corners(
+                layer,
+                Point::default(),
+                &RoundedClipCorners::of(clip, raster_scale),
+            )
+    })
+}
+
+/// The radius of a clip whose four corners share it.
+fn uniform_radius(clip: LayerRoundedClip) -> Option<f32> {
     let radius = clip.radii[0];
-    let uniform = clip
-        .radii
+    clip.radii
         .iter()
-        .all(|corner| (corner - radius).abs() <= AFFINE_TOLERANCE);
-    (uniform
-        && layer.visual_clip_rect() == Some(clip.rect)
-        && layer_takes_corners(
-            layer,
-            Point::default(),
-            &RoundedClipCorners::of(clip, raster_scale),
-        ))
-    .then_some(radius)
+        .all(|corner| (corner - radius).abs() <= AFFINE_TOLERANCE)
+        .then_some(radius)
 }
 
 fn layer_takes_corners(layer: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
@@ -747,12 +904,33 @@ fn child_takes_corners(child: &LayerNode, offset: Point, corners: &RoundedClipCo
     }
 }
 
+/// Whether nothing `child` draws reaches the corners. A child that clips
+/// draws nothing past its clip but the antialiasing the corners' margin
+/// takes, and one that only moves under a uniform rounded clip and no
+/// effect draws within its rounded rect.
 fn child_stays_clear(child: &LayerNode, offset: Point, corners: &RoundedClipCorners) -> bool {
     if !child.draws_within_bounds || child.graphics_layer.shadow_elevation > 0.0 {
         return false;
     }
-    let padding = cranpose_render_common::graph::CONTAINED_DRAW_SLACK
-        + child.effect().map_or(0.0, RenderEffect::output_padding);
+    let effect = child.effect();
+    if effect.is_none()
+        && let Some(clip) = rounded_clip_for_layer(child)
+        && let Some(radius) = uniform_radius(clip)
+        && let Some(translation) = direct_translation(child.transform_to_parent)
+    {
+        return rounded_stays_clear(
+            clip.rect
+                .translate(offset.x + translation.x, offset.y + translation.y),
+            radius,
+            corners,
+        );
+    }
+    let slack = if child.visual_clip_rect().is_some() {
+        0.0
+    } else {
+        cranpose_render_common::graph::CONTAINED_DRAW_SLACK
+    };
+    let padding = slack + effect.map_or(0.0, RenderEffect::output_padding);
     stays_clear(
         quad_bounds(
             child
@@ -835,6 +1013,16 @@ fn stays_clear(rect: Rect, offset: Point, corners: &RoundedClipCorners) -> bool 
         rect.translate(offset.x, offset.y),
         corners.aa_margin,
     ))
+}
+
+/// Whether a rounded rect at `rect`, its corners rounded at `radius`, stays
+/// inside the corners with its antialiased edge: grown outwards, a rounded
+/// rect keeps its arcs' centres and their radius grows by as much.
+fn rounded_stays_clear(rect: Rect, radius: f32, corners: &RoundedClipCorners) -> bool {
+    corners.admits_rounded(
+        expand_rect(rect, corners.aa_margin),
+        radius + corners.aa_margin,
+    )
 }
 
 /// Whether a primitive takes a rounded clip's coverage in its own shader: a

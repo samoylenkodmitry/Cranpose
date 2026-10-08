@@ -250,6 +250,50 @@ fn content_touching_the_edge_between_corners_is_admitted() {
     assert!(corners(200.0, 100.0, 20.0).admits(rect(40.0, 0.0, 100.0, 100.0)));
 }
 
+/// The gauntlet card's corner, rounded at 1.44, and its avatar: a circle 4
+/// across at (1, 1), grown by the one-unit antialias margin to 6 across.
+#[test]
+fn a_circle_inside_the_corner_arc_is_admitted_where_its_bounding_rect_is_not() {
+    let card = corners(63.0, 28.5, 1.44);
+    let avatar = rect(0.0, 0.0, 6.0, 6.0);
+    assert!(card.admits_rounded(avatar, 3.0));
+    assert!(!card.admits(avatar));
+}
+
+/// A circle 2 across in each corner of the card: 0.2 in from the corner
+/// its arc stays 0.1 inside the corner's, at the corner it reaches past it.
+#[test]
+fn a_circle_is_admitted_alike_in_every_corner_while_its_arc_stays_inside() {
+    let card = corners(63.0, 28.5, 1.44);
+    for (left, top) in [(true, true), (false, true), (true, false), (false, false)] {
+        let circle = |inset: f32| {
+            rect(
+                if left { inset } else { 61.0 - inset },
+                if top { inset } else { 26.5 - inset },
+                2.0,
+                2.0,
+            )
+        };
+        assert!(card.admits_rounded(circle(0.2), 1.0), "{left} {top}");
+        assert!(!card.admits(circle(0.2)), "{left} {top}");
+        assert!(!card.admits_rounded(circle(0.0), 1.0), "{left} {top}");
+    }
+}
+
+#[test]
+fn a_region_without_rounding_is_admitted_as_a_rect() {
+    let clip = corners(200.0, 100.0, 20.0);
+    let entering = rect(2.0, 2.0, 60.0, 60.0);
+    let inside = rect(14.0, 14.0, 60.0, 60.0);
+    assert_eq!(clip.admits_rounded(entering, 0.0), clip.admits(entering));
+    assert_eq!(clip.admits_rounded(inside, 0.0), clip.admits(inside));
+}
+
+#[test]
+fn a_rounded_region_clear_of_every_corner_square_is_admitted() {
+    assert!(corners(200.0, 100.0, 20.0).admits_rounded(rect(20.0, 20.0, 160.0, 60.0), 30.0));
+}
+
 fn rounded_layer(radius: f32, content: RenderNode) -> LayerNode {
     LayerNode {
         local_bounds: rect(0.0, 0.0, 200.0, 100.0),
@@ -369,7 +413,7 @@ fn a_rounded_layer_with_uneven_corners_isolates_shapes_in_a_corner() {
 }
 
 #[test]
-fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() {
+fn a_rounded_layer_under_a_clip_that_cuts_it_or_its_corners_isolates() {
     let layer = rounded_layer(
         20.0,
         shapes_run(vec![white_rect(rect(0.0, 0.0, 200.0, 100.0))]),
@@ -393,8 +437,15 @@ fn a_rounded_layer_under_a_clip_that_cuts_it_or_another_rounded_clip_isolates() 
         placement_in(&layer, &context(Some(rect(0.0, 0.0, 150.0, 400.0)), 0.0)),
         Placement::Isolated
     ));
+    assert!(
+        matches!(
+            placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 8.0)),
+            Placement::DirectRounded(_, radius) if radius == 20.0
+        ),
+        "a rounded clip that cuts nothing of the layer leaves it its own radius"
+    );
     assert!(matches!(
-        placement_in(&layer, &context(Some(rect(0.0, 0.0, 400.0, 400.0)), 8.0)),
+        placement_in(&layer, &context(Some(rect(10.0, 10.0, 200.0, 100.0)), 30.0)),
         Placement::Isolated
     ));
 }

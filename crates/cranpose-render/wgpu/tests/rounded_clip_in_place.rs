@@ -273,6 +273,68 @@ fn an_image_filling_a_rounded_clip_draws_in_place_as_its_surface_would() {
     }
 }
 
+/// The gauntlet's card in miniature: a fill reaching the rounded layer's
+/// corners and a circular avatar 16 across, `inset` in from its top left
+/// corner, clipping a fill of its own.
+fn card_with_avatar(inset: f32, offscreen: bool) -> RenderGraph {
+    let bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 16.0,
+        height: 16.0,
+    };
+    let mut avatar = shared_test_support::layer_node(
+        bounds,
+        ProjectiveTransform::translation(inset, inset),
+        rounded(bounds.width / 2.0, false),
+        vec![solid_rect(bounds, Color(0.1, 0.65, 0.3, 1.0))],
+    );
+    avatar.draws_within_bounds = avatar.content_draws_within_bounds();
+    clipped(
+        vec![
+            solid_rect(CLIP, Color(0.85, 0.15, 0.2, 1.0)),
+            RenderNode::Layer(Box::new(avatar)),
+        ],
+        offscreen,
+    )
+}
+
+#[test]
+fn a_circle_inside_a_rounded_layers_corner_arc_draws_in_place_with_it() {
+    // 4 in, the circle shares the corner arc's centre and stays 4 inside
+    // it, while its bounding rect reaches past the arc.
+    let Some((frames, isolated)) = both_graphs(|offscreen| card_with_avatar(4.0, offscreen)) else {
+        return;
+    };
+    assert_eq!(isolated, [0, 1], "in place, then through a surface");
+    let differing =
+        support::pixels_differing_beyond(WIDTH, &frames[0], &frames[1], SURFACE_ROUNDING);
+    assert!(
+        differing.is_empty(),
+        "the circle and the fill draw in place as through the surface: {}",
+        support::describe_differing(&differing)
+    );
+}
+
+#[test]
+fn a_circle_reaching_past_a_rounded_layers_corner_arc_keeps_its_surface() {
+    let Some((frames, isolated)) = both_graphs(|offscreen| card_with_avatar(0.0, offscreen)) else {
+        return;
+    };
+    assert_eq!(
+        isolated,
+        [1, 1],
+        "the corner's arc cuts the circle, which only a surface takes"
+    );
+    let differing =
+        support::pixels_differing_beyond(WIDTH, &frames[0], &frames[1], SURFACE_ROUNDING);
+    assert!(
+        differing.is_empty(),
+        "both frames cut the circle at the corner's arc: {}",
+        support::describe_differing(&differing)
+    );
+}
+
 /// The workspace port's bid/ask bar in miniature: a rounded clip at a
 /// fractional place inside a panel that clips, `panel_width` wide.
 fn in_panel(panel_width: f32, offscreen: bool) -> RenderGraph {
