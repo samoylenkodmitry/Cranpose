@@ -28,6 +28,7 @@ dioxus = { version = "0.7.10", features = ["desktop"] }
 dioxus = { version = "0.7.10", features = ["web"] }
 wasm-bindgen = "0.2"
 wasm-logger = "0.2"
+console_error_panic_hook = "0.1"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "CssStyleDeclaration", "Location"] }
 
 # Its own workspace, like a real application, built as the Cranpose app is.

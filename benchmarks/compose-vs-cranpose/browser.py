@@ -15,6 +15,7 @@ import re
 import socketserver
 import threading
 import time
+from pathlib import Path
 
 # Every app reports through the console, whatever its framework calls it:
 # `log::info!`, `print`, `println`. The wrapped methods still print there.
@@ -23,12 +24,15 @@ PERF_SCRIPT = """\
   var report = function (text) {
     try { navigator.sendBeacon('/__perf', text); } catch (error) { }
   };
-  ['log', 'info', 'debug', 'warn'].forEach(function (method) {
+  ['log', 'info', 'debug', 'warn', 'error'].forEach(function (method) {
     var original = console[method].bind(console);
     console[method] = function () {
       try {
         var text = Array.prototype.map.call(arguments, String).join(' ');
         if (text.indexOf('PERF ') >= 0) report(text);
+        // What a page says when it fails is what a run's log needs, though
+        // an error here does not end the run.
+        else if (method === 'error') report('PERF console.error: ' + text.slice(0, 600));
       } catch (error) { }
       original.apply(null, arguments);
     };
@@ -89,7 +93,7 @@ class BrowserServer:
                     if path.endswith('/'):
                         page += '/index.html'
                     try:
-                        body = open(page, 'rb').read()
+                        body = Path(page).read_bytes()
                     except OSError:
                         self.send_error(404)
                         return
@@ -144,8 +148,10 @@ class BrowserServer:
                     if text in line:
                         return line
                     if line.startswith('PERF error'):
-                        raise RuntimeError(f'the page failed: {line}')
+                        said = ' | '.join(heard[:300] for heard in self.heard[since:] if 'console.error' in heard)
+                        raise RuntimeError(f'the page failed: {line}' + (f' ({said})' if said else ''))
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise RuntimeError(f'no "{text}" within {timeout} s')
+                    said = ' | '.join(line[:200] for line in self.heard[max(since, len(self.heard) - 3):])
+                    raise RuntimeError(f'no "{text}" within {timeout} s' + (f'; the page said: {said}' if said else ''))
                 self.condition.wait(remaining)

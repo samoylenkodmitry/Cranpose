@@ -51,8 +51,16 @@ def measure_frameworks(args):
             if args.install and (apk := args.install / f'{app}.apk').exists():
                 device.install(app, apk)
     device.adb('push', str(HERE / 'perf_window.sh'), REMOTE_WINDOW)
+    # An app that fails to start leaves its legs out and the run goes on: a
+    # page can fail where the browser lacks what its framework needs.
+    started = []
     for app in apps:
-        prime(device, targets[app], args.scenario, args)
+        try:
+            prime(device, targets[app], args.scenario, args)
+        except (RuntimeError, ValueError) as failure:
+            print(f'{app:10} failed to start: {failure}', flush=True)
+        else:
+            started.append(app)
     # The versions macm3 built with, and the browser or WebView the web page
     # runs in.
     folder = args.browser or args.install
@@ -67,9 +75,13 @@ def measure_frameworks(args):
             built['web'] = f'WebView {match.group(1)}, {built.get("web") or versions.version("web", "android")}'
     legs = []
     for round_index in range(args.rounds):
-        for app in apps if round_index % 2 == 0 else apps[::-1]:
-            run = measure_run(device, targets[app], args.scenario, args, args.output,
-                              args.windows.get((app, args.scenario)))
+        for app in started if round_index % 2 == 0 else started[::-1]:
+            try:
+                run = measure_run(device, targets[app], args.scenario, args, args.output,
+                                  args.windows.get((app, args.scenario)))
+            except (RuntimeError, ValueError) as failure:
+                print(f'{app:10} failed: {failure}', flush=True)
+                continue
             size_window(args, app, args.scenario, run['fps'])
             legs.append(leg_record(run, app, len(legs)))
             print(f'{app:10} fps {run["fps"]:5.1f} cpu/f {run["cpu_ms_per_frame"]:6.1f} '
@@ -130,7 +142,9 @@ def main():
     parser.add_argument('--install', type=Path, help='folder of APP.apk builds to install first')
     parser.add_argument('--browser', type=Path, metavar='DIR',
                         help='folder of pages `build_apps.sh browser` built, to open in Chrome')
-    parser.add_argument('--tier', type=int, default=4, help="the gauntlet's tier in the browser")
+    parser.add_argument('--tier', type=int, default=8,
+                        help="the gauntlet's tier in Chrome on the phone: the lightest at which no app reaches "
+                             "60 fps and the heaviest still draw 5 (README)")
     parser.add_argument('--main', help="the commit the Cranpose app was built at, recorded with the run")
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     args = parser.parse_args()
@@ -141,7 +155,8 @@ def main():
         run = measure_frameworks(args)
     (args.output / 'frameworks.json').write_text(json.dumps(run, indent=1))
     for app, values in run['scenarios'][0]['summary'].items():
-        print(f'{app:10} fps {values["fps"]:5.1f} cpu/f {values["cpu_ms_per_frame"]:6.1f}')
+        print(f'{app:10} ' + (f'fps {values["fps"]:5.1f} cpu/f {values["cpu_ms_per_frame"]:6.1f}' if values
+                              else 'no legs'))
     print('DURATION', run['duration_s'], 's')
 
 

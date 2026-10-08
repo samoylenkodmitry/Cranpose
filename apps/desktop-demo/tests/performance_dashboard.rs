@@ -43,6 +43,15 @@ const INDEX: &str = r#"{"runs": [
   "scenarios": {"gauntlet": {"legs": 8,
     "summary": {"compose": {"fps": 26.5}, "cranpose": {"fps": 52.8}},
     "verdicts": {"fps": "better", "cpu_ms_per_frame": "better", "desired_to_present_p50_ms": "worse"}}}},
+ {"file": "runs/f.json", "kind": "browser", "started_at": "2026-10-06T06:10:00+00:00",
+  "device": "Apple M3 Pro · Chrome 154", "main": "ccccccccc333",
+  "subjects": [
+   {"name": "egui", "label": "egui 0.36.2", "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"},
+   {"name": "web", "label": "Web Chrome 154.0.8037.98",
+    "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"}],
+  "scenarios": {"gauntlet": {"legs": 4,
+    "summary": {"egui": {"fps": 49.8, "ram_mb": 935.3}, "web": {"fps": 37.8, "ram_mb": 1002.7}},
+    "verdicts": {}}}},
  {"file": "runs/e.json", "kind": "frameworks", "started_at": "2026-10-06T06:40:00+00:00",
   "device": "Apple M3 Pro", "main": "ccccccccc333",
   "subjects": [
@@ -122,6 +131,26 @@ fn each_device_shows_its_latest_framework_comparison() {
     assert!(
         !shows(&labels, "4.7"),
         "the phone's older comparison gives way to its latest: {labels:?}"
+    );
+}
+
+#[test]
+fn the_browser_runs_have_a_card_of_their_own_beside_the_native_ones() {
+    let labels = labels();
+    assert!(
+        shows(&labels, "49.8") && shows(&labels, "37.8"),
+        "the browser run, which has no Compose to give it a card: {labels:?}"
+    );
+    assert!(
+        shows(&labels, "55.7"),
+        "the Mac's native comparison stays: {labels:?}"
+    );
+    assert!(
+        shows(
+            &labels,
+            "Frameworks in the browser, Apple M3 Pro · Chrome 154, 2026-10-06"
+        ),
+        "the card says it is the browser's: {labels:?}"
     );
 }
 

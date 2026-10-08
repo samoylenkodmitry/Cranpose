@@ -14,7 +14,8 @@ GameActivity), `slint-app` (Slint on Skia) and `web-app` (a web page in
 Capacitor, on the device's Chromium WebView: the stack Ionic, Tauri and
 Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
 packages them: each crate's folder is its Android module, behind one launch
-activity that hands the native side the `am start` extras.
+activity that hands the native side the `am start` extras. The frameworks that
+target the browser also run there, as pages in Chrome ("In a browser", below).
 
 This file describes the apps and how they are measured, not results: the
 nightly measures every framework at its latest stable release, and the
@@ -381,10 +382,13 @@ release (`cranpose-release`, once a release draws the gauntlet) and main.
    keeps each app's last build with a stamp of the files, pin and
    toolchains it read, so a night builds again only the apps that moved and
    Cranpose's.
+   `build_apps.sh browser` also builds the apps that target the browser, and
+   `desktop.py --browser` measures them in Chrome at tier 16 (below).
 2. On the Mac the Mate 20 X is attached to, `scripts/perf/nightly.py`
    compares the latest release with main, and `just perf-frameworks` installs
    macm3's Android builds beside Cranpose's release and main and runs
-   `frameworks.py`.
+   `frameworks.py`. `just perf-browser` then opens macm3's browser builds in
+   Chrome on the phone at tier 8.
 
 Each run names the version of every framework it measured: the pins
 `versions.py` reads, the Flutter SDK and .NET MAUI workload `build_apps.sh`
@@ -629,6 +633,68 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```
+
+### In a browser
+
+The frameworks that target the browser run there too, as pages: the same
+gauntlet, the same data and the same sources, compiled for the web. A page is
+no app: it shares its browser's processes, its renderer is the browser's, and
+its memory is the browser's. So these runs are of kind `browser`, on a device
+named for the browser (`Apple M3 Pro · Chrome 154`, `EVR-AL00 · Chrome 154`),
+and the dashboard shows them beside the native comparison, not in place of
+it. `build_apps.sh browser DIR` makes `DIR/APP/index.html`:
+
+| App | In the browser |
+| --- | --- |
+| `cranpose` | `cranpose-app` with `--features web`, on wgpu's WebGL2 (`?backend=webgpu` asks for WebGPU), the query string read as its launch arguments |
+| `compose` | `compose-browser-app`: Compose Multiplatform compiled to Kotlin/Wasm, the composables of `shared-compose`, drawn by Skia |
+| `flutter` | `flutter build web --wasm`: skwasm, and the JavaScript build for a browser without WasmGC |
+| `egui` | eframe on glow, which is WebGL2 there; no AccessKit tree to keep |
+| `slint` | FemtoVG on WebGL2: Skia does not run in a browser |
+| `iced` | wgpu: WebGPU where the browser has it, WebGL2 where not |
+| `dioxus` | the web renderer, which patches the DOM directly instead of sending the patches to a webview |
+| `avalonia` | `avalonia-app/Browser`: Avalonia on Skia, compiled ahead of time to WebAssembly |
+| `web` | the plain page of DOM and CSS, which every other app is held to |
+
+GPUI, Xilem, Fyne, Tauri and the native toolkits have no browser target, and
+React Native, Lynx, NativeScript, MAUI and Views are not pages. Every page
+takes its tier and freeze frame from the query string, `?tier=12&freeze=120`,
+and logs its `PERF` lines on the console. `browser.py` serves the pages, and
+puts one script in each page's head that forwards those lines to the server,
+because Chrome on a phone logs a page's console nowhere a harness can read.
+
+`desktop.py --browser DIR` opens each page in its own Chrome app window, as
+it opens the plain page, and counts frames, CPU, memory and clocks as for any
+desktop app: the browser, its renderer and its GPU process are the app.
+`frameworks.py --browser DIR` opens each in Chrome on the phone over `adb
+reverse`, takes its frames from Chrome's page surface
+(`com.android.chrome/ChromeChildSurface#0`) and sums the CPU and memory of
+every Chrome process. A page that fails to start leaves its legs out and the
+run goes on, as a dash in the dashboard.
+
+**The tier.** A browser caps a page at the display's rate, and a framework
+that draws in a browser tab loses much of what it has natively, so each
+browser has a tier of its own, calibrated like the devices': the lightest at
+which no page reaches 60 fps, so every page's frame rate shows its cost. If
+that tier leaves the heaviest pages under 5 fps, it is relaxed a tier or two:
+a load that crawls for all tells the pages apart no better. Frame rates of one
+round each, 2026-10-08:
+
+| Tier | Cranpose | Compose | Flutter | egui | Slint | iced | Dioxus | Avalonia | Web |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| M3 Pro 8 | 47.9 | 34.5 | 48.3 | 60.1 | 51.7 | 60.2 | 60.2 | 39.6 | 60.0 |
+| M3 Pro 12 | 29.3 | 25.6 | 52.1 | 60.2 | 34.2 | 42.2 | 56.5 | 27.4 | 57.6 |
+| **M3 Pro 16** | 23.6 | 22.9 | 31.2 | 49.8 | 24.7 | 33.5 | 35.1 | 21.3 | 37.8 |
+| Mate 4 | 10.4 | 13.0 | 59.5 | 60.2 | 19.5 | fails | 59.3 | 15.1 | 59.2 |
+| **Mate 8** | 6.1 | 6.2 | 28.4 | 54.8 | 8.7 | fails | 33.6 | 5.9 | 42.2 |
+| Mate 12 | 2.5 | 2.5 | 10.5 | 42.2 | 4.7 | fails | 12.4 | 2.3 | 16.0 |
+
+On the desktop the heaviest tier, 16, already keeps egui, the fastest, under
+60. On the phone tier 8 is the first at which nothing reaches 60, and tier 12
+leaves three pages at about 2 fps. Chrome on the Mate has no WebGPU
+(Android 10), so every page that can draws on WebGL2. iced's WebGL fragment
+shader for gradients does not compile on the Mate's GPU driver, and its page
+stops at start. Raising a browser's tier starts a new series.
 
 ## Findings
 

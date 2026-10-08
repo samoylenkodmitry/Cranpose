@@ -227,6 +227,7 @@ pub fn run_desktop(launch: Launch) -> Result<(), PlatformError> {
 #[wasm_bindgen::prelude::wasm_bindgen(start)]
 pub fn run_web() {
     wasm_logger::init(wasm_logger::Config::new(log::Level::Info));
+    console_error_panic_hook::set_once();
     let page = web_sys::window();
     let query = page
         .as_ref()

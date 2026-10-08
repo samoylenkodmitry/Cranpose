@@ -379,6 +379,7 @@ test-shell-helpers: _benchmark-python ci-contract-gates
     python3 benchmarks/compose-vs-cranpose/tests/test_ab_decisions.py
     python3 benchmarks/compose-vs-cranpose/tests/test_desktop_accounting.py
     python3 benchmarks/compose-vs-cranpose/tests/test_adb_recovery.py
+    python3 benchmarks/compose-vs-cranpose/tests/test_browser_server.py
     {{benchmark_python}} benchmarks/compose-vs-cranpose/tests/test_parity_compare.py
     python3 scripts/perf/publish_test.py
     python3 scripts/perf/propose_versions_test.py
@@ -964,6 +965,11 @@ perf-nightly serial output:
 # release and main, built from this checkout.
 perf-frameworks serial output apks:
     python3 scripts/perf/frameworks_phone.py --serial {{serial}} --output {{output}} --apks {{apks}}
+
+# The apps that target the browser, open in Chrome on the phone: the pages in
+# `pages` (from `build_apps.sh browser`), at the browser's tier on the phone.
+perf-browser serial output pages:
+    python3 benchmarks/compose-vs-cranpose/frameworks.py --serial {{serial}} --output {{output}} --browser {{pages}} --main "$(git rev-parse HEAD)"
 
 # Adds a comparison run to the perf-data branch the performance dashboard reads.
 perf-publish run:

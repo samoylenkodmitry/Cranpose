@@ -71,10 +71,14 @@ impl PerfRun {
             .copied()
     }
 
+    /// Whether the run compares frameworks: Compose is among its subjects,
+    /// or it is the browser run, whose Compose may have failed to start.
     fn compares_frameworks(&self) -> bool {
-        self.subjects
-            .iter()
-            .any(|subject| subject.name == "compose")
+        self.kind == "browser"
+            || self
+                .subjects
+                .iter()
+                .any(|subject| subject.name == "compose")
     }
 }
 
@@ -694,8 +698,13 @@ fn Frameworks(palette: Palette, run: PerfRun) {
     subjects.sort_by(|(_, a), (_, b)| a.name.cmp(&b.name));
     let commit = run.main.clone().unwrap_or_else(|| "main".to_string());
     let metric = cranpose_core::rememberMutableStateOf(|| Metric::Fps);
+    let place = if run.kind == "browser" {
+        "Frameworks in the browser,"
+    } else {
+        "Frameworks on the"
+    };
     let title = format!(
-        "Frameworks on the {}, {}",
+        "{place} {}, {}",
         run.device,
         &run.started_at[..run.started_at.len().min(10)]
     );
