@@ -2090,7 +2090,7 @@ fn a_projection_like_the_last_one_reuses_its_strings() {
 }
 
 #[test]
-fn a_mirror_shows_focus_typing_and_dialogs_at_once_and_holds_back_the_rest() {
+fn a_mirror_keeps_a_control_as_written_only_while_just_its_place_changes() {
     let field = AccessibilityElement {
         node_id: 2,
         role: AccessibilityRole::TextField,
@@ -2105,56 +2105,24 @@ fn a_mirror_shows_focus_typing_and_dialogs_at_once_and_holds_back_the_rest() {
 
     let mut moved = applied.clone();
     moved[0].bounds.x += 40.0;
-    assert!(moved[0].same_but_bounds(&applied[0]));
     assert_ne!(moved[0], applied[0]);
-    assert!(!mirror_at_once(&applied, &moved), "a move waits");
+    assert!(
+        moved[0].same_but_bounds(&applied[0]),
+        "a move keeps the node"
+    );
 
     let mut renamed = applied.clone();
     renamed[0].label = "Other".into();
-    assert!(!renamed[0].same_but_bounds(&applied[0]));
-    assert!(!mirror_at_once(&applied, &renamed), "a new label waits");
-
-    let mut focused = applied.clone();
-    focused[0].focused = true;
     assert!(
-        mirror_at_once(&applied, &focused),
-        "a focus move shows at once"
+        !renamed[0].same_but_bounds(&applied[0]),
+        "a new label is written"
     );
 
     let mut typed = applied.clone();
     typed[1].value = Some("ab".into());
     typed[1].update_details(|details| details.text_selection = Some((2, 2)));
-    assert!(mirror_at_once(&applied, &typed), "typing shows at once");
-
-    let mut dialog = applied.clone();
-    dialog.push(AccessibilityElement {
-        role: AccessibilityRole::Dialog,
-        ..element_with(3, None)
-    });
-    assert!(mirror_at_once(&applied, &dialog), "a dialog shows at once");
-
     assert!(
-        mirror_at_once(&[], &applied),
-        "the first controls show at once"
-    );
-}
-
-#[test]
-fn a_held_back_change_applies_once_its_interval_is_over() {
-    let start = web_time::Instant::now();
-    let due = start + std::time::Duration::from_secs(1);
-    assert!(sync_now(false, start, None), "a mirror that never synced");
-    let before = start + std::time::Duration::from_millis(999);
-    assert!(
-        !sync_now(false, before, Some(due)),
-        "a change waits for the interval"
-    );
-    assert!(
-        sync_now(false, due, Some(due)),
-        "the boundary itself is due"
-    );
-    assert!(
-        sync_now(true, start, Some(due)),
-        "a change a reader needs now"
+        !typed[1].same_but_bounds(&applied[1]),
+        "typed text and its caret are written"
     );
 }

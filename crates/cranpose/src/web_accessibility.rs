@@ -1,4 +1,9 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Write, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    fmt::Write,
+    rc::Rc,
+};
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -10,14 +15,26 @@ use web_sys::{
 };
 use web_time::Instant;
 
-use crate::accessibility::{
-    self, AccessibilityElement, AccessibilityRect, AccessibilityRole, Replaced, edits_text,
+use crate::{
+    accessibility::{
+        self, AccessibilityElement, AccessibilityRect, AccessibilityRole, Replaced, edits_text,
+    },
+    accessibility_publish_policy::AccessibilityPublishPolicy,
 };
 
-/// How often the mirror takes on a change no reader needs at once. A screen
-/// reader reads where a control sits only when it moves onto the control, so
-/// the mirror may trail an animation by this much.
-const SYNC_INTERVAL: Duration = Duration::from_secs(1);
+/// What the mirror's listeners and the bridge share: the live node behind
+/// each virtual id, and what a person did through the mirror since the
+/// bridge last looked at the app.
+#[derive(Default)]
+struct MirrorLinks {
+    node_ids: RefCell<HashMap<i32, cranpose_core::NodeId>>,
+    /// A reader acted through the mirror, so changes show at the interactive
+    /// interval for a while.
+    read: Cell<bool>,
+    /// A person typed in a mirrored field or moved its caret, so the mirror
+    /// shows the field as the app holds it at once.
+    edited: Cell<bool>,
+}
 
 fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
     if (element.role != AccessibilityRole::StaticText || element.details().pane_title.is_some())
@@ -122,20 +139,20 @@ fn takes_home_and_end(element: &AccessibilityElement) -> bool {
 fn attach_page_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    links: Rc<MirrorLinks>,
 ) -> Result<(), JsValue> {
     let key_down = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
         let Some(target) = key_target(&event) else {
             return;
         };
-        let Some(node_id) = node_id_attribute(&target, "data-cranpose-page", &node_ids) else {
+        let Some(node_id) = node_id_attribute(&target, "data-cranpose-page", &links) else {
             return;
         };
         match event.key().as_str() {
-            "PageDown" => page_mirror(&event, &target, &app, node_id, 1.0),
-            "PageUp" => page_mirror(&event, &target, &app, node_id, -1.0),
-            "Home" => jump_mirror(&event, &target, &app, node_id, false),
-            "End" => jump_mirror(&event, &target, &app, node_id, true),
+            "PageDown" => page_mirror(&event, &target, &app, &links, node_id, 1.0),
+            "PageUp" => page_mirror(&event, &target, &app, &links, node_id, -1.0),
+            "Home" => jump_mirror(&event, &target, &app, &links, node_id, false),
+            "End" => jump_mirror(&event, &target, &app, &links, node_id, true),
             _ => {}
         }
     }) as Box<dyn FnMut(_)>);
@@ -149,6 +166,7 @@ fn page_mirror(
     event: &web_sys::KeyboardEvent,
     target: &Element,
     app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
+    links: &MirrorLinks,
     node_id: cranpose_core::NodeId,
     sign: f32,
 ) {
@@ -159,7 +177,7 @@ fn page_mirror(
         return;
     };
     event.prevent_default();
-    on_live_tree(app, |root| {
+    on_live_tree(app, links, |root| {
         accessibility::scroll_by(root, node_id, sign * dx, sign * dy)
     });
 }
@@ -170,6 +188,7 @@ fn jump_mirror(
     event: &web_sys::KeyboardEvent,
     target: &Element,
     app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
+    links: &MirrorLinks,
     node_id: cranpose_core::NodeId,
     last: bool,
 ) {
@@ -178,7 +197,7 @@ fn jump_mirror(
     };
     let index = if last { last_row.max(0.0) as usize } else { 0 };
     event.prevent_default();
-    on_live_tree(app, |root| {
+    on_live_tree(app, links, |root| {
         accessibility::scroll_to_index(root, node_id, index)
     });
 }
@@ -200,21 +219,23 @@ fn number_attribute(target: &Element, name: &str) -> Option<f32> {
 fn node_id_attribute(
     target: &Element,
     name: &str,
-    node_ids: &RefCell<HashMap<i32, cranpose_core::NodeId>>,
+    links: &MirrorLinks,
 ) -> Option<cranpose_core::NodeId> {
     target
         .get_attribute(name)
         .and_then(|value| value.parse::<i32>().ok())
-        .and_then(|element_id| node_ids.borrow().get(&element_id).copied())
+        .and_then(|element_id| links.node_ids.borrow().get(&element_id).copied())
 }
 
 /// Runs one reader action against the live semantics tree, unless the app is
 /// busy with its own frame.
 fn on_live_tree(
     app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
+    links: &MirrorLinks,
     act: impl FnOnce(&cranpose_ui::SemanticsNode) -> bool,
 ) {
     if let Ok(mut shell) = app.try_borrow_mut() {
+        links.read.set(true);
         accessibility::run_reader_action(&mut shell, act);
     }
 }
@@ -440,7 +461,7 @@ fn field_selection(element: &Element) -> Option<(usize, usize)> {
 fn attach_selection_listener(
     document: &Document,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    links: Rc<MirrorLinks>,
 ) -> Result<(), JsValue> {
     let owner = document.clone();
     let on_change = Closure::wrap(Box::new(move |_event: web_sys::Event| {
@@ -457,14 +478,15 @@ fn attach_selection_listener(
         if active.get_attribute("data-cranpose-selection").as_deref() == Some(ends.as_str()) {
             return;
         }
-        let Some(node_id) = node_id_attribute(&active, "data-cranpose-node", &node_ids) else {
+        let Some(node_id) = node_id_attribute(&active, "data-cranpose-node", &links) else {
             return;
         };
         let Some(value) = field_value(&active) else {
             return;
         };
         let _ = active.set_attribute("data-cranpose-selection", &ends);
-        on_live_tree(&app, |root| {
+        links.edited.set(true);
+        on_live_tree(&app, &links, |root| {
             accessibility::set_text_selection(
                 root,
                 node_id,
@@ -571,7 +593,7 @@ impl Placement {
 fn attach_focus_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    links: Rc<MirrorLinks>,
 ) -> Result<(), JsValue> {
     let blur_app = Rc::clone(&app);
     let focus_out = Closure::wrap(Box::new(move |event: web_sys::Event| {
@@ -600,10 +622,12 @@ fn attach_focus_listener(
         else {
             return;
         };
-        let Some(node_id) = node_ids.borrow().get(&element_id).copied() else {
+        let Some(node_id) = links.node_ids.borrow().get(&element_id).copied() else {
             return;
         };
-        on_live_tree(&app, |root| accessibility::focus_node(root, node_id));
+        on_live_tree(&app, &links, |root| {
+            accessibility::focus_node(root, node_id)
+        });
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("focusin", focus_in.as_ref().unchecked_ref())?;
     focus_in.forget();
@@ -644,19 +668,20 @@ fn on_mirror_click(
 fn attach_click_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    links: Rc<MirrorLinks>,
 ) -> Result<(), JsValue> {
     on_mirror_click(root, move |target| {
         if !target.has_attribute("data-cranpose-clickable") {
             return;
         }
-        let Some(node_id) = node_id_attribute(&target, "data-cranpose-node", &node_ids) else {
+        let Some(node_id) = node_id_attribute(&target, "data-cranpose-node", &links) else {
             return;
         };
         let canvas_key = target
             .get_attribute("data-cranpose-canvas")
             .and_then(|value| value.parse::<u64>().ok());
         if let Ok(mut shell) = app.try_borrow_mut() {
+            links.read.set(true);
             shell.accessibility_activate(node_id, canvas_key);
         }
     })
@@ -665,7 +690,7 @@ fn attach_click_listener(
 fn attach_action_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    links: Rc<MirrorLinks>,
 ) -> Result<(), JsValue> {
     on_mirror_click(root, move |target| {
         let Some(index) = target
@@ -680,14 +705,13 @@ fn attach_action_listener(
         else {
             return;
         };
-        let Some(node_id) = node_id_attribute(&target, "data-cranpose-action-node", &node_ids)
-        else {
+        let Some(node_id) = node_id_attribute(&target, "data-cranpose-action-node", &links) else {
             return;
         };
         let canvas_key = target
             .get_attribute("data-cranpose-canvas")
             .and_then(|value| value.parse::<u64>().ok());
-        on_live_tree(&app, |root| {
+        on_live_tree(&app, &links, |root| {
             accessibility::perform_listed_action(root, node_id, canvas_key, named, index)
         });
     })
@@ -698,7 +722,7 @@ fn attach_action_listener(
 fn attach_key_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    links: Rc<MirrorLinks>,
 ) -> Result<(), JsValue> {
     let key_down = Closure::wrap(Box::new(move |event: web_sys::KeyboardEvent| {
         let Some(target) = key_target(&event) else {
@@ -724,12 +748,12 @@ fn attach_key_listener(
             "End" => max,
             _ => return,
         };
-        let Some(node_id) = node_id_attribute(&target, "data-cranpose-node", &node_ids) else {
+        let Some(node_id) = node_id_attribute(&target, "data-cranpose-node", &links) else {
             return;
         };
         event.prevent_default();
         event.stop_propagation();
-        on_live_tree(&app, |root| {
+        on_live_tree(&app, &links, |root| {
             accessibility::set_progress(root, node_id, next.clamp(min, max))
         });
     }) as Box<dyn FnMut(_)>);
@@ -785,7 +809,7 @@ fn live_region(document: &Document, politeness: &str) -> Result<HtmlElement, JsV
 fn attach_input_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    links: Rc<MirrorLinks>,
 ) -> Result<(), JsValue> {
     let input = Closure::wrap(Box::new(move |event: web_sys::Event| {
         let Some(target) = event
@@ -794,7 +818,7 @@ fn attach_input_listener(
         else {
             return;
         };
-        sync_field_input(&target, &app, &node_ids);
+        sync_field_input(&target, &app, &links);
     }) as Box<dyn FnMut(_)>);
     root.add_event_listener_with_callback("input", input.as_ref().unchecked_ref())?;
     input.forget();
@@ -820,9 +844,9 @@ fn composition_range(target: &Element) -> Option<(usize, usize)> {
 fn sync_field_input(
     target: &Element,
     app: &Rc<RefCell<AppShell<WgpuRenderer>>>,
-    node_ids: &RefCell<HashMap<i32, cranpose_core::NodeId>>,
+    links: &MirrorLinks,
 ) {
-    let Some(node_id) = node_id_attribute(target, "data-cranpose-node", node_ids) else {
+    let Some(node_id) = node_id_attribute(target, "data-cranpose-node", links) else {
         return;
     };
     let Some(value) = field_value(target) else {
@@ -832,7 +856,8 @@ fn sync_field_input(
     if let Some((anchor, focus)) = selection {
         let _ = target.set_attribute("data-cranpose-selection", &format!("{anchor}:{focus}"));
     }
-    on_live_tree(app, |root| {
+    links.edited.set(true);
+    on_live_tree(app, links, |root| {
         let changed = accessibility::set_text(root, node_id, &value);
         if let Some((anchor, focus)) = selection {
             let anchor = accessibility::byte_offset_for_utf16(&value, anchor);
@@ -854,11 +879,11 @@ fn sync_field_input(
 fn attach_composition_listener(
     root: &HtmlElement,
     app: Rc<RefCell<AppShell<WgpuRenderer>>>,
-    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    links: Rc<MirrorLinks>,
 ) -> Result<(), JsValue> {
     for name in ["compositionstart", "compositionupdate", "compositionend"] {
         let app = Rc::clone(&app);
-        let node_ids = Rc::clone(&node_ids);
+        let links = Rc::clone(&links);
         let listener = Closure::wrap(Box::new(move |event: web_sys::CompositionEvent| {
             let Some(target) = event
                 .target()
@@ -871,7 +896,7 @@ fn attach_composition_listener(
             };
             if name == "compositionend" {
                 let _ = target.remove_attribute("data-cranpose-composition");
-                sync_field_input(&target, &app, &node_ids);
+                sync_field_input(&target, &app, &links);
                 if let Ok(mut shell) = app.try_borrow_mut() {
                     shell.on_ime_finish_composing();
                 }
@@ -946,6 +971,9 @@ struct MirrorEntry {
     /// Where the node and its action buttons were put last, or nothing while
     /// one of them has no place yet.
     placed: Option<[f64; 4]>,
+    /// The virtual id of the scroll container the node sits in, or nothing
+    /// for the mirror root.
+    parent: Option<i32>,
 }
 
 impl MirrorEntry {
@@ -957,7 +985,16 @@ impl MirrorEntry {
             actions: Vec::new(),
             page: None,
             placed: None,
+            parent: None,
         })
+    }
+
+    /// Takes the node and its action buttons out of the page.
+    fn detach(&self) {
+        self.node.remove();
+        for button in &self.actions {
+            button.remove();
+        }
     }
 
     fn update(
@@ -1108,16 +1145,19 @@ pub(crate) struct WebAccessibilityBridge {
     canvas: HtmlCanvasElement,
     /// The elements the mirror shows.
     previous: accessibility::AccessibilitySnapshot,
-    /// The newest elements, while they differ from the ones the mirror shows
-    /// and wait for its next sync.
-    pending: Option<Vec<AccessibilityElement>>,
-    /// When the mirror may next take on a change no reader needs at once.
-    sync_due: Option<Instant>,
+    /// The semantics revision the mirror last looked at, or nothing when it
+    /// must look again whatever the revision: before its first look and after
+    /// a failed sync.
+    seen_revision: Option<u64>,
+    /// The node that held the app's focus when the mirror last looked.
+    seen_focus: Option<cranpose_core::NodeId>,
+    /// When the mirror looks at a change no reader needs at once.
+    policy: AccessibilityPublishPolicy,
     /// Room for the declarations that place one mirror node.
     css: String,
     dirty: bool,
     entries: HashMap<i32, MirrorEntry>,
-    node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>>,
+    links: Rc<MirrorLinks>,
     text_input: Rc<WebTextInput>,
     focused_element: Option<i32>,
     polite: HtmlElement,
@@ -1139,27 +1179,27 @@ impl WebAccessibilityBridge {
         let assertive = live_region(document, "assertive")?;
         body.append_child(&polite)?;
         body.append_child(&assertive)?;
-        let node_ids: Rc<RefCell<HashMap<i32, cranpose_core::NodeId>>> =
-            Rc::new(RefCell::new(HashMap::new()));
-        attach_click_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
-        attach_focus_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
-        attach_key_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
-        attach_action_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
-        attach_selection_listener(document, Rc::clone(&app), Rc::clone(&node_ids))?;
-        attach_input_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
-        attach_composition_listener(&root, Rc::clone(&app), Rc::clone(&node_ids))?;
-        attach_page_listener(&root, app, Rc::clone(&node_ids))?;
+        let links = Rc::new(MirrorLinks::default());
+        attach_click_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
+        attach_focus_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
+        attach_key_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
+        attach_action_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
+        attach_selection_listener(document, Rc::clone(&app), Rc::clone(&links))?;
+        attach_input_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
+        attach_composition_listener(&root, Rc::clone(&app), Rc::clone(&links))?;
+        attach_page_listener(&root, app, Rc::clone(&links))?;
 
         Ok(Self {
             root,
             canvas,
             previous: accessibility::AccessibilitySnapshot::default(),
-            pending: None,
-            sync_due: None,
+            seen_revision: None,
+            seen_focus: None,
+            policy: AccessibilityPublishPolicy::new(),
             css: String::new(),
             dirty: false,
             entries: HashMap::new(),
-            node_ids,
+            links,
             text_input: Rc::default(),
             focused_element: None,
             polite,
@@ -1174,22 +1214,17 @@ impl WebAccessibilityBridge {
         self.text_input.clone()
     }
 
-    /// When a frame must come to sync the mirror with elements it holds back,
-    /// if it holds any.
+    /// When a frame must come for the mirror to look at a change the publish
+    /// interval holds back, if one waits.
     pub(crate) fn sync_wake(&self) -> Option<Instant> {
-        self.pending.as_ref().and(self.sync_due)
+        self.policy.wake_deadline()
     }
 
     /// Puts text a screen reader reads out into the live region that matches
     /// how urgent it is. The same text twice in a row carries a trailing space
     /// one time out of two, because a reader reads a live region only when its
-    /// text changes. Every frame speaks, against the elements of the frame
-    /// before, while the mirror itself may trail them.
-    fn speak(&mut self, next: &[AccessibilityElement]) {
-        let heard = self.pending.as_deref().unwrap_or(&self.previous.elements);
-        let mut announcements = accessibility::drain_app_announcements();
-        announcements.extend(accessibility::live_region_announcements(heard, next));
-        announcements.extend(accessibility::pane_title_announcements(heard, next));
+    /// text changes.
+    fn speak(&mut self, announcements: Vec<cranpose_ui::Announcement>) {
         for announcement in announcements {
             self.announcement_turn = !self.announcement_turn;
             let text = if self.announcement_turn {
@@ -1223,32 +1258,79 @@ impl WebAccessibilityBridge {
         focus_mirror_node(node)
     }
 
+    /// Looks at the app's controls and brings the mirror to them. The mirror
+    /// looks at once for its first controls, after a failed sync, when the
+    /// app's focus moved and when a person edited a field through it. Any
+    /// other change waits for the shared publish interval: a second, or the
+    /// interactive interval while a reader acts. Nothing is built while the
+    /// controls are as the mirror last saw them. Text the app asks to read
+    /// out is spoken every frame, and a live region or a pane title that
+    /// changed is spoken when the mirror looks.
     pub(crate) fn sync(
         &mut self,
         document: &Document,
         shell: &mut AppShell<WgpuRenderer>,
     ) -> Result<(), JsValue> {
-        let elements = accessibility::snapshot(shell, &mut self.previous);
-        self.speak(&elements);
-        let Some(elements) = self.previous.changed(elements, self.dirty) else {
-            if let Some(pending) = self.pending.take() {
-                self.previous.recycle(pending);
-            }
-            return self.sync_password(shell, &self.previous.elements);
-        };
         let now = Instant::now();
-        let immediate =
-            self.dirty || accessibility::mirror_at_once(&self.previous.elements, &elements);
-        if !accessibility::sync_now(immediate, now, self.sync_due) {
-            if let Some(pending) = self.pending.replace(elements) {
-                self.previous.recycle(pending);
-            }
-            return self.sync_password(shell, &self.previous.elements);
+        if self.policy.update_enabled(shell.semantics_active()) {
+            self.seen_revision = None;
         }
-        if let Some(pending) = self.pending.take() {
-            self.previous.recycle(pending);
+        // The web cannot tell whether a screen reader runs, so what a reader
+        // does through the mirror is the only sign of one.
+        if self.links.read.take() {
+            self.policy.note_read(now);
         }
-        self.sync_due = Some(now + SYNC_INTERVAL);
+        let focus = shell.app_context().enter(cranpose_ui::active_focus_target);
+        let at_once =
+            self.seen_revision.is_none() || self.links.edited.get() || focus != self.seen_focus;
+        let changed = self.seen_revision != Some(shell.semantics_snapshot_revision());
+        let looks = self.policy.try_publish_change(now, changed, at_once);
+        let elements = if looks {
+            self.seen_focus = focus;
+            self.links.edited.set(false);
+            accessibility::snapshot_if_changed(shell, &mut self.seen_revision, &mut self.previous)
+                .and_then(|elements| self.previous.changed(elements, self.dirty))
+        } else {
+            None
+        };
+        let mut announcements = accessibility::drain_app_announcements();
+        if let Some(elements) = &elements {
+            announcements.extend(accessibility::live_region_announcements(
+                &self.previous.elements,
+                elements,
+            ));
+            announcements.extend(accessibility::pane_title_announcements(
+                &self.previous.elements,
+                elements,
+            ));
+        }
+        self.speak(announcements);
+        let Some(elements) = elements else {
+            // The elements leave out the text of a secret, so a look writes
+            // it even when they stay the same.
+            return if looks {
+                self.sync_password(shell, &self.previous.elements)
+            } else {
+                Ok(())
+            };
+        };
+        let result = self.show(document, shell, elements);
+        // The web never learns whether a tree was read, so the wait never
+        // grows.
+        self.policy.published(false);
+        if self.dirty {
+            self.seen_revision = None;
+        }
+        result
+    }
+
+    /// Brings the mirror to `elements`, which differ from the ones it shows.
+    fn show(
+        &mut self,
+        document: &Document,
+        shell: &mut AppShell<WgpuRenderer>,
+        elements: Vec<AccessibilityElement>,
+    ) -> Result<(), JsValue> {
         let opened_dialog = accessibility::opened_dialog(&self.previous.elements, &elements);
         let held = reader_focus(document).filter(|_| opened_dialog.is_none());
         let app_focus_before = self.focused_element;
@@ -1298,6 +1380,8 @@ impl WebAccessibilityBridge {
         result
     }
 
+    /// Writes the text and the caret of each secret field among `elements`,
+    /// which the elements leave out, from the semantics tree a look built.
     fn sync_password(
         &self,
         shell: &mut AppShell<WgpuRenderer>,
@@ -1345,8 +1429,18 @@ impl WebAccessibilityBridge {
             .filter(|(_, element)| element.canvas_key.is_none())
             .map(|(id, element)| (element.node_id, *id))
             .collect();
+        // The nodes of controls that left go first: a node that stays among
+        // its parent's children would hold the reconcile cursor and move
+        // every node after it.
+        self.entries.retain(|id, entry| {
+            let stays = snapshot.element(*id).is_some();
+            if !stays {
+                entry.detach();
+            }
+            stays
+        });
         let mut children: HashMap<Option<i32>, Vec<HtmlElement>> = HashMap::new();
-        self.node_ids.borrow_mut().clear();
+        self.links.node_ids.borrow_mut().clear();
         self.text_input.fields.borrow_mut().clear();
         for (index, ((id, element), page)) in
             ids.iter().copied().zip(elements).zip(pages).enumerate()
@@ -1363,7 +1457,7 @@ impl WebAccessibilityBridge {
                 entry.update(document, id, element, page)?;
             }
             entry.place(placement.rect(element.bounds), &mut self.css)?;
-            self.node_ids.borrow_mut().insert(id, element.node_id);
+            self.links.node_ids.borrow_mut().insert(id, element.node_id);
             if edits_text(element) {
                 self.text_input
                     .fields
@@ -1373,6 +1467,12 @@ impl WebAccessibilityBridge {
             let parent = element
                 .scroll_parent
                 .and_then(|parent| parents.get(&parent).copied());
+            if entry.parent != parent {
+                // A node that changed containers leaves the old one for the
+                // same reason.
+                entry.detach();
+                entry.parent = parent;
+            }
             let siblings = children.entry(parent).or_default();
             siblings.push(entry.node.clone());
             siblings.extend(entry.actions.iter().cloned());
@@ -1381,17 +1481,6 @@ impl WebAccessibilityBridge {
             let parent = parent.map_or(&self.root, |id| &self.entries[&id].node);
             reconcile_children(parent, &children)?;
         }
-        self.entries.retain(|id, entry| {
-            if snapshot.element(*id).is_some() {
-                true
-            } else {
-                entry.node.remove();
-                for button in &entry.actions {
-                    button.remove();
-                }
-                false
-            }
-        });
         Ok(())
     }
 
