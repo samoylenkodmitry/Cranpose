@@ -1,6 +1,7 @@
 import {Buffer} from "node:buffer";
 import {writeFileSync} from "node:fs";
 import {join} from "node:path";
+import {ENABLE_MIRROR} from "../cdp.mjs";
 
 export async function checkMarkdownImages({send, until, evaluate, report, url, output}) {
     const {identifier} = await send("Page.addScriptToEvaluateOnNewDocument", {
@@ -32,6 +33,7 @@ export async function checkMarkdownImages({send, until, evaluate, report, url, o
     const markdownUrl = new URL(url);
     markdownUrl.searchParams.set('tab', 'markdown');
     await send('Page.navigate', {url: markdownUrl.href});
+    await until(ENABLE_MIRROR);
     await until(`!!document.querySelector('[data-cranpose-node][aria-label="Fetch"]')`);
     await evaluate(`document.querySelector('[data-cranpose-node][aria-label="Fetch"]').click()`);
     await until(`[...document.querySelectorAll('[data-cranpose-node]')].some(node =>

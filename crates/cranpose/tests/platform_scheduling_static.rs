@@ -5,9 +5,12 @@ fn crate_source(path: &str) -> String {
     std::fs::read_to_string(crate_dir.join(path)).expect("failed to read cranpose source file")
 }
 
-/// The web mirror: the bridge and the attributes it works out for each node.
+/// The web mirror: the bridge, the attributes it works out for each node, and
+/// the text input its field nodes share with the hidden editor.
 fn web_mirror_source() -> String {
-    crate_source("src/web_accessibility.rs") + &crate_source("src/web_accessibility_attributes.rs")
+    crate_source("src/web_accessibility.rs")
+        + &crate_source("src/web_accessibility_attributes.rs")
+        + &crate_source("src/web_text_input.rs")
 }
 
 fn voiceover_value_source() -> String {
@@ -1344,6 +1347,48 @@ fn every_platform_bridge_publishes_focus_moves_and_typing_at_once() {
         web.contains("cranpose_ui::active_focus_target")
             && web.contains("self.policy.try_publish_change(now, changed, at_once)"),
         "the web mirror looks at once for a focus move through the same policy entry"
+    );
+}
+
+#[test]
+fn web_bridge_builds_nothing_until_a_reader_turns_the_mirror_on() {
+    let web_source = crate_source("src/web.rs");
+    assert!(
+        web_source.contains(".set_semantics_enabled(settings.web_accessibility_on_start);")
+            && !web_source.contains("set_semantics_enabled(true)"),
+        "a web app keeps its semantics off unless it asked for the mirror from the start"
+    );
+    let bridge_source = crate_source("src/web_accessibility.rs");
+    assert!(
+        bridge_source.contains(r#"button.set_attribute("aria-label", "Enable accessibility")?;"#)
+            && bridge_source.contains("shell.set_semantics_enabled(true);"),
+        "the page offers a reader one button, and pressing it turns semantics on"
+    );
+    let sync = bridge_source
+        .split("pub(crate) fn sync(")
+        .nth(1)
+        .and_then(|body| body.split("\n    }\n").next())
+        .expect("the bridge syncs in one method");
+    let leaves_without_reader = sync
+        .find("if !shell.semantics_active() {")
+        .expect("the sync leaves early while semantics are off");
+    let opens = sync
+        .find("None => self.open(document)?,")
+        .expect("the sync builds the mirror once semantics are on");
+    assert!(
+        leaves_without_reader < opens,
+        "no mirror node, live region or snapshot is made before a reader turns the mirror on"
+    );
+    let text_input = crate_source("src/web_text_input.rs");
+    assert!(
+        text_input.contains("attach_field_listeners(&editor, app, Rc::clone(&self.links))?;")
+            && text_input.contains("shell.on_paste(inserted);"),
+        "with the mirror off, a hidden editor takes typing through the listeners the mirror's fields use"
+    );
+    assert!(
+        text_input.contains(r#"editor.set_attribute("type", "password")?;"#)
+            && text_input.contains("shell.ime_field_is_password()"),
+        "with the mirror off, a field that holds a secret takes typing through a password input"
     );
 }
 
@@ -4280,10 +4325,10 @@ fn every_platform_lets_a_reader_move_the_caret_of_a_field() {
     assert!(
         web_source.contains("\"selectionchange\"")
             && web_source.contains("accessibility::set_text_selection(")
-            && web_source.contains("accessibility::byte_offset_for_utf16(&value, anchor)")
-            && web_source.contains("accessibility::byte_offset_for_utf16(&value, focus)")
+            && web_source.contains("accessibility::byte_offset_for_utf16(value, anchor)")
+            && web_source.contains("accessibility::byte_offset_for_utf16(value, focus)")
             && web_source.contains("fn reconcile_children(")
-            && web_source.contains("attach_input_listener(&root")
+            && web_source.contains("attach_field_listeners(&root")
             && !web_source.contains("set_inner_html(\"\")"),
         "the web mirror is an input whose caret goes both ways without a rebuild"
     );

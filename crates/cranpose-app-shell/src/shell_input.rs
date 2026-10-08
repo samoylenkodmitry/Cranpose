@@ -1534,6 +1534,36 @@ where
         })
     }
 
+    /// Whether the focused text field holds a secret, as
+    /// `Modifier::password()` marks one. Only the semantics of the field's
+    /// own node are read, so no semantics tree is built, and the answer holds
+    /// with semantics off. A platform gives such a field a protected editor,
+    /// which a software keyboard neither learns from nor suggests for.
+    /// `false` when this surface has no focused text field.
+    pub fn ime_field_is_password(&mut self) -> bool {
+        let app_context = Rc::clone(&self.shell.app.app_context);
+        app_context.enter(|| {
+            let Some(field) = self
+                .receives_focused_input()
+                .then(cranpose_ui::text_field_focus::focused_field_target)
+                .flatten()
+            else {
+                return false;
+            };
+            let mut applier = self.shell.app.composition.applier_mut();
+            applier
+                .with_node::<LayoutNode, _>(field, |node| node.semantics_configuration())
+                .or_else(|_| {
+                    applier.with_node::<SubcomposeLayoutNode, _>(field, |node| {
+                        node.semantics_configuration()
+                    })
+                })
+                .ok()
+                .flatten()
+                .is_some_and(|config| config.password)
+        })
+    }
+
     /// Clears text-field focus (used by platform IME actions such as
     /// Android's Done). The focus-loss notification hides the soft keyboard.
     pub fn clear_text_field_focus(&mut self) {
@@ -1977,6 +2007,11 @@ where
         &mut self,
     ) -> Option<cranpose_ui::text_field_focus::ImeCaretGeometry> {
         self.primary().ime_caret_geometry()
+    }
+
+    /// Primary-surface form of [`SurfaceMut::ime_field_is_password`].
+    pub fn ime_field_is_password(&mut self) -> bool {
+        self.primary().ime_field_is_password()
     }
 
     /// Primary-surface form of [`SurfaceMut::clear_text_field_focus`].

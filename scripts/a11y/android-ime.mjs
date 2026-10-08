@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Cdp } from "./cdp.mjs";
+import { Cdp, ENABLE_MIRROR } from "./cdp.mjs";
 import { checkImeFocus } from "./tests/ime-focus.mjs";
 
 const [serial, endpoint, url, output, mode] = process.argv.slice(2);
@@ -49,6 +49,7 @@ try {
     await cdp.send("Runtime.enable");
     await cdp.send("Log.enable");
     await cdp.send("Page.navigate", {url: url + "?tab=textinput"});
+    await cdp.until(ENABLE_MIRROR);
     await cdp.until("!!document.querySelector('textarea[data-cranpose-node]')");
     await cdp.evaluate(`(() => {
         window.imeField = document.querySelector('textarea[data-cranpose-node]');

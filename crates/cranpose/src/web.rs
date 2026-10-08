@@ -437,15 +437,9 @@ pub async fn run(
         (css_width as f32, css_height as f32),
         effective_scale as f32,
     )));
-    app.borrow_mut().set_semantics_enabled(true);
+    app.borrow_mut()
+        .set_semantics_enabled(settings.web_accessibility_on_start);
     crate::accessibility::install_inspector(&mut app.borrow_mut(), settings.developer_inspector);
-    let accessibility = Rc::new(RefCell::new(
-        crate::web_accessibility::WebAccessibilityBridge::install(
-            &document,
-            canvas.clone(),
-            app.clone(),
-        )?,
-    ));
     let platform = Rc::new(RefCell::new(WebPlatform::default()));
     platform.borrow_mut().set_scale_factor(scale_factor);
 
@@ -462,6 +456,14 @@ pub async fn run(
         Rc::new(move || request_web_frame(&frame_pending, &render_loop, Some(&frame_timer)))
     };
     crate::web_host_surface::wake_with(request_frame.clone());
+    let accessibility = Rc::new(RefCell::new(
+        crate::web_accessibility::WebAccessibilityBridge::install(
+            &document,
+            canvas.clone(),
+            app.clone(),
+            request_frame.clone(),
+        )?,
+    ));
     app.borrow_mut().set_frame_waker({
         let request_frame = request_frame.clone();
         let run_tasks = woken_task_pump(Rc::downgrade(&app));

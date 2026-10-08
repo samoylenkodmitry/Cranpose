@@ -126,6 +126,15 @@ pub struct AppSettings {
     /// in here and the canvas fills the dynamic viewport, tracking the browser
     /// window as it resizes; other platforms ignore this field.
     pub web_fill_viewport: bool,
+    /// Web only: build the accessibility mirror from the first frame.
+    ///
+    /// By default a web app builds no semantics and no mirror. The page holds
+    /// one button, "Enable accessibility", that a screen reader finds first,
+    /// and the mirror is built when a reader presses it, as Flutter's web
+    /// engine does. An app whose readers should not have to press it sets
+    /// this, at the cost of the mirror on every page load; other platforms
+    /// ignore this field.
+    pub web_accessibility_on_start: bool,
     /// Desktop and web: how big an app's own cursor images appear when the
     /// person has enlarged the system pointer.
     ///
@@ -213,6 +222,7 @@ impl Default for AppSettings {
             initial_size_explicit: false,
             primary_wraps_content: false,
             web_fill_viewport: false,
+            web_accessibility_on_start: false,
             custom_cursor_size: CustomCursorSize::FollowSystem,
             fonts: None,
             font_registry: SoftwareTextFontRegistry::new(),
@@ -655,6 +665,14 @@ impl<Fonts: LauncherFonts> AppLauncher<Fonts> {
     /// platforms ignore this.
     pub fn with_web_fill_viewport(mut self, fill: bool) -> Self {
         self.settings.web_fill_viewport = fill;
+        self
+    }
+
+    /// Web only: build the accessibility mirror from the first frame instead
+    /// of when a screen reader presses the page's "Enable accessibility"
+    /// button. Other platforms ignore this.
+    pub fn with_web_accessibility_on_start(mut self, on: bool) -> Self {
+        self.settings.web_accessibility_on_start = on;
         self
     }
 
