@@ -2,7 +2,7 @@ mod buffer_uploads;
 
 use std::fmt;
 
-use buffer_uploads::BufferUploads;
+use buffer_uploads::{BeforePassWriter, BufferUploads};
 use web_time::Instant;
 
 use crate::{
@@ -649,7 +649,6 @@ impl WgpuFrameGraphExecutor {
         label: Option<&'static str>,
     ) -> WgpuFrameEncoder<'a> {
         WgpuFrameEncoder {
-            device,
             queue,
             encoder: Self::create_command_encoder(device, label),
             uploads: &mut self.upload_allocators,
@@ -1171,7 +1170,7 @@ impl FrameCommandRecorder for PassContext<'_> {
         device: &wgpu::Device,
         bytes: &[u8],
     ) -> BufferUpload {
-        self.uploads.upload_buffer(spec, device, bytes)
+        self.uploads.upload_buffer(spec, device, bytes, device)
     }
 
     fn acquire_transient_offscreen(
@@ -1208,7 +1207,6 @@ impl FrameCommandRecorder for PassContext<'_> {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) struct WgpuFrameEncoder<'a> {
-    device: &'a wgpu::Device,
     queue: &'a wgpu::Queue,
     encoder: wgpu::CommandEncoder,
     uploads: &'a mut FrameUploadAllocators,
@@ -1234,7 +1232,7 @@ impl WgpuFrameEncoder<'_> {
         let transient_texture_bytes = self.transient_texture_bytes;
         let copies = self.copies;
         let mut transient_releases = self.transient_releases;
-        let uploads = self.uploads.encode_pending(self.device);
+        let uploads = self.uploads.encode_pending(self.queue);
         self.uploads.buffers.finish();
         self.uploads.finish_frame();
         let before_passes = self.uploads.buffers.take_before_passes();
@@ -1321,15 +1319,17 @@ impl Drop for PendingTransientReleases<'_> {
 impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
     fn stage_frame_buffer_copy(
         &mut self,
-        device: &wgpu::Device,
+        _device: &wgpu::Device,
         buffer: &wgpu::Buffer,
         offset: u64,
         bytes: &[u8],
     ) -> FrameCommandStats {
         self.uploads
-            .stage_frame_buffer_copy(device, buffer, offset, bytes)
+            .stage_frame_buffer_copy(self.queue, buffer, offset, bytes)
     }
 
+    /// In command order, through the staging belt: a queue write would land
+    /// before the passes already recorded.
     fn stage_buffer_copy(
         &mut self,
         device: &wgpu::Device,
@@ -1390,7 +1390,7 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         device: &wgpu::Device,
         bytes: &[u8],
     ) -> BufferUpload {
-        self.uploads.upload_buffer(spec, device, bytes)
+        self.uploads.upload_buffer(spec, device, bytes, self.queue)
     }
 
     fn acquire_transient_offscreen(
@@ -1676,8 +1676,8 @@ struct UploadGeneration {
 
 /// How a frame's uploads reach the GPU: written by the CPU into buffers it
 /// keeps mapped, on devices that read their vertex and uniform buffers
-/// from host memory at full speed, or copied by the GPU from the staging
-/// belt into device buffers elsewhere.
+/// from host memory at full speed, or written into device buffers
+/// elsewhere, through the recorder's [`BeforePassWriter`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum UploadMode {
     Copied,
@@ -1818,14 +1818,10 @@ impl UploadRing {
         }
     }
 
-    fn upload(
-        &mut self,
-        device: &wgpu::Device,
-        belt: &mut BufferUploads,
-        binding: u64,
-        bytes: &[u8],
-    ) -> (usize, u64) {
-        let len = bytes.len() as u64;
+    /// Places an upload of `len` bytes for a binding of `binding` bytes:
+    /// after the frame's last one, or at the start of a new buffer when the
+    /// last has no room. Returns the buffer's slot and the offset in it.
+    fn place(&mut self, device: &wgpu::Device, binding: u64, len: u64) -> (usize, u64) {
         let current = self.generations.last();
         let placement = place_upload(
             current.map_or(0, |generation| generation.cursor),
@@ -1846,22 +1842,41 @@ impl UploadRing {
             }
         };
         let slot = self.generations.len() - 1;
-        let generation = &mut self.generations[slot];
-        generation.cursor = offset + len;
-        if self.staged {
-            self.staging
-                .resize(generation.staged_at + offset as usize, 0);
-            self.staging.extend_from_slice(bytes);
+        self.generations[slot].cursor = offset + len;
+        (slot, offset)
+    }
+
+    /// Places `bytes` in a staged ring, which writes them when the frame is
+    /// staged.
+    fn stage(&mut self, device: &wgpu::Device, binding: u64, bytes: &[u8]) -> (usize, u64) {
+        debug_assert!(self.staged, "only a staged ring holds uploads back");
+        let (slot, offset) = self.place(device, binding, bytes.len() as u64);
+        self.staging
+            .resize(self.generations[slot].staged_at + offset as usize, 0);
+        self.staging.extend_from_slice(bytes);
+        (slot, offset)
+    }
+
+    /// Places `bytes` and writes them now: into a mapped ring's buffer, or
+    /// through `write`.
+    fn write(
+        &mut self,
+        device: &wgpu::Device,
+        binding: u64,
+        bytes: &[u8],
+        write: &mut impl FnMut(&wgpu::Buffer, u64, &[u8]) -> u64,
+    ) -> (usize, u64) {
+        debug_assert!(
+            !self.staged,
+            "a staged ring writes when the frame is staged"
+        );
+        let (slot, offset) = self.place(device, binding, bytes.len() as u64);
+        let buffer = &self.generations[slot].buffer;
+        self.written += if self.chunks.is_some() {
+            write_mapped(buffer, offset, bytes)
         } else {
-            self.written += write_upload(
-                self.chunks.is_some(),
-                belt,
-                device,
-                &generation.buffer,
-                offset,
-                bytes,
-            );
-        }
+            write_aligned(write, buffer, offset, bytes)
+        };
         (slot, offset)
     }
 
@@ -2012,23 +2027,6 @@ impl UploadRing {
     }
 }
 
-/// Writes `bytes` at `offset` of a ring's `buffer`: into its mapped
-/// memory, or through the staging belt.
-fn write_upload(
-    mapped: bool,
-    belt: &mut BufferUploads,
-    device: &wgpu::Device,
-    buffer: &wgpu::Buffer,
-    offset: u64,
-    bytes: &[u8],
-) -> FrameCommandStats {
-    if mapped {
-        write_mapped(buffer, offset, bytes)
-    } else {
-        write_aligned(belt, device, buffer, offset, bytes)
-    }
-}
-
 /// Writes `bytes` at `offset` of a mapped `buffer`, with a last partial
 /// word padded by zeros: a mapped range covers whole words.
 fn write_mapped(buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]) -> FrameCommandStats {
@@ -2049,26 +2047,40 @@ fn write_mapped(buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]) -> FrameComman
     }
 }
 
-/// Writes `bytes` at `offset` of `buffer` through the staging belt, with a
-/// last partial word padded by zeros to the copy alignment: an upload's
-/// span in its ring is padded so, and copies move whole words.
+/// Writes `bytes` at `offset` of `buffer` through `write`, with a last
+/// partial word padded by zeros to the copy alignment: an upload's span in
+/// its ring is padded so, and copies and queue writes move whole words.
 fn write_aligned(
-    buffers: &mut BufferUploads,
-    device: &wgpu::Device,
+    write: &mut impl FnMut(&wgpu::Buffer, u64, &[u8]) -> u64,
     buffer: &wgpu::Buffer,
     offset: u64,
     bytes: &[u8],
 ) -> FrameCommandStats {
     const WORD: usize = wgpu::COPY_BUFFER_ALIGNMENT as usize;
     let whole = bytes.len() - bytes.len() % WORD;
-    let mut upload_bytes = buffers.write(device, None, buffer, offset, &bytes[..whole]);
+    let mut upload_bytes = write(buffer, offset, &bytes[..whole]);
     if whole < bytes.len() {
         let mut tail = [0u8; WORD];
         tail[..bytes.len() - whole].copy_from_slice(&bytes[whole..]);
-        upload_bytes += buffers.write(device, None, buffer, offset + whole as u64, &tail);
+        upload_bytes += write(buffer, offset + whole as u64, &tail);
     }
     FrameCommandStats {
         upload_bytes,
+        upload_writes: u32::from(!bytes.is_empty()),
+        ..FrameCommandStats::default()
+    }
+}
+
+/// One write of `bytes` that lands before the frame's passes.
+fn write_before_passes(
+    writer: &impl BeforePassWriter,
+    belt: &mut BufferUploads,
+    buffer: &wgpu::Buffer,
+    offset: u64,
+    bytes: &[u8],
+) -> FrameCommandStats {
+    FrameCommandStats {
+        upload_bytes: writer.write_before_passes(belt, buffer, offset, bytes),
         upload_writes: u32::from(!bytes.is_empty()),
         ..FrameCommandStats::default()
     }
@@ -2130,11 +2142,11 @@ impl FrameUploadAllocators {
             "upload_uniform requires a uniform allocator spec"
         );
         let binding = align_u64_to(spec.size.max(bytes.len() as u64), 16);
-        let Self { buffers, rings } = self;
-        let ring = &mut rings
+        let ring = &mut self
+            .rings
             .get_or_insert_with(|| frame_rings(device, UploadMode::for_device(device)))
             [UploadAllocatorKind::Uniform.ring()];
-        let (generation, offset) = ring.upload(device, buffers, binding, bytes);
+        let (generation, offset) = ring.stage(device, binding, bytes);
         let generation = &mut ring.generations[generation];
         let bind_group = generation.bind_groups[id.index()].get_or_insert_with(|| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2156,11 +2168,14 @@ impl FrameUploadAllocators {
         }
     }
 
+    /// Places `bytes` in the frame's vertex or index buffer and writes them
+    /// through `writer`, unless the ring maps its buffers.
     pub(crate) fn upload_buffer(
         &mut self,
         spec: UploadAllocatorSpec,
         device: &wgpu::Device,
         bytes: &[u8],
+        writer: &impl BeforePassWriter,
     ) -> BufferUpload {
         debug_assert_ne!(
             spec.kind,
@@ -2171,7 +2186,10 @@ impl FrameUploadAllocators {
         let ring = &mut rings
             .get_or_insert_with(|| frame_rings(device, UploadMode::for_device(device)))
             [spec.kind.ring()];
-        let (generation, offset) = ring.upload(device, buffers, spec.size, bytes);
+        let (generation, offset) =
+            ring.write(device, spec.size, bytes, &mut |buffer, offset, bytes| {
+                writer.write_before_passes(buffers, buffer, offset, bytes)
+            });
         BufferUpload {
             buffer: ring.generations[generation].buffer.clone(),
             offset,
@@ -2194,26 +2212,22 @@ impl FrameUploadAllocators {
 
     fn stage_frame_buffer_copy(
         &mut self,
-        device: &wgpu::Device,
+        writer: &impl BeforePassWriter,
         buffer: &wgpu::Buffer,
         offset: u64,
         bytes: &[u8],
     ) -> FrameCommandStats {
-        FrameCommandStats {
-            upload_bytes: self.buffers.write(device, None, buffer, offset, bytes),
-            upload_writes: u32::from(!bytes.is_empty()),
-            ..FrameCommandStats::default()
-        }
+        write_before_passes(writer, &mut self.buffers, buffer, offset, bytes)
     }
 
-    fn encode_pending(&mut self, device: &wgpu::Device) -> FrameCommandStats {
-        let buffers = &mut self.buffers;
+    /// Writes the staged rings' bytes through `writer` and reports the
+    /// frame's writes.
+    fn encode_pending(&mut self, writer: &impl BeforePassWriter) -> FrameCommandStats {
+        let Self { buffers, rings } = self;
         let mut stats = FrameCommandStats::default();
-        for ring in self.rings.iter_mut().flatten() {
-            stats += ring.stage_pending(&mut |buffer, offset, bytes| FrameCommandStats {
-                upload_bytes: buffers.write(device, None, buffer, offset, bytes),
-                upload_writes: u32::from(!bytes.is_empty()),
-                ..FrameCommandStats::default()
+        for ring in rings.iter_mut().flatten() {
+            stats += ring.stage_pending(&mut |buffer, offset, bytes| {
+                write_before_passes(writer, buffers, buffer, offset, bytes)
             });
         }
         stats
