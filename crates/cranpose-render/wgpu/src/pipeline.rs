@@ -559,7 +559,8 @@ trait TextStyleDrawSink {
         rect: Rect,
         text: Arc<cranpose_ui::text::RenderString>,
         color: Color,
-        text_style: Arc<TextStyle>,
+        // The style, and its `TextStyle::render_hash` hashed once.
+        text_style: (Arc<TextStyle>, u64),
         font_size: f32,
         scale: f32,
         layout_options: TextLayoutOptions,
@@ -573,7 +574,8 @@ trait TextStyleDrawSink {
         rect: Rect,
         text: Arc<cranpose_ui::text::RenderString>,
         color: Color,
-        text_style: Arc<TextStyle>,
+        // The style, and its `TextStyle::render_hash` hashed once.
+        text_style: (Arc<TextStyle>, u64),
         font_size: f32,
         scale: f32,
         layout_options: TextLayoutOptions,
@@ -636,7 +638,7 @@ impl TextStyleDrawSink for CompositorScene {
         rect: Rect,
         text: Arc<cranpose_ui::text::RenderString>,
         color: Color,
-        text_style: Arc<TextStyle>,
+        text_style: (Arc<TextStyle>, u64),
         font_size: f32,
         scale: f32,
         layout_options: TextLayoutOptions,
@@ -662,7 +664,7 @@ impl TextStyleDrawSink for CompositorScene {
         rect: Rect,
         text: Arc<cranpose_ui::text::RenderString>,
         color: Color,
-        text_style: Arc<TextStyle>,
+        (text_style, style_hash): (Arc<TextStyle>, u64),
         font_size: f32,
         scale: f32,
         layout_options: TextLayoutOptions,
@@ -679,6 +681,7 @@ impl TextStyleDrawSink for CompositorScene {
                 text,
                 color,
                 text_style,
+                style_hash,
                 font_size,
                 scale,
                 layout_options,
@@ -769,7 +772,7 @@ impl TextStyleDrawSink for TextBoundsCollector {
         rect: Rect,
         _text: Arc<cranpose_ui::text::RenderString>,
         _color: Color,
-        _text_style: Arc<TextStyle>,
+        _text_style: (Arc<TextStyle>, u64),
         _font_size: f32,
         _scale: f32,
         _layout_options: TextLayoutOptions,
@@ -785,7 +788,7 @@ impl TextStyleDrawSink for TextBoundsCollector {
         rect: Rect,
         _text: Arc<cranpose_ui::text::RenderString>,
         _color: Color,
-        _text_style: Arc<TextStyle>,
+        _text_style: (Arc<TextStyle>, u64),
         _font_size: f32,
         scale: f32,
         _layout_options: TextLayoutOptions,
@@ -860,7 +863,10 @@ fn push_span_gpu_text_material_draws<S: TextStyleDrawSink>(
             text_rect,
             Arc::new(mask_text.render_string()),
             Color(1.0, 1.0, 1.0, 0.0),
-            Arc::new(mask_text_style.clone()),
+            (
+                Arc::new(mask_text_style.clone()),
+                mask_text_style.render_hash(),
+            ),
             font_size,
             text_scale,
             options,
@@ -957,12 +963,13 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         let mut shadow_text_style = TextStyle::clone(&transformed_text_style);
         shadow_text_style.span_style.brush = None;
         let blur_radius = shadow.blur_radius.max(0.0) * text_scale;
+        let shadow_style_hash = shadow_text_style.render_hash();
         sink.push_shadow_text(
             node_id,
             apply_layer_to_rect(shadow_rect, rect, content_layer),
             Arc::clone(render_text),
             apply_layer_to_color(shadow.color, content_layer),
-            Arc::new(shadow_text_style),
+            (Arc::new(shadow_text_style), shadow_style_hash),
             font_size,
             text_scale,
             options,
@@ -1041,13 +1048,14 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         mask_text_style.span_style.color = Some(Color::WHITE);
         mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
         let mask_text = text_for_gpu_mask(text);
+        let mask_style_hash = mask_text_style.render_hash();
 
         sink.push_text(
             node_id,
             transformed_shifted_text_rect,
             Arc::new(mask_text.render_string()),
             Color::WHITE,
-            Arc::new(mask_text_style),
+            (Arc::new(mask_text_style), mask_style_hash),
             font_size,
             text_scale,
             options,
@@ -1081,13 +1089,14 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         return;
     }
 
+    let transformed_style_hash = transformed_text_style.render_hash();
     push_text_draw(
         sink,
         node_id,
         transformed_shifted_text_rect,
         Arc::clone(render_text),
         transformed_text_color,
-        transformed_text_style,
+        (transformed_text_style, transformed_style_hash),
         font_size,
         text_scale,
         options,
@@ -1117,7 +1126,7 @@ fn push_text_draw<S: TextStyleDrawSink>(
     rect: Rect,
     text: Arc<cranpose_ui::text::RenderString>,
     color: Color,
-    text_style: Arc<TextStyle>,
+    text_style: (Arc<TextStyle>, u64),
     font_size: f32,
     scale: f32,
     layout_options: TextLayoutOptions,
@@ -1168,7 +1177,7 @@ pub(crate) fn push_text_style_draws(
             apply_layer_to_rect(shifted_text_rect, rect, content_layer),
             Arc::clone(render_text),
             apply_layer_to_color(paint.color, content_layer),
-            Arc::clone(text_style),
+            (Arc::clone(text_style), paint.style_hash),
             font_size,
             layer_uniform_scale(content_layer),
             options,
@@ -1790,12 +1799,13 @@ pub(crate) fn push_draw_primitive(
         }
 
         fn push_text(&mut self, params: TextDrawParams) {
+            let style_hash = params.text_style.render_hash();
             self.scene.push_text(
                 DRAW_PRIMITIVE_TEXT_NODE_ID,
                 params.rect,
                 params.render_text,
                 params.color,
-                Arc::new(params.text_style),
+                (Arc::new(params.text_style), style_hash),
                 params.font_size,
                 params.scale,
                 params.layout_options,

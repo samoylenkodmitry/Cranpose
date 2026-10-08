@@ -583,7 +583,10 @@ fn push_label(scene: &mut CompositorScene, x: f32, color: Color) {
         },
         cranpose_ui::text::shared_plain_render_string("MM"),
         color,
-        std::sync::Arc::new(style),
+        {
+            let hash = style.render_hash();
+            (std::sync::Arc::new(style), hash)
+        },
         18.0,
         1.0,
         TextLayoutOptions::default(),
