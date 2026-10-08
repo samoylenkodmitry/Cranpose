@@ -175,8 +175,12 @@ public sealed class GauntletView : Grid
             RowDefinitions = new RowDefinitions("Auto,*"),
         };
         content.Children.Add(panel);
-        SetRow(scroller, 1);
-        content.Children.Add(scroller);
+        // The panels stack over the list and show only over it, as every app clips them.
+        var area = new Grid { ClipToBounds = true };
+        area.Children.Add(scroller);
+        for (var layer = 0; layer < tier.Layers; layer++) area.Children.Add(new StackedLayer(layer, tier.LayerRows));
+        SetRow(area, 1);
+        content.Children.Add(area);
         SetRow(content, 1);
         Children.Add(content);
     }
@@ -271,6 +275,73 @@ sealed class Rows(Look look, int columns, int depth, Post[] posts, Bitmap[] avat
 }
 
 /// <summary>A rounded track filled to its share of the frame.</summary>
+/// <summary>A translucent panel stacked over the list. Its controls never change: each frame sets
+/// only the panel's translation and tilt and its nested card's tilt, which the compositor applies
+/// to their retained drawing.</summary>
+sealed class StackedLayer : Border
+{
+    static readonly IBrush LayerBackground = new ImmutableSolidColorBrush(Color.FromUInt32(0xC01E293B));
+    static readonly IBrush NestedBackground = new ImmutableSolidColorBrush(Color.FromUInt32(0xE6FFFFFF));
+
+    readonly int layer;
+    readonly RotateTransform tilt = new();
+    readonly TranslateTransform shift = new();
+    readonly RotateTransform nestedTilt = new();
+
+    public StackedLayer(int layer, int rows)
+    {
+        this.layer = layer;
+        var look = new Look(1);
+        Width = 220;
+        HorizontalAlignment = HorizontalAlignment.Left;
+        VerticalAlignment = VerticalAlignment.Top;
+        Background = LayerBackground;
+        CornerRadius = new CornerRadius(12);
+        Padding = new Thickness(10);
+        var title = look.Text(13, Brushes.White, bold: true);
+        title.Text = $"Layer {layer + 1}";
+        var cells = new StackPanel { Spacing = 3 };
+        for (var row = 0; row < rows; row++)
+        {
+            var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 3 };
+            for (var column = 0; column < LayerColumns; column++)
+            {
+                var cell = row * LayerColumns + column;
+                var label = look.Text(9, Brushes.White);
+                label.Text = $"{cell + 1}";
+                label.HorizontalAlignment = HorizontalAlignment.Center;
+                label.VerticalAlignment = VerticalAlignment.Center;
+                var box = Look.Rounded(Look.Palette[LayerCellColor(layer, cell)], 4, new Thickness(0), label);
+                box.Width = 22;
+                box.Height = 22;
+                line.Children.Add(box);
+            }
+            cells.Children.Add(line);
+        }
+        var heading = look.Text(11, Look.Ink, bold: true);
+        heading.Text = $"Nested in layer {layer + 1}";
+        var body = look.Text(11, Look.Body);
+        body.Text = "Tilts against its panel";
+        var nested = Look.Rounded(NestedBackground, 8, new Thickness(8),
+            new StackPanel { Spacing = 2, Children = { heading, body } });
+        nested.RenderTransform = nestedTilt;
+        Child = new StackPanel { Spacing = 8, Children = { title, cells, nested } };
+        // Tilted about its center, then moved.
+        RenderTransform = new TransformGroup { Children = { tilt, shift } };
+        OnFrame(0);
+        Clock.Follow(this, OnFrame);
+    }
+
+    void OnFrame(int frame)
+    {
+        var degrees = LayerDegrees(layer, frame);
+        tilt.Angle = degrees;
+        shift.X = LayerX(layer, frame);
+        shift.Y = LayerY(layer, frame);
+        nestedTilt.Angle = -degrees;
+    }
+}
+
 sealed class Bar(double radius, Func<int, double> share) : Control
 {
     public IBrush Fill { get; set; } = Brushes.Black;

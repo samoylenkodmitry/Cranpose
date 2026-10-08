@@ -53,6 +53,8 @@ export global Clock {
 export global Gauntlet {
     in property <float> s: 1;
     in property <int> depth;
+    in property <int> layers;
+    in property <int> layer-rows;
     in property <[color]> palette;
 
     /// A card's 48-point sparkline on the frame, as path commands in a
@@ -82,6 +84,15 @@ export global Gauntlet {
     }
     pure public function width-fraction(frame: int) -> float {
         0.92 + 0.08 * triangle(frame * 3, 200) / 100
+    }
+    pure public function layer-x(layer: int, frame: int) -> length {
+        (48 + 28 * layer + triangle(frame * 2 + layer * 37, 160) - 40) * 1px
+    }
+    pure public function layer-y(layer: int, frame: int) -> length {
+        (48 + 72 * layer + triangle(frame + layer * 53, 120) - 30) * 1px
+    }
+    pure public function layer-degrees(layer: int, frame: int) -> float {
+        triangle(frame + layer * 29, 48) * 0.5 - 6
     }
 }
 
@@ -410,6 +421,80 @@ component Cluster inherits Rectangle {
     }
 }
 
+/// A translucent panel stacked over the list. Its content never changes:
+/// only its position and its and its nested card's rotations read the frame.
+/// The rotation is on a rectangle inside the component: Slint left the
+/// component's own root upright inside the clipping list area.
+component StackedLayer inherits Rectangle {
+    in property <int> layer;
+    in property <int> rows;
+    property <float> degrees: Gauntlet.layer-degrees(layer, Clock.frame);
+    x: Gauntlet.layer-x(layer, Clock.frame);
+    y: Gauntlet.layer-y(layer, Clock.frame);
+    width: 220px;
+    height: content.preferred-height;
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        transform-rotation: degrees * 1deg;
+        background: #1E293BC0;
+        border-radius: 12px;
+        content := VerticalLayout {
+            padding: 10px;
+            spacing: 8px;
+            Text {
+                text: "Layer \{layer + 1}";
+                font-size: 13px;
+                font-weight: 700;
+                color: white;
+            }
+            VerticalLayout {
+                spacing: 3px;
+                for row in rows: HorizontalLayout {
+                    spacing: 3px;
+                    alignment: start;
+                    for column in 8: Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        border-radius: 4px;
+                        background: Gauntlet.palette[mod(layer * 3 + row * 8 + column, 8)];
+                        Text {
+                            width: parent.width;
+                            height: parent.height;
+                            text: "\{row * 8 + column + 1}";
+                            font-size: 9px;
+                            color: white;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                height: nested.preferred-height;
+                transform-rotation: -degrees * 1deg;
+                background: #FFFFFFE6;
+                border-radius: 8px;
+                nested := VerticalLayout {
+                    padding: 8px;
+                    spacing: 2px;
+                    Text {
+                        text: "Nested in layer \{layer + 1}";
+                        font-size: 11px;
+                        font-weight: 700;
+                        color: Ink.ink;
+                    }
+                    Text {
+                        text: "Tilts against its panel";
+                        font-size: 11px;
+                        color: Ink.body;
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component GauntletWindow inherits Window {
     in property <[TickerData]> tickers;
     in property <[RowData]> rows;
@@ -449,30 +534,41 @@ export component GauntletWindow inherits Window {
                         }
                     }
                 }
-                list := ListView {
-                    // Each row is as tall as its content, 8 px (scaled) below
-                    // the one above.
-                    for row in rows: VerticalLayout {
-                        padding-top: 8px * s;
-                        padding-left: 8px * s;
-                        padding-right: 8px * s;
-                        if row.cluster >= 0: Cluster {
-                            cluster: row.cluster;
-                        }
-                        // Equal columns. A horizontal layout takes its height
-                        // from each cell's height at the cell's own width, so
-                        // each column is given its width rather than stretched
-                        // to it: the cards wrap their text at that width.
-                        if row.cluster < 0: HorizontalLayout {
-                            spacing: 8px * s;
-                            for card in row.cards: VerticalLayout {
-                                width: (parent.width - (row.cards.length - 1) * 8px * s) / row.cards.length;
-                                alignment: start;
-                                Card {
-                                    data: card;
+                // The panels stack over the list and show only over it, as
+                // every app clips them.
+                Rectangle {
+                    clip: true;
+                    list := ListView {
+                        width: parent.width;
+                        height: parent.height;
+                        // Each row is as tall as its content, 8 px (scaled) below
+                        // the one above.
+                        for row in rows: VerticalLayout {
+                            padding-top: 8px * s;
+                            padding-left: 8px * s;
+                            padding-right: 8px * s;
+                            if row.cluster >= 0: Cluster {
+                                cluster: row.cluster;
+                            }
+                            // Equal columns. A horizontal layout takes its height
+                            // from each cell's height at the cell's own width, so
+                            // each column is given its width rather than stretched
+                            // to it: the cards wrap their text at that width.
+                            if row.cluster < 0: HorizontalLayout {
+                                spacing: 8px * s;
+                                for card in row.cards: VerticalLayout {
+                                    width: (parent.width - (row.cards.length - 1) * 8px * s) / row.cards.length;
+                                    alignment: start;
+                                    Card {
+                                        data: card;
+                                    }
                                 }
                             }
                         }
+                    }
+                    for layer in Gauntlet.layers: StackedLayer {
+                        layer: layer;
+                        rows: Gauntlet.layer-rows;
                     }
                 }
             }

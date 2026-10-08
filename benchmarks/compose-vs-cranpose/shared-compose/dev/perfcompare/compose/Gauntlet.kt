@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
@@ -36,6 +38,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.shadow
@@ -79,6 +82,8 @@ private val Panel = Color(0xFFE2E8F0)
 private val Up = Color(0xFF16A34A)
 private val Down = Color(0xFFDC2626)
 private val LevelBackground = arrayOf(Color(0xFFF1F5F9), Color(0xFFCBD5E1))
+private val LayerBackground = Color(0xC01E293B)
+private val NestedBackground = Color(0xE6FFFFFF)
 
 /** Blocks of five card rows and a cluster: no measurement window reaches the end. */
 private const val BLOCKS = 200_000
@@ -133,31 +138,50 @@ fun ColumnScope.GauntletScreen(load: GauntletLoad) {
             },
     ) {
         TickerPanel(tickers, frame, s)
-        val perBlock = CARD_ROWS_PER_CLUSTER * tier.columns + 1
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(tier.columns),
-            modifier = Modifier
+        // The panels show only over the grid, as every app clips them.
+        Box(
+            Modifier
                 .fillMaxWidth()
-                .weight(1f),
-            state = state,
-            contentPadding = PaddingValues((8 * s).dp),
-            verticalArrangement = Arrangement.spacedBy((8 * s).dp),
-            horizontalArrangement = Arrangement.spacedBy((8 * s).dp),
+                .weight(1f)
+                .clipToBounds(),
         ) {
-            items(
-                count = BLOCKS * perBlock,
-                key = { it },
-                span = { if (it % perBlock == perBlock - 1) GridItemSpan(maxLineSpan) else GridItemSpan(1) },
-                contentType = { if (it % perBlock == perBlock - 1) 1 else 0 },
-            ) { item ->
-                val block = item / perBlock
-                val within = item % perBlock
-                if (within == perBlock - 1) {
-                    Level(block, tier.depth, s)
-                } else {
-                    val card = block * (perBlock - 1) + within
-                    Card(posts[card % posts.size], avatars[card % AVATAR_COUNT], card, frame, s)
-                }
+            CardGrid(tier, posts, avatars, state, frame)
+            repeat(tier.layers) { layer -> StackedLayer(layer, tier.layerRows, frame) }
+        }
+    }
+}
+
+@Composable
+private fun CardGrid(
+    tier: GauntletTier,
+    posts: List<Post>,
+    avatars: List<ImageBitmap>,
+    state: LazyGridState,
+    frame: IntState,
+) {
+    val s = tier.scale
+    val perBlock = CARD_ROWS_PER_CLUSTER * tier.columns + 1
+    LazyVerticalGrid(
+        columns = GridCells.Fixed(tier.columns),
+        modifier = Modifier.fillMaxSize(),
+        state = state,
+        contentPadding = PaddingValues((8 * s).dp),
+        verticalArrangement = Arrangement.spacedBy((8 * s).dp),
+        horizontalArrangement = Arrangement.spacedBy((8 * s).dp),
+    ) {
+        items(
+            count = BLOCKS * perBlock,
+            key = { it },
+            span = { if (it % perBlock == perBlock - 1) GridItemSpan(maxLineSpan) else GridItemSpan(1) },
+            contentType = { if (it % perBlock == perBlock - 1) 1 else 0 },
+        ) { item ->
+            val block = item / perBlock
+            val within = item % perBlock
+            if (within == perBlock - 1) {
+                Level(block, tier.depth, s)
+            } else {
+                val card = block * (perBlock - 1) + within
+                Card(posts[card % posts.size], avatars[card % AVATAR_COUNT], card, frame, s)
             }
         }
     }
@@ -454,5 +478,64 @@ private fun Level(cluster: Int, remaining: Int, s: Float) {
             }
         }
         if (remaining > 0) Level(cluster, remaining - 1, s)
+    }
+}
+
+/**
+ * A translucent panel stacked over the grid. Its content never changes: each
+ * frame its graphics layer moves and tilts it, and its nested card's tilts
+ * the card back the other way, so nothing is composed or measured again.
+ */
+@Composable
+private fun StackedLayer(layer: Int, rows: Int, frame: IntState) {
+    Column(
+        Modifier
+            .width(220.dp)
+            .graphicsLayer {
+                translationX = layerX(layer, frame.intValue).dp.toPx()
+                translationY = layerY(layer, frame.intValue).dp.toPx()
+                rotationZ = layerDegrees(layer, frame.intValue)
+            }
+            .background(LayerBackground, RoundedCornerShape(12.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        BasicText("Layer ${layer + 1}", style = textStyle(13f, Color.White, true))
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            for (row in 0 until rows) LayerCells(layer, row)
+        }
+        NestedCard(layer, frame)
+    }
+}
+
+/** One row of a stacked panel's numbered cells. */
+@Composable
+private fun LayerCells(layer: Int, row: Int) {
+    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+        for (cell in row * LAYER_COLUMNS until (row + 1) * LAYER_COLUMNS) {
+            Box(
+                Modifier
+                    .size(22.dp)
+                    .background(PALETTE[layerCellColor(layer, cell)], RoundedCornerShape(4.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                BasicText("${cell + 1}", style = textStyle(9f, Color.White, false))
+            }
+        }
+    }
+}
+
+@Composable
+private fun NestedCard(layer: Int, frame: IntState) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .graphicsLayer { rotationZ = -layerDegrees(layer, frame.intValue) }
+            .background(NestedBackground, RoundedCornerShape(8.dp))
+            .padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        BasicText("Nested in layer ${layer + 1}", style = textStyle(11f, Ink, true))
+        BasicText("Tilts against its panel", style = textStyle(11f, Body, false))
     }
 }

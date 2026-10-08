@@ -127,6 +127,8 @@ pub fn run(launch: Launch, size: Option<slint::LogicalSize>) -> Result<(), Platf
     let gauntlet = window.global::<Gauntlet>();
     gauntlet.set_s(tier.scale);
     gauntlet.set_depth(tier.depth as i32);
+    gauntlet.set_layers(tier.layers as i32);
+    gauntlet.set_layer_rows(tier.layer_rows as i32);
     gauntlet.set_palette(ModelRc::new(VecModel::from(
         PALETTE_RGB.map(color).to_vec(),
     )));

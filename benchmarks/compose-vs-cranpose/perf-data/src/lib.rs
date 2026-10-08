@@ -353,6 +353,10 @@ pub struct GauntletTier {
     pub tickers: usize,
     /// Nested levels in each deep cluster.
     pub depth: usize,
+    /// Translucent panels stacked over the list.
+    pub layers: usize,
+    /// Rows of [`LAYER_COLUMNS`] cells in each stacked panel.
+    pub layer_rows: usize,
 }
 
 pub const GAUNTLET_TIERS: [GauntletTier; 16] = [
@@ -361,96 +365,128 @@ pub const GAUNTLET_TIERS: [GauntletTier; 16] = [
         scale: 1.0,
         tickers: 8,
         depth: 6,
+        layers: 1,
+        layer_rows: 2,
     },
     GauntletTier {
         columns: 2,
         scale: 0.85,
         tickers: 12,
         depth: 8,
+        layers: 1,
+        layer_rows: 2,
     },
     GauntletTier {
         columns: 2,
         scale: 0.7,
         tickers: 16,
         depth: 10,
+        layers: 2,
+        layer_rows: 3,
     },
     GauntletTier {
         columns: 3,
         scale: 0.6,
         tickers: 20,
         depth: 12,
+        layers: 2,
+        layer_rows: 3,
     },
     GauntletTier {
         columns: 3,
         scale: 0.5,
         tickers: 28,
         depth: 14,
+        layers: 2,
+        layer_rows: 4,
     },
     GauntletTier {
         columns: 4,
         scale: 0.45,
         tickers: 36,
         depth: 16,
+        layers: 3,
+        layer_rows: 4,
     },
     GauntletTier {
         columns: 4,
         scale: 0.4,
         tickers: 44,
         depth: 20,
+        layers: 3,
+        layer_rows: 5,
     },
     GauntletTier {
         columns: 5,
         scale: 0.35,
         tickers: 56,
         depth: 24,
+        layers: 3,
+        layer_rows: 5,
     },
     GauntletTier {
         columns: 6,
         scale: 0.3,
         tickers: 72,
         depth: 28,
+        layers: 4,
+        layer_rows: 6,
     },
     GauntletTier {
         columns: 7,
         scale: 0.27,
         tickers: 96,
         depth: 32,
+        layers: 4,
+        layer_rows: 6,
     },
     GauntletTier {
         columns: 8,
         scale: 0.25,
         tickers: 120,
         depth: 40,
+        layers: 4,
+        layer_rows: 7,
     },
     GauntletTier {
         columns: 10,
         scale: 0.2,
         tickers: 160,
         depth: 48,
+        layers: 5,
+        layer_rows: 7,
     },
     GauntletTier {
         columns: 12,
         scale: 0.18,
         tickers: 200,
         depth: 56,
+        layers: 5,
+        layer_rows: 8,
     },
     GauntletTier {
         columns: 14,
         scale: 0.16,
         tickers: 240,
         depth: 64,
+        layers: 5,
+        layer_rows: 8,
     },
     GauntletTier {
         columns: 16,
         scale: 0.14,
         tickers: 300,
         depth: 72,
+        layers: 6,
+        layer_rows: 9,
     },
     GauntletTier {
         columns: 20,
         scale: 0.12,
         tickers: 400,
         depth: 80,
+        layers: 6,
+        layer_rows: 10,
     },
 ];
 
@@ -704,6 +740,34 @@ pub fn progress_permille(card: usize, frame: u32) -> u32 {
 /// The tilt of a card's badge on `frame`, in degrees: -5 to 5.
 pub fn badge_degrees(card: usize, frame: u32) -> f32 {
     triangle((frame * 2 + card as u32 * 30) as i32, 40) as f32 * 0.5 - 5.0
+}
+
+/// Cells in each row of a stacked panel's grid.
+pub const LAYER_COLUMNS: usize = 8;
+
+/// The left edge of stacked panel `layer` on `frame` before its tilt, in dp
+/// from the list's left edge: it drifts 80 dp from side to side.
+pub fn layer_x(layer: usize, frame: u32) -> f32 {
+    let drift = triangle((frame * 2 + layer as u32 * 37) as i32, 160);
+    (48 + 28 * layer as i32 + drift - 40) as f32
+}
+
+/// The top edge of stacked panel `layer` on `frame` before its tilt, in dp
+/// from the list's top edge: it drifts 60 dp up and down.
+pub fn layer_y(layer: usize, frame: u32) -> f32 {
+    let drift = triangle((frame + layer as u32 * 53) as i32, 120);
+    (48 + 72 * layer as i32 + drift - 30) as f32
+}
+
+/// The tilt of stacked panel `layer` about its center on `frame`, in degrees:
+/// -6 to 6. Its nested card tilts as far the other way.
+pub fn layer_degrees(layer: usize, frame: u32) -> f32 {
+    triangle((frame + layer as u32 * 29) as i32, 48) as f32 * 0.5 - 6.0
+}
+
+/// The [`PALETTE_RGB`] index of cell `cell` in stacked panel `layer`.
+pub fn layer_cell_color(layer: usize, cell: usize) -> usize {
+    (layer * 3 + cell) % PALETTE_RGB.len()
 }
 
 /// The content's share of the screen width on `frame`: 0.92 to 1.

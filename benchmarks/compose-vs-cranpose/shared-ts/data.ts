@@ -126,25 +126,29 @@ export interface GauntletTier {
   scale: number;
   tickers: number;
   depth: number;
+  /** Translucent panels stacked over the list. */
+  layers: number;
+  /** Rows of `LAYER_COLUMNS` cells in each stacked panel. */
+  layerRows: number;
 }
 
 const TIERS: GauntletTier[] = [
-  { columns: 1, scale: 1.0, tickers: 8, depth: 6 },
-  { columns: 2, scale: 0.85, tickers: 12, depth: 8 },
-  { columns: 2, scale: 0.7, tickers: 16, depth: 10 },
-  { columns: 3, scale: 0.6, tickers: 20, depth: 12 },
-  { columns: 3, scale: 0.5, tickers: 28, depth: 14 },
-  { columns: 4, scale: 0.45, tickers: 36, depth: 16 },
-  { columns: 4, scale: 0.4, tickers: 44, depth: 20 },
-  { columns: 5, scale: 0.35, tickers: 56, depth: 24 },
-  { columns: 6, scale: 0.3, tickers: 72, depth: 28 },
-  { columns: 7, scale: 0.27, tickers: 96, depth: 32 },
-  { columns: 8, scale: 0.25, tickers: 120, depth: 40 },
-  { columns: 10, scale: 0.2, tickers: 160, depth: 48 },
-  { columns: 12, scale: 0.18, tickers: 200, depth: 56 },
-  { columns: 14, scale: 0.16, tickers: 240, depth: 64 },
-  { columns: 16, scale: 0.14, tickers: 300, depth: 72 },
-  { columns: 20, scale: 0.12, tickers: 400, depth: 80 },
+  { columns: 1, scale: 1.0, tickers: 8, depth: 6, layers: 1, layerRows: 2 },
+  { columns: 2, scale: 0.85, tickers: 12, depth: 8, layers: 1, layerRows: 2 },
+  { columns: 2, scale: 0.7, tickers: 16, depth: 10, layers: 2, layerRows: 3 },
+  { columns: 3, scale: 0.6, tickers: 20, depth: 12, layers: 2, layerRows: 3 },
+  { columns: 3, scale: 0.5, tickers: 28, depth: 14, layers: 2, layerRows: 4 },
+  { columns: 4, scale: 0.45, tickers: 36, depth: 16, layers: 3, layerRows: 4 },
+  { columns: 4, scale: 0.4, tickers: 44, depth: 20, layers: 3, layerRows: 5 },
+  { columns: 5, scale: 0.35, tickers: 56, depth: 24, layers: 3, layerRows: 5 },
+  { columns: 6, scale: 0.3, tickers: 72, depth: 28, layers: 4, layerRows: 6 },
+  { columns: 7, scale: 0.27, tickers: 96, depth: 32, layers: 4, layerRows: 6 },
+  { columns: 8, scale: 0.25, tickers: 120, depth: 40, layers: 4, layerRows: 7 },
+  { columns: 10, scale: 0.2, tickers: 160, depth: 48, layers: 5, layerRows: 7 },
+  { columns: 12, scale: 0.18, tickers: 200, depth: 56, layers: 5, layerRows: 8 },
+  { columns: 14, scale: 0.16, tickers: 240, depth: 64, layers: 5, layerRows: 8 },
+  { columns: 16, scale: 0.14, tickers: 300, depth: 72, layers: 6, layerRows: 9 },
+  { columns: 20, scale: 0.12, tickers: 400, depth: 80, layers: 6, layerRows: 10 },
 ];
 
 /** Tier `1..16`; anything else is clamped into that range. */
@@ -214,6 +218,29 @@ export function progressPermille(card: number, frame: number): number {
 /** The tilt of a card's badge on `frame`, in degrees: -5 to 5. */
 export function badgeDegrees(card: number, frame: number): number {
   return triangle(frame * 2 + card * 30, 40) * 0.5 - 5;
+}
+
+/** Cells in each row of a stacked panel's grid. */
+export const LAYER_COLUMNS = 8;
+
+/** The left edge of stacked panel `layer` on `frame` before its tilt, in dp from the list's left edge. */
+export function layerX(layer: number, frame: number): number {
+  return 48 + 28 * layer + triangle(frame * 2 + layer * 37, 160) - 40;
+}
+
+/** The top edge of stacked panel `layer` on `frame` before its tilt, in dp from the list's top edge. */
+export function layerY(layer: number, frame: number): number {
+  return 48 + 72 * layer + triangle(frame + layer * 53, 120) - 30;
+}
+
+/** The tilt of stacked panel `layer` about its center on `frame`, in degrees: -6 to 6. */
+export function layerDegrees(layer: number, frame: number): number {
+  return triangle(frame + layer * 29, 48) * 0.5 - 6;
+}
+
+/** The palette index of cell `cell` in stacked panel `layer`. */
+export function layerCellColor(layer: number, cell: number): number {
+  return (layer * 3 + cell) % PALETTE.length;
 }
 
 /** The content's share of the screen width on `frame`: 0.92 to 1. */

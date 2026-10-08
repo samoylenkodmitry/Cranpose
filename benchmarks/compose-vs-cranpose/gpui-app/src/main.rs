@@ -39,6 +39,11 @@ fn hex(value: u32) -> Hsla {
     rgb([(value >> 16) as u8, (value >> 8) as u8, value as u8])
 }
 
+/// `value` as RGB, at `alpha` of 255.
+fn rgba(value: u32, alpha: u8) -> Hsla {
+    hex(value).opacity(f32::from(alpha) / 255.0)
+}
+
 fn palette(index: usize) -> Hsla {
     rgb(PALETTE_RGB[index % PALETTE_RGB.len()])
 }
@@ -56,9 +61,9 @@ fn hairline() -> Hsla {
     hex(0xE5E7EB)
 }
 
-/// The badge's text as Roboto Bold's outlines: GPUI draws paths rotated,
-/// and text only upright.
-struct BadgeText {
+/// A line of text as Roboto's outlines: GPUI draws paths turned, but no
+/// text.
+struct GlyphText {
     /// Outline commands in font units, the pen advanced glyph by glyph.
     commands: Vec<Command>,
     advance: f32,
@@ -107,12 +112,11 @@ impl ttf_parser::OutlineBuilder for Outline<'_> {
     }
 }
 
-impl BadgeText {
-    fn new(bold: &[u8]) -> Option<Self> {
-        let face = ttf_parser::Face::parse(bold, 0).ok()?;
+impl GlyphText {
+    fn new(face: &ttf_parser::Face, text: &str) -> Option<Self> {
         let mut commands = Vec::new();
         let mut advance = 0.0;
-        for character in "HOT".chars() {
+        for character in text.chars() {
             let glyph = face.glyph_index(character)?;
             face.outline_glyph(
                 glyph,
@@ -129,6 +133,73 @@ impl BadgeText {
             ascender: f32::from(face.ascender()),
             descender: f32::from(face.descender()),
             units_per_em: f32::from(face.units_per_em()),
+        })
+    }
+
+    /// The line's width and the font's height at `font_size`.
+    fn size(&self, font_size: f32) -> gpui::Size<Pixels> {
+        let scale = font_size / self.units_per_em;
+        size(
+            px(self.advance * scale),
+            px((self.ascender - self.descender) * scale),
+        )
+    }
+
+    /// Paints the line at `font_size` with its top left `corner` offset from
+    /// `center`, turned `degrees` about `center`.
+    fn paint(
+        &self,
+        window: &mut Window,
+        font_size: f32,
+        corner: Point<Pixels>,
+        degrees: f32,
+        center: Point<Pixels>,
+        color: Hsla,
+    ) {
+        let scale = font_size / self.units_per_em;
+        // Glyphs from the font's units, y up, onto the screen, y down.
+        let origin = corner + point(px(0.0), px(self.ascender * scale));
+        let at = |x: f32, y: f32| origin + point(px(x * scale), px(-y * scale));
+        let mut glyphs = PathBuilder::fill();
+        for command in &self.commands {
+            match *command {
+                Command::Move(x, y) => glyphs.move_to(at(x, y)),
+                Command::Line(x, y) => glyphs.line_to(at(x, y)),
+                Command::Quad(x1, y1, x, y) => glyphs.curve_to(at(x, y), at(x1, y1)),
+                Command::Cubic(x1, y1, x2, y2, x, y) => {
+                    glyphs.cubic_bezier_to(at(x, y), at(x1, y1), at(x2, y2))
+                }
+                Command::Close => glyphs.close(),
+            }
+        }
+        glyphs.rotate(degrees);
+        glyphs.translate(center);
+        if let Ok(path) = glyphs.build() {
+            window.paint_path(path, color);
+        }
+    }
+}
+
+/// The outlines of every turned text on screen: the badge's, and the stacked
+/// panels' titles and cell numbers.
+struct Glyphs {
+    hot: GlyphText,
+    titles: Vec<GlyphText>,
+    numbers: Vec<GlyphText>,
+}
+
+impl Glyphs {
+    fn new(regular: &[u8], bold: &[u8], tier: GauntletTier) -> Option<Self> {
+        let regular = ttf_parser::Face::parse(regular, 0).ok()?;
+        let bold = ttf_parser::Face::parse(bold, 0).ok()?;
+        Some(Self {
+            hot: GlyphText::new(&bold, "HOT")?,
+            titles: (1..=tier.layers)
+                .map(|layer| GlyphText::new(&bold, &format!("Layer {layer}")))
+                .collect::<Option<_>>()?,
+            numbers: (1..=tier.layer_rows * LAYER_COLUMNS)
+                .map(|number| GlyphText::new(&regular, &number.to_string()))
+                .collect::<Option<_>>()?,
         })
     }
 }
@@ -163,15 +234,14 @@ struct Gauntlet {
     posts: Arc<Vec<Post>>,
     tickers: Vec<Ticker>,
     avatars: Arc<Vec<Arc<RenderImage>>>,
-    badge: Arc<Option<BadgeText>>,
+    glyphs: Arc<Option<Glyphs>>,
     list: ListState,
     /// The first row the list shows and its top in the list's content.
     anchor: (usize, Pixels),
 }
 
 impl Gauntlet {
-    fn new(load: Launch, badge: Option<BadgeText>) -> Self {
-        let tier = gauntlet_tier(load.tier);
+    fn new(load: Launch, tier: GauntletTier, glyphs: Option<Glyphs>) -> Self {
         let avatars = (0..AVATAR_COUNT)
             .map(|index| {
                 // GPUI's frames hold BGRA pixels.
@@ -194,7 +264,7 @@ impl Gauntlet {
             posts: Arc::new(posts()),
             tickers: tickers(tier.tickers),
             avatars: Arc::new(avatars),
-            badge: Arc::new(badge),
+            glyphs: Arc::new(glyphs),
             list,
             anchor: (0, px(0.0)),
         }
@@ -274,7 +344,7 @@ struct Rows {
     frame: u32,
     posts: Arc<Vec<Post>>,
     avatars: Arc<Vec<Arc<RenderImage>>>,
-    badge: Arc<Option<BadgeText>>,
+    glyphs: Arc<Option<Glyphs>>,
 }
 
 impl Rows {
@@ -444,7 +514,7 @@ impl Rows {
             .child(chips)
             .child(footer)
             .when(card.is_multiple_of(5), |card_box| {
-                let badge = self.badge.clone();
+                let glyphs = self.glyphs.clone();
                 let degrees = badge_degrees(card, frame);
                 // A translucent tag tilting with the frame: drawn rotated
                 // over the card, never laid out again.
@@ -452,8 +522,8 @@ impl Rows {
                     canvas(
                         |_, _, _| {},
                         move |bounds, _, window, _| {
-                            if let Some(text) = badge.as_ref() {
-                                badge_paint(window, bounds, text, degrees, s);
+                            if let Some(glyphs) = glyphs.as_ref() {
+                                badge_paint(window, bounds, &glyphs.hot, degrees, s);
                             }
                         },
                     )
@@ -546,15 +616,11 @@ fn sparkline(
 fn badge_paint(
     window: &mut Window,
     bounds: Bounds<Pixels>,
-    text: &BadgeText,
+    text: &GlyphText,
     degrees: f32,
     s: f32,
 ) {
-    let scale = 9.0 * s / text.units_per_em;
-    let label = size(
-        px(text.advance * scale),
-        px((text.ascender - text.descender) * scale),
-    );
+    let label = text.size(9.0 * s);
     let badge = size(label.width + px(12.0 * s), label.height + px(4.0 * s));
     let center = point(
         bounds.origin.x + bounds.size.width - px(6.0 * s) - badge.width / 2.0,
@@ -573,25 +639,132 @@ fn badge_paint(
     if let Ok(path) = background.build() {
         window.paint_path(path, palette(0).opacity(0.9));
     }
-    // Glyphs from the font's units, y up, onto the badge, y down.
-    let origin = corner + point(px(6.0 * s), px(2.0 * s) + px(text.ascender * scale));
-    let at = |x: f32, y: f32| origin + point(px(x * scale), px(-y * scale));
-    let mut glyphs = PathBuilder::fill();
-    for command in &text.commands {
-        match *command {
-            Command::Move(x, y) => glyphs.move_to(at(x, y)),
-            Command::Line(x, y) => glyphs.line_to(at(x, y)),
-            Command::Quad(x1, y1, x, y) => glyphs.curve_to(at(x, y), at(x1, y1)),
-            Command::Cubic(x1, y1, x2, y2, x, y) => {
-                glyphs.cubic_bezier_to(at(x, y), at(x1, y1), at(x2, y2))
-            }
-            Command::Close => glyphs.close(),
-        }
+    text.paint(
+        window,
+        9.0 * s,
+        corner + point(px(6.0 * s), px(2.0 * s)),
+        degrees,
+        center,
+        gpui::white().opacity(0.9),
+    );
+}
+
+/// Fills a rounded rectangle at `corner` offset from `center`, turned
+/// `degrees` about `center`.
+fn turned_rectangle(
+    window: &mut Window,
+    corner: Point<Pixels>,
+    extent: gpui::Size<Pixels>,
+    radius: f32,
+    degrees: f32,
+    center: Point<Pixels>,
+    color: Hsla,
+) {
+    let mut path = PathBuilder::fill();
+    rounded_rectangle(&mut path, corner, extent, px(radius));
+    path.rotate(degrees);
+    path.translate(center);
+    if let Ok(path) = path.build() {
+        window.paint_path(path, color);
     }
-    glyphs.rotate(degrees);
-    glyphs.translate(center);
-    if let Ok(path) = glyphs.build() {
-        window.paint_path(path, gpui::white().opacity(0.9));
+}
+
+/// The translucent panels stacked over the list, painted again each frame as
+/// paths turned about each panel's centre, as GPUI turns no element; the
+/// nested card's text stays upright, where its panel moved its centre.
+fn layers_paint(
+    window: &mut Window,
+    cx: &mut App,
+    bounds: Bounds<Pixels>,
+    glyphs: &Glyphs,
+    tier: GauntletTier,
+    frame: u32,
+) {
+    let line = glyphs.hot.size(11.0).height;
+    let title = glyphs.hot.size(13.0).height;
+    let cells_top = 10.0 + f32::from(title) + 8.0;
+    let nested_top = cells_top + tier.layer_rows as f32 * 25.0 - 3.0 + 8.0;
+    let nested = size(px(200.0), px(8.0 + 2.0 * f32::from(line) + 2.0 + 8.0));
+    let panel = size(px(220.0), px(nested_top + 10.0) + nested.height);
+    let half = point(panel.width / 2.0, panel.height / 2.0);
+    let font = |weight| gpui::Font {
+        weight,
+        ..gpui::font("Roboto")
+    };
+    for (layer, title) in glyphs.titles.iter().enumerate() {
+        let degrees = layer_degrees(layer, frame);
+        let center =
+            bounds.origin + point(px(layer_x(layer, frame)), px(layer_y(layer, frame))) + half;
+        let background = rgba(0x1E293B, 0xC0);
+        let top_left = point(-half.x, -half.y);
+        turned_rectangle(window, top_left, panel, 12.0, degrees, center, background);
+        let at = top_left + point(px(10.0), px(10.0));
+        title.paint(window, 13.0, at, degrees, center, gpui::white());
+        for (cell, number) in glyphs.numbers.iter().enumerate() {
+            let corner = top_left
+                + point(
+                    px(10.0 + (cell % LAYER_COLUMNS) as f32 * 25.0),
+                    px(cells_top + (cell / LAYER_COLUMNS) as f32 * 25.0),
+                );
+            let color = palette(layer_cell_color(layer, cell));
+            turned_rectangle(
+                window,
+                corner,
+                size(px(22.0), px(22.0)),
+                4.0,
+                degrees,
+                center,
+                color,
+            );
+            let label = number.size(9.0);
+            let at = corner + point(px(11.0) - label.width / 2.0, px(11.0) - label.height / 2.0);
+            number.paint(window, 9.0, at, degrees, center, gpui::white());
+        }
+        // The nested card's centre, turned with its panel.
+        let offset = top_left + point(px(110.0), px(nested_top) + nested.height / 2.0);
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let (x, y) = (f32::from(offset.x), f32::from(offset.y));
+        let middle = center + point(px(x * cos - y * sin), px(x * sin + y * cos));
+        let corner = point(-nested.width / 2.0, -nested.height / 2.0);
+        turned_rectangle(
+            window,
+            corner,
+            nested,
+            8.0,
+            0.0,
+            middle,
+            rgba(0xFFFFFF, 0xE6),
+        );
+        let mut top = middle + corner + point(px(8.0), px(8.0));
+        let lines = [
+            (
+                format!("Nested in layer {}", layer + 1),
+                FontWeight::BOLD,
+                ink(),
+            ),
+            (
+                "Tilts against its panel".to_owned(),
+                FontWeight::NORMAL,
+                body(),
+            ),
+        ];
+        for (text, weight, color) in lines {
+            let run = gpui::TextRun {
+                len: text.len(),
+                font: font(weight),
+                color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let shaped = window
+                .text_system()
+                .shape_line(text.into(), px(11.0), &[run], None);
+            if let Err(error) = shaped.paint(top, line, gpui::TextAlign::Left, None, window, cx) {
+                log::warn!("nested text not painted: {error}");
+            }
+            top.y += line + px(2.0);
+        }
     }
 }
 
@@ -630,8 +803,9 @@ impl Render for Gauntlet {
             frame: self.frame,
             posts: self.posts.clone(),
             avatars: self.avatars.clone(),
-            badge: self.badge.clone(),
+            glyphs: self.glyphs.clone(),
         };
+        let (glyphs, tier, frame) = (self.glyphs.clone(), self.tier, self.frame);
         let (width, _) = perf_data::DESKTOP_WINDOW;
         div()
             .size_full()
@@ -663,11 +837,34 @@ impl Render for Gauntlet {
                     .flex()
                     .flex_col()
                     .child(self.ticker_panel())
+                    // The panels stack over the list and show only over it,
+                    // as every app clips them.
                     .child(
-                        list(self.list.clone(), move |row, _, _| rows.row(row))
+                        div()
                             .flex_1()
+                            .min_h(px(0.0))
                             .w_full()
-                            .text_size(px(10.0 * s)),
+                            .relative()
+                            .overflow_hidden()
+                            .child(
+                                list(self.list.clone(), move |row, _, _| rows.row(row))
+                                    .size_full()
+                                    .text_size(px(10.0 * s)),
+                            )
+                            .child(
+                                canvas(
+                                    |_, _, _| {},
+                                    move |bounds, _, window, cx| {
+                                        if let Some(glyphs) = glyphs.as_ref() {
+                                            layers_paint(window, cx, bounds, glyphs, tier, frame);
+                                        }
+                                    },
+                                )
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full(),
+                            ),
                     ),
             )
     }
@@ -677,19 +874,18 @@ fn main() {
     perf_data::log_to_stdout();
     let load = Launch::from_env();
     gpui_platform::application().run(move |cx: &mut App| {
+        let tier = gauntlet_tier(load.tier);
         let mut fonts: Vec<Cow<'static, [u8]>> = Vec::new();
-        let mut badge = None;
         for file in ["Roboto-Regular.ttf", "Roboto-Bold.ttf"] {
             match std::fs::read(perf_data::font_path(file)) {
-                Ok(bytes) => {
-                    if file == "Roboto-Bold.ttf" {
-                        badge = BadgeText::new(&bytes);
-                    }
-                    fonts.push(Cow::Owned(bytes));
-                }
+                Ok(bytes) => fonts.push(Cow::Owned(bytes)),
                 Err(error) => log::warn!("no {file}: {error}"),
             }
         }
+        let glyphs = match fonts.as_slice() {
+            [regular, bold] => Glyphs::new(regular, bold, tier),
+            _ => None,
+        };
         if let Err(error) = cx.text_system().add_fonts(fonts) {
             log::warn!("fonts not added: {error}");
         }
@@ -707,8 +903,9 @@ fn main() {
             inactive_frame_interval: None,
             ..Default::default()
         };
-        if let Err(error) = cx.open_window(options, |_, cx| cx.new(|_| Gauntlet::new(load, badge)))
-        {
+        if let Err(error) = cx.open_window(options, |_, cx| {
+            cx.new(|_| Gauntlet::new(load, tier, glyphs))
+        }) {
             log::error!("no window: {error}");
         }
         cx.activate(true);

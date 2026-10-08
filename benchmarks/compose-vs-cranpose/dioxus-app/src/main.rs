@@ -210,7 +210,14 @@ fn Content() -> Element {
     rsx! {
         main { class: "content", style: "width: {width}px",
             Panel {}
-            List {}
+            // The panels stack over the list and show only over it, as every
+            // app clips them.
+            div { class: "stack",
+                List {}
+                for layer in 0..desktop_gauntlet().tier.layers {
+                    StackedLayer { key: "{layer}", layer }
+                }
+            }
         }
     }
 }
@@ -397,6 +404,56 @@ fn Sparkline(card: usize, color: usize) -> Element {
             path { fill: "url(#spark-{color})", d: "{area}" }
             path { class: "line", stroke: "{colors().palette[color]}", d: "{line}" }
         }
+    }
+}
+
+/// A translucent panel stacked over the list. Its content never changes:
+/// only the two components that carry its transforms read the frame.
+#[component]
+fn StackedLayer(layer: usize) -> Element {
+    let (rows, colors) = (desktop_gauntlet().tier.layer_rows, colors());
+    rsx! {
+        LayerTilt { layer,
+            div { class: "layer-title", "Layer {layer + 1}" }
+            div { class: "layer-rows",
+                for row in 0..rows {
+                    div { key: "{row}", class: "layer-row",
+                        for cell in row * LAYER_COLUMNS..(row + 1) * LAYER_COLUMNS {
+                            div {
+                                key: "{cell}",
+                                class: "layer-cell",
+                                style: "background: {colors.palette[layer_cell_color(layer, cell)]}",
+                                "{cell + 1}"
+                            }
+                        }
+                    }
+                }
+            }
+            NestedTilt { layer,
+                div { class: "nested-title", "Nested in layer {layer + 1}" }
+                div { class: "nested-text", "Tilts against its panel" }
+            }
+        }
+    }
+}
+
+/// The panel moved and tilted on this frame.
+#[component]
+fn LayerTilt(layer: usize, children: Element) -> Element {
+    let frame = FRAME();
+    let (x, y) = (layer_x(layer, frame), layer_y(layer, frame));
+    let degrees = layer_degrees(layer, frame);
+    rsx! {
+        div { class: "layer", style: "transform: translate({x}px, {y}px) rotate({degrees}deg)", {children} }
+    }
+}
+
+/// The nested card tilted against its panel on this frame.
+#[component]
+fn NestedTilt(layer: usize, children: Element) -> Element {
+    let degrees = -layer_degrees(layer, FRAME());
+    rsx! {
+        div { class: "nested", style: "transform: rotate({degrees}deg)", {children} }
     }
 }
 

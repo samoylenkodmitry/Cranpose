@@ -14,6 +14,7 @@ import {
   CARD_ROWS_PER_CLUSTER,
   CHIP_BACKGROUND,
   GRADIENT_END,
+  LAYER_COLUMNS,
   PALETTE,
   POST_COUNT,
   type Post,
@@ -24,6 +25,10 @@ import {
   centsText,
   changeText,
   gauntletTier,
+  layerCellColor,
+  layerDegrees,
+  layerX,
+  layerY,
   posts,
   progressPermille,
   sparkValue,
@@ -237,6 +242,42 @@ class Card {
 }
 
 /** `depth` levels nested inside one another, each a row of three labels above the next level. */
+/**
+ * A translucent panel stacked over the list. Its elements never change: each
+ * frame sets only its transform and its nested card's, which the compositor
+ * applies to the layers `will-change` keeps for them.
+ */
+class StackedLayer {
+  private readonly panel: HTMLElement;
+  private readonly nested: HTMLElement;
+
+  constructor(private readonly layer: number, rows: number, parent: Element) {
+    this.panel = element('div', 'layer', parent);
+    setText(element('div', 'layer-title', this.panel), `Layer ${layer + 1}`);
+    const grid = element('div', 'layer-rows', this.panel);
+    for (let row = 0; row < rows; row++) {
+      const line = element('div', 'layer-row', grid);
+      for (let column = 0; column < LAYER_COLUMNS; column++) {
+        const cell = row * LAYER_COLUMNS + column;
+        const box = element('div', 'layer-cell', line);
+        box.style.background = PALETTE[layerCellColor(layer, cell)];
+        setText(box, String(cell + 1));
+      }
+    }
+    this.nested = element('div', 'nested', this.panel);
+    setText(element('div', 'nested-title', this.nested), `Nested in layer ${layer + 1}`);
+    setText(element('div', 'nested-text', this.nested), 'Tilts against its panel');
+    this.update(0);
+  }
+
+  update(frame: number) {
+    const degrees = layerDegrees(this.layer, frame);
+    this.panel.style.transform =
+      `translate(${layerX(this.layer, frame)}px, ${layerY(this.layer, frame)}px) rotate(${degrees}deg)`;
+    this.nested.style.transform = `rotate(${-degrees}deg)`;
+  }
+}
+
 class Cluster {
   private readonly levels: { remaining: number; level: HTMLDivElement; chips: HTMLDivElement[] }[] = [];
 
@@ -297,6 +338,8 @@ async function main() {
     return canvas.toDataURL();
   });
   const tiles = tickers(tier.tickers).map((ticker, index) => new TickerTile(ticker, index, panel));
+  const stack = need<HTMLElement>('.stack');
+  const layers = Array.from({ length: tier.layers }, (_, layer) => new StackedLayer(layer, tier.layerRows, stack));
 
   // Rows on screen, the next row to show, and rows scrolled off for reuse.
   const rows: Row[] = [];
@@ -359,6 +402,7 @@ async function main() {
     // The width follows the frame, in whole pixels.
     content.style.width = `${Math.round(innerWidth * devicePixelRatio * widthFraction(frame)) / devicePixelRatio}px`;
     tiles.forEach(tile => tile.update(frame));
+    layers.forEach(layer => layer.update(frame));
     rows.forEach(row => row.cards.forEach(card => card.update(frame)));
     const top = frame * SCROLL_PER_FRAME;
     fill(top, frame);

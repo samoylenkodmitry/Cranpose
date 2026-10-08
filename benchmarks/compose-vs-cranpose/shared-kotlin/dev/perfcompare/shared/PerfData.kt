@@ -134,25 +134,34 @@ fun posts(): List<Post> = List(POST_COUNT) { post(it) }
 // same digits on the same frame.
 
 /** What one load tier puts on screen; `../README.md` lists the tiers. */
-data class GauntletTier(val columns: Int, val scale: Float, val tickers: Int, val depth: Int)
+data class GauntletTier(
+    val columns: Int,
+    val scale: Float,
+    val tickers: Int,
+    val depth: Int,
+    /** Translucent panels stacked over the list. */
+    val layers: Int,
+    /** Rows of [LAYER_COLUMNS] cells in each stacked panel. */
+    val layerRows: Int,
+)
 
 val GAUNTLET_TIERS = listOf(
-    GauntletTier(columns = 1, scale = 1.0f, tickers = 8, depth = 6),
-    GauntletTier(columns = 2, scale = 0.85f, tickers = 12, depth = 8),
-    GauntletTier(columns = 2, scale = 0.7f, tickers = 16, depth = 10),
-    GauntletTier(columns = 3, scale = 0.6f, tickers = 20, depth = 12),
-    GauntletTier(columns = 3, scale = 0.5f, tickers = 28, depth = 14),
-    GauntletTier(columns = 4, scale = 0.45f, tickers = 36, depth = 16),
-    GauntletTier(columns = 4, scale = 0.4f, tickers = 44, depth = 20),
-    GauntletTier(columns = 5, scale = 0.35f, tickers = 56, depth = 24),
-    GauntletTier(columns = 6, scale = 0.3f, tickers = 72, depth = 28),
-    GauntletTier(columns = 7, scale = 0.27f, tickers = 96, depth = 32),
-    GauntletTier(columns = 8, scale = 0.25f, tickers = 120, depth = 40),
-    GauntletTier(columns = 10, scale = 0.2f, tickers = 160, depth = 48),
-    GauntletTier(columns = 12, scale = 0.18f, tickers = 200, depth = 56),
-    GauntletTier(columns = 14, scale = 0.16f, tickers = 240, depth = 64),
-    GauntletTier(columns = 16, scale = 0.14f, tickers = 300, depth = 72),
-    GauntletTier(columns = 20, scale = 0.12f, tickers = 400, depth = 80),
+    GauntletTier(columns = 1, scale = 1.0f, tickers = 8, depth = 6, layers = 1, layerRows = 2),
+    GauntletTier(columns = 2, scale = 0.85f, tickers = 12, depth = 8, layers = 1, layerRows = 2),
+    GauntletTier(columns = 2, scale = 0.7f, tickers = 16, depth = 10, layers = 2, layerRows = 3),
+    GauntletTier(columns = 3, scale = 0.6f, tickers = 20, depth = 12, layers = 2, layerRows = 3),
+    GauntletTier(columns = 3, scale = 0.5f, tickers = 28, depth = 14, layers = 2, layerRows = 4),
+    GauntletTier(columns = 4, scale = 0.45f, tickers = 36, depth = 16, layers = 3, layerRows = 4),
+    GauntletTier(columns = 4, scale = 0.4f, tickers = 44, depth = 20, layers = 3, layerRows = 5),
+    GauntletTier(columns = 5, scale = 0.35f, tickers = 56, depth = 24, layers = 3, layerRows = 5),
+    GauntletTier(columns = 6, scale = 0.3f, tickers = 72, depth = 28, layers = 4, layerRows = 6),
+    GauntletTier(columns = 7, scale = 0.27f, tickers = 96, depth = 32, layers = 4, layerRows = 6),
+    GauntletTier(columns = 8, scale = 0.25f, tickers = 120, depth = 40, layers = 4, layerRows = 7),
+    GauntletTier(columns = 10, scale = 0.2f, tickers = 160, depth = 48, layers = 5, layerRows = 7),
+    GauntletTier(columns = 12, scale = 0.18f, tickers = 200, depth = 56, layers = 5, layerRows = 8),
+    GauntletTier(columns = 14, scale = 0.16f, tickers = 240, depth = 64, layers = 5, layerRows = 8),
+    GauntletTier(columns = 16, scale = 0.14f, tickers = 300, depth = 72, layers = 6, layerRows = 9),
+    GauntletTier(columns = 20, scale = 0.12f, tickers = 400, depth = 80, layers = 6, layerRows = 10),
 )
 
 /** Tier `1..16`; anything else is clamped into that range. */
@@ -215,6 +224,21 @@ fun progressPermille(card: Int, frame: Int): Int = (frame * 3 + card * 37) % 1_0
 
 /** The tilt of a card's badge on [frame], in degrees: -5 to 5. */
 fun badgeDegrees(card: Int, frame: Int): Float = triangle(frame * 2 + card * 30, 40) * 0.5f - 5f
+
+/** Cells in each row of a stacked panel's grid. */
+const val LAYER_COLUMNS = 8
+
+/** The left edge of stacked panel `layer` on `frame` before its tilt, in dp from the list's left edge. */
+fun layerX(layer: Int, frame: Int): Float = (48 + 28 * layer + triangle(frame * 2 + layer * 37, 160) - 40).toFloat()
+
+/** The top edge of stacked panel `layer` on `frame` before its tilt, in dp from the list's top edge. */
+fun layerY(layer: Int, frame: Int): Float = (48 + 72 * layer + triangle(frame + layer * 53, 120) - 30).toFloat()
+
+/** The tilt of stacked panel `layer` about its center on `frame`, in degrees: -6 to 6. */
+fun layerDegrees(layer: Int, frame: Int): Float = triangle(frame + layer * 29, 48) * 0.5f - 6f
+
+/** The palette index of cell `cell` in stacked panel `layer`. */
+fun layerCellColor(layer: Int, cell: Int): Int = (layer * 3 + cell) % PALETTE_ARGB.size
 
 /** The content's share of the screen width on [frame]: 0.92 to 1. */
 fun widthFraction(frame: Int): Float = 0.92f + 0.08f * triangle(frame * 3, 200).toFloat() / 100f

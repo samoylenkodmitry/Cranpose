@@ -28,6 +28,7 @@ import dev.perfcompare.shared.CARD_ROWS_PER_CLUSTER
 import dev.perfcompare.shared.CHIP_BACKGROUND_ARGB
 import dev.perfcompare.shared.GRADIENT_END_ARGB
 import dev.perfcompare.shared.GauntletTier
+import dev.perfcompare.shared.LAYER_COLUMNS
 import dev.perfcompare.shared.PALETTE_ARGB
 import dev.perfcompare.shared.Post
 import dev.perfcompare.shared.Ticker
@@ -35,6 +36,10 @@ import dev.perfcompare.shared.avatarArgb
 import dev.perfcompare.shared.badgeDegrees
 import dev.perfcompare.shared.centsText
 import dev.perfcompare.shared.changeText
+import dev.perfcompare.shared.layerCellColor
+import dev.perfcompare.shared.layerDegrees
+import dev.perfcompare.shared.layerX
+import dev.perfcompare.shared.layerY
 import dev.perfcompare.shared.posts
 import dev.perfcompare.shared.progressPermille
 import dev.perfcompare.shared.tickerCents
@@ -54,6 +59,8 @@ private const val PANEL = 0xFFE2E8F0.toInt()
 private const val UP = 0xFF16A34A.toInt()
 private const val DOWN = 0xFFDC2626.toInt()
 private val LEVEL_BACKGROUND = intArrayOf(0xFFF1F5F9.toInt(), 0xFFCBD5E1.toInt())
+private const val LAYER_BACKGROUND = 0xC01E293B.toInt()
+private const val NESTED_BACKGROUND = 0xE6FFFFFF.toInt()
 
 /** Blocks of five card rows and a cluster: no measurement window reaches the end. */
 private const val BLOCKS = 200_000
@@ -85,6 +92,7 @@ class GauntletState(
 class GauntletScreen(private val state: GauntletState, private val freeze: Int) : Choreographer.FrameCallback {
     private val context = state.context
     private val tiles = mutableListOf<TickerTile>()
+    private val layers = List(state.tier.layers) { StackedLayer(state, it) }
     private val recycler = RecyclerView(context)
     private val follower: WidthFollower
     private val scrollPx = context.dp(SCROLL_PER_FRAME_DP).let { kotlin.math.round(it).toInt() }
@@ -124,7 +132,13 @@ class GauntletScreen(private val state: GauntletState, private val freeze: Int) 
                 }
             })
         }
-        column.addView(recycler, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val stack = FrameLayout(context).apply {
+            addView(recycler, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            for (layer in layers) {
+                addView(layer.view, FrameLayout.LayoutParams(context.px(220f), ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+        }
+        column.addView(stack, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         follower = WidthFollower(context) { widthFraction(state.frame) }.apply { addView(column) }
         root = follower
     }
@@ -134,6 +148,7 @@ class GauntletScreen(private val state: GauntletState, private val freeze: Int) 
     override fun doFrame(frameTimeNanos: Long) {
         val frame = ++state.frame
         for (tile in tiles) tile.onFrame(frame)
+        for (layer in layers) layer.onFrame(frame)
         for (index in 0 until recycler.childCount) {
             (recycler.getChildViewHolder(recycler.getChildAt(index)) as? CardRowHolder)?.onFrame(frame)
         }
@@ -180,6 +195,69 @@ private class TickerTile(private val state: GauntletState, private val ticker: T
         change.text = changeText(ticker, cents)
         change.setTextColor(if (cents >= ticker.baseCents) UP else DOWN)
         bar.fraction = ((cents - ticker.baseCents + ticker.swingCents).toFloat() / (2 * ticker.swingCents)).coerceIn(0f, 1f)
+    }
+}
+
+/**
+ * A translucent panel stacked over the list. Its views never change: each
+ * frame sets only its render node's translation and rotation, and its nested
+ * card's rotation the other way.
+ */
+private class StackedLayer(state: GauntletState, private val layer: Int) {
+    private val context = state.context
+    private val fonts = state.fonts
+    private val nested = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(NESTED_BACKGROUND, context.dp(8f))
+        val pad = context.px(8f)
+        setPadding(pad, pad, pad, pad)
+        addView(text(11f, INK, true, "Nested in layer ${layer + 1}"))
+        addView(text(11f, BODY, false, "Tilts against its panel"), below(2f))
+    }
+    val view = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(LAYER_BACKGROUND, context.dp(12f))
+        val pad = context.px(10f)
+        setPadding(pad, pad, pad, pad)
+        addView(text(13f, 0xFFFFFFFF.toInt(), true, "Layer ${layer + 1}"))
+        for (row in 0 until state.tier.layerRows) addView(cells(row), below(if (row == 0) 8f else 3f))
+        addView(nested, below(8f).apply { width = ViewGroup.LayoutParams.MATCH_PARENT })
+    }
+
+    init {
+        onFrame(0)
+    }
+
+    private fun text(sizeSp: Float, color: Int, bold: Boolean, value: String) =
+        GauntletText(context).styled(sizeSp, color, bold, fonts).apply { text = value }
+
+    private fun below(gapDp: Float) =
+        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            topMargin = context.px(gapDp)
+        }
+
+    private fun cells(row: Int) = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        for (column in 0 until LAYER_COLUMNS) {
+            val cell = row * LAYER_COLUMNS + column
+            addView(
+                text(9f, 0xFFFFFFFF.toInt(), false, "${cell + 1}").apply {
+                    gravity = Gravity.CENTER
+                    background = rounded(PALETTE_ARGB[layerCellColor(layer, cell)], context.dp(4f))
+                },
+                LinearLayout.LayoutParams(context.px(22f), context.px(22f)).apply {
+                    if (column > 0) marginStart = context.px(3f)
+                },
+            )
+        }
+    }
+
+    fun onFrame(frame: Int) {
+        val degrees = layerDegrees(layer, frame)
+        view.translationX = context.dp(layerX(layer, frame))
+        view.translationY = context.dp(layerY(layer, frame))
+        view.rotation = degrees
+        nested.rotation = -degrees
     }
 }
 

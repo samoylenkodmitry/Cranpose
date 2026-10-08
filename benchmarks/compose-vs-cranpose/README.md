@@ -9,8 +9,7 @@ OpenGL ES on the Mate), `rn-app` (React Native on the New Architecture with
 Hermes), `nativescript-app` (NativeScript: TypeScript on V8 driving Android
 views), `lynx-app` (Lynx: ReactLynx on PrimJS driving Lynx's native
 elements), `maui-app` (.NET MAUI, fully AOT-compiled), `avalonia-app` (Avalonia
-on Skia, fully AOT-compiled), `uno-app` (Uno Platform on its Skia renderer,
-fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
+on Skia, fully AOT-compiled), `egui-app` (egui in eframe on OpenGL ES, in a
 GameActivity), `slint-app` (Slint on Skia) and `web-app` (a web page in
 Capacitor, on the device's Chromium WebView: the stack Ionic, Tauri and
 Dioxus apps run on). The Rust apps share `perf-data`, and `rust-android`
@@ -60,7 +59,7 @@ Knobs:
 - `workspace`: `--es mode quotes`, `scroll` or `hover` (default `quotes`);
 - `--ez still true` holds the feed still, or starts the workspace at tick zero
   with its stream, automatic scrolling and synthetic hover stopped;
-- `gauntlet`: `--ei tier` (1 to 8) and `--ei freeze K`, which stops on frame K
+- `gauntlet`: `--ei tier` (1 to 16) and `--ei freeze K`, which stops on frame K
   for picture comparisons.
 
 ### Gauntlet
@@ -80,6 +79,15 @@ so both apps show the same digits on the same frame.
   counters split by dividers in an `IntrinsicSize.Min` row. Every fifth card
   carries a translucent badge tilting in its graphics layer.
 - **Deep clusters:** after every five card rows, a cluster of nested levels.
+- **Stacked layers:** translucent dark panels stacked over the list, each
+  220 dp wide, with a title, rows of eight numbered colored cells and a
+  translucent white nested card with two lines of text. A panel's content
+  never changes: each frame it drifts and tilts up to 6 degrees about its
+  center, and its nested card tilts as far the other way. The panels overlap
+  one another and the list, so every pixel under them blends several times.
+  A framework that keeps a panel's drawing and only moves it does little
+  work here; one that draws or lays it out again each frame pays for every
+  cell.
 - **Width:** the whole content's width follows `k` between 92% and 100%, so
   every visible node is measured again each frame.
 
@@ -88,7 +96,9 @@ line. Compose uses `LazyVerticalGrid` with full-span clusters, reads the
 width in `Modifier.layout`, and isolates every per-frame read in its own small
 composable or draw lambda. Cranpose uses `LazyColumn` rows (it has no lazy
 grid yet, #1165), reads the width at the screen root above one argument-stable
-call, and isolates the same reads. Views uses a `RecyclerView` of card rows
+call, and isolates the same reads. Both move and tilt each stacked panel in a
+graphics layer whose block reads the frame, so the frame records no panel
+again. Views uses a `RecyclerView` of card rows
 and clusters, measures the width in a parent `onMeasure`, and redraws bars and
 sparklines in `onDraw`. Flutter uses a `ListView` of rows, lays the width out
 in a `SingleChildLayoutDelegate` that relayouts on the frame, rebuilds only the
@@ -139,24 +149,37 @@ The web page lays everything out in CSS, trims paragraph leading with
 scroll off behind a spacer as tall, and sets only what changed each
 animation frame; sparklines are SVG paths in a box CSS stretches.
 
-| Tier | Columns | Scale | Ticker tiles | Cluster depth |
-| --- | ---: | ---: | ---: | ---: |
-| 1 | 1 | 1.0 | 8 | 6 |
-| 2 | 2 | 0.85 | 12 | 8 |
-| 3 | 2 | 0.7 | 16 | 10 |
-| 4 | 3 | 0.6 | 20 | 12 |
-| 5 | 3 | 0.5 | 28 | 14 |
-| 6 | 4 | 0.45 | 36 | 16 |
-| 7 | 4 | 0.4 | 44 | 20 |
-| 8 | 5 | 0.35 | 56 | 24 |
-| 9 | 6 | 0.3 | 72 | 28 |
-| 10 | 7 | 0.27 | 96 | 32 |
-| 11 | 8 | 0.25 | 120 | 40 |
-| 12 | 10 | 0.2 | 160 | 48 |
-| 13 | 12 | 0.18 | 200 | 56 |
-| 14 | 14 | 0.16 | 240 | 64 |
-| 15 | 16 | 0.14 | 300 | 72 |
-| 16 | 20 | 0.12 | 400 | 80 |
+Each app moves and tilts the stacked panels in its own way. Views sets
+each panel's render node properties; Flutter turns a `Transform` over a
+`RepaintBoundary`, so the panel paints once; React Native, Lynx and
+NativeScript set the panel view's transform; MAUI and Avalonia set its
+render transform; SwiftUI applies rotation and offset effects; AppKit sets
+the panel layer's position and transform; the web page and Dioxus set a CSS
+transform on an element that `will-change` keeps on a compositor layer of
+its own; Slint binds the panel's position and rotation to the frame;
+Xilem memoizes the panel's content and sets only its box's transform. egui,
+iced and gpui lay out and paint every panel again each frame, turning each
+shape; gpui turns text as glyph outlines, as it draws no turned text. Fyne
+draws no turned object, so its panels only drift.
+
+| Tier | Columns | Scale | Ticker tiles | Cluster depth | Layers | Cell rows |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1 | 1.0 | 8 | 6 | 1 | 2 |
+| 2 | 2 | 0.85 | 12 | 8 | 1 | 2 |
+| 3 | 2 | 0.7 | 16 | 10 | 2 | 3 |
+| 4 | 3 | 0.6 | 20 | 12 | 2 | 3 |
+| 5 | 3 | 0.5 | 28 | 14 | 2 | 4 |
+| 6 | 4 | 0.45 | 36 | 16 | 3 | 4 |
+| 7 | 4 | 0.4 | 44 | 20 | 3 | 5 |
+| 8 | 5 | 0.35 | 56 | 24 | 3 | 5 |
+| 9 | 6 | 0.3 | 72 | 28 | 4 | 6 |
+| 10 | 7 | 0.27 | 96 | 32 | 4 | 6 |
+| 11 | 8 | 0.25 | 120 | 40 | 4 | 7 |
+| 12 | 10 | 0.2 | 160 | 48 | 5 | 7 |
+| 13 | 12 | 0.18 | 200 | 56 | 5 | 8 |
+| 14 | 14 | 0.16 | 240 | 64 | 5 | 8 |
+| 15 | 16 | 0.14 | 300 | 72 | 6 | 9 |
+| 16 | 20 | 0.12 | 400 | 80 | 6 | 10 |
 
 Calibration fixes one tier per device: the lightest at which every
 framework draws below 60 fps. The Huawei Mate 20 X runs tier 12 and the
@@ -169,8 +192,10 @@ captures the way the eye does: softened and cut into tiles. On frame 120 a
 cluster sits mid-screen; on frame 240 one sits at the top of the list, where
 its look-alike levels make the drift ambiguous. Each band of tiles
 is found in the other capture up to 160 pixels higher or lower. Each tile is
-then matched at the best offset within 8 pixels of its band's, quarter by
-quarter of the neighbouring bands' where they drifted differently. A tile
+then matched at the best offset within 8 pixels of its band's, by halves of
+its quarters at the neighbouring bands' where they drifted differently. A
+band whose tiles changed, as where the still stacked panels lie over the
+list, matches them again at every offset a whole band matched at. A tile
 that still differs on average is changed; a band that has drifted past the
 other capture's edge, or behind its still content, is left out. Each
 capture's tiles are found in the other, and the worse way decides. The
@@ -178,8 +203,16 @@ bands absorb drift: the frameworks put lines of text on different pixel grids,
 so a list scrolled 720 dp shows its rows a few dozen pixels apart without
 looking any different. Flutter rounds each line to whole logical pixels and
 Compose rounds it up to whole device pixels. Any difference for the same
-composable code is a Cranpose bug. Against Compose at tier 5 every app stays
-under the 2% gate; what the other frameworks draw differently, by design:
+composable code is a Cranpose bug. Against Compose at tier 5 every app but
+Flutter, NativeScript and Slint stays under the 2% gate; what the other
+frameworks draw differently, by design:
+
+- The stacked panels lie still over a list that drifts as each framework
+  rounds its lines: where a tilted panel's edge crosses the list, the list
+  beneath it has moved. Flutter's and NativeScript's lists drift the most,
+  about 50 pixels under the second panel's edge, so the row of tiles along
+  that edge changes: 2.9% and 3.4% of tiles. Slint's ticker strip breaks
+  into one more line, so its panels and its list sit a line lower: 2.9%.
 
 - Flutter and Slint set text slightly wider, so a few lines break a word
   earlier.
@@ -499,6 +532,13 @@ a window lasts as long as the app's frame rate needs for 40 frames, from 3 to
 8 seconds. Desktop numbers feed the dashboard only; merges are judged on the
 slowest phone.
 
+At tier 5 against Compose Multiplatform, SwiftUI and AppKit change 0.0% of
+tiles, Flutter 0.1%, the web page and Tauri 0.2%, Dioxus and egui 0.3%,
+Cranpose 0.35%, Avalonia 0.5%, Slint 0.7%, GPUI 0.9% and iced 1.1%. Fyne
+changes 2.7%: its panels only drift. Xilem changes 5.6%: its labels keep the
+font's own line height, so its cards are shorter and its list drifts further,
+and the panels lie over a different part of the cluster's look-alike levels.
+
 | App | Stack |
 | --- | --- |
 | `cranpose` | `cranpose-app`'s desktop binary |
@@ -513,8 +553,8 @@ slowest phone.
 | `web` | the web page in a Chrome app window, the engine Electron apps ship |
 | `tauri` | the same page in a Tauri window, on the system's WKWebView; the page asks the app for the tier and logs through its commands |
 | `dioxus` | `dioxus-app`: Dioxus components over the web page's CSS, on Dioxus's desktop renderer (WKWebView) |
+| `xilem` | `xilem-app`: Xilem's views over Masonry's widgets, drawn by Vello on wgpu |
 | `fyne` | `fyne-app`: Fyne on OpenGL, canvas objects the app places itself |
-| `uno` | `uno-app`'s desktop head: Uno Platform's WinUI on its Skia renderer, self-contained |
 
 What each framework lacks and how its app does without:
 
@@ -540,19 +580,19 @@ What each framework lacks and how its app does without:
   through `eval`, and serves the avatars and Roboto from a custom protocol.
   It has no list that renders only the rows on screen: rows report their
   heights through `onresize`, as iced's sensors do.
+- Xilem has no wrapping row, no box that clips, scrolls or turns about its
+  centre, no canvas, and shadows only on buttons and text inputs: the app
+  adds Masonry widgets for these, with a view for each, and a widget that
+  hands each animation frame to the app logic. Its labels keep the font's
+  own line height and have no line limit, so a box as tall as the lines
+  clips a paragraph, and the subtitle is three labels in a row. Its virtual
+  scroll moves by whole rows, so rows report their heights, as iced's do.
 - Fyne sizes an object before it knows its width, so the app wraps
   paragraphs and places every object itself, as Fyne's custom widgets do. It
   rotates no object: the badge stays upright. Its canvas has no path: the
   sparkline's line is 47 segments, and its fading fill is a vertical
   gradient under white polygons above the line, four side by side, since
   Fyne fills a polygon of at most 16 vertices.
-- Uno's list is an ItemsRepeater whose element factory recycles each kind of
-  row; sparklines draw in a Skia canvas element. Uno's macOS window sizes its
-  content in pixels, so the app asks for 1280 x 820 times the display's scale.
-  A self-contained build runs on Mono unless told otherwise
-  (`-p:UseMonoRuntime=false`). Its time per frame grows faster than its
-  element count: on the M3 Pro about 0.1 s at tier 5, 0.8 s at tier 10 and
-  over 2 s at tier 12, so at tier 16 a window may hold no frame.
 - The JVM opens no window outside the login session, so `desktop.py` starts
   every app bundle through `open`. macOS then asks the user before such an
   app reads a removable volume, so the fonts and Chrome's profile sit in a
@@ -584,8 +624,8 @@ sh benchmarks/compose-vs-cranpose/framecount/build.sh
 (cd benchmarks/compose-vs-cranpose/web-app && npm ci && npx tsc -p tsconfig.json)
 (cd benchmarks/compose-vs-cranpose/tauri-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/dioxus-app && cargo build --release)
+(cd benchmarks/compose-vs-cranpose/xilem-app && cargo build --release)
 (cd benchmarks/compose-vs-cranpose/fyne-app && go build -o build/perf-compare-fyne .)
-(cd benchmarks/compose-vs-cranpose/uno-app && dotnet publish -c Release -f net10.0-desktop -r osx-arm64 --self-contained -p:UseMonoRuntime=false)
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop --tier 16
 python3 benchmarks/compose-vs-cranpose/desktop.py --output benchmarks/compose-vs-cranpose/results/desktop-parity --parity --tier 5
 ```

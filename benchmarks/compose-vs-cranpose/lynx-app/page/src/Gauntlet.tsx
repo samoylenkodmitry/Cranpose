@@ -30,6 +30,7 @@ import {
   CHIP_BACKGROUND,
   GRADIENT_END,
   type GauntletTier,
+  LAYER_COLUMNS,
   PALETTE,
   POST_COUNT,
   type Post,
@@ -40,6 +41,10 @@ import {
   centsText,
   changeText,
   gauntletTier,
+  layerCellColor,
+  layerDegrees,
+  layerX,
+  layerY,
   posts,
   progressPermille,
   sparkValue,
@@ -265,7 +270,12 @@ export function Gauntlet() {
       <view style={{ display: 'flex', flexDirection: 'column', flex: '1' }}>
         <WidthFollower>
           <TickerPanel quotes={content.quotes} layout={layout} />
-          <CardList tier={load} posts={content.posts} avatars={content.avatars} freeze={freeze} layout={layout} />
+          <view style={stack.area}>
+            <CardList tier={load} posts={content.posts} avatars={content.avatars} freeze={freeze} layout={layout} />
+            {Array.from({ length: load.layers }, (_, layer) => (
+              <StackedLayer key={layer} layer={layer} rows={load.layerRows} />
+            ))}
+          </view>
         </WidthFollower>
       </view>
     </view>
@@ -586,6 +596,96 @@ const Level = memo(function Level({ cluster, remaining, layout }: { cluster: num
         ))}
       </view>
       {remaining > 0 ? <Level cluster={cluster} remaining={remaining - 1} layout={layout} /> : null}
+    </view>
+  );
+});
+
+const stack = {
+  // The panels show only over the list, as every app clips them.
+  area: { display: 'flex', flexDirection: 'column', flex: '1', position: 'relative', overflow: 'hidden' },
+  layer: {
+    display: 'flex',
+    flexDirection: 'column',
+    position: 'absolute',
+    left: '0px',
+    top: '0px',
+    width: '220px',
+    padding: '10px',
+    gap: '8px',
+    borderRadius: '12px',
+    backgroundColor: 'rgba(30, 41, 59, 0.753)',
+  },
+  title: text(13, WHITE, true),
+  rows: { display: 'flex', flexDirection: 'column', gap: '3px' },
+  row: { display: 'flex', flexDirection: 'row', gap: '3px' },
+  cell: {
+    display: 'flex',
+    width: '22px',
+    height: '22px',
+    borderRadius: '4px',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cellText: text(9, WHITE),
+  nested: {
+    display: 'flex',
+    flexDirection: 'column',
+    padding: '8px',
+    gap: '2px',
+    borderRadius: '8px',
+    backgroundColor: 'rgba(255, 255, 255, 0.902)',
+  },
+  nestedTitle: text(11, INK, true),
+  nestedText: text(11, BODY),
+} satisfies Record<string, CSSProperties>;
+
+/**
+ * A translucent panel stacked over the list. Its content is elements made
+ * once, so each frame re-renders only the two views that carry the panel's
+ * and its nested card's transforms.
+ */
+const StackedLayer = memo(function StackedLayer({ layer, rows }: { layer: number; rows: number }) {
+  return (
+    <LayerTilt layer={layer}>
+      <text style={stack.title}>{`Layer ${layer + 1}`}</text>
+      <view style={stack.rows}>
+        {Array.from({ length: rows }, (_, row) => (
+          <LayerCells key={row} layer={layer} row={row} />
+        ))}
+      </view>
+      <NestedTilt layer={layer}>
+        <text style={stack.nestedTitle}>{`Nested in layer ${layer + 1}`}</text>
+        <text style={stack.nestedText}>Tilts against its panel</text>
+      </NestedTilt>
+    </LayerTilt>
+  );
+});
+
+/** The panel moved and tilted on this frame. */
+function LayerTilt({ layer, children }: { layer: number; children: ReactNode }) {
+  const frame = useFrame();
+  const transform = `translate(${px(layerX(layer, frame))}, ${px(layerY(layer, frame))}) rotate(${layerDegrees(layer, frame)}deg)`;
+  return <view style={{ ...stack.layer, transform }}>{children}</view>;
+}
+
+/** The nested card tilted against its panel on this frame. */
+function NestedTilt({ layer, children }: { layer: number; children: ReactNode }) {
+  const frame = useFrame();
+  return <view style={{ ...stack.nested, transform: `rotate(${-layerDegrees(layer, frame)}deg)` }}>{children}</view>;
+}
+
+/** One row of a stacked panel's numbered cells. */
+const LayerCells = memo(function LayerCells({ layer, row }: { layer: number; row: number }) {
+  return (
+    <view style={stack.row}>
+      {Array.from({ length: LAYER_COLUMNS }, (_, column) => {
+        const cell = row * LAYER_COLUMNS + column;
+        return (
+          <view key={column} style={{ ...stack.cell, backgroundColor: PALETTE[layerCellColor(layer, cell)] }}>
+            <text style={stack.cellText}>{`${cell + 1}`}</text>
+          </view>
+        );
+      })}
     </view>
   );
 });

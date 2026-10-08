@@ -115,14 +115,16 @@ public static class PerfData
         return posts;
     }
 
-    public sealed record Tier(int Columns, float Scale, int Tickers, int Depth);
+    /// <summary>What one load tier puts on screen: <c>Layers</c> translucent panels stacked over the
+    /// list, each with <c>LayerRows</c> rows of <see cref="LayerColumns"/> cells.</summary>
+    public sealed record Tier(int Columns, float Scale, int Tickers, int Depth, int Layers, int LayerRows);
 
     static readonly Tier[] Tiers =
     [
-        new(1, 1.0f, 8, 6), new(2, 0.85f, 12, 8), new(2, 0.7f, 16, 10), new(3, 0.6f, 20, 12),
-        new(3, 0.5f, 28, 14), new(4, 0.45f, 36, 16), new(4, 0.4f, 44, 20), new(5, 0.35f, 56, 24),
-        new(6, 0.3f, 72, 28), new(7, 0.27f, 96, 32), new(8, 0.25f, 120, 40), new(10, 0.2f, 160, 48),
-        new(12, 0.18f, 200, 56), new(14, 0.16f, 240, 64), new(16, 0.14f, 300, 72), new(20, 0.12f, 400, 80),
+        new(1, 1.0f, 8, 6, 1, 2), new(2, 0.85f, 12, 8, 1, 2), new(2, 0.7f, 16, 10, 2, 3), new(3, 0.6f, 20, 12, 2, 3),
+        new(3, 0.5f, 28, 14, 2, 4), new(4, 0.45f, 36, 16, 3, 4), new(4, 0.4f, 44, 20, 3, 5), new(5, 0.35f, 56, 24, 3, 5),
+        new(6, 0.3f, 72, 28, 4, 6), new(7, 0.27f, 96, 32, 4, 6), new(8, 0.25f, 120, 40, 4, 7), new(10, 0.2f, 160, 48, 5, 7),
+        new(12, 0.18f, 200, 56, 5, 8), new(14, 0.16f, 240, 64, 5, 8), new(16, 0.14f, 300, 72, 6, 9), new(20, 0.12f, 400, 80, 6, 10),
     ];
 
     /// <summary>Tier 1 to 16; anything else is clamped into that range.</summary>
@@ -184,6 +186,21 @@ public static class PerfData
 
     /// <summary>The tilt of a card's badge on the frame, in degrees: -5 to 5.</summary>
     public static float BadgeDegrees(int card, int frame) => Triangle(frame * 2 + card * 30, 40) * 0.5f - 5f;
+
+    /// <summary>Cells in each row of a stacked panel's grid.</summary>
+    public const int LayerColumns = 8;
+
+    /// <summary>The left edge of the stacked panel on the frame before its tilt, in dp from the list's left edge.</summary>
+    public static float LayerX(int layer, int frame) => 48 + 28 * layer + Triangle(frame * 2 + layer * 37, 160) - 40;
+
+    /// <summary>The top edge of the stacked panel on the frame before its tilt, in dp from the list's top edge.</summary>
+    public static float LayerY(int layer, int frame) => 48 + 72 * layer + Triangle(frame + layer * 53, 120) - 30;
+
+    /// <summary>The tilt of the stacked panel about its center on the frame, in degrees: -6 to 6.</summary>
+    public static float LayerDegrees(int layer, int frame) => Triangle(frame + layer * 29, 48) * 0.5f - 6f;
+
+    /// <summary>The palette index of a cell in a stacked panel.</summary>
+    public static int LayerCellColor(int layer, int cell) => (layer * 3 + cell) % PaletteArgb.Length;
 
     /// <summary>The content's share of the screen width on the frame: 0.92 to 1.</summary>
     public static float WidthFraction(int frame) => 0.92f + 0.08f * Triangle(frame * 3, 200) / 100f;

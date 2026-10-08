@@ -196,7 +196,11 @@ public sealed class GauntletPage : ContentPage
             RowDefinitions = [new RowDefinition(GridLength.Auto), new RowDefinition(GridLength.Star)],
         };
         content.Add(panel, 0, 0);
-        content.Add(list, 0, 1);
+        // The panels stack over the list and show only over it, as every app clips them.
+        var area = new Grid { IsClippedToBounds = true };
+        area.Add(list);
+        for (var layer = 0; layer < tier.Layers; layer++) area.Add(new StackedLayer(layer, tier.LayerRows));
+        content.Add(area, 0, 1);
 
         var topBar = new Grid { BackgroundColor = Color.FromUint(0xFF1E2A4A), Padding = new Thickness(16, 0) };
         var title = new Look(1).Text(20, Colors.White, bold: true);
@@ -270,6 +274,65 @@ abstract class FrameView : ContentView
     }
 
     protected abstract void OnFrame(int frame);
+}
+
+/// <summary>A translucent panel stacked over the list. Its views never change: each frame sets
+/// only the panel's translation and rotation and its nested card's rotation, which Android applies
+/// to their render nodes.</summary>
+sealed class StackedLayer : FrameView
+{
+    static readonly Color Background = Color.FromUint(0xC01E293B);
+    static readonly Color NestedBackground = Color.FromUint(0xE6FFFFFF);
+
+    readonly int layer;
+    readonly Border nested;
+
+    public StackedLayer(int layer, int rows)
+    {
+        this.layer = layer;
+        var look = new Look(1);
+        WidthRequest = 220;
+        HorizontalOptions = LayoutOptions.Start;
+        VerticalOptions = LayoutOptions.Start;
+        var title = look.Text(13, Colors.White, bold: true);
+        title.Text = $"Layer {layer + 1}";
+        var cells = new VerticalStackLayout { Spacing = 3 };
+        for (var row = 0; row < rows; row++)
+        {
+            var line = new HorizontalStackLayout { Spacing = 3 };
+            for (var column = 0; column < LayerColumns; column++)
+            {
+                var cell = row * LayerColumns + column;
+                var label = look.Text(9, Colors.White);
+                label.Text = $"{cell + 1}";
+                label.HorizontalOptions = LayoutOptions.Center;
+                label.VerticalOptions = LayoutOptions.Center;
+                var box = Look.Rounded(Look.Palette[LayerCellColor(layer, cell)], 4, new Thickness(0), label);
+                box.WidthRequest = 22;
+                box.HeightRequest = 22;
+                line.Add(box);
+            }
+            cells.Add(line);
+        }
+        var heading = look.Text(11, Look.Ink, bold: true);
+        heading.Text = $"Nested in layer {layer + 1}";
+        var body = look.Text(11, Look.Body);
+        body.Text = "Tilts against its panel";
+        nested = Look.Rounded(NestedBackground, 8, new Thickness(8),
+            new VerticalStackLayout { Spacing = 2, Children = { heading, body } });
+        Content = Look.Rounded(Background, 12, new Thickness(10),
+            new VerticalStackLayout { Spacing = 8, Children = { title, cells, nested } });
+        OnFrame(0);
+    }
+
+    protected override void OnFrame(int frame)
+    {
+        var degrees = LayerDegrees(layer, frame);
+        TranslationX = LayerX(layer, frame);
+        TranslationY = LayerY(layer, frame);
+        Rotation = degrees;
+        nested.Rotation = -degrees;
+    }
 }
 
 /// <summary>A rounded track filled to its share of the frame.</summary>

@@ -28,6 +28,7 @@ import {
   CHIP_BACKGROUND,
   GRADIENT_END,
   type GauntletTier,
+  LAYER_COLUMNS,
   PALETTE,
   POST_COUNT,
   type Post,
@@ -38,6 +39,10 @@ import {
   centsText,
   changeText,
   gauntletTier,
+  layerCellColor,
+  layerDegrees,
+  layerX,
+  layerY,
   posts,
   progressPermille,
   sparkValue,
@@ -221,7 +226,12 @@ export default function GauntletApp({ tier = 5, freeze = 0 }: { tier?: number; f
       <View style={root.fill}>
         <WidthFollower layout={layout}>
           <TickerPanel quotes={content.quotes} layout={layout} />
-          <CardList tier={load} posts={content.posts} avatars={content.avatars} freeze={freeze} layout={layout} />
+          <View style={stack.area}>
+            <CardList tier={load} posts={content.posts} avatars={content.avatars} freeze={freeze} layout={layout} />
+            {Array.from({ length: load.layers }, (_, layer) => (
+              <StackedLayer key={layer} layer={layer} rows={load.layerRows} />
+            ))}
+          </View>
         </WidthFollower>
       </View>
     </View>
@@ -540,6 +550,87 @@ const Level = memo(function Level({ cluster, remaining, layout }: { cluster: num
         ))}
       </View>
       {remaining > 0 ? <Level cluster={cluster} remaining={remaining - 1} layout={layout} /> : null}
+    </View>
+  );
+});
+
+const stack = StyleSheet.create({
+  // The panels show only over the list, as every app clips them.
+  area: { flex: 1, overflow: 'hidden' },
+  layer: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: 220,
+    padding: 10,
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: '#1E293BC0',
+  },
+  title: text(13, WHITE, true),
+  rows: { gap: 3 },
+  row: { flexDirection: 'row', gap: 3 },
+  cell: { width: 22, height: 22, borderRadius: 4, alignItems: 'center', justifyContent: 'center' },
+  cellText: text(9, WHITE),
+  nested: { padding: 8, gap: 2, borderRadius: 8, backgroundColor: '#FFFFFFE6' },
+  nestedTitle: text(11, INK, true),
+  nestedText: text(11, BODY),
+});
+
+/**
+ * A translucent panel stacked over the list. Its content is elements made
+ * once, so each frame re-renders only the two views that carry the panel's
+ * and its nested card's transforms.
+ */
+const StackedLayer = memo(function StackedLayer({ layer, rows }: { layer: number; rows: number }) {
+  return (
+    <LayerTilt layer={layer}>
+      <Text style={stack.title}>{`Layer ${layer + 1}`}</Text>
+      <View style={stack.rows}>
+        {Array.from({ length: rows }, (_, row) => (
+          <LayerCells key={row} layer={layer} row={row} />
+        ))}
+      </View>
+      <NestedTilt layer={layer}>
+        <Text style={stack.nestedTitle}>{`Nested in layer ${layer + 1}`}</Text>
+        <Text style={stack.nestedText}>Tilts against its panel</Text>
+      </NestedTilt>
+    </LayerTilt>
+  );
+});
+
+/** The panel moved and tilted on this frame. */
+function LayerTilt({ layer, children }: { layer: number; children: React.ReactNode }) {
+  const frame = useFrame();
+  const place: ViewStyle = {
+    transform: [
+      { translateX: layerX(layer, frame) },
+      { translateY: layerY(layer, frame) },
+      { rotate: `${layerDegrees(layer, frame)}deg` },
+    ],
+  };
+  return <View style={[stack.layer, place]}>{children}</View>;
+}
+
+/** The nested card tilted against its panel on this frame. */
+function NestedTilt({ layer, children }: { layer: number; children: React.ReactNode }) {
+  const frame = useFrame();
+  const tilt: ViewStyle = { transform: [{ rotate: `${-layerDegrees(layer, frame)}deg` }] };
+  return <View style={[stack.nested, tilt]}>{children}</View>;
+}
+
+/** One row of a stacked panel's numbered cells. */
+const LayerCells = memo(function LayerCells({ layer, row }: { layer: number; row: number }) {
+  return (
+    <View style={stack.row}>
+      {Array.from({ length: LAYER_COLUMNS }, (_, column) => {
+        const cell = row * LAYER_COLUMNS + column;
+        return (
+          <View key={column} style={[stack.cell, { backgroundColor: PALETTE[layerCellColor(layer, cell)] }]}>
+            <Text style={stack.cellText}>{cell + 1}</Text>
+          </View>
+        );
+      })}
     </View>
   );
 });

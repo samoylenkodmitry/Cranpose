@@ -725,6 +725,79 @@ final class ListView: Box {
     }
 }
 
+/// The translucent panels stacked over the list, in a view of their own over
+/// it that clips them to it, as every app clips them. Each panel is a layer
+/// tree drawn once: a frame sets only the panel's position and rotation and
+/// its nested card's rotation, which the GPU composites.
+final class LayerStack: Box {
+    private var panels: [(panel: CALayer, nested: CALayer)] = []
+
+    init(tier: PerfData.Tier) {
+        super.init(frame: .zero)
+        layer?.masksToBounds = true
+        let title = TextStyle(13, .white, bold: true)
+        let number = TextStyle(9, .white)
+        let heading = TextStyle(11, .ink, bold: true)
+        let line = TextStyle(11, .body)
+        for index in 0..<tier.layers {
+            let panel = stillLayer()
+            panel.backgroundColor = NSColor(rgb: 0x1E293B, alpha: 192.0 / 255).cgColor
+            panel.cornerRadius = 12
+            let name = Self.text("Layer \(index + 1)", title, in: panel)
+            name.place(CGRect(origin: CGPoint(x: 10, y: 10), size: name.frame.size))
+            let cellsTop = 10 + name.frame.height + 8
+            for cell in 0..<tier.layerRows * PerfData.layerColumns {
+                let square = stillLayer()
+                square.backgroundColor = NSColor.palette[PerfData.layerCellColor(index, cell)].cgColor
+                square.cornerRadius = 4
+                square.frame = CGRect(x: 10 + CGFloat(cell % PerfData.layerColumns) * 25,
+                                      y: cellsTop + CGFloat(cell / PerfData.layerColumns) * 25, width: 22, height: 22)
+                panel.addSublayer(square)
+                let label = Self.text("\(cell + 1)", number, in: panel)
+                let size = label.frame.size
+                label.place(CGRect(origin: CGPoint(x: square.frame.midX - size.width / 2,
+                                                   y: square.frame.midY - size.height / 2), size: size))
+            }
+            let nested = stillLayer()
+            nested.backgroundColor = NSColor(rgb: 0xFFFFFF, alpha: 230.0 / 255).cgColor
+            nested.cornerRadius = 8
+            let top = Self.text("Nested in layer \(index + 1)", heading, in: nested)
+            top.place(CGRect(origin: CGPoint(x: 8, y: 8), size: top.frame.size))
+            let bottom = Self.text("Tilts against its panel", line, in: nested)
+            bottom.place(CGRect(origin: CGPoint(x: 8, y: 8 + top.frame.height + 2), size: bottom.frame.size))
+            let nestedTop = cellsTop + CGFloat(tier.layerRows) * 25 - 3 + 8
+            nested.frame = CGRect(x: 10, y: nestedTop, width: 200, height: bottom.frame.maxY + 8)
+            panel.addSublayer(nested)
+            panel.bounds = CGRect(x: 0, y: 0, width: 220, height: nested.frame.maxY + 10)
+            layer?.addSublayer(panel)
+            panels.append((panel, nested))
+        }
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    /// A text layer in `parent`, at its own size.
+    private static func text(_ string: String, _ style: TextStyle, in parent: CALayer) -> TextLayer {
+        let text = stillLayer(TextLayer())
+        text.set(string, style)
+        text.place(CGRect(origin: .zero, size: text.size(within: .greatestFiniteMagnitude)))
+        parent.addSublayer(text)
+        return text
+    }
+
+    /// Moves and turns each panel to the frame: layer properties only.
+    func place(frame: Int) {
+        for (index, layers) in panels.enumerated() {
+            let size = layers.panel.bounds.size
+            let turn = PerfData.layerDegrees(index, frame) * .pi / 180
+            layers.panel.position = CGPoint(x: PerfData.layerX(index, frame) + size.width / 2,
+                                            y: PerfData.layerY(index, frame) + size.height / 2)
+            layers.panel.setAffineTransform(CGAffineTransform(rotationAngle: turn))
+            layers.nested.setAffineTransform(CGAffineTransform(rotationAngle: -turn))
+        }
+    }
+}
+
 /// The window's root: the top bar, then the ticker strip and the list in a
 /// column whose width follows the frame.
 final class GauntletView: Box {
@@ -733,6 +806,7 @@ final class GauntletView: Box {
     let heading: TextLayer = stillLayer(TextLayer())
     let panel: TickerPanel
     let list: ListView
+    let stack: LayerStack
     private var link: CADisplayLink?
 
     init() {
@@ -740,12 +814,13 @@ final class GauntletView: Box {
         self.model = model
         panel = TickerPanel(tickers: model.tickers, s: model.tier.scale, styles: model.styles)
         list = ListView(model: model)
+        stack = LayerStack(tier: model.tier)
         super.init(frame: CGRect(origin: .zero, size: Launch.window))
         fill(NSColor(rgb: 0xEEF0F5))
         topBar.fill(NSColor(rgb: 0x1E2A4A))
         heading.set("Gauntlet", TextStyle(20, .white, bold: true))
         topBar.add([heading])
-        for view in [topBar, panel, list] { addSubview(view) }
+        for view in [topBar, panel, list, stack] { addSubview(view) }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -779,6 +854,8 @@ final class GauntletView: Box {
         let listSize = CGSize(width: width, height: bounds.height - 56 - panelHeight)
         list.frame = CGRect(origin: CGPoint(x: 0, y: 56 + panelHeight), size: listSize)
         list.place(size: listSize, frame: frame)
+        stack.frame = list.frame
+        stack.place(frame: frame)
     }
 }
 
