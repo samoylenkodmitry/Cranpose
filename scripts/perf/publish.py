@@ -11,7 +11,6 @@ Usage: publish.py --run RUN_JSON [--tree DIR] [--no-push]
 """
 
 import argparse
-import base64
 import json
 import os
 import subprocess
@@ -30,20 +29,23 @@ PUSH_ATTEMPTS = 3
 PUSH_DELAY_S = 2
 
 
+# Answers git's request for credentials with the job's token.
+TOKEN_HELPER = '!f() { test "$1" = get && echo username=x-access-token && echo "password=$GH_TOKEN"; }; f'
+
+
 def credentials():
-    """The environment git runs in. A job that holds a token (`GH_TOKEN`) makes
-    its pushes with it, as `actions/checkout` fetches, and leaves the
-    keychain helper out: a Mac's login keychain is locked while nobody is
-    at the machine, and the helper then fails the push with "failed to get:
-    -25308" (the nightly of 2026-10-08)."""
-    token = os.environ.get('GH_TOKEN')
-    if not token:
+    """The environment git runs in. A job that holds a token (`GH_TOKEN`) gives
+    it to git when the server asks for credentials, in place of the
+    machine's keychain helper: a Mac's login keychain is locked while nobody
+    is at the machine, and the helper then fails the push with "failed to get:
+    -25308" (the nightly of 2026-10-08). A header would reach the server even
+    when `actions/checkout`'s own reaches it, which GitHub refuses as a
+    duplicate."""
+    if not os.environ.get('GH_TOKEN'):
         return None
-    header = base64.b64encode(f'x-access-token:{token}'.encode()).decode()
     return {**os.environ, 'GIT_CONFIG_COUNT': '2',
             'GIT_CONFIG_KEY_0': 'credential.helper', 'GIT_CONFIG_VALUE_0': '',
-            'GIT_CONFIG_KEY_1': 'http.https://github.com/.extraheader',
-            'GIT_CONFIG_VALUE_1': f'AUTHORIZATION: basic {header}'}
+            'GIT_CONFIG_KEY_1': 'credential.helper', 'GIT_CONFIG_VALUE_1': TOKEN_HELPER}
 
 
 def git(*args, cwd):
@@ -80,9 +82,14 @@ def index_entry(run, file):
     }
 
 
+def fetch_data_branch(cwd):
+    return subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=cwd, env=credentials(),
+                          capture_output=True, text=True)
+
+
 def published_runs():
     """The runs the data branch's index lists, or none before its first run."""
-    if subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=REPO, env=credentials()).returncode != 0:
+    if fetch_data_branch(REPO).returncode != 0:
         return []
     return json.loads(git('show', f'origin/{DATA_BRANCH}:index.json', cwd=REPO))['runs']
 
@@ -93,15 +100,18 @@ def data_tree(tree):
     clone than this script's."""
     if not (tree / '.git').exists():
         git('worktree', 'add', '-q', '--force', '--detach', str(tree), 'HEAD', cwd=REPO)
-    fetched = subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=tree, env=credentials()).returncode == 0
-    if fetched:
+    fetched = fetch_data_branch(tree)
+    if fetched.returncode == 0:
         # Detached at the data branch's head: the branch may be checked out in
         # another worktree, and the push names it.
         git('checkout', '-q', '--detach', f'origin/{DATA_BRANCH}', cwd=tree)
-    else:
+    elif "couldn't find remote ref" in fetched.stderr:
         git('checkout', '-q', '--orphan', DATA_BRANCH, cwd=tree)
         git('rm', '-q', '-r', '-f', '.', cwd=tree)
         (tree / 'index.json').write_text(json.dumps({'runs': []}, indent=1) + '\n')
+    else:
+        # A branch that exists must not be started again over a fetch that failed.
+        raise RuntimeError(f'git fetch origin {DATA_BRANCH} failed: {fetched.stderr.strip()}')
     return tree
 
 
