@@ -16,11 +16,19 @@ use web_sys::{
 use web_time::Instant;
 
 use crate::{
-    accessibility::{
-        self, AccessibilityElement, AccessibilityRect, AccessibilityRole, Replaced, edits_text,
-    },
+    accessibility::{self, AccessibilityElement, AccessibilityRect, Replaced, edits_text},
     accessibility_publish_policy::AccessibilityPublishPolicy,
+    web_accessibility_attributes::{
+        MirrorAttributes, PageTarget, mirror_tag, mirror_text, page_targets,
+    },
+    web_accessibility_order::ChildMoves,
 };
+
+/// The class every mirror node and action button carries. One rule in the
+/// mirror's style sheet gives them what they share: they sit over the canvas,
+/// show nothing and take no pointer. Each node's own style holds only where
+/// it sits.
+const MIRROR_CLASS: &str = "cranpose-mirror";
 
 /// What the mirror's listeners and the bridge share: the live node behind
 /// each virtual id, and what a person did through the mirror since the
@@ -34,102 +42,6 @@ struct MirrorLinks {
     /// A person typed in a mirrored field or moved its caret, so the mirror
     /// shows the field as the app holds it at once.
     edited: Cell<bool>,
-}
-
-fn apply_role_and_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    if (element.role != AccessibilityRole::StaticText || element.details().pane_title.is_some())
-        && !edits_text(element)
-    {
-        node.set_attribute("role", accessibility::web_role(element))?;
-    }
-    if let Some(title) = &element.details().pane_title {
-        node.set_attribute("aria-label", title)?;
-    }
-    apply_role_extras(node, element)?;
-    apply_progress(node, element)?;
-    apply_aria_state(node, element)
-}
-
-/// The value an adjustable control holds, and the stops an arrow key moves it
-/// by. A screen reader reads the value and offers its own way to change it.
-fn apply_progress(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    let details = element.details();
-    let Some(progress) = details.progress else {
-        return Ok(());
-    };
-    node.set_attribute("aria-valuenow", &progress.current.to_string())?;
-    node.set_attribute(
-        "aria-valuemin",
-        &progress.start.min(progress.end).to_string(),
-    )?;
-    node.set_attribute(
-        "aria-valuemax",
-        &progress.start.max(progress.end).to_string(),
-    )?;
-    if let Some(text) = &details.state_description {
-        node.set_attribute("aria-valuetext", text)?;
-    }
-    if details.adjustable && element.enabled {
-        node.set_attribute("data-cranpose-value", &progress.current.to_string())?;
-        node.set_attribute("data-cranpose-min", &progress.start.to_string())?;
-        node.set_attribute("data-cranpose-max", &progress.end.to_string())?;
-        node.set_attribute("data-cranpose-step", &progress.step().to_string())?;
-    }
-    Ok(())
-}
-
-/// The scroll container an element sits in: its virtual id, the move one page
-/// on makes, and the last row a reader may ask the container for.
-#[derive(Clone, Copy, PartialEq)]
-struct PageTarget {
-    container: i32,
-    dx: f32,
-    dy: f32,
-    last_row: Option<usize>,
-}
-
-fn page_targets(ids: &[i32], elements: &[AccessibilityElement]) -> Vec<Option<PageTarget>> {
-    elements
-        .iter()
-        .map(|element| {
-            let container = accessibility::scroll_container_for(elements, element)?;
-            let index = elements
-                .iter()
-                .position(|candidate| std::ptr::eq(candidate, container))?;
-            let (dx, dy) = accessibility::page_delta(container, true);
-            let rows = accessibility::row_count(container);
-            Some(PageTarget {
-                container: *ids.get(index)?,
-                dx,
-                dy,
-                last_row: (rows > 0).then(|| rows - 1),
-            })
-        })
-        .collect()
-}
-
-fn apply_page(
-    node: &HtmlElement,
-    element: &AccessibilityElement,
-    page: Option<PageTarget>,
-) -> Result<(), JsValue> {
-    let Some(page) = page else {
-        return Ok(());
-    };
-    node.set_attribute("data-cranpose-page", &page.container.to_string())?;
-    node.set_attribute("data-cranpose-page-dx", &page.dx.to_string())?;
-    node.set_attribute("data-cranpose-page-dy", &page.dy.to_string())?;
-    if let Some(last_row) = page.last_row.filter(|_| takes_home_and_end(element)) {
-        node.set_attribute("data-cranpose-last-row", &last_row.to_string())?;
-    }
-    Ok(())
-}
-
-/// Whether Home and End on this mirror node may reach the list around it. A
-/// text field moves its caret with those two keys and a slider moves its
-/// value, so inside a list those two keep them.
-fn takes_home_and_end(element: &AccessibilityElement) -> bool {
-    !element.role.is_text_field() && !element.details().adjustable
 }
 
 /// Pages the scroll container around the focused mirror node on Page Down and
@@ -237,115 +149,6 @@ fn on_live_tree(
     if let Ok(mut shell) = app.try_borrow_mut() {
         links.read.set(true);
         accessibility::run_reader_action(&mut shell, act);
-    }
-}
-
-/// What a role asks for beyond its name: text to read, a heading level, the
-/// value of a field, or the modal flag on a dialog.
-fn apply_role_extras(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    if is_mirror_container(element) && element.role != AccessibilityRole::Dialog {
-        return Ok(());
-    }
-    match element.role {
-        AccessibilityRole::StaticText => node.set_text_content(Some(&element.label)),
-        AccessibilityRole::TextField | AccessibilityRole::SearchField => {
-            node.set_text_content(element.value.as_deref());
-        }
-        AccessibilityRole::Header => {
-            node.set_attribute("aria-level", "2")?;
-            node.set_text_content(Some(&element.label));
-        }
-        AccessibilityRole::Dialog => node.set_attribute(
-            "aria-modal",
-            if element.details().is_modal {
-                "true"
-            } else {
-                "false"
-            },
-        )?,
-        _ => {}
-    }
-    Ok(())
-}
-
-/// What the control says about itself in words: the state description with
-/// the reason its content is wrong, whether it holds a secret, and where it
-/// sits in a group.
-fn apply_aria_description(
-    node: &HtmlElement,
-    element: &AccessibilityElement,
-) -> Result<(), JsValue> {
-    if let Some(state) = accessibility::state_with_error(element) {
-        node.set_attribute("aria-description", &state)?;
-    }
-    if element.details().password {
-        node.set_attribute("aria-roledescription", "password")?;
-    }
-    if element.details().error.is_some() {
-        node.set_attribute("aria-invalid", "true")?;
-    }
-    if let Some(item) = element.collection_item {
-        node.set_attribute("aria-posinset", &item.position.to_string())?;
-        node.set_attribute("aria-setsize", &item.count.to_string())?;
-    }
-    Ok(())
-}
-
-/// The checked or selected flag, and whether the control is disabled.
-fn apply_aria_state(node: &HtmlElement, element: &AccessibilityElement) -> Result<(), JsValue> {
-    apply_aria_description(node, element)?;
-    if let Some(expanded) = element.details().expanded {
-        node.set_attribute("aria-expanded", if expanded { "true" } else { "false" })?;
-    }
-    if let Some(toggled) = element.toggled {
-        let flag = if element.role == AccessibilityRole::ToggleButton {
-            "aria-pressed"
-        } else {
-            "aria-checked"
-        };
-        node.set_attribute(flag, if toggled { "true" } else { "false" })?;
-    }
-    if let Some(selected) = element.selected {
-        let selected = if selected { "true" } else { "false" };
-        match element.role {
-            AccessibilityRole::RadioButton => node.set_attribute("aria-checked", selected)?,
-            AccessibilityRole::Button | AccessibilityRole::ToggleButton => {
-                node.set_attribute("aria-pressed", selected)?;
-            }
-            _ => node.set_attribute("aria-selected", selected)?,
-        }
-    }
-    if !element.enabled {
-        node.set_attribute("aria-disabled", "true")?;
-    }
-    Ok(())
-}
-
-fn is_mirror_container(element: &AccessibilityElement) -> bool {
-    let details = element.details();
-    element.role.is_named_container()
-        || element.role == AccessibilityRole::Dialog
-        || details.vertical_scroll.is_some()
-        || details.horizontal_scroll.is_some()
-        || details.pane_title.is_some()
-}
-
-/// The element a control is mirrored as: a text field is an input or a text
-/// area, so a reader walks and edits its text the way it does any form
-/// field; a control a click reaches is a button; anything else is a span.
-fn mirror_tag(element: &AccessibilityElement) -> &'static str {
-    if edits_text(element) {
-        if element.details().multiline && !element.details().password {
-            "textarea"
-        } else {
-            "input"
-        }
-    } else if is_mirror_container(element) {
-        "div"
-    } else if element.clickable {
-        "button"
-    } else {
-        "span"
     }
 }
 
@@ -501,71 +304,52 @@ fn attach_selection_listener(
     Ok(())
 }
 
-/// One mirror node for a control: a text field as an input, a button when a
-/// click reaches it, a span otherwise, carrying its label, role, state and
-/// paging data.
+fn mirror_element(document: &Document, tag: &str) -> Result<HtmlElement, JsValue> {
+    let node = document.create_element(tag)?.dyn_into::<HtmlElement>()?;
+    node.set_class_name(MIRROR_CLASS);
+    Ok(node)
+}
+
+/// A new mirror node for a control, with every attribute `attributes`
+/// describes for it, its text and the text of a field written once.
 fn mirror_node(
     document: &Document,
     id: i32,
     element: &AccessibilityElement,
     page: Option<PageTarget>,
+    attributes: &mut MirrorAttributes,
 ) -> Result<HtmlElement, JsValue> {
-    let node = document
-        .create_element(mirror_tag(element))?
-        .dyn_into::<HtmlElement>()?;
-    if element.role != AccessibilityRole::StaticText {
-        node.set_attribute("aria-label", &element.label)?;
+    let node = mirror_element(document, mirror_tag(element))?;
+    attributes.describe(id, element, page);
+    for (name, value) in attributes.iter() {
+        node.set_attribute(name, value)?;
     }
-    if !element.enabled {
-        node.set_attribute("disabled", "")?;
+    if let Some(text) = mirror_text(element).filter(|text| !text.is_empty()) {
+        node.set_text_content(Some(text));
     }
-    apply_activation_identity(&node, id, element)?;
-    if let Some(language) = &element.details().language {
-        node.set_attribute("lang", language)?;
-    }
-    apply_role_and_state(&node, element)?;
-    if let Some(input) = node.dyn_ref::<HtmlInputElement>() {
-        input.set_type(if element.details().password {
-            "password"
-        } else if element.role == AccessibilityRole::SearchField {
-            "search"
-        } else {
-            "text"
-        });
-    }
-    apply_page(&node, element, page)?;
     apply_field_text(&node, element)?;
-    node.set_attribute("tabindex", tab_index(element))?;
     Ok(node)
 }
 
-fn apply_activation_identity(
-    node: &HtmlElement,
-    id: i32,
-    element: &AccessibilityElement,
-) -> Result<(), JsValue> {
-    node.set_attribute("data-cranpose-node", &id.to_string())?;
-    if element.clickable {
-        node.set_attribute("data-cranpose-clickable", "")?;
+/// Gives a mirror node that holds no other node the text `text`, through the
+/// text node it holds when it holds one.
+fn write_text(node: &HtmlElement, text: Option<&str>) {
+    match (node.first_child(), text) {
+        (Some(child), Some(text)) => child.set_node_value(Some(text)),
+        (_, text) => node.set_text_content(text),
     }
-    if let Some(key) = element.canvas_key {
-        node.set_attribute("data-cranpose-canvas", &key.to_string())?;
-    }
-    Ok(())
 }
 
-/// Where the mirrored control sits in the Tab order: a focus target or an
-/// adjustable control takes Tab, a plain button keeps the browser's default,
-/// and text stays out of the way.
-fn tab_index(element: &AccessibilityElement) -> &'static str {
-    if element.enabled
-        && element.tab_stop
-        && (element.focusable || element.details().adjustable || element.clickable)
-    {
-        "0"
-    } else {
-        "-1"
-    }
+/// The style sheet with the rule every mirror node and action button
+/// shares. The declarations are marked important, so a page rule that
+/// matches a button or a span does not show the mirror.
+fn mirror_style(document: &Document) -> Result<Element, JsValue> {
+    let style = document.create_element("style")?;
+    style.set_text_content(Some(&format!(
+        ".{MIRROR_CLASS}{{position:fixed!important;opacity:0.001!important;\
+         pointer-events:none!important;overflow:hidden!important}}"
+    )));
+    Ok(style)
 }
 
 /// Where the canvas sits on the page and how its logical pixels map onto it.
@@ -963,6 +747,14 @@ impl cranpose_app_shell::PlatformTextInputHandler for WebTextInput {
     }
 }
 
+/// Room for the attributes of a mirror node as the mirror showed it and as
+/// it shows it now.
+#[derive(Default)]
+struct AttributeRoom {
+    shown: MirrorAttributes,
+    now: MirrorAttributes,
+}
+
 struct MirrorEntry {
     node: HtmlElement,
     actions: Vec<HtmlElement>,
@@ -974,54 +766,117 @@ struct MirrorEntry {
     /// The virtual id of the scroll container the node sits in, or nothing
     /// for the mirror root.
     parent: Option<i32>,
+    /// Where the node sat among its parent's children when the mirror last
+    /// wrote their order, its action buttons right after it, or nothing
+    /// while none of them sits there.
+    written_at: Option<usize>,
+    /// Whether the node was built after that order, in place of the one that
+    /// sat there.
+    replaced: bool,
+    /// How many of the action buttons were in that order.
+    written_actions: usize,
 }
 
 impl MirrorEntry {
-    fn new(document: &Document, element: &AccessibilityElement) -> Result<Self, JsValue> {
-        Ok(Self {
-            node: document
-                .create_element(mirror_tag(element))?
-                .dyn_into::<HtmlElement>()?,
-            actions: Vec::new(),
-            page: None,
-            placed: None,
-            parent: None,
-        })
-    }
-
-    /// Takes the node and its action buttons out of the page.
-    fn detach(&self) {
-        self.node.remove();
-        for button in &self.actions {
-            button.remove();
-        }
-    }
-
-    fn update(
-        &mut self,
+    fn new(
         document: &Document,
         id: i32,
         element: &AccessibilityElement,
         page: Option<PageTarget>,
-    ) -> Result<(), JsValue> {
-        let template = mirror_node(document, id, element, page)?;
-        if self.node.tag_name() != template.tag_name() {
-            self.node.remove();
-            self.node = template;
-            self.placed = None;
-        } else {
-            patch_attributes(&self.node, &template)?;
-            if !is_mirror_container(element)
-                && matches!(
-                    element.role,
-                    AccessibilityRole::StaticText | AccessibilityRole::Header
-                )
-                && self.node.text_content() != template.text_content()
-            {
-                self.node
-                    .set_text_content(template.text_content().as_deref());
+        attributes: &mut MirrorAttributes,
+    ) -> Result<Self, JsValue> {
+        let mut entry = Self {
+            node: mirror_node(document, id, element, page, attributes)?,
+            actions: Vec::new(),
+            page,
+            placed: None,
+            parent: None,
+            written_at: None,
+            replaced: false,
+            written_actions: 0,
+        };
+        entry.update_actions(document, id, element)?;
+        Ok(entry)
+    }
+
+    /// Takes the node and its action buttons out of the page.
+    fn detach(&mut self) {
+        self.node.remove();
+        for button in &self.actions {
+            button.remove();
+        }
+        self.written_at = None;
+    }
+
+    /// Adds the node and its action buttons to the children of their parent
+    /// in the order the sync writes, each with where it sat in the order
+    /// written last unless the page may hold anything after a failed sync,
+    /// and notes where they sit now.
+    fn push_children(&mut self, id: i32, children: &mut Vec<MirrorChild>, written: bool) {
+        let was = self.written_at.filter(|_| written);
+        self.written_at = Some(children.len());
+        children.push(MirrorChild {
+            id,
+            slot: 0,
+            was: was.filter(|_| !self.replaced),
+        });
+        children.extend((0..self.actions.len()).map(|button| {
+            MirrorChild {
+                id,
+                slot: button + 1,
+                was: was
+                    .filter(|_| button < self.written_actions)
+                    .map(|at| at + 1 + button),
             }
-            apply_field_text(&self.node, element)?;
+        }));
+        self.replaced = false;
+        self.written_actions = self.actions.len();
+    }
+
+    /// The node at slot 0, or an action button at a later slot.
+    fn child(&self, slot: usize) -> Option<&HtmlElement> {
+        match slot.checked_sub(1) {
+            None => Some(&self.node),
+            Some(button) => self.actions.get(button),
+        }
+    }
+
+    /// Brings the node to `element`. A node that showed `shown` as the
+    /// same kind of element gets only the attributes and the text that
+    /// changed, worked out from the two elements without a read of the page.
+    /// Any other node is replaced by a new one, so nothing written before
+    /// stays on it.
+    fn update(
+        &mut self,
+        document: &Document,
+        id: i32,
+        shown: Option<&AccessibilityElement>,
+        element: &AccessibilityElement,
+        page: Option<PageTarget>,
+        attributes: &mut AttributeRoom,
+    ) -> Result<(), JsValue> {
+        match shown.filter(|shown| mirror_tag(shown) == mirror_tag(element)) {
+            Some(shown) => {
+                attributes.shown.describe(id, shown, self.page);
+                attributes.now.describe(id, element, page);
+                for name in attributes.now.dropped_from(&attributes.shown) {
+                    self.node.remove_attribute(name)?;
+                }
+                for (name, value) in attributes.now.written_over(&attributes.shown) {
+                    self.node.set_attribute(name, value)?;
+                }
+                let text = mirror_text(element);
+                if mirror_text(shown) != text {
+                    write_text(&self.node, text);
+                }
+                apply_field_text(&self.node, element)?;
+            }
+            None => {
+                let node = mirror_node(document, id, element, page, &mut attributes.now)?;
+                std::mem::replace(&mut self.node, node).remove();
+                self.placed = None;
+                self.replaced = true;
+            }
         }
         self.page = page;
         self.update_actions(document, id, element)
@@ -1038,8 +893,7 @@ impl MirrorEntry {
         css.clear();
         write!(
             css,
-            "position:fixed;left:{left}px;top:{top}px;width:{width}px;height:{height}px;\
-             opacity:0.001;pointer-events:none;overflow:hidden"
+            "left:{left}px;top:{top}px;width:{width}px;height:{height}px"
         )
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
         for node in std::iter::once(&self.node).chain(&self.actions) {
@@ -1059,11 +913,7 @@ impl MirrorEntry {
         let actions = accessibility::listed_actions(element);
         for (index, action) in actions.iter().enumerate() {
             if index == self.actions.len() {
-                self.actions.push(
-                    document
-                        .create_element("button")?
-                        .dyn_into::<HtmlElement>()?,
-                );
+                self.actions.push(mirror_element(document, "button")?);
                 self.placed = None;
             }
             let button = &self.actions[index];
@@ -1089,35 +939,6 @@ impl MirrorEntry {
     }
 }
 
-fn patch_attributes(node: &HtmlElement, template: &HtmlElement) -> Result<(), JsValue> {
-    for name in node
-        .get_attribute_names()
-        .iter()
-        .filter_map(|name| name.as_string())
-    {
-        if name != "style"
-            && name != "data-cranpose-composition"
-            && name != "data-cranpose-selection"
-            && !template.has_attribute(&name)
-        {
-            node.remove_attribute(&name)?;
-        }
-    }
-    for name in template
-        .get_attribute_names()
-        .iter()
-        .filter_map(|name| name.as_string())
-    {
-        if name != "data-cranpose-selection"
-            && let Some(value) = template.get_attribute(&name)
-            && node.get_attribute(&name).as_ref() != Some(&value)
-        {
-            node.set_attribute(&name, &value)?;
-        }
-    }
-    Ok(())
-}
-
 /// The element the mirror showed for the control at `index` of the new
 /// snapshot, when it showed one.
 fn shown_element(shown: Option<&Replaced>, index: usize) -> Option<&AccessibilityElement> {
@@ -1125,19 +946,109 @@ fn shown_element(shown: Option<&Replaced>, index: usize) -> Option<&Accessibilit
     shown.elements.get((*shown.was.get(index)?)?)
 }
 
-fn reconcile_children(parent: &HtmlElement, children: &[HtmlElement]) -> Result<(), JsValue> {
-    let mut cursor = parent.first_child();
-    for child in children {
-        if cursor
-            .as_ref()
-            .is_some_and(|cursor| cursor.is_same_node(Some(child)))
-        {
-            cursor = child.next_sibling();
-        } else {
-            parent.insert_before(child, cursor.as_ref())?;
-        }
+/// A node or an action button of a control in the order a sync writes: the
+/// control's virtual id, the slot (0 for the node, the buttons after), and
+/// where the child sat in the order written last.
+#[derive(Clone, Copy)]
+struct MirrorChild {
+    id: i32,
+    slot: usize,
+    was: Option<usize>,
+}
+
+/// The children of one mirror parent in the order a sync writes.
+#[derive(Default)]
+struct ChildList {
+    children: Vec<MirrorChild>,
+    /// Whether the parent's node was built in this sync, so none of the
+    /// children sit in it yet.
+    replaced: bool,
+}
+
+/// Puts the children of `parent` in the order of `list`. A child moves only
+/// when it is out of its old order, and then once.
+fn reconcile_children(
+    parent: &HtmlElement,
+    list: &ChildList,
+    entries: &HashMap<i32, MirrorEntry>,
+    moves: &mut ChildMoves,
+) -> Result<(), JsValue> {
+    moves.plan(
+        list.children
+            .iter()
+            .map(|child| child.was.filter(|_| !list.replaced)),
+    );
+    let node = |index: usize| {
+        list.children
+            .get(index)
+            .and_then(|child| entries.get(&child.id)?.child(child.slot))
+            .map(AsRef::<web_sys::Node>::as_ref)
+            .ok_or_else(|| JsValue::from_str("a mirror child has no node"))
+    };
+    for (child, before) in moves.moves() {
+        let before = before.map(node).transpose()?;
+        parent.insert_before(node(child)?, before)?;
     }
     Ok(())
+}
+
+/// The children of each mirror parent, the root or a scroll container, in
+/// the order a sync writes, and the plan that moves them there.
+#[derive(Default)]
+struct MirrorOrders {
+    lists: HashMap<Option<i32>, ChildList>,
+    moves: ChildMoves,
+}
+
+impl MirrorOrders {
+    /// Empties the lists for a new sync.
+    fn start(&mut self) {
+        for list in self.lists.values_mut() {
+            list.children.clear();
+            list.replaced = false;
+        }
+    }
+
+    /// Adds the node and the action buttons of the entry with virtual id
+    /// `id` to the children of `parent`, the scroll container it sits in.
+    /// After a failed sync `written` is false: the page may hold anything,
+    /// so no child keeps an old position and the whole order is written.
+    fn push(&mut self, id: i32, entry: &mut MirrorEntry, parent: Option<i32>, written: bool) {
+        if entry.replaced {
+            self.lists.entry(Some(id)).or_default().replaced = true;
+        }
+        if entry.parent != parent {
+            // A node that changed containers leaves the old one and has no
+            // place in the new one yet.
+            entry.detach();
+            entry.parent = parent;
+        }
+        entry.push_children(
+            id,
+            &mut self.lists.entry(parent).or_default().children,
+            written,
+        );
+    }
+
+    /// Puts the children of every parent in the order of its list.
+    fn write(
+        &mut self,
+        root: &HtmlElement,
+        entries: &HashMap<i32, MirrorEntry>,
+    ) -> Result<(), JsValue> {
+        self.lists.retain(|_, list| !list.children.is_empty());
+        for (parent, list) in &self.lists {
+            let parent = match parent {
+                None => root,
+                Some(id) => entries
+                    .get(id)
+                    .map(|entry| &entry.node)
+                    .ok_or_else(|| JsValue::from_str("a mirror parent has no node"))?,
+            };
+            reconcile_children(parent, list, entries, &mut self.moves)?;
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct WebAccessibilityBridge {
@@ -1155,6 +1066,9 @@ pub(crate) struct WebAccessibilityBridge {
     policy: AccessibilityPublishPolicy,
     /// Room for the declarations that place one mirror node.
     css: String,
+    /// Room for the attributes of one mirror node the sync brings up to date.
+    attributes: AttributeRoom,
+    orders: MirrorOrders,
     dirty: bool,
     entries: HashMap<i32, MirrorEntry>,
     links: Rc<MirrorLinks>,
@@ -1174,6 +1088,8 @@ impl WebAccessibilityBridge {
         let root = mirror_root(document)?;
 
         let body = document.body().ok_or("document has no body")?;
+        let style = mirror_style(document)?;
+        body.append_child(&style)?;
         body.append_child(&root)?;
         let polite = live_region(document, "polite")?;
         let assertive = live_region(document, "assertive")?;
@@ -1197,6 +1113,8 @@ impl WebAccessibilityBridge {
             seen_focus: None,
             policy: AccessibilityPublishPolicy::new(),
             css: String::new(),
+            attributes: AttributeRoom::default(),
+            orders: MirrorOrders::default(),
             dirty: false,
             entries: HashMap::new(),
             links,
@@ -1429,9 +1347,7 @@ impl WebAccessibilityBridge {
             .filter(|(_, element)| element.canvas_key.is_none())
             .map(|(id, element)| (element.node_id, *id))
             .collect();
-        // The nodes of controls that left go first: a node that stays among
-        // its parent's children would hold the reconcile cursor and move
-        // every node after it.
+        // The nodes of controls that left go first.
         self.entries.retain(|id, entry| {
             let stays = snapshot.element(*id).is_some();
             if !stays {
@@ -1439,23 +1355,31 @@ impl WebAccessibilityBridge {
             }
             stays
         });
-        let mut children: HashMap<Option<i32>, Vec<HtmlElement>> = HashMap::new();
+        self.orders.start();
         self.links.node_ids.borrow_mut().clear();
         self.text_input.fields.borrow_mut().clear();
         for (index, ((id, element), page)) in
             ids.iter().copied().zip(elements).zip(pages).enumerate()
         {
             let entry = match self.entries.entry(id) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(MirrorEntry::new(document, element)?)
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    let entry = entry.into_mut();
+                    let shown = shown_element(shown, index);
+                    let unchanged =
+                        entry.page == page && shown.is_some_and(|old| old.same_but_bounds(element));
+                    if !unchanged {
+                        entry.update(document, id, shown, element, page, &mut self.attributes)?;
+                    }
+                    entry
                 }
+                std::collections::hash_map::Entry::Vacant(entry) => entry.insert(MirrorEntry::new(
+                    document,
+                    id,
+                    element,
+                    page,
+                    &mut self.attributes.now,
+                )?),
             };
-            let unchanged = entry.page == page
-                && shown_element(shown, index).is_some_and(|old| old.same_but_bounds(element));
-            if !unchanged {
-                entry.update(document, id, element, page)?;
-            }
             entry.place(placement.rect(element.bounds), &mut self.css)?;
             self.links.node_ids.borrow_mut().insert(id, element.node_id);
             if edits_text(element) {
@@ -1467,21 +1391,9 @@ impl WebAccessibilityBridge {
             let parent = element
                 .scroll_parent
                 .and_then(|parent| parents.get(&parent).copied());
-            if entry.parent != parent {
-                // A node that changed containers leaves the old one for the
-                // same reason.
-                entry.detach();
-                entry.parent = parent;
-            }
-            let siblings = children.entry(parent).or_default();
-            siblings.push(entry.node.clone());
-            siblings.extend(entry.actions.iter().cloned());
+            self.orders.push(id, entry, parent, shown.is_some());
         }
-        for (parent, children) in children {
-            let parent = parent.map_or(&self.root, |id| &self.entries[&id].node);
-            reconcile_children(parent, &children)?;
-        }
-        Ok(())
+        self.orders.write(&self.root, &self.entries)
     }
 
     fn settle_focus(
