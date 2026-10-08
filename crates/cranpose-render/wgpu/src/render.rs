@@ -751,15 +751,61 @@ pub(crate) fn image_draw_bounds(image: &ImageDraw, root_scale: f32) -> Option<Re
 }
 
 pub(crate) fn run_draw_bounds(run: &RunDraw, root_scale: f32) -> Option<Rect> {
-    let snap_delta = run
-        .placement
-        .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+    let snap_delta = run_snap_delta(run, root_scale);
     clipped_bounds(
         run.bounds.translate(snap_delta.x, snap_delta.y),
         run.placement.clip,
     )
+}
+
+fn run_snap_delta(run: &RunDraw, root_scale: f32) -> Point {
+    run.placement
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default()
+}
+
+/// The logical rects the shape records of `run` in `window`, counted in
+/// draw order, may touch, with their indices in the run's tables: each
+/// record's reach placed and clipped as [`run_draw_bounds`] places the
+/// run's bounds. A record its clip leaves nothing of is left out.
+pub(crate) fn run_record_bounds(
+    run: &RunDraw,
+    root_scale: f32,
+    window: std::ops::Range<u32>,
+) -> impl Iterator<Item = (Rect, usize)> + '_ {
+    let snap = run_snap_delta(run, root_scale);
+    let (dx, dy) = (
+        run.placement.offset.x + snap.x,
+        run.placement.offset.y + snap.y,
+    );
+    let bodies = run.tables().shapes.bodies();
+    let clip = run.placement.clip;
+    let mut first = 0;
+    run.segment_records().flat_map(move |records| {
+        let start = first;
+        first += records.count;
+        (start.max(window.start)..first.min(window.end)).filter_map(move |ordinal| {
+            let index = (records.start + ordinal - start) as usize;
+            let reach = bodies.get(index)?.reach_rect().translate(dx, dy);
+            Some((clipped_bounds(reach, clip)?, index))
+        })
+    })
+}
+
+/// The logical rects the record of `run` at `index` leaves untouched inside
+/// its stroke, when it is a stroked rect, placed as [`run_record_bounds`]
+/// places its reach.
+pub(crate) fn run_record_holes(run: &RunDraw, root_scale: f32, index: usize) -> Option<[Rect; 2]> {
+    let snap = run_snap_delta(run, root_scale);
+    let (dx, dy) = (
+        run.placement.offset.x + snap.x,
+        run.placement.offset.y + snap.y,
+    );
+    run.tables()
+        .shapes
+        .stroke_holes(index)
+        .map(|holes| holes.map(|hole| hole.translate(dx, dy)))
 }
 
 pub(crate) fn text_draw_is_visible_in_rect(
@@ -885,10 +931,7 @@ pub(crate) fn hash_run_item_with_clip<H: Hasher>(
     run.segments.start.hash(state);
     run.segments.end.hash(state);
     let placement = &run.placement;
-    let snap = placement
-        .snap_anchor
-        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-        .unwrap_or_default();
+    let snap = run_snap_delta(run, root_scale);
     let offset = Point::new(placement.offset.x + snap.x, placement.offset.y + snap.y);
     let canonicalize = placement.snap_anchor.is_some();
     canonicalize.hash(state);
@@ -2509,6 +2552,13 @@ pub(crate) struct ImageDrawCmd {
     clip: Option<u32>,
 }
 
+impl ImageDrawCmd {
+    /// Target pixels the draw can touch: its scissor.
+    pub(crate) fn bounds(&self) -> TargetRect {
+        self.scissor
+    }
+}
+
 /// Which glyph pipeline draws a stretch of quads: plain quads, sampled
 /// within their glyph's texel centers; plain quads on whole pixels at one
 /// texel a pixel, whose samples land on those centers unclamped; or quads
@@ -3068,6 +3118,7 @@ pub struct GpuRenderer {
     pub(crate) scratch_glyph_moved: Vec<GlyphDrawCmd>,
     pub(crate) scratch_shadow_instances: Vec<ShadowInstance>,
     pub(crate) scratch_arena_draws: Vec<RunDrawCall>,
+    pub(crate) scratch_overlays: crate::draw_pass::OverlayScratch,
     scratch_text_glyph_run: Vec<SoftwareGlyphAtlasRunGlyph>,
     scratch_text_glyph_entries: Vec<GlyphAtlasEntry>,
     run_glyph_scratch: RunGlyphScratch,
@@ -3434,6 +3485,7 @@ impl GpuRenderer {
             scratch_glyph_moved: Vec::new(),
             scratch_shadow_instances: Vec::new(),
             scratch_arena_draws: Vec::new(),
+            scratch_overlays: Default::default(),
             scratch_text_glyph_run: Vec::new(),
             scratch_text_glyph_entries: Vec::new(),
             run_glyph_scratch: RunGlyphScratch::default(),

@@ -408,7 +408,7 @@ impl ShapeRecord {
     /// band, and the tight cap-aware bounds the primitive carries are
     /// derived when asked for, never on the recording path.
     pub fn has_loose_rect(&self) -> bool {
-        self.flags & ARC_RECT_LOOSE_BIT != 0
+        rect_is_loose(self.flags)
     }
 
     /// The rect as stored: loose for a scope-recorded arc.
@@ -535,6 +535,60 @@ fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     let [_, _, width, height] = body.rect;
     let area = width * height;
     rounded && area > 0.0 && band_interior_area(width, height, curve.radii) * 2.0 >= area
+}
+
+/// Whether a record with `flags` stores the loose rect of a scope-recorded
+/// arc, whose tight bounds come from its original arguments.
+pub(crate) fn rect_is_loose(flags: u32) -> bool {
+    flags & ARC_RECT_LOOSE_BIT != 0
+}
+
+impl ShapeRecordBody {
+    /// A rect holding every pixel the record can reach, read from its body
+    /// alone: its coverage rect, except that a line's ends' box grows by
+    /// half its width times the square root of two, which holds any cap on
+    /// any slant, and a scope-recorded arc keeps the disc around its band.
+    pub fn reach_rect(&self) -> Rect {
+        let half = if self.flags & STROKED_BIT != 0 {
+            self.stroke_width * 0.5
+        } else {
+            0.0
+        };
+        let line =
+            (self.flags >> KIND_SHIFT) & TWO_BITS == RECORD_KIND_LINE && !is_trapezoid(self.flags);
+        expand_rect(
+            row_rect(self.rect),
+            if line {
+                half * std::f32::consts::SQRT_2
+            } else {
+                half
+            },
+        )
+    }
+}
+
+/// The inside a stroked rect or rounded rect that blends src-over leaves
+/// untouched, as two rects whose union holds it: its rect inset by half the
+/// stroke width across one axis and, across the other, by that or its
+/// largest corner radius, whichever is larger. `None` for any other record.
+pub(crate) fn stroke_holes(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> Option<[Rect; 2]> {
+    let blend = BlendMode::ALL.get(((body.flags >> BLEND_SHIFT) & BLEND_MASK) as usize);
+    if fragment_kind(body.flags) != FRAGMENT_KIND_STROKE || blend != Some(&BlendMode::SrcOver) {
+        return None;
+    }
+    let [x, y, width, height] = body.rect;
+    let [top_left, top_right, bottom_right, bottom_left] = curve.radii;
+    let edge = body.stroke_width * 0.5;
+    let corner = edge
+        .max(top_left.max(top_right))
+        .max(bottom_right.max(bottom_left));
+    let inset = |across: f32, down: f32| Rect {
+        x: x + across,
+        y: y + down,
+        width: width - 2.0 * across,
+        height: height - 2.0 * down,
+    };
+    Some([inset(corner, edge), inset(edge, corner)])
 }
 
 /// The least interior, in square logical pixels, that a solid fill lays
@@ -1912,12 +1966,7 @@ impl CommandRecording {
     pub fn coverage_rects(&self, segments: Range<u32>) -> impl Iterator<Item = Rect> + '_ {
         self.segments_in(&segments).flat_map(move |segment| {
             segment.range().filter_map(move |index| match segment.lane {
-                RecordLane::Shapes => self
-                    .shapes
-                    .tables
-                    .shapes
-                    .get(index)
-                    .map(|record| record.coverage_rect()),
+                RecordLane::Shapes => self.shapes.tables.shapes.coverage_rect(index),
                 RecordLane::Others => primitive_coverage_rect(&self.content.others[index]),
                 RecordLane::Content => None,
             })

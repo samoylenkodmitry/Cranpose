@@ -572,6 +572,23 @@ fn segment_iteration_preserves_order_bounds_and_marker_filtering() {
 }
 
 #[test]
+fn a_record_reaches_no_pixel_outside_its_reach_rect() {
+    let recording = CommandRecording::from_primitives(every_primitive());
+    let shapes = recording.shapes();
+    for (index, body) in shapes.bodies().iter().enumerate() {
+        let reach = body.reach_rect();
+        let coverage = shapes.coverage_rect(index).expect("a recorded shape");
+        assert!(
+            reach.x <= coverage.x
+                && reach.y <= coverage.y
+                && reach.x + reach.width >= coverage.x + coverage.width
+                && reach.y + reach.height >= coverage.y + coverage.height,
+            "record {index}: {reach:?} misses {coverage:?}"
+        );
+    }
+}
+
+#[test]
 fn summary_and_bounds_are_what_a_scan_of_the_primitives_finds() {
     let primitives = every_primitive();
     let recording = CommandRecording::from_primitives(primitives.clone());
@@ -604,6 +621,11 @@ fn a_scope_arc_keeps_the_disc_and_derives_the_tight_bounds() {
     let tight = ArcGeometry::new(center, 28.0, 32.0, 0.5, 1.0, StrokeCap::Butt).bounds();
     assert_eq!(record.rect_value(), tight);
     assert_eq!(record.coverage_rect(), expand_rect(tight, 2.0));
+    assert_eq!(
+        recording.shapes().coverage_rect(0),
+        Some(record.coverage_rect()),
+        "the column answers with the tight bounds the arguments give"
+    );
     let stored = record.stored_rect();
     assert!(stored.x <= tight.x && stored.y <= tight.y);
     assert!(stored.x + stored.width >= tight.x + tight.width);

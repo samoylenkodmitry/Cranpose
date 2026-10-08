@@ -41,6 +41,7 @@ mod glass_underlay_scroll;
 mod glass_vibrancy;
 mod gpu_fence_uploads;
 mod gradient_blur_reference;
+mod held_overlays;
 mod in_place_layers;
 mod initial_present_contract;
 mod layer_effect_cache;
