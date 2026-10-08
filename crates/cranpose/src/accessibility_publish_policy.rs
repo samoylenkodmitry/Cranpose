@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// How often a changing tree is published while nobody uses it: a screen
 /// reader reads the tree when the person touches, swipes or acts, so
@@ -81,6 +81,32 @@ impl AccessibilityPublishPolicy {
                 true
             }
         }
+    }
+
+    /// Whether a bridge that publishes only a tree that changed publishes at
+    /// `now`: never while the tree is as it was last published, at once when
+    /// a reader needs the change now, and otherwise when the interval allows.
+    /// A wake is armed only while a change waits for the interval, so an idle
+    /// app gets no frame for a tree it already published.
+    #[cfg(any(
+        test,
+        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+    ))]
+    pub(crate) fn try_publish_change(
+        &mut self,
+        now: Instant,
+        changed: bool,
+        at_once: bool,
+    ) -> bool {
+        if !changed {
+            return false;
+        }
+        if at_once {
+            self.pending_deadline = None;
+            self.last_publish = Some(now);
+            return true;
+        }
+        self.try_begin_publish(now)
     }
 
     /// A tree was sent to the platform. When `backs_off_unread`, the tree

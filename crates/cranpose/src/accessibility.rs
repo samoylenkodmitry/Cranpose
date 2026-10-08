@@ -45,77 +45,9 @@ pub(crate) fn opened_dialog(
         .map(|element| element.node_id)
 }
 
-/// Whether a mirror must show `next` at once instead of with its next sync
-/// of everything that changed: the first controls it shows, a focus move, a
-/// dialog that opened, or a field a person types in that changed its text or
-/// caret.
-#[cfg(any(
-    test,
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-))]
-pub(crate) fn mirror_at_once(
-    applied: &[AccessibilityElement],
-    next: &[AccessibilityElement],
-) -> bool {
-    applied.is_empty()
-        || !focused_controls(applied).eq(focused_controls(next))
-        || !same_typed_fields(applied, next)
-        || opened_dialog(applied, next).is_some()
-}
-
-#[cfg(any(
-    test,
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-))]
-fn focused_controls(
-    elements: &[AccessibilityElement],
-) -> impl Iterator<Item = (NodeId, u32, Option<u64>)> {
-    elements
-        .iter()
-        .filter(|element| element.focused)
-        .map(AccessibilityElement::identity_key)
-}
-
-#[cfg(any(
-    test,
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-))]
-fn same_typed_fields(applied: &[AccessibilityElement], next: &[AccessibilityElement]) -> bool {
-    let mut applied = applied.iter().filter(|element| edits_text(element));
-    let mut next = next.iter().filter(|element| edits_text(element));
-    loop {
-        match (applied.next(), next.next()) {
-            (None, None) => return true,
-            (Some(old), Some(new))
-                if old.identity_key() == new.identity_key()
-                    && old.value == new.value
-                    && old.details == new.details => {}
-            _ => return false,
-        }
-    }
-}
-
-/// Whether a mirror applies a snapshot that differs from the one it shows at
-/// `now`: at once when a reader must meet it now, and otherwise once `due`
-/// has come, so the latest snapshot of a busy second wins.
-#[cfg(any(
-    test,
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-))]
-pub(crate) fn sync_now(
-    immediate: bool,
-    now: web_time::Instant,
-    due: Option<web_time::Instant>,
-) -> bool {
-    immediate || due.is_none_or(|due| now >= due)
-}
-
 /// Whether a person edits the text of this field through the mirror: a text
 /// field with a caret, or one that holds a secret.
-#[cfg(any(
-    test,
-    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-))]
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 pub(crate) fn edits_text(element: &AccessibilityElement) -> bool {
     element.role.is_text_field()
         && (element.details().text_selection.is_some() || element.details().password)
@@ -594,7 +526,8 @@ impl Default for AccessibilityElement {
 
 #[cfg(any(
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
-    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 pub(crate) fn snapshot_if_changed<R>(
     shell: &mut AppShell<R>,

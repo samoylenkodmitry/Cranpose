@@ -156,3 +156,32 @@ fn a_screen_reader_keeps_the_publish_interval_without_reads() {
     assert!(!policy.try_begin_publish(next + ACCESSIBILITY_PUBLISH_INTERVAL / 2));
     assert!(policy.try_begin_publish(next + ACCESSIBILITY_PUBLISH_INTERVAL));
 }
+
+#[test]
+fn a_change_waits_for_the_interval_unless_a_reader_needs_it_now() {
+    let start = Instant::now();
+    let mut policy = policy_enabled_at(start);
+    let inside = start + ACCESSIBILITY_PUBLISH_INTERVAL / 2;
+    assert!(
+        !policy.try_publish_change(inside, true, false),
+        "a change nobody needs now waits"
+    );
+    assert_eq!(
+        policy.wake_deadline(),
+        Some(start + ACCESSIBILITY_PUBLISH_INTERVAL),
+        "a frame comes when the waiting change is due"
+    );
+    assert!(
+        policy.try_publish_change(inside, true, true),
+        "a focus move or an edit shows inside the interval"
+    );
+    assert_eq!(
+        policy.wake_deadline(),
+        None,
+        "the change it showed leaves nothing to wake for"
+    );
+    assert!(
+        !policy.try_publish_change(inside + Duration::from_millis(16), true, false),
+        "the next change waits a whole interval after it"
+    );
+}
