@@ -1072,7 +1072,7 @@ fn requested_web_backend(window: &web_sys::Window) -> WebBackendPreference {
             _ => WebBackendPreference::Auto,
         };
     }
-    WebBackendPreference::Gl
+    WebBackendPreference::Auto
 }
 
 fn instance_backends(preference: WebBackendPreference) -> wgpu::Backends {

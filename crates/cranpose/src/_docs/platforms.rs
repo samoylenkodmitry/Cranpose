@@ -33,8 +33,8 @@
 //! ## Renderer and fonts
 //!
 //! `renderer-wgpu` uses the GPU. `renderer-wgpu-gles` adds GL/GLES; Android
-//! already selects this backend. Web defaults to GL, and `?backend=webgpu`
-//! requests WebGPU. `?backend=auto` tries WebGPU with a GL fallback.
+//! already selects this backend. Web uses WebGPU where the browser offers it
+//! and WebGL2 otherwise. `?backend=gl` or `?backend=webgpu` forces one.
 //! `renderer-pixels` provides software output for custom hosts and watchOS.
 //!
 //! The default feature embeds a font. Apps can supply fonts through

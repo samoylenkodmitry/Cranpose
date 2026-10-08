@@ -363,9 +363,9 @@ simulator interaction still needs a Mac.
 
 ### Run in a browser
 
-Build on Windows, Linux or macOS. Cranpose selects WebGL by default. Add
-`?backend=webgpu` to request WebGPU, or `?backend=auto` to try WebGPU first
-with WebGL fallback. Use `localhost` for local tests and HTTPS for a public host.
+Build on Windows, Linux or macOS. Cranpose draws with WebGPU where the browser
+offers it and with WebGL2 otherwise. Add `?backend=gl` or `?backend=webgpu` to
+the URL to force one. Use `localhost` for local tests and HTTPS for a public host.
 The showcase starter uses `./build-web.sh`, then serves `dist` as static files.
 For the manual package above, add the web target and entry point:
 
@@ -422,8 +422,9 @@ wasm-pack build --target web --out-dir pkg --no-default-features --features web,
 python3 -m http.server 8000
 ```
 
-Open `http://localhost:8000/?backend=webgpu` in a browser with WebGPU support,
-or use `http://localhost:8000/?backend=auto` for WebGPU with WebGL fallback.
+Open `http://localhost:8000` in a browser. The page uses WebGPU where the
+browser offers it and WebGL2 otherwise. Add `?backend=gl` or `?backend=webgpu`
+to force one.
 `wasm-pack` creates the WebAssembly module and JavaScript loader in `pkg`. The
 canvas ID matches the first argument to `run_web`.
 
