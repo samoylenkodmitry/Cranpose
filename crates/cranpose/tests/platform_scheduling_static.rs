@@ -1264,14 +1264,14 @@ fn desktop_bridge_builds_nothing_without_a_reader_and_publishes_on_androids_inte
         .find("if !reader_connected {\n            return;\n        }")
         .expect("the sync leaves early while no reader holds the tree");
     let snapshots = sync
-        .find("accessibility::snapshot_if_changed(")
-        .expect("the sync snapshots the semantics tree");
+        .find("self.watch.elements_due(")
+        .expect("the sync builds the elements through the shared watch");
     assert!(
         leaves_without_reader < snapshots,
         "no semantics snapshot or accesskit tree is built while no reader holds the tree"
     );
     assert!(
-        sync.contains("tree_owed || self.policy.try_begin_publish(Instant::now())"),
+        sync.contains("Instant::now(),\n            tree_owed,"),
         "a connecting reader gets the whole tree at once; changes after it go out on the shared publish interval"
     );
     let loop_source = crate_source("src/desktop.rs");
@@ -1281,6 +1281,69 @@ fn desktop_bridge_builds_nothing_without_a_reader_and_publishes_on_androids_inte
             && loop_source.contains("accessibility.serve(app, now)")
             && loop_source.contains("DesktopAccessibilityBridge::wake_deadline"),
         "the loop syncs a tree a reader asked for, and wakes for a change the interval held back"
+    );
+}
+
+#[test]
+fn ios_bridge_publishes_on_androids_interval_for_every_reader() {
+    let ios_source = crate_source("src/ios_accessibility.rs");
+    let sync = ios_source
+        .split("pub(crate) fn sync<R>(")
+        .nth(1)
+        .and_then(|body| body.split("\n    }\n").next())
+        .expect("the iOS bridge syncs in one method");
+    assert!(
+        sync.contains("self.watch.elements_due(")
+            && !ios_source.contains("accessibility::snapshot_if_changed("),
+        "the elements are built only through the shared watch, when the policy lets a changed tree out"
+    );
+    assert!(
+        !sync.contains("return;"),
+        "Voice Control and Full Keyboard Access have no status to check, so the sync never leaves before the watch looks"
+    );
+    assert!(
+        ios_source.contains("self.ivars().requests.read.set(true);")
+            && sync.contains("self.policy.note_read(now);"),
+        "a VoiceOver read or action publishes at the interactive interval"
+    );
+    let loop_source = crate_source("src/ios.rs");
+    assert!(
+        loop_source.contains("IosAccessibilityBridge::wake_deadline")
+            && loop_source.contains("self.publish_held_accessibility();"),
+        "the loop wakes to publish a change the interval held back"
+    );
+}
+
+#[test]
+fn every_platform_bridge_publishes_focus_moves_and_typing_at_once() {
+    let watch = crate_source("src/accessibility.rs");
+    let elements_due = watch
+        .split("pub(crate) fn elements_due<R>(")
+        .nth(1)
+        .and_then(|body| body.split("\n    }\n").next())
+        .expect("the shared watch decides in one method");
+    assert!(
+        elements_due.contains("cranpose_ui::active_focus_target()")
+            && elements_due.contains("cranpose_ui::text_field_focus::edit_count()")
+            && elements_due.contains("focus != self.focus || edits != self.edits")
+            && elements_due.contains("policy.try_publish_change(now, changed, at_once)"),
+        "a focus move or an edit publishes a changed tree at once; any other change waits for the policy"
+    );
+    for (path, platform) in [
+        ("src/android_accessibility.rs", "Android"),
+        ("src/desktop_accessibility.rs", "desktop"),
+        ("src/ios_accessibility.rs", "iOS"),
+    ] {
+        assert!(
+            crate_source(path).contains(".elements_due("),
+            "the {platform} bridge builds its elements through the shared watch"
+        );
+    }
+    let web = crate_source("src/web_accessibility.rs");
+    assert!(
+        web.contains("cranpose_ui::active_focus_target")
+            && web.contains("self.policy.try_publish_change(now, changed, at_once)"),
+        "the web mirror looks at once for a focus move through the same policy entry"
     );
 }
 

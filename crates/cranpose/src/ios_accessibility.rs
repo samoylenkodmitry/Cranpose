@@ -5,6 +5,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     rc::Rc,
+    time::Instant,
 };
 
 use cranpose_app_shell::AppShell;
@@ -42,6 +43,7 @@ use winit::event_loop::EventLoopProxy;
 
 use crate::{
     accessibility::{self, AccessibilityElement, AccessibilityRole},
+    accessibility_publish_policy::AccessibilityPublishPolicy,
     ios_file_picker::root_view_controller,
 };
 
@@ -69,6 +71,7 @@ struct ReaderRequests {
     /// The first element of the screen that declares a magic tap, which the
     /// gesture reaches from a cursor on any other element.
     screen_action: Rc<Cell<Option<i32>>>,
+    read: Rc<Cell<bool>>,
 }
 
 struct AccessibilityElementIvars {
@@ -102,7 +105,7 @@ define_class!(
                 .requests.activations
                 .borrow_mut()
                 .push(self.ivars().element_id);
-            self.ivars().wake_proxy.wake_up();
+            self.wake_for_reader();
             Bool::YES
         }
 
@@ -112,7 +115,7 @@ define_class!(
                 .requests.steps
                 .borrow_mut()
                 .push((self.ivars().element_id, true));
-            self.ivars().wake_proxy.wake_up();
+            self.wake_for_reader();
         }
 
         #[unsafe(method(accessibilityDecrement))]
@@ -121,7 +124,7 @@ define_class!(
                 .requests.steps
                 .borrow_mut()
                 .push((self.ivars().element_id, false));
-            self.ivars().wake_proxy.wake_up();
+            self.wake_for_reader();
         }
 
         #[unsafe(method(accessibilityScroll:))]
@@ -135,7 +138,7 @@ define_class!(
                 .requests.scrolls
                 .borrow_mut()
                 .push((self.ivars().element_id, forward));
-            self.ivars().wake_proxy.wake_up();
+            self.wake_for_reader();
             Bool::YES
         }
 
@@ -159,7 +162,7 @@ define_class!(
                 .custom_actions
                 .borrow_mut()
                 .push((self.ivars().element_id, index));
-            self.ivars().wake_proxy.wake_up();
+            self.wake_for_reader();
             Bool::YES
         }
 
@@ -180,7 +183,7 @@ define_class!(
                     .requests.dismissals
                     .borrow_mut()
                     .push(self.ivars().element_id);
-                self.ivars().wake_proxy.wake_up();
+                self.wake_for_reader();
                 return Bool::YES;
             }
             if !accessibility::escape_has_a_taker() {
@@ -188,7 +191,7 @@ define_class!(
             }
             let escapes = &self.ivars().requests.escapes;
             escapes.set(escapes.get() + 1);
-            self.ivars().wake_proxy.wake_up();
+            self.wake_for_reader();
             Bool::YES
         }
 
@@ -203,7 +206,7 @@ define_class!(
                 return Bool::NO;
             };
             self.ivars().requests.magic_taps.borrow_mut().push(target);
-            self.ivars().wake_proxy.wake_up();
+            self.wake_for_reader();
             Bool::YES
         }
 
@@ -213,7 +216,7 @@ define_class!(
                 .requests.focus
                 .borrow_mut()
                 .push(self.ivars().element_id);
-            self.ivars().wake_proxy.wake_up();
+            self.wake_for_reader();
         }
     }
 );
@@ -240,6 +243,11 @@ impl NativeAccessibilityElement {
         unsafe { msg_send![super(this), initWithAccessibilityContainer: container] }
     }
 
+    fn wake_for_reader(&self) {
+        self.ivars().requests.read.set(true);
+        self.ivars().wake_proxy.wake_up();
+    }
+
     fn set_actionable(&self, actionable: bool) {
         self.ivars().actionable.set(actionable);
     }
@@ -264,7 +272,7 @@ impl NativeAccessibilityElement {
             .jumps
             .borrow_mut()
             .push((self.ivars().element_id, last));
-        self.ivars().wake_proxy.wake_up();
+        self.wake_for_reader();
         Bool::YES
     }
 }
@@ -275,6 +283,9 @@ pub(crate) struct IosAccessibilityBridge {
     host_view: Retained<UIView>,
     native_elements: HashMap<i32, Retained<NativeAccessibilityElement>>,
     snapshot: accessibility::AccessibilitySnapshot,
+    watch: accessibility::TreeWatch,
+    seen_input: bool,
+    policy: AccessibilityPublishPolicy,
     requests: ReaderRequests,
     wake_proxy: EventLoopProxy,
     published_once: bool,
@@ -294,12 +305,17 @@ impl IosAccessibilityBridge {
         let host_object: &NSObject = host_view.as_ref();
         host_object.setIsAccessibilityElement(false, mtm);
 
+        let mut policy = AccessibilityPublishPolicy::new();
+        policy.update_enabled(true);
         Some(Self {
             #[cfg(feature = "webview")]
             hosted_revision: 0,
             host_view,
             native_elements: HashMap::new(),
             snapshot: accessibility::AccessibilitySnapshot::default(),
+            watch: accessibility::TreeWatch::default(),
+            seen_input: false,
+            policy,
             requests: ReaderRequests::default(),
             wake_proxy: event_proxy,
             published_once: false,
@@ -328,18 +344,66 @@ impl IosAccessibilityBridge {
         if accessibility::apply_accessibility_options(shell, options) {
             shell.set_font_scale(options.font_scale);
         }
-        let next = accessibility::snapshot(shell, &mut self.snapshot);
-        self.speak(&next);
+        let now = Instant::now();
+        if self.requests.read.take() {
+            self.policy.note_read(now);
+        }
         #[cfg(feature = "webview")]
-        let hosted_changed = {
-            let changed = self.hosted_revision != hosted.revision();
-            self.hosted_revision = hosted.revision();
-            changed
-        };
+        let hosted_changed = self.hosted_revision != hosted.revision();
         #[cfg(not(feature = "webview"))]
         let hosted_changed = false;
-        let input_changed = (crate::ios_keyboard::reader_input_active()
-            && reader_field(&next).is_some())
+        let input_active = crate::ios_keyboard::reader_input_active();
+        let input_moved = input_active != self.seen_input;
+        // The hosted views and the text input view sit among the elements
+        // without a semantics revision of their own.
+        if hosted_changed || input_moved {
+            self.watch.forget();
+        }
+        let next = self.watch.elements_due(
+            shell,
+            &mut self.policy,
+            now,
+            input_moved,
+            &mut self.snapshot,
+        );
+        if next.is_some() {
+            self.seen_input = input_active;
+            #[cfg(feature = "webview")]
+            {
+                self.hosted_revision = hosted.revision();
+            }
+        }
+        let mut announcements = accessibility::drain_app_announcements();
+        if let Some(next) = &next {
+            announcements.extend(accessibility::live_region_announcements(
+                &self.snapshot.elements,
+                next,
+            ));
+            announcements.extend(accessibility::pane_title_announcements(
+                &self.snapshot.elements,
+                next,
+            ));
+        }
+        speak(announcements);
+        if let Some(next) = next {
+            self.publish_elements(
+                next,
+                hosted_changed,
+                mtm,
+                #[cfg(feature = "webview")]
+                hosted,
+            );
+        }
+    }
+
+    fn publish_elements(
+        &mut self,
+        next: Vec<AccessibilityElement>,
+        hosted_changed: bool,
+        mtm: MainThreadMarker,
+        #[cfg(feature = "webview")] hosted: &crate::webview_host::WebViews<wry::WebView>,
+    ) {
+        let input_changed = (self.seen_input && reader_field(&next).is_some())
             != self.reader_view.is_some()
             || hosted_changed;
         let Some(next) = self.snapshot.changed(next, input_changed) else {
@@ -377,7 +441,6 @@ impl IosAccessibilityBridge {
         self.native_elements
             .retain(|element_id, _| current_ids.contains(element_id));
 
-        let mtm = MainThreadMarker::new().expect("accessibility sync runs on UIKit's main thread");
         for (element_id, element) in next_ids.iter().zip(next) {
             if !self.native_elements.contains_key(element_id) {
                 let native = self.create_element(*element_id, mtm);
@@ -410,38 +473,17 @@ impl IosAccessibilityBridge {
             );
         }
         self.snapshot = next_snapshot;
+        // iOS learns of a read only from VoiceOver's cursor and actions, and
+        // Voice Control, the inspector and UI tests read unseen, so the wait
+        // never grows.
+        self.policy.published(false);
         if !self.follow_app_focus() {
             self.respeak_under_cursor(&changed);
         }
     }
 
-    /// Hands VoiceOver text to read out: what the app asked for through
-    /// [`cranpose_ui::Announcer`], and the text of any live region that
-    /// changed. iOS has no live region of its own, so the change is read as an
-    /// announcement. VoiceOver drops these when it is off, so the call costs
-    /// nothing then.
-    fn speak(&self, next: &[AccessibilityElement]) {
-        let mut announcements = accessibility::drain_app_announcements();
-        announcements.extend(accessibility::live_region_announcements(
-            &self.snapshot.elements,
-            next,
-        ));
-        announcements.extend(accessibility::pane_title_announcements(
-            &self.snapshot.elements,
-            next,
-        ));
-        for announcement in announcements {
-            let text = NSString::from_str(&announcement.text);
-            let argument: &AnyObject = text.as_ref();
-            // SAFETY: the announcement notification takes the string to read,
-            // and `text` lives until the call returns.
-            unsafe {
-                UIAccessibilityPostNotification(
-                    UIAccessibilityAnnouncementNotification,
-                    Some(argument),
-                );
-            }
-        }
+    pub(crate) fn wake_deadline(&self) -> Option<Instant> {
+        self.policy.wake_deadline()
     }
 
     /// Moves the VoiceOver cursor onto the control the app focused, so a
@@ -824,6 +866,23 @@ impl IosAccessibilityBridge {
             UIAccessibilityPostNotification(notification, landing);
         }
         self.published_once = true;
+    }
+}
+
+// iOS has no live region of its own, so a live region change is read as an
+// announcement.
+fn speak(announcements: Vec<cranpose_ui::Announcement>) {
+    for announcement in announcements {
+        let text = NSString::from_str(&announcement.text);
+        let argument: &AnyObject = text.as_ref();
+        // SAFETY: the announcement notification takes the string to read,
+        // and `text` lives until the call returns.
+        unsafe {
+            UIAccessibilityPostNotification(
+                UIAccessibilityAnnouncementNotification,
+                Some(argument),
+            );
+        }
     }
 }
 

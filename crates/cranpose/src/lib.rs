@@ -41,6 +41,7 @@ mod accessibility;
     test,
     all(feature = "android", feature = "renderer-wgpu", target_os = "android"),
     all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 mod accessibility_publish_policy;

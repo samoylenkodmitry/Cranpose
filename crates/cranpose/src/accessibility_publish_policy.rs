@@ -61,7 +61,7 @@ impl AccessibilityPublishPolicy {
         self.interactive_until = Some(now + ACCESSIBILITY_INTERACTION_WINDOW);
     }
 
-    pub(crate) fn try_begin_publish(&mut self, now: Instant) -> bool {
+    fn try_begin_publish(&mut self, now: Instant) -> bool {
         if !self.enabled {
             return false;
         }
@@ -88,10 +88,6 @@ impl AccessibilityPublishPolicy {
     /// a reader needs the change now, and otherwise when the interval allows.
     /// A wake is armed only while a change waits for the interval, so an idle
     /// app gets no frame for a tree it already published.
-    #[cfg(any(
-        test,
-        all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
-    ))]
     pub(crate) fn try_publish_change(
         &mut self,
         now: Instant,
