@@ -684,6 +684,33 @@ pub(crate) fn text_raster_geometry_for_draw(
     ))
 }
 
+/// The target pixels a text rasterized at `raster_rect` draws within: the
+/// rect within `clip`, as the scissor of its glyph draws.
+fn raster_scissor(
+    raster_rect: Rect,
+    clip: Option<Rect>,
+    root_scale: f32,
+    viewport: ViewportUniformParams,
+) -> Option<TargetRect> {
+    let draw_rect = Rect {
+        x: raster_rect.x / root_scale,
+        y: raster_rect.y / root_scale,
+        width: raster_rect.width / root_scale,
+        height: raster_rect.height / root_scale,
+    };
+    scissor_rect_for_layer(draw_rect, clip, root_scale, viewport)
+}
+
+/// The target pixels the retained glyph run of `text_draw` draws within.
+pub(crate) fn text_draw_scissor(
+    text_draw: &TextDraw,
+    root_scale: f32,
+    viewport: ViewportUniformParams,
+) -> Option<TargetRect> {
+    let (_, raster_rect, clip, _, _) = text_raster_geometry_for_draw(text_draw, root_scale)?;
+    raster_scissor(raster_rect, clip, root_scale, viewport)
+}
+
 fn text_draw_is_visible_in_viewport(
     logical_rect: Rect,
     clip: Option<Rect>,
@@ -2550,13 +2577,6 @@ pub(crate) struct ImageDrawCmd {
     /// The rounded clip whose coverage the image takes in place: its index
     /// among the pass's clip instances.
     clip: Option<u32>,
-}
-
-impl ImageDrawCmd {
-    /// Target pixels the draw can touch: its scissor.
-    pub(crate) fn bounds(&self) -> TargetRect {
-        self.scissor
-    }
 }
 
 /// Which glyph pipeline draws a stretch of quads: plain quads, sampled
@@ -6098,13 +6118,7 @@ impl GpuRenderer {
             run_key,
             run,
         } = draw;
-        let draw_rect = Rect {
-            x: raster_rect.x / root_scale,
-            y: raster_rect.y / root_scale,
-            width: raster_rect.width / root_scale,
-            height: raster_rect.height / root_scale,
-        };
-        let Some(scissor) = scissor_rect_for_layer(draw_rect, text_draw.clip, root_scale, viewport)
+        let Some(scissor) = raster_scissor(raster_rect, text_draw.clip, root_scale, viewport)
         else {
             return true;
         };

@@ -124,27 +124,22 @@ impl Lcg {
 #[test]
 fn held_overlay_cells_answer_as_checking_every_held_draw() {
     let mut random = Lcg(7);
-    let overlays = [Overlay::Glyphs, Overlay::Images, Overlay::StoreRun];
-    let kinds = [
-        None,
-        Some(Overlay::Glyphs),
-        Some(Overlay::Images),
-        Some(Overlay::StoreRun),
-    ];
-    // Wide targets take several words of cells a row.
+    let overlays = [Overlay::Glyphs, Overlay::StoreRun];
+    let kinds = [None, Some(Overlay::Glyphs), Some(Overlay::StoreRun)];
+    // Past 64 cell columns the last bit is shared, so wide targets are
+    // covered too.
     for extent in [300, 2_200, 6_000] {
         for _ in 0..200 {
             let mut held = HeldOverlays::default();
-            held.cells.reset(extent);
             let draws: Vec<(Overlay, TargetRect)> = (0..random.next(40))
-                .map(|_| (overlays[random.next(3) as usize], random.rect(extent)))
+                .map(|_| (overlays[random.next(2) as usize], random.rect(extent)))
                 .collect();
             for (kind, rect) in &draws {
                 held.add(*rect, *kind);
             }
             for _ in 0..20 {
                 let query = random.rect(extent);
-                let kind = kinds[random.next(4) as usize];
+                let kind = kinds[random.next(3) as usize];
                 let expected = draws
                     .iter()
                     .filter(|(held, rect)| {
@@ -158,9 +153,9 @@ fn held_overlay_cells_answer_as_checking_every_held_draw() {
                     expected,
                     "{draws:?} against {query:?}"
                 );
-                held.gather(query, kind);
+                let mut candidates = Vec::new();
                 assert_eq!(
-                    held.gathered_kinds(),
+                    held.gather((query, kind), (1.0, [0.0; 2]), &mut candidates),
                     expected,
                     "a run gathers what it overlaps"
                 );
@@ -172,6 +167,22 @@ fn held_overlay_cells_answer_as_checking_every_held_draw() {
             );
         }
     }
+}
+
+#[test]
+fn a_held_draw_marks_every_cell_it_touches() {
+    assert_eq!(
+        held_cells((70, 0, 0, 10)),
+        (0..1, 0b10),
+        "an empty side counts as the pixel it stands on"
+    );
+    assert_eq!(held_cells((63, 64, 2, 1)), (1..2, 0b11));
+    assert_eq!(held_cells((0, 0, 64 * 64 + 1, 1)), (0..1, u64::MAX));
+    assert_eq!(
+        held_cells((5_000, 0, 10, 10)),
+        (0..1, 1 << 63),
+        "columns past the last share its bit"
+    );
 }
 
 /// A logical rect of a random place and size, at quarter points.
@@ -187,7 +198,7 @@ fn logical_rect(random: &mut Lcg) -> Rect {
 #[test]
 fn a_record_meets_every_held_draw_its_target_pixels_meet() {
     let mut random = Lcg(11);
-    let (mut met, mut kept) = (0, 0);
+    let mut met = 0;
     for scale in [1.0, 1.5, 2.0, 2.625, 3.0] {
         let pixel = 1.0 / scale;
         for _ in 0..4_000 {
@@ -227,55 +238,7 @@ fn a_record_meets_every_held_draw_its_target_pixels_meet() {
                 );
                 met += 1;
             }
-            let held = (
-                random.next(400),
-                random.next(400),
-                random.next(8),
-                random.next(8),
-            );
-            let candidate = Candidate::of(held, Overlay::Glyphs, scale, offset);
-            let hole = logical_rect(&mut random);
-            let device = |value: f32, origin: f32| value * scale - origin;
-            let (left, top) = (
-                (device(hole.x, offset[0]) + 1.0).ceil(),
-                (device(hole.y, offset[1]) + 1.0).ceil(),
-            );
-            let (right, bottom) = (
-                (device(hole.x + hole.width, offset[0]) - 1.0).floor(),
-                (device(hole.y + hole.height, offset[1]) - 1.0).floor(),
-            );
-            let inside = left <= held.0 as f32
-                && top <= held.1 as f32
-                && (held.0 + held.2) as f32 <= right
-                && (held.1 + held.3) as f32 <= bottom;
-            if candidate.kept_by([hole, hole], pixel) {
-                assert!(
-                    inside,
-                    "{held:?} lies inside the pixels {hole:?} keeps at {scale} from {offset:?}"
-                );
-                kept += 1;
-            }
         }
     }
-    assert!(
-        met > 1_000 && kept > 50,
-        "both checks ran: {met} met, {kept} kept"
-    );
-}
-
-#[test]
-fn a_cell_grid_counts_what_a_rect_touches_at_its_edges() {
-    let mut grid = CellGrid::<6>::default();
-    grid.reset(200);
-    grid.mark((60, 0, 10, 10));
-    assert!(
-        grid.touched((70, 5, 0, 0)),
-        "an empty rect counts as the pixel it stands on"
-    );
-    assert!(!grid.touched((128, 0, 10, 10)));
-    grid.mark((5_000, 300, 10, 10));
-    assert!(
-        grid.touched((4_100, 300, 1, 1)),
-        "columns past a row's words share its last"
-    );
+    assert!(met > 1_000, "the overlaps were checked: {met}");
 }

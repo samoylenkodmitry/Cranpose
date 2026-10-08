@@ -408,7 +408,7 @@ impl ShapeRecord {
     /// band, and the tight cap-aware bounds the primitive carries are
     /// derived when asked for, never on the recording path.
     pub fn has_loose_rect(&self) -> bool {
-        rect_is_loose(self.flags)
+        self.flags & ARC_RECT_LOOSE_BIT != 0
     }
 
     /// The rect as stored: loose for a scope-recorded arc.
@@ -537,17 +537,12 @@ fn interior_repays(body: &ShapeRecordBody, curve: &ShapeRecordCurve) -> bool {
     rounded && area > 0.0 && band_interior_area(width, height, curve.radii) * 2.0 >= area
 }
 
-/// Whether a record with `flags` stores the loose rect of a scope-recorded
-/// arc, whose tight bounds come from its original arguments.
-pub(crate) fn rect_is_loose(flags: u32) -> bool {
-    flags & ARC_RECT_LOOSE_BIT != 0
-}
-
 impl ShapeRecordBody {
-    /// A rect holding every pixel the record can reach, read from its body
-    /// alone: its coverage rect, except that a line's ends' box grows by
+    /// A rect holding the record's coverage rect, read from its body alone:
+    /// the coverage rect itself, except that a line's ends' box grows by
     /// half its width times the square root of two, which holds any cap on
     /// any slant, and a scope-recorded arc keeps the disc around its band.
+    /// The antialiased edge reaches past it.
     pub fn reach_rect(&self) -> Rect {
         let half = if self.flags & STROKED_BIT != 0 {
             self.stroke_width * 0.5
@@ -1966,7 +1961,12 @@ impl CommandRecording {
     pub fn coverage_rects(&self, segments: Range<u32>) -> impl Iterator<Item = Rect> + '_ {
         self.segments_in(&segments).flat_map(move |segment| {
             segment.range().filter_map(move |index| match segment.lane {
-                RecordLane::Shapes => self.shapes.tables.shapes.coverage_rect(index),
+                RecordLane::Shapes => self
+                    .shapes
+                    .tables
+                    .shapes
+                    .get(index)
+                    .map(|record| record.coverage_rect()),
                 RecordLane::Others => primitive_coverage_rect(&self.content.others[index]),
                 RecordLane::Content => None,
             })

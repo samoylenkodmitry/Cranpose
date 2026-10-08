@@ -15,7 +15,7 @@ use crate::{
         GpuRenderer, PassFrame, RunStage, StoreRunBatch, TargetRect, ViewportUniformParams,
         image_draw_bounds, run_draw_bounds, run_draw_is_visible_in_rect, run_record_bounds,
         run_record_holes, scissor_rect_for_rect, segment_scene_rect, supported_blend_mode,
-        text_draw_bounds, text_draw_is_visible_in_rect,
+        text_draw_bounds, text_draw_is_visible_in_rect, text_draw_scissor,
     },
     rrect_shadow::{ShadowInstance, append_shadow_instances, rrect_shadow_bounds},
     run_store::{RunDrawCall, run_has_shapes},
@@ -310,16 +310,7 @@ impl GpuRenderer {
         let mut scratch = self.take_pass_scratch();
         let device = self.device.clone();
         let depth = takes_depth(segments);
-        let OverlayScratch {
-            mut held,
-            mut hoisted,
-            candidates,
-        } = std::mem::take(&mut scratch.overlays);
-        held.cells.reset(target.width);
-        hoisted.cover.reset(target.width);
-        hoisted.marks = segments
-            .iter()
-            .any(|segment| !segment.scene.rrect_shadows.is_empty());
+        let OverlayScratch { held, candidates } = std::mem::take(&mut scratch.overlays);
         let mut prep = PassPrep {
             recorder,
             device: &device,
@@ -328,7 +319,6 @@ impl GpuRenderer {
             batches: Vec::new(),
             chunk: None,
             held,
-            hoisted,
             candidates,
             depth,
             mixed_turns: turns_mixed(segments),
@@ -346,12 +336,11 @@ impl GpuRenderer {
         let prepared = segments
             .iter()
             .try_for_each(|segment| prep.segment(self, segment, &mut scratch));
-        prep.finish(self, &mut scratch);
+        prep.finish(self);
         let batches = prep.batches;
         scratch.arena_draws = prep.arena_draws;
         scratch.overlays = OverlayScratch {
             held: prep.held,
-            hoisted: prep.hoisted,
             candidates: prep.candidates,
         };
         let buffers = if prepared.is_ok() {
@@ -948,12 +937,6 @@ fn run_target_bounds(draw: &RunDraw, run: &SegmentRun<'_, '_>) -> Option<TargetR
     run_draw_bounds(draw, run.segment.scale).and_then(|bounds| shape_target_rect(bounds, run))
 }
 
-/// The target pixels a round rect shadow can touch.
-fn shadow_target_rect(draw: &RRectShadowDraw, run: &SegmentRun<'_, '_>) -> Option<TargetRect> {
-    rrect_shadow_bounds(draw, run.segment.scale)
-        .and_then(|bounds| scissor_rect_for_rect(bounds, run.segment.scale, run.viewport))
-}
-
 /// The per-frame vectors a pass fills: image and glyph geometry and draw
 /// commands, kept on the renderer between frames so they never reallocate.
 /// The quads a pass drew from its scratch, uploaded for its draws: image
@@ -1020,93 +1003,23 @@ fn target_rect_union(a: TargetRect, b: TargetRect) -> TargetRect {
 /// Log2 of the side, in target pixels, of the cells [`HeldOverlays`] marks.
 const HELD_CELL_SHIFT: u32 = 6;
 
-/// Log2 of the side, in target pixels, of the cells [`HoistedShadows`]
-/// marks: fine enough that a card's shadow clears the cells of the card
-/// beside it.
-const COVER_CELL_SHIFT: u32 = 2;
-
-/// The square cells of `1 << SHIFT` target pixels that marked rects touch,
-/// each row of cells a run of bit words.
-#[derive(Default)]
-struct CellGrid<const SHIFT: u32> {
-    words: usize,
-    cells: Vec<u64>,
-    /// The rows holding a mark, which clearing zeroes.
-    marked: std::ops::Range<usize>,
-}
-
-impl<const SHIFT: u32> CellGrid<SHIFT> {
-    /// Forgets every mark and fits the rows to a target `width` pixels wide.
-    fn reset(&mut self, width: u32) {
-        self.words = (width >> SHIFT) as usize / 64 + 1;
-        self.cells.clear();
-        self.marked = 0..0;
-    }
-
-    fn clear(&mut self) {
-        let words = self.words.max(1);
-        if let Some(cells) = self
-            .cells
-            .get_mut(self.marked.start * words..self.marked.end * words)
-        {
-            cells.fill(0);
-        }
-        self.marked = 0..0;
-    }
-
-    fn mark(&mut self, rect: TargetRect) {
-        let (rows, columns) = self.span(rect);
-        let words = self.words.max(1);
-        if self.cells.len() < rows.end * words {
-            self.cells.resize(rows.end * words, 0);
-        }
-        self.marked = if self.marked.is_empty() {
-            rows.clone()
-        } else {
-            self.marked.start.min(rows.start)..self.marked.end.max(rows.end)
-        };
-        for row in rows {
-            for (word, mask) in column_words(columns.clone()) {
-                self.cells[row * words + word] |= mask;
-            }
-        }
-    }
-
-    /// Whether `rect` touches a marked cell.
-    fn touched(&self, rect: TargetRect) -> bool {
-        let (rows, columns) = self.span(rect);
-        let words = self.words.max(1);
-        let rows = rows.start..rows.end.min(self.cells.len() / words);
-        rows.into_iter().any(|row| {
-            column_words(columns.clone())
-                .any(|(word, mask)| self.cells[row * words + word] & mask != 0)
-        })
-    }
-
-    /// The rows of cells `rect` touches and its columns, those past the
-    /// target sharing its last. An empty side counts as one pixel:
-    /// [`target_rects_overlap`] lets a rect that thin overlap one it lies
-    /// inside, and the pixel it stands on is in that one too.
-    fn span(&self, rect: TargetRect) -> (std::ops::Range<usize>, std::ops::RangeInclusive<usize>) {
-        let (x, y, width, height) = rect;
-        let last = self.words.max(1) * 64 - 1;
-        let column = |pixel: u32| ((pixel >> SHIFT) as usize).min(last);
-        let row = |pixel: u32| (pixel >> SHIFT) as usize;
-        (
-            row(y)..row(y.saturating_add(height.max(1) - 1)) + 1,
-            column(x)..=column(x.saturating_add(width.max(1) - 1)),
-        )
-    }
-}
-
-/// The bit words a row's `columns` fall in, each with its bits of them.
-fn column_words(columns: std::ops::RangeInclusive<usize>) -> impl Iterator<Item = (usize, u64)> {
-    let (first, last) = (*columns.start(), *columns.end());
-    (first / 64..=last / 64).map(move |word| {
-        let low = if word == first / 64 { first % 64 } else { 0 };
-        let high = if word == last / 64 { last % 64 } else { 63 };
-        (word, (u64::MAX >> (63 - high)) & (u64::MAX << low))
-    })
+/// The rows of cells `rect` touches and the mask of its columns in each,
+/// columns past the 63rd sharing the last bit. An empty side counts as one
+/// pixel: [`target_rects_overlap`] lets a rect that thin overlap one it lies
+/// inside, and the pixel it stands on is in that one too.
+fn held_cells(rect: TargetRect) -> (std::ops::Range<usize>, u64) {
+    let (x, y, width, height) = rect;
+    let last_column = (x.saturating_add(width.max(1) - 1) >> HELD_CELL_SHIFT).min(63);
+    let first_column = (x >> HELD_CELL_SHIFT).min(63);
+    let columns = last_column - first_column + 1;
+    let mask = if columns >= 64 {
+        u64::MAX
+    } else {
+        ((1_u64 << columns) - 1) << first_column
+    };
+    let first_row = (y >> HELD_CELL_SHIFT) as usize;
+    let last_row = (y.saturating_add(height.max(1) - 1) >> HELD_CELL_SHIFT) as usize;
+    (first_row..last_row + 1, mask)
 }
 
 /// What a held draw is. Held draws of one kind keep their order when they
@@ -1114,18 +1027,15 @@ fn column_words(columns: std::ops::RangeInclusive<usize>) -> impl Iterator<Item 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Overlay {
     Glyphs,
-    Images,
     StoreRun,
 }
-
-const OVERLAYS: [Overlay; 3] = [Overlay::Glyphs, Overlay::Images, Overlay::StoreRun];
 
 /// A set of [`Overlay`] kinds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Kinds(u8);
 
 impl Kinds {
-    const ALL: Self = Self(0b111);
+    const ALL: Self = Self(0b11);
 
     fn of(kind: Overlay) -> Self {
         Self(1 << kind as u8)
@@ -1156,9 +1066,15 @@ impl std::ops::BitAnd for Kinds {
     }
 }
 
+/// The slot of [`HeldOverlays::unions`] a draw of `kind`, `None` for a
+/// shape, checks.
+fn union_slot(kind: Option<Overlay>) -> usize {
+    kind.map_or(2, |kind| kind as usize)
+}
+
 /// Widens by `rect`, which a held draw of `kind` touches, the unions of
-/// [`HeldOverlays::unions`] that draws of other kinds and shapes check.
-fn widen(unions: &mut [Option<TargetRect>; 4], rect: TargetRect, kind: Overlay) {
+/// [`HeldOverlays::unions`] that the other kind and shapes check.
+fn widen(unions: &mut [Option<TargetRect>; 3], rect: TargetRect, kind: Overlay) {
     for (slot, union) in unions.iter_mut().enumerate() {
         if slot != kind as usize {
             *union = Some(union.map_or(rect, |union| target_rect_union(union, rect)));
@@ -1179,47 +1095,38 @@ struct HeldStoreRun {
 }
 
 /// Draws held back so the shapes after them keep filling one arena chunk:
-/// glyphs, src-over images and stored runs. The texts, avatar and chart of
-/// a card no longer split the shapes around them into draws of their own.
-/// A shape that overlaps a held draw, or a draw of another kind that does,
-/// draws the held draws of that kind first, so nothing is reordered past a
-/// pixel it shares; held draws of different kinds never share one.
+/// glyphs and stored runs. The texts and chart of a card no longer split the
+/// shapes around them into draws of their own. A shape that overlaps a held
+/// draw, or a draw of another kind that does, draws the held draws of that
+/// kind first, so nothing is reordered past a pixel it shares; held draws
+/// of different kinds never share one.
 #[derive(Default)]
 struct HeldOverlays {
     glyphs: Option<std::ops::Range<usize>>,
-    /// The held image commands and the viewport they draw under.
-    images: Option<(std::ops::Range<usize>, ViewportUniformParams)>,
     store_runs: Vec<HeldStoreRun>,
     rects: Vec<HeldRect>,
     /// The union of the held rects a draw of each kind may not pass, by
-    /// [`Overlay`], and last for a shape: those of the other kinds, and for
-    /// a shape every one.
-    unions: [Option<TargetRect>; 4],
-    /// The cells a held rect touches. A rect touching none of them overlaps
-    /// no held draw, so only one that does is checked against each: a
-    /// list's cards held a few hundred draws that every shape after them
-    /// was checked against.
-    cells: CellGrid<HELD_CELL_SHIFT>,
-    /// The held rects a run's bounds overlap, which its records are checked
-    /// against.
-    near: Vec<usize>,
+    /// [`union_slot`]: those of the other kind, and for a shape every one.
+    unions: [Option<TargetRect>; 3],
+    /// Per band of cell rows, the cell columns a held rect touches. A rect
+    /// touching none of them overlaps no held draw, so only one that does is
+    /// checked against each: a list's cards held a few hundred draws that
+    /// every shape after them was checked against.
+    cells: Vec<u64>,
 }
 
 impl HeldOverlays {
     /// The kinds of the draws held.
     fn kinds(&self) -> Kinds {
-        let held = [
-            self.glyphs.is_some(),
-            self.images.is_some(),
-            !self.store_runs.is_empty(),
-        ];
-        OVERLAYS
-            .iter()
-            .zip(held)
-            .filter(|(_, held)| *held)
-            .fold(Kinds::default(), |kinds, (kind, _)| {
-                kinds | Kinds::of(*kind)
-            })
+        let held = |held: bool, kind| {
+            if held {
+                Kinds::of(kind)
+            } else {
+                Kinds::default()
+            }
+        };
+        held(self.glyphs.is_some(), Overlay::Glyphs)
+            | held(!self.store_runs.is_empty(), Overlay::StoreRun)
     }
 
     fn full(&self) -> bool {
@@ -1228,7 +1135,13 @@ impl HeldOverlays {
 
     fn add(&mut self, rect: TargetRect, kind: Overlay) {
         widen(&mut self.unions, rect, kind);
-        self.cells.mark(rect);
+        let (rows, mask) = held_cells(rect);
+        if self.cells.len() < rows.end {
+            self.cells.resize(rows.end, 0);
+        }
+        for row in &mut self.cells[rows] {
+            *row |= mask;
+        }
         self.rects.push(HeldRect { rect, kind });
     }
 
@@ -1247,22 +1160,6 @@ impl HeldOverlays {
         }
     }
 
-    /// Holds the image command at `cmds`, drawn under `viewport` within
-    /// `bounds`.
-    fn hold_image(
-        &mut self,
-        cmds: std::ops::Range<usize>,
-        viewport: ViewportUniformParams,
-        bounds: TargetRect,
-    ) {
-        let cmds = match self.images.take() {
-            Some((held, _)) => held.start..cmds.end,
-            None => cmds,
-        };
-        self.images = Some((cmds, viewport));
-        self.add(bounds, Overlay::Images);
-    }
-
     /// Holds a stored run within `bounds`; one touching nothing of the
     /// target is held without them.
     fn hold_store_run(&mut self, run: HeldStoreRun, bounds: Option<TargetRect>) {
@@ -1272,73 +1169,58 @@ impl HeldOverlays {
         }
     }
 
-    /// The viewport the held images draw under.
-    fn image_viewport(&self) -> Option<ViewportUniformParams> {
-        self.images.as_ref().map(|(_, viewport)| *viewport)
-    }
-
-    /// Whether a draw of `kind`, `None` for a shape, touching `rect` may
-    /// overlap a held draw it may not pass: it lies within their union and
-    /// touches a cell a held rect touches.
-    fn may_touch(&self, rect: TargetRect, kind: Option<Overlay>) -> bool {
-        let slot = kind.map_or(OVERLAYS.len(), |kind| kind as usize);
-        self.unions[slot].is_some_and(|union| target_rects_overlap(union, rect))
-            && self.cells.touched(rect)
+    /// The held rects a draw of `kind`, `None` for a shape, touching `rect`
+    /// may not pass: those of the other kind, or every one for a shape, that
+    /// it overlaps. The union and the cells answer first for most draws.
+    fn passing(
+        &self,
+        rect: TargetRect,
+        kind: Option<Overlay>,
+    ) -> impl Iterator<Item = &HeldRect> + '_ {
+        let (rows, mask) = held_cells(rect);
+        let end = rows.end.min(self.cells.len());
+        let start = rows.start.min(end);
+        let near = self.unions[union_slot(kind)]
+            .is_some_and(|union| target_rects_overlap(union, rect))
+            && self.cells[start..end].iter().any(|row| row & mask != 0);
+        self.rects.iter().filter(move |held| {
+            near && Some(held.kind) != kind && target_rects_overlap(held.rect, rect)
+        })
     }
 
     /// The kinds of the held draws a draw of `kind`, `None` for a shape,
     /// touching `rect` has to wait for: those of other kinds it overlaps.
     fn blocking(&self, rect: TargetRect, kind: Option<Overlay>) -> Kinds {
-        if !self.may_touch(rect, kind) {
-            return Kinds::default();
-        }
-        self.rects
-            .iter()
-            .filter(|held| Some(held.kind) != kind && target_rects_overlap(held.rect, rect))
+        self.passing(rect, kind)
             .fold(Kinds::default(), |kinds, held| kinds | Kinds::of(held.kind))
     }
 
-    /// Gathers the held rects a run of `kind` touching `bounds` may have to
-    /// wait for, and returns whether there are any.
-    fn gather(&mut self, bounds: TargetRect, kind: Option<Overlay>) -> bool {
-        self.near.clear();
-        if !self.may_touch(bounds, kind) {
-            return false;
-        }
-        let Self { rects, near, .. } = self;
-        near.extend(
-            rects
-                .iter()
-                .enumerate()
-                .filter(|(_, held)| {
-                    Some(held.kind) != kind && target_rects_overlap(held.rect, bounds)
-                })
-                .map(|(index, _)| index),
+    /// Gathers into `candidates` the held rects a run of `kind` within
+    /// `bounds` may have to wait for, in the logical space of a run drawn at
+    /// `scale` from `offset`, and returns their kinds.
+    fn gather(
+        &self,
+        (bounds, kind): (TargetRect, Option<Overlay>),
+        (scale, offset): (f32, [f32; 2]),
+        candidates: &mut Vec<Candidate>,
+    ) -> Kinds {
+        candidates.clear();
+        candidates.extend(
+            self.passing(bounds, kind)
+                .map(|held| Candidate::of(held.rect, held.kind, scale, offset)),
         );
-        !near.is_empty()
-    }
-
-    /// The kinds of the gathered rects.
-    fn gathered_kinds(&self) -> Kinds {
-        self.near.iter().fold(Kinds::default(), |kinds, index| {
-            kinds | Kinds::of(self.rects[*index].kind)
-        })
-    }
-
-    /// The gathered rects as candidates in the logical space of a run drawn
-    /// at `scale` from `offset`.
-    fn candidates(&self, scale: f32, offset: [f32; 2]) -> impl Iterator<Item = Candidate> + '_ {
-        self.near.iter().map(move |index| {
-            let held = &self.rects[*index];
-            Candidate::of(held.rect, held.kind, scale, offset)
-        })
+        candidates
+            .iter()
+            .fold(Kinds::default(), |kinds, candidate| {
+                kinds | Kinds::of(candidate.kind)
+            })
     }
 
     /// Forgets the rects of the held draws of `kinds` once they have drawn;
     /// the cells stay marked until nothing is held.
     fn release(&mut self, kinds: Kinds) {
         self.rects.retain(|held| !kinds.has(held.kind));
-        self.unions = [None; 4];
+        self.unions = [None; 3];
         for held in &self.rects {
             widen(&mut self.unions, held.rect, held.kind);
         }
@@ -1348,44 +1230,11 @@ impl HeldOverlays {
     }
 }
 
-/// The open batch of round rect shadows: a shadow that nothing drawn or
-/// held since the batch's place overlaps joins it there, so the shadows of
-/// cards set apart draw as one batch below the cards. One that overlaps
-/// such a draw draws everything before it and opens the next batch.
-#[derive(Default)]
-struct HoistedShadows {
-    /// Whether the pass draws round rect shadows at all; without any,
-    /// nothing marks the cells.
-    marks: bool,
-    instances: Vec<ShadowInstance>,
-    /// The cells of everything drawn or held since the batch's place.
-    cover: CellGrid<COVER_CELL_SHIFT>,
-    /// The batch's place among the pass's batches and the pass-order index
-    /// there.
-    batch_start: usize,
-    depth_start: u32,
-}
-
-impl HoistedShadows {
-    fn begin(&mut self, batch_start: usize, depth_start: u32) {
-        self.cover.clear();
-        self.batch_start = batch_start;
-        self.depth_start = depth_start;
-    }
-
-    fn mark(&mut self, rect: Option<TargetRect>) {
-        if let Some(rect) = rect.filter(|_| self.marks) {
-            self.cover.mark(rect);
-        }
-    }
-}
-
-/// The per-pass state of held and hoisted draws, kept on the renderer
-/// between frames so it never reallocates.
+/// The per-pass state of held draws, kept on the renderer between frames
+/// so it never reallocates.
 #[derive(Default)]
 pub(crate) struct OverlayScratch {
     held: HeldOverlays,
-    hoisted: HoistedShadows,
     /// The held rects gathered for one run, in its logical space.
     candidates: Vec<Candidate>,
 }
@@ -1401,7 +1250,6 @@ struct PassPrep<'a, 's, C> {
     /// draws.
     chunk: Option<usize>,
     held: HeldOverlays,
-    hoisted: HoistedShadows,
     /// The held rects gathered for the run being placed, in its logical
     /// space.
     candidates: Vec<Candidate>,
@@ -1469,7 +1317,7 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         };
         let binding = match self.open {
             Some(open) if open.bound == bound && open.scissor == segment.scissor => open,
-            _ => self.bind(renderer, bound, segment.scissor, scratch),
+            _ => self.bind(renderer, bound, segment.scissor),
         };
         let mut items = merge_items(
             segment,
@@ -1490,15 +1338,20 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     continue;
                 }
                 Item::Image(_) => {
-                    self.image_items(renderer, &mut items, &run, scratch)?;
+                    self.flush(renderer, run.binding);
+                    self.image_run(renderer, &mut items, &run, scratch)?;
                     continue;
                 }
                 Item::Text(text) => self.text_item(renderer, text, &run, scratch)?,
                 Item::RRectShadow(_) => {
-                    self.shadow_items(renderer, &mut items, &run, scratch);
+                    self.flush(renderer, run.binding);
+                    self.shadow_run(renderer, &mut items, &run, scratch);
                     continue;
                 }
-                Item::Composite(composite) => self.composite_items(renderer, composite, &run)?,
+                Item::Composite(composite) => {
+                    self.flush(renderer, run.binding);
+                    self.composite_item(renderer, composite, &run)?;
+                }
             }
             items.next();
         }
@@ -1506,62 +1359,32 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
     }
 
     /// Draws what the open binding still holds and opens one binding
-    /// `bound` under `scissor`.
+    /// `bound` under `scissor`. A batch pushed under another binding takes
+    /// no later draws.
     fn bind(
         &mut self,
         renderer: &mut GpuRenderer,
         bound: ViewportUniformParams,
         scissor: Option<TargetRect>,
-        scratch: &mut PassScratch,
     ) -> SegmentBinding {
-        self.finish(renderer, scratch);
+        self.finish(renderer);
         let open = SegmentBinding {
             uniform_slot: renderer.claim_uniform_slot(bound),
             bound,
             scissor,
         };
         self.open = Some(open);
-        self.hoisted.begin(self.batches.len(), self.depth_seq);
+        self.overlay_segment = None;
+        self.overlay_images = None;
         open
     }
 
-    /// Draws what the open binding still holds and places its open shadow
-    /// batch; the next segment binds afresh.
-    fn finish(&mut self, renderer: &mut GpuRenderer, scratch: &mut PassScratch) {
+    /// Draws what the open binding still holds; the next segment binds
+    /// afresh.
+    fn finish(&mut self, renderer: &mut GpuRenderer) {
         if let Some(open) = self.open.take() {
             self.flush(renderer, open);
-            self.place_hoisted(renderer, open, scratch);
         }
-    }
-
-    /// Puts the open shadow batch at its place as one instanced batch,
-    /// placed in a pass with a depth buffer at the pass-order index there,
-    /// so every later opaque interior hides it.
-    fn place_hoisted(
-        &mut self,
-        renderer: &mut GpuRenderer,
-        binding: SegmentBinding,
-        scratch: &mut PassScratch,
-    ) {
-        if self.hoisted.instances.is_empty() {
-            return;
-        }
-        let start = scratch.shadow_instances.len() as u32;
-        scratch.shadow_instances.append(&mut self.hoisted.instances);
-        let uniform_slot = self.placed_slot(
-            renderer,
-            binding,
-            binding.bound,
-            Some(self.hoisted.depth_start),
-        );
-        self.batches.insert(
-            self.hoisted.batch_start,
-            Batch::Shadows {
-                instances: start..scratch.shadow_instances.len() as u32,
-                uniform_slot,
-                scissor: binding.scissor,
-            },
-        );
     }
 
     /// Opens the arena chunk shapes append to next, its records placed
@@ -1751,9 +1574,6 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         if let Some(cmds) = self.held.glyphs.take_if(|_| kinds.has(Overlay::Glyphs)) {
             self.emit_glyphs(renderer, binding, cmds, base);
         }
-        if let Some((cmds, viewport)) = self.held.images.take_if(|_| kinds.has(Overlay::Images)) {
-            self.emit_images(renderer, binding, (cmds, viewport), base);
-        }
         if kinds.has(Overlay::StoreRun) {
             self.batches
                 .extend(self.held.store_runs.drain(..).map(|held| Batch::StoreRun {
@@ -1790,37 +1610,6 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         });
     }
 
-    /// Pushes held src-over image commands drawn under a viewport, joining
-    /// the last image batch as [`Self::emit_glyphs`] joins glyphs.
-    fn emit_images(
-        &mut self,
-        renderer: &mut GpuRenderer,
-        binding: SegmentBinding,
-        (cmds, viewport): (std::ops::Range<usize>, ViewportUniformParams),
-        base: Option<u32>,
-    ) {
-        let continues = base.is_none() && self.overlay_images == Some(viewport);
-        if let Some(Batch::Images {
-            cmds: last,
-            blend_mode: BlendMode::SrcOver,
-            ..
-        }) = self.batches.last_mut()
-            && continues
-            && last.end == cmds.start
-        {
-            last.end = cmds.end;
-            return;
-        }
-        let uniform_slot = self.placed_slot(renderer, binding, viewport, base);
-        self.overlay_images = Some(viewport);
-        self.batches.push(Batch::Images {
-            cmds,
-            blend_mode: BlendMode::SrcOver,
-            uniform_slot,
-            scissor: binding.scissor,
-        });
-    }
-
     fn run_items(
         &mut self,
         renderer: &mut GpuRenderer,
@@ -1832,7 +1621,6 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         {
             let window = window.unwrap_or(0..u32::MAX);
             let bounds = run_target_bounds(draw, run);
-            self.hoisted.mark(bounds);
             if renderer.run_is_stored(draw) {
                 self.hold_stored_run(renderer, (draw, window), run, bounds);
                 continue;
@@ -1856,16 +1644,14 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         bounds: TargetRect,
         kind: Option<Overlay>,
     ) -> Kinds {
-        if !self.held.gather(bounds, kind) {
-            return Kinds::default();
-        }
-        let gathered = self.held.gathered_kinds();
-        if !run.viewport.transform.is_identity() {
+        let gathered = self.held.gather(
+            (bounds, kind),
+            (run.segment.scale, run.viewport.offset),
+            &mut self.candidates,
+        );
+        if gathered.is_empty() || !run.viewport.transform.is_identity() {
             return gathered;
         }
-        self.candidates.clear();
-        self.candidates
-            .extend(self.held.candidates(run.segment.scale, run.viewport.offset));
         records_meeting(
             (draw, window),
             run.segment.scale,
@@ -1980,73 +1766,6 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         }
     }
 
-    /// Places the images starting a run of items: a src-over image is held
-    /// with the overlays, an image of another blend mode draws what is held
-    /// and starts a batch of the images after it that share its mode.
-    fn image_items(
-        &mut self,
-        renderer: &mut GpuRenderer,
-        items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
-        run: &SegmentRun<'s, '_>,
-        scratch: &mut PassScratch,
-    ) -> Result<(), String> {
-        let Some(Item::Image(index)) = items.peek() else {
-            unreachable!("an image run starts at an image");
-        };
-        let image = &run.segment.scene.images[*index];
-        if supported_blend_mode(image.blend_mode) != BlendMode::SrcOver {
-            self.flush(renderer, run.binding);
-            return self.image_run(renderer, items, run, scratch);
-        }
-        items.next();
-        self.hold_image(renderer, image, run, scratch)
-    }
-
-    /// Holds a src-over image's draw, drawing what is held first when the
-    /// image overlaps a held draw of another kind, the held images draw
-    /// under another viewport or the hold is full.
-    fn hold_image(
-        &mut self,
-        renderer: &mut GpuRenderer,
-        image: &crate::scene::ImageDraw,
-        run: &SegmentRun<'s, '_>,
-        scratch: &mut PassScratch,
-    ) -> Result<(), String> {
-        if self
-            .held
-            .image_viewport()
-            .is_some_and(|viewport| viewport != run.viewport)
-        {
-            self.draw_held(renderer, run.binding, Kinds::of(Overlay::Images));
-        }
-        let start = scratch.image_cmds.len();
-        renderer.append_image_draw_cmd(
-            image,
-            run.viewport,
-            run.segment.scale,
-            (&mut scratch.image_vertices, &mut scratch.image_indices),
-            &mut scratch.image_clips,
-            &mut scratch.image_cmds,
-        )?;
-        let Some(bounds) = scratch
-            .image_cmds
-            .get(start)
-            .map(crate::render::ImageDrawCmd::bounds)
-        else {
-            return Ok(());
-        };
-        let waits = if self.held.full() {
-            Kinds::ALL
-        } else {
-            self.held.blocking(bounds, Some(Overlay::Images))
-        };
-        self.draw_held(renderer, run.binding, waits);
-        self.held
-            .hold_image(start..scratch.image_cmds.len(), run.viewport, bounds);
-        self.hoisted.mark(Some(bounds));
-        Ok(())
-    }
-
     fn image_run(
         &mut self,
         renderer: &mut GpuRenderer,
@@ -2073,56 +1792,49 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                 &mut scratch.image_cmds,
             )?;
         }
-        self.mark_images(&scratch.image_cmds[cmd_start..]);
-        if cmd_start < scratch.image_cmds.len() {
-            let uniform_slot = self.placed_slot(renderer, run.binding, run.viewport, None);
-            self.overlay_images = Some(run.viewport);
-            self.batches.push(Batch::Images {
-                cmds: cmd_start..scratch.image_cmds.len(),
-                blend_mode,
-                uniform_slot,
-                scissor: run.segment.scissor,
-            });
-        }
+        self.push_images(
+            renderer,
+            run,
+            cmd_start..scratch.image_cmds.len(),
+            blend_mode,
+        );
         Ok(())
     }
 
-    /// Marks what image commands drawn in place cover, for the shadows
-    /// hoisted past them.
-    fn mark_images(&mut self, cmds: &[crate::render::ImageDrawCmd]) {
-        for cmd in cmds {
-            self.hoisted.mark(Some(cmd.bounds()));
-        }
-    }
-
-    /// Places the round rect shadow starting a run of items. Drawn without
-    /// a turn it joins the open shadow batch, after drawing everything so
-    /// far and opening the next batch when it overlaps a draw since the
-    /// batch's place. Under a turn, which a batch binds, it draws in place
-    /// with the shadows after it.
-    fn shadow_items(
+    /// Pushes image commands drawn under `run`'s viewport, joining the last
+    /// image batch when they are src-over and follow its commands under the
+    /// same binding and viewport.
+    fn push_images(
         &mut self,
         renderer: &mut GpuRenderer,
-        items: &mut Peekable<impl Iterator<Item = Item<'s>>>,
         run: &SegmentRun<'s, '_>,
-        scratch: &mut PassScratch,
+        cmds: std::ops::Range<usize>,
+        blend_mode: BlendMode,
     ) {
-        let Some(Item::RRectShadow(draw)) = items.peek() else {
-            unreachable!("a shadow run starts at a shadow");
-        };
-        let draw = *draw;
-        if run.viewport != run.binding.bound {
-            self.flush(renderer, run.binding);
-            self.shadow_run(renderer, items, run, scratch);
+        if cmds.is_empty() {
             return;
         }
-        if shadow_target_rect(draw, run).is_some_and(|bounds| self.hoisted.cover.touched(bounds)) {
-            self.flush(renderer, run.binding);
-            self.place_hoisted(renderer, run.binding, scratch);
-            self.hoisted.begin(self.batches.len(), self.depth_seq);
+        let continues =
+            blend_mode == BlendMode::SrcOver && self.overlay_images == Some(run.viewport);
+        if let Some(Batch::Images {
+            cmds: last,
+            blend_mode: BlendMode::SrcOver,
+            ..
+        }) = self.batches.last_mut()
+            && continues
+            && last.end == cmds.start
+        {
+            last.end = cmds.end;
+            return;
         }
-        items.next();
-        append_shadow_instances(draw, run.segment.scale, &mut self.hoisted.instances);
+        let uniform_slot = self.placed_slot(renderer, run.binding, run.viewport, None);
+        self.overlay_images = Some(run.viewport);
+        self.batches.push(Batch::Images {
+            cmds,
+            blend_mode,
+            uniform_slot,
+            scissor: run.segment.scissor,
+        });
     }
 
     /// Draws a run of round rect shadows as one instanced batch, placed in
@@ -2139,7 +1851,6 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             items.next_if(|item| matches!(item, Item::RRectShadow(_)))
         {
             append_shadow_instances(draw, run.segment.scale, &mut scratch.shadow_instances);
-            self.hoisted.mark(shadow_target_rect(draw, run));
         }
         let end = scratch.shadow_instances.len();
         if start == end {
@@ -2163,6 +1874,18 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         run: &SegmentRun<'s, '_>,
         scratch: &mut PassScratch,
     ) -> Result<(), String> {
+        if self.depth
+            && text_draw_scissor(text, run.segment.scale, run.viewport).is_some_and(|rect| {
+                self.held
+                    .blocking(rect, Some(Overlay::Glyphs))
+                    .has(Overlay::StoreRun)
+            })
+        {
+            // A retained run takes its place in the pass's order as it is
+            // appended: the held runs it lies over draw first, so it falls
+            // past their records.
+            self.draw_held(renderer, run.binding, Kinds::of(Overlay::StoreRun));
+        }
         let glyph_start = scratch.glyph_cmds.len();
         let drew_glyphs = renderer.append_text_glyph_draws(
             text,
@@ -2182,12 +1905,10 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     })
                 };
                 self.draw_held(renderer, run.binding, waits);
-                let bounds = cmds.iter().map(crate::render::GlyphDrawCmd::bounds);
-                for rect in bounds.clone() {
-                    self.hoisted.mark(Some(rect));
-                }
-                self.held
-                    .hold_glyphs(glyph_start..scratch.glyph_cmds.len(), bounds);
+                self.held.hold_glyphs(
+                    glyph_start..scratch.glyph_cmds.len(),
+                    cmds.iter().map(crate::render::GlyphDrawCmd::bounds),
+                );
             }
             return Ok(());
         }
@@ -2201,46 +1922,13 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
             &mut scratch.image_indices,
             &mut scratch.image_cmds,
         )?;
-        self.mark_images(&scratch.image_cmds[cmd_start..]);
-        if cmd_start < scratch.image_cmds.len() {
-            let continues = self.overlay_images == Some(run.viewport);
-            match self.batches.last_mut() {
-                Some(Batch::Images {
-                    cmds, blend_mode, ..
-                }) if cmds.end == cmd_start && *blend_mode == BlendMode::SrcOver && continues => {
-                    cmds.end = scratch.image_cmds.len();
-                }
-                _ => {
-                    let uniform_slot = self.placed_slot(renderer, run.binding, run.viewport, None);
-                    self.overlay_images = Some(run.viewport);
-                    self.batches.push(Batch::Images {
-                        cmds: cmd_start..scratch.image_cmds.len(),
-                        blend_mode: BlendMode::SrcOver,
-                        uniform_slot,
-                        scissor: run.segment.scissor,
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Draws what is held, then prepares one resolved composite and marks
-    /// what it covers for the shadows hoisted past it.
-    fn composite_items(
-        &mut self,
-        renderer: &mut GpuRenderer,
-        composite: &'s ResolvedComposite,
-        run: &SegmentRun<'s, '_>,
-    ) -> Result<(), String> {
-        self.flush(renderer, run.binding);
-        let offset = run.segment.offset;
-        let target_size = self.target_size();
-        self.hoisted.mark(
-            scissor_in_target(composite.dest, target_size, offset)
-                .and_then(|dest| intersect_scissors(Some(dest), run.segment.scissor).flatten()),
+        self.push_images(
+            renderer,
+            run,
+            cmd_start..scratch.image_cmds.len(),
+            BlendMode::SrcOver,
         );
-        self.composite_item(renderer, composite, run)
+        Ok(())
     }
 
     /// Prepares one resolved composite where it lands in the target,

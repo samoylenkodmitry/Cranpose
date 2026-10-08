@@ -111,19 +111,6 @@ impl ShapeRecords {
             .map(|body| reconstruct(body, &self.curves[index], self.source(index)))
     }
 
-    /// The rect record `index`'s pixels can reach, as
-    /// [`ShapeRecord::coverage_rect`] gives it. Only a scope-recorded arc,
-    /// whose tight rect comes from its original arguments, looks them up.
-    pub fn coverage_rect(&self, index: usize) -> Option<crate::Rect> {
-        let (body, curve) = self.bodies.get(index).zip(self.curves.get(index))?;
-        let source = if crate::record::rect_is_loose(body.flags) {
-            self.source(index)
-        } else {
-            [0.0; 4]
-        };
-        Some(reconstruct(body, curve, source).coverage_rect())
-    }
-
     /// The inside record `index` leaves untouched when it is a stroked rect
     /// or rounded rect blending src-over, as two rects whose union holds it:
     /// its rect inset by half the stroke width across one axis and, across
