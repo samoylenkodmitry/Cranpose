@@ -5,6 +5,11 @@ fn crate_source(path: &str) -> String {
     std::fs::read_to_string(crate_dir.join(path)).expect("failed to read cranpose source file")
 }
 
+/// The web mirror: the bridge and the attributes it works out for each node.
+fn web_mirror_source() -> String {
+    crate_source("src/web_accessibility.rs") + &crate_source("src/web_accessibility_attributes.rs")
+}
+
 fn voiceover_value_source() -> String {
     assert!(
         crate_source("src/ios_accessibility.rs")
@@ -1142,7 +1147,7 @@ fn every_platform_bridge_carries_focus_both_ways() {
         "TalkBack should report where its cursor landed and follow the app's focus, with the frame loop resolving the id"
     );
 
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
         web_source.contains("\"focusin\"")
             && web_source.contains("node.focus()")
@@ -1197,7 +1202,7 @@ fn every_platform_bridge_lets_a_reader_move_an_adjustable_control() {
         "TalkBack reads a RangeInfo and hands a new value back through the wire"
     );
 
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
         web_source.contains("\"aria-valuenow\"")
             && web_source.contains("fn attach_key_listener(")
@@ -1313,7 +1318,7 @@ fn every_platform_bridge_reads_announcements_out() {
         "TalkBack reads a virtual view's live region only through the host view, so both paths go out as one spoken line"
     );
 
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
         web_source.contains("region.set_attribute(\"aria-live\", politeness)?")
             && web_source.contains("accessibility::live_region_announcements("),
@@ -3768,7 +3773,7 @@ fn every_platform_bridge_pages_a_scroll_container() {
         "a row sits under its list in the virtual view tree, so TalkBack's page gesture on the row reaches the list"
     );
 
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
         web_source.contains("\"PageDown\"")
             && web_source.contains("data-cranpose-page")
@@ -3871,7 +3876,7 @@ fn every_platform_bridge_offers_custom_actions() {
         "TalkBack lists custom actions on the node and the shell drains them each frame"
     );
 
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
         web_source.contains("data-cranpose-action")
             && web_source.contains("fn update_actions(")
@@ -3901,7 +3906,7 @@ fn every_platform_offers_the_long_press_of_a_control() {
 
     let desktop_source = crate_source("src/desktop_accessibility.rs");
     let ios_source = crate_source("src/ios_accessibility.rs");
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
         desktop_source.contains("accessibility::reader_actions(element)")
             && ios_source.contains("accessibility::reader_actions(element)")
@@ -3919,7 +3924,7 @@ fn a_dialog_takes_the_reader_along_when_it_opens() {
         "VoiceOver gets a screen change aimed at the dialog that opened"
     );
 
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
         web_source.contains("accessibility::opened_dialog(")
             && web_source.contains("let opened = opened_dialog == Some(element.node_id);"),
@@ -3978,7 +3983,7 @@ fn every_platform_takes_a_reader_to_a_row_by_number() {
         "TalkBack names a row through Android's own scroll-to-position action"
     );
 
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
         web_source.contains("\"Home\"")
             && web_source.contains("\"End\"")
@@ -4087,9 +4092,9 @@ fn every_platform_says_which_tab_of_how_many() {
         "VoiceOver reads the tab's place as its value"
     );
 
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
-        web_source.contains("node.set_attribute(\"aria-posinset\", &item.position.to_string())?;"),
+        web_source.contains("self.set_number(\"aria-posinset\", item.position);"),
         "the web mirror sets the tab's position in its set"
     );
 
@@ -4132,7 +4137,7 @@ fn every_platform_reads_a_pane_title_when_the_app_moves_on() {
     for source in [
         crate_source("src/android_accessibility.rs"),
         crate_source("src/ios_accessibility.rs"),
-        crate_source("src/web_accessibility.rs"),
+        web_mirror_source(),
         crate_source("src/desktop_accessibility.rs"),
     ] {
         assert!(
@@ -4208,7 +4213,7 @@ fn every_platform_lets_a_reader_move_the_caret_of_a_field() {
         "VoiceOver gets the focused field as the keyboard's UITextInput view"
     );
 
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
         web_source.contains("\"selectionchange\"")
             && web_source.contains("accessibility::set_text_selection(")
@@ -4251,9 +4256,9 @@ fn every_platform_with_a_reader_signal_reports_it_and_voiceover_takes_the_magic_
         projection_source.contains(".chain(details.magic_tap_label.clone())"),
         "the other platforms list the magic tap by its label"
     );
-    let web_source = crate_source("src/web_accessibility.rs");
+    let web_source = web_mirror_source();
     assert!(
-        web_source.contains("node.set_attribute(\"lang\", language)?;"),
+        web_source.contains("self.set(\"lang\", language);"),
         "the web mirror carries the language"
     );
     let desktop_source = crate_source("src/desktop_accessibility.rs");
@@ -4298,7 +4303,7 @@ fn every_platform_says_why_a_field_is_wrong() {
         "TalkBack gets the node's error"
     );
     for source in [
-        crate_source("src/web_accessibility.rs"),
+        web_mirror_source(),
         crate_source("src/desktop_accessibility.rs"),
     ] {
         assert!(
@@ -4321,7 +4326,7 @@ fn no_platform_reads_a_password_out() {
         "accesskit reads the node as a password input"
     );
     assert!(
-        crate_source("src/web_accessibility.rs").contains(r#""aria-roledescription", "password""#),
+        web_mirror_source().contains(r#""aria-roledescription", "password""#),
         "the web mirror says the field is a password"
     );
     assert!(
@@ -4339,7 +4344,7 @@ fn every_platform_reads_the_traversal_order_from_the_projection() {
     );
     for source in [
         crate_source("src/ios_accessibility.rs"),
-        crate_source("src/web_accessibility.rs"),
+        web_mirror_source(),
         crate_source("src/desktop_accessibility.rs"),
         crate_source("src/android_accessibility_wire.rs"),
     ] {
@@ -4363,7 +4368,7 @@ fn every_platform_opens_and_closes_a_control() {
         "accesskit says whether the control is open"
     );
     assert!(
-        crate_source("src/web_accessibility.rs").contains(r#""aria-expanded""#),
+        web_mirror_source().contains(r#""aria-expanded""#),
         "the web mirror says whether the control is open"
     );
     assert!(
@@ -4387,7 +4392,7 @@ fn every_platform_sends_a_control_away() {
     );
     for source in [
         crate_source("src/desktop_accessibility.rs"),
-        crate_source("src/web_accessibility.rs"),
+        web_mirror_source(),
     ] {
         assert!(
             source.contains("accessibility::listed_actions(element)"),

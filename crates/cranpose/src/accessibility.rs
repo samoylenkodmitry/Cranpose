@@ -47,7 +47,10 @@ pub(crate) fn opened_dialog(
 
 /// Whether a person edits the text of this field through the mirror: a text
 /// field with a caret, or one that holds a secret.
-#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
 pub(crate) fn edits_text(element: &AccessibilityElement) -> bool {
     element.role.is_text_field()
         && (element.details().text_selection.is_some() || element.details().password)
