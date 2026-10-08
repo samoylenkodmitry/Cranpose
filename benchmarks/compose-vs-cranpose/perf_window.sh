@@ -1,13 +1,15 @@
 #!/system/bin/sh
 # One measurement window, run on the device so no adb round trip lands inside it.
-# Usage: perf_window.sh PID PACKAGE LAYER SAMPLES INTERVAL_S GFXINFO(0|1)
+# Usage: perf_window.sh PIDS PACKAGE LAYER SAMPLES INTERVAL_S GFXINFO(0|1)
+# PIDS is one process id, or a comma-separated list for an app that runs in
+# several (a browser): the first is the one that must stay alive.
 #
 # SurfaceFlinger keeps only the last frames of a layer: 128 on Android 10, 64
 # on Android 17, which is half a second at 120 Hz. A poller of its own reads
 # the layer every INTERVAL_S, so pick it below that span; the slower clock and
 # thermal samples run beside it and never delay a poll. The host merges the
 # polls and counts any two that fail to overlap.
-PID=$1
+PIDS=$(echo "$1" | tr ',' ' ')
 PKG=$2
 LAYER=$3
 SAMPLES=$4
@@ -20,9 +22,16 @@ LATENCY_LOG=/data/local/tmp/perf_window_latency.$$
 STOP=/data/local/tmp/perf_window_stop.$$
 
 snap() {
-  echo "STAT $(cat /proc/$PID/stat)"
-  for task in /proc/$PID/task/*; do
-    echo "TASK $(cat $task/stat 2>/dev/null)"
+  first=1
+  for pid in $PIDS; do
+    stat=$(cat /proc/$pid/stat 2>/dev/null)
+    # A helper process that ended is left out; the first, the app itself,
+    # shows as an empty STAT line, which the host reads as the app's end.
+    if [ -n "$stat" ] || [ $first = 1 ]; then echo "STAT $stat"; fi
+    first=0
+    for task in /proc/$pid/task/*; do
+      echo "TASK $(cat $task/stat 2>/dev/null)"
+    done
   done
 }
 

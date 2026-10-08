@@ -9,9 +9,11 @@ frames, from 4 to 15 seconds, kept short so a night's run of every framework
 stays short. Writes `frameworks.json` in the dashboard's run
 format, kind `frameworks`: device, subjects, every leg and per-app medians.
 `--install DIR` first installs each app's `APP.apk` from DIR, as the
-nightly hands over the builds macm3 made.
+nightly hands over the builds macm3 made. `--browser DIR` measures the pages
+`build_apps.sh browser DIR` built instead, each open in Chrome on the phone at
+`--tier`, and writes a run of kind `browser`.
 Usage: frameworks.py --serial SERIAL --output DIR [--apps compose,cranpose,...]
-                     [--install DIR] [--main COMMIT]
+                     [--install DIR | --browser DIR --tier N] [--main COMMIT]
 """
 
 import argparse
@@ -23,7 +25,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ab import DECIDING, REPORTED, leg_record, metric_values, prime, size_window
-from measure import APPS, HEAVY, HERE, REMOTE_WINDOW, Device, device_lock, measure_run
+from browser import BrowserServer
+from measure import (APPS, CHROME, HEAVY, HERE, REMOTE_WINDOW, AppTarget, Device, PageTarget, device_lock,
+                     measure_run)
 import versions
 
 DEFAULT_APPS = 'compose,cranpose,views,flutter,rn,nativescript,lynx,maui,avalonia,egui,slint,web'
@@ -37,23 +41,34 @@ def measure_frameworks(args):
     args.output.mkdir(parents=True, exist_ok=True)
     device = Device(args.serial)
     apps = args.apps.split(',')
-    if args.install:
+    if args.browser:
+        server = BrowserServer(args.browser)
+        device.adb('reverse', f'tcp:{server.port}', f'tcp:{server.port}')
+        targets = {app: PageTarget(server, app, args.tier) for app in apps}
+    else:
+        targets = {app: AppTarget(app) for app in apps}
         for app in apps:
-            if (apk := args.install / f'{app}.apk').exists():
+            if args.install and (apk := args.install / f'{app}.apk').exists():
                 device.install(app, apk)
     device.adb('push', str(HERE / 'perf_window.sh'), REMOTE_WINDOW)
     for app in apps:
-        prime(device, app, args.scenario, args)
-    # The versions macm3 built with, and the WebView the web page runs in.
-    built = json.loads((args.install / 'versions.json').read_text()) if args.install and (
-        args.install / 'versions.json').exists() else {}
-    webview = device.shell('dumpsys', 'package', 'com.google.android.webview')
-    if match := re.search(r'versionName=(\S+)', webview):
-        built['web'] = f'WebView {match.group(1)}, {built.get("web") or versions.version("web", "android")}'
+        prime(device, targets[app], args.scenario, args)
+    # The versions macm3 built with, and the browser or WebView the web page
+    # runs in.
+    folder = args.browser or args.install
+    built = json.loads((folder / 'versions.json').read_text()) if folder and (
+        folder / 'versions.json').exists() else {}
+    chrome = re.search(r'versionName=(\S+)', device.shell('dumpsys', 'package', CHROME))
+    if args.browser:
+        built['web'] = f'Chrome {chrome.group(1)}' if chrome else 'Chrome'
+    else:
+        webview = device.shell('dumpsys', 'package', 'com.google.android.webview')
+        if match := re.search(r'versionName=(\S+)', webview):
+            built['web'] = f'WebView {match.group(1)}, {built.get("web") or versions.version("web", "android")}'
     legs = []
     for round_index in range(args.rounds):
         for app in apps if round_index % 2 == 0 else apps[::-1]:
-            run = measure_run(device, app, args.scenario, args, args.output,
+            run = measure_run(device, targets[app], args.scenario, args, args.output,
                               args.windows.get((app, args.scenario)))
             size_window(args, app, args.scenario, run['fps'])
             legs.append(leg_record(run, app, len(legs)))
@@ -65,20 +80,29 @@ def measure_frameworks(args):
               if (values := metric_values(legs, app, metric))}
         for app in apps
     }
+    identity = {key: device.shell('getprop', key).strip() for key in
+                ['ro.product.model', 'ro.build.version.release', 'ro.hardware']}
+    if args.browser:
+        # The dashboard lists a device's latest comparison: the browser's has
+        # a card of its own.
+        identity['ro.product.model'] += f' · Chrome {chrome.group(1).split(".")[0]}' if chrome else ' · Chrome'
+        subjects = [versions.subject(app, 'browser', built, args.release) for app in apps]
+    else:
+        subjects = [{**versions.subject(app, 'android', built, args.release), 'package': APPS[app]['package']}
+                    for app in apps]
     return {
-        'kind': 'frameworks',
+        'kind': 'browser' if args.browser else 'frameworks',
         'started_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
         'main': args.main,
         'release': args.release,
-        'device': {key: device.shell('getprop', key).strip() for key in
-                   ['ro.product.model', 'ro.build.version.release', 'ro.hardware']},
-        'subjects': [{**versions.subject(app, 'android', built, args.release), 'package': APPS[app]['package']}
-                     for app in apps],
+        'device': identity,
+        'subjects': subjects,
         'protocol': {'warmup_s': args.warmup, 'window_s': args.window, 'min_frames': args.min_frames,
                      'max_window_s': args.max_window, 'rounds': args.rounds},
         'scenarios': [{
             'scenario': args.scenario,
-            'extras': (HEAVY.get(args.scenario, '') + ' ' + args.extra).strip(),
+            'extras': f'tier {args.tier}, in Chrome' if args.browser else (
+                HEAVY.get(args.scenario, '') + ' ' + args.extra).strip(),
             'legs': legs,
             'summary': summary,
             'verdicts': {},
@@ -92,7 +116,7 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--serial', required=True)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--apps', default=DEFAULT_APPS)
+    parser.add_argument('--apps', help='by default every app built, or every page in `--browser`')
     parser.add_argument('--scenario', default='gauntlet')
     parser.add_argument('--rounds', type=int, default=2)
     parser.add_argument('--warmup', type=float, default=1.5)
@@ -104,9 +128,15 @@ def main():
     parser.add_argument('--clock-ticks', type=int, default=100)
     parser.add_argument('--extra', default='', help='more `am start` extras')
     parser.add_argument('--install', type=Path, help='folder of APP.apk builds to install first')
+    parser.add_argument('--browser', type=Path, metavar='DIR',
+                        help='folder of pages `build_apps.sh browser` built, to open in Chrome')
+    parser.add_argument('--tier', type=int, default=4, help="the gauntlet's tier in the browser")
     parser.add_argument('--main', help="the commit the Cranpose app was built at, recorded with the run")
     parser.add_argument('--release', help='the release tag `cranpose-release` was built at')
     args = parser.parse_args()
+    if not args.apps:
+        args.apps = ','.join(name for name in versions.BROWSER_APPS if (args.browser / name / 'index.html').exists()
+                             ) if args.browser else DEFAULT_APPS
     with device_lock(args.serial):
         run = measure_frameworks(args)
     (args.output / 'frameworks.json').write_text(json.dumps(run, indent=1))

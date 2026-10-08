@@ -6,6 +6,10 @@ description = "Cranpose half of the Cranpose versus Jetpack Compose device compa
 license = "Apache-2.0 OR MIT"
 publish = false
 
+# wasm-pack's wasm-opt reads the instructions rustc emits for the browser.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O3", "--all-features"]
+
 [lib]
 name = "perf_compare"
 crate-type = ["cdylib", "rlib"]
@@ -23,6 +27,9 @@ renderer-wgpu = ["cranpose/renderer-wgpu"]
 # no Roboto files.
 desktop = ["cranpose/desktop", "cranpose/embedded-default-font"]
 android = ["cranpose/android", "cranpose/release-log-info"]
+# The gauntlet in a browser: `wasm-pack build --target web --no-default-features
+# --features web,renderer-wgpu`. The faces are embedded, as a page has no files.
+web = ["cranpose/web", "dep:wasm-bindgen", "dep:wasm-logger"]
 
 [dependencies]
 cranpose = { path = "../../../crates/cranpose", default-features = false }
@@ -31,6 +38,14 @@ cranpose-ui = { path = "../../../crates/cranpose-ui" }
 cranpose-foundation = { path = "../../../crates/cranpose-foundation" }
 log = "0.4"
 perf-data = { path = "../perf-data" }
+
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-logger = { version = "0.2", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Location"] }
 
 [dev-dependencies]
 cranpose-app-shell = { path = "../../../crates/cranpose-app-shell" }

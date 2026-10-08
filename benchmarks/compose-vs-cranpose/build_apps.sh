@@ -7,6 +7,8 @@
 #                                with DIR/versions.json naming their versions
 #   build_apps.sh release TAG    Cranpose's desktop app at the release TAG, where
 #                                desktop.py runs it as `cranpose-release`
+#   build_apps.sh browser DIR    every app that targets the browser, as DIR/APP/index.html
+#                                with DIR/versions.json naming their versions
 #
 # Cranpose's Android apps are not here: the nightly builds them on the Mac the
 # phone is attached to, signed by the key its earlier builds carry.
@@ -24,7 +26,7 @@ set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
 cache=${PERF_BUILD_CACHE:-$HOME/ci-cache/gauntlet}
-mode=${1:?usage: build_apps.sh desktop | android DIR | release TAG}
+mode=${1:?usage: build_apps.sh desktop | android DIR | release TAG | browser DIR}
 mkdir -p "$cache"
 
 export PATH="$cache/flutter/bin:/opt/homebrew/bin:$HOME/.cargo/bin:$PATH"
@@ -232,6 +234,26 @@ android)
     cp "$here/web-app/android/app/build/outputs/apk/release/app-release.apk" "$out/web.apk"
     python3 "$here/versions.py" write "$out/versions.json" --platform android
     ;;
+browser)
+    out=${2:?usage: build_apps.sh browser DIR}
+    dist=$here/browser-dist
+    mkdir -p "$out" "$dist"
+    flutter_ready
+    tools=$(toolchains)
+    # Cranpose's app reads the whole workspace, which moves every night.
+    step cranpose-web
+    rust_target cranpose-app
+    (cd "$here/cranpose-app" && env -u CARGO_TARGET_DIR wasm-pack build --target web --release \
+        --no-default-features --features web,renderer-wgpu)
+    mkdir -p "$dist/cranpose"
+    cp "$here/cranpose-app/index.html" "$dist/cranpose/index.html"
+    ditto "$here/cranpose-app/pkg" "$dist/cranpose/pkg"
+    # The page, with the Roboto files its style names.
+    build web-browser browser-dist/web web-app shared-ts -- \
+        attempt web bash -c "cd '$here/web-app' && npm ci --no-audit --no-fund && npx tsc -p tsconfig.json && rm -rf '$dist/web' && mkdir -p '$dist/web/fonts' && cp -R www/. '$dist/web/' && cp '$here/fonts/'*.ttf '$dist/web/fonts/'"
+    ditto "$dist" "$out"
+    python3 "$here/versions.py" write "$out/versions.json" --platform browser
+    ;;
 release)
     tag=${2:?usage: build_apps.sh release TAG}
     tree=$cache/release-tree
@@ -253,7 +275,7 @@ release)
     ln -sfn "$cache/targets/cranpose-release" "$here/cranpose-app/target-release"
     ;;
 *)
-    echo "usage: build_apps.sh desktop | android DIR | release TAG" >&2
+    echo "usage: build_apps.sh desktop | android DIR | release TAG | browser DIR" >&2
     exit 2
     ;;
 esac

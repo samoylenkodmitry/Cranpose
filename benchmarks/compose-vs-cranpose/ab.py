@@ -36,8 +36,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from measure import (APPS, HEAVY, REMOTE_WINDOW, HERE, Device, device_lock, frame_rate, launch, measure_run,
-                     memory_mb)
+from measure import (APPS, HEAVY, REMOTE_WINDOW, HERE, AppTarget, Device, device_lock, frame_rate,
+                     measure_run, memory_mb)
 
 # Metric: (threshold, whether the threshold is relative, whether more is better).
 DECIDING = {
@@ -136,11 +136,13 @@ def size_window(args, subject, scenario, rate):
 
 def prime(device, subject, scenario, args):
     """Launches the build once unmeasured, and sizes its first window from the
-    frame rate it reached."""
-    launch(device, subject, scenario, (HEAVY.get(scenario, '') + ' ' + args.extra).split())
+    frame rate it reached. `subject` is an installed app's name, or the target
+    of a page in the browser."""
+    target = AppTarget(subject) if isinstance(subject, str) else subject
+    target.launch(device, scenario, (HEAVY.get(scenario, '') + ' ' + args.extra).split())
     time.sleep(args.prime)
-    size_window(args, subject, scenario, frame_rate(device, subject))
-    device.shell('am', 'force-stop', APPS[subject]['package'])
+    size_window(args, target.name, scenario, frame_rate(device, target.layer(device)))
+    target.stop(device)
 
 
 def main():

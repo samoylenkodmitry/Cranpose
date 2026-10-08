@@ -5,6 +5,8 @@
 
 mod data;
 mod screens;
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+mod web;
 
 use std::cell::Cell;
 
