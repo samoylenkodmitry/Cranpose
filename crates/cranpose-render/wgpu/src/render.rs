@@ -2509,6 +2509,13 @@ pub(crate) struct ImageDrawCmd {
     clip: Option<u32>,
 }
 
+impl ImageDrawCmd {
+    /// Target pixels the draw can touch: its scissor.
+    pub(crate) fn bounds(&self) -> TargetRect {
+        self.scissor
+    }
+}
+
 /// Which glyph pipeline draws a stretch of quads: plain quads, sampled
 /// within their glyph's texel centers; plain quads on whole pixels at one
 /// texel a pixel, whose samples land on those centers unclamped; or quads

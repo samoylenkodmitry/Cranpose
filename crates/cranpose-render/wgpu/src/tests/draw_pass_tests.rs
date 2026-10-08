@@ -128,7 +128,7 @@ fn held_glyph_cells_answer_as_checking_every_held_draw() {
     // covered too.
     for extent in [300, 2_200, 6_000] {
         for _ in 0..200 {
-            let mut pending = PendingGlyphs::default();
+            let mut pending = HeldDraws::default();
             let held: Vec<TargetRect> = (0..random.next(40)).map(|_| random.rect(extent)).collect();
             pending.hold(0..1, held.iter().copied());
             for _ in 0..20 {
@@ -140,7 +140,7 @@ fn held_glyph_cells_answer_as_checking_every_held_draw() {
                     "{held:?} against {query:?}"
                 );
             }
-            assert!(pending.take().is_some());
+            assert!(pending.take().glyphs.is_some());
             assert!(
                 !pending.overlaps((0, 0, extent, extent)),
                 "taking forgets every cell"
