@@ -183,7 +183,9 @@ def commit_run(tree, run, file, stamp, device):
         what = f"{run['release']} against main {(run.get('main') or '')[:9]}"
     else:
         what = ', '.join(subject['name'] for subject in run['subjects'])
-    git('commit', '-q', '-m', f"{run['kind']} {stamp}: {what} on {device}", cwd=tree)
+    # Unsigned: a Mac that signs the user's commits has no one to answer its
+    # pinentry at night (macm3, 2026-10-08), and the data holds no user's work.
+    git('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', f"{run['kind']} {stamp}: {what} on {device}", cwd=tree)
 
 
 if __name__ == '__main__':

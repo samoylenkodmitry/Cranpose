@@ -55,11 +55,14 @@ class ProposeVersionsTest(unittest.TestCase):
             record.write_text(json.dumps({'nativescript': {
                 'from': '9.1.2', 'to': '9.1.3', 'files': ['nativescript-app/package.json'], 'reverted': False}}))
             tools.mkdir()
+            # A Mac whose git signs every commit with a key only a person can unlock.
+            machine = Path(folder) / 'machine-gitconfig'
+            machine.write_text('[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = false\n')
             (tools / 'gh').write_text('#!/bin/sh\ncase "$2" in create) echo https://example.com/pull/1;; esac\n')
             (tools / 'gh').chmod(0o755)
             subprocess.run(['python3', 'scripts/perf/propose_versions.py', '--record', str(record)], cwd=repo,
                            check=True, capture_output=True, text=True,
-                           env=dict(ENV, PATH=f'{tools}{os.pathsep}{os.environ["PATH"]}'))
+                           env=dict(ENV, PATH=f'{tools}{os.pathsep}{os.environ["PATH"]}', GIT_CONFIG_GLOBAL=str(machine)))
             proposed = git('diff', '--name-only', 'main', 'origin/perf/framework-versions', cwd=repo).splitlines()
             self.assertEqual(sorted(proposed), [f'{BENCHMARK}/nativescript-app/package-lock.json',
                                                 f'{BENCHMARK}/nativescript-app/package.json'])
