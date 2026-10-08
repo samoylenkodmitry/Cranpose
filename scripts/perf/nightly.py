@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -59,6 +60,13 @@ def release_tree_at(tree, tag):
     return tree
 
 
+# Attempts at a build, and the seconds before the next: on 2026-10-08 a build
+# timed out waiting for the Gradle cache lock that a build of another job on
+# the machine held.
+BUILD_ATTEMPTS = 2
+BUILD_RETRY_DELAY_S = 60
+
+
 def build(tree, suffix=None):
     command = ['./gradlew', '--no-daemon', '-q', ':app:assembleRelease']
     if suffix:
@@ -66,7 +74,15 @@ def build(tree, suffix=None):
     # Each tree builds into its own target: one target shared by two trees
     # can hand one tree the other's library.
     environment = dict(os.environ, CARGO_TARGET_DIR=str(tree / BENCH / 'cranpose-app/target'))
-    subprocess.run(command, cwd=tree / ANDROID, check=True, env=environment)
+    for attempt in range(1, BUILD_ATTEMPTS + 1):
+        try:
+            subprocess.run(command, cwd=tree / ANDROID, check=True, env=environment)
+            break
+        except subprocess.CalledProcessError:
+            if attempt == BUILD_ATTEMPTS:
+                raise
+            print(f'the build failed; trying again in {BUILD_RETRY_DELAY_S} s', flush=True)
+            time.sleep(BUILD_RETRY_DELAY_S)
     return tree / ANDROID / 'app/build/outputs/apk/release/app-release.apk'
 
 
