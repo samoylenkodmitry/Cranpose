@@ -4425,6 +4425,144 @@
     }
    },
    "confirmed_regressions": {}
+  },
+  {
+   "file": "runs/2026-10-08-browser-b01b52a08-EVR-AL00-\u00b7-Chrome-154.json",
+   "kind": "browser",
+   "started_at": "2026-10-08T15:43:39+00:00",
+   "device": "EVR-AL00 \u00b7 Chrome 154",
+   "main": "b01b52a08a6fb770464e27563236ec971000d9f1",
+   "release": null,
+   "subjects": [
+    {
+     "name": "cranpose",
+     "label": "Cranpose 0.9.12 main b01b52a08",
+     "source": "benchmarks/compose-vs-cranpose/cranpose-app/src/screens/gauntlet.rs"
+    },
+    {
+     "name": "compose",
+     "label": "Compose Multiplatform 1.12.1",
+     "source": "benchmarks/compose-vs-cranpose/shared-compose/dev/perfcompare/compose/Gauntlet.kt"
+    },
+    {
+     "name": "flutter",
+     "label": "Flutter 3.47.6",
+     "source": "benchmarks/compose-vs-cranpose/flutter-app/lib/main.dart"
+    },
+    {
+     "name": "egui",
+     "label": "egui 0.36.2",
+     "source": "benchmarks/compose-vs-cranpose/egui-app/src/lib.rs"
+    },
+    {
+     "name": "slint",
+     "label": "Slint 1.18.1",
+     "source": "benchmarks/compose-vs-cranpose/slint-app/ui/gauntlet.slint"
+    },
+    {
+     "name": "iced",
+     "label": "iced 0.14.0",
+     "source": "benchmarks/compose-vs-cranpose/iced-app/src/lib.rs"
+    },
+    {
+     "name": "dioxus",
+     "label": "Dioxus 0.7.10",
+     "source": "benchmarks/compose-vs-cranpose/dioxus-app/src/main.rs"
+    },
+    {
+     "name": "avalonia",
+     "label": "Avalonia 12.1.3",
+     "source": "benchmarks/compose-vs-cranpose/avalonia-app/Gauntlet.cs"
+    },
+    {
+     "name": "web",
+     "label": "Web Chrome 154.0.8037.92",
+     "source": "benchmarks/compose-vs-cranpose/web-app/src/gauntlet.ts"
+    }
+   ],
+   "duration_s": 268,
+   "scenarios": {
+    "gauntlet": {
+     "legs": 15,
+     "summary": {
+      "cranpose": {
+       "fps": 5.966400883201134,
+       "cpu_ms_per_frame": 326.80555555555554,
+       "janky_pct": 100.0,
+       "ram_mb": 620.0302734375,
+       "gpu_ram_mb": 148.8984375,
+       "cpu_mhz": 2568.222222222222,
+       "gpu_mhz": 139.0
+      },
+      "compose": {
+       "fps": 6.004621010472288,
+       "cpu_ms_per_frame": 268.55440967283073,
+       "janky_pct": 100.0,
+       "ram_mb": 684.87744140625,
+       "gpu_ram_mb": 132.044921875,
+       "cpu_mhz": 2594.222222222222,
+       "gpu_mhz": 168.13333333333333
+      },
+      "flutter": {
+       "fps": 28.773035192458366,
+       "cpu_ms_per_frame": 83.42893706714845,
+       "janky_pct": 93.21342834279618,
+       "ram_mb": 592.5849609375,
+       "gpu_ram_mb": 106.173828125,
+       "cpu_mhz": 2600.0,
+       "gpu_mhz": 246.8125
+      },
+      "egui": {
+       "fps": 54.682670995686834,
+       "cpu_ms_per_frame": 33.90282131661442,
+       "janky_pct": 9.697099760868232,
+       "ram_mb": 444.99267578125,
+       "gpu_ram_mb": 86.341796875,
+       "cpu_mhz": 1878.625,
+       "gpu_mhz": 268.375
+      },
+      "slint": {
+       "fps": 9.03050437932593,
+       "cpu_ms_per_frame": 181.57407407407408,
+       "janky_pct": 99.0566037735849,
+       "ram_mb": 477.77392578125,
+       "gpu_ram_mb": 92.71484375,
+       "cpu_mhz": 1671.5625,
+       "gpu_mhz": 212.3125
+      },
+      "iced": {},
+      "dioxus": {
+       "fps": 34.39444635542718,
+       "cpu_ms_per_frame": 75.29685434840073,
+       "janky_pct": 68.47657710592384,
+       "ram_mb": 572.53076171875,
+       "gpu_ram_mb": 91.65234375,
+       "cpu_mhz": 2600.0,
+       "gpu_mhz": 259.75
+      },
+      "avalonia": {
+       "fps": 5.793178126682439,
+       "cpu_ms_per_frame": 260.5607476635514,
+       "janky_pct": 100.0,
+       "ram_mb": 667.2392578125,
+       "gpu_ram_mb": 120.46875,
+       "cpu_mhz": 2600.0,
+       "gpu_mhz": 258.6
+      },
+      "web": {
+       "fps": 42.50329716828928,
+       "cpu_ms_per_frame": 64.50710410746578,
+       "janky_pct": 38.986524034454014,
+       "ram_mb": 562.0537109375,
+       "gpu_ram_mb": 109.224609375,
+       "cpu_mhz": 2600.0,
+       "gpu_mhz": 242.5
+      }
+     },
+     "verdicts": {}
+    }
+   },
+   "confirmed_regressions": {}
   }
  ]
 }
