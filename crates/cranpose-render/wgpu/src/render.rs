@@ -592,7 +592,7 @@ fn hash_text_draw_for_cache<H: Hasher>(
     state: &mut H,
 ) {
     text_draw.text.render_hash().hash(state);
-    text_draw.text_style.render_hash().hash(state);
+    text_draw.style_hash.hash(state);
     text_draw.color.render_hash().hash(state);
     hash_text_gradient_phase_for_cache(text_draw, raster_rect, state);
     text_draw.font_size.to_bits().hash(state);

@@ -20,6 +20,9 @@ pub struct TextPaint {
     pub color: Color,
     /// How far the style's baseline shift moves the glyphs down.
     pub baseline_shift: f32,
+    /// The style's [`TextStyle::render_hash`], which keys the glyph caches
+    /// a renderer draws the text from, so no frame hashes the style again.
+    pub style_hash: u64,
 }
 
 impl TextPaint {
@@ -42,6 +45,7 @@ impl TextPaint {
                 .baseline_shift
                 .filter(|shift| shift.is_specified())
                 .map_or(0.0, |shift| -(shift.0 * font_size)),
+            style_hash: style.render_hash(),
         }
     }
 }
