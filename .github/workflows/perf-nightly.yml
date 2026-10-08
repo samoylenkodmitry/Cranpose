@@ -134,6 +134,8 @@ jobs:
 
       - name: Publish the desktop run
         if: steps.published.outputs.measured != 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: just perf-publish "$RUNNER_TEMP/desktop/report.json"
 
       - name: Measure the browser apps in Chrome
@@ -146,6 +148,8 @@ jobs:
 
       - name: Publish the browser run
         if: steps.published.outputs.measured != 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: just perf-publish "$RUNNER_TEMP/desktop-browser/report.json"
 
       - name: Propose the pins that moved
@@ -204,6 +208,8 @@ jobs:
         run: just perf-nightly "$PERF_SERIAL" "$PERF_OUTPUT"
 
       - name: Publish the run
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: just perf-publish "$PERF_OUTPUT/run.json"
 
       - name: Report confirmed regressions
@@ -220,6 +226,8 @@ jobs:
 
       - name: Compare the frameworks on the phone
         if: ${{ !cancelled() && needs.desktop.outputs.apks == 'yes' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           just perf-frameworks "$PERF_SERIAL" "$PERF_OUTPUT/frameworks" "$RUNNER_TEMP/gauntlet-apks"
           just perf-publish "$PERF_OUTPUT/frameworks/frameworks.json"
@@ -233,6 +241,8 @@ jobs:
 
       - name: Compare the browser apps in Chrome on the phone
         if: ${{ !cancelled() && needs.desktop.outputs.browser == 'yes' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           just perf-browser "$PERF_SERIAL" "$PERF_OUTPUT/browser" "$RUNNER_TEMP/gauntlet-browser"
           just perf-publish "$PERF_OUTPUT/browser/frameworks.json"

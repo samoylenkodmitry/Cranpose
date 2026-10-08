@@ -11,7 +11,9 @@ Usage: publish.py --run RUN_JSON [--tree DIR] [--no-push]
 """
 
 import argparse
+import base64
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -28,8 +30,24 @@ PUSH_ATTEMPTS = 3
 PUSH_DELAY_S = 2
 
 
+def credentials():
+    """The environment git runs in. A job that holds a token (`GH_TOKEN`) makes
+    its pushes with it, as `actions/checkout` fetches, and leaves the
+    keychain helper out: a Mac's login keychain is locked while nobody is
+    at the machine, and the helper then fails the push with "failed to get:
+    -25308" (the nightly of 2026-10-08)."""
+    token = os.environ.get('GH_TOKEN')
+    if not token:
+        return None
+    header = base64.b64encode(f'x-access-token:{token}'.encode()).decode()
+    return {**os.environ, 'GIT_CONFIG_COUNT': '2',
+            'GIT_CONFIG_KEY_0': 'credential.helper', 'GIT_CONFIG_VALUE_0': '',
+            'GIT_CONFIG_KEY_1': 'http.https://github.com/.extraheader',
+            'GIT_CONFIG_VALUE_1': f'AUTHORIZATION: basic {header}'}
+
+
 def git(*args, cwd):
-    result = subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True, env=credentials())
     if result.returncode != 0:
         raise RuntimeError(f'git {" ".join(args)} failed: {result.stderr.strip()}')
     return result.stdout.strip()
@@ -64,7 +82,7 @@ def index_entry(run, file):
 
 def published_runs():
     """The runs the data branch's index lists, or none before its first run."""
-    if subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=REPO).returncode != 0:
+    if subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=REPO, env=credentials()).returncode != 0:
         return []
     return json.loads(git('show', f'origin/{DATA_BRANCH}:index.json', cwd=REPO))['runs']
 
@@ -75,7 +93,7 @@ def data_tree(tree):
     clone than this script's."""
     if not (tree / '.git').exists():
         git('worktree', 'add', '-q', '--force', '--detach', str(tree), 'HEAD', cwd=REPO)
-    fetched = subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=tree).returncode == 0
+    fetched = subprocess.run(['git', 'fetch', '-q', 'origin', DATA_BRANCH], cwd=tree, env=credentials()).returncode == 0
     if fetched:
         # Detached at the data branch's head: the branch may be checked out in
         # another worktree, and the push names it.
