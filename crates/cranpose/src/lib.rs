@@ -680,6 +680,11 @@ mod web_accessibility;
 mod web_accessibility_attributes;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_accessibility_options;
+#[cfg(any(
+    test,
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
+))]
+mod web_accessibility_order;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_lifecycle;
 

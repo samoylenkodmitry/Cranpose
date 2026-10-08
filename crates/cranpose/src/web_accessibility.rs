@@ -21,6 +21,7 @@ use crate::{
     web_accessibility_attributes::{
         MirrorAttributes, PageTarget, mirror_tag, mirror_text, page_targets,
     },
+    web_accessibility_order::ChildMoves,
 };
 
 /// The class every mirror node and action button carries. One rule in the
@@ -765,6 +766,15 @@ struct MirrorEntry {
     /// The virtual id of the scroll container the node sits in, or nothing
     /// for the mirror root.
     parent: Option<i32>,
+    /// Where the node sat among its parent's children when the mirror last
+    /// wrote their order, its action buttons right after it, or nothing
+    /// while none of them sits there.
+    written_at: Option<usize>,
+    /// Whether the node was built after that order, in place of the one that
+    /// sat there.
+    replaced: bool,
+    /// How many of the action buttons were in that order.
+    written_actions: usize,
 }
 
 impl MirrorEntry {
@@ -781,16 +791,53 @@ impl MirrorEntry {
             page,
             placed: None,
             parent: None,
+            written_at: None,
+            replaced: false,
+            written_actions: 0,
         };
         entry.update_actions(document, id, element)?;
         Ok(entry)
     }
 
     /// Takes the node and its action buttons out of the page.
-    fn detach(&self) {
+    fn detach(&mut self) {
         self.node.remove();
         for button in &self.actions {
             button.remove();
+        }
+        self.written_at = None;
+    }
+
+    /// Adds the node and its action buttons to the children of their parent
+    /// in the order the sync writes, each with where it sat in the order
+    /// written last unless the page may hold anything after a failed sync,
+    /// and notes where they sit now.
+    fn push_children(&mut self, id: i32, children: &mut Vec<MirrorChild>, written: bool) {
+        let was = self.written_at.filter(|_| written);
+        self.written_at = Some(children.len());
+        children.push(MirrorChild {
+            id,
+            slot: 0,
+            was: was.filter(|_| !self.replaced),
+        });
+        children.extend((0..self.actions.len()).map(|button| {
+            MirrorChild {
+                id,
+                slot: button + 1,
+                was: was
+                    .filter(|_| button < self.written_actions)
+                    .map(|at| at + 1 + button),
+            }
+        }));
+        self.replaced = false;
+        self.written_actions = self.actions.len();
+    }
+
+    /// The node at slot 0, or an action button at a later slot.
+    fn child(&self, slot: usize) -> Option<&HtmlElement> {
+        match slot.checked_sub(1) {
+            None => Some(&self.node),
+            Some(button) => self.actions.get(button),
         }
     }
 
@@ -828,6 +875,7 @@ impl MirrorEntry {
                 let node = mirror_node(document, id, element, page, &mut attributes.now)?;
                 std::mem::replace(&mut self.node, node).remove();
                 self.placed = None;
+                self.replaced = true;
             }
         }
         self.page = page;
@@ -898,19 +946,109 @@ fn shown_element(shown: Option<&Replaced>, index: usize) -> Option<&Accessibilit
     shown.elements.get((*shown.was.get(index)?)?)
 }
 
-fn reconcile_children(parent: &HtmlElement, children: &[HtmlElement]) -> Result<(), JsValue> {
-    let mut cursor = parent.first_child();
-    for child in children {
-        if cursor
-            .as_ref()
-            .is_some_and(|cursor| cursor.is_same_node(Some(child)))
-        {
-            cursor = child.next_sibling();
-        } else {
-            parent.insert_before(child, cursor.as_ref())?;
-        }
+/// A node or an action button of a control in the order a sync writes: the
+/// control's virtual id, the slot (0 for the node, the buttons after), and
+/// where the child sat in the order written last.
+#[derive(Clone, Copy)]
+struct MirrorChild {
+    id: i32,
+    slot: usize,
+    was: Option<usize>,
+}
+
+/// The children of one mirror parent in the order a sync writes.
+#[derive(Default)]
+struct ChildList {
+    children: Vec<MirrorChild>,
+    /// Whether the parent's node was built in this sync, so none of the
+    /// children sit in it yet.
+    replaced: bool,
+}
+
+/// Puts the children of `parent` in the order of `list`. A child moves only
+/// when it is out of its old order, and then once.
+fn reconcile_children(
+    parent: &HtmlElement,
+    list: &ChildList,
+    entries: &HashMap<i32, MirrorEntry>,
+    moves: &mut ChildMoves,
+) -> Result<(), JsValue> {
+    moves.plan(
+        list.children
+            .iter()
+            .map(|child| child.was.filter(|_| !list.replaced)),
+    );
+    let node = |index: usize| {
+        list.children
+            .get(index)
+            .and_then(|child| entries.get(&child.id)?.child(child.slot))
+            .map(AsRef::<web_sys::Node>::as_ref)
+            .ok_or_else(|| JsValue::from_str("a mirror child has no node"))
+    };
+    for (child, before) in moves.moves() {
+        let before = before.map(node).transpose()?;
+        parent.insert_before(node(child)?, before)?;
     }
     Ok(())
+}
+
+/// The children of each mirror parent, the root or a scroll container, in
+/// the order a sync writes, and the plan that moves them there.
+#[derive(Default)]
+struct MirrorOrders {
+    lists: HashMap<Option<i32>, ChildList>,
+    moves: ChildMoves,
+}
+
+impl MirrorOrders {
+    /// Empties the lists for a new sync.
+    fn start(&mut self) {
+        for list in self.lists.values_mut() {
+            list.children.clear();
+            list.replaced = false;
+        }
+    }
+
+    /// Adds the node and the action buttons of the entry with virtual id
+    /// `id` to the children of `parent`, the scroll container it sits in.
+    /// After a failed sync `written` is false: the page may hold anything,
+    /// so no child keeps an old position and the whole order is written.
+    fn push(&mut self, id: i32, entry: &mut MirrorEntry, parent: Option<i32>, written: bool) {
+        if entry.replaced {
+            self.lists.entry(Some(id)).or_default().replaced = true;
+        }
+        if entry.parent != parent {
+            // A node that changed containers leaves the old one and has no
+            // place in the new one yet.
+            entry.detach();
+            entry.parent = parent;
+        }
+        entry.push_children(
+            id,
+            &mut self.lists.entry(parent).or_default().children,
+            written,
+        );
+    }
+
+    /// Puts the children of every parent in the order of its list.
+    fn write(
+        &mut self,
+        root: &HtmlElement,
+        entries: &HashMap<i32, MirrorEntry>,
+    ) -> Result<(), JsValue> {
+        self.lists.retain(|_, list| !list.children.is_empty());
+        for (parent, list) in &self.lists {
+            let parent = match parent {
+                None => root,
+                Some(id) => entries
+                    .get(id)
+                    .map(|entry| &entry.node)
+                    .ok_or_else(|| JsValue::from_str("a mirror parent has no node"))?,
+            };
+            reconcile_children(parent, list, entries, &mut self.moves)?;
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct WebAccessibilityBridge {
@@ -930,6 +1068,7 @@ pub(crate) struct WebAccessibilityBridge {
     css: String,
     /// Room for the attributes of one mirror node the sync brings up to date.
     attributes: AttributeRoom,
+    orders: MirrorOrders,
     dirty: bool,
     entries: HashMap<i32, MirrorEntry>,
     links: Rc<MirrorLinks>,
@@ -975,6 +1114,7 @@ impl WebAccessibilityBridge {
             policy: AccessibilityPublishPolicy::new(),
             css: String::new(),
             attributes: AttributeRoom::default(),
+            orders: MirrorOrders::default(),
             dirty: false,
             entries: HashMap::new(),
             links,
@@ -1207,9 +1347,7 @@ impl WebAccessibilityBridge {
             .filter(|(_, element)| element.canvas_key.is_none())
             .map(|(id, element)| (element.node_id, *id))
             .collect();
-        // The nodes of controls that left go first: a node that stays among
-        // its parent's children would hold the reconcile cursor and move
-        // every node after it.
+        // The nodes of controls that left go first.
         self.entries.retain(|id, entry| {
             let stays = snapshot.element(*id).is_some();
             if !stays {
@@ -1217,7 +1355,7 @@ impl WebAccessibilityBridge {
             }
             stays
         });
-        let mut children: HashMap<Option<i32>, Vec<HtmlElement>> = HashMap::new();
+        self.orders.start();
         self.links.node_ids.borrow_mut().clear();
         self.text_input.fields.borrow_mut().clear();
         for (index, ((id, element), page)) in
@@ -1253,21 +1391,9 @@ impl WebAccessibilityBridge {
             let parent = element
                 .scroll_parent
                 .and_then(|parent| parents.get(&parent).copied());
-            if entry.parent != parent {
-                // A node that changed containers leaves the old one for the
-                // same reason.
-                entry.detach();
-                entry.parent = parent;
-            }
-            let siblings = children.entry(parent).or_default();
-            siblings.push(entry.node.clone());
-            siblings.extend(entry.actions.iter().cloned());
+            self.orders.push(id, entry, parent, shown.is_some());
         }
-        for (parent, children) in children {
-            let parent = parent.map_or(&self.root, |id| &self.entries[&id].node);
-            reconcile_children(parent, &children)?;
-        }
-        Ok(())
+        self.orders.write(&self.root, &self.entries)
     }
 
     fn settle_focus(
