@@ -1,1 +1,8 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/samoylenkodmitry/Cranpose/discussions/categories/q-a
+    about: Ask how to use Cranpose in Discussions.
+  - name: Show an app
+    url: https://github.com/samoylenkodmitry/Cranpose/discussions/categories/show-and-tell
+    about: Post an app or a component built with Cranpose.

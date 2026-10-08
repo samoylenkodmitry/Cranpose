@@ -1,5 +1,12 @@
 # Cranpose
 
+[![crates.io](https://img.shields.io/crates/v/cranpose.svg)](https://crates.io/crates/cranpose)
+[![docs.rs](https://img.shields.io/docsrs/cranpose)](https://docs.rs/cranpose/latest/cranpose/)
+[![CI](https://github.com/samoylenkodmitry/Cranpose/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/samoylenkodmitry/Cranpose/actions/workflows/rust.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20or%20MIT-blue.svg)](#license)
+
+**[Try the showcase in your browser](https://samoylenkodmitry.github.io/cranpose-showcase/)**
+
 Cranpose brings the Jetpack Compose model to Rust. Composable functions describe
 the UI. State changes trigger recomposition. Modifiers control layout, input and
 graphics. Cranpose supplies the platform window and device services.
@@ -12,9 +19,26 @@ controls inside a Cranpose screen.
 [Performance results](https://samoylenkodmitry.github.io/Cranpose/?tab=performance) ·
 [API reference](https://docs.rs/cranpose/latest/cranpose/) ·
 [Project template](https://github.com/samoylenkodmitry/cranpose-showcase) ·
-[Releases](https://github.com/samoylenkodmitry/Cranpose/releases)
+[Releases](https://github.com/samoylenkodmitry/Cranpose/releases) ·
+[Discussions](https://github.com/samoylenkodmitry/Cranpose/discussions)
 
-<img width="1536" height="1024" alt="Cranpose app examples" src="https://github.com/user-attachments/assets/2ce48dfe-a048-4b9d-8812-a0e4534691f8" />
+<img width="1800" height="820" alt="Cranamp on a desktop, CranScan on a phone, Orbit Breaker on a watch and the Cranpose showcase in a browser" src="docs/images/apps.webp" />
+
+On a Huawei Mate 20 X from 2018, the [gauntlet benchmark](benchmarks/compose-vs-cranpose/README.md)
+draws 53 frames per second in Cranpose and 4.5 in Jetpack Compose. Both apps
+show the same UI, element for element. Cranpose spends 30 ms of CPU time per
+frame and Compose 294 ms. These numbers come from the nightly run of 8 October
+2026 at tier 12. The [Performance tab](https://samoylenkodmitry.github.io/Cranpose/?tab=performance)
+shows the latest run, with Flutter, React Native, egui, Slint and other
+frameworks on the same phone and on a Mac.
+
+## Apps built with Cranpose
+
+| App | Platforms | Get it |
+| --- | --- | --- |
+| [Cranamp](https://github.com/samoylenkodmitry/cranamp), a music player with pixel skins and a skin editor | Windows, macOS, Linux, Android, iOS, web | [Google Play](https://play.google.com/store/apps/details?id=com.cranamp.app), [App Store](https://apps.apple.com/app/id6818451356), [browser](https://samoylenkodmitry.github.io/cranamp/) |
+| CranScan, a document and receipt scanner with on-device text recognition | Android, iOS | [Google Play](https://play.google.com/store/apps/details?id=com.cranscan.app), [App Store](https://apps.apple.com/app/id6795579921) |
+| Orbit Breaker, a brick-breaking game for round Wear OS watches | Wear OS | [Google Play](https://play.google.com/store/apps/details?id=com.dmitry.orbitbreaker) |
 
 ## Start an app
 
@@ -236,6 +260,11 @@ just robot
 `just ci` checks formatting, spelling, versions, tests, Clippy, API docs and build
 budgets. `just robot` drives the demo through real windows and the semantics tree.
 See the [test guide](docs/ROBOT_TESTING.md) and [contributor rules](AGENTS.md).
+
+Ask questions in [Q&A](https://github.com/samoylenkodmitry/Cranpose/discussions/categories/q-a)
+and post apps built with Cranpose in
+[Show and tell](https://github.com/samoylenkodmitry/Cranpose/discussions/categories/show-and-tell).
+Report bugs and request features in [Issues](https://github.com/samoylenkodmitry/Cranpose/issues/new/choose).
 
 ## License
 
