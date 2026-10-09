@@ -382,7 +382,7 @@ impl<A: Applier + 'static> Composition<A> {
             }
             runtime_handle.drain_ui();
             self.dispose_forgotten_movables()?;
-            let Some(scopes) = live_invalidated_scopes(&runtime_handle) else {
+            let Some(scopes) = runtime_handle.take_invalidated_scopes() else {
                 break;
             };
             if scopes.is_empty() {
@@ -494,7 +494,7 @@ impl<A: Applier + 'static> Composition<A> {
                 if self.root_render_requested {
                     for (_, remaining_scopes) in scope_groups.iter().skip(host_group_index + 1) {
                         for scope in remaining_scopes {
-                            runtime_handle.requeue_invalid_scope(scope.id(), scope.downgrade());
+                            runtime_handle.requeue_invalid_scope(scope);
                         }
                     }
                     break;
@@ -540,22 +540,6 @@ impl<A: Applier + 'static> Composition<A> {
 /// moved, and then its readers run in a pass of their own.
 fn recomposes_content(scopes: &[RecomposeScope]) -> bool {
     scopes.iter().any(|scope| !scope.is_derivation())
-}
-
-fn live_invalidated_scopes(runtime_handle: &RuntimeHandle) -> Option<Vec<RecomposeScope>> {
-    let pending = runtime_handle.take_invalidated_scopes();
-    if pending.is_empty() {
-        return None;
-    }
-    let mut scopes = Vec::with_capacity(pending.len());
-    for (id, weak) in pending {
-        if let Some(inner) = weak.upgrade() {
-            scopes.push(RecomposeScope { inner });
-        } else {
-            runtime_handle.mark_scope_recomposed(id);
-        }
-    }
-    Some(scopes)
 }
 
 impl<A: Applier + 'static> Composition<A> {

@@ -856,7 +856,7 @@ impl Drop for RecomposeScopeInner {
             });
         }
         if self.enqueued.replace(false) {
-            self.runtime.mark_scope_recomposed(id);
+            self.runtime.mark_scope_recomposed();
         }
     }
 }
@@ -920,6 +920,10 @@ impl RecomposeScope {
         self.inner.invalid.get()
     }
 
+    pub(crate) fn is_enqueued(&self) -> bool {
+        self.inner.enqueued.get()
+    }
+
     pub fn is_active(&self) -> bool {
         self.inner.active.get()
     }
@@ -965,9 +969,7 @@ impl RecomposeScope {
             return;
         }
         if !self.inner.enqueued.replace(true) {
-            self.inner
-                .runtime
-                .register_invalid_scope(self.id(), self.downgrade());
+            self.inner.runtime.register_invalid_scope(self.downgrade());
         }
     }
 
@@ -988,7 +990,7 @@ impl RecomposeScope {
         self.inner.unknown_invalidation_source.set(false);
         self.inner.invalidation_sources.borrow_mut().clear();
         if self.inner.enqueued.replace(false) {
-            self.inner.runtime.mark_scope_recomposed(self.id());
+            self.inner.runtime.mark_scope_recomposed();
         }
         let pending = self.inner.pending_recompose.replace(false);
         if pending {
@@ -1169,13 +1171,13 @@ impl RecomposeScope {
             .deactivations
             .set(self.inner.deactivations.get() + 1);
         if self.inner.enqueued.replace(false) {
-            self.inner.runtime.mark_scope_recomposed(self.id());
+            self.inner.runtime.mark_scope_recomposed();
         }
     }
 
     pub(crate) fn defer_until_reactivated(&self) {
         if self.inner.enqueued.replace(false) {
-            self.inner.runtime.mark_scope_recomposed(self.id());
+            self.inner.runtime.mark_scope_recomposed();
         }
     }
 
@@ -1185,9 +1187,7 @@ impl RecomposeScope {
             && self.is_effectively_active()
             && !self.inner.enqueued.replace(true)
         {
-            self.inner
-                .runtime
-                .register_invalid_scope(self.id(), self.downgrade());
+            self.inner.runtime.register_invalid_scope(self.downgrade());
         }
     }
 
