@@ -91,6 +91,63 @@ fn a_stored_run_draws_every_record_the_recording_changed() {
     assert!(is_red(pixel_at_record(&shorter, RECORDS - 2)));
 }
 
+/// Every frame recolours another record of a stored run, and some change
+/// its length, while the frames before it may still be on the GPU: each
+/// frame draws the tables it was recorded with, whether its changes go to a
+/// version no frame in flight reads or queue as copies between the frames.
+#[test]
+fn stored_runs_changed_every_frame_draw_their_own_tables_while_earlier_frames_are_in_flight() {
+    const FRAMES: usize = 8;
+    type Renderer = fn() -> Result<support::LockedRenderer, String>;
+    let renderers: [(&str, Renderer); 2] = [
+        ("default uploads", support::headless_renderer),
+        ("copied uploads", support::headless_renderer_copying_uploads),
+    ];
+    for (uploads, renderer) in renderers {
+        let mut renderer = match renderer() {
+            Ok(renderer) => renderer,
+            Err(err) => {
+                eprintln!("skipping run store upload: headless WGPU init failed: {err}");
+                return;
+            }
+        };
+        let green = |frame: usize| frame * 7 % RECORDS;
+        let frames: Vec<Vec<Color>> = (0..FRAMES)
+            .map(|frame| {
+                let mut colors = vec![RED; RECORDS + frame % 3];
+                colors[green(frame)] = GREEN;
+                colors
+            })
+            .collect();
+        let presented: Vec<wgpu::Texture> = frames
+            .iter()
+            .map(|colors| {
+                support::present(
+                    &mut renderer,
+                    WIDTH,
+                    HEIGHT,
+                    support::stored_run_graph(WIDTH, HEIGHT, colors),
+                )
+            })
+            .collect();
+        for (frame, (colors, texture)) in frames.iter().zip(&presented).enumerate() {
+            let pixels = support::read_presented(&renderer, texture);
+            for index in 0..colors.len() {
+                let pixel = pixel_at_record(&pixels, index);
+                let expected = if index == green(frame) {
+                    is_green(pixel)
+                } else {
+                    is_red(pixel)
+                };
+                assert!(
+                    expected,
+                    "{uploads}: frame {frame} must draw record {index} as recorded, drew {pixel:?}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn stored_runs_that_take_gradients_after_solid_frames_paint_their_own() {
     const TALL: u32 = 160;

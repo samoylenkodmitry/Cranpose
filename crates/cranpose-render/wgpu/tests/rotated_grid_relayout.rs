@@ -329,7 +329,7 @@ fn offscreen_rotated_cells_that_hold_still_for_a_moment_are_kept_by_copy_and_one
         kept = kept.max(stats.layer_cache_size);
         assert!(
             stats.pass_count <= MAX_PASSES,
-            "frame {frame}: cells the cache keeps are copied out of the shared pass, not \
+            "frame {frame}: cells the cache keeps render together in an atlas, not \
              drawn in passes of their own: {stats:?}"
         );
         assert!(
@@ -385,8 +385,8 @@ const FULL_PERIOD: usize = 190;
 /// cell about 32 times.
 const COPIES_PER_CELL: u32 = 7;
 
-/// Offscreen cells render together into atlases, so keeping one means
-/// copying it out. On a phone a pixel-at-a-time relayout holds a cell's size
+/// Offscreen cells render together into atlases, and a kept cell keeps its
+/// atlas. On a phone a pixel-at-a-time relayout holds a cell's size
 /// two or three frames: a copy read once and then replaced cost a copy and
 /// a texture for nothing, and on the device that churn held 30 MB more GPU
 /// memory than drawing every cell every frame did (#920).

@@ -232,14 +232,48 @@ pub fn headless_renderer_configured(
     Ok(with_app_context(renderer, Some(lock)))
 }
 
+/// Whether the test renderers draw animated frames copy-free: on Metal,
+/// with mapped primary buffers, where run tables and retained glyph runs
+/// are written mapped and kept layer surfaces stay in their atlas.
+pub fn renders_copy_free() -> bool {
+    device::headless_adapter(wgpu::Backends::all()).is_ok_and(|adapter| {
+        adapter.get_info().backend == wgpu::Backend::Metal
+            && cranpose_render_wgpu::optional_device_features(&adapter)
+                .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)
+    })
+}
+
+/// A renderer whose device does not map its vertex and table buffers, so
+/// its uploads take copies even on an integrated GPU.
+pub fn headless_renderer_copying_uploads() -> Result<LockedRenderer, String> {
+    headless_renderer_on(|| {
+        device::HeadlessDevice::request_without_features(
+            wgpu::Backends::all(),
+            wgpu::Limits::default(),
+            "Copied Upload Test Device",
+            wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
+        )
+    })
+}
+
 pub fn headless_renderer_without(flags: wgpu::DownlevelFlags) -> Result<LockedRenderer, String> {
+    headless_renderer_on(|| {
+        Ok(device::HeadlessDevice::request(
+            wgpu::Backends::all(),
+            wgpu::Limits::default(),
+            "Downlevel Path Test Device",
+        )?
+        .without(flags))
+    })
+}
+
+/// A renderer compiling inline on the device `request` makes under the GPU
+/// test lock.
+fn headless_renderer_on(
+    request: impl FnOnce() -> Result<device::HeadlessDevice, String>,
+) -> Result<LockedRenderer, String> {
     let lock = lock_gpu_test();
-    let device = device::HeadlessDevice::request(
-        wgpu::Backends::all(),
-        wgpu::Limits::default(),
-        "Downlevel Path Test Device",
-    )?
-    .without(flags);
+    let device = request()?;
     let mut renderer = WgpuRenderer::new(&[TEST_FONT]);
     device.attach(
         &mut renderer,
@@ -1531,6 +1565,18 @@ pub fn present_and_read(
     height: u32,
     graph: RenderGraph,
 ) -> Vec<u8> {
+    let texture = present(renderer, width, height, graph);
+    read_presented(renderer, &texture)
+}
+
+/// Presents `graph` at `width` by `height` into a texture of its own and
+/// returns it without waiting for the GPU.
+pub fn present(
+    renderer: &mut LockedRenderer,
+    width: u32,
+    height: u32,
+    graph: RenderGraph,
+) -> wgpu::Texture {
     renderer.scene_mut().graph = Some(graph);
     let packet = renderer
         .build_frame_packet_for_tests(width, height)
@@ -1546,9 +1592,14 @@ pub fn present_and_read(
         .render_held_packet_for_tests(&texture, &view, width, height, packet)
         .expect("the packet must draw");
     assert_eq!(outcome, PresentOutcome::Presented);
+    texture
+}
+
+/// The pixels of a texture [`present`] drew, as RGBA8 rows.
+pub fn read_presented(renderer: &LockedRenderer, texture: &wgpu::Texture) -> Vec<u8> {
     let device = renderer.try_device().expect("device");
     let queue = renderer.try_queue_for_tests().expect("queue");
-    read_texture(device, queue, &texture)
+    read_texture(device, queue, texture)
 }
 
 /// What a reference blur reads past the image: the edge pixel again, or

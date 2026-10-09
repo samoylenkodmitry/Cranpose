@@ -400,6 +400,7 @@ fn an_arena_append_wants_pipelines_for_the_records_its_window_takes() {
             storage: true,
             trig_fill: false,
         },
+        UploadMode::Copied,
     );
     let run = fill_run(3, 2);
     let keys: Vec<_> = run.segment_records().map(arena_key).collect();
@@ -425,6 +426,7 @@ fn an_arena_chunk_that_fills_up_wants_only_the_records_it_took() {
             storage: false,
             trig_fill: false,
         },
+        UploadMode::Copied,
     );
     let records = RECORD_CHUNK as u32 + 40;
     let run = fill_run(records as usize, 0);
@@ -435,4 +437,208 @@ fn an_arena_chunk_that_fills_up_wants_only_the_records_it_took() {
     let (rest, wanted) = arena_wants(&mut store, &run, first..u32::MAX);
     assert_eq!(rest, 40);
     assert_eq!(wanted, [(key, 160)]);
+}
+
+/// The modes the test device offers: the copied one always, the mapped
+/// one when the device maps its primary buffers.
+fn upload_modes(device: &wgpu::Device) -> Vec<UploadMode> {
+    let mut modes = vec![UploadMode::Copied];
+    if UploadMode::for_device(device) == UploadMode::Mapped {
+        modes.push(UploadMode::Mapped);
+    }
+    modes
+}
+
+fn storage_store(device: &wgpu::Device, upload: UploadMode) -> RunStore {
+    RunStore::new(
+        device,
+        RunBufferMode {
+            storage: true,
+            trig_fill: false,
+        },
+        upload,
+    )
+}
+
+/// A stored run of `records` gradient rects as one command, painted at
+/// `alpha`; record `marked` takes a colour of its own.
+fn stored_gradient_run(records: usize, marked: usize, alpha: f32) -> RunDraw {
+    use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, Rect, ShapeRecorder};
+    let mut recorder = ShapeRecorder::default();
+    for index in 0..records {
+        let first = if index == marked {
+            Color(1.0, 0.0, 0.0, 1.0)
+        } else {
+            Color(0.0, 1.0, 0.0, 1.0)
+        };
+        recorder.push_primitive(DrawPrimitive::Rect {
+            rect: Rect {
+                x: (index % 16) as f32 * 4.0,
+                y: (index / 16) as f32 * 4.0,
+                width: 3.0,
+                height: 3.0,
+            },
+            brush: Brush::linear_gradient(vec![first, Color(0.0, 0.0, 1.0, 1.0)]),
+            stroke: None,
+        });
+    }
+    let mut placement = crate::scene::Placement::at(Point::default(), None, None);
+    placement.alpha = alpha;
+    let mut run = RunDraw::whole(std::sync::Arc::new(recorder), placement).expect("recorded run");
+    run.command = Some(DrawCommandId {
+        node_id: 7,
+        command_index: 0,
+        placement: cranpose_render_common::style_shared::DrawPlacement::Behind,
+    });
+    run
+}
+
+/// A readback buffer the size of `tables`' buffer, with a copy of it
+/// recorded into the pass where the copy stands in for a draw.
+fn copy_tables(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    tables: &StoredTables,
+) -> wgpu::Buffer {
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: tables.buffer.size(),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    encoder.copy_buffer_to_buffer(&tables.buffer, 0, &readback, 0, tables.buffer.size());
+    readback
+}
+
+fn holds(bytes: &[u8], table: &[u8]) -> bool {
+    bytes.windows(table.len()).any(|window| window == table)
+}
+
+fn painted_stop_bytes(run: &RunDraw) -> Vec<u8> {
+    let mut painted = Vec::new();
+    painted_stops(
+        &run.tables().stops,
+        &paint_layer(&run.placement),
+        &mut painted,
+    );
+    bytemuck::cast_slice(&painted).to_vec()
+}
+
+/// One frame that uploads `runs` in order, each read by a copy recorded
+/// right after its upload as the pass that draws it would read it; returns
+/// the copies and the frame's submission.
+fn upload_frame(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    store: &mut RunStore,
+    runs: &[&RunDraw],
+) -> (Vec<wgpu::Buffer>, wgpu::SubmissionIndex) {
+    store.begin_frame(false);
+    let mut readbacks = Vec::new();
+    let mut executor = crate::frame_graph::WgpuFrameGraphExecutor::new();
+    let mut graph = crate::frame_graph::WgpuFrameGraph::new(None);
+    graph.add_fallible_command_pass(Some("stored run uploads"), &[], &[], |context| {
+        for run in runs {
+            let (_, _, tables) =
+                store.upload_stored(device, context, run, 1.0, &(0..u32::MAX), &[]);
+            readbacks.push(copy_tables(device, context.encoder, &tables));
+        }
+        Ok(())
+    });
+    let execution = executor
+        .execute_recorded_graph(device, queue, graph)
+        .expect("the frame submits");
+    store.finish_frame();
+    store.recall();
+    (readbacks, execution.submission)
+}
+
+#[test]
+fn a_stored_run_rewritten_within_a_frame_leaves_each_read_its_own_tables() {
+    let (_lock, device, queue) = crate::frame_graph::upload_test_device();
+    for upload in upload_modes(&device) {
+        let mut store = storage_store(&device, upload);
+        let opaque = stored_gradient_run(80, 0, 1.0);
+        let faded = RunDraw {
+            placement: crate::scene::Placement {
+                alpha: 0.25,
+                ..opaque.placement
+            },
+            ..opaque.clone()
+        };
+        upload_frame(&device, &queue, &mut store, &[&opaque]);
+        let (readbacks, submission) = upload_frame(&device, &queue, &mut store, &[&opaque, &faded]);
+        let first =
+            crate::frame_graph::read_uploaded_bytes(&device, &readbacks[0], submission.clone());
+        let second = crate::frame_graph::read_uploaded_bytes(&device, &readbacks[1], submission);
+        let (opaque_stops, faded_stops) = (painted_stop_bytes(&opaque), painted_stop_bytes(&faded));
+        assert!(
+            holds(&first, &opaque_stops) && !holds(&first, &faded_stops),
+            "{upload:?}: the read before the rewrite sees the opaque stops"
+        );
+        assert!(
+            holds(&second, &faded_stops),
+            "{upload:?}: the read after the rewrite sees the faded stops"
+        );
+        let bodies: &[u8] = bytemuck::cast_slice(opaque.tables().shapes.bodies());
+        assert!(
+            holds(&first, bodies) && holds(&second, bodies),
+            "{upload:?}"
+        );
+    }
+}
+
+/// Uploads a stored run that changes every frame in a different place, and
+/// sometimes grows, and checks every frame read its own tables whole: with
+/// the GPU done before each next frame, and with every frame in flight.
+#[test]
+fn stored_runs_changed_while_earlier_frames_are_in_flight_keep_each_frames_tables_whole() {
+    const RECORDS: usize = 400;
+    // A body is 64 bytes: 64 records fill an upload chunk.
+    let marked = |frame: usize| (frame * 64 * 3) % RECORDS;
+    let (_lock, device, queue) = crate::frame_graph::upload_test_device();
+    for upload in upload_modes(&device) {
+        for wait in [true, false] {
+            let mut store = storage_store(&device, upload);
+            let runs: Vec<RunDraw> = (0..10)
+                .map(|frame| {
+                    let records = if frame % 4 == 3 {
+                        RECORDS + 70
+                    } else {
+                        RECORDS
+                    };
+                    stored_gradient_run(records, marked(frame), 1.0)
+                })
+                .collect();
+            let mut frames = Vec::new();
+            for run in &runs {
+                frames.push(upload_frame(&device, &queue, &mut store, &[run]));
+                if wait {
+                    device
+                        .poll(wgpu::PollType::wait_indefinitely())
+                        .expect("idle device");
+                }
+            }
+            for (frame, ((readbacks, submission), run)) in frames.into_iter().zip(&runs).enumerate()
+            {
+                let read =
+                    crate::frame_graph::read_uploaded_bytes(&device, &readbacks[0], submission);
+                let tables = run.tables();
+                for (table, bytes) in [
+                    (
+                        "bodies",
+                        bytemuck::cast_slice::<_, u8>(tables.shapes.bodies()),
+                    ),
+                    ("curves", bytemuck::cast_slice(tables.shapes.curves())),
+                    ("brushes", bytemuck::cast_slice(&tables.brushes)),
+                    ("stops", &painted_stop_bytes(run)[..]),
+                ] {
+                    assert!(
+                        holds(&read, bytes),
+                        "{upload:?}, waiting {wait}: frame {frame} reads its own {table} whole"
+                    );
+                }
+            }
+        }
+    }
 }

@@ -97,7 +97,7 @@ impl ArcTrigFill {
         };
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Arc Trig Fill Bind Group Layout"),
-            entries: &[table(1, true), table(2, false)],
+            entries: &[table(1, false), table(2, false)],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Arc Trig Fill Pipeline Layout"),
@@ -135,16 +135,23 @@ impl ArcTrigFill {
             })
     }
 
-    pub(crate) fn bind(&self, bodies: &wgpu::Buffer, curves: &wgpu::Buffer) -> TrigBindings {
-        let rows = (bodies.size() / BODY_ROW).min(curves.size() / CURVE_ROW);
+    /// Bindings over `rows` records whose bodies and curves start at the
+    /// given offsets, which may share a buffer: both bind as writable
+    /// storage, so one buffer takes a single usage in the dispatch.
+    pub(crate) fn bind(
+        &self,
+        (bodies, bodies_offset): (&wgpu::Buffer, u64),
+        (curves, curves_offset): (&wgpu::Buffer, u64),
+        rows: u64,
+    ) -> TrigBindings {
         let windows = (0..rows.div_ceil(self.window_rows))
             .map(|index| {
                 let first = index * self.window_rows;
                 let count = self.window_rows.min(rows - first);
-                let window = |buffer, row| {
+                let window = |buffer, base: u64, row| {
                     wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer,
-                        offset: first * row,
+                        offset: base + first * row,
                         size: wgpu::BufferSize::new(count * row),
                     })
                 };
@@ -156,11 +163,11 @@ impl ArcTrigFill {
                         entries: &[
                             wgpu::BindGroupEntry {
                                 binding: 1,
-                                resource: window(bodies, BODY_ROW),
+                                resource: window(bodies, bodies_offset, BODY_ROW),
                             },
                             wgpu::BindGroupEntry {
                                 binding: 2,
-                                resource: window(curves, CURVE_ROW),
+                                resource: window(curves, curves_offset, CURVE_ROW),
                             },
                         ],
                     })

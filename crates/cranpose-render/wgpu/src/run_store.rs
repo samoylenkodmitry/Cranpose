@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
-use cranpose_core::collections::map::HashMap;
+use cranpose_core::collections::map::{Entry, HashMap};
 use cranpose_render_common::{graph::DrawCommandId, style_shared::apply_layer_to_color};
 use cranpose_ui_graphics::{
     ARC_BUCKETS, BrushRecord, Color, FRAGMENT_KIND_ARC, GradientStopRecord, GraphicsLayer,
@@ -9,15 +9,19 @@ use cranpose_ui_graphics::{
     band_class_segments, strip_index_pattern, strip_indices, strip_vertices,
 };
 use smallvec::SmallVec;
-use wgpu::util::DeviceExt;
 
 use crate::{
     arc_trig_fill::{ArcTrigFill, TrigBindings},
-    frame_graph::{FrameCommandRecorder, FrameCommandStats, UploadPlacement, place_upload},
+    frame_graph::{
+        FrameCommandRecorder, FrameCommandStats, MapRequests, MappedBuffers, MappedPool,
+        TEST_READBACK, UploadMode, UploadPlacement, align_u64_to, create_filled_buffer,
+        place_upload, write_mapped,
+    },
     geometry::{
         SegmentTransform, canonicalized_scaled_rect, snap_delta_for_anchor,
         snapped_anchor_device_origin,
     },
+    idle_pool::IDLE_FRAMES,
     run_geometry::ShapeFill,
     scene::{Placement, RunDraw},
 };
@@ -32,23 +36,10 @@ pub(crate) const PLACEMENT_CHUNK: usize = 4;
 /// consecutive runs share a draw.
 pub(crate) const STORE_RUN_MIN_RECORDS: u32 = 64;
 const STORE_IDLE_FRAMES: u64 = 120;
-/// What a stored run's buffers start at in the uniform mode, where the
-/// shader's chunked tables bind them; with storage buffers a run takes what
-/// it holds (see [`stored_capacity`]).
-const UNIFORM_STORE_CAPACITIES: [usize; BUFFER_COUNT] = [
-    INITIAL_STORE_RECORDS,
-    INITIAL_STORE_RECORDS,
-    INITIAL_BRUSHES,
-    INITIAL_STOPS,
-    STORE_PLACEMENTS,
-];
-const INITIAL_STORE_RECORDS: usize = 256;
 const INITIAL_ARENA_RECORDS: usize = 1024;
 const INITIAL_BRUSHES: usize = 64;
 const INITIAL_STOPS: usize = 128;
 const INITIAL_PLACEMENTS: usize = 64;
-/// The store tier binds a placement table it never reads: one entry.
-const STORE_PLACEMENTS: usize = 1;
 
 const PLACEMENT_CANONICALIZE: u32 = 1;
 #[cfg(test)]
@@ -101,9 +92,9 @@ impl RunBufferMode {
 
     fn usage(self) -> wgpu::BufferUsages {
         if self.storage {
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST
+            wgpu::BufferUsages::STORAGE
         } else {
-            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST
+            wgpu::BufferUsages::UNIFORM
         }
     }
 
@@ -284,14 +275,6 @@ fn painted_stops(
     }));
 }
 
-pub(crate) struct RunBuffers {
-    buffers: [wgpu::Buffer; BUFFER_COUNT],
-    capacities: [usize; BUFFER_COUNT],
-    pub(crate) bind_group: wgpu::BindGroup,
-    mode: RunBufferMode,
-    trig_fill: Option<TrigBindings>,
-}
-
 /// Bytes compared at a time when a stored run's tables change, so the
 /// arena whose ball moved re-uploads the ball's chunk, not the arena.
 /// Every element size divides it or is divided by it, so a chunk edge is
@@ -313,6 +296,13 @@ const LABELS: [&str; BUFFER_COUNT] = [
     "Run Placements",
 ];
 
+/// The tables a stored run keeps: its record bodies and curves, brushes
+/// and stops. The store tier reads its placement from its uniform.
+const STORED_TABLES: usize = 4;
+
+/// The most versions a stored run keeps besides the one its draws bind.
+const MAX_SPARE_VERSIONS: usize = 3;
+
 /// Brush, stop and placement tables of no entries, which every stored run
 /// whose own table is empty binds: most runs paint solid colours, and the
 /// store tier never reads its placement. On Metal each buffer, however
@@ -322,249 +312,348 @@ pub(crate) struct EmptyRunTables {
 }
 
 impl EmptyRunTables {
-    fn new(device: &wgpu::Device, mode: RunBufferMode) -> Self {
+    fn new(device: &wgpu::Device, mode: RunBufferMode, upload: UploadMode) -> Self {
         let buffers = std::array::from_fn(|index| {
             matches!(index, BRUSH_BUFFER | STOP_BUFFER | PLACEMENT_BUFFER).then(|| {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(LABELS[index]),
-                    size: (ELEMENT_SIZES[index] * stored_capacity(mode, index, 1)) as u64,
-                    usage: buffer_usage(mode, index),
-                    mapped_at_creation: false,
-                })
+                create_filled_buffer(
+                    device,
+                    upload,
+                    LABELS[index],
+                    buffer_usage(mode, index),
+                    &vec![0; ELEMENT_SIZES[index]],
+                )
             })
         });
         Self { buffers }
     }
+
+    fn buffer(&self, index: usize) -> &wgpu::Buffer {
+        self.buffers[index]
+            .as_ref()
+            .expect("the brush, stop and placement tables have empty stand-ins")
+    }
 }
 
-impl RunBuffers {
-    /// A stored run's buffers for `capacities` elements; a table of none
-    /// binds `empty`'s.
-    fn new(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        mode: RunBufferMode,
-        capacities: [usize; BUFFER_COUNT],
-        empty: &EmptyRunTables,
-    ) -> Self {
-        let buffers = std::array::from_fn(|index| match &empty.buffers[index] {
-            Some(shared) if capacities[index] == 0 => shared.clone(),
-            _ => device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(LABELS[index]),
-                size: (ELEMENT_SIZES[index] * capacities[index].max(1)) as u64,
-                usage: buffer_usage(mode, index),
-                mapped_at_creation: false,
-            }),
+/// What making and writing a stored run's tables takes from the store.
+struct StoreContext<'a> {
+    device: &'a wgpu::Device,
+    layout: &'a wgpu::BindGroupLayout,
+    upload: UploadMode,
+    empty: &'a EmptyRunTables,
+    alignment: u64,
+}
+
+/// One copy of a stored run's tables, each at an aligned offset of one
+/// buffer, and the bind group over its brushes and stops.
+struct TableVersion {
+    buffer: wgpu::Buffer,
+    offsets: [u64; STORED_TABLES],
+    capacities: [usize; STORED_TABLES],
+    bind_group: wgpu::BindGroup,
+    trig_fill: Option<TrigBindings>,
+    /// The run's update whose bytes it holds.
+    held: u64,
+}
+
+impl MappedBuffers for TableVersion {
+    fn mapped_buffers(&self) -> &[wgpu::Buffer] {
+        std::slice::from_ref(&self.buffer)
+    }
+}
+
+impl TableVersion {
+    /// Tables for `needed` elements, mapped from the start in the mapped
+    /// mode; an empty brush or stop table binds the empty stand-in.
+    fn new(context: &StoreContext<'_>, needed: [usize; STORED_TABLES]) -> Self {
+        let capacities = std::array::from_fn(|index| stored_capacity(needed[index]));
+        let mut offsets = [0; STORED_TABLES];
+        let mut end = 0;
+        for index in 0..STORED_TABLES {
+            offsets[index] = align_u64_to(end, context.alignment);
+            end = offsets[index] + (ELEMENT_SIZES[index] * capacities[index]) as u64;
+        }
+        let buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Stored Run Tables"),
+            size: align_u64_to(end.max(1), wgpu::COPY_BUFFER_ALIGNMENT),
+            usage: context
+                .upload
+                .writable(wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE | TEST_READBACK),
+            mapped_at_creation: context.upload == UploadMode::Mapped,
         });
-        let bind_group = Self::bind(device, layout, &buffers);
+        let region = |index: usize| {
+            if capacities[index] == 0 {
+                context.empty.buffer(index).as_entire_binding()
+            } else {
+                wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &buffer,
+                    offset: offsets[index],
+                    size: wgpu::BufferSize::new((ELEMENT_SIZES[index] * capacities[index]) as u64),
+                })
+            }
+        };
+        let bind_group = context
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Run Tables Bind Group"),
+                layout: context.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: region(BRUSH_BUFFER),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: region(STOP_BUFFER),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: context.empty.buffer(PLACEMENT_BUFFER).as_entire_binding(),
+                    },
+                ],
+            });
         Self {
-            buffers,
+            buffer,
+            offsets,
             capacities,
             bind_group,
-            mode,
             trig_fill: None,
+            held: 0,
         }
     }
 
-    fn bind(
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        buffers: &[wgpu::Buffer; BUFFER_COUNT],
-    ) -> wgpu::BindGroup {
-        let entries =
-            [(1, BRUSH_BUFFER), (2, STOP_BUFFER), (3, PLACEMENT_BUFFER)].map(|(binding, index)| {
-                wgpu::BindGroupEntry {
-                    binding,
-                    resource: buffers[index].as_entire_binding(),
-                }
-            });
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Run Tables Bind Group"),
-            layout,
-            entries: &entries,
-        })
+    fn holds(&self, needed: [usize; STORED_TABLES]) -> bool {
+        self.capacities
+            .iter()
+            .zip(needed)
+            .all(|(capacity, needed)| *capacity >= needed)
     }
 
-    /// Grows any buffer below `needed` elements and rebinds; says, per
-    /// buffer, whether it was recreated and so holds nothing yet.
-    fn ensure(
+    fn bytes(&self) -> usize {
+        self.buffer.size() as usize
+    }
+
+    fn bound(&self) -> StoredTables {
+        StoredTables {
+            buffer: self.buffer.clone(),
+            records: [self.offsets[BODY_BUFFER], self.offsets[CURVE_BUFFER]].map(|offset| {
+                u32::try_from(offset).expect("a stored run's tables fit u32 offsets")
+            }),
+            bind_group: self.bind_group.clone(),
+        }
+    }
+
+    /// Fills the trig rows of the version's arc records, once its curves
+    /// were written.
+    fn fill_trig(
         &mut self,
-        device: &wgpu::Device,
-        layout: &wgpu::BindGroupLayout,
-        needed: [usize; BUFFER_COUNT],
-    ) -> [bool; BUFFER_COUNT] {
-        let mut fresh = [false; BUFFER_COUNT];
-        for index in 0..BUFFER_COUNT {
-            if needed[index] > self.capacities[index] {
-                let capacity = stored_capacity(self.mode, index, needed[index]);
-                self.buffers[index] = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(LABELS[index]),
-                    size: (ELEMENT_SIZES[index] * capacity) as u64,
-                    usage: buffer_usage(self.mode, index),
-                    mapped_at_creation: false,
-                });
-                self.capacities[index] = capacity;
-                fresh[index] = true;
-            }
-        }
-        if fresh.contains(&true) {
-            self.bind_group = Self::bind(device, layout, &self.buffers);
-        }
-        if fresh[BODY_BUFFER] || fresh[CURVE_BUFFER] {
-            self.trig_fill = None;
-        }
-        fresh
-    }
-
-    fn upload_records(
-        &mut self,
-        device: &wgpu::Device,
         recorder: &mut impl FrameCommandRecorder,
-        (previous, tables): (&RecordTables, &RecordTables),
-        whole: [bool; 2],
-        fill: Option<&ArcTrigFill>,
-    ) -> FrameCommandStats {
-        let mut records = self.write_changed(
-            device,
-            recorder,
-            BODY_BUFFER,
-            previous.shapes.bodies(),
-            tables.shapes.bodies(),
-            whole[0],
-        );
-        let curves = self.write_changed(
-            device,
-            recorder,
-            CURVE_BUFFER,
-            previous.shapes.curves(),
-            tables.shapes.curves(),
-            whole[1],
-        );
-        if let Some(fill) = fill
-            && curves.upload_bytes > 0
-            && tables_hold_arcs(tables)
-        {
-            let buffers = &self.buffers;
-            let bindings = self
-                .trig_fill
-                .get_or_insert_with(|| fill.bind(&buffers[BODY_BUFFER], &buffers[CURVE_BUFFER]));
-            let mut pass = recorder.begin_compute_pass("Stored Run Arc Trig Fill");
-            fill.dispatch(&mut pass, bindings, tables.shapes.len() as u32);
-        }
-        records += curves;
-        records
-    }
-
-    fn write<T: Pod>(
-        &self,
-        device: &wgpu::Device,
-        recorder: &mut impl FrameCommandRecorder,
-        index: usize,
-        data: &[T],
-    ) -> FrameCommandStats {
-        if data.is_empty() {
-            return FrameCommandStats::default();
-        }
-        recorder.stage_buffer_copy(device, &self.buffers[index], 0, bytemuck::cast_slice(data))
-    }
-
-    pub(crate) fn binding(&self) -> ArenaBinding<'_> {
-        ArenaBinding {
-            records: [&self.buffers[BODY_BUFFER], &self.buffers[CURVE_BUFFER]],
-            bind_group: &self.bind_group,
-            offsets: [0; BUFFER_COUNT],
-        }
-    }
-
-    /// Writes what `data` changes against `previous`, the buffer's
-    /// contents: the chunks of [`UPLOAD_CHUNK_BYTES`] that differ, joined
-    /// when adjacent, and everything past the shorter table; the whole of
-    /// `data` when `fresh` says the buffer holds nothing.
-    fn write_changed<T: Pod>(
-        &self,
-        device: &wgpu::Device,
-        recorder: &mut impl FrameCommandRecorder,
-        index: usize,
-        previous: &[T],
-        data: &[T],
-        fresh: bool,
-    ) -> FrameCommandStats {
-        let bytes = bytemuck::cast_slice::<T, u8>(data);
-        if fresh {
-            return recorder.stage_buffer_copy(device, &self.buffers[index], 0, bytes);
-        }
-        let previous = bytemuck::cast_slice::<T, u8>(previous);
-        let shared = previous.len().min(bytes.len());
-        let mut stats = FrameCommandStats::default();
-        let mut pending = None;
-        let mut offset = 0;
-        while offset < shared {
-            let end = (offset + UPLOAD_CHUNK_BYTES).min(shared);
-            let changed = bytes[offset..end] != previous[offset..end];
-            match (changed, pending) {
-                (true, None) => pending = Some(offset),
-                (false, Some(from)) => {
-                    stats += recorder.stage_buffer_copy(
-                        device,
-                        &self.buffers[index],
-                        from as u64,
-                        &bytes[from..offset],
-                    );
-                    pending = None;
-                }
-                _ => {}
-            }
-            offset = end;
-        }
-        let from = pending.unwrap_or(shared);
-        if from < bytes.len() {
-            stats += recorder.stage_buffer_copy(
-                device,
-                &self.buffers[index],
-                from as u64,
-                &bytes[from..],
-            );
-        }
-        stats
+        fill: &ArcTrigFill,
+        rows: usize,
+    ) {
+        let (buffer, offsets, capacity) =
+            (&self.buffer, self.offsets, self.capacities[BODY_BUFFER]);
+        let bindings = self.trig_fill.get_or_insert_with(|| {
+            fill.bind(
+                (buffer, offsets[BODY_BUFFER]),
+                (buffer, offsets[CURVE_BUFFER]),
+                capacity as u64,
+            )
+        });
+        let mut pass = recorder.begin_compute_pass("Stored Run Arc Trig Fill");
+        fill.dispatch(&mut pass, bindings, rows as u32);
     }
 }
 
-/// The elements each of a stored run's buffers holds for `tables`: none
-/// for an empty brush or stop table, and none for the placement, which the
-/// store tier binds but never reads.
-fn stored_needs(tables: &RecordTables) -> [usize; BUFFER_COUNT] {
+/// The tables one stored-run batch binds: the version that was current
+/// when the batch was prepared, so a later rewrite in the same frame goes
+/// to another version and leaves this one as the batch's draws read it.
+pub(crate) struct StoredTables {
+    buffer: wgpu::Buffer,
+    records: [u32; 2],
+    bind_group: wgpu::BindGroup,
+}
+
+impl StoredTables {
+    pub(crate) fn binding(&self) -> ArenaBinding<'_> {
+        ArenaBinding {
+            records: [&self.buffer, &self.buffer],
+            bind_group: &self.bind_group,
+            offsets: [self.records[0], self.records[1], 0, 0, 0],
+        }
+    }
+}
+
+/// A run's tables as the update writes them: the recorded ones it compares
+/// against `previous`, and the stops painted with the run's paint.
+struct TableUpdate<'a> {
+    previous: &'a RecordTables,
+    tables: &'a RecordTables,
+    painted_stops: &'a [GradientStopRecord],
+    stops_changed: bool,
+}
+
+impl TableUpdate<'_> {
+    fn bytes(&self, table: usize) -> &[u8] {
+        match table {
+            BODY_BUFFER => bytemuck::cast_slice(self.tables.shapes.bodies()),
+            CURVE_BUFFER => bytemuck::cast_slice(self.tables.shapes.curves()),
+            BRUSH_BUFFER => bytemuck::cast_slice(&self.tables.brushes),
+            _ => bytemuck::cast_slice(self.painted_stops),
+        }
+    }
+
+    /// Calls `changed` with each byte range of `table` that differs from
+    /// the previous tables.
+    fn changes(&self, table: usize, changed: impl FnMut(std::ops::Range<usize>)) {
+        let previous: &[u8] = match table {
+            BODY_BUFFER => bytemuck::cast_slice(self.previous.shapes.bodies()),
+            CURVE_BUFFER => bytemuck::cast_slice(self.previous.shapes.curves()),
+            BRUSH_BUFFER => bytemuck::cast_slice(&self.previous.brushes),
+            _ if self.stops_changed => &[],
+            _ => self.bytes(table),
+        };
+        changed_ranges(previous, self.bytes(table), changed);
+    }
+}
+
+/// Calls `changed` with the chunks of [`UPLOAD_CHUNK_BYTES`] of `data` that
+/// differ from `previous`, joined when adjacent, and with everything past
+/// the shorter of the two.
+fn changed_ranges(previous: &[u8], data: &[u8], mut changed: impl FnMut(std::ops::Range<usize>)) {
+    let shared = previous.len().min(data.len());
+    let mut pending = None;
+    let mut offset = 0;
+    while offset < shared {
+        let end = (offset + UPLOAD_CHUNK_BYTES).min(shared);
+        let differs = data[offset..end] != previous[offset..end];
+        match (differs, pending) {
+            (true, None) => pending = Some(offset),
+            (false, Some(from)) => {
+                changed(from..offset);
+                pending = None;
+            }
+            _ => {}
+        }
+        offset = end;
+    }
+    let from = pending.unwrap_or(shared);
+    if from < data.len() {
+        changed(from..data.len());
+    }
+}
+
+/// Which bytes of each table a version takes.
+#[derive(Clone, Copy)]
+enum Writes<'a> {
+    /// All of them: the version holds nothing yet.
+    Whole,
+    /// Those that differ from the previous tables, which it holds.
+    Changed,
+    /// The chunks a later update than the one it holds changed.
+    Since(&'a [Vec<u64>; STORED_TABLES], u64),
+}
+
+/// Writes `update` into `version` as `writes` says: through ordered copies
+/// in the copied mode, into the mapped buffer in the mapped mode, which
+/// is then unmapped for the frame's draws. Fills the trig rows of arc
+/// records whose curves were written.
+fn write_version(
+    context: &StoreContext<'_>,
+    recorder: &mut impl FrameCommandRecorder,
+    version: &mut TableVersion,
+    update: &TableUpdate<'_>,
+    writes: Writes<'_>,
+    fill: Option<&ArcTrigFill>,
+) -> FrameCommandStats {
+    let mut stats = FrameCommandStats::default();
+    let mut curves_written = false;
+    for table in 0..STORED_TABLES {
+        let bytes = update.bytes(table);
+        let buffer = &version.buffer;
+        let base = version.offsets[table];
+        let mut write = |range: std::ops::Range<usize>| {
+            curves_written |= table == CURVE_BUFFER;
+            let offset = base + range.start as u64;
+            stats += match context.upload {
+                UploadMode::Copied => {
+                    recorder.stage_buffer_copy(context.device, buffer, offset, &bytes[range])
+                }
+                UploadMode::Mapped => write_mapped(buffer, offset, &bytes[range]),
+            };
+        };
+        match writes {
+            Writes::Whole if !bytes.is_empty() => write(0..bytes.len()),
+            Writes::Whole => {}
+            Writes::Changed => update.changes(table, write),
+            Writes::Since(stamps, held) => stale_ranges(&stamps[table], held, bytes.len(), write),
+        }
+    }
+    if context.upload == UploadMode::Mapped {
+        version.buffer.unmap();
+    }
+    if let Some(fill) = fill
+        && curves_written
+        && tables_hold_arcs(update.tables)
+    {
+        version.fill_trig(recorder, fill, update.tables.shapes.len());
+    }
+    stats
+}
+
+/// Calls `stale` with the byte ranges of a table of `len` bytes whose
+/// chunks changed in an update after `held`, joined when adjacent.
+fn stale_ranges(
+    stamps: &[u64],
+    held: u64,
+    len: usize,
+    mut stale: impl FnMut(std::ops::Range<usize>),
+) {
+    let mut chunk = 0;
+    while chunk < stamps.len() {
+        if stamps[chunk] <= held {
+            chunk += 1;
+            continue;
+        }
+        let from = chunk;
+        while chunk < stamps.len() && stamps[chunk] > held {
+            chunk += 1;
+        }
+        let range = from * UPLOAD_CHUNK_BYTES..(chunk * UPLOAD_CHUNK_BYTES).min(len);
+        if !range.is_empty() {
+            stale(range);
+        }
+    }
+}
+
+/// The elements each of a stored run's tables holds for `tables`: none
+/// for an empty brush or stop table.
+fn stored_needs(tables: &RecordTables) -> [usize; STORED_TABLES] {
     [
         tables.shapes.len().max(1),
         tables.shapes.len().max(1),
         tables.brushes.len(),
         tables.stops.len(),
-        0,
     ]
 }
 
-/// The elements a stored run's buffer `index` takes for `needed`: a quarter
-/// more, so a run that grows a little keeps its buffer, in whole groups of
-/// 16. A run of 70 records took 256 at the start and the next power of two
+/// The elements a stored run's table takes for `needed`: a quarter more,
+/// so a run that grows a little keeps its buffer, in whole groups of 16.
+/// A run of 70 records took 256 at the start and the next power of two
 /// after: 341 runs held 20 MB of tables on the desktop gauntlet.
-fn stored_capacity(mode: RunBufferMode, index: usize, needed: usize) -> usize {
+fn stored_capacity(needed: usize) -> usize {
     if needed == 0 {
         return 0;
     }
-    let grown = (needed + needed / 4).next_multiple_of(16);
-    if mode.storage {
-        grown
-    } else {
-        grown.max(UNIFORM_STORE_CAPACITIES[index])
-    }
+    (needed + needed / 4).next_multiple_of(16)
 }
 
+/// The usage of an arena table, short of how the CPU writes it.
 fn buffer_usage(mode: RunBufferMode, index: usize) -> wgpu::BufferUsages {
     if index == BODY_BUFFER || index == CURVE_BUFFER {
-        let records = wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::VERTEX;
         if mode.trig_fill {
-            records | wgpu::BufferUsages::STORAGE
+            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::STORAGE
         } else {
-            records
+            wgpu::BufferUsages::VERTEX
         }
     } else {
         mode.usage()
@@ -585,8 +674,21 @@ fn segment_holds_arcs(segment: &RecordSegment) -> bool {
 }
 
 /// A recording's tables resident on the GPU, keyed by its command.
+///
+/// In the copied mode the run keeps one version and copies what changes
+/// into it, ordered between the passes that read it. In the mapped mode the
+/// CPU writes a version the GPU no longer reads: a change goes to a spare
+/// whose map completed once the frames that drew it finished, or to a new
+/// one, which takes the chunks changed since the update it holds; the
+/// version it replaces waits for its own map. A frame never writes a
+/// version that frame or one in flight reads.
 pub(crate) struct StoredRun {
-    pub(crate) buffers: RunBuffers,
+    tables: TableVersion,
+    spares: MappedPool<TableVersion>,
+    /// The mapped mode's update that last changed each chunk of each table.
+    stamps: [Vec<u64>; STORED_TABLES],
+    update: u64,
+    last_changed_frame: u64,
     recorder: Arc<cranpose_ui_graphics::ShapeRecorder>,
     paint: PaintKey,
     fill: Option<ShapeFill>,
@@ -597,29 +699,73 @@ pub(crate) struct StoredRun {
 }
 
 impl StoredRun {
-    /// A run not yet uploaded, with buffers for tables of `needed` elements.
-    fn new(
-        device: &wgpu::Device,
-        (layout, mode, empty): (&wgpu::BindGroupLayout, RunBufferMode, &EmptyRunTables),
-        needed: [usize; BUFFER_COUNT],
-        paint: PaintKey,
-    ) -> Self {
-        Self {
-            buffers: RunBuffers::new(
-                device,
-                layout,
-                mode,
-                std::array::from_fn(|index| stored_capacity(mode, index, needed[index])),
-                empty,
-            ),
-            recorder: Arc::default(),
-            paint,
-            fill: None,
-            fill_scale_bits: 0,
-            fill_offset_bits: [0; 2],
-            fill_window: [0; 4],
-            last_used_frame: 0,
+    fn bytes(&self) -> usize {
+        self.tables.bytes() + self.spares.iter().map(TableVersion::bytes).sum::<usize>()
+    }
+
+    /// Notes in the stamps the chunks `update` changes and says whether
+    /// it changes any.
+    fn stamp_changes(&mut self, update: &TableUpdate<'_>) -> bool {
+        let stamp = self.update + 1;
+        let mut changed = false;
+        for (table, stamps) in self.stamps.iter_mut().enumerate() {
+            let chunks = update.bytes(table).len().div_ceil(UPLOAD_CHUNK_BYTES);
+            changed |= chunks > stamps.len();
+            stamps.resize(chunks, stamp);
+            update.changes(table, |range| {
+                changed = true;
+                let chunks =
+                    range.start / UPLOAD_CHUNK_BYTES..range.end.div_ceil(UPLOAD_CHUNK_BYTES);
+                for chunk in &mut stamps[chunks] {
+                    *chunk = stamp;
+                }
+            });
         }
+        changed
+    }
+
+    /// Brings the run's tables to `update`, in place in the copied mode and
+    /// in another version in the mapped mode.
+    fn write(
+        &mut self,
+        context: &StoreContext<'_>,
+        recorder: &mut impl FrameCommandRecorder,
+        update: &TableUpdate<'_>,
+        fill: Option<&ArcTrigFill>,
+        requests: &mut MapRequests,
+    ) -> FrameCommandStats {
+        let needed = stored_needs(update.tables);
+        if context.upload == UploadMode::Copied {
+            let writes = if self.tables.holds(needed) {
+                Writes::Changed
+            } else {
+                self.tables = TableVersion::new(context, needed);
+                Writes::Whole
+            };
+            return write_version(context, recorder, &mut self.tables, update, writes, fill);
+        }
+        if !self.stamp_changes(update) {
+            return FrameCommandStats::default();
+        }
+        self.update += 1;
+        let mut version = match self.spares.take(context.device, Vec::pop) {
+            Some(spare) if spare.holds(needed) => spare,
+            _ => {
+                if self.spares.len() >= MAX_SPARE_VERSIONS {
+                    self.spares.drop_oldest_mapping();
+                }
+                TableVersion::new(context, needed)
+            }
+        };
+        let writes = match version.held {
+            0 => Writes::Whole,
+            held => Writes::Since(&self.stamps, held),
+        };
+        let stats = write_version(context, recorder, &mut version, update, writes, fill);
+        version.held = self.update;
+        let replaced = std::mem::replace(&mut self.tables, version);
+        self.spares.recycle(replaced, requests);
+        stats
     }
 }
 
@@ -698,18 +844,18 @@ struct StripIndexBuffer {
 }
 
 impl StripIndexBuffer {
-    fn ensure(&mut self, device: &wgpu::Device, segments: u32) {
+    fn ensure(&mut self, device: &wgpu::Device, upload: UploadMode, segments: u32) {
         if self.buffer.is_some() {
             return;
         }
         let indices: Vec<u32> = strip_index_pattern(segments).collect();
-        self.buffer = Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Run Strip Indices"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
-        );
+        self.buffer = Some(create_filled_buffer(
+            device,
+            upload,
+            "Run Strip Indices",
+            wgpu::BufferUsages::INDEX,
+            bytemuck::cast_slice(&indices),
+        ));
     }
 }
 
@@ -802,17 +948,28 @@ pub(crate) struct ArenaBinding<'a> {
 struct ArenaGeneration {
     buffers: [wgpu::Buffer; BUFFER_COUNT],
     capacities: [u64; BUFFER_COUNT],
+    /// The end of each table's placements this frame.
+    cursors: [u64; BUFFER_COUNT],
+    /// A copied generation's tables this frame, written when it is staged.
     staged: [Vec<u8>; BUFFER_COUNT],
+    /// The binding sizes its bind group covers.
+    bindings: [u64; BUFFER_COUNT],
     bind_group: wgpu::BindGroup,
     arcs: bool,
     trig_fill: Option<TrigBindings>,
+}
+
+impl MappedBuffers for ArenaGeneration {
+    fn mapped_buffers(&self) -> &[wgpu::Buffer] {
+        &self.buffers
+    }
 }
 
 impl ArenaGeneration {
     fn new(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        mode: RunBufferMode,
+        (mode, upload): (RunBufferMode, UploadMode),
         capacities: [u64; BUFFER_COUNT],
         bindings: [u64; BUFFER_COUNT],
     ) -> Self {
@@ -820,15 +977,17 @@ impl ArenaGeneration {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(LABELS[index]),
                 size: capacities[index],
-                usage: buffer_usage(mode, index),
-                mapped_at_creation: false,
+                usage: upload.writable(buffer_usage(mode, index)),
+                mapped_at_creation: upload == UploadMode::Mapped,
             })
         });
         let bind_group = Self::bind(device, layout, &buffers, bindings);
         Self {
             buffers,
             capacities,
+            cursors: [0; BUFFER_COUNT],
             staged: Default::default(),
+            bindings,
             bind_group,
             arcs: false,
             trig_fill: None,
@@ -858,15 +1017,99 @@ impl ArenaGeneration {
             entries: &entries,
         })
     }
+
+    fn holds(&self, bytes: [u64; BUFFER_COUNT]) -> bool {
+        self.capacities
+            .iter()
+            .zip(bytes)
+            .all(|(capacity, bytes)| *capacity >= bytes)
+    }
+
+    fn placed(&self) -> bool {
+        self.cursors.iter().any(|cursor| *cursor > 0)
+    }
+
+    fn rebind(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        bindings: [u64; BUFFER_COUNT],
+    ) {
+        self.bind_group = Self::bind(device, layout, &self.buffers, bindings);
+        self.bindings = bindings;
+    }
+
+    /// Places `bytes` at `offset` of `table`: staged for the frame's copy,
+    /// or written where the buffer is mapped.
+    fn write(
+        &mut self,
+        table: usize,
+        offset: u64,
+        bytes: &[u8],
+        upload: UploadMode,
+    ) -> FrameCommandStats {
+        self.cursors[table] = offset + bytes.len() as u64;
+        match upload {
+            UploadMode::Copied => {
+                let staged = &mut self.staged[table];
+                staged.resize(offset as usize, 0);
+                staged.extend_from_slice(bytes);
+                FrameCommandStats::default()
+            }
+            UploadMode::Mapped => write_mapped(&self.buffers[table], offset, bytes),
+        }
+    }
+
+    /// Opens the generation for a frame.
+    fn clear(&mut self) {
+        self.arcs = false;
+        self.cursors = [0; BUFFER_COUNT];
+        for staged in &mut self.staged {
+            staged.clear();
+        }
+    }
 }
 
+/// The frame's arena tables. A copied arena keeps its last generation from
+/// frame to frame, since the copies into it queue behind the draws that
+/// read it. A mapped arena writes each placement into a generation it
+/// keeps mapped until the frame is staged; its generations then cycle
+/// through a [`MappedPool`] while the GPU reads them.
 struct ArenaTables {
     mode: RunBufferMode,
+    upload: UploadMode,
     alignment: u64,
     bindings: [u64; BUFFER_COUNT],
     generations: Vec<ArenaGeneration>,
     chunks: Vec<ArenaChunk>,
     staging: ArenaStaging,
+    pool: MappedPool<ArenaGeneration>,
+    requests: MapRequests,
+    /// The bytes of each table the last mapped frame placed: a frame opens
+    /// in a generation that holds them.
+    last_totals: [u64; BUFFER_COUNT],
+    /// Whether the frame's mapped generations were unmapped for its submit.
+    sealed: bool,
+    /// The frame's mapped writes so far, reported when it is staged.
+    written: FrameCommandStats,
+}
+
+/// The capacities of the generation a placement that does not fit `current`
+/// opens: what each table's placement asked for, at least the tables'
+/// initial sizes.
+fn grown_capacities(
+    placements: &[UploadPlacement; BUFFER_COUNT],
+    current: Option<&ArenaGeneration>,
+) -> [u64; BUFFER_COUNT] {
+    std::array::from_fn(|index| {
+        let least = (INITIAL_ARENA_CAPACITIES[index] * ELEMENT_SIZES[index]) as u64;
+        match placements[index] {
+            UploadPlacement::Grow(capacity) => capacity.max(least),
+            UploadPlacement::At(_) => current
+                .map_or(least, |generation| generation.capacities[index])
+                .max(least),
+        }
+    })
 }
 
 const INITIAL_ARENA_CAPACITIES: [usize; BUFFER_COUNT] = [
@@ -886,7 +1129,7 @@ const UNIFORM_CHUNKS: [usize; BUFFER_COUNT] = [
 ];
 
 impl ArenaTables {
-    fn new(mode: RunBufferMode, alignment: u64) -> Self {
+    fn new(mode: RunBufferMode, upload: UploadMode, alignment: u64) -> Self {
         let bindings = std::array::from_fn(|index| {
             let elements = if mode.storage {
                 1
@@ -897,11 +1140,17 @@ impl ArenaTables {
         });
         Self {
             mode,
+            upload,
             alignment,
             bindings,
             generations: Vec::new(),
             chunks: Vec::new(),
             staging: ArenaStaging::default(),
+            pool: MappedPool::default(),
+            requests: MapRequests::default(),
+            last_totals: [0; BUFFER_COUNT],
+            sealed: false,
+            written: FrameCommandStats::default(),
         }
     }
 
@@ -911,63 +1160,90 @@ impl ArenaTables {
         layout: &wgpu::BindGroupLayout,
         tables: [&[u8]; BUFFER_COUNT],
     ) -> ArenaChunk {
-        let mut rebind = false;
-        for (binding, table) in self.bindings.iter_mut().zip(tables) {
-            let needed = table.len() as u64;
-            if self.mode.storage && needed > *binding {
-                *binding = needed;
-                rebind = true;
+        if self.mode.storage {
+            for (binding, table) in self.bindings.iter_mut().zip(tables) {
+                *binding = (*binding).max(table.len() as u64);
             }
         }
         let current = self.generations.last();
         let placements: [UploadPlacement; BUFFER_COUNT] = std::array::from_fn(|index| {
             place_upload(
-                current.map_or(0, |generation| generation.staged[index].len() as u64),
+                current.map_or(0, |generation| generation.cursors[index]),
                 tables[index].len() as u64,
                 self.bindings[index],
                 self.table_alignment(index),
                 current.map(|generation| generation.capacities[index]),
             )
         });
+        // The chunks a generation holds bind its bind group: one bound with
+        // smaller tables takes no more chunks.
+        let stale = current.is_some_and(|generation| generation.bindings != self.bindings);
         let grows = placements
             .iter()
-            .any(|placement| matches!(placement, UploadPlacement::Grow(_)));
+            .any(|placement| matches!(placement, UploadPlacement::Grow(_)))
+            || (stale && current.is_some_and(ArenaGeneration::placed));
         if grows {
-            let capacities = std::array::from_fn(|index| {
-                let least = (INITIAL_ARENA_CAPACITIES[index] * ELEMENT_SIZES[index]) as u64;
-                match placements[index] {
-                    UploadPlacement::Grow(capacity) => capacity.max(least),
-                    UploadPlacement::At(_) => current
-                        .map_or(least, |generation| generation.capacities[index])
-                        .max(least),
-                }
-            });
-            self.generations.push(ArenaGeneration::new(
-                device,
-                layout,
-                self.mode,
-                capacities,
-                self.bindings,
-            ));
-        } else if rebind && let Some(generation) = self.generations.last_mut() {
-            generation.bind_group =
-                ArenaGeneration::bind(device, layout, &generation.buffers, self.bindings);
+            let capacities = grown_capacities(&placements, current);
+            let generation = self.open(device, layout, capacities);
+            self.generations.push(generation);
+        } else if stale && let Some(generation) = self.generations.last_mut() {
+            generation.rebind(device, layout, self.bindings);
         }
         let index = self.generations.len() - 1;
         let generation = &mut self.generations[index];
+        let upload = self.upload;
+        let mut written = FrameCommandStats::default();
         let offsets = std::array::from_fn(|table| {
             let offset = match placements[table] {
                 UploadPlacement::At(offset) if !grows => offset,
                 _ => 0,
             };
-            let staged = &mut generation.staged[table];
-            staged.resize(offset as usize, 0);
-            staged.extend_from_slice(tables[table]);
+            written += generation.write(table, offset, tables[table], upload);
             u32::try_from(offset).expect("a frame's arena tables fit a dynamic offset")
         });
+        self.written += written;
         ArenaChunk {
             generation: index,
             offsets,
+        }
+    }
+
+    /// A generation of at least `capacities` bytes per table: a mapped
+    /// arena reuses a free one, which at a frame's start holds the last
+    /// frame's tables with room to grow, and makes one when none is free.
+    /// Free generations that do not hold the frame's tables go, so the
+    /// pool keeps only generations a frame can take.
+    fn open(
+        &mut self,
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        capacities: [u64; BUFFER_COUNT],
+    ) -> ArenaGeneration {
+        let modes = (self.mode, self.upload);
+        if self.upload == UploadMode::Copied {
+            return ArenaGeneration::new(device, layout, modes, capacities, self.bindings);
+        }
+        let wanted = if self.generations.is_empty() {
+            std::array::from_fn(|index| {
+                let last = self.last_totals[index];
+                capacities[index].max(align_u64_to(last + last / 4, self.alignment))
+            })
+        } else {
+            capacities
+        };
+        let taken = self.pool.take(device, |free| {
+            free.retain(|generation| generation.holds(wanted));
+            free.pop()
+        });
+        match taken {
+            Some(mut generation) => {
+                generation.clear();
+                if generation.bindings != self.bindings {
+                    generation.rebind(device, layout, self.bindings);
+                }
+                generation
+            }
+            None => ArenaGeneration::new(device, layout, modes, wanted, self.bindings),
         }
     }
 
@@ -995,22 +1271,46 @@ impl ArenaTables {
         }
         let mut pass = recorder.begin_frame_compute_pass(device, "Arena Arc Trig Fill");
         for generation in generations {
-            let rows = generation.staged[CURVE_BUFFER].len() / ELEMENT_SIZES[CURVE_BUFFER];
+            let rows = generation.cursors[CURVE_BUFFER] / ELEMENT_SIZES[CURVE_BUFFER] as u64;
+            let buffers = &generation.buffers;
+            let capacity = [BODY_BUFFER, CURVE_BUFFER]
+                .map(|table| generation.capacities[table] / ELEMENT_SIZES[table] as u64);
             let bind_group = generation.trig_fill.get_or_insert_with(|| {
                 fill.bind(
-                    &generation.buffers[BODY_BUFFER],
-                    &generation.buffers[CURVE_BUFFER],
+                    (&buffers[BODY_BUFFER], 0),
+                    (&buffers[CURVE_BUFFER], 0),
+                    capacity[0].min(capacity[1]),
                 )
             });
             fill.dispatch(&mut pass, bind_group, rows as u32);
         }
     }
 
+    /// Writes the frame's tables: a copied arena's staged bytes through
+    /// the recorder, one copy per table; a mapped arena wrote them as they
+    /// were placed and unmaps its generations for the submit.
     fn stage_pending(
         &mut self,
         device: &wgpu::Device,
         recorder: &mut impl FrameCommandRecorder,
     ) -> FrameCommandStats {
+        if self.upload == UploadMode::Mapped {
+            for generation in &self.generations {
+                for buffer in &generation.buffers {
+                    buffer.unmap();
+                }
+            }
+            self.sealed = true;
+            if !self.generations.is_empty() {
+                self.last_totals = std::array::from_fn(|table| {
+                    self.generations
+                        .iter()
+                        .map(|generation| generation.cursors[table])
+                        .sum()
+                });
+            }
+            return std::mem::take(&mut self.written);
+        }
         let mut stats = FrameCommandStats::default();
         for generation in &mut self.generations {
             for (buffer, staged) in generation.buffers.iter().zip(&mut generation.staged) {
@@ -1026,14 +1326,22 @@ impl ArenaTables {
         stats
     }
 
+    /// Ends the frame: a mapped arena's staged generations go to the pool,
+    /// to map again once the frame is submitted; otherwise the last
+    /// generation stays for the next frame. A mapped generation the frame
+    /// never staged is still mapped and stays writable.
     fn reset(&mut self) {
+        self.written = FrameCommandStats::default();
+        if std::mem::take(&mut self.sealed) {
+            for generation in self.generations.drain(..) {
+                self.pool.recycle(generation, &mut self.requests);
+            }
+            return;
+        }
         let keep = self.generations.len().saturating_sub(1);
         self.generations.drain(..keep);
         for generation in &mut self.generations {
-            generation.arcs = false;
-            for staged in &mut generation.staged {
-                staged.clear();
-            }
+            generation.clear();
         }
     }
 }
@@ -1046,6 +1354,8 @@ pub(crate) fn draw_vertices(records: u32, band_class: u8) -> u64 {
 /// per-pass arena chunks small runs are copied into.
 pub(crate) struct RunStore {
     mode: RunBufferMode,
+    upload: UploadMode,
+    alignment: u64,
     layout: wgpu::BindGroupLayout,
     stored: HashMap<DrawCommandId, StoredRun>,
     empty_tables: EmptyRunTables,
@@ -1055,10 +1365,13 @@ pub(crate) struct RunStore {
     frame: u64,
     fill_stats: bool,
     trig_fill: Option<ArcTrigFill>,
+    /// The stored runs' replaced versions, mapped again once the frame
+    /// that replaced them is submitted.
+    requests: MapRequests,
 }
 
 impl RunStore {
-    pub(crate) fn new(device: &wgpu::Device, mode: RunBufferMode) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, mode: RunBufferMode, upload: UploadMode) -> Self {
         let binding = |index: u32| wgpu::BindGroupLayoutEntry {
             binding: index,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -1080,17 +1393,24 @@ impl RunStore {
             limits.min_uniform_buffer_offset_alignment
         })
         .max(wgpu::COPY_BUFFER_ALIGNMENT);
+        let alignment = match upload {
+            UploadMode::Copied => alignment,
+            UploadMode::Mapped => alignment.max(wgpu::MAP_ALIGNMENT),
+        };
         Self {
             mode,
+            upload,
+            alignment,
             layout,
             stored: HashMap::default(),
-            empty_tables: EmptyRunTables::new(device, mode),
-            arena: ArenaTables::new(mode, alignment),
+            empty_tables: EmptyRunTables::new(device, mode, upload),
+            arena: ArenaTables::new(mode, upload, alignment),
             fill_stats: false,
             scratch_stops: Vec::new(),
             strip_indices: Default::default(),
             frame: 0,
             trig_fill: None,
+            requests: MapRequests::default(),
         }
     }
 
@@ -1124,19 +1444,24 @@ impl RunStore {
     fn ensure_strip_indices(&mut self, device: &wgpu::Device, draws: &[RunDrawCall]) {
         for draw in draws {
             let class = draw.band_class;
-            self.strip_indices[class as usize].ensure(device, band_class_segments(class));
+            self.strip_indices[class as usize].ensure(
+                device,
+                self.upload,
+                band_class_segments(class),
+            );
         }
     }
 
-    /// The draws one stored run takes: its segments in record order, one
-    /// draw for each run of them a single pipeline draws.
+    /// Appends the draws one stored run takes to `out`: its segments in
+    /// record order, one draw for each run of them a single pipeline draws.
     pub(crate) fn stored_run_draws(
         &mut self,
         device: &wgpu::Device,
         run: &RunDraw,
         key_for: &mut dyn FnMut(&RecordSegment) -> crate::render::ShapePipelineKey,
-        out: &mut SmallVec<[RunDrawCall; 8]>,
+        out: &mut Vec<RunDrawCall>,
     ) {
+        let start = out.len();
         for segment in run.segment_records() {
             let key = key_for(segment);
             let band_class = if self.mode.storage {
@@ -1146,14 +1471,14 @@ impl RunStore {
             };
             let records = segment.start..segment.start + segment.count;
             let occluders = segment.occluders;
-            if !out
+            if !out[start..]
                 .last_mut()
                 .is_some_and(|last| last.absorb(key, band_class, records.clone(), occluders))
             {
                 out.push(RunDrawCall::new(key, band_class, records, occluders));
             }
         }
-        self.ensure_strip_indices(device, out);
+        self.ensure_strip_indices(device, &out[start..]);
     }
 
     pub(crate) fn mode(&self) -> RunBufferMode {
@@ -1178,12 +1503,22 @@ impl RunStore {
         self.frame += 1;
         self.arena.chunks.clear();
         let frame = self.frame;
-        self.stored
-            .retain(|_, run| frame - run.last_used_frame <= STORE_IDLE_FRAMES);
+        self.stored.retain(|_, run| {
+            if frame - run.last_changed_frame > IDLE_FRAMES {
+                run.spares.clear();
+            }
+            frame - run.last_used_frame <= STORE_IDLE_FRAMES
+        });
     }
 
     pub(crate) fn finish_frame(&mut self) {
         self.arena.reset();
+    }
+
+    /// Asks the frame's replaced tables back once the frame is submitted.
+    pub(crate) fn recall(&mut self) {
+        self.requests.recall();
+        self.arena.requests.recall();
     }
 
     pub(crate) fn stage_pending(
@@ -1199,17 +1534,7 @@ impl RunStore {
     }
 
     pub(crate) fn stored_bytes(&self) -> usize {
-        self.stored
-            .values()
-            .map(|run| {
-                run.buffers
-                    .capacities
-                    .iter()
-                    .zip(ELEMENT_SIZES)
-                    .map(|(capacity, size)| capacity * size)
-                    .sum::<usize>()
-            })
-            .sum()
+        self.stored.values().map(StoredRun::bytes).sum()
     }
 
     pub(crate) fn arena_staging_bytes(&self) -> usize {
@@ -1221,10 +1546,6 @@ impl RunStore {
                 .flat_map(|generation| generation.staged.iter())
                 .map(Vec::capacity)
                 .sum::<usize>()
-    }
-
-    pub(crate) fn stored(&self, command: &DrawCommandId) -> Option<&StoredRun> {
-        self.stored.get(command)
     }
 
     /// The tables a closed chunk's draws bind: the frame's arena bind
@@ -1249,8 +1570,8 @@ impl RunStore {
 
     /// Brings a stored run's tables up to date: nothing is written when the
     /// recorder handed back the same tables, or new tables with the same
-    /// bytes, under the same paint. Returns the upload stats and the run's
-    /// fill for `root_scale`.
+    /// bytes, under the same paint. Returns the upload stats, the run's
+    /// fill for `root_scale` and the tables its draws bind.
     pub(crate) fn upload_stored(
         &mut self,
         device: &wgpu::Device,
@@ -1259,69 +1580,92 @@ impl RunStore {
         root_scale: f32,
         window: &std::ops::Range<u32>,
         draws: &[RunDrawCall],
-    ) -> (FrameCommandStats, Option<ShapeFill>) {
+    ) -> (FrameCommandStats, Option<ShapeFill>, StoredTables) {
         let command = run.command.expect("a stored run has a command");
         let paint = PaintKey::of(&run.placement);
-        let layout = &self.layout;
         let frame = self.frame;
-        let mode = self.mode;
-        let trig_fill = active_fill(mode, self.trig_fill.as_ref());
+        let fill_stats = self.fill_stats;
+        let trig_fill = active_fill(self.mode, self.trig_fill.as_ref());
+        let context = StoreContext {
+            device,
+            layout: &self.layout,
+            upload: self.upload,
+            empty: &self.empty_tables,
+            alignment: self.alignment,
+        };
+        let tables = run.tables();
         let scratch_stops = &mut self.scratch_stops;
-        let empty = &self.empty_tables;
-        let needed = stored_needs(run.tables());
-        let entry = self
-            .stored
-            .entry(command)
-            .or_insert_with(|| StoredRun::new(device, (layout, mode, empty), needed, paint));
-        let first_use = entry.last_used_frame == 0;
-        entry.last_used_frame = frame;
-        let same_paint = entry.paint == paint;
-        let mut stats = FrameCommandStats::default();
-        let mut stops_changed = first_use;
-        if first_use || !Arc::ptr_eq(&entry.recorder, &run.recorder) {
-            let tables = run.tables();
-            let fresh = entry.buffers.ensure(device, layout, needed);
-            let previous = entry.recorder.tables();
-            stats += entry.buffers.upload_records(
-                device,
-                recorder,
-                (previous, tables),
-                [
-                    first_use || fresh[BODY_BUFFER],
-                    first_use || fresh[CURVE_BUFFER],
-                ],
-                trig_fill,
-            );
-            stats += entry.buffers.write_changed(
-                device,
-                recorder,
-                BRUSH_BUFFER,
-                &previous.brushes,
-                &tables.brushes,
-                first_use || fresh[BRUSH_BUFFER],
-            );
-            stops_changed |= fresh[STOP_BUFFER] || previous.stops != tables.stops;
-            if self.fill_stats && previous.segments != tables.segments {
-                entry.fill = None;
+        let (entry, stats) = match self.stored.entry(command) {
+            Entry::Occupied(entry) => {
+                let entry = entry.into_mut();
+                let mut stats = FrameCommandStats::default();
+                if !Arc::ptr_eq(&entry.recorder, &run.recorder) || entry.paint != paint {
+                    let previous_recorder =
+                        std::mem::replace(&mut entry.recorder, Arc::clone(&run.recorder));
+                    let previous = previous_recorder.tables();
+                    let stops_changed = entry.paint != paint || previous.stops != tables.stops;
+                    painted_stops(&tables.stops, &paint_layer(&run.placement), scratch_stops);
+                    let update = TableUpdate {
+                        previous,
+                        tables,
+                        painted_stops: scratch_stops,
+                        stops_changed,
+                    };
+                    stats = entry.write(&context, recorder, &update, trig_fill, &mut self.requests);
+                    if fill_stats && previous.segments != tables.segments {
+                        entry.fill = None;
+                    }
+                    if stats.upload_bytes > 0 || stops_changed {
+                        entry.fill = None;
+                        entry.last_changed_frame = frame;
+                    }
+                    entry.paint = paint;
+                }
+                (entry, stats)
             }
-            entry.recorder = Arc::clone(&run.recorder);
-        }
-        let changed = stats.upload_bytes > 0 || stops_changed;
-        if stops_changed || !same_paint {
-            painted_stops(
-                &run.tables().stops,
-                &paint_layer(&run.placement),
-                scratch_stops,
-            );
-            stats += entry
-                .buffers
-                .write(device, recorder, STOP_BUFFER, scratch_stops);
-            entry.paint = paint;
-        }
-        if changed {
-            entry.fill = None;
-        }
-        let fill = self.fill_stats.then(|| {
+            Entry::Vacant(slot) => {
+                painted_stops(&tables.stops, &paint_layer(&run.placement), scratch_stops);
+                let update = TableUpdate {
+                    previous: tables,
+                    tables,
+                    painted_stops: scratch_stops,
+                    stops_changed: true,
+                };
+                let mut version = TableVersion::new(&context, stored_needs(tables));
+                let stats = write_version(
+                    &context,
+                    recorder,
+                    &mut version,
+                    &update,
+                    Writes::Whole,
+                    trig_fill,
+                );
+                version.held = 1;
+                let stamps = std::array::from_fn(|table| match context.upload {
+                    UploadMode::Copied => Vec::new(),
+                    UploadMode::Mapped => {
+                        vec![1; update.bytes(table).len().div_ceil(UPLOAD_CHUNK_BYTES)]
+                    }
+                });
+                let entry = slot.insert(StoredRun {
+                    tables: version,
+                    spares: MappedPool::default(),
+                    stamps,
+                    update: 1,
+                    last_changed_frame: frame,
+                    recorder: Arc::clone(&run.recorder),
+                    paint,
+                    fill: None,
+                    fill_scale_bits: 0,
+                    fill_offset_bits: [0; 2],
+                    fill_window: [0; 4],
+                    last_used_frame: frame,
+                });
+                (entry, stats)
+            }
+        };
+        entry.last_used_frame = frame;
+        let fill = fill_stats.then(|| {
             let offset_bits = [
                 run.placement.offset.x.to_bits(),
                 run.placement.offset.y.to_bits(),
@@ -1355,7 +1699,7 @@ impl RunStore {
                 )
             })
         });
-        (stats, fill)
+        (stats, fill, entry.tables.bound())
     }
 
     /// Opens the arena chunk a pass appends to.
@@ -1514,7 +1858,11 @@ impl RunStore {
         );
         for draw in &self.arena.staging.draws {
             let class = draw.band_class;
-            self.strip_indices[class as usize].ensure(device, band_class_segments(class));
+            self.strip_indices[class as usize].ensure(
+                device,
+                self.upload,
+                band_class_segments(class),
+            );
         }
         out.append(&mut self.arena.staging.draws);
     }

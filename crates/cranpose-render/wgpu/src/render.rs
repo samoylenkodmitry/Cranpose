@@ -43,7 +43,7 @@ use crate::{
     frame::{AdmissionGate, FrameExecutor, StageSideScratch},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
-        FrameUploadAllocators, UniformUpload, UploadAllocatorId, UploadAllocatorSpec,
+        FrameUploadAllocators, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, UploadMode,
         WgpuFrameGraph, WgpuFrameGraphExecutor,
     },
     frame_packet::{CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, RenderReturns},
@@ -63,7 +63,7 @@ use crate::{
     record_columns::record_vertex_layouts,
     rect_to_quad,
     rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance, create_rrect_shadow_pipeline},
-    run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore},
+    run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore, StoredTables},
     scene::{
         CompositorScene, DrawOp, DrawOpKind, ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
     },
@@ -2907,13 +2907,14 @@ pub(crate) fn segment_scene_rect(
     }
 }
 
-/// A stored run's draws for one pass: its tables by command, the uniform
-/// slot holding its placement, and the pipeline and vertex range of each
-/// segment's quads and bands.
+/// A stored run's draws for one pass: the tables current when it was
+/// prepared, the uniform slot holding its placement, and the range of the
+/// pass's run draws with the pipeline and vertex range of each segment's
+/// quads and bands.
 pub(crate) struct StoreRunBatch {
-    pub(crate) command: DrawCommandId,
+    pub(crate) tables: StoredTables,
     pub(crate) uniform_slot: usize,
-    pub(crate) draws: SmallVec<[RunDrawCall; 8]>,
+    pub(crate) draws: std::ops::Range<usize>,
     /// The scissor an unturned run's clip puts on its paint: see
     /// [`clip_scissor`].
     pub(crate) clip: Option<TargetRect>,
@@ -3061,6 +3062,9 @@ pub struct GpuRenderer {
     text_glyph_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedTextGlyphRun>,
     text_glyph_gpu_run_cache: BoundedLruCache<TextGlyphRunCacheKey, Rc<CachedGpuTextGlyphRun>>,
     text_glyph_run_arena: GlyphRunArena,
+    /// How run tables and retained glyph runs reach the GPU, and whether
+    /// kept layer surfaces stay in their atlas: see [`UploadMode::copy_free`].
+    pub(crate) copy_free: UploadMode,
     text_glyph_run_frame: u64,
     /// Text runs the frame has drawn so far, cached or not.
     text_glyph_runs_drawn: usize,
@@ -3167,9 +3171,11 @@ impl GpuRenderer {
         device.set_device_lost_callback(|reason, message| {
             log::error!("[gpu-device] device lost ({reason:?}): {message}");
         });
+        let copy_free = UploadMode::copy_free(&device, adapter_backend);
         let mut run_store = RunStore::new(
             &device,
             RunBufferMode::for_device(&device, adapter_downlevel),
+            copy_free,
         );
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -3426,7 +3432,8 @@ impl GpuRenderer {
             text_glyph_gpu_run_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
             ),
-            text_glyph_run_arena: GlyphRunArena::default(),
+            text_glyph_run_arena: GlyphRunArena::new(copy_free),
+            copy_free,
             text_glyph_run_frame: 0,
             text_glyph_mask_cache: SoftwareGlyphRasterCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
@@ -4428,7 +4435,7 @@ impl GpuRenderer {
         let mut executor = std::mem::take(&mut self.frame_graph_executor);
         let execution = executor.execute_recorded_graph(&device, &queue, graph);
         self.frame_graph_executor = executor;
-        self.viewport_uniforms.uploads.recall();
+        self.recall_frame_uploads();
         let execution = execution.map_err(|error| error.to_string())?;
         let submission_index = execution.submission;
         let copy_stats = execution.stats;
@@ -4477,6 +4484,12 @@ impl GpuRenderer {
         self.convert_surface_pixels_to_rgba(&pixels)
     }
 
+    /// Asks the buffers the submitted frame unmapped back for later frames.
+    fn recall_frame_uploads(&mut self) {
+        self.viewport_uniforms.uploads.recall();
+        self.run_store.recall();
+    }
+
     fn render_graph(
         &mut self,
         root_target: &Rc<OffscreenTarget>,
@@ -4523,7 +4536,7 @@ impl GpuRenderer {
             let execution = executor.execute_recorded_graph(&device, &queue, frame_graph);
             let after_execute = Instant::now();
             self.frame_graph_executor = executor;
-            self.viewport_uniforms.uploads.recall();
+            self.recall_frame_uploads();
             if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
                 log::warn!(
                     "[wgpu-render-stage:graph] total_ms={total_ms:.2} build_ms={:.2} execute_ms={:.2}",
@@ -4590,7 +4603,7 @@ impl GpuRenderer {
         if !submitted {
             self.run_store.invalidate_uploads();
             self.text_glyph_gpu_run_cache.clear();
-            self.text_glyph_run_arena = GlyphRunArena::default();
+            self.text_glyph_run_arena = GlyphRunArena::new(self.copy_free);
         }
         returns.scene = Some(FrameSceneStorage { root, overlay });
         result
@@ -5072,8 +5085,9 @@ impl GpuRenderer {
         }
     }
 
-    /// Brings a stored run's tables up to date and records its draws under
-    /// a placement uniform of its own.
+    /// Brings a stored run's tables up to date and appends its draws, under
+    /// a placement uniform of its own, to the pass's run draws `draws`.
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn prepare_store_run<C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -5082,14 +5096,14 @@ impl GpuRenderer {
         root_scale: f32,
         window: &std::ops::Range<u32>,
         depth: bool,
+        draws: &mut Vec<RunDrawCall>,
     ) -> StoreRunBatch {
-        let command = run.command.expect("a stored run has a command");
         let placement = &run.placement;
         let ablation = self.ablation.shape;
         let turns = ShapeTurns::of(viewport.transform, false);
         let scissor = clip_scissor(placement, root_scale, viewport);
         let clip = SegmentClip::of(placement, scissor.is_some());
-        let mut draws = SmallVec::new();
+        let start = draws.len();
         self.run_store.stored_run_draws(
             &self.device,
             run,
@@ -5104,13 +5118,19 @@ impl GpuRenderer {
                     viewport,
                 )
             },
-            &mut draws,
+            draws,
         );
-        window_draws(&mut draws, window);
+        window_draws(draws, start, window);
+        let run_draws = &draws[start..];
         let upload_start = Instant::now();
-        let (upload, fill) =
-            self.run_store
-                .upload_stored(&self.device, recorder, run, root_scale, window, &draws);
+        let (upload, fill, tables) = self.run_store.upload_stored(
+            &self.device,
+            recorder,
+            run,
+            root_scale,
+            window,
+            run_draws,
+        );
         if let Some(total_ms) = should_log_wgpu_render_stage(upload_start, Instant::now()) {
             log::warn!(
                 "[wgpu-render-stage:run-upload] total_ms={total_ms:.2} bytes={} records={}",
@@ -5130,7 +5150,7 @@ impl GpuRenderer {
         let uniform_slot =
             self.viewport_uniforms
                 .claim(&self.device, &self.uniform_bind_group_layout, &uniforms);
-        for draw in &draws {
+        for draw in run_draws {
             self.ensure_run_pipelines(
                 draw.key,
                 crate::run_store::draw_vertices(
@@ -5140,9 +5160,9 @@ impl GpuRenderer {
             );
         }
         StoreRunBatch {
-            command,
+            tables,
             uniform_slot,
-            draws,
+            draws: start..draws.len(),
             clip: scissor,
         }
     }
@@ -5302,22 +5322,20 @@ impl GpuRenderer {
         Ok(())
     }
 
+    /// Draws a stored-run batch, whose draws are its range of `draws`.
     pub(crate) fn draw_store_run(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         batch: &StoreRunBatch,
+        draws: &[RunDrawCall],
         scissor: (u32, u32, u32, u32),
         stage: RunStage,
     ) -> Result<(), String> {
-        let stored = self
-            .run_store
-            .stored(&batch.command)
-            .ok_or_else(|| "a stored run left the store before its draw".to_string())?;
         self.draw_run_calls(
             pass,
-            stored.buffers.binding(),
+            batch.tables.binding(),
             batch.uniform_slot,
-            &batch.draws,
+            &draws[batch.draws.clone()],
             scissor,
             stage,
         )
@@ -5818,6 +5836,18 @@ impl GpuRenderer {
             run.last_frame.get()
         });
         self.text_glyph_run_arena.begin_frame();
+        let evacuating = self.text_glyph_run_arena.evacuating();
+        if !evacuating.is_empty() {
+            let moving: Vec<TextGlyphRunCacheKey> = self
+                .text_glyph_gpu_run_cache
+                .iter()
+                .filter(|(_, run)| evacuating.contains(&run.span.chunk()))
+                .map(|(key, _)| *key)
+                .collect();
+            for key in &moving {
+                self.text_glyph_gpu_run_cache.pop(key);
+            }
+        }
     }
 
     fn emit_retained_text_glyph_run_if_ready(
@@ -7097,9 +7127,13 @@ fn evict_idle<K: Clone + Eq + std::hash::Hash, V>(
     }
 }
 
-fn window_draws(draws: &mut SmallVec<[RunDrawCall; 8]>, window: &std::ops::Range<u32>) {
+/// Cuts the run draws from `start` on to `window` of their records, counted
+/// across them in order, and drops the draws left with none.
+fn window_draws(draws: &mut Vec<RunDrawCall>, start: usize, window: &std::ops::Range<u32>) {
     let mut relative = 0u32;
-    draws.retain(|draw| {
+    let mut kept = start;
+    for index in start..draws.len() {
+        let draw = &mut draws[index];
         let count = draw.records.end - draw.records.start;
         let first = relative;
         relative += count;
@@ -7107,8 +7141,12 @@ fn window_draws(draws: &mut SmallVec<[RunDrawCall; 8]>, window: &std::ops::Range
         let keep_end = window.end.min(first + count).max(keep_start);
         draw.records =
             draw.records.start + (keep_start - first)..draw.records.start + (keep_end - first);
-        draw.records.start < draw.records.end
-    });
+        if draw.records.start < draw.records.end {
+            draws.swap(kept, index);
+            kept += 1;
+        }
+    }
+    draws.truncate(kept);
 }
 
 #[cfg(test)]

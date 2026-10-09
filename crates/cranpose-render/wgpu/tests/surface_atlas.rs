@@ -227,56 +227,106 @@ fn tiles_shell(
     (shell, side)
 }
 
-#[test]
-fn an_atlas_whose_surfaces_shrink_to_a_third_draws_into_the_texture_it_had() {
+/// Resizes the still tiles twice, checks the second resize draws what a
+/// fresh renderer draws and returns the new textures each resize took;
+/// none when there is no GPU. The tiles' kept atlas stays until the frame
+/// that replaces them ends, so the first resize may take one texture beside
+/// it; the second finds that atlas back in the pool.
+fn resize_tiles_twice(first: f32, second: f32) -> Option<(u32, u32)> {
     let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
         eprintln!("skipping (headless WGPU init failed)");
-        return;
+        return None;
     };
     let (mut shell, side) = tiles_shell(renderer, 36.0, 1);
     support::settle(|| support::update_and_capture(&mut shell, WIDTH, HEIGHT));
     support::wait_for_background_compiler_idle();
-    shell.debug_enter_app_context(|| side.set(20.0));
-    let (stats, shrunk) = support::update_and_capture(&mut shell, WIDTH, HEIGHT);
+    shell.debug_enter_app_context(|| side.set(first));
+    let (stats, _) = support::update_and_capture(&mut shell, WIDTH, HEIGHT);
     assert_eq!(stats.isolated_layer_renders, 6);
-    assert_eq!(
-        stats.offscreen_news, 0,
-        "the smaller atlas takes the texture the larger one drew into: {stats:?}"
-    );
+    let first_news = stats.offscreen_news;
+    shell.debug_enter_app_context(|| side.set(second));
+    let (stats, resized) = support::update_and_capture(&mut shell, WIDTH, HEIGHT);
+    assert_eq!(stats.isolated_layer_renders, 6);
+    let reference = {
+        let (mut fresh, _) = tiles_shell(
+            support::headless_renderer_beside_locked().expect("reference renderer"),
+            second,
+            1,
+        );
+        support::settle(|| support::update_and_capture(&mut fresh, WIDTH, HEIGHT))
+    };
+    support::assert_same_bytes("resized tiles", WIDTH, &reference.pixels, &resized.pixels);
+    Some((first_news, stats.offscreen_news))
+}
 
-    let (mut fresh, _) = tiles_shell(
-        support::headless_renderer_beside_locked().expect("reference renderer"),
-        20.0,
-        1,
+#[test]
+fn an_atlas_whose_surfaces_shrink_to_a_third_draws_into_the_texture_it_had() {
+    let Some((first, second)) = resize_tiles_twice(20.0, 19.0) else {
+        return;
+    };
+    assert!(
+        first <= 1,
+        "the smaller atlas takes one texture beside the kept one, not {first}"
     );
-    let reference = support::settle(|| support::update_and_capture(&mut fresh, WIDTH, HEIGHT));
-    support::assert_same_bytes("shrunk tiles", WIDTH, &reference.pixels, &shrunk.pixels);
+    assert_eq!(
+        second, 0,
+        "the next atlas takes the texture the larger one drew into"
+    );
 }
 
 #[test]
 fn an_atlas_whose_surfaces_grow_a_little_draws_into_the_texture_it_had() {
+    let Some((first, second)) = resize_tiles_twice(40.0, 41.0) else {
+        return;
+    };
+    assert!(
+        first <= 1,
+        "the grown atlas takes one texture beside the kept one, not {first}"
+    );
+    assert_eq!(second, 0, "the first atlas had room for a step of growth");
+}
+
+/// Tiles that hold still are kept and drawn from the cache as a fresh
+/// renderer draws them. A copy-free renderer keeps them where their atlas
+/// drew them, at no copy; another copies each out of the shared atlas.
+#[test]
+fn kept_atlas_surfaces_are_read_in_place_without_copies() {
     let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let (mut shell, side) = tiles_shell(renderer, 36.0, 1);
-    support::settle(|| support::update_and_capture(&mut shell, WIDTH, HEIGHT));
+    let (mut shell, _) = tiles_shell(renderer, 36.0, 1);
+    let (mut copies, mut hits) = (0, 0);
+    let mut frame = || {
+        let (stats, captured) = support::update_and_capture(&mut shell, WIDTH, HEIGHT);
+        copies += stats.copy_count;
+        hits += stats.layer_cache_hits;
+        (stats, captured)
+    };
+    support::settle(&mut frame);
     support::wait_for_background_compiler_idle();
-    shell.debug_enter_app_context(|| side.set(40.0));
-    let (stats, grown) = support::update_and_capture(&mut shell, WIDTH, HEIGHT);
-    assert_eq!(stats.isolated_layer_renders, 6);
-    assert_eq!(
-        stats.offscreen_news, 0,
-        "the first atlas had room for a step of growth: {stats:?}"
+    frame();
+    let (_, kept) = frame();
+    assert!(
+        hits > 0,
+        "the still tiles are kept and drawn from the cache"
     );
+    if support::renders_copy_free() {
+        assert_eq!(
+            copies, 0,
+            "kept surfaces stay in the atlas they were drawn in"
+        );
+    } else {
+        assert!(copies > 0, "kept surfaces are copied out of the atlas");
+    }
 
     let (mut fresh, _) = tiles_shell(
         support::headless_renderer_beside_locked().expect("reference renderer"),
-        40.0,
+        36.0,
         1,
     );
     let reference = support::settle(|| support::update_and_capture(&mut fresh, WIDTH, HEIGHT));
-    support::assert_same_bytes("grown tiles", WIDTH, &reference.pixels, &grown.pixels);
+    support::assert_same_bytes("kept tiles", WIDTH, &reference.pixels, &kept.pixels);
 }
 
 /// A host that builds its shell at a density and sets nothing more, as a

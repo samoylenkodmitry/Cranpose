@@ -525,7 +525,7 @@ impl GpuRenderer {
         match batch {
             Batch::StoreRun { batch, scissor } => {
                 match stage_scissor(frame.scissor(*scissor), batch.clip, stage) {
-                    Some(scissor) => self.draw_store_run(pass, batch, scissor, stage),
+                    Some(scissor) => self.draw_store_run(pass, batch, arena, scissor, stage),
                     None => Ok(()),
                 }
             }
@@ -1051,7 +1051,8 @@ struct PassPrep<'a, 's, C> {
     /// that bind the same keep adding to them: layers drawn in place carry
     /// their turns in their records and glyphs, not in what they bind.
     open: Option<SegmentBinding>,
-    /// Every arena draw of the pass, which arena batches draw ranges of.
+    /// Every run draw of the pass, arena chunks' and stored runs', which
+    /// their batches draw ranges of.
     arena_draws: Vec<RunDrawCall>,
     /// Where the open chunk's draws start in `arena_draws`.
     chunk_start: usize,
@@ -1301,13 +1302,15 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
         }
     }
 
-    /// Reserves the pass-order indices of `draws`' records, which are
-    /// instanced from their table's start, and returns the first.
-    fn take_depth_range(&mut self, draws: &[RunDrawCall]) -> f32 {
-        let base = self.depth_seq;
-        let records = draws.iter().map(|draw| draw.records.end).max().unwrap_or(0);
-        self.depth_seq = base.saturating_add(records);
-        base as f32
+    /// Reserves the pass-order indices of the records of the run draws in
+    /// `draws`, which are instanced from their table's start.
+    fn take_depth_range(&mut self, draws: std::ops::Range<usize>) {
+        let records = self.arena_draws[draws]
+            .iter()
+            .map(|draw| draw.records.end)
+            .max()
+            .unwrap_or(0);
+        self.depth_seq = self.depth_seq.saturating_add(records);
     }
 
     /// Draws everything held: the open chunk's shapes, then the held draws
@@ -1449,9 +1452,10 @@ impl<'s, C: FrameCommandRecorder> PassPrep<'_, 's, C> {
                     run.segment.scale,
                     &window,
                     self.depth,
+                    &mut self.arena_draws,
                 );
                 if self.depth {
-                    self.take_depth_range(&batch.draws);
+                    self.take_depth_range(batch.draws.clone());
                 }
                 self.batches.push(Batch::StoreRun {
                     batch,
