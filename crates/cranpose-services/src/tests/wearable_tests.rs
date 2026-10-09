@@ -10,6 +10,7 @@ use super::*;
 #[derive(Default)]
 struct Recorded {
     sent: Mutex<Vec<(String, String, Vec<u8>)>>,
+    opened: Mutex<Vec<(String, String)>>,
 }
 
 struct FakeLink(Arc<Recorded>);
@@ -19,6 +20,7 @@ impl WearableLink for FakeLink {
         Ok(vec![WearablePeer {
             id: "watch".into(),
             name: "Pixel Watch".into(),
+            has_app: false,
         }])
     }
 
@@ -38,6 +40,11 @@ impl WearableLink for FakeLink {
         }
         Ok(Box::new(Vec::new()))
     }
+
+    fn open_url(&self, peer: &str, url: &str) -> Result<(), WearableError> {
+        self.0.opened.lock().push((peer.into(), url.into()));
+        Ok(())
+    }
 }
 
 #[test]
@@ -53,6 +60,10 @@ fn every_call_is_unavailable_without_a_platform_link() {
         open_wearable_stream("watch", "/audio"),
         Err(WearableError::Unavailable)
     ));
+    assert!(matches!(
+        open_on_wearable_peer("watch", "market://details?id=app"),
+        Err(WearableError::Unavailable)
+    ));
 }
 
 #[test]
@@ -66,7 +77,8 @@ fn calls_reach_the_installed_platform_link() {
         peers,
         Ok(vec![WearablePeer {
             id: "watch".into(),
-            name: "Pixel Watch".into()
+            name: "Pixel Watch".into(),
+            has_app: false,
         }])
     );
     assert!(send_wearable_message("watch", "/line", b"hello").is_ok());
@@ -75,6 +87,11 @@ fn calls_reach_the_installed_platform_link() {
         vec![("watch".to_owned(), "/line".to_owned(), b"hello".to_vec())]
     );
     assert!(open_wearable_stream("watch", "/audio").is_ok());
+    assert!(open_on_wearable_peer("watch", "market://details?id=app").is_ok());
+    assert_eq!(
+        *recorded.opened.lock(),
+        vec![("watch".to_owned(), "market://details?id=app".to_owned())]
+    );
     assert!(matches!(
         open_wearable_stream("gone", "/audio"),
         Err(WearableError::Failed(_))

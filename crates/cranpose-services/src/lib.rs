@@ -264,7 +264,7 @@ pub use uri_handler::{
 };
 pub use wearable::{
     WearableError, WearableEvent, WearableLink, WearablePeer, WearableReceiver, WearableStream,
-    open_wearable_stream, publish_wearable_event, send_wearable_message,
+    open_on_wearable_peer, open_wearable_stream, publish_wearable_event, send_wearable_message,
     set_platform_wearable_link, set_wearable_receiver, wearable_peers,
 };
 pub use writable_folder::{

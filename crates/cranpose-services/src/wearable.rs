@@ -8,11 +8,18 @@
 //! platforms, and in a build without the service, every call returns
 //! [`WearableError::Unavailable`].
 //!
-//! **Sending.** [`wearable_peers`] lists the connected devices,
-//! [`send_wearable_message`] delivers a small message, and
-//! [`open_wearable_stream`] opens a byte stream for continuous data such as
-//! audio. Each call blocks until the platform answers, so call them off the
-//! UI thread.
+//! **Sending.** [`wearable_peers`] lists the connected devices and whether
+//! the application is installed on each, [`send_wearable_message`] delivers
+//! a small message, and [`open_wearable_stream`] opens a byte stream for
+//! continuous data such as audio. [`open_on_wearable_peer`] opens a link on a
+//! device's screen, such as its store page for this application, so a person
+//! can install the companion from the device they hold. Each call blocks
+//! until the platform answers, so call them off the UI thread.
+//!
+//! **The companion.** On Android the phone and watch applications must share
+//! one application id. The build advertises the application on the device it
+//! is installed on, so the other device sees it as soon as it is installed,
+//! also before it first runs.
 //!
 //! **Receiving.** The application installs one [`WearableReceiver`] with
 //! [`set_wearable_receiver`]. Events arrive on a platform thread. A
@@ -34,6 +41,8 @@ pub struct WearablePeer {
     pub id: String,
     /// The name the person gave the device.
     pub name: String,
+    /// Whether this application is installed on the device.
+    pub has_app: bool,
 }
 
 /// Why a call to the paired device did not happen.
@@ -106,6 +115,8 @@ pub trait WearableLink: Send + Sync {
     fn send_message(&self, peer: &str, path: &str, data: &[u8]) -> Result<(), WearableError>;
     /// Opens a byte stream to `peer` under `path`.
     fn open_stream(&self, peer: &str, path: &str) -> Result<Box<dyn Write + Send>, WearableError>;
+    /// Opens `url` on `peer`'s screen.
+    fn open_url(&self, peer: &str, url: &str) -> Result<(), WearableError>;
 }
 
 static PLATFORM: ServiceRegistry<dyn WearableLink> = ServiceRegistry::new();
@@ -142,6 +153,13 @@ pub fn open_wearable_stream(
     path: &str,
 ) -> Result<Box<dyn Write + Send>, WearableError> {
     link()?.open_stream(peer, path)
+}
+
+/// Opens `url` on `peer`'s screen, for example the store page of this
+/// application, so the person can install the companion there. The person
+/// sees it on that device; nothing happens here.
+pub fn open_on_wearable_peer(peer: &str, url: &str) -> Result<(), WearableError> {
+    link()?.open_url(peer, url)
 }
 
 /// Installs the application's receiver of what the paired device sends,
