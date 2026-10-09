@@ -186,8 +186,9 @@ struct StagedSpan {
 /// arena writes new runs into chunks mapped for the frame and unmaps them
 /// for its submit; a chunk then only loses runs, and goes back to a pool
 /// once it holds none and the GPU is done with it. Runs in a chunk that
-/// fell below a quarter full move out: the renderer drops them, and they
-/// are written again where they are next drawn.
+/// fell below half full move out: the renderer drops them, and they are
+/// written again where they are next drawn. At a quarter, the desktop
+/// gauntlet's chunks at tier 16 held 1.7 times their live quads.
 pub(crate) struct GlyphRunArena {
     chunks: Vec<Chunk>,
     next_chunk: u64,
@@ -333,7 +334,7 @@ impl GlyphRunArena {
                 .filter(|chunk| {
                     !chunk.open
                         && !chunk.evacuated
-                        && u64::from(chunk.live) * 4 < u64::from(chunk.spans.capacity())
+                        && u64::from(chunk.live) * 2 < u64::from(chunk.spans.capacity())
                 })
                 .map(|chunk| chunk.id),
         );

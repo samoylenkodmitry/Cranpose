@@ -446,7 +446,7 @@ fn a_retained_run_no_frame_draws_gives_its_quads_back() {
     let quads = run_quads(&renderer, &glyphs, &run);
     assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(1), quads));
     assert!(renderer.ensure_retained_text_glyph_run(TextGlyphRunCacheKey(2), quads));
-    for _ in 0..TEXT_GLYPH_RUN_IDLE_FRAMES {
+    for _ in 0..TEXT_GLYPH_GPU_RUN_IDLE_FRAMES {
         renderer.begin_text_glyph_run_frame();
         assert!(
             renderer

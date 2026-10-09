@@ -96,6 +96,12 @@ const MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS: usize = 1024;
 /// a scrolling feed, and the CPU runs, bounded only by their count, held
 /// another 4.6 MB of placements and quads.
 const TEXT_GLYPH_RUN_IDLE_FRAMES: u64 = 30;
+/// Frames a retained run's quads stay on the GPU undrawn. Writing a run's
+/// quads again costs far less than laying its glyphs out, which the CPU run
+/// keeps for [`TEXT_GLYPH_RUN_IDLE_FRAMES`]. On the desktop gauntlet at tier
+/// 16, 270 retained runs drew each frame while 30 frames held 650 of them;
+/// 8 frames hold 400 and write 25 runs a frame again instead of 16.
+const TEXT_GLYPH_GPU_RUN_IDLE_FRAMES: u64 = 8;
 /// Text runs with at least this many glyphs keep their quads in retained GPU
 /// buffers and draw on their own; shorter ones are written into the frame's
 /// shared quads each frame, where consecutive runs share a draw.
@@ -458,7 +464,7 @@ struct CachedGpuTextGlyphRun {
     span: GlyphRunSpan,
     atlas_generation: u64,
     /// The frame the run last drew in; a run idle for
-    /// [`TEXT_GLYPH_RUN_IDLE_FRAMES`] gives its quads back.
+    /// [`TEXT_GLYPH_GPU_RUN_IDLE_FRAMES`] gives its quads back.
     last_frame: Cell<u64>,
 }
 
@@ -5830,8 +5836,9 @@ impl GpuRenderer {
     }
 
     /// Opens a frame for text runs: runs no frame drew for
-    /// [`TEXT_GLYPH_RUN_IDLE_FRAMES`] leave both caches, and the arena takes
-    /// back the quads dropped retained runs held.
+    /// [`TEXT_GLYPH_GPU_RUN_IDLE_FRAMES`] leave the GPU cache and those no
+    /// frame drew for [`TEXT_GLYPH_RUN_IDLE_FRAMES`] the CPU cache, and the
+    /// arena takes back the quads dropped retained runs held.
     fn begin_text_glyph_run_frame(&mut self) {
         self.text_glyph_run_frame += 1;
         let frame = self.text_glyph_run_frame;
@@ -5840,12 +5847,18 @@ impl GpuRenderer {
             std::num::NonZeroUsize::new(demand.max(MIN_TEXT_GLYPH_RUN_CACHE_ITEMS))
                 .unwrap_or(std::num::NonZeroUsize::MIN),
         );
-        evict_idle(&mut self.text_glyph_gpu_run_cache, frame, |run| {
-            run.last_frame.get()
-        });
-        evict_idle(&mut self.text_glyph_run_cache, frame, |run| {
-            run.last_frame.get()
-        });
+        evict_idle(
+            &mut self.text_glyph_gpu_run_cache,
+            frame,
+            TEXT_GLYPH_GPU_RUN_IDLE_FRAMES,
+            |run| run.last_frame.get(),
+        );
+        evict_idle(
+            &mut self.text_glyph_run_cache,
+            frame,
+            TEXT_GLYPH_RUN_IDLE_FRAMES,
+            |run| run.last_frame.get(),
+        );
         self.text_glyph_run_arena.begin_frame();
         let evacuating = self.text_glyph_run_arena.evacuating();
         if !evacuating.is_empty() {
@@ -7123,17 +7136,19 @@ pub(crate) fn interior_run_draws(draws: &[RunDrawCall]) -> SmallVec<[PlannedRunD
     planned
 }
 
-/// Drops the entries of `cache` no frame drew for more than
-/// [`TEXT_GLYPH_RUN_IDLE_FRAMES`] before `frame`: the least recently used
-/// first, which is the order they were last drawn in.
+/// Drops the entries of `cache` no frame drew for more than `idle_frames`
+/// before `frame`: the least recently used first, which is the order they
+/// were last drawn in.
 fn evict_idle<K: Clone + Eq + std::hash::Hash, V>(
     cache: &mut BoundedLruCache<K, V>,
     frame: u64,
+    idle_frames: u64,
     last_frame: impl Fn(&V) -> u64,
 ) {
-    while cache.peek_lru().is_some_and(|(_, value)| {
-        frame.saturating_sub(last_frame(value)) > TEXT_GLYPH_RUN_IDLE_FRAMES
-    }) {
+    while cache
+        .peek_lru()
+        .is_some_and(|(_, value)| frame.saturating_sub(last_frame(value)) > idle_frames)
+    {
         cache.pop_lru();
     }
 }
