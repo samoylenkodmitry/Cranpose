@@ -23,6 +23,10 @@ internal val DECLARED_SERVICES: Map<String, DeclaredService> = mapOf(
         javaSource = "java-heart-rate",
         receivers = emptyList(),
     ),
+    "microphone" to DeclaredService(
+        javaSource = "java-microphone",
+        receivers = emptyList(),
+    ),
 )
 
 /**

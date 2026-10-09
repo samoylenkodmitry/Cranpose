@@ -223,6 +223,8 @@ public class CranposeActivity extends NativeActivity {
     private static final String DEFAULT_NATIVE_LIB_NAME = "main";
 
     private static final int REQUEST_BASE = 0x0C9A0000;
+    /** Permissions the person refused once, by name: see onRequestPermissionsResult. */
+    static final String REFUSED_PERMISSIONS = "dev.cranpose.refused_permissions";
     private static final int REQUEST_CAMERA = REQUEST_BASE + 0x100;
     private static final int FLAG_FOLDER = 1;
     private static final int FLAG_WRITABLE = 4;
@@ -2570,14 +2572,22 @@ public class CranposeActivity extends NativeActivity {
             // A request this activity did not make itself: a service's, such
             // as the heart-rate sensor's. Rust routes each answer to the
             // service that asked, one "permission<TAB>granted" line each.
+            // A refusal is remembered: after one, Android stops showing its
+            // prompt, and only the services can tell the person so.
+            android.content.SharedPreferences.Editor refused =
+                    getSharedPreferences(REFUSED_PERMISSIONS, Context.MODE_PRIVATE).edit();
             StringBuilder results = new StringBuilder();
             for (int at = 0; at < permissions.length && at < grantResults.length; at++) {
+                if (grantResults[at] != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    refused.putBoolean(permissions[at], true);
+                }
                 results.append(permissions[at])
                         .append('\t')
                         .append(grantResults[at] == android.content.pm.PackageManager.PERMISSION_GRANTED
                                 ? '1' : '0')
                         .append('\n');
             }
+            refused.apply();
             nativeOnPermissionsResult(results.toString());
             return;
         }
