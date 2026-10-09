@@ -75,10 +75,11 @@ impl WearableLink for AndroidWearableLink {
         Ok(listing
             .lines()
             .filter_map(|line| {
-                let (id, name) = line.split_once('\t')?;
+                let mut fields = line.split('\t');
                 Some(WearablePeer {
-                    id: id.to_owned(),
-                    name: name.to_owned(),
+                    id: fields.next()?.to_owned(),
+                    name: fields.next()?.to_owned(),
+                    has_app: fields.next() == Some("1"),
                 })
             })
             .collect())
@@ -98,6 +99,24 @@ impl WearableLink for AndroidWearableLink {
                     JValue::Object(&peer),
                     JValue::Object(&path),
                     JValue::Object(&data),
+                ],
+            )
+            .map(|_| ())
+        })
+    }
+
+    fn open_url(&self, peer: &str, url: &str) -> Result<(), WearableError> {
+        self.call(|env, activity, class| {
+            let peer = JObject::from(env.new_string(peer)?);
+            let url = JObject::from(env.new_string(url)?);
+            env.call_static_method(
+                class,
+                jni_str!("openUrl"),
+                jni_sig!("(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;)V"),
+                &[
+                    JValue::Object(activity),
+                    JValue::Object(&peer),
+                    JValue::Object(&url),
                 ],
             )
             .map(|_| ())

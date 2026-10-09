@@ -193,7 +193,8 @@ class CranposeAndroidPlugin : Plugin<Project> {
             project.layout.projectDirectory.file(File(root, "proguard-rules.pro").absolutePath)
         )
 
-        for (service in requireKnownServices(cranpose)) {
+        val services = requireKnownServices(cranpose)
+        for (service in services) {
             contributeManifest(variant, root, service)
             SERVICE_JAVA_SOURCE[service]?.let { dir ->
                 variant.sources.java?.addStaticSourceDirectory(File(root, dir).absolutePath)
@@ -201,6 +202,19 @@ class CranposeAndroidPlugin : Plugin<Project> {
         }
 
         val name = variant.name.replaceFirstChar { first -> first.uppercase() }
+        if ("wearable" in services) {
+            val capability = project.tasks.register(
+                "cranpose${name}WearableCapability",
+                CranposeWearableCapability::class.java,
+            ) {
+                description = "Advertises ${variant.name} to the paired phone or watch"
+                applicationId.set(variant.applicationId)
+            }
+            variant.sources.res?.addGeneratedSourceDirectory(
+                capability,
+                CranposeWearableCapability::outputDir,
+            )
+        }
         val declared = project.tasks.register(
             "cranpose${name}DeclaredSources",
             CranposeDeclaredSources::class.java,
@@ -575,7 +589,10 @@ class CranposeAndroidPlugin : Plugin<Project> {
         /** Third-party dependencies a service needs beyond the framework's own. */
         val SERVICE_DEPENDENCIES = mapOf(
             "billing" to listOf("com.android.billingclient:billing:9.1.0"),
-            "wearable" to listOf("com.google.android.gms:play-services-wearable:20.0.1"),
+            "wearable" to listOf(
+                "com.google.android.gms:play-services-wearable:20.0.1",
+                "androidx.wear:wear-remote-interactions:1.1.0",
+            ),
         )
 
         /**
