@@ -40,25 +40,9 @@ pub(crate) struct Placement {
     /// clipped to it composites through the same mask.
     pub clip_radius: f32,
     pub alpha: f32,
-    /// Shared with the layer's other runs: few layers filter, and inline
-    /// the 4x5 matrix took 84 of a run draw's 184 bytes.
+    /// Boxed: few layers filter, and inline the 4x5 matrix took 84 of a
+    /// run draw's 184 bytes.
     pub color_filter: Option<Arc<ColorFilter>>,
-}
-
-/// The paint a layer gives every run it draws: its alpha and its colour
-/// filter, shared by the runs.
-pub(crate) struct LayerPaint {
-    alpha: f32,
-    color_filter: Option<Arc<ColorFilter>>,
-}
-
-impl LayerPaint {
-    pub(crate) fn of(layer: &GraphicsLayer) -> Self {
-        Self {
-            alpha: layer.alpha.clamp(0.0, 1.0),
-            color_filter: layer.color_filter.as_ref().map(|filter| Arc::new(*filter)),
-        }
-    }
 }
 
 impl Placement {
@@ -99,15 +83,15 @@ impl Placement {
         offset: Point,
         snap_anchor: Option<SnapAnchor>,
         clip: Option<Rect>,
-        paint: &LayerPaint,
+        layer: &GraphicsLayer,
     ) -> Self {
         Self {
             offset,
             snap_anchor,
             clip,
             clip_radius: 0.0,
-            alpha: paint.alpha,
-            color_filter: paint.color_filter.clone(),
+            alpha: layer.alpha.clamp(0.0, 1.0),
+            color_filter: layer.color_filter.as_ref().map(|filter| Arc::new(*filter)),
         }
     }
 

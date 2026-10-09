@@ -37,7 +37,7 @@ fn recycled_shadow_recorders_clear_geometry_and_preserve_retained_runs() {
     let placement = Placement::at(Point::default(), None, None);
     let mut caster = scene.take_shadow_recorder();
     Arc::make_mut(&mut caster).push_primitive(loose_rect(0.0));
-    let caster = RunDraw::whole(caster, placement.clone()).unwrap();
+    let caster = RunDraw::whole(caster, placement.clone()).expect("the caster recorded");
     let retained = caster.clone();
     let fingerprint = retained.recorder.fingerprint();
     let mut cutout = scene.take_shadow_recorder();
@@ -123,7 +123,7 @@ fn loose_primitives_under_one_placement_share_a_run_and_close_before_anything_el
     let mut scene = CompositorScene::new();
     let placement = Placement::at(Point::new(5.0, 5.0), None, None);
     scene.push_loose(loose_rect(0.0), placement.clone());
-    scene.push_loose(loose_rect(20.0), placement.clone());
+    scene.push_loose(loose_rect(20.0), placement);
     assert!(scene.runs.is_empty());
     let z = scene.next_z();
     assert_eq!(scene.runs.len(), 1);
