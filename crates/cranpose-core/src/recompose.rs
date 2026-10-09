@@ -1,5 +1,3 @@
-use std::rc::Rc;
-
 use crate::{
     Command, Composer, ComposerCore, DirtyBubble, NodeId, RecomposeScope,
     debug_scope_invalidation_sources, debug_scope_label,
@@ -56,15 +54,14 @@ impl Composer {
     }
 
     pub(crate) fn recompose_group(&self, scope: &RecomposeScope) {
-        struct RecomposeGuard {
-            composer: Composer,
-            scope: RecomposeScope,
+        struct RecomposeGuard<'a> {
+            composer: &'a Composer,
+            scope: &'a RecomposeScope,
         }
 
-        impl Drop for RecomposeGuard {
+        impl Drop for RecomposeGuard<'_> {
             fn drop(&mut self) {
-                self.composer
-                    .close_current_group_body_for_scope(&self.scope);
+                self.composer.close_current_group_body_for_scope(self.scope);
                 #[expect(
                     clippy::redundant_closure_for_method_calls,
                     reason = "the method path is not general over the session lifetime"
@@ -99,19 +96,19 @@ impl Composer {
             let cursor = RecomposeChildCursor::at_first_root(parent_hint, first_root);
             let previous_hint = self.core.recompose_parent_hint.replace(parent_hint);
             self.core.recompose_child_cursor.set(cursor);
-            struct HintGuard {
-                core: Rc<ComposerCore>,
+            struct HintGuard<'a> {
+                core: &'a ComposerCore,
                 previous: Option<NodeId>,
                 previous_cursor: RecomposeChildCursor,
             }
-            impl Drop for HintGuard {
+            impl Drop for HintGuard<'_> {
                 fn drop(&mut self) {
                     self.core.recompose_parent_hint.set(self.previous);
                     self.core.recompose_child_cursor.set(self.previous_cursor);
                 }
             }
             let _hint_guard = HintGuard {
-                core: self.clone_core(),
+                core: &self.core,
                 previous: previous_hint,
                 previous_cursor,
             };
@@ -120,14 +117,10 @@ impl Composer {
                 stack.push(scope.clone());
             }
             let guard = RecomposeGuard {
-                composer: self.clone(),
-                scope: scope.clone(),
+                composer: self,
+                scope,
             };
-            let saved_locals = self.current_local_stack();
-            {
-                let mut locals = self.local_stack();
-                *locals = scope.local_stack();
-            }
+            let saved_locals = std::mem::replace(&mut *self.local_stack(), scope.local_stack());
             let callback_ran = scope.run_recompose(self);
             log::trace!(
                 target: "cranpose::compose::recompose",
@@ -145,10 +138,7 @@ impl Composer {
                 }
                 self.skip_current_group();
             }
-            {
-                let mut locals = self.local_stack();
-                *locals = saved_locals;
-            }
+            *self.local_stack() = saved_locals;
             drop(guard);
         } else {
             if let Some(ancestor_scope) = scope.callback_promotion_target() {

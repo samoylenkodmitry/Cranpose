@@ -89,6 +89,7 @@ struct GroupScopeEntry<'a> {
     start_kind: GroupStartKind,
     host: &'a SlotsHost,
     group: crate::slot::ActiveGroupId,
+    parent_hint: Option<NodeId>,
 }
 
 struct SlotHostPassGuard {
@@ -244,6 +245,10 @@ impl ComposerRuntimeState {
         self.live_hosts
             .borrow_mut()
             .insert(host.storage_key(), Rc::downgrade(host));
+    }
+
+    pub(crate) fn retains_any(&self) -> bool {
+        !self.retention_by_host.borrow().is_empty()
     }
 
     pub(crate) fn set_retention_policy(&self, policy: RetentionPolicy) {
@@ -1384,6 +1389,7 @@ impl Composer {
             start_kind,
             host,
             group,
+            parent_hint,
         } = entry;
         // A group entered while its scope is inactive is reused content, as
         // when a lazy list gives a recycled row to another item: like Compose,
@@ -1428,11 +1434,44 @@ impl Composer {
         }
 
         scope_ref.snapshot_locals(&self.core.local_stack.borrow());
-        let parent_hint = self.current_parent_hint();
         if restored {
             reparent_restored_scopes(host, group, scope_ref.parent_hint(), parent_hint);
         }
         scope_ref.set_parent_hint(parent_hint);
+    }
+
+    fn start_group(
+        &self,
+        host: &Rc<SlotsHost>,
+        seed: crate::slot::GroupKeySeed,
+        parent_node: Option<NodeId>,
+    ) -> (
+        GroupStart<crate::slot::ActiveGroupId>,
+        Option<crate::slot::GroupKey>,
+    ) {
+        if !self.core.shared_state.retains_any() {
+            let started = host.with_write_session(|slots| {
+                let key = slots.reserve_group_key(seed);
+                (!key.is_movable()).then(|| slots.begin_group(key, None, parent_node))
+            });
+            if let Some(started) = started {
+                return (started, None);
+            }
+        }
+        let parent_scope_id = self
+            .core
+            .scope_stack
+            .borrow()
+            .last()
+            .map(RecomposeScope::id);
+        let GroupEntry {
+            key,
+            restored,
+            placeholder_for,
+        } = self.resolve_group_entry(host, seed, parent_scope_id);
+        let started =
+            host.with_write_session(|slots| slots.begin_group(key, restored, parent_node));
+        (started, placeholder_for)
     }
 
     #[inline(never)]
@@ -1442,24 +1481,16 @@ impl Composer {
         key: crate::slot::GroupKeySeed,
     ) -> (RecomposeScope, bool) {
         let options = self.pending_scope_options().take().unwrap_or_default();
-        let parent_scope_id = self
-            .core
-            .scope_stack
-            .borrow()
-            .last()
-            .map(RecomposeScope::id);
-        let GroupEntry {
-            key: reserved_key,
-            restored,
-            placeholder_for,
-        } = self.resolve_group_entry(host, key, parent_scope_id);
         let parent_node = self.current_parent_hint();
-        let GroupStart {
-            group,
-            anchor,
-            scope,
-            kind,
-        } = host.with_write_session(|slots| slots.begin_group(reserved_key, restored, parent_node));
+        let (
+            GroupStart {
+                group,
+                anchor,
+                scope,
+                kind,
+            },
+            placeholder_for,
+        ) = self.start_group(host, key, parent_node);
         let scope_ref = self.scope_for_started_group(host, group, scope);
         if let Some(movable_key) = placeholder_for {
             self.core.shared_state.record_pending_movable(
@@ -1483,6 +1514,7 @@ impl Composer {
                 start_kind: kind,
                 host,
                 group,
+                parent_hint: parent_node,
             },
         );
         (scope_ref, placeholder_for.is_none())
