@@ -52,7 +52,9 @@ pub use callbacks::{
     CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot, SharedParam, refresh_param,
     refresh_shared_param,
 };
-pub use composer::{BranchGroupGuard, CapturedCompositionContext, Composer, ValueSlotHandle};
+pub use composer::{
+    BranchGroupGuard, CapturedCompositionContext, ComposableGroup, Composer, ValueSlotHandle,
+};
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
@@ -1337,7 +1339,9 @@ pub enum Phase {
     Layout,
 }
 
-pub use composer_context::{note_nested_slots_host, with_composer as with_current_composer};
+pub use composer_context::{
+    __current_composer, note_nested_slots_host, with_composer as with_current_composer,
+};
 
 #[expect(non_snake_case)]
 pub fn withCurrentComposer<R>(f: impl FnOnce(&Composer) -> R) -> R {

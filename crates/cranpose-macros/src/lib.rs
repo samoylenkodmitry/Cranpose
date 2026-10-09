@@ -847,9 +847,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let helper_body = if returns_unit {
             quote! {
                 #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
-                let #current_scope_ident = #composer_ident
-                    .current_recompose_scope()
-                    .expect("missing recompose scope");
                 let mut __changed = #current_scope_ident.should_recompose();
                 #(#param_setup)*
                 #recompose_setter
@@ -862,9 +859,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         } else {
             quote! {
                 #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
-                let #current_scope_ident = #composer_ident
-                    .current_recompose_scope()
-                    .expect("missing recompose scope");
                 let mut __changed = #current_scope_ident.should_recompose();
                 #(#param_setup)*
                 #recompose_setter
@@ -931,7 +925,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let helper_fn = quote! {
             #[allow(non_snake_case, clippy::too_many_arguments)]
             fn #helper_ident #impl_generics (
-                #composer_ident: &#core_path::Composer
+                #composer_ident: &#core_path::Composer,
+                #current_scope_ident: &#core_path::RecomposeScope
                 #(, #helper_inputs)*
             ) -> #return_ty #where_clause {
                 #slot_origin
@@ -969,13 +964,18 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
             .collect();
 
+        let group_ident = Ident::new("__cranpose_group", Span::mixed_site());
         let wrapped = quote!({
             #caller_key_stmt
-            #core_path::with_current_composer(|#composer_ident: &#core_path::Composer| {
-                #composer_ident.with_group(#key_expr, |#composer_ident: &#core_path::Composer| {
-                    #helper_ident(#composer_ident #(, #wrapper_args)*)
-                })
-            })
+            let #composer_ident = #core_path::__current_composer();
+            let #group_ident = #composer_ident.__open_composable_group(#key_expr);
+            let #result_ident = #helper_ident(
+                &#composer_ident,
+                #group_ident.scope()
+                #(, #wrapper_args)*
+            );
+            #group_ident.close();
+            #result_ident
         });
         *func.block = syn::parse2(wrapped).expect("failed to build block");
         TokenStream::from(quote! {

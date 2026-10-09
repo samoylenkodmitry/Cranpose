@@ -784,6 +784,48 @@ impl Drop for BranchGroupGuard {
     }
 }
 
+/// A group a composable call opened; [`ComposableGroup::close`] ends it
+/// after the call's body.
+#[doc(hidden)]
+pub struct ComposableGroup<'a> {
+    composer: &'a Composer,
+    host: Rc<SlotsHost>,
+    scope: RecomposeScope,
+    pass: Option<SlotHostPassGuard>,
+    runs_body: bool,
+    completed: bool,
+}
+
+impl ComposableGroup<'_> {
+    /// The recompose scope of the group.
+    pub fn scope(&self) -> &RecomposeScope {
+        &self.scope
+    }
+
+    /// Ends the group after its body composed.
+    pub fn close(mut self) {
+        self.completed = true;
+    }
+}
+
+impl Drop for ComposableGroup<'_> {
+    fn drop(&mut self) {
+        if self.completed {
+            self.scope.mark_composed_once();
+        }
+        self.composer
+            .close_group_in_active_pass(&self.host, &self.scope);
+        if let Some(mut pass) = self.pass.take() {
+            if self.completed
+                && let Err(err) = self.composer.finish_slot_host_pass(&pass.host)
+            {
+                log::error!("slot host pass finalization failed: {err}");
+            }
+            pass.close();
+        }
+    }
+}
+
 pub(crate) enum EmittedNode {
     Fresh(Box<dyn Node>),
     Recycled(RecycledNode),
@@ -1398,34 +1440,11 @@ impl Composer {
     }
 
     #[inline(never)]
-    fn with_group_in_active_pass_dyn(
+    fn open_group_in_active_pass(
         &self,
         host: &Rc<SlotsHost>,
         key: crate::slot::GroupKeySeed,
-        f: &mut dyn FnMut(&Composer),
-    ) {
-        struct GroupGuard<'a> {
-            composer: &'a Composer,
-            host: &'a Rc<SlotsHost>,
-            scope: RecomposeScope,
-        }
-
-        impl Drop for GroupGuard<'_> {
-            fn drop(&mut self) {
-                let result = self.host.with_write_session(|slots| {
-                    let result = slots.finish_group_body();
-                    slots.end_group();
-                    result
-                });
-                self.composer
-                    .close_finished_group(self.host, &self.scope, result);
-                self.scope.mark_recomposed();
-                if let Err(err) = self.composer.flush_pending_commands_if_large() {
-                    log::error!("mid-composition command flush failed: {err}");
-                }
-            }
-        }
-
+    ) -> (RecomposeScope, bool) {
         let options = self.pending_scope_options().take().unwrap_or_default();
         let parent_scope_id = self
             .core
@@ -1470,28 +1489,46 @@ impl Composer {
                 group,
             },
         );
-
-        let guard = GroupGuard {
-            composer: self,
-            host,
-            scope: scope_ref,
-        };
-        if placeholder_for.is_none() {
-            f(self);
-        }
-        guard.scope.mark_composed_once();
-        drop(guard);
+        (scope_ref, placeholder_for.is_none())
     }
 
-    fn with_group_seed_dyn(&self, key: crate::slot::GroupKeySeed, f: &mut dyn FnMut(&Composer)) {
-        let host = self.active_slots_host();
-        if host.has_active_pass() {
-            self.with_group_in_active_pass_dyn(&host, key, f);
-            return;
-        }
-        self.with_slot_host_pass(host, crate::slot::SlotPassMode::Compose, |composer| {
-            composer.with_group_in_active_pass_dyn(&composer.active_slots_host(), key, f);
+    #[inline(never)]
+    fn close_group_in_active_pass(&self, host: &Rc<SlotsHost>, scope: &RecomposeScope) {
+        let result = host.with_write_session(|slots| {
+            let result = slots.finish_group_body();
+            slots.end_group();
+            result
         });
+        self.close_finished_group(host, scope, result);
+        scope.mark_recomposed();
+        if let Err(err) = self.flush_pending_commands_if_large() {
+            log::error!("mid-composition command flush failed: {err}");
+        }
+    }
+
+    #[inline(never)]
+    fn open_group(&self, key: crate::slot::GroupKeySeed) -> ComposableGroup<'_> {
+        let host = self.active_slots_host();
+        let (host, pass) = if host.has_active_pass() {
+            (host, None)
+        } else {
+            let pass = self.begin_slot_host_pass(&host, crate::slot::SlotPassMode::Compose);
+            (self.active_slots_host(), Some(pass))
+        };
+        let (scope, runs_body) = self.open_group_in_active_pass(&host, key);
+        ComposableGroup {
+            composer: self,
+            host,
+            scope,
+            pass,
+            runs_body,
+            completed: false,
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn __open_composable_group(&self, key: Key) -> ComposableGroup<'_> {
+        self.open_group(crate::slot::GroupKeySeed::unkeyed(key))
     }
 
     pub(crate) fn with_group_seed<R>(
@@ -1499,22 +1536,19 @@ impl Composer {
         key: crate::slot::GroupKeySeed,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
-        let mut f = Some(f);
-        let mut result = None;
-        self.with_group_seed_dyn(key, &mut |composer| {
-            let f = f.take().expect("group body must run at most once");
-            result = Some(f(composer));
-        });
-        result.expect("group body must run exactly once")
+        let group = self.open_group(key);
+        debug_assert!(group.runs_body, "only movable content waits for a body");
+        let result = f(self);
+        group.close();
+        result
     }
 
     pub(crate) fn with_movable_group(&self, id: Key, f: impl FnOnce(&Composer)) {
-        let mut f = Some(f);
-        self.with_group_seed_dyn(crate::slot::GroupKeySeed::movable(id), &mut |composer| {
-            if let Some(f) = f.take() {
-                f(composer);
-            }
-        });
+        let group = self.open_group(crate::slot::GroupKeySeed::movable(id));
+        if group.runs_body {
+            f(self);
+        }
+        group.close();
     }
 
     pub fn with_group<R>(&self, key: Key, f: impl FnOnce(&Composer) -> R) -> R {

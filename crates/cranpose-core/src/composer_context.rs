@@ -78,6 +78,23 @@ pub fn with_composer<R>(f: impl FnOnce(&Composer) -> R) -> R {
     })
 }
 
+/// The current thread's composer, for the code `#[composable]` expands to.
+///
+/// # Panics
+/// Panics if there is no active composer.
+#[doc(hidden)]
+pub fn __current_composer() -> Composer {
+    CURRENT_COMPOSER.with(|current| {
+        Composer::from_core(
+            current
+                .borrow()
+                .as_ref()
+                .expect("with_composer: no active composer")
+                .clone(),
+        )
+    })
+}
+
 pub(crate) fn with_current_core<R>(f: impl FnOnce(&ComposerCore) -> R) -> Option<R> {
     if !any_composer_installed() {
         return None;
