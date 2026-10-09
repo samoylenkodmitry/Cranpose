@@ -18,7 +18,7 @@
 //! `Density` converts to and from device pixels and does the rounding on
 //! the pixel side, which is the only side where rounding means anything.
 
-use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
+use cranpose_core::{CompositionLocalProvider, StaticCompositionLocal, staticCompositionLocalOf};
 use cranpose_ui_layout::{ceil_to_px, round_to_px};
 
 use crate::{
@@ -31,10 +31,10 @@ use crate::{
 ///
 /// This is Compose's `Density`, and [`local_density`] is its `LocalDensity`.
 ///
-/// Read it in a composable through [`density`], which subscribes to the
-/// composition local rather than to process-wide state, so a subtree given its
-/// own density recomposes only what read it. Tests and goldens construct one
-/// directly so a measurement does not depend on the machine it runs on.
+/// Read it in a composable through [`density`], which reads the composition
+/// local rather than process-wide state, so a subtree can be given its own
+/// density. Tests and goldens construct one directly so a measurement does
+/// not depend on the machine it runs on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Density {
     density: f32,
@@ -186,17 +186,19 @@ impl cranpose_ui_layout::MeasureScope for DensityMeasureScope {
     }
 }
 
-/// The [`CompositionLocal`] carrying the device pixel grid.
+/// The [`StaticCompositionLocal`] carrying the device pixel grid.
 ///
-/// Compose's `LocalDensity`. Its default is whatever grid the host installed on
-/// this shell, so an application that never provides one still measures against
-/// the real screen; providing one scopes a different grid to a subtree, which
-/// is what a preview, a scaled container or a density-specific golden needs.
-pub fn local_density() -> CompositionLocal<Density> {
+/// Compose's `LocalDensity`, static as Compose's is: a read subscribes
+/// nothing, and a provider given a different grid recomposes everything
+/// under it. Its default is whatever grid the host installed on this shell,
+/// so an application that never provides one still measures against the
+/// real screen; providing one scopes a different grid to a subtree, which is
+/// what a preview, a scaled container or a density-specific golden needs.
+pub fn local_density() -> StaticCompositionLocal<Density> {
     crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
         locals
             .density
-            .get_or_init(|| compositionLocalOf(Density::from_host))
+            .get_or_init(|| staticCompositionLocalOf(Density::from_host))
             .clone()
     })
 }
@@ -206,7 +208,7 @@ pub fn density() -> Density {
     crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
         locals
             .density
-            .get_or_init(|| compositionLocalOf(Density::from_host))
+            .get_or_init(|| staticCompositionLocalOf(Density::from_host))
             .current()
     })
 }

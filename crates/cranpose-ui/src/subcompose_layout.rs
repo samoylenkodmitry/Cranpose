@@ -354,10 +354,13 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
 
         let slot_host = self.state.get_or_create_slots(slot_id);
         self.parent_handle.note_slot_host(&slot_host);
+        let locals_stale = self.state.slot_locals_stale(slot_id);
         let scopes = self
             .composer
-            .subcompose_slot(&slot_host, Some(virtual_node_id), move |_| {
-                compose_subcompose_slot_content(content_holder);
+            .with_locals_changed(locals_stale, |composer| {
+                composer.subcompose_slot(&slot_host, Some(virtual_node_id), move |_| {
+                    compose_subcompose_slot_content(content_holder);
+                })
             })
             .map(|((), scopes)| scopes)
             .unwrap_or_default();
@@ -861,8 +864,16 @@ impl SubcomposeLayoutNode {
     }
 
     /// Records the source composition context for measure-time subcomposition.
+    /// A context under a changed static composition local makes every slot
+    /// compose again, running every body it holds, as Compose forces a
+    /// `SubcomposeLayout`'s children.
     pub fn set_captured_context(&mut self, context: cranpose_core::CapturedCompositionContext) {
+        let locals_changed = context.locals_changed();
         self.inner.borrow_mut().captured_context = Some(context);
+        if locals_changed {
+            self.inner.borrow().state.invalidate_locals();
+            self.request_measure_recompose();
+        }
     }
 
     /// Records the grid the composition provided, re-measuring if it moved.

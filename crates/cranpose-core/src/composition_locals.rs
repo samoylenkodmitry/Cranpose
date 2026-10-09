@@ -12,7 +12,7 @@ fn provider_entry_source(key: &LocalKey, caller: crate::Key) -> crate::Key {
 pub struct ProvidedValue {
     key: LocalKey,
     #[expect(clippy::type_complexity)]
-    apply: Box<dyn Fn(&Composer, crate::Key) -> Rc<dyn Any>>,
+    apply: Box<dyn Fn(&Composer, crate::Key) -> (Rc<dyn Any>, bool)>,
 }
 
 impl ProvidedValue {
@@ -20,14 +20,16 @@ impl ProvidedValue {
         &self.key
     }
 
+    /// The provided entry, and whether it replaced a different value of a
+    /// static local that this site provided before.
     pub(crate) fn into_entry(
         self,
         composer: &Composer,
         site: crate::Key,
-    ) -> (LocalKey, Rc<dyn Any>) {
+    ) -> (LocalKey, Rc<dyn Any>, bool) {
         let ProvidedValue { key, apply } = self;
-        let entry = apply(composer, site);
-        (key, entry)
+        let (entry, static_changed) = apply(composer, site);
+        (key, entry, static_changed)
     }
 }
 
@@ -90,8 +92,14 @@ impl<T: Clone + 'static> StaticLocalEntry<T> {
         }
     }
 
-    fn set(&self, value: T) {
-        *self.value.borrow_mut() = value;
+    /// Stores `value` and says whether it differs from the stored one.
+    fn set(&self, value: T, equivalent: &LocalEquivalentFn<T>) -> bool {
+        let mut current = self.value.borrow_mut();
+        if equivalent(&current, &value) {
+            return false;
+        }
+        *current = value;
+        true
     }
 
     pub(crate) fn value(&self) -> T {
@@ -133,7 +141,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
                     ))
                 });
                 entry_ref.update(|entry| entry.set(value.clone()));
-                entry_ref.with(|entry| entry.clone() as Rc<dyn Any>)
+                entry_ref.with(|entry| (entry.clone() as Rc<dyn Any>, false))
             }),
         }
     }
@@ -151,7 +159,7 @@ impl<T: Clone + 'static> CompositionLocal<T> {
 fn malformed_provided_value_for_test(key: LocalKey, entry: Rc<dyn Any>) -> ProvidedValue {
     ProvidedValue {
         key,
-        apply: Box::new(move |_, _| entry.clone()),
+        apply: Box::new(move |_, _| (entry.clone(), false)),
     }
 }
 
@@ -182,20 +190,17 @@ pub fn compositionLocalOfWithPolicy<T: Clone + 'static>(
     }
 }
 
-/// A `StaticCompositionLocal` is a CompositionLocal that is optimized for values that are
-/// unlikely to change. Unlike `CompositionLocal`, reads of a `StaticCompositionLocal` are not
-/// tracked by the recomposition system, which means:
-/// - Reading `.current()` does NOT establish a subscription
-/// - Changing the provided value does NOT automatically invalidate readers
-/// - This makes it more efficient for truly static values
-///
-/// This matches the API of Jetpack Compose's `staticCompositionLocalOf` but with simplified
-/// semantics. Use this for values that are guaranteed to never change during the lifetime of
-/// the CompositionLocalProvider scope (e.g., application-wide constants, configuration)
+/// A composition local for values that rarely change, as Jetpack Compose's
+/// `staticCompositionLocalOf`. A read of `.current()` subscribes nothing, so
+/// it costs less than a read of a [`CompositionLocal`]. In return, a
+/// provider whose value changes recomposes everything it provides to, not
+/// only the readers: every composable call under it runs its body, and
+/// every subcomposition under it composes again the same way.
 #[derive(Clone)]
 pub struct StaticCompositionLocal<T: Clone + 'static> {
     pub(crate) key: LocalKey,
     default: Rc<dyn Fn() -> T>,
+    equivalent: Arc<LocalEquivalentFn<T>>,
 }
 
 impl<T: Clone + 'static> PartialEq for StaticCompositionLocal<T> {
@@ -211,14 +216,15 @@ impl<T: Clone + 'static> StaticCompositionLocal<T> {
     pub fn provides(&self, value: T) -> ProvidedValue {
         let key = self.key.clone();
         let entry_source = provider_entry_source(&key, crate::caller_location_key());
+        let equivalent = Arc::clone(&self.equivalent);
         ProvidedValue {
             key,
             apply: Box::new(move |composer: &Composer, site: crate::Key| {
                 let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
                 let entry_ref = composer
                     .remember_internal(source, || Rc::new(StaticLocalEntry::new(value.clone())));
-                entry_ref.update(|entry| entry.set(value.clone()));
-                entry_ref.with(|entry| entry.clone() as Rc<dyn Any>)
+                let changed = entry_ref.update(|entry| entry.set(value.clone(), &*equivalent));
+                entry_ref.with(|entry| (entry.clone() as Rc<dyn Any>, changed))
             }),
         }
     }
@@ -240,12 +246,24 @@ pub(crate) fn malformed_static_composition_local_for_test<T: Clone + 'static>(
     malformed_provided_value_for_test(local.key.clone(), entry)
 }
 
+/// A [`StaticCompositionLocal`] whose provided values compare with `==`.
 #[expect(non_snake_case)]
-pub fn staticCompositionLocalOf<T: Clone + 'static>(
+pub fn staticCompositionLocalOf<T: Clone + PartialEq + 'static>(
     default: impl Fn() -> T + 'static,
+) -> StaticCompositionLocal<T> {
+    staticCompositionLocalOfWithPolicy(default, |current, next| current == next)
+}
+
+/// A [`StaticCompositionLocal`] whose provider recomposes its content when
+/// `equivalent` says a new value differs from the last one.
+#[expect(non_snake_case)]
+pub fn staticCompositionLocalOfWithPolicy<T: Clone + 'static>(
+    default: impl Fn() -> T + 'static,
+    equivalent: impl Fn(&T, &T) -> bool + Send + Sync + 'static,
 ) -> StaticCompositionLocal<T> {
     StaticCompositionLocal {
         key: LocalKey::new(),
         default: Rc::new(default),
+        equivalent: Arc::new(equivalent),
     }
 }

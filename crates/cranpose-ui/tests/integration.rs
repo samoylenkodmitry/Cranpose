@@ -13,6 +13,7 @@ mod localization;
 mod round_scaling_list_integration;
 mod round_scroll_indicator_integration;
 mod shadow_api_integration;
+mod static_density_integration;
 mod subcompose_disposal;
 #[cfg(feature = "svg")]
 mod svg_painter_integration;

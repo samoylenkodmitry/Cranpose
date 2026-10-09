@@ -1543,6 +1543,14 @@ impl<T: Clone + 'static> PartialEq for MutableState<T> {
     }
 }
 
+/// Two owning handles are equal when they hold the same state, as two
+/// [`MutableState`] handles are.
+impl<T: Clone + 'static> PartialEq for OwnedMutableState<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.state == other.state
+    }
+}
+
 impl<T: Clone + 'static> Eq for MutableState<T> {}
 
 impl<T: Clone + 'static> Copy for State<T> {}

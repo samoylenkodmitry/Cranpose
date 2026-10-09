@@ -60,7 +60,12 @@ pub fn local_layout_direction() -> CompositionLocal<LayoutDirection> {
 
 /// The layout direction in force here.
 pub fn layout_direction() -> LayoutDirection {
-    local_layout_direction().current()
+    crate::environment_locals::ENVIRONMENT_LOCALS.with(|locals| {
+        locals
+            .direction
+            .get_or_init(|| compositionLocalOf(LayoutDirection::default))
+            .current()
+    })
 }
 
 /// Runs `content` in `direction`.
