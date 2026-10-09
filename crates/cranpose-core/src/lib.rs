@@ -1154,6 +1154,20 @@ impl RecomposeScope {
         (key != 0).then_some(key)
     }
 
+    /// What decides the slot host a recomposition of this scope runs in: its
+    /// table's storage key and the runtime state that table belongs to.
+    pub(crate) fn slots_host_identity(
+        &self,
+    ) -> (usize, *const crate::composer::ComposerRuntimeState) {
+        let state = self
+            .inner
+            .slots_runtime_state
+            .borrow()
+            .as_ref()
+            .map_or(std::ptr::null(), std::rc::Weak::as_ptr);
+        (self.inner.slots_storage_key.get(), state)
+    }
+
     pub(crate) fn slots_runtime_state(&self) -> Option<Rc<crate::composer::ComposerRuntimeState>> {
         self.inner
             .slots_runtime_state

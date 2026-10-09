@@ -365,6 +365,51 @@ impl<A: Applier + 'static> Composition<A> {
             .validate_host_retention(self.slots.as_ref(), &table)
     }
 
+    /// The scopes grouped by the slot host each recomposes in, in the order
+    /// each host first appears.
+    fn group_scopes_by_host(
+        &self,
+        scopes: Vec<RecomposeScope>,
+    ) -> Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> {
+        let root_host = self.slots_host();
+        let mut scope_groups: Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> = Vec::new();
+        let mut scope_group_index: HashMap<usize, usize> = HashMap::default();
+        let mut previous_host: Option<(_, usize)> = None;
+        for scope in scopes {
+            let identity = scope.slots_host_identity();
+            if let Some((previous_identity, index)) = previous_host
+                && previous_identity == identity
+            {
+                scope_groups[index].1.push(scope);
+                continue;
+            }
+            let host = scope
+                .slots_runtime_state()
+                .and_then(|state| {
+                    scope
+                        .slots_storage_key()
+                        .and_then(|storage_key| state.host_for_storage_key(storage_key))
+                })
+                .or_else(|| {
+                    scope.slots_storage_key().and_then(|storage_key| {
+                        self.composer_state.host_for_storage_key(storage_key)
+                    })
+                })
+                .unwrap_or_else(|| Rc::clone(&root_host));
+            let host_key = host.storage_key();
+            let index = if let Some(index) = scope_group_index.get(&host_key).copied() {
+                scope_groups[index].1.push(scope);
+                index
+            } else {
+                scope_group_index.insert(host_key, scope_groups.len());
+                scope_groups.push((host, vec![scope]));
+                scope_groups.len() - 1
+            };
+            previous_host = Some((identity, index));
+        }
+        scope_groups
+    }
+
     fn process_invalid_scopes_until_root_request(&mut self) -> Result<bool, NodeError> {
         let runtime_handle = self.runtime_handle();
         let mut did_recompose = false;
@@ -390,31 +435,7 @@ impl<A: Applier + 'static> Composition<A> {
             }
             did_recompose |= recomposes_content(&scopes);
             let runtime_clone = runtime_handle.clone();
-            let root_host = self.slots_host();
-            let mut scope_groups: Vec<(Rc<SlotsHost>, Vec<RecomposeScope>)> = Vec::new();
-            let mut scope_group_index: HashMap<usize, usize> = HashMap::default();
-            for scope in scopes {
-                let host = scope
-                    .slots_runtime_state()
-                    .and_then(|state| {
-                        scope
-                            .slots_storage_key()
-                            .and_then(|storage_key| state.host_for_storage_key(storage_key))
-                    })
-                    .or_else(|| {
-                        scope.slots_storage_key().and_then(|storage_key| {
-                            self.composer_state.host_for_storage_key(storage_key)
-                        })
-                    })
-                    .unwrap_or_else(|| Rc::clone(&root_host));
-                let host_key = host.storage_key();
-                if let Some(index) = scope_group_index.get(&host_key).copied() {
-                    scope_groups[index].1.push(scope);
-                } else {
-                    scope_group_index.insert(host_key, scope_groups.len());
-                    scope_groups.push((host, vec![scope]));
-                }
-            }
+            let scope_groups = self.group_scopes_by_host(scopes);
             let mut host_group_index = 0usize;
             while host_group_index < scope_groups.len() {
                 let (host, scopes) = &scope_groups[host_group_index];
