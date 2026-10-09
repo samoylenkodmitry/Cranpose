@@ -25,7 +25,10 @@ Runtime effects accept up to three substrate declarations. See
 ## Surface cache and opaque prefixes
 
 `LayerCache` retains keyed surfaces under a 96 MiB byte budget and a 4096
-entry cap. The transient texture pool reuses recent frame targets under a
+entry cap. Flat surfaces the cache keeps render together into an atlas of
+their own and are read in place there, without a copy. The atlas returns to
+its pool once its kept surfaces hold under a quarter of the pixels they
+held. The transient texture pool reuses recent frame targets under a
 32–256 MiB working-set budget and a 64-texture cap. The layer cache counts
 shared texture allocations once toward its byte budget. See
 [`layer_cache.rs`](../crates/cranpose-render/wgpu/src/layer_cache.rs) and

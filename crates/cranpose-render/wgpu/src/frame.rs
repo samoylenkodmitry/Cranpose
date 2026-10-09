@@ -4566,14 +4566,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
     ) -> SourceDecision {
         let key = plan.cache_key(child);
         if let Some(key) = key
-            && let Some(texture) = self.cached_source(child.node_id, key, plan.width, plan.height)
+            && let Some(retained) = self.cached_source(child, key, plan.width, plan.height)
         {
             return SourceDecision::Cached(plan.surface(
                 CompositeSource {
-                    texture,
+                    texture: retained.texture,
                     content: SourceContent::retained(&key),
                 },
-                None,
+                retained.region,
             ));
         }
         SourceDecision::Render(
@@ -4615,7 +4615,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             beneath,
         )?;
-        let retained = retain.filter(|key| self.retain_source(child.node_id, *key, &texture));
+        let retained = retain.filter(|key| {
+            self.retain_source(
+                child.node_id,
+                *key,
+                Retained::surface(Rc::clone(&texture)),
+                None,
+            )
+        });
         Ok(plan.surface(
             CompositeSource {
                 texture,
@@ -4697,8 +4704,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 });
                 continue;
             };
-            // A member rendered with the others lands in a shared atlas, so
-            // keeping its surface means copying it out.
+            // A member rendered with the others lands in a shared atlas,
+            // which the cache keeps while it keeps the member's surface.
             let gate = if in_place {
                 AdmissionGate::drawn_in_place
             } else {
@@ -4724,16 +4731,26 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
+    /// Renders the batch's members together: those the cache keeps into
+    /// an atlas of their own, which the cache keeps while it keeps any of
+    /// them and reads in place, the others into one the frame lets go.
     fn render_surface_batch(
         &mut self,
         layer: &LayerScene,
-        batch: Vec<BatchMember>,
+        mut batch: Vec<BatchMember>,
     ) -> Result<Vec<(usize, SurfaceRender)>, String> {
         let mut surfaces = Vec::with_capacity(batch.len());
-        match batch.as_slice() {
-            [] => {}
-            [member] => surfaces.push((member.index, self.render_member_alone(layer, member)?)),
-            group => self.render_surface_atlas(layer, group, &mut surfaces)?,
+        batch.sort_by_key(|member| member.retain.is_none());
+        let kept = batch.partition_point(|member| member.retain.is_some());
+        let (kept, drawn) = batch.split_at(kept);
+        for (group, keeps) in [(kept, true), (drawn, false)] {
+            match group {
+                [] => {}
+                [member] => {
+                    surfaces.push((member.index, self.render_member_alone(layer, member)?));
+                }
+                group => self.render_surface_atlas(layer, group, keeps, &mut surfaces)?,
+            }
         }
         Ok(surfaces)
     }
@@ -4756,6 +4773,7 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         &mut self,
         layer: &LayerScene,
         group: &[BatchMember],
+        keeps: bool,
         surfaces: &mut Vec<(usize, SurfaceRender)>,
     ) -> Result<(), String> {
         let limit = self.renderer.max_texture_dim();
@@ -4765,8 +4783,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .sum();
         let mut packer =
             AtlasPacker::new(limit).with_shelf_width(u32::try_from(area.isqrt()).unwrap_or(limit));
-        // Each surface is copied out of the atlas, so where it lands costs
-        // nothing later: the tallest go first, into an atlas near square.
+        // A kept surface is read in place, so where it lands costs nothing
+        // later: the tallest go first, into an atlas near square.
         let mut tallest_first: Vec<usize> = (0..group.len()).collect();
         tallest_first.sort_by_key(|&index| std::cmp::Reverse(group[index].plan.height));
         let mut placements: Vec<Option<AtlasPlacement>> = vec![None; group.len()];
@@ -4783,9 +4801,14 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                     .settle(atlas.padded_size(limit), limit)
             })
             .collect();
+        let label = if keeps {
+            "Kept Layer Surface Atlas"
+        } else {
+            "Layer Surface Atlas"
+        };
         let atlases: Vec<Rc<OffscreenTarget>> = sizes
             .into_iter()
-            .map(|(width, height)| self.acquire_transient("Layer Surface Atlas", width, height))
+            .map(|(width, height)| self.acquire_transient(label, width, height))
             .collect();
         let ops: Vec<Cow<'_, [DrawOp]>> = group
             .iter()
@@ -4869,40 +4892,46 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(key) = member.retain else {
             return in_atlas;
         };
-        let retained = Rc::new(
-            self.renderer
-                .acquire_retained_surface(plan.width, plan.height),
-        );
-        if !copy_compatible(atlas, &retained) {
-            return in_atlas;
-        }
-        self.recorder.copy_texture_region(TextureRegionCopy {
-            source: atlas,
-            source_origin: [placement.x, placement.y],
-            dest: &retained,
-            dest_origin: [0, 0],
-            size: [plan.width, plan.height],
-        });
-        if !self.retain_source(child.node_id, key, &retained) {
+        let region = DeviceRect {
+            x: placement.x as f32,
+            y: placement.y as f32,
+            width: plan.width as f32,
+            height: plan.height as f32,
+        };
+        let transient = self.transient_descriptor(atlas);
+        if !self.retain_source(
+            child.node_id,
+            key,
+            Retained::surface_in(Rc::clone(atlas), region),
+            transient,
+        ) {
             return in_atlas;
         }
         plan.surface(
             CompositeSource {
-                texture: retained,
+                texture: Rc::clone(atlas),
                 content: SourceContent::retained(&key),
             },
-            None,
+            Some(region),
         )
     }
 
+    /// The child's retained surface under `key`. A surface kept in place in
+    /// an atlas serves only a child that composites it flat: an effect
+    /// reads its source texture whole.
     fn cached_source(
         &mut self,
-        node_id: Option<NodeId>,
+        child: &ChildLayer,
         key: LayerRasterCacheKey,
         width: u32,
         height: u32,
-    ) -> Option<Rc<OffscreenTarget>> {
-        let retained = self.renderer.layer_cache.get(&key)?;
+    ) -> Option<Retained> {
+        let node_id = child.node_id;
+        let retained = self
+            .renderer
+            .layer_cache
+            .get(&key)
+            .filter(|retained| retained.region.is_none() || renders_flat(child))?;
         self.renderer
             .frame_stats
             .record_layer_cache_hit(&key, width, height);
@@ -4910,22 +4939,26 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         if let Some(gate) = self.source_gate(node_id) {
             gate.hit(key);
         }
-        Some(retained.texture)
+        Some(retained)
     }
 
+    /// Keeps `retained` under `key`; `transient` names the pool texture a
+    /// surface kept in place in a frame's atlas returns to.
     fn retain_source(
         &mut self,
         node_id: Option<NodeId>,
         key: LayerRasterCacheKey,
-        texture: &Rc<OffscreenTarget>,
+        retained: Retained,
+        transient: Option<FrameTextureDescriptor>,
     ) -> bool {
+        let (width, height) = match retained.region {
+            Some(region) => (region.width as u32, region.height as u32),
+            None => (retained.texture.width, retained.texture.height),
+        };
         self.renderer
             .frame_stats
-            .record_layer_cache_miss(&key, texture.width, texture.height);
-        let inserted =
-            self.renderer
-                .layer_cache
-                .insert(key, Retained::surface(Rc::clone(texture)), None);
+            .record_layer_cache_miss(&key, width, height);
+        let inserted = self.renderer.layer_cache.insert(key, retained, transient);
         if inserted && let Some(gate) = self.source_gate(node_id) {
             gate.admitted();
         }

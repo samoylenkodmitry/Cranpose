@@ -78,20 +78,22 @@ fn a_removed_entry_is_retired_and_its_texture_released_once_unshared() {
 #[test]
 fn a_shared_texture_is_charged_once_and_retired_by_its_last_holder() {
     let mut ledger = AllocationLedger::default();
-    ledger.attach(7, 1000, Some(descriptor(10)));
-    ledger.attach(7, 1000, Some(descriptor(10)));
-    ledger.attach(9, 50, None);
+    ledger.attach(7, 1000, Some(descriptor(10)), 1);
+    ledger.attach(7, 1000, Some(descriptor(10)), 1);
+    ledger.attach(9, 50, None, 1);
     assert_eq!(ledger.bytes, 1050);
-    assert!(ledger.detach(7).is_none());
+    assert!(ledger.detach(7, 1).is_none());
     assert_eq!(ledger.bytes, 1050);
     let retired = ledger
-        .detach(7)
+        .detach(7, 1)
         .expect("the last holder retires the texture");
     assert_eq!(retired.bytes, 1000);
     assert_eq!(retired.transient, Some(descriptor(10)));
     assert_eq!(ledger.bytes, 50);
-    assert!(ledger.detach(7).is_none());
-    let retired = ledger.detach(9).expect("a lone holder retires its texture");
+    assert!(ledger.detach(7, 1).is_none());
+    let retired = ledger
+        .detach(9, 1)
+        .expect("a lone holder retires its texture");
     assert_eq!(retired.transient, None);
     assert_eq!(ledger.bytes, 0);
 }
@@ -99,12 +101,12 @@ fn a_shared_texture_is_charged_once_and_retired_by_its_last_holder() {
 #[test]
 fn a_texture_charged_again_after_retirement_starts_a_new_record() {
     let mut ledger = AllocationLedger::default();
-    ledger.attach(3, 20, None);
-    ledger.detach(3);
-    ledger.attach(3, 40, Some(descriptor(4)));
+    ledger.attach(3, 20, None, 1);
+    ledger.detach(3, 1);
+    ledger.attach(3, 40, Some(descriptor(4)), 1);
     assert_eq!(ledger.bytes, 40);
     assert_eq!(
-        ledger.detach(3).map(|record| record.transient),
+        ledger.detach(3, 1).map(|record| record.transient),
         Some(Some(descriptor(4)))
     );
 }
@@ -237,4 +239,41 @@ fn many_small_surfaces_stay_cached_within_the_byte_budget() {
          surface just before the frame that reads it, every frame"
     );
     assert!(cache.get(&key(0)).is_some());
+}
+
+#[test]
+fn an_atlas_whose_kept_surfaces_mostly_left_goes_back_to_its_pool() {
+    let (_lock, device, _queue) = upload_test_device();
+    let mut cache = LayerCache::with_budget(1 << 20);
+    let atlas = texture(&device, 80);
+    for index in 0..5 {
+        let region = crate::frame::DeviceRect {
+            x: index as f32 * 16.0,
+            y: 0.0,
+            width: 16.0,
+            height: 1.0,
+        };
+        assert!(cache.insert(
+            key(index),
+            Retained::surface_in(Rc::clone(&atlas), region),
+            Some(descriptor(80)),
+        ));
+    }
+    drop(atlas);
+    for index in 0..3 {
+        cache.remove(&key(index));
+    }
+    cache.end_frame();
+    assert_eq!(cache.len(), 2, "two of five members still use the atlas");
+    assert!(cache.take_released().next().is_none());
+    cache.remove(&key(3));
+    cache.end_frame();
+    assert_eq!(
+        cache.len(),
+        0,
+        "the last member under a quarter of the atlas leaves with it"
+    );
+    let released: Vec<_> = cache.take_released().collect();
+    assert_eq!(released.len(), 1, "the atlas goes back to its pool");
+    assert_eq!(released[0].0, Some(descriptor(80)));
 }
