@@ -890,7 +890,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 #(#param_setup_recompose)*
                 #(#reads_for_recompose)*
                 #body_call;
-                #recompose_setter
             }
         } else {
             quote! {
@@ -905,7 +904,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         slot.store(#value_ident.clone());
                     },
                 );
-                #recompose_setter
                 #invalidate_return_consumer
                 #value_ident
             }
