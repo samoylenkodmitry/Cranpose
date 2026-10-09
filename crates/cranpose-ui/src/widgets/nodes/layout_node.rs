@@ -446,6 +446,37 @@ impl LayoutNodeCacheHandles {
     }
 }
 
+/// A node id or none in one word, where `Cell<Option<NodeId>>` takes two: a
+/// layout node keeps three, and the 24 bytes kept it out of jemalloc's
+/// 640-byte size class.
+struct NodeIdCell(Cell<NodeId>);
+
+/// The id a [`NodeIdCell`] holds for none: no node gets it, as ids index
+/// the applier's nodes and virtual ids count up from `VIRTUAL_NODE_ID_START`.
+const NO_NODE_ID: NodeId = NodeId::MAX;
+
+impl NodeIdCell {
+    fn new(id: Option<NodeId>) -> Self {
+        Self(Cell::new(id.unwrap_or(NO_NODE_ID)))
+    }
+
+    fn get(&self) -> Option<NodeId> {
+        let id = self.0.get();
+        (id != NO_NODE_ID).then_some(id)
+    }
+
+    fn set(&self, id: Option<NodeId>) {
+        debug_assert_ne!(id, Some(NO_NODE_ID), "no node takes the none id");
+        self.0.set(id.unwrap_or(NO_NODE_ID));
+    }
+
+    fn replace(&self, id: Option<NodeId>) -> Option<NodeId> {
+        let previous = self.get();
+        self.set(id);
+        previous
+    }
+}
+
 /// A node of the layout tree.
 ///
 /// Its fields keep the order they are declared in: what a layout pass reads
@@ -484,16 +515,15 @@ pub struct LayoutNode {
     modifier_slices_dirty: Cell<bool>,
     debug_modifiers: Cell<bool>,
 
-    id: Cell<Option<NodeId>>,
-    parent: Cell<Option<NodeId>>,
-    folded_parent: Cell<Option<NodeId>>,
+    id: NodeIdCell,
+    parent: NodeIdCell,
+    folded_parent: NodeIdCell,
     modifier_slices_snapshot: RefCell<Rc<ModifierNodeSlices>>,
 
     /// The chain's modal and hidden flags, read by the modal count and the
     /// modal walk: dropped whenever the chain syncs or semantics are
     /// invalidated, the two ways its semantics change.
     semantics_reach: Cell<Option<cranpose_foundation::SemanticsReach>>,
-    virtual_children_count: Cell<usize>,
     owner_context_id: Cell<Option<crate::render_state::AppContextId>>,
     modifier_chain: ModifierChainHandle,
     pub modifier: Modifier,
@@ -539,7 +569,6 @@ impl LayoutNode {
         shell.id.set(None);
         shell.owner_context_id.set(None);
         shell.debug_modifiers.set(false);
-        shell.virtual_children_count.set(0);
         shell.modifier_slices_dirty = Cell::new(true);
         shell
     }
@@ -571,13 +600,12 @@ impl LayoutNode {
             needs_redraw: Cell::new(true),
             needs_pointer_pass: Cell::new(false),
             needs_focus_sync: Cell::new(false),
-            parent: Cell::new(None),
-            folded_parent: Cell::new(None),
-            id: Cell::new(None),
+            parent: NodeIdCell::new(None),
+            folded_parent: NodeIdCell::new(None),
+            id: NodeIdCell::new(None),
             owner_context_id: Cell::new(None),
             debug_modifiers: Cell::new(false),
             is_virtual,
-            virtual_children_count: Cell::new(0),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
             layout_state: Rc::new(RefCell::new(LayoutState::default())),
@@ -1209,13 +1237,12 @@ impl Clone for LayoutNode {
             needs_redraw: Cell::new(self.needs_redraw.get()),
             needs_pointer_pass: Cell::new(self.needs_pointer_pass.get()),
             needs_focus_sync: Cell::new(self.needs_focus_sync.get()),
-            parent: Cell::new(self.parent.get()),
-            folded_parent: Cell::new(self.folded_parent.get()),
-            id: Cell::new(None),
+            parent: NodeIdCell::new(self.parent.get()),
+            folded_parent: NodeIdCell::new(self.folded_parent.get()),
+            id: NodeIdCell::new(None),
             owner_context_id: Cell::new(None),
             debug_modifiers: Cell::new(self.debug_modifiers.get()),
             is_virtual: self.is_virtual,
-            virtual_children_count: Cell::new(self.virtual_children_count.get()),
             modifier_slices_snapshot: RefCell::new(Rc::default()),
             modifier_slices_dirty: Cell::new(true),
             layout_state: self.layout_state.clone(),
@@ -1247,10 +1274,6 @@ impl Node for LayoutNode {
         if self.children.contains(&child) {
             return false;
         }
-        if is_virtual_node(child) {
-            let count = self.virtual_children_count.get();
-            self.virtual_children_count.set(count + 1);
-        }
         self.children.push(child);
         self.cache.clear();
         self.mark_needs_measure();
@@ -1263,12 +1286,6 @@ impl Node for LayoutNode {
         self.children.retain(|&id| id != child);
         let removed = self.children.len() < before;
         if removed {
-            if is_virtual_node(child) {
-                let count = self.virtual_children_count.get();
-                if count > 0 {
-                    self.virtual_children_count.set(count - 1);
-                }
-            }
             self.cache.clear();
             self.mark_needs_measure();
             self.note_semantics_layout_change();
@@ -1423,7 +1440,6 @@ struct LayoutNodeRegistryEntry {
     parent: Option<NodeId>,
     modifier_child_capabilities: NodeCapabilities,
     modifier_locals: Option<ModifierLocalsHandle>,
-    is_virtual: bool,
 }
 
 pub(crate) struct LayoutNodeRegistryState {
@@ -1446,7 +1462,6 @@ impl LayoutNodeRegistryState {
                 parent: node.parent(),
                 modifier_child_capabilities: node.modifier_child_capabilities(),
                 modifier_locals: node.modifier_locals_handle(),
-                is_virtual: node.is_virtual(),
             },
         );
     }
@@ -1493,13 +1508,6 @@ impl LayoutNodeRegistryState {
             len: entries.len(),
             capacity: entries.capacity(),
         }
-    }
-
-    fn is_virtual_node(&self, id: NodeId) -> bool {
-        self.entries
-            .borrow()
-            .get(&id)
-            .is_some_and(|entry| entry.is_virtual)
     }
 
     fn allocate_virtual_node_id(&self) -> NodeId {
@@ -1568,10 +1576,6 @@ pub(crate) fn unregister_layout_node(
 #[cfg(test)]
 fn layout_node_registry_stats() -> LayoutNodeRegistryDebugStats {
     crate::render_state::with_layout_node_registry(LayoutNodeRegistryState::stats)
-}
-
-pub(crate) fn is_virtual_node(id: NodeId) -> bool {
-    crate::render_state::with_layout_node_registry(|registry| registry.is_virtual_node(id))
 }
 
 pub(crate) fn allocate_virtual_node_id() -> NodeId {
