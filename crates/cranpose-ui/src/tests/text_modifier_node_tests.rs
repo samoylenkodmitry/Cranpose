@@ -582,3 +582,60 @@ fn a_text_laid_out_as_written_shares_its_string_and_style_with_its_layout() {
     assert_eq!(wrapped_text, "cell\n123");
     assert!(style_shared, "both layouts share the node's style");
 }
+
+#[test]
+fn an_update_to_an_equal_style_keeps_the_layout_and_a_new_style_lays_out_again() {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let app_context = crate::AppContext::new();
+        app_context.enter(|| {
+            let text = Rc::new(AnnotatedString::from("cell 123"));
+            let large = TextStyle {
+                span_style: crate::text::SpanStyle {
+                    font_size: TextUnit::Sp(24.0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let element = |style: TextStyle| {
+                TextModifierElement::new(
+                    Rc::clone(&text),
+                    style,
+                    TextLayoutOptions::default(),
+                    crate::density::Density::new(1.0, 1.0),
+                )
+            };
+            let first = element(TextStyle::default());
+            let mut node = first.create();
+            let layout = |node: &TextModifierNode| {
+                node.layout.measure_layout(Some(200.0));
+                node.layout.measured_layout().expect("a measured layout")
+            };
+            let before = layout(&node);
+            let same = element(TextStyle::default());
+            let equal = same == first;
+            same.update(&mut node);
+            let kept = Rc::ptr_eq(&before, &layout(&node));
+            let restyled = element(large);
+            let differs = restyled != first;
+            restyled.update(&mut node);
+            let after = layout(&node);
+            tx.send((
+                equal,
+                kept,
+                differs,
+                after.visual_style.span_style.font_size,
+            ))
+            .expect("send layouts");
+        });
+    });
+    let (equal, kept, differs, font_size) = rx.recv().expect("receive layouts");
+    assert!(equal, "elements of equal styles are equal");
+    assert!(kept, "an equal style keeps the prepared layout");
+    assert!(differs, "an element of another style differs");
+    assert_eq!(
+        font_size,
+        TextUnit::Sp(24.0),
+        "the new style lays the text out again"
+    );
+}
