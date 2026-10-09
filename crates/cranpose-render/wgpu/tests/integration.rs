@@ -25,6 +25,7 @@ mod clipped_text_batching;
 mod device_error_survival;
 mod device_limits;
 mod direct_surface_root_parity;
+mod effect_rect_past_target;
 mod effect_sample_domain;
 mod effect_semantics;
 mod elevation_shadow;

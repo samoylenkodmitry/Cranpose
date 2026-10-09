@@ -72,14 +72,12 @@ impl Default for BlurredEdgeTreatment {
     }
 }
 
-/// The vertex stage and bindings every runtime shader starts from: a
-/// fullscreen triangle whose `uv` spans the input, the input texture and
-/// sampler at group 0, and the 64 uniform vectors at group 1. A shader
-/// source is this prelude followed by an `effect_fs` fragment stage.
-pub const RUNTIME_SHADER_PRELUDE_WGSL: &str = concat!(
-    framework_wgsl!("fullscreen_quad_vs.wgsl"),
-    framework_wgsl!("runtime_shader_bindings.wgsl"),
-);
+/// The vertex stage and bindings every runtime shader starts from: a quad
+/// whose `uv` spans the effect's rect, the input texture and sampler at
+/// group 0, and the 64 uniform vectors at group 1, which both stages read.
+/// A shader source is this prelude followed by an `effect_fs` fragment
+/// stage.
+pub const RUNTIME_SHADER_PRELUDE_WGSL: &str = framework_wgsl!("runtime_shader_prelude.wgsl");
 
 /// A custom WGSL shader effect, analogous to Android's `RuntimeShader`.
 ///
@@ -90,13 +88,20 @@ pub const RUNTIME_SHADER_PRELUDE_WGSL: &str = concat!(
 /// @group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;
 /// ```
 ///
+/// [`RUNTIME_SHADER_PRELUDE_WGSL`] declares them with the `fullscreen_vs`
+/// vertex stage. A module that writes its own vertex stage places its quad
+/// by slots `220..224` as the prelude does: the renderer holds a pass's
+/// viewport inside its target, and an effect rect that reaches past the
+/// target spans the viewport only through that placement.
+///
 /// Float uniforms are packed linearly into the `u` array. Access them in WGSL
 /// as `u[index / 4][index % 4]` for individual floats, or `u[index / 4].xy`
-/// for vec2, etc. User uniforms may use indices `0..224`; slots `224..256`
+/// for vec2, etc. User uniforms may use indices `0..220`; slots `220..256`
 /// are reserved for renderer metadata:
 ///
 /// | slots     | content                                                     |
 /// |-----------|-------------------------------------------------------------|
+/// | 220..224  | where the prelude's vertex stage places the effect rect in the pass's viewport: clip-space scale minus one (x, y) and offset (z, w); zero = the whole viewport |
 /// | 224..236  | substrate regions `(x, y, w, h)` in input texels, the third at 224, the second at 228, the first at 232; zero = none |
 /// | 236..240  | source region `(x, y, w, h)` in input texels; zero = whole  |
 /// | 240..244  | composite mask rect `(x, y, w, h)` in region pixels; zero = none |
@@ -430,7 +435,13 @@ impl RuntimeShader {
     /// The final slots are reserved for renderer-managed data.
     pub const MAX_UNIFORMS: usize = 256;
     /// First renderer-reserved uniform slot.
-    pub const RESERVED_UNIFORM_START: usize = 224;
+    pub const RESERVED_UNIFORM_START: usize = 220;
+    /// Reserved slot of the effect rect's placement in the pass's viewport,
+    /// read by the prelude's vertex stage: clip-space scale minus one
+    /// `(x, y)` and offset `(z, w)`. A viewport must lie inside its target
+    /// on Safari's WebGPU, so an effect rect reaching past the target is
+    /// placed in the part of it the target holds.
+    pub const QUAD_PLACEMENT_UNIFORM: usize = 220;
     /// Reserved slots of the substrate regions `(x, y, w, h)` in input
     /// texels, in declaration order.
     pub const SUBSTRATE_REGION_UNIFORMS: [usize; MAX_SUBSTRATES] = [232, 228, 224];
