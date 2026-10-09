@@ -16,10 +16,10 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.5 for the catch-up barrier, the Metal
-pipeline switch, the dedicated Vulkan allocations and the GL point size
-below, and `cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.5 to
-require it.
+`cranpose-wgpu-hal` is at 30.0.6 for the catch-up barrier, the Metal
+pipeline switch, the dedicated Vulkan allocations, the GL point size, the
+GL state tracker and the web surface usages below, and
+`cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.6 to require it.
 
 | fork | upstream |
 | --- | --- |
@@ -32,8 +32,9 @@ require it.
 | `cranpose-wgpu-core-deps-windows-linux-android` | `wgpu-core-deps-windows-linux-android` |
 
 Every library keeps its upstream crate name (`wgpu`, `wgpu_core`,
-`wgpu_hal`, ...), so code reads the same. Only `wgpu-hal` changes; the other
-crates are forked because each depends on the one below it by name.
+`wgpu_hal`, ...), so code reads the same. `wgpu-hal` and the WebGPU backend
+of `wgpu` change; `wgpu-core` is forked because each crate depends on the
+one below it by name.
 `wgpu-types`, `naga` and `wgpu-naga-bridge` stay upstream.
 
 ### The patch: sampled textures wait only in the stages that read them
@@ -122,6 +123,45 @@ frame that drew with it failed validation and drew nothing.
 
 The fork's GL device writes `gl_PointSize` only in the vertex stage of a
 pipeline whose topology is a point list; the program cache keys on it.
+
+### The GL queue skips calls that set what the context holds
+
+Upstream's GL encoder re-specifies every vertex attribute of a pipeline at
+each draw whose buffers or first instance moved (four calls an attribute),
+disables them all at each pipeline switch, and binds the scissor, textures,
+samplers and uniform ranges again for every batch. On WebGL each call
+crosses into JavaScript, is validated and serialized by the renderer, and
+is decoded and validated again in the GPU process.
+
+The fork's queue keeps the state a command buffer's commands have set
+(`gles/gl_state.rs`): attribute enables, pointers and divisors, the
+`ARRAY_BUFFER` binding, the program, scissor, depth and stencil state,
+uniform buffer ranges, textures, samplers and the active unit. A command
+that sets a value the context holds makes no call; disables wait for the
+next draw, since the next pipeline usually enables the same attributes.
+Any command the tracker does not know forgets it all, and the state starts
+unknown in each command buffer, as the device's own calls run between
+them. A draw with no first-instance uniform makes no `uniform1ui(null)`.
+
+Cranpose's gauntlet at tier 8 made 24,200 WebGL calls a frame, 74% of them
+attribute calls, and makes 9,800 with the same pictures. On a Mate 20 X in
+Chrome 154 (6 legs each) the renderer's main thread went from 16.6 to
+16.1 ms a frame and the GPU process's from 7.6 to 7.0 ms.
+
+### Web surfaces can be copied and sampled; the WebGL canvas has no depth
+
+Upstream reports only `RENDER_ATTACHMENT` for a WebGPU canvas, which takes
+copies and sampling as well, and only `COLOR_TARGET` for a WebGL surface,
+whose image is a texture of the GL backend's own. Cranpose draws a frame
+straight into the presented image only when it can copy it and, for a
+backdrop, sample it; otherwise it draws into a texture of the viewport's
+size and converts that into the image in one more full-screen pass. The
+fork reports the copies and sampling for both.
+
+A WebGL canvas also took the default depth buffer (8.1 MiB at
+1080 x 1975), which no draw uses: the GL backend renders into its surface
+texture and blits that to the canvas. The fork asks for a canvas without
+depth or stencil.
 
 ### Update the fork
 

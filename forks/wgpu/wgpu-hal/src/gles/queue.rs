@@ -221,8 +221,8 @@ impl super::Queue {
                         )
                     }
                 } else {
-                    unsafe {
-                        gl.uniform_1_u32(first_instance_location.as_ref(), first_instance);
+                    if let Some(location) = first_instance_location.as_ref() {
+                        unsafe { gl.uniform_1_u32(Some(location), first_instance) };
                     }
 
                     // Don't use `gl.draw_arrays` for `instance_count == 1`.
@@ -266,7 +266,9 @@ impl super::Queue {
                         )
                     }
                 } else {
-                    unsafe { gl.uniform_1_u32(first_instance_location.as_ref(), first_instance) };
+                    if let Some(location) = first_instance_location.as_ref() {
+                        unsafe { gl.uniform_1_u32(Some(location), first_instance) };
+                    }
 
                     if base_vertex == 0 {
                         unsafe {
@@ -1327,85 +1329,50 @@ impl super::Queue {
                 unsafe { gl.viewport(rect.x, rect.y, rect.w, rect.h) };
                 unsafe { gl.depth_range_f32(depth.start, depth.end) };
             }
-            C::SetScissor(ref rect) => {
-                unsafe { gl.scissor(rect.x, rect.y, rect.w, rect.h) };
-                unsafe { gl.enable(glow::SCISSOR_TEST) };
+            // `GlState::apply` runs these, issuing only the calls that change
+            // the context's state.
+            C::SetScissor(_)
+            | C::SetStencilFunc { .. }
+            | C::SetStencilOps { .. }
+            | C::SetVertexAttribute {
+                buffer: Some(_), ..
             }
-            C::SetStencilFunc {
-                face,
-                function,
-                reference,
-                read_mask,
-            } => {
-                unsafe { gl.stencil_func_separate(face, function, reference as i32, read_mask) };
-            }
-            C::SetStencilOps {
-                face,
-                write_mask,
-                ref ops,
-            } => {
-                unsafe { gl.stencil_mask_separate(face, write_mask) };
-                unsafe { gl.stencil_op_separate(face, ops.fail, ops.depth_fail, ops.pass) };
-            }
+            | C::UnsetVertexAttribute(_)
+            | C::SetDepth(_)
+            | C::ConfigureDepthStencil(_)
+            | C::SetProgram(_)
+            | C::BindSampler(..)
+            | C::BindTexture { .. } => {}
             C::SetVertexAttribute {
-                buffer,
-                ref buffer_desc,
+                buffer: None,
+                buffer_desc: _,
                 attribute_desc: ref vat,
             } => {
-                unsafe { gl.bind_buffer(glow::ARRAY_BUFFER, buffer) };
+                unsafe { gl.bind_buffer(glow::ARRAY_BUFFER, None) };
                 unsafe { gl.enable_vertex_attrib_array(vat.location) };
-
-                if buffer.is_none() {
-                    match vat.format_desc.attrib_kind {
-                        super::VertexAttribKind::Float => unsafe {
-                            gl.vertex_attrib_format_f32(
-                                vat.location,
-                                vat.format_desc.element_count,
-                                vat.format_desc.element_format,
-                                true, // always normalized
-                                vat.offset,
-                            )
-                        },
-                        super::VertexAttribKind::Integer => unsafe {
-                            gl.vertex_attrib_format_i32(
-                                vat.location,
-                                vat.format_desc.element_count,
-                                vat.format_desc.element_format,
-                                vat.offset,
-                            )
-                        },
-                    }
-
-                    //Note: there is apparently a bug on AMD 3500U:
-                    // this call is ignored if the current array is disabled.
-                    unsafe { gl.vertex_attrib_binding(vat.location, vat.buffer_index) };
-                } else {
-                    match vat.format_desc.attrib_kind {
-                        super::VertexAttribKind::Float => unsafe {
-                            gl.vertex_attrib_pointer_f32(
-                                vat.location,
-                                vat.format_desc.element_count,
-                                vat.format_desc.element_format,
-                                true, // always normalized
-                                buffer_desc.stride as i32,
-                                vat.offset as i32,
-                            )
-                        },
-                        super::VertexAttribKind::Integer => unsafe {
-                            gl.vertex_attrib_pointer_i32(
-                                vat.location,
-                                vat.format_desc.element_count,
-                                vat.format_desc.element_format,
-                                buffer_desc.stride as i32,
-                                vat.offset as i32,
-                            )
-                        },
-                    }
-                    unsafe { gl.vertex_attrib_divisor(vat.location, buffer_desc.step as u32) };
+                match vat.format_desc.attrib_kind {
+                    super::VertexAttribKind::Float => unsafe {
+                        gl.vertex_attrib_format_f32(
+                            vat.location,
+                            vat.format_desc.element_count,
+                            vat.format_desc.element_format,
+                            true, // always normalized
+                            vat.offset,
+                        )
+                    },
+                    super::VertexAttribKind::Integer => unsafe {
+                        gl.vertex_attrib_format_i32(
+                            vat.location,
+                            vat.format_desc.element_count,
+                            vat.format_desc.element_format,
+                            vat.offset,
+                        )
+                    },
                 }
-            }
-            C::UnsetVertexAttribute(location) => {
-                unsafe { gl.disable_vertex_attrib_array(location) };
+
+                //Note: there is apparently a bug on AMD 3500U:
+                // this call is ignored if the current array is disabled.
+                unsafe { gl.vertex_attrib_binding(vat.location, vat.buffer_index) };
             }
             C::SetVertexBuffer {
                 index,
@@ -1422,10 +1389,6 @@ impl super::Queue {
                     )
                 };
             }
-            C::SetDepth(ref depth) => {
-                unsafe { gl.depth_func(depth.function) };
-                unsafe { gl.depth_mask(depth.mask) };
-            }
             C::SetDepthBias(bias) => {
                 if bias.is_enabled() {
                     unsafe { gl.enable(glow::POLYGON_OFFSET_FILL) };
@@ -1434,27 +1397,12 @@ impl super::Queue {
                     unsafe { gl.disable(glow::POLYGON_OFFSET_FILL) };
                 }
             }
-            C::ConfigureDepthStencil(aspects) => {
-                if aspects.contains(crate::FormatAspects::DEPTH) {
-                    unsafe { gl.enable(glow::DEPTH_TEST) };
-                } else {
-                    unsafe { gl.disable(glow::DEPTH_TEST) };
-                }
-                if aspects.contains(crate::FormatAspects::STENCIL) {
-                    unsafe { gl.enable(glow::STENCIL_TEST) };
-                } else {
-                    unsafe { gl.disable(glow::STENCIL_TEST) };
-                }
-            }
             C::SetAlphaToCoverage(enabled) => {
                 if enabled {
                     unsafe { gl.enable(glow::SAMPLE_ALPHA_TO_COVERAGE) };
                 } else {
                     unsafe { gl.disable(glow::SAMPLE_ALPHA_TO_COVERAGE) };
                 }
-            }
-            C::SetProgram(program) => {
-                unsafe { gl.use_program(Some(program)) };
             }
             C::SetPrimitive(ref state) => {
                 unsafe { gl.front_face(state.front_face) };
@@ -1566,50 +1514,6 @@ impl super::Queue {
                 size,
             } => {
                 unsafe { gl.bind_buffer_range(target, slot, Some(buffer), offset, size) };
-            }
-            C::BindSampler(texture_index, sampler) => {
-                unsafe { gl.bind_sampler(texture_index, sampler) };
-            }
-            C::BindTexture {
-                slot,
-                texture,
-                target,
-                aspects,
-                ref mip_levels,
-            } => {
-                unsafe { gl.active_texture(glow::TEXTURE0 + slot) };
-                unsafe { gl.bind_texture(target, Some(texture)) };
-
-                unsafe {
-                    gl.tex_parameter_i32(target, glow::TEXTURE_BASE_LEVEL, mip_levels.start as i32)
-                };
-                unsafe {
-                    gl.tex_parameter_i32(
-                        target,
-                        glow::TEXTURE_MAX_LEVEL,
-                        (mip_levels.end - 1) as i32,
-                    )
-                };
-
-                let version = gl.version();
-                let is_min_es_3_1 = version.is_embedded && (version.major, version.minor) >= (3, 1);
-                let is_min_4_3 = !version.is_embedded && (version.major, version.minor) >= (4, 3);
-                if is_min_es_3_1 || is_min_4_3 {
-                    let mode = match aspects {
-                        crate::FormatAspects::DEPTH => Some(glow::DEPTH_COMPONENT),
-                        crate::FormatAspects::STENCIL => Some(glow::STENCIL_INDEX),
-                        _ => None,
-                    };
-                    if let Some(mode) = mode {
-                        unsafe {
-                            gl.tex_parameter_i32(
-                                target,
-                                glow::DEPTH_STENCIL_TEXTURE_MODE,
-                                mode as _,
-                            )
-                        };
-                    }
-                }
             }
             C::BindImage { slot, ref binding } => {
                 unsafe {
@@ -1930,9 +1834,13 @@ impl crate::Queue for super::Queue {
                 }
             }
 
+            let mut state = super::gl_state::GlState::default();
             for command in cmd_buf.commands.iter() {
-                unsafe { self.process(gl, command, &cmd_buf.data_bytes, &cmd_buf.queries) };
+                if !unsafe { state.apply(gl, command) } {
+                    unsafe { self.process(gl, command, &cmd_buf.data_bytes, &cmd_buf.queries) };
+                }
             }
+            unsafe { state.finish(gl) };
 
             if cmd_buf.label.is_some()
                 && self
