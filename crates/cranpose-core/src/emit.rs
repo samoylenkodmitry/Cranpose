@@ -116,7 +116,6 @@ impl Composer {
                     self.queue_replaced_slot_node_removal(old_id, old_generation);
                 }
             }
-            self.core.last_node_reused.set(Some(true));
             return id;
         }
 
@@ -184,7 +183,6 @@ impl Composer {
                 );
             }
         }
-        self.core.last_node_reused.set(Some(false));
         id
     }
 
@@ -386,18 +384,14 @@ impl Composer {
     }
 
     pub fn push_parent(&self, id: NodeId) {
-        let reused = self.core.last_node_reused.take().unwrap_or(true);
         let in_subcompose = !self.core.subcompose_stack.borrow().is_empty();
 
-        let mut previous = ChildList::new();
-        if reused || in_subcompose {
-            previous.extend(self.get_node_children(id));
+        let children = self.get_node_children(id);
+        let previous = if children.is_empty() {
+            ChildList::new()
         } else {
-            let existing_children = self.get_node_children(id);
-            if !existing_children.is_empty() {
-                previous.extend(existing_children);
-            }
-        }
+            ChildList::from_slice(&children)
+        };
         let attach_mode = if in_subcompose || !previous.is_empty() {
             ParentAttachMode::DeferredSync
         } else {
