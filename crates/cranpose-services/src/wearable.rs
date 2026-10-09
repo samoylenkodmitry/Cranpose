@@ -111,15 +111,13 @@ pub trait WearableLink: Send + Sync {
 static PLATFORM: ServiceRegistry<dyn WearableLink> = ServiceRegistry::new();
 static RECEIVER: ServiceRegistry<dyn WearableReceiver> = ServiceRegistry::new();
 
-/// Installs the platform's link. Platform backends call it.
-pub fn set_platform_wearable_link(link: Arc<dyn WearableLink>) {
-    PLATFORM.set(link);
-}
-
-/// Removes the platform's link; every call then returns
-/// [`WearableError::Unavailable`].
-pub fn clear_platform_wearable_link() {
-    PLATFORM.clear();
+/// Installs the platform's link, or removes it with `None`; without one,
+/// every call returns [`WearableError::Unavailable`]. Platform backends call it.
+pub fn set_platform_wearable_link(link: Option<Arc<dyn WearableLink>>) {
+    match link {
+        Some(link) => PLATFORM.set(link),
+        None => PLATFORM.clear(),
+    }
 }
 
 fn link() -> Result<Arc<dyn WearableLink>, WearableError> {
@@ -147,14 +145,13 @@ pub fn open_wearable_stream(
 }
 
 /// Installs the application's receiver of what the paired device sends,
-/// replacing any earlier one.
-pub fn set_wearable_receiver(receiver: Arc<dyn WearableReceiver>) {
-    RECEIVER.set(receiver);
-}
-
-/// Removes the application's receiver; later events are dropped.
-pub fn clear_wearable_receiver() {
-    RECEIVER.clear();
+/// replacing any earlier one, or removes it with `None`; later events are then
+/// dropped.
+pub fn set_wearable_receiver(receiver: Option<Arc<dyn WearableReceiver>>) {
+    match receiver {
+        Some(receiver) => RECEIVER.set(receiver),
+        None => RECEIVER.clear(),
+    }
 }
 
 /// Hands an event from the platform to the application's receiver, or drops

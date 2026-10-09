@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The microphone standby: a foreground service of type microphone that the
+    application starts from its screen, so it may record later from the
+    background. The permissions are the application's to declare; the build
+    fails and names them if it does not.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <service
+            android:name="dev.cranpose.android.CranposeMicrophoneStandby"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+    </application>
+</manifest>

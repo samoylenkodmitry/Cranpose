@@ -31,7 +31,7 @@ pub(crate) fn register(app: android_activity::AndroidApp) {
         load_cranpose_java_class(env, &activity, WEARABLE_CLASS).map(|_| ())
     });
     if declared.is_ok() {
-        set_platform_wearable_link(Arc::new(AndroidWearableLink { app }));
+        set_platform_wearable_link(Some(Arc::new(AndroidWearableLink { app })));
     }
 }
 

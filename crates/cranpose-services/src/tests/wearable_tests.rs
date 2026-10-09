@@ -43,7 +43,7 @@ impl WearableLink for FakeLink {
 #[test]
 fn every_call_is_unavailable_without_a_platform_link() {
     let _guard = crate::registry::test_service_guard();
-    clear_platform_wearable_link();
+    set_platform_wearable_link(None);
     assert!(matches!(wearable_peers(), Err(WearableError::Unavailable)));
     assert!(matches!(
         send_wearable_message("watch", "/line", b"hi"),
@@ -59,7 +59,7 @@ fn every_call_is_unavailable_without_a_platform_link() {
 fn calls_reach_the_installed_platform_link() {
     let _guard = crate::registry::test_service_guard();
     let recorded = Arc::new(Recorded::default());
-    set_platform_wearable_link(Arc::new(FakeLink(Arc::clone(&recorded))));
+    set_platform_wearable_link(Some(Arc::new(FakeLink(Arc::clone(&recorded)))));
 
     let peers = wearable_peers().map_err(|error| error.to_string());
     assert_eq!(
@@ -79,7 +79,7 @@ fn calls_reach_the_installed_platform_link() {
         open_wearable_stream("gone", "/audio"),
         Err(WearableError::Failed(_))
     ));
-    clear_platform_wearable_link();
+    set_platform_wearable_link(None);
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn events_reach_the_receiver_and_streams_read_to_their_end() {
     let _guard = crate::registry::test_service_guard();
     let received = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&received);
-    set_wearable_receiver(Arc::new(move |event: WearableEvent| {
+    set_wearable_receiver(Some(Arc::new(move |event: WearableEvent| {
         let entry = match event {
             WearableEvent::Message { peer, path, data } => (peer, path, data),
             WearableEvent::Stream(mut stream) => {
@@ -97,7 +97,7 @@ fn events_reach_the_receiver_and_streams_read_to_their_end() {
             }
         };
         sink.lock().push(entry);
-    }));
+    })));
 
     publish_wearable_event(WearableEvent::Message {
         peer: "phone".into(),
@@ -118,13 +118,13 @@ fn events_reach_the_receiver_and_streams_read_to_their_end() {
             ("watch".to_owned(), "/audio".to_owned(), vec![1, 2, 3]),
         ]
     );
-    clear_wearable_receiver();
+    set_wearable_receiver(None);
 }
 
 #[test]
 fn events_without_a_receiver_are_dropped() {
     let _guard = crate::registry::test_service_guard();
-    clear_wearable_receiver();
+    set_wearable_receiver(None);
     publish_wearable_event(WearableEvent::Message {
         peer: "phone".into(),
         path: "/line".into(),

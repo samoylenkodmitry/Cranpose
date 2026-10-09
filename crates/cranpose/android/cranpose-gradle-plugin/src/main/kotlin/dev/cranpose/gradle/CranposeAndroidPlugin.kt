@@ -551,6 +551,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "camera",
             "haptics",
             "media",
+            "microphone-standby",
             "network",
             "notifications",
             "overlay",
@@ -567,6 +568,7 @@ class CranposeAndroidPlugin : Plugin<Project> {
          */
         val SERVICE_JAVA_SOURCE = mapOf(
             "billing" to "java-billing",
+            "microphone-standby" to "java-microphone-standby",
             "wearable" to "java-wearable",
         )
 
@@ -598,6 +600,11 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "media" to listOf(
                 "android.permission.FOREGROUND_SERVICE",
                 "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+            ),
+            "microphone-standby" to listOf(
+                "android.permission.FOREGROUND_SERVICE",
+                "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+                "android.permission.RECORD_AUDIO",
             ),
             "network" to listOf(
                 "android.permission.INTERNET",

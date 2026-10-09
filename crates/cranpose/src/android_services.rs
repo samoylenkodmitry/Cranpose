@@ -92,6 +92,8 @@ pub(crate) fn register(
     // Present only when the application declares the `wearable` service in
     // its Gradle build; without it the link reports itself unavailable.
     crate::android_wearable::register(app.clone());
+    // Present only when the application declares `microphone-standby`.
+    crate::android_microphone_standby::register(app.clone());
     #[cfg(feature = "media")]
     crate::android_media::register(app.clone());
     set_platform_launch_args(Rc::new(read_launch_arguments(&app)));
