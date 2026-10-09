@@ -16,7 +16,6 @@ use cranpose_app_shell::{
     AppShell, FramePacingMode, FrameUpdateResult, RootId, SurfaceMut, default_root_key,
 };
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
-#[cfg(feature = "robot")]
 use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
 use winit::{
@@ -5098,7 +5097,6 @@ fn update_app_scale_factor(
     scale_factor: f64,
 ) {
     platform.set_scale_factor(scale_factor);
-    app.renderer().set_root_scale(scale_factor as f32);
     app.set_density(scale_factor as f32);
 }
 

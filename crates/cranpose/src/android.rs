@@ -974,7 +974,6 @@ fn update_android_shell_geometry(
     density: f32,
     host_window_registry: &android_host_window::AndroidHostWindowRegistry,
 ) -> Option<Size> {
-    shell.renderer().set_root_scale(density);
     shell.set_density(density);
     shell.set_font_scale_curve(crate::android_font_scale::font_scale_curve());
     shell.set_rotary_scroll_factor(crate::android_input::android_rotary_scroll_factor(density));
@@ -1518,7 +1517,6 @@ where
     }
 
     if let Some(shell) = app_shell {
-        shell.renderer().set_root_scale(density);
         shell.set_density(density);
         set_android_ime_density(density);
     }

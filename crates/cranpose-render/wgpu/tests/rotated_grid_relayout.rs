@@ -123,7 +123,10 @@ impl GridHarness {
         });
         let (width_px, height_px) = screen.size;
         shell.set_density(screen.density);
-        shell.set_viewport(width_px as f32, height_px as f32);
+        shell.set_viewport(
+            width_px as f32 / screen.density,
+            height_px as f32 / screen.density,
+        );
         shell.set_buffer_size(width_px, height_px);
         shell.update();
         Self {
@@ -377,8 +380,10 @@ fn rotated_cells_kept_once_they_hold_still_render_their_surfaces_together() {
 /// Two turns of the width's motion at 60 Hz.
 const FULL_PERIOD: usize = 190;
 /// How often a cell may be copied into the cache over that period: once per
-/// pause of the motion and a few times while its gate learns the churn.
-const COPIES_PER_CELL: u32 = 5;
+/// pause of the motion and a few times while its gate learns the churn. A
+/// gate that counts a surface as paid for at its first read copies each
+/// cell about 32 times.
+const COPIES_PER_CELL: u32 = 7;
 
 /// Offscreen cells render together into atlases, so keeping one means
 /// copying it out. On a phone a pixel-at-a-time relayout holds a cell's size

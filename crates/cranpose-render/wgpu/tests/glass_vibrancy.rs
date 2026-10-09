@@ -617,7 +617,6 @@ fn with_tab_shell<T>(
         move || VibrantTabScene(backdrop),
     );
     cranpose_ui_graphics::set_glass_material_folds(false);
-    shell.renderer().set_root_scale(3.0);
     shell.set_density(3.0);
     shell.set_viewport(402.0, 120.0);
     shell.set_buffer_size(1206, 360);

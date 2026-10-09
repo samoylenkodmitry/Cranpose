@@ -154,7 +154,6 @@ fn scene_shell(
     let app_context = cranpose_ui::AppContext::new();
     renderer.attach_app_context_services(&app_context);
     let mut shell = AppShell::new(renderer, location_key(file!(), line!(), column!()), content);
-    shell.renderer().set_root_scale(scale);
     shell.set_density(scale);
     shell.set_buffer_size((view.0 * scale) as u32, (view.1 * scale) as u32);
     shell.set_viewport(view.0, view.1);

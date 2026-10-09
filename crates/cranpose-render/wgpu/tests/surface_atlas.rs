@@ -203,10 +203,14 @@ fn Tiles(side: MutableState<f32>) {
     );
 }
 
-fn tiles_shell(renderer: WgpuRenderer, side: f32) -> (AppShell<WgpuRenderer>, MutableState<f32>) {
+fn tiles_shell(
+    renderer: WgpuRenderer,
+    side: f32,
+    density: u32,
+) -> (AppShell<WgpuRenderer>, MutableState<f32>) {
     let state: Rc<RefCell<Option<MutableState<f32>>>> = Rc::new(RefCell::new(None));
     let state_for_app = Rc::clone(&state);
-    let mut shell = AppShell::new(
+    let mut shell = AppShell::new_with_size_and_density(
         renderer,
         location_key(file!(), line!(), column!()),
         move || {
@@ -214,9 +218,10 @@ fn tiles_shell(renderer: WgpuRenderer, side: f32) -> (AppShell<WgpuRenderer>, Mu
             *state_for_app.borrow_mut() = Some(side);
             Tiles(side);
         },
+        (WIDTH * density, HEIGHT * density),
+        (WIDTH as f32, HEIGHT as f32),
+        density as f32,
     );
-    shell.set_viewport(WIDTH as f32, HEIGHT as f32);
-    shell.set_buffer_size(WIDTH, HEIGHT);
     shell.update();
     let side = state.borrow().as_ref().copied().expect("side captured");
     (shell, side)
@@ -228,7 +233,7 @@ fn an_atlas_whose_surfaces_shrink_to_a_third_draws_into_the_texture_it_had() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let (mut shell, side) = tiles_shell(renderer, 36.0);
+    let (mut shell, side) = tiles_shell(renderer, 36.0, 1);
     support::settle(|| support::update_and_capture(&mut shell, WIDTH, HEIGHT));
     support::wait_for_background_compiler_idle();
     shell.debug_enter_app_context(|| side.set(20.0));
@@ -242,6 +247,7 @@ fn an_atlas_whose_surfaces_shrink_to_a_third_draws_into_the_texture_it_had() {
     let (mut fresh, _) = tiles_shell(
         support::headless_renderer_beside_locked().expect("reference renderer"),
         20.0,
+        1,
     );
     let reference = support::settle(|| support::update_and_capture(&mut fresh, WIDTH, HEIGHT));
     support::assert_same_bytes("shrunk tiles", WIDTH, &reference.pixels, &shrunk.pixels);
@@ -253,7 +259,7 @@ fn an_atlas_whose_surfaces_grow_a_little_draws_into_the_texture_it_had() {
         eprintln!("skipping (headless WGPU init failed)");
         return;
     };
-    let (mut shell, side) = tiles_shell(renderer, 36.0);
+    let (mut shell, side) = tiles_shell(renderer, 36.0, 1);
     support::settle(|| support::update_and_capture(&mut shell, WIDTH, HEIGHT));
     support::wait_for_background_compiler_idle();
     shell.debug_enter_app_context(|| side.set(40.0));
@@ -267,7 +273,50 @@ fn an_atlas_whose_surfaces_grow_a_little_draws_into_the_texture_it_had() {
     let (mut fresh, _) = tiles_shell(
         support::headless_renderer_beside_locked().expect("reference renderer"),
         40.0,
+        1,
     );
     let reference = support::settle(|| support::update_and_capture(&mut fresh, WIDTH, HEIGHT));
     support::assert_same_bytes("grown tiles", WIDTH, &reference.pixels, &grown.pixels);
+}
+
+/// A host that builds its shell at a density and sets nothing more, as a
+/// headless bench or an embedder does, gets surfaces rasterized at that
+/// density, as on a device: the first tile, 30 points wide from x = 8, ends
+/// at device pixel 114 with the gap to the next tile after it, and each
+/// surface holds at least the tile's 90 by 90 device pixels.
+#[test]
+fn a_shell_built_at_a_density_rasterizes_its_surfaces_at_that_density() {
+    const DENSITY: u32 = 3;
+    let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
+        eprintln!("skipping (headless WGPU init failed)");
+        return;
+    };
+    let (width, height) = (WIDTH * DENSITY, HEIGHT * DENSITY);
+    let (mut shell, side) = tiles_shell(renderer, 36.0, DENSITY);
+    support::settle(|| support::update_and_capture(&mut shell, width, height));
+    support::wait_for_background_compiler_idle();
+    shell.debug_enter_app_context(|| side.set(30.0));
+    let (stats, frame) = support::update_and_capture(&mut shell, width, height);
+    assert_eq!(stats.isolated_layer_renders, 6);
+    let side_px = u64::from(30 * DENSITY);
+    assert!(
+        stats.isolated_layer_pixels >= 6 * side_px * side_px,
+        "six surfaces of {side_px} by {side_px} device pixels: {stats:?}"
+    );
+    let pixel = |x: u32, y: u32| {
+        let at = ((y * width + x) * 4) as usize;
+        &frame.pixels[at..at + 4]
+    };
+    let middle = (20 + 15) * DENSITY;
+    let page = pixel(2, 2);
+    assert_ne!(
+        pixel(112, middle),
+        page,
+        "the first tile reaches device pixel 114"
+    );
+    assert_eq!(
+        pixel(116, middle),
+        page,
+        "the gap after the first tile starts at device pixel 114"
+    );
 }
