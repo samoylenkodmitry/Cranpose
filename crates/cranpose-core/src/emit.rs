@@ -3,7 +3,7 @@ use std::any::TypeId;
 use crate::{
     Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble, EmittedNode, MutableState,
     Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode, ParentFrame, debug_scope_label,
-    slot::NodeSlotUpdate,
+    recompose::RecomposeChildCursor, slot::NodeSlotUpdate,
 };
 
 impl Composer {
@@ -228,10 +228,26 @@ impl Composer {
         })
     }
 
-    fn advance_recompose_child_cursor(&self) -> Option<usize> {
-        let cursor = self.core.recompose_child_cursor.get()?;
-        self.core.recompose_child_cursor.set(Some(cursor + 1));
-        Some(cursor)
+    fn skip_recompose_child(&self) {
+        let cursor = match self.core.recompose_child_cursor.get() {
+            RecomposeChildCursor::After { first, placed } => RecomposeChildCursor::After {
+                first,
+                placed: placed + 1,
+            },
+            RecomposeChildCursor::At(index) => RecomposeChildCursor::At(index + 1),
+            RecomposeChildCursor::Unknown => return,
+        };
+        self.core.recompose_child_cursor.set(cursor);
+    }
+
+    fn next_recompose_insert_index(&self) -> Option<usize> {
+        let RecomposeChildCursor::At(index) = self.resolve_recompose_child_cursor() else {
+            return None;
+        };
+        self.core
+            .recompose_child_cursor
+            .set(RecomposeChildCursor::At(index + 1));
+        Some(index)
     }
 
     pub(crate) fn attach_to_parent(&self, id: NodeId) {
@@ -327,10 +343,10 @@ impl Composer {
             };
             match parent_status {
                 Some(existing) if existing == parent_hint => {
-                    self.advance_recompose_child_cursor();
+                    self.skip_recompose_child();
                 }
                 None => {
-                    let insert_index = self.advance_recompose_child_cursor();
+                    let insert_index = self.next_recompose_insert_index();
                     self.commands_mut().push(Command::AttachChild {
                         parent_id: parent_hint,
                         child_id: id,
@@ -445,6 +461,7 @@ impl Composer {
     /// This is useful during measure-time subcomposition to ensure newly created
     /// nodes are available for measurement before the full composition is committed.
     pub fn apply_pending_commands(&self) -> Result<(), NodeError> {
+        self.resolve_recompose_child_cursor();
         let mut commands = self.take_commands();
         let runtime_handle = self.runtime_handle();
         let result = {

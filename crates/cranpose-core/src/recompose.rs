@@ -5,17 +5,42 @@ use crate::{
     debug_scope_invalidation_sources, debug_scope_label,
 };
 
+#[derive(Clone, Copy)]
+pub(crate) enum RecomposeChildCursor {
+    Unknown,
+    After { first: NodeId, placed: usize },
+    At(usize),
+}
+
 impl Composer {
     fn scope_child_cursor(
         &self,
         scope: &RecomposeScope,
         parent_hint: Option<NodeId>,
-    ) -> Option<usize> {
-        let parent_hint = parent_hint?;
-        let first =
-            self.with_slot_session_mut(|slots| slots.active_scope_first_root_node_id(scope))?;
-        let mut applier = self.borrow_applier();
-        applier.get_mut(parent_hint).ok()?.owned_child_index(first)
+    ) -> RecomposeChildCursor {
+        if parent_hint.is_none() {
+            return RecomposeChildCursor::Unknown;
+        }
+        self.with_slot_session_mut(|slots| slots.active_scope_first_root_node_id(scope))
+            .map_or(RecomposeChildCursor::Unknown, |first| {
+                RecomposeChildCursor::After { first, placed: 0 }
+            })
+    }
+
+    pub(crate) fn resolve_recompose_child_cursor(&self) -> RecomposeChildCursor {
+        let cursor = self.core.recompose_child_cursor.get();
+        let RecomposeChildCursor::After { first, placed } = cursor else {
+            return cursor;
+        };
+        let index = self.core.recompose_parent_hint.get().and_then(|parent| {
+            let mut applier = self.borrow_applier();
+            applier.get_mut(parent).ok()?.owned_child_index(first)
+        });
+        let resolved = index.map_or(RecomposeChildCursor::Unknown, |index| {
+            RecomposeChildCursor::At(index + placed)
+        });
+        self.core.recompose_child_cursor.set(resolved);
+        resolved
     }
 
     pub(crate) fn recompose_group(&self, scope: &RecomposeScope) {
@@ -66,15 +91,14 @@ impl Composer {
         );
         if started.is_some() {
             let parent_hint = scope.parent_hint();
+            let previous_cursor = self.resolve_recompose_child_cursor();
+            let cursor = self.scope_child_cursor(scope, parent_hint);
             let previous_hint = self.core.recompose_parent_hint.replace(parent_hint);
-            let previous_cursor = self
-                .core
-                .recompose_child_cursor
-                .replace(self.scope_child_cursor(scope, parent_hint));
+            self.core.recompose_child_cursor.set(cursor);
             struct HintGuard {
                 core: Rc<ComposerCore>,
                 previous: Option<NodeId>,
-                previous_cursor: Option<usize>,
+                previous_cursor: RecomposeChildCursor,
             }
             impl Drop for HintGuard {
                 fn drop(&mut self) {
