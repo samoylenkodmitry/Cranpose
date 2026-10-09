@@ -47,6 +47,12 @@ pub struct ModifierNodeSlices {
     rare: Option<Box<RareSlices>>,
 }
 
+fn publish_pointer_input_size(rare: &RareSlices, size: cranpose_ui_graphics::Size) {
+    for sink in &rare.pointer_input_sizes {
+        sink.set(size);
+    }
+}
+
 /// What few nodes' chains contribute: pointer input, window geometry sinks,
 /// translated content and live layer resolvers.
 #[derive(Clone, Default)]
@@ -331,8 +337,8 @@ impl ModifierNodeSlices {
     /// [`PointerEvent`] positions are made local to — so handlers can compare
     /// event coordinates against it directly.
     pub fn publish_pointer_input_size(&self, size: cranpose_ui_graphics::Size) {
-        for sink in self.pointer_input_size_sinks() {
-            sink.set(size);
+        if let Some(rare) = self.rare() {
+            publish_pointer_input_size(rare, size);
         }
     }
 
@@ -366,21 +372,25 @@ impl ModifierNodeSlices {
         transform: cranpose_ui_graphics::ProjectiveTransform,
         size: Size,
     ) {
-        if self.text_window_transform().is_some() || self.viewport_window_rect().is_some() {
+        // Every sink is a rare slice: most nodes have none to publish to.
+        let Some(rare) = self.rare() else {
+            return;
+        };
+        if rare.text_window_transform.is_some() || rare.viewport_window_rect.is_some() {
             let local_to_window =
                 cranpose_ui_graphics::ProjectiveTransform::translation(origin.x, origin.y)
                     .then(transform);
-            if let Some(sink) = self.text_window_transform() {
+            if let Some(sink) = &rare.text_window_transform {
                 sink.set(local_to_window);
             }
-            if let Some(sink) = self.viewport_window_rect() {
+            if let Some(sink) = &rare.viewport_window_rect {
                 sink.set(cranpose_ui_graphics::WindowCoordinates {
                     size,
                     local_to_window,
                 });
             }
         }
-        self.publish_pointer_input_size(size);
+        publish_pointer_input_size(rare, size);
     }
 
     pub fn motion_context_animated(&self) -> bool {
