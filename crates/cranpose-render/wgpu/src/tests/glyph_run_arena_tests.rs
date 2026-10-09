@@ -94,10 +94,10 @@ fn chunks_double_and_empty_ones_are_released() {
     assert_eq!(capacities, [MIN_CHUNK_QUADS, MIN_CHUNK_QUADS * 2]);
 
     let huge = arena
-        .insert(&device, quads(MAX_CHUNK_QUADS as usize + 1))
+        .insert(&device, quads(MAX_COPIED_CHUNK_QUADS as usize + 1))
         .expect("a run");
     assert_eq!(arena.chunks.len(), 3);
-    assert_eq!(huge.instances(), 0..MAX_CHUNK_QUADS + 1);
+    assert_eq!(huge.instances(), 0..MAX_COPIED_CHUNK_QUADS + 1);
 
     drop(small);
     drop(huge);

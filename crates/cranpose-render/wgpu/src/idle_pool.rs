@@ -46,6 +46,18 @@ impl<T> IdlePool<T> {
         }
     }
 
+    /// Ends a frame like [`Self::end_frame`], after dropping the oldest of
+    /// the items handed back before this frame while more than `max_idle` of
+    /// them are held. The items this frame handed back all wait for the
+    /// next frame.
+    pub(crate) fn end_frame_keeping(&mut self, max_idle: usize) {
+        let earlier = self
+            .available
+            .partition_point(|(_, returned)| *returned < self.frame);
+        self.available.drain(..earlier.saturating_sub(max_idle));
+        self.end_frame();
+    }
+
     /// Ends a frame, dropping every item no frame has taken back out for
     /// [`IDLE_FRAMES`].
     pub(crate) fn end_frame(&mut self) {
