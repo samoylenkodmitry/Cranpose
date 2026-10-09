@@ -56,3 +56,26 @@ fn end_frame_drops_what_no_frame_took_for_the_idle_frames() {
         "one frame more drops it; the item handed back every frame stays"
     );
 }
+
+#[test]
+fn a_frames_items_wait_for_the_next_frame_and_older_ones_are_capped() {
+    let mut pool = IdlePool::default();
+    pool.put(1, 64, u64::MAX, weight);
+    pool.end_frame();
+    for item in 10..30 {
+        pool.put(item, 64, u64::MAX, weight);
+    }
+    pool.end_frame_keeping(4);
+    assert_eq!(
+        pool.len(),
+        21,
+        "every item of the frame waits for the next frame; one earlier item is under the cap"
+    );
+    assert_eq!(pool.take(|item| *item == 10), Some(10));
+    pool.end_frame_keeping(4);
+    assert_eq!(
+        pool.iter().copied().collect::<Vec<_>>(),
+        vec![26, 27, 28, 29],
+        "past their next frame, only the newest items stay"
+    );
+}

@@ -560,6 +560,16 @@ impl Drop for DeviceShared {
     }
 }
 
+/// The share of the allocator's smallest memory block from which a buffer or
+/// texture takes a dedicated allocation instead of a range of a shared block.
+///
+/// Resources of other lifetimes stay scattered through a shared block, so its
+/// free space splits into small ranges: on a Mali-G76 with 4 MiB host blocks,
+/// a block with 2.9 MiB free held no free 512 KiB range. Each larger buffer
+/// that a frame ring or a glyph arena grew to then took a new block, and the
+/// GL memory the process reports keeps every block it ever had.
+const DEDICATED_ALLOCATION_BLOCK_SHARE: u64 = 8;
+
 #[expect(
     missing_debug_implementations,
     reason = "needs work to not be disastrously verbose"
@@ -568,6 +578,9 @@ pub struct Device {
     mem_allocator: Mutex<gpu_allocator::vulkan::Allocator>,
     desc_allocator: Mutex<descriptor::DescriptorAllocator>,
     valid_ash_memory_types: u32,
+    /// Resources whose memory takes at least this many bytes get dedicated
+    /// allocations; see [`DEDICATED_ALLOCATION_BLOCK_SHARE`].
+    dedicated_allocation_bytes: u64,
     naga_options: naga::back::spv::Options<'static>,
     #[cfg(feature = "renderdoc")]
     render_doc: crate::auxil::renderdoc::RenderDoc,

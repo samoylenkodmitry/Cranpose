@@ -15,7 +15,14 @@ use crate::{
 /// The first chunk's quads; each later chunk doubles up to the largest,
 /// and a run too large for that gets a chunk of its own size.
 const MIN_CHUNK_QUADS: u32 = 1024;
-const MAX_CHUNK_QUADS: u32 = 8192;
+/// The largest chunk a mapped arena opens for later runs of a frame.
+const MAX_MAPPED_CHUNK_QUADS: u32 = 8192;
+/// The largest chunk a copied arena opens: 128 KiB. A copied chunk lives
+/// as long as its runs, in a block the GPU allocator shares with the
+/// renderer's other buffers and textures. On a Mali-G76, 4 MiB blocks with
+/// 2.9 MiB free held no free 512 KiB range, so each 512 KiB chunk took
+/// memory of its own; 128 KiB chunks fill the ranges those blocks have.
+const MAX_COPIED_CHUNK_QUADS: u32 = 2048;
 /// No text run holds more glyphs; bounds the index arithmetic.
 const MAX_RUN_QUADS: u32 = 1 << 20;
 /// The quads a mapped chunk grows by: one 16 KiB page.
@@ -290,7 +297,7 @@ impl GlyphRunArena {
             if !chunk.spans.is_unused() {
                 return true;
             }
-            let keep = keep_empty && chunk.spans.capacity() <= MAX_CHUNK_QUADS;
+            let keep = keep_empty && chunk.spans.capacity() <= MAX_COPIED_CHUNK_QUADS;
             keep_empty &= !keep;
             keep
         });
@@ -423,7 +430,7 @@ impl GlyphRunArena {
             .max();
         let hint = match largest_open {
             None => self.last_quads + self.last_quads / 4,
-            Some(largest) => largest.saturating_mul(2).min(MAX_CHUNK_QUADS),
+            Some(largest) => largest.saturating_mul(2).min(MAX_MAPPED_CHUNK_QUADS),
         };
         let wanted = quads
             .max(hint)
@@ -472,11 +479,11 @@ impl GlyphRunArena {
             .chunks
             .iter()
             .map(|chunk| chunk.spans.capacity())
-            .filter(|capacity| *capacity <= MAX_CHUNK_QUADS)
+            .filter(|capacity| *capacity <= MAX_COPIED_CHUNK_QUADS)
             .max();
         let capacity = largest
             .map_or(MIN_CHUNK_QUADS, |largest| {
-                largest.saturating_mul(2).min(MAX_CHUNK_QUADS)
+                largest.saturating_mul(2).min(MAX_COPIED_CHUNK_QUADS)
             })
             .max(quads);
         let mut spans = SpanAllocator::new(capacity);

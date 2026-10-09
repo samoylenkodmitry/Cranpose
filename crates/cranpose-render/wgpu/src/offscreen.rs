@@ -146,6 +146,17 @@ pub(crate) struct OffscreenPool {
 
 const MAX_POOLED_TARGETS: usize = 64;
 
+/// The targets the pool keeps once the frame after the one that handed them
+/// back has passed. A frame's targets serve the next frame's requests of
+/// their sizes however many there are; older ones serve a later return to
+/// a size. In the gauntlet at tier 12 on a Mate 20 X, the first frame kept
+/// 96 layer surfaces and the cache gave back 90 of them within ten frames:
+/// the pool held 64 of them, 4 MiB, and the next 90 frames took none back.
+/// Most later reuses took one of the 16 most recently pooled targets. The
+/// GL memory Android reports for the process stays at its peak, so a target
+/// no frame takes back costs memory for the rest of the run.
+const MAX_IDLE_TARGETS: usize = 16;
+
 const MAX_POOLED_BYTES: u64 = 128 * 1024 * 1024;
 
 fn target_bytes(width: u32, height: u32, bytes_per_pixel: u64) -> u64 {
@@ -219,10 +230,11 @@ impl OffscreenPool {
             });
     }
 
-    /// Ends a frame, dropping the targets no frame has reused for
-    /// [`crate::idle_pool::IDLE_FRAMES`].
+    /// Ends a frame, keeping every target this frame handed back and
+    /// [`MAX_IDLE_TARGETS`] of the older ones, and dropping the targets no
+    /// frame has reused for [`crate::idle_pool::IDLE_FRAMES`].
     pub fn end_frame(&mut self) {
-        self.available.end_frame();
+        self.available.end_frame_keeping(MAX_IDLE_TARGETS);
     }
 
     fn bytes_per_pixel(&self) -> u64 {
