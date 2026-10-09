@@ -25,10 +25,11 @@ Runtime effects accept up to three substrate declarations. See
 ## Surface cache and opaque prefixes
 
 `LayerCache` retains keyed surfaces under a 96 MiB byte budget and a 4096
-entry cap. Flat surfaces the cache keeps render together into an atlas of
-their own and are read in place there, without a copy. The atlas returns to
-its pool once its kept surfaces hold under a quarter of the pixels they
-held. The transient texture pool reuses recent frame targets under a
+entry cap. Flat surfaces render together into atlases. On Metal the
+surfaces the cache keeps render into an atlas of their own and are read in
+place there, without a copy; the atlas returns to its pool once its kept
+surfaces hold under a quarter of the pixels they held. Elsewhere a kept
+surface is copied out of the shared atlas. The transient texture pool reuses recent frame targets under a
 32–256 MiB working-set budget and a 64-texture cap. The layer cache counts
 shared texture allocations once toward its byte budget. See
 [`layer_cache.rs`](../crates/cranpose-render/wgpu/src/layer_cache.rs) and
@@ -48,14 +49,17 @@ bounds. Source checks require opaque, whole-pixel geometry. See
 ## Uploads
 
 On a GPU that reads mapped buffers at full speed
-(`MAPPABLE_PRIMARY_BUFFERS`), the CPU writes frame uniforms and geometry, the
-frame's run arena, stored run tables and retained glyph runs into mapped
-buffers. An animated frame then records no buffer copy and no queue write.
-Each buffer maps again once the GPU finishes the frames that read it. A
-changed stored run is written into a spare version of its tables, which takes
-the 4 KiB chunks changed since the update it holds. Glyph chunks take new
-runs only in the frame that maps them. Other GPUs copy through a staging belt,
-in order between the passes. See
+(`MAPPABLE_PRIMARY_BUFFERS`), the CPU writes frame uniforms and geometry into
+mapped buffers. On Metal it also writes the frame's run arena, stored run
+tables and retained glyph runs mapped, so an animated frame records no copy:
+the Metal driver grows a pool of 2 MiB objects for frames that copy, 39
+against 20 at gauntlet tier 16. Each buffer maps again once the GPU finishes
+the frames that read it. A changed stored run is written into a spare version
+of its tables, which takes the 4 KiB chunks changed since the update it
+holds. Glyph chunks take new runs only in the frame that maps them. On Mali
+those spares and per-frame tables cost GL memory without a pool to save, so
+other GPUs copy run tables and glyph runs through a staging belt, in order
+between the passes. See
 [`frame_graph.rs`](../crates/cranpose-render/wgpu/src/frame_graph.rs),
 [`run_store.rs`](../crates/cranpose-render/wgpu/src/run_store.rs) and
 [`glyph_run_arena.rs`](../crates/cranpose-render/wgpu/src/glyph_run_arena.rs).

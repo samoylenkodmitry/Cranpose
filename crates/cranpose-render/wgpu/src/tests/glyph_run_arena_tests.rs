@@ -6,10 +6,7 @@ fn quads(count: usize) -> Vec<GlyphInstance> {
 }
 
 fn copied_arena() -> GlyphRunArena {
-    GlyphRunArena {
-        upload: Some(UploadMode::Copied),
-        ..GlyphRunArena::default()
-    }
+    GlyphRunArena::new(UploadMode::Copied)
 }
 
 #[test]
@@ -57,7 +54,7 @@ fn a_span_allocator_ignores_empty_and_foreign_spans() {
 #[test]
 fn an_arena_takes_no_run_without_quads() {
     let (_lock, device, _queue) = upload_test_device();
-    let mut arena = GlyphRunArena::default();
+    let mut arena = copied_arena();
     assert!(arena.insert(&device, quads(0)).is_none());
     assert!(arena.chunks.is_empty());
     assert!(arena.staged_instances.is_empty());
@@ -182,10 +179,7 @@ fn a_mapped_arena_writes_each_run_whole_and_leaves_earlier_frames_runs_alone() {
     if UploadMode::for_device(&device) != UploadMode::Mapped {
         return;
     }
-    let mut arena = GlyphRunArena {
-        upload: Some(UploadMode::Mapped),
-        ..GlyphRunArena::default()
-    };
+    let mut arena = GlyphRunArena::new(UploadMode::Mapped);
     let first = arena_frame(&device, &queue, &mut arena, |arena| {
         [(300, 1), (40, 2)]
             .map(|(count, byte)| arena.insert(&device, filled(count, byte)).expect("a run"))

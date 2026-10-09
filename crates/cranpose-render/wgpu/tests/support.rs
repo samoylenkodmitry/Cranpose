@@ -232,6 +232,17 @@ pub fn headless_renderer_configured(
     Ok(with_app_context(renderer, Some(lock)))
 }
 
+/// Whether the test renderers draw animated frames copy-free: on Metal,
+/// with mapped primary buffers, where run tables and retained glyph runs
+/// are written mapped and kept layer surfaces stay in their atlas.
+pub fn renders_copy_free() -> bool {
+    device::headless_adapter(wgpu::Backends::all()).is_ok_and(|adapter| {
+        adapter.get_info().backend == wgpu::Backend::Metal
+            && cranpose_render_wgpu::optional_device_features(&adapter)
+                .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)
+    })
+}
+
 /// A renderer whose device does not map its vertex and table buffers, so
 /// its uploads take copies even on an integrated GPU.
 pub fn headless_renderer_copying_uploads() -> Result<LockedRenderer, String> {

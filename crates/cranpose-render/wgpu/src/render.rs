@@ -3061,6 +3061,9 @@ pub struct GpuRenderer {
     text_glyph_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedTextGlyphRun>,
     text_glyph_gpu_run_cache: BoundedLruCache<TextGlyphRunCacheKey, Rc<CachedGpuTextGlyphRun>>,
     text_glyph_run_arena: GlyphRunArena,
+    /// How run tables and retained glyph runs reach the GPU, and whether
+    /// kept layer surfaces stay in their atlas: see [`UploadMode::copy_free`].
+    pub(crate) copy_free: UploadMode,
     text_glyph_run_frame: u64,
     /// Text runs the frame has drawn so far, cached or not.
     text_glyph_runs_drawn: usize,
@@ -3167,10 +3170,11 @@ impl GpuRenderer {
         device.set_device_lost_callback(|reason, message| {
             log::error!("[gpu-device] device lost ({reason:?}): {message}");
         });
+        let copy_free = UploadMode::copy_free(&device, adapter_backend);
         let mut run_store = RunStore::new(
             &device,
             RunBufferMode::for_device(&device, adapter_downlevel),
-            UploadMode::for_device(&device),
+            copy_free,
         );
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -3427,7 +3431,8 @@ impl GpuRenderer {
             text_glyph_gpu_run_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_GPU_RUN_CACHE_ITEMS,
             ),
-            text_glyph_run_arena: GlyphRunArena::default(),
+            text_glyph_run_arena: GlyphRunArena::new(copy_free),
+            copy_free,
             text_glyph_run_frame: 0,
             text_glyph_mask_cache: SoftwareGlyphRasterCache::with_capacity_at_least_one(
                 MAX_TEXT_GLYPH_MASK_CACHE_ITEMS,
@@ -4597,7 +4602,7 @@ impl GpuRenderer {
         if !submitted {
             self.run_store.invalidate_uploads();
             self.text_glyph_gpu_run_cache.clear();
-            self.text_glyph_run_arena = GlyphRunArena::default();
+            self.text_glyph_run_arena = GlyphRunArena::new(self.copy_free);
         }
         returns.scene = Some(FrameSceneStorage { root, overlay });
         result

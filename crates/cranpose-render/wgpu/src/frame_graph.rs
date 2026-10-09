@@ -1719,6 +1719,22 @@ impl UploadMode {
             Self::Copied
         }
     }
+
+    /// The mode of the frame's run tables and retained glyph runs, which
+    /// also says whether kept layer surfaces stay in their atlas: copy-free
+    /// on Metal alone. The Metal driver keeps a pool of 2 MiB objects for
+    /// the frames in flight that a frame with a copy or compute pass grows
+    /// by 14 to 16, even at one such frame a second: 39 objects at gauntlet
+    /// tier 16 on Apple silicon, 20 copy-free. Mali keeps no such pool:
+    /// there a run's spare tables, the arena held for each frame in flight
+    /// and the kept atlases cost GL memory alone, +31 MB on the Mate 20 X
+    /// at tier 12 against copies.
+    pub(crate) fn copy_free(device: &wgpu::Device, backend: wgpu::Backend) -> Self {
+        match backend {
+            wgpu::Backend::Metal => Self::for_device(device),
+            _ => Self::Copied,
+        }
+    }
 }
 
 /// Buffers the CPU writes while they are mapped and the GPU reads once they

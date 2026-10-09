@@ -35,7 +35,8 @@ use crate::{
         blur_scratch_size, substrate_scratch_size,
     },
     frame_graph::{
-        FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, copy_compatible,
+        FrameCommandRecorder, FrameTextureDescriptor, TextureRegionCopy, UploadMode,
+        copy_compatible,
     },
     geometry::{SegmentTransform, snap_delta_for_anchor},
     layer_cache::{Retained, RetainedContent},
@@ -4704,8 +4705,8 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 });
                 continue;
             };
-            // A member rendered with the others lands in a shared atlas,
-            // which the cache keeps while it keeps the member's surface.
+            // A member rendered with the others lands in an atlas: a kept
+            // one is read there in place or copied out of it.
             let gate = if in_place {
                 AdmissionGate::drawn_in_place
             } else {
@@ -4731,17 +4732,23 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
-    /// Renders the batch's members together: those the cache keeps into
-    /// an atlas of their own, which the cache keeps while it keeps any of
-    /// them and reads in place, the others into one the frame lets go.
+    /// Renders the batch's members together. Copy-free, those the cache
+    /// keeps go into an atlas of their own, which the cache keeps while it
+    /// keeps any of them and reads in place, and the others into one the
+    /// frame lets go; otherwise all share one atlas the kept ones are
+    /// copied out of. See [`UploadMode::copy_free`].
     fn render_surface_batch(
         &mut self,
         layer: &LayerScene,
         mut batch: Vec<BatchMember>,
     ) -> Result<Vec<(usize, SurfaceRender)>, String> {
         let mut surfaces = Vec::with_capacity(batch.len());
-        batch.sort_by_key(|member| member.retain.is_none());
-        let kept = batch.partition_point(|member| member.retain.is_some());
+        let kept = if self.renderer.copy_free == UploadMode::Mapped {
+            batch.sort_by_key(|member| member.retain.is_none());
+            batch.partition_point(|member| member.retain.is_some())
+        } else {
+            0
+        };
         let (kept, drawn) = batch.split_at(kept);
         for (group, keeps) in [(kept, true), (drawn, false)] {
             match group {
@@ -4783,8 +4790,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             .sum();
         let mut packer =
             AtlasPacker::new(limit).with_shelf_width(u32::try_from(area.isqrt()).unwrap_or(limit));
-        // A kept surface is read in place, so where it lands costs nothing
-        // later: the tallest go first, into an atlas near square.
+        // A kept surface is read in place or copied out, so where it lands
+        // costs nothing later: the tallest go first, into an atlas near
+        // square.
         let mut tallest_first: Vec<usize> = (0..group.len()).collect();
         tallest_first.sort_by_key(|&index| std::cmp::Reverse(group[index].plan.height));
         let mut placements: Vec<Option<AtlasPlacement>> = vec![None; group.len()];
@@ -4792,23 +4800,22 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
             let plan = &group[index].plan;
             placements[index] = packer.place(plan.width, plan.height);
         }
-        let sizes: Vec<(u32, u32)> = packer
+        // A kept atlas stays in the cache for as long as its members do: it
+        // takes its own size from the retained surfaces' pool, as the kept
+        // surfaces did. A pooled size that serves later frames' atlases
+        // held a kept one at up to four times the area its members need.
+        let atlases: Vec<Rc<OffscreenTarget>> = packer
             .atlases
             .iter()
             .map(|atlas| {
-                self.renderer
-                    .surface_atlas_sizes
-                    .settle(atlas.padded_size(limit), limit)
+                let size = atlas.padded_size(limit);
+                if keeps {
+                    Rc::new(self.renderer.acquire_retained_surface(size.0, size.1))
+                } else {
+                    let (width, height) = self.renderer.surface_atlas_sizes.settle(size, limit);
+                    self.acquire_transient("Layer Surface Atlas", width, height)
+                }
             })
-            .collect();
-        let label = if keeps {
-            "Kept Layer Surface Atlas"
-        } else {
-            "Layer Surface Atlas"
-        };
-        let atlases: Vec<Rc<OffscreenTarget>> = sizes
-            .into_iter()
-            .map(|(width, height)| self.acquire_transient(label, width, height))
             .collect();
         let ops: Vec<Cow<'_, [DrawOp]>> = group
             .iter()
@@ -4860,7 +4867,12 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                         child.node_id,
                         member.plan.surface_logical,
                     );
-                    self.retain_from_atlas(child, member, &atlases[placement.atlas], placement)
+                    self.retain_from_atlas(
+                        child,
+                        member,
+                        &atlases[placement.atlas],
+                        (placement, keeps),
+                    )
                 }
                 None => self.render_member_alone(layer, member)?,
             };
@@ -4869,12 +4881,15 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         Ok(())
     }
 
+    /// The member's surface in `atlas`, kept by the cache when it admits
+    /// it: in place when the atlas holds kept members alone, else copied
+    /// out into a texture of its own.
     fn retain_from_atlas(
         &mut self,
         child: &ChildLayer,
         member: &BatchMember,
         atlas: &Rc<OffscreenTarget>,
-        placement: AtlasPlacement,
+        (placement, in_place): (AtlasPlacement, bool),
     ) -> SurfaceRender {
         let plan = &member.plan;
         let in_atlas = plan.surface(
@@ -4892,6 +4907,9 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
         let Some(key) = member.retain else {
             return in_atlas;
         };
+        if !in_place {
+            return self.copy_out_of_atlas(child, member, atlas, placement, key, in_atlas);
+        }
         let region = DeviceRect {
             x: placement.x as f32,
             y: placement.y as f32,
@@ -4913,6 +4931,47 @@ impl<'r, 'c, C: FrameCommandRecorder> FrameExecutor<'r, 'c, C> {
                 content: SourceContent::retained(&key),
             },
             Some(region),
+        )
+    }
+
+    fn copy_out_of_atlas(
+        &mut self,
+        child: &ChildLayer,
+        member: &BatchMember,
+        atlas: &Rc<OffscreenTarget>,
+        placement: AtlasPlacement,
+        key: LayerRasterCacheKey,
+        in_atlas: SurfaceRender,
+    ) -> SurfaceRender {
+        let plan = &member.plan;
+        let retained = Rc::new(
+            self.renderer
+                .acquire_retained_surface(plan.width, plan.height),
+        );
+        if !copy_compatible(atlas, &retained) {
+            return in_atlas;
+        }
+        self.recorder.copy_texture_region(TextureRegionCopy {
+            source: atlas,
+            source_origin: [placement.x, placement.y],
+            dest: &retained,
+            dest_origin: [0, 0],
+            size: [plan.width, plan.height],
+        });
+        if !self.retain_source(
+            child.node_id,
+            key,
+            Retained::surface(Rc::clone(&retained)),
+            None,
+        ) {
+            return in_atlas;
+        }
+        plan.surface(
+            CompositeSource {
+                texture: retained,
+                content: SourceContent::retained(&key),
+            },
+            None,
         )
     }
 

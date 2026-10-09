@@ -286,9 +286,9 @@ fn an_atlas_whose_surfaces_grow_a_little_draws_into_the_texture_it_had() {
     assert_eq!(second, 0, "the first atlas had room for a step of growth");
 }
 
-/// Tiles that hold still are kept where their atlas drew them: keeping them
-/// costs no copy, and the frames that draw them from the cache draw what a
-/// fresh renderer draws.
+/// Tiles that hold still are kept and drawn from the cache as a fresh
+/// renderer draws them. A copy-free renderer keeps them where their atlas
+/// drew them, at no copy; another copies each out of the shared atlas.
 #[test]
 fn kept_atlas_surfaces_are_read_in_place_without_copies() {
     let Ok((_lock, renderer)) = support::headless_renderer_parts() else {
@@ -311,10 +311,14 @@ fn kept_atlas_surfaces_are_read_in_place_without_copies() {
         hits > 0,
         "the still tiles are kept and drawn from the cache"
     );
-    assert_eq!(
-        copies, 0,
-        "kept surfaces stay in the atlas they were drawn in"
-    );
+    if support::renders_copy_free() {
+        assert_eq!(
+            copies, 0,
+            "kept surfaces stay in the atlas they were drawn in"
+        );
+    } else {
+        assert!(copies > 0, "kept surfaces are copied out of the atlas");
+    }
 
     let (mut fresh, _) = tiles_shell(
         support::headless_renderer_beside_locked().expect("reference renderer"),

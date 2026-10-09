@@ -181,15 +181,13 @@ struct StagedSpan {
 /// once it holds none and the GPU is done with it. Runs in a chunk that
 /// fell below a quarter full move out: the renderer drops them, and they
 /// are written again where they are next drawn.
-#[derive(Default)]
 pub(crate) struct GlyphRunArena {
     chunks: Vec<Chunk>,
     next_chunk: u64,
     staged_instances: Vec<GlyphInstance>,
     staged: Vec<StagedSpan>,
     retired: Rc<RetiredSpans>,
-    /// Set on the first run, once the device says how writes reach it.
-    upload: Option<UploadMode>,
+    upload: UploadMode,
     pool: MappedPool<Chunk>,
     requests: MapRequests,
     /// The quads the frame wrote so far, and those of the last frame that
@@ -201,6 +199,23 @@ pub(crate) struct GlyphRunArena {
 }
 
 impl GlyphRunArena {
+    pub(crate) fn new(upload: UploadMode) -> Self {
+        Self {
+            chunks: Vec::new(),
+            next_chunk: 0,
+            staged_instances: Vec::new(),
+            staged: Vec::new(),
+            retired: Rc::default(),
+            upload,
+            pool: MappedPool::default(),
+            requests: MapRequests::default(),
+            frame_quads: 0,
+            last_quads: 0,
+            written: FrameCommandStats::default(),
+            evacuating: Vec::new(),
+        }
+    }
+
     /// Places `quads` in a free span, opening a chunk when none has room:
     /// staged for the frame's flush, or written into a mapped chunk now.
     /// `None` when there are no quads or more than any text run holds.
@@ -208,9 +223,7 @@ impl GlyphRunArena {
     where
         I: IntoIterator<Item = GlyphInstance>,
     {
-        let upload = *self
-            .upload
-            .get_or_insert_with(|| UploadMode::for_device(device));
+        let upload = self.upload;
         let start = self.staged_instances.len();
         self.staged_instances.extend(quads);
         let count = self.staged_instances.len() - start;
@@ -258,7 +271,7 @@ impl GlyphRunArena {
     /// mapped arena asks its empty chunks back and picks the sparse ones
     /// whose runs move out.
     pub(crate) fn begin_frame(&mut self) {
-        let mapped = self.upload == Some(UploadMode::Mapped);
+        let mapped = self.upload == UploadMode::Mapped;
         for span in self.retired.take() {
             if let Some(chunk) = self.chunks.iter_mut().find(|chunk| chunk.id == span.chunk) {
                 if mapped {
@@ -338,7 +351,7 @@ impl GlyphRunArena {
         device: &wgpu::Device,
         recorder: &mut impl FrameCommandRecorder,
     ) -> FrameCommandStats {
-        if self.upload == Some(UploadMode::Mapped) {
+        if self.upload == UploadMode::Mapped {
             for chunk in self.chunks.iter_mut().filter(|chunk| chunk.open) {
                 chunk.buffer.unmap();
                 chunk.open = false;
