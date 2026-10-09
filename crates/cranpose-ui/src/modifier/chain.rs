@@ -1,6 +1,10 @@
 #![expect(private_interfaces)]
 
-use std::{any::type_name_of_val, cell::RefCell, rc::Rc};
+use std::{
+    any::type_name_of_val,
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_core::NodeId;
 #[expect(unused_imports)]
@@ -48,9 +52,10 @@ pub struct ModifierChainHandle {
     /// most chains never do.
     modifier_locals: Option<ModifierLocalsHandle>,
     debug_logging: bool,
-    /// Counts the changes to the chain's nodes, their layout direction and
-    /// their attachment, so a reader that keeps what it derived from the
-    /// chain knows when to derive it again.
+    /// A number no other chain on this thread had, taken again on each
+    /// change to the chain's nodes, their layout direction or their
+    /// attachment: a reader that keeps what it derived from a chain knows
+    /// when to derive it again, also after its node takes a new chain.
     revision: u64,
 }
 
@@ -65,9 +70,20 @@ impl Default for ModifierChainHandle {
             aggregate_child_capabilities: NodeCapabilities::default(),
             modifier_locals: None,
             debug_logging: false,
-            revision: 0,
+            revision: next_revision(),
         }
     }
+}
+
+fn next_revision() -> u64 {
+    thread_local! {
+        static LAST_REVISION: Cell<u64> = const { Cell::new(0) };
+    }
+    LAST_REVISION.with(|last| {
+        let revision = last.get() + 1;
+        last.set(revision);
+        revision
+    })
 }
 
 impl ModifierChainHandle {
@@ -86,7 +102,7 @@ impl ModifierChainHandle {
         self.layout_direction
     }
 
-    /// The count of changes to the chain; see the field.
+    /// The chain's current revision; see the field.
     pub(crate) fn revision(&self) -> u64 {
         self.revision
     }
@@ -96,7 +112,7 @@ impl ModifierChainHandle {
             return false;
         }
         self.layout_direction = direction;
-        self.revision += 1;
+        self.revision = next_revision();
         self.update_offset_direction();
         self.resolved = self.compute_resolved();
         true
@@ -145,7 +161,7 @@ impl ModifierChainHandle {
         modifier: &Modifier,
         resolver: &mut ModifierLocalAncestorResolver<'_>,
     ) -> ModifierInvalidations {
-        self.revision += 1;
+        self.revision = next_revision();
         self.chain
             .update_from_ref_iter(modifier.iter_elements(), &mut *self.context.borrow_mut());
         if self.layout_direction.is_rtl() {
@@ -184,7 +200,7 @@ impl ModifierChainHandle {
         }
 
         self.context.borrow_mut().set_node_id(id);
-        self.revision += 1;
+        self.revision = next_revision();
 
         if id.is_some() {
             self.chain.detach_nodes();
@@ -200,7 +216,7 @@ impl ModifierChainHandle {
 
     /// Returns mutable access to the modifier node chain.
     pub fn chain_mut(&mut self) -> &mut ModifierNodeChain {
-        self.revision += 1;
+        self.revision = next_revision();
         &mut self.chain
     }
 
@@ -212,7 +228,7 @@ impl ModifierChainHandle {
         &mut ModifierNodeChain,
         std::cell::RefMut<'_, BasicModifierNodeContext>,
     ) {
-        self.revision += 1;
+        self.revision = next_revision();
         (&mut self.chain, self.context.borrow_mut())
     }
 
