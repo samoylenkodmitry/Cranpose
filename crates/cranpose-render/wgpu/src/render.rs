@@ -43,7 +43,7 @@ use crate::{
     frame::{AdmissionGate, FrameExecutor, StageSideScratch},
     frame_graph::{
         BufferUpload, FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor,
-        FrameUploadAllocators, UniformUpload, UploadAllocatorId, UploadAllocatorSpec,
+        FrameUploadAllocators, UniformUpload, UploadAllocatorId, UploadAllocatorSpec, UploadMode,
         WgpuFrameGraph, WgpuFrameGraphExecutor,
     },
     frame_packet::{CancelReason, FramePacket, FrameSceneStorage, PresentOutcome, RenderReturns},
@@ -63,7 +63,7 @@ use crate::{
     record_columns::record_vertex_layouts,
     rect_to_quad,
     rrect_shadow::{SHADOW_QUAD_CORNERS, ShadowInstance, create_rrect_shadow_pipeline},
-    run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore},
+    run_store::{ArenaBinding, PlacementData, RunBufferMode, RunDrawCall, RunStore, StoredTables},
     scene::{
         CompositorScene, DrawOp, DrawOpKind, ImageDraw, RunDraw, ShadowDraw, SnapAnchor, TextDraw,
     },
@@ -2907,11 +2907,11 @@ pub(crate) fn segment_scene_rect(
     }
 }
 
-/// A stored run's draws for one pass: its tables by command, the uniform
-/// slot holding its placement, and the pipeline and vertex range of each
-/// segment's quads and bands.
+/// A stored run's draws for one pass: the tables current when it was
+/// prepared, the uniform slot holding its placement, and the pipeline and
+/// vertex range of each segment's quads and bands.
 pub(crate) struct StoreRunBatch {
-    pub(crate) command: DrawCommandId,
+    pub(crate) tables: StoredTables,
     pub(crate) uniform_slot: usize,
     pub(crate) draws: SmallVec<[RunDrawCall; 8]>,
     /// The scissor an unturned run's clip puts on its paint: see
@@ -3170,6 +3170,7 @@ impl GpuRenderer {
         let mut run_store = RunStore::new(
             &device,
             RunBufferMode::for_device(&device, adapter_downlevel),
+            UploadMode::for_device(&device),
         );
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -4428,7 +4429,7 @@ impl GpuRenderer {
         let mut executor = std::mem::take(&mut self.frame_graph_executor);
         let execution = executor.execute_recorded_graph(&device, &queue, graph);
         self.frame_graph_executor = executor;
-        self.viewport_uniforms.uploads.recall();
+        self.recall_frame_uploads();
         let execution = execution.map_err(|error| error.to_string())?;
         let submission_index = execution.submission;
         let copy_stats = execution.stats;
@@ -4477,6 +4478,12 @@ impl GpuRenderer {
         self.convert_surface_pixels_to_rgba(&pixels)
     }
 
+    /// Asks the buffers the submitted frame unmapped back for later frames.
+    fn recall_frame_uploads(&mut self) {
+        self.viewport_uniforms.uploads.recall();
+        self.run_store.recall();
+    }
+
     fn render_graph(
         &mut self,
         root_target: &Rc<OffscreenTarget>,
@@ -4523,7 +4530,7 @@ impl GpuRenderer {
             let execution = executor.execute_recorded_graph(&device, &queue, frame_graph);
             let after_execute = Instant::now();
             self.frame_graph_executor = executor;
-            self.viewport_uniforms.uploads.recall();
+            self.recall_frame_uploads();
             if let Some(total_ms) = should_log_wgpu_render_stage(graph_start, after_execute) {
                 log::warn!(
                     "[wgpu-render-stage:graph] total_ms={total_ms:.2} build_ms={:.2} execute_ms={:.2}",
@@ -5083,7 +5090,6 @@ impl GpuRenderer {
         window: &std::ops::Range<u32>,
         depth: bool,
     ) -> StoreRunBatch {
-        let command = run.command.expect("a stored run has a command");
         let placement = &run.placement;
         let ablation = self.ablation.shape;
         let turns = ShapeTurns::of(viewport.transform, false);
@@ -5108,7 +5114,7 @@ impl GpuRenderer {
         );
         window_draws(&mut draws, window);
         let upload_start = Instant::now();
-        let (upload, fill) =
+        let (upload, fill, tables) =
             self.run_store
                 .upload_stored(&self.device, recorder, run, root_scale, window, &draws);
         if let Some(total_ms) = should_log_wgpu_render_stage(upload_start, Instant::now()) {
@@ -5140,7 +5146,7 @@ impl GpuRenderer {
             );
         }
         StoreRunBatch {
-            command,
+            tables,
             uniform_slot,
             draws,
             clip: scissor,
@@ -5309,13 +5315,9 @@ impl GpuRenderer {
         scissor: (u32, u32, u32, u32),
         stage: RunStage,
     ) -> Result<(), String> {
-        let stored = self
-            .run_store
-            .stored(&batch.command)
-            .ok_or_else(|| "a stored run left the store before its draw".to_string())?;
         self.draw_run_calls(
             pass,
-            stored.buffers.binding(),
+            batch.tables.binding(),
             batch.uniform_slot,
             &batch.draws,
             scissor,
@@ -5818,6 +5820,18 @@ impl GpuRenderer {
             run.last_frame.get()
         });
         self.text_glyph_run_arena.begin_frame();
+        let evacuating = self.text_glyph_run_arena.evacuating();
+        if !evacuating.is_empty() {
+            let moving: Vec<TextGlyphRunCacheKey> = self
+                .text_glyph_gpu_run_cache
+                .iter()
+                .filter(|(_, run)| evacuating.contains(&run.span.chunk()))
+                .map(|(key, _)| *key)
+                .collect();
+            for key in &moving {
+                self.text_glyph_gpu_run_cache.pop(key);
+            }
+        }
     }
 
     fn emit_retained_text_glyph_run_if_ready(

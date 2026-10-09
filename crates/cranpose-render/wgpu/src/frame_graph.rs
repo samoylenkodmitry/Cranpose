@@ -1,6 +1,12 @@
 mod buffer_uploads;
 
-use std::fmt;
+use std::{
+    fmt,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+};
 
 use buffer_uploads::{BeforePassWriter, BufferUploads};
 use web_time::Instant;
@@ -1426,7 +1432,7 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
     }
 }
 
-fn align_u64_to(value: u64, alignment: u64) -> u64 {
+pub(crate) fn align_u64_to(value: u64, alignment: u64) -> u64 {
     debug_assert!(alignment > 0);
     value.div_ceil(alignment) * alignment
 }
@@ -1674,6 +1680,12 @@ struct UploadGeneration {
     bind_groups: [Option<wgpu::BindGroup>; UploadAllocatorId::COUNT],
 }
 
+impl MappedBuffers for UploadGeneration {
+    fn mapped_buffers(&self) -> &[wgpu::Buffer] {
+        std::slice::from_ref(&self.buffer)
+    }
+}
+
 /// How a frame's uploads reach the GPU: written by the CPU into buffers it
 /// keeps mapped, on devices that read their vertex and uniform buffers
 /// from host memory at full speed, or written into device buffers
@@ -1685,6 +1697,14 @@ pub(crate) enum UploadMode {
 }
 
 impl UploadMode {
+    /// `usage` with the way the CPU writes a buffer in this mode.
+    pub(crate) fn writable(self, usage: wgpu::BufferUsages) -> wgpu::BufferUsages {
+        match self {
+            Self::Copied => usage | wgpu::BufferUsages::COPY_DST,
+            Self::Mapped => usage | wgpu::BufferUsages::MAP_WRITE,
+        }
+    }
+
     /// The mode of a device, from the features `optional_device_features`
     /// asked for it. The fence profile submits parts of a frame as they
     /// are recorded, which a mapped buffer cannot join: it copies.
@@ -1701,55 +1721,141 @@ impl UploadMode {
     }
 }
 
-/// The buffers a mapped ring is not writing. A frame's buffers are
-/// unmapped before its submit and asked to map again after it, which
-/// completes once the frame's draws are done with them; the ring takes
-/// them back from the channel when it next opens a buffer.
-struct MappedChunks {
-    free: Vec<UploadGeneration>,
-    /// The frame's buffers between its submit and their map requests.
-    submitted: Vec<UploadGeneration>,
-    sender: std::sync::mpsc::Sender<UploadGeneration>,
-    receiver: std::sync::mpsc::Receiver<UploadGeneration>,
+/// Buffers the CPU writes while they are mapped and the GPU reads once they
+/// are unmapped.
+pub(crate) trait MappedBuffers {
+    fn mapped_buffers(&self) -> &[wgpu::Buffer];
 }
 
-impl MappedChunks {
-    fn new() -> Self {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        Self {
-            free: Vec::new(),
-            submitted: Vec::new(),
-            sender,
-            receiver,
-        }
-    }
+struct MapProgress {
+    remaining: AtomicUsize,
+    failed: AtomicBool,
+}
 
-    /// The largest free buffer of at least `fit` bytes. Buffers under half
-    /// of it would not serve a frame like the last and are dropped.
-    fn take(&mut self, fit: u64) -> Option<UploadGeneration> {
-        self.free.extend(self.receiver.try_iter());
-        self.free.retain(|chunk| chunk.capacity >= fit / 2);
-        let largest = self
-            .free
-            .iter()
-            .enumerate()
-            .filter(|(_, chunk)| chunk.capacity >= fit)
-            .max_by_key(|(_, chunk)| chunk.capacity)
-            .map(|(slot, _)| slot)?;
-        Some(self.free.swap_remove(largest))
-    }
+/// Map requests of buffers a frame unmapped, sent once the frame is
+/// submitted: a map completes when the GPU is done with every submit that
+/// read the buffer.
+#[derive(Default)]
+pub(crate) struct MapRequests(Vec<(wgpu::Buffer, Arc<MapProgress>)>);
 
-    fn recall(&mut self) {
-        for generation in self.submitted.drain(..) {
-            let sender = self.sender.clone();
-            let buffer = generation.buffer.clone();
-            buffer.map_async(wgpu::MapMode::Write, .., move |result| {
-                if result.is_ok() {
-                    let _ = sender.send(generation);
+impl MapRequests {
+    pub(crate) fn recall(&mut self) {
+        for (buffer, progress) in self.0.drain(..) {
+            buffer.map_async(wgpu::MapMode::Write, .., move |result| match result {
+                Ok(()) => {
+                    progress.remaining.fetch_sub(1, Ordering::Release);
                 }
+                Err(_) => progress.failed.store(true, Ordering::Release),
             });
         }
     }
+}
+
+/// Items of mapped buffers out of use: free ones the CPU may write, and
+/// ones waiting for their maps.
+pub(crate) struct MappedPool<T> {
+    free: Vec<T>,
+    mapping: Vec<(T, Arc<MapProgress>)>,
+}
+
+impl<T> Default for MappedPool<T> {
+    fn default() -> Self {
+        Self {
+            free: Vec::new(),
+            mapping: Vec::new(),
+        }
+    }
+}
+
+impl<T: MappedBuffers> MappedPool<T> {
+    /// Takes back `item`, unmapped and read by the frame about to be
+    /// submitted, and asks for its buffers once `requests` is recalled.
+    pub(crate) fn recycle(&mut self, item: T, requests: &mut MapRequests) {
+        let buffers = item.mapped_buffers();
+        let progress = Arc::new(MapProgress {
+            remaining: AtomicUsize::new(buffers.len()),
+            failed: AtomicBool::new(false),
+        });
+        requests.0.extend(
+            buffers
+                .iter()
+                .map(|buffer| (buffer.clone(), Arc::clone(&progress))),
+        );
+        self.mapping.push((item, progress));
+    }
+
+    /// The free item `choose` takes from the free ones, after a poll when
+    /// it takes none the first time and maps are pending.
+    pub(crate) fn take(
+        &mut self,
+        device: &wgpu::Device,
+        mut choose: impl FnMut(&mut Vec<T>) -> Option<T>,
+    ) -> Option<T> {
+        self.collect();
+        if let Some(item) = choose(&mut self.free) {
+            return Some(item);
+        }
+        if self.mapping.is_empty() {
+            return None;
+        }
+        let _ = device.poll(wgpu::PollType::Poll);
+        self.collect();
+        choose(&mut self.free)
+    }
+
+    fn collect(&mut self) {
+        let mut index = 0;
+        while index < self.mapping.len() {
+            let progress = &self.mapping[index].1;
+            if progress.failed.load(Ordering::Acquire) {
+                self.mapping.swap_remove(index);
+            } else if progress.remaining.load(Ordering::Acquire) == 0 {
+                let (item, _) = self.mapping.swap_remove(index);
+                self.free.push(item);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.free.len() + self.mapping.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+        self.free
+            .iter()
+            .chain(self.mapping.iter().map(|(item, _)| item))
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.free.clear();
+        self.mapping.clear();
+    }
+
+    /// Drops the item waiting longest for its map.
+    pub(crate) fn drop_oldest_mapping(&mut self) {
+        if !self.mapping.is_empty() {
+            self.mapping.remove(0);
+        }
+    }
+}
+
+/// Takes the largest of `free` that holds `fit` bytes, after dropping those
+/// under half of it: they would not serve a frame like the last.
+pub(crate) fn take_largest_fitting<T>(
+    free: &mut Vec<T>,
+    fit: u64,
+    capacity: impl Fn(&T) -> u64,
+) -> Option<T> {
+    free.retain(|item| capacity(item) >= fit / 2);
+    let largest = free
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| capacity(item) >= fit)
+        .max_by_key(|(_, item)| capacity(item))
+        .map(|(slot, _)| slot)?;
+    Some(free.swap_remove(largest))
 }
 
 /// One usage's uploads of a frame, in order, in one buffer: a buffer that
@@ -1763,7 +1869,7 @@ impl MappedChunks {
 ///
 /// A copied ring keeps its last buffer from frame to frame, since the
 /// copies into it queue behind the draws that read it. A mapped ring's
-/// buffers cycle through `MappedChunks`: the CPU writes the next frame
+/// buffers cycle through a [`MappedPool`]: the CPU writes the next frame
 /// while the GPU may still read the last.
 struct UploadRing {
     usage: wgpu::BufferUsages,
@@ -1777,7 +1883,8 @@ struct UploadRing {
     /// writes a buffer's as soon as it fills and starts over.
     staging: Vec<u8>,
     /// A mapped ring's buffers out of use; a copied ring has none.
-    chunks: Option<MappedChunks>,
+    chunks: Option<MappedPool<UploadGeneration>>,
+    requests: MapRequests,
     /// The bytes the last frame uploaded: a mapped ring opens a frame in
     /// a buffer that holds at least them.
     last_total: u64,
@@ -1801,7 +1908,7 @@ impl UploadRing {
             UploadMode::Mapped => (
                 usage | wgpu::BufferUsages::MAP_WRITE,
                 alignment.max(wgpu::MAP_ALIGNMENT),
-                Some(MappedChunks::new()),
+                Some(MappedPool::default()),
             ),
         };
         Self {
@@ -1812,6 +1919,7 @@ impl UploadRing {
             generations: Vec::new(),
             staging: Vec::new(),
             chunks,
+            requests: MapRequests::default(),
             last_total: 0,
             frame_need: MIN_UPLOAD_BUFFER_BYTES,
             written: FrameCommandStats::default(),
@@ -1894,11 +2002,8 @@ impl UploadRing {
         } else {
             span
         };
-        let taken = chunks.take(fit).or_else(|| {
-            // The buffers of the frame before last are back once the GPU
-            // finished it: a poll collects them before a new one is made.
-            let _ = device.poll(wgpu::PollType::Poll);
-            chunks.take(fit)
+        let taken = chunks.take(device, |free| {
+            take_largest_fitting(free, fit, |chunk| chunk.capacity)
         });
         match taken {
             Some(mut generation) => {
@@ -1985,7 +2090,7 @@ impl UploadRing {
                 for generation in self.generations.drain(..) {
                     generation.buffer.unmap();
                     if ring_outlives_frame(generation.capacity, staged) {
-                        chunks.submitted.push(generation);
+                        chunks.recycle(generation, &mut self.requests);
                     }
                 }
                 if staged > 0 {
@@ -2007,9 +2112,7 @@ impl UploadRing {
     }
 
     fn recall(&mut self) {
-        if let Some(chunks) = &mut self.chunks {
-            chunks.recall();
-        }
+        self.requests.recall();
     }
 
     /// Opens a frame. Buffers of a frame that never finished stay usable:
@@ -2027,9 +2130,44 @@ impl UploadRing {
     }
 }
 
+/// The usage tests add to the buffers they read back.
+#[cfg(test)]
+pub(crate) const TEST_READBACK: wgpu::BufferUsages = wgpu::BufferUsages::COPY_SRC;
+#[cfg(not(test))]
+pub(crate) const TEST_READBACK: wgpu::BufferUsages = wgpu::BufferUsages::empty();
+
+/// A buffer of `usage` that holds `contents` from its creation: written
+/// where it is mapped in the mapped mode, and copied from the staging buffer
+/// wgpu fills otherwise.
+pub(crate) fn create_filled_buffer(
+    device: &wgpu::Device,
+    mode: UploadMode,
+    label: &'static str,
+    usage: wgpu::BufferUsages,
+    contents: &[u8],
+) -> wgpu::Buffer {
+    use wgpu::util::DeviceExt;
+    if mode == UploadMode::Copied {
+        return device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents,
+            usage,
+        });
+    }
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: align_u64_to(contents.len().max(1) as u64, wgpu::COPY_BUFFER_ALIGNMENT),
+        usage: mode.writable(usage),
+        mapped_at_creation: true,
+    });
+    write_mapped(&buffer, 0, contents);
+    buffer.unmap();
+    buffer
+}
+
 /// Writes `bytes` at `offset` of a mapped `buffer`, with a last partial
 /// word padded by zeros: a mapped range covers whole words.
-fn write_mapped(buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]) -> FrameCommandStats {
+pub(crate) fn write_mapped(buffer: &wgpu::Buffer, offset: u64, bytes: &[u8]) -> FrameCommandStats {
     if bytes.is_empty() {
         return FrameCommandStats::default();
     }

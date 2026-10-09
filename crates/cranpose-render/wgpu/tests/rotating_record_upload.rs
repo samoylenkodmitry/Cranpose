@@ -136,14 +136,18 @@ fn rotating_arcs_upload_motion_and_preserve_changed_pixels() {
     let mut renderer = support::headless_renderer().expect("headless renderer");
     let color = Color(0.8, 0.3, 0.1, 1.0);
     let before = support::present_and_read(&mut renderer, SIDE, SIDE, rotating_arcs(0.0, color));
+    support::present_and_read(&mut renderer, SIDE, SIDE, rotating_arcs(0.4, color));
     let after = support::present_and_read(&mut renderer, SIDE, SIDE, rotating_arcs(0.8, color));
     let stats = renderer.last_frame_stats().expect("frame stats");
     assert!(
         before != after,
         "a changed arc angle must change the picture"
     );
+    // Copied uploads write the last turn's curves into the table the GPU
+    // reads in order; mapped uploads write the version the GPU finished
+    // with, which missed the last two turns.
     assert!(
-        stats.upload_bytes <= (RECORDS * 32 + 4096) as u64,
+        stats.upload_bytes <= (2 * RECORDS * 32 + 4096) as u64,
         "rotation must upload motion without resending unchanged geometry and paint: {} bytes",
         stats.upload_bytes,
     );

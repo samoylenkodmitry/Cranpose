@@ -5,6 +5,13 @@ fn quads(count: usize) -> Vec<GlyphInstance> {
     vec![bytemuck::Zeroable::zeroed(); count]
 }
 
+fn copied_arena() -> GlyphRunArena {
+    GlyphRunArena {
+        upload: Some(UploadMode::Copied),
+        ..GlyphRunArena::default()
+    }
+}
+
 #[test]
 fn a_span_allocator_takes_the_first_range_that_fits() {
     let mut spans = SpanAllocator::new(10);
@@ -59,7 +66,7 @@ fn an_arena_takes_no_run_without_quads() {
 #[test]
 fn a_dropped_runs_quads_stay_taken_until_the_next_frame() {
     let (_lock, device, _queue) = upload_test_device();
-    let mut arena = GlyphRunArena::default();
+    let mut arena = copied_arena();
     let dropped = arena.insert(&device, quads(1)).expect("a run");
     let kept = arena.insert(&device, quads(1)).expect("a run");
     assert_eq!(dropped.instances(), 0..1);
@@ -81,7 +88,7 @@ fn a_dropped_runs_quads_stay_taken_until_the_next_frame() {
 #[test]
 fn chunks_double_and_empty_ones_are_released() {
     let (_lock, device, _queue) = upload_test_device();
-    let mut arena = GlyphRunArena::default();
+    let mut arena = copied_arena();
     let small = arena
         .insert(&device, quads(MIN_CHUNK_QUADS as usize))
         .expect("a run");
@@ -111,4 +118,107 @@ fn chunks_double_and_empty_ones_are_released() {
         "the last empty chunk stays for new runs"
     );
     assert!(arena.chunks[0].spans.is_unused());
+}
+
+fn filled(count: usize, byte: u8) -> Vec<GlyphInstance> {
+    let mut quads = quads(count);
+    bytemuck::cast_slice_mut::<_, u8>(&mut quads).fill(byte);
+    quads
+}
+
+/// Runs one frame of `arena` in a frame graph pass: `body` inserts runs,
+/// the frame is staged, and each of `read`'s spans is copied out after.
+fn arena_frame(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    arena: &mut GlyphRunArena,
+    body: impl FnOnce(&mut GlyphRunArena) -> Vec<GlyphRunSpan>,
+) -> Vec<(GlyphRunSpan, Vec<u8>)> {
+    arena.begin_frame();
+    let mut spans = Vec::new();
+    let mut readbacks = Vec::new();
+    let mut executor = crate::frame_graph::WgpuFrameGraphExecutor::new();
+    let mut graph = crate::frame_graph::WgpuFrameGraph::new(None);
+    graph.add_fallible_command_pass(Some("glyph runs"), &[], &[], |context| {
+        spans = body(arena);
+        arena.stage_pending(device, context);
+        for span in &spans {
+            let bytes = instance_offset(span.instances().len() as u32);
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: bytes,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            context.encoder.copy_buffer_to_buffer(
+                span.instance_buffer(),
+                instance_offset(span.instances().start),
+                &readback,
+                0,
+                bytes,
+            );
+            readbacks.push(readback);
+        }
+        Ok(())
+    });
+    let submission = executor
+        .execute_recorded_graph(device, queue, graph)
+        .expect("the frame submits")
+        .submission;
+    spans
+        .into_iter()
+        .zip(readbacks)
+        .map(|(span, readback)| {
+            let read =
+                crate::frame_graph::read_uploaded_bytes(device, &readback, submission.clone());
+            (span, read)
+        })
+        .collect()
+}
+
+#[test]
+fn a_mapped_arena_writes_each_run_whole_and_leaves_earlier_frames_runs_alone() {
+    let (_lock, device, queue) = upload_test_device();
+    if UploadMode::for_device(&device) != UploadMode::Mapped {
+        return;
+    }
+    let mut arena = GlyphRunArena {
+        upload: Some(UploadMode::Mapped),
+        ..GlyphRunArena::default()
+    };
+    let first = arena_frame(&device, &queue, &mut arena, |arena| {
+        [(300, 1), (40, 2)]
+            .map(|(count, byte)| arena.insert(&device, filled(count, byte)).expect("a run"))
+            .into_iter()
+            .collect()
+    });
+    for ((_, read), byte) in first.iter().zip([1, 2]) {
+        assert!(read.iter().all(|read| *read == byte), "a run lands whole");
+    }
+    let [(dropped, _), (kept, _)] = <[_; 2]>::try_from(first).ok().expect("two runs");
+    drop(dropped);
+    let mut kept = Some(kept);
+    // Later frames write new runs while the first frame's chunk holds a
+    // run its draws read: the kept run's quads must stay as written.
+    for frame in 0..3u8 {
+        let read = arena_frame(&device, &queue, &mut arena, |arena| {
+            let mut spans: Vec<GlyphRunSpan> = kept.take().into_iter().collect();
+            spans.push(
+                arena
+                    .insert(&device, filled(500, 10 + frame))
+                    .expect("a run"),
+            );
+            spans
+        });
+        assert!(
+            read[0].1.iter().all(|byte| *byte == 2),
+            "frame {frame}: the kept run"
+        );
+        assert!(
+            read[1].1.iter().all(|byte| *byte == 10 + frame),
+            "frame {frame}: the new run"
+        );
+        let mut runs = read.into_iter().map(|(span, _)| span);
+        kept = runs.next();
+    }
 }

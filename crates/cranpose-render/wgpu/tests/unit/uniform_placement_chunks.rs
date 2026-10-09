@@ -28,6 +28,7 @@ fn uniform_binding_covers_the_entire_placement_chunk() {
             storage: false,
             trig_fill: false,
         },
+        UploadMode::Copied,
         256,
     );
     assert_eq!(

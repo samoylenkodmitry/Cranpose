@@ -42,6 +42,21 @@ bounds. Source checks require opaque, whole-pixel geometry. See
 [`frame.rs`](../crates/cranpose-render/wgpu/src/frame.rs) and the
 [`opaque prefix cache test`](../crates/cranpose-render/wgpu/tests/opaque_prefix_cache.rs).
 
+## Uploads
+
+On a GPU that reads mapped buffers at full speed
+(`MAPPABLE_PRIMARY_BUFFERS`), the CPU writes frame uniforms and geometry, the
+frame's run arena, stored run tables and retained glyph runs into mapped
+buffers. An animated frame then records no buffer copy and no queue write.
+Each buffer maps again once the GPU finishes the frames that read it. A
+changed stored run is written into a spare version of its tables, which takes
+the 4 KiB chunks changed since the update it holds. Glyph chunks take new
+runs only in the frame that maps them. Other GPUs copy through a staging belt,
+in order between the passes. See
+[`frame_graph.rs`](../crates/cranpose-render/wgpu/src/frame_graph.rs),
+[`run_store.rs`](../crates/cranpose-render/wgpu/src/run_store.rs) and
+[`glyph_run_arena.rs`](../crates/cranpose-render/wgpu/src/glyph_run_arena.rs).
+
 ## Pipeline compilation
 
 Native WGPU renderers can compile on two worker lanes: demanded pipelines and

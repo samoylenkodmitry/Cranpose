@@ -53,10 +53,22 @@ impl HeadlessDevice {
         limits: wgpu::Limits,
         label: &str,
     ) -> Result<Self, String> {
+        Self::request_without_features(backends, limits, label, wgpu::Features::empty())
+    }
+
+    /// A device without `features` of those the renderer asks for: without
+    /// `MAPPABLE_PRIMARY_BUFFERS` it copies its uploads as a discrete GPU
+    /// does.
+    pub fn request_without_features(
+        backends: wgpu::Backends,
+        limits: wgpu::Limits,
+        label: &str,
+        features: wgpu::Features,
+    ) -> Result<Self, String> {
         let adapter = headless_adapter(backends)?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some(label),
-            required_features: cranpose_render_wgpu::optional_device_features(&adapter),
+            required_features: cranpose_render_wgpu::optional_device_features(&adapter) - features,
             required_limits: limits,
             experimental_features: wgpu::ExperimentalFeatures::disabled(),
             memory_hints: wgpu::MemoryHints::default(),

@@ -4,7 +4,7 @@ const CURVE_ROW_VECTORS: u32 = 2u;
 const TRIG_FILL_WORKGROUP: u32 = 64u;
 
 @group(0) @binding(1)
-var<storage, read> fill_bodies: array<u32>;
+var<storage, read_write> fill_bodies: array<u32>;
 
 @group(0) @binding(2)
 var<storage, read_write> fill_curves: array<vec4<f32>>;
