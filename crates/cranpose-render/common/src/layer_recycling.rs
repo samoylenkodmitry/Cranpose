@@ -97,12 +97,12 @@ pub(crate) fn recycle_list(list: Vec<RenderNode>) {
 }
 
 /// A child list with room for `capacity` children, recycled when the pool
-/// has one.
+/// has one. A new list holds exactly that many.
 pub(crate) fn child_list(capacity: usize) -> Vec<RenderNode> {
     let mut list = POOL
         .with(|pool| pool.borrow_mut().lists.pop())
         .unwrap_or_default();
-    list.reserve(capacity);
+    list.reserve_exact(capacity);
     list
 }
 
