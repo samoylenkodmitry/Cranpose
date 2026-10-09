@@ -4,7 +4,8 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::{MemoryApplier, NodeId};
+use cranpose_app_shell::AppShell;
+use cranpose_core::{MemoryApplier, NodeId, location_key};
 use cranpose_render_common::{
     Renderer, SceneUpdates,
     graph::{LayerNode, PrimitiveNode, RenderNode},
@@ -23,6 +24,36 @@ pub struct CheckingRenderer {
     pub scene: Scene,
     pub rebuilds: Rc<Cell<usize>>,
     pub mismatches: Option<Rc<Cell<usize>>>,
+}
+
+/// What a [`CheckingRenderer`] counts: whole rebuilds, and the scoped updates
+/// whose scene differs from one built from scratch.
+#[derive(Clone, Default)]
+pub struct SceneChecks {
+    pub rebuilds: Rc<Cell<usize>>,
+    pub mismatches: Rc<Cell<usize>>,
+}
+
+/// A 320 by 240 shell that draws `content` through a [`CheckingRenderer`]
+/// counting into the returned checks. With `check`, every scoped update is
+/// compared with a scene built from scratch.
+pub fn checking_shell(
+    check: bool,
+    content: impl FnMut() + 'static,
+) -> (AppShell<CheckingRenderer>, SceneChecks) {
+    let checks = SceneChecks::default();
+    let shell = AppShell::new_with_size(
+        CheckingRenderer {
+            scene: Scene::new(),
+            rebuilds: Rc::clone(&checks.rebuilds),
+            mismatches: check.then(|| Rc::clone(&checks.mismatches)),
+        },
+        location_key(file!(), line!(), column!()),
+        content,
+        (320, 240),
+        (320.0, 240.0),
+    );
+    (shell, checks)
 }
 
 /// What `layer` draws where, in drawing order: each layer's node, bounds and

@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use cranpose::{AppLauncher, FramePacingMode};
-use cranpose_testing::find_text_in_semantics;
+use desktop_app::app::{self, DemoTab};
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 700;
@@ -10,7 +10,6 @@ const WARMUP_FOR: Duration = Duration::from_millis(1500);
 const HARD60_MIN_FPS: f32 = 40.0;
 const HARD60_MAX_FPS: f32 = 80.0;
 const FREE_RUN_PANEL_MULTIPLE: f32 = 2.0;
-const TAB: &str = "Animations";
 
 struct Measured {
     fps: f32,
@@ -58,14 +57,6 @@ pub(crate) fn main() {
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() == Ok("1"))
         .with_test_driver(move |robot| {
             let _ = robot.wait_for_idle();
-
-            let (tab_x, tab_y, tab_w, tab_h) =
-                find_text_in_semantics(&robot, TAB).expect("the tab under test must be on screen");
-            robot
-                .click(tab_x + tab_w * 0.5, tab_y + tab_h * 0.5)
-                .expect("click the tab under test");
-            let _ = robot.wait_for_idle();
-            std::thread::sleep(Duration::from_millis(300));
 
             let stage = |label: &str, window: Duration| {
                 let measured = measure(&robot, window);
@@ -126,6 +117,6 @@ pub(crate) fn main() {
                 vsync.fps, hard60.fps, free.fps, recapped.fps,
             );
         })
-        .try_run(desktop_app::app::DesktopApp)
+        .try_run(|| app::combined_app_with_initial_tab(Some(DemoTab::Animations)))
         .expect("launch the demo");
 }

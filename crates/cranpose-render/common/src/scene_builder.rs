@@ -584,8 +584,8 @@ fn move_retained_layer(
     if layer.has_origin_sinks {
         return None;
     }
-    let state = scene_layout_state(applier, layer_identity(layer)?)?;
-    if !state.is_placed() || Rect::from_size(state.size()) != layer.node_rect() {
+    let state = placed_child_layout_state(applier, layer_identity(layer)?)?;
+    if Rect::from_size(state.size()) != layer.node_rect() {
         return None;
     }
     let previous = HitGraphState::of(layer);
@@ -856,12 +856,9 @@ fn translated_children(
     let placed_fresh = &mut scratch.placed_fresh;
     placed_fresh.clear();
     for child_id in fresh_children {
-        let Some(state) = scene_layout_state(applier, *child_id) else {
+        let Some(state) = placed_child_layout_state(applier, *child_id) else {
             continue;
         };
-        if !state.is_placed() {
-            continue;
-        }
         placed_fresh.push((*child_id, state));
     }
     let children_unchanged = container.children.len() == placed_fresh.len()
@@ -1704,16 +1701,20 @@ fn lower_child(
     })
 }
 
-fn scene_layout_state(
+fn placed_child_layout_state(
     applier: &MemoryApplier,
     node_id: NodeId,
 ) -> Option<cranpose_ui::widgets::LayoutState> {
     let node: &dyn Any = applier.get_ref(node_id).ok()?;
-    if let Some(node) = node.downcast_ref::<LayoutNode>() {
-        return Some(node.layout_state());
-    }
-    node.downcast_ref::<SubcomposeLayoutNode>()
-        .map(SubcomposeLayoutNode::layout_state)
+    let state = if let Some(node) = node.downcast_ref::<LayoutNode>() {
+        if node.is_window_root() {
+            return None;
+        }
+        node.layout_state()
+    } else {
+        node.downcast_ref::<SubcomposeLayoutNode>()?.layout_state()
+    };
+    state.is_placed().then_some(state)
 }
 
 fn read_node_data<R>(
