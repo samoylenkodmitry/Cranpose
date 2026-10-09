@@ -40,6 +40,12 @@ pub enum Service {
     Network,
     /// The wearer's heart rate, from the device's own sensor.
     HeartRate,
+    /// Recording that can start from the background, kept possible by a
+    /// standby the application starts from its screen.
+    MicrophoneStandby,
+    /// Messages and streams to the same application on the paired phone or
+    /// watch.
+    Wearable,
 }
 
 impl Service {
@@ -60,6 +66,8 @@ impl Service {
             Service::Update => "update",
             Service::Network => "network",
             Service::HeartRate => "heart-rate",
+            Service::MicrophoneStandby => "microphone-standby",
+            Service::Wearable => "wearable",
         }
     }
 
@@ -96,6 +104,14 @@ impl Service {
             // permissions; older releases read the same sensor under
             // BODY_SENSORS, which `android_permissions_up_to` carries.
             Service::HeartRate => &["android.permission.health.READ_HEART_RATE"],
+            Service::MicrophoneStandby => &[
+                "android.permission.FOREGROUND_SERVICE",
+                "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+                "android.permission.RECORD_AUDIO",
+            ],
+            // The Data Layer runs through Google Play services and asks for
+            // nothing.
+            Service::Wearable => &[],
         }
     }
 
@@ -220,6 +236,24 @@ impl Use {
     pub const fn haptics() -> Self {
         Self {
             service: Service::Haptics,
+            reason: None,
+        }
+    }
+
+    /// Recording that can start from the background; see
+    /// `cranpose_services::hold_microphone_standby`.
+    pub const fn microphone_standby() -> Self {
+        Self {
+            service: Service::MicrophoneStandby,
+            reason: None,
+        }
+    }
+
+    /// Messages and streams to the same application on the paired phone or
+    /// watch; see `cranpose_services::wearable`.
+    pub const fn wearable() -> Self {
+        Self {
+            service: Service::Wearable,
             reason: None,
         }
     }

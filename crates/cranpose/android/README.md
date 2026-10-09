@@ -88,9 +88,11 @@ The Gradle `services` set also supports manually maintained app manifests:
 | `camera` | Camera backend | `CAMERA` |
 | `haptics` | Vibrator backend | `VIBRATE` |
 | `media` | Media-session service | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MEDIA_PLAYBACK` |
+| `microphone-standby` | Foreground service of type microphone that keeps recording possible from the background (`cranpose_services::hold_microphone_standby`) | `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_MICROPHONE`, `RECORD_AUDIO` |
 | `network` | HTTP and connectivity state | `INTERNET`, `ACCESS_NETWORK_STATE` |
 | `notifications` | Notification backend | `POST_NOTIFICATIONS` |
 | `overlay` | Surface above other apps | `SYSTEM_ALERT_WINDOW` |
+| `wearable` | Messages and streams to the app on the paired phone or watch (Wear OS Data Layer, `cranpose_services::wearable`) | none |
 
 `Use::update()` also selects the package installer, its receiver and
 `REQUEST_INSTALL_PACKAGES`. The launcher registers the updater when the declared

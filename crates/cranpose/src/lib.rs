@@ -95,6 +95,8 @@ mod android_launch_args;
 #[cfg(all(feature = "android", feature = "media", target_os = "android"))]
 mod android_media;
 #[cfg(all(feature = "android", target_os = "android"))]
+mod android_microphone_standby;
+#[cfg(all(feature = "android", target_os = "android"))]
 mod android_overlay_window;
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android_panic_hook;
@@ -132,6 +134,8 @@ mod android_surface;
 mod android_text_input;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_vsync;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_wearable;
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android_wire_escape;
 #[cfg(all(feature = "android", target_os = "android"))]

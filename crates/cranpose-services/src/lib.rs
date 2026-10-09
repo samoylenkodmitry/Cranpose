@@ -33,6 +33,7 @@ pub mod launch_args;
 pub mod launcher;
 pub mod media;
 pub mod memory_pressure;
+pub mod microphone_standby;
 pub mod navigation;
 pub mod network_status;
 pub mod notifier;
@@ -45,6 +46,7 @@ mod registry;
 pub mod share_sheet;
 pub mod theme;
 pub mod uri_handler;
+pub mod wearable;
 pub mod writable_folder;
 
 pub use accessibility_options::{
@@ -199,6 +201,10 @@ pub use memory_pressure::{
     MemoryPressure, MemoryPressureObserver, observe_memory_pressure, publish_memory_pressure,
     rememberMemoryPressure,
 };
+pub use microphone_standby::{
+    MicrophoneStandby, MicrophoneStandbyLease, hold_microphone_standby,
+    microphone_standby_available, set_platform_microphone_standby,
+};
 pub use navigation::{
     BackHandler, BackRequestObserver, back_interception_enabled, exit_requested,
     observe_back_requests, push_back_request, request_exit, set_back_interception,
@@ -249,6 +255,11 @@ pub use theme::{
 pub use uri_handler::{
     ProvideUriHandler, UriHandler, UriHandlerError, UriHandlerRef, clear_platform_uri_handler,
     default_uri_handler, local_uri_handler, set_platform_uri_handler,
+};
+pub use wearable::{
+    WearableError, WearableEvent, WearableLink, WearablePeer, WearableReceiver, WearableStream,
+    open_wearable_stream, publish_wearable_event, send_wearable_message,
+    set_platform_wearable_link, set_wearable_receiver, wearable_peers,
 };
 pub use writable_folder::{
     FolderEntry, FolderError, FolderReader, FolderWriter, WritableFolderStore,
