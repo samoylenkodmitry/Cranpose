@@ -26,8 +26,14 @@ pub struct TextPaint {
 }
 
 impl TextPaint {
-    /// The paint of a text in `style` with `spans`, at `font_size`.
-    pub fn of(style: &TextStyle, spans: &[RangeStyle<SpanStyle>], font_size: f32) -> Self {
+    /// The paint of a text in `style`, whose [`TextStyle::render_hash`] is
+    /// `style_hash`, with `spans`, at `font_size`.
+    pub fn of(
+        style: &TextStyle,
+        style_hash: u64,
+        spans: &[RangeStyle<SpanStyle>],
+        font_size: f32,
+    ) -> Self {
         let span_style = &style.span_style;
         let plain = span_style.background.is_none()
             && span_style.shadow.is_none()
@@ -45,7 +51,7 @@ impl TextPaint {
                 .baseline_shift
                 .filter(|shift| shift.is_specified())
                 .map_or(0.0, |shift| -(shift.0 * font_size)),
-            style_hash: style.render_hash(),
+            style_hash,
         }
     }
 }

@@ -92,6 +92,7 @@ impl TextPrimitiveNode {
         self.paint.get_or(|| {
             TextPaint::of(
                 &self.text_style,
+                self.text_style.render_hash(),
                 self.render_text.span_styles(),
                 self.font_size,
             )

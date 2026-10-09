@@ -60,6 +60,7 @@ pub struct PreparedTextLayout {
     /// `text` as a renderer draws it, converted on first use: see
     /// [`PreparedTextLayout::render_text`].
     pub render_text: std::cell::OnceCell<std::sync::Arc<crate::text::RenderString>>,
+    pub(crate) visual_style_hash: std::cell::OnceCell<u64>,
     /// The max widths the layout's greedy wrap breaks the same lines at and
     /// cuts its ellipsis at the same character, when it wrapped: `None` when
     /// it did not, broke lines another way, or a line overflowed its width.
@@ -119,6 +120,17 @@ impl PreparedTextLayout {
         let converted = std::sync::Arc::new(self.text.render_string());
         let _ = self.render_text.set(std::sync::Arc::clone(&converted));
         converted
+    }
+
+    /// [`TextStyle::render_hash`] of `visual_style`, hashed once for the
+    /// layout, or handed over by the node that knows its style's hash.
+    pub fn visual_style_hash(&self) -> u64 {
+        if let Some(hash) = self.visual_style_hash.get() {
+            return *hash;
+        }
+        let hash = self.visual_style.render_hash();
+        let _ = self.visual_style_hash.set(hash);
+        hash
     }
 }
 
@@ -1311,6 +1323,7 @@ fn prepare_layout<M: TextMeasurer + ?Sized>(
         },
         did_overflow,
         render_text: Default::default(),
+        visual_style_hash: Default::default(),
         wrap_hold,
     };
 

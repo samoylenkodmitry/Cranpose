@@ -1430,6 +1430,7 @@ fn prepared_as(display: &str, width: f32, did_overflow: bool) -> PreparedTextLay
         },
         did_overflow,
         render_text: Default::default(),
+        visual_style_hash: Default::default(),
         alignment_lines: Default::default(),
         wrap_hold: None,
     }
@@ -1685,6 +1686,7 @@ fn a_prepared_layout_converts_its_render_text_once() {
         },
         did_overflow: false,
         render_text: Default::default(),
+        visual_style_hash: Default::default(),
         wrap_hold: None,
     };
     let untouched = layout.clone();

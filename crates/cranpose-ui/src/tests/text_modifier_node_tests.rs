@@ -50,6 +50,7 @@ impl crate::text::TextMeasurer for RecordingPreparedLayoutMeasurer {
             },
             did_overflow: false,
             render_text: Default::default(),
+            visual_style_hash: Default::default(),
             alignment_lines: Default::default(),
             wrap_hold: None,
         }
@@ -124,6 +125,7 @@ impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
             },
             did_overflow: false,
             render_text: Default::default(),
+            visual_style_hash: Default::default(),
             alignment_lines: Default::default(),
             wrap_hold: None,
         }
@@ -186,6 +188,7 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
             },
             did_overflow: false,
             render_text: Default::default(),
+            visual_style_hash: Default::default(),
             alignment_lines: Default::default(),
             wrap_hold: None,
         }

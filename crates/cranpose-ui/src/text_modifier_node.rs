@@ -46,6 +46,7 @@ struct TextPreparedLayoutCacheEntry {
 struct TextPreparedLayoutOwner {
     text: Rc<AnnotatedString>,
     style: std::sync::Arc<TextStyle>,
+    style_hash: u64,
     options: TextLayoutOptions,
     node_id: Cell<Option<cranpose_core::NodeId>>,
     measured_max_width: Cell<Option<Option<f32>>>,
@@ -61,7 +62,7 @@ pub(crate) struct TextPreparedLayoutHandle {
 impl TextPreparedLayoutOwner {
     fn new(
         text: Rc<AnnotatedString>,
-        style: std::sync::Arc<TextStyle>,
+        (style, style_hash): (std::sync::Arc<TextStyle>, u64),
         options: TextLayoutOptions,
         node_id: Option<cranpose_core::NodeId>,
         measured_max_width: Option<Option<f32>>,
@@ -70,6 +71,7 @@ impl TextPreparedLayoutOwner {
         Self {
             text,
             style,
+            style_hash,
             options: options.normalized(),
             node_id: Cell::new(node_id),
             measured_max_width: Cell::new(measured_max_width),
@@ -140,6 +142,9 @@ impl TextPreparedLayoutOwner {
             self.options,
             normalized_max_width,
         );
+        if std::sync::Arc::ptr_eq(&prepared.visual_style, &self.style) {
+            let _ = prepared.visual_style_hash.set(self.style_hash);
+        }
         let widths = crate::text::measure::PreparedWidths::of(
             self.text.as_ref(),
             self.options,
@@ -239,10 +244,11 @@ impl TextModifierNode {
         options: TextLayoutOptions,
         density: Density,
     ) -> Self {
+        let style_hash = style.render_hash();
         Self {
             layout: Rc::new(TextPreparedLayoutOwner::new(
                 text,
-                std::sync::Arc::new(style),
+                (std::sync::Arc::new(style), style_hash),
                 options,
                 None,
                 None,
@@ -497,9 +503,12 @@ impl ModifierNodeElement for TextModifierElement {
             // A text that changed in the same style, as a ticker's does,
             // keeps sharing the style it had.
             let style = if same_style {
-                std::sync::Arc::clone(&current.style)
+                (std::sync::Arc::clone(&current.style), current.style_hash)
             } else {
-                std::sync::Arc::new(self.style.clone())
+                (
+                    std::sync::Arc::new(self.style.clone()),
+                    self.style.render_hash(),
+                )
             };
             let owner = TextPreparedLayoutOwner::new(
                 self.text.clone(),

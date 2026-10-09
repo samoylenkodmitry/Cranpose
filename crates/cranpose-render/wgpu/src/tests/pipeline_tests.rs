@@ -121,6 +121,7 @@ fn push_text_style_draws_for_test(
                 &std::sync::Arc::new(text_style.clone()),
                 cranpose_render_common::text_paint::TextPaint::of(
                     text_style,
+                    text_style.render_hash(),
                     &text.span_styles,
                     font_size,
                 ),
