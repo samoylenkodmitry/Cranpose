@@ -36,6 +36,8 @@ jobs:
           real_home="$(eval echo "~$(id -un)")"
           export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
           echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
+          # Node for the WebGPU check: one runner's PATH lacks Homebrew.
+          echo /opt/homebrew/bin >> "$GITHUB_PATH"
           scripts/ci/install_toolchains.sh
           rustc --version
           scripts/ci/rustup_locked.sh target add wasm32-unknown-unknown
@@ -74,6 +76,11 @@ jobs:
           site_root="$RUNNER_TEMP/cranpose-pages-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           apps/desktop-demo/package-web.sh "$site_root"
           echo "CRANPOSE_PAGES_SITE_ROOT=$site_root" >> "$GITHUB_ENV"
+
+      - name: Open every page of the site on WebGPU
+        # A site that blanks on WebGPU must not replace the deployed one
+        # (#1311). This runs on Metal; the pull request check runs on Vulkan.
+        run: just web-webgpu-smoke "$CRANPOSE_PAGES_SITE_ROOT" "$RUNNER_TEMP/webgpu-smoke-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
 
       - name: Provision GNU tar for the Pages uploader
         env:

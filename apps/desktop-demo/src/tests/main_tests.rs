@@ -551,24 +551,31 @@ fn tab_labels_slugs_and_startup_aliases_are_unique() {
     slugs.dedup();
     assert_eq!(slugs.len(), count, "tab slugs collide");
 
-    let mut aliases: Vec<&str> = DEMO_TAB_INFO
+    let mut names: Vec<String> = DEMO_TAB_INFO
         .iter()
-        .flat_map(|info| info.startup_aliases.iter().copied())
+        .flat_map(|info| {
+            std::iter::once(startup_key(info.slug).collect())
+                .chain(info.startup_aliases.iter().map(ToString::to_string))
+        })
         .collect();
-    let alias_count = aliases.len();
-    aliases.sort_unstable();
-    aliases.dedup();
-    assert_eq!(aliases.len(), alias_count, "startup aliases collide");
+    let name_count = names.len();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(
+        names.len(),
+        name_count,
+        "startup aliases collide with each other or with a slug"
+    );
 }
 
 #[test]
-fn startup_names_round_trip_through_their_aliases() {
+fn startup_names_round_trip_through_their_slugs_and_aliases() {
     for info in &DEMO_TAB_INFO {
-        for alias in info.startup_aliases {
+        for name in std::iter::once(&info.slug).chain(info.startup_aliases) {
             assert_eq!(
-                DemoTab::from_startup_name(alias),
+                DemoTab::from_startup_name(name),
                 Some(info.tab),
-                "'{alias}' should select {:?}",
+                "'{name}' should select {:?}",
                 info.tab
             );
         }
@@ -578,6 +585,29 @@ fn startup_names_round_trip_through_their_aliases() {
         Some(DemoTab::Controls)
     );
     assert_eq!(DemoTab::from_startup_name("no-such-tab"), None);
+}
+
+#[test]
+fn every_startup_page_opens_what_it_names() {
+    let pages: Vec<String> = startup_pages().collect();
+    assert_eq!(pages.len(), DEMO_TABS.len() + ShaderSection::ALL.len());
+    for page in &pages {
+        let param = |name: &str| {
+            page.split('&')
+                .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
+        };
+        let tab = param("tab").and_then(DemoTab::from_startup_name);
+        let section = param("shader_section").map(ShaderSection::from_startup_name);
+        assert!(tab.is_some(), "'{page}' names no tab");
+        assert_ne!(section, Some(None), "'{page}' names no shader section");
+        let startup = StartupSelection::from_requested(tab, section.flatten());
+        assert_eq!(startup.initial_tab, tab, "'{page}'");
+        assert_eq!(
+            startup.initial_shader_section,
+            section.flatten(),
+            "'{page}'"
+        );
+    }
 }
 
 #[test]

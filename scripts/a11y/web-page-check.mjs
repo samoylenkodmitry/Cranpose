@@ -1,58 +1,22 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
-import { mkdtempSync, openSync, readFileSync, writeFileSync, closeSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { checkMarkdownImages } from "./tests/markdown-images.mjs";
 import { checkImeFocus } from "./tests/ime-focus.mjs";
 import { checkEditorWithoutMirror } from "./tests/editor-without-mirror.mjs";
-import { Cdp, ENABLE_MIRROR } from "./cdp.mjs";
+import { ENABLE_MIRROR } from "./cdp.mjs";
+import { launchChrome } from "./chrome.mjs";
 
 const url = process.argv[2];
 assert.ok(url, "pass the URL of a running web demo");
-const chrome = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-let port = Number(process.env.A11Y_DEBUG_PORT ?? 0);
 const output = process.argv[3];
-const profile = mkdtempSync(join(tmpdir(), "a11y-chrome-"));
-const browserLog = output ? openSync(join(output, 'chrome.log'), 'w') : null;
-let browserError;
-
-const browser = spawn(
-  chrome,
-  [
-    "--headless=new",
-    `--remote-debugging-port=${port}`,
-    `--user-data-dir=${profile}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--use-angle=swiftshader",
-    "--enable-unsafe-swiftshader",
-    "--window-size=1024,700",
-    "about:blank",
-  ],
-  { stdio: ['ignore', 'ignore', browserLog ?? 'inherit'] },
+const { cdp, close } = await launchChrome(
+  ["--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--window-size=1024,700"],
+  output,
 );
-browser.on('error', error => { browserError = error; });
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function pageTarget() {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (browserError) throw browserError;
-    if (browser.exitCode !== null || browser.signalCode !== null) throw new Error('Chrome exited before connecting');
-    try {
-      if (port === 0) port = Number(readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]);
-      const list = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json());
-      const page = list.find((t) => t.type === "page");
-      if (page) return page;
-    } catch {}
-    await pause(200);
-  }
-  throw new Error("chrome did not answer on the debugging port");
-}
-
-const cdp = new Cdp();
 const send = cdp.send.bind(cdp);
 const evaluate = cdp.evaluate.bind(cdp);
 const until = cdp.until.bind(cdp);
@@ -73,10 +37,6 @@ async function check(name, expression) {
   report.push(name);
 }
 try {
-  await cdp.connect((await pageTarget()).webSocketDebuggerUrl);
-  await send("Page.enable");
-  await send("Runtime.enable");
-  await send("Log.enable");
   await checkEditorWithoutMirror({ send, until, evaluate, report, url });
   await checkImeFocus({ send, until, evaluate, report, url });
   await checkMarkdownImages({ send, until, evaluate, report, url, output });
@@ -204,11 +164,5 @@ try {
       writeFileSync(join(output, 'screen.png'), Buffer.from(screenshot.data, 'base64'));
     } catch (error) { console.error('Artifact capture:', error); }
   }
-  cdp.close();
-  if (!browserError && browser.exitCode === null && browser.signalCode === null) {
-    const exited = new Promise(resolve => browser.once("exit", resolve));
-    browser.kill();
-    await exited;
-  }
-  if (browserLog !== null) closeSync(browserLog);
+  await close();
 }

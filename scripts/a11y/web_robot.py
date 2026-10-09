@@ -9,9 +9,21 @@ import subprocess
 import sys
 from threading import Thread
 
+# Each browser check: the script that drives the page and its time limit in seconds.
+CHECKS = {
+    'accessibility': ('scripts/a11y/web-page-check.mjs', 180),
+    'webgpu': ('scripts/a11y/tests/webgpu-smoke.mjs', 300),
+}
+
+
+class QuietHandler(SimpleHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--check', choices=CHECKS, default='accessibility')
     parser.add_argument('--site', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--chrome', default=os.environ.get('CHROME'))
@@ -24,7 +36,8 @@ def main():
         chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
     if not chrome:
         raise RuntimeError('Set CHROME to a Chrome or Chromium executable')
-    handler = partial(SimpleHTTPRequestHandler, directory=str(args.site.resolve()))
+    script, timeout = CHECKS[args.check]
+    handler = partial(QuietHandler, directory=str(args.site.resolve()))
     with ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
         serving = Thread(target=server.serve_forever)
         serving.start()
@@ -34,10 +47,11 @@ def main():
             environment = dict(os.environ, CHROME=chrome, A11Y_DEBUG_PORT='0')
             with (args.output / 'browser.log').open('w') as log:
                 process = subprocess.Popen(
-                    ['node', 'scripts/a11y/web-page-check.mjs', url, str(args.output.resolve())],
+                    ['node', script, url, str(args.output.resolve())],
                     env=environment, stdout=log, stderr=subprocess.STDOUT,
                     start_new_session=os.name == 'posix')
-                status = process.wait(timeout=180)
+                status = process.wait(timeout=timeout)
+            print((args.output / 'browser.log').read_text(), end='')
             if status:
                 raise RuntimeError(f'Browser robot failed ({status}); see {args.output}/browser.log')
         finally:
