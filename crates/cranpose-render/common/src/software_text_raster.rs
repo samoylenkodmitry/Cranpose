@@ -517,17 +517,19 @@ impl SoftwareTextFontSet {
         text: &str,
         style: &TextStyle,
     ) -> Option<&SoftwareTextFont> {
+        self.resolve_covering(text, style)
+            .and_then(|(primary, covers)| covers.then_some(primary))
+    }
+
+    fn resolve_covering(&self, text: &str, style: &TextStyle) -> Option<(&SoftwareTextFont, bool)> {
         let request = FontSelectionRequest::resolve(style, &self.registered_families);
         let primary = self.resolve_for_request(request)?;
-        if self.fonts.len() == 1 || primary.takes_ascii(text) {
-            return Some(primary);
-        }
-        for grapheme in text.graphemes(true) {
-            if !std::ptr::eq(primary, self.resolve_grapheme(primary, grapheme, request)) {
-                return None;
-            }
-        }
-        Some(primary)
+        let covers = self.fonts.len() == 1
+            || primary.takes_ascii(text)
+            || text.graphemes(true).all(|grapheme| {
+                std::ptr::eq(primary, self.resolve_grapheme(primary, grapheme, request))
+            });
+        Some((primary, covers))
     }
 }
 
@@ -1208,6 +1210,24 @@ impl TextMeasurer for SoftwareTextMeasurer {
     fn line_box(&self, style: &TextStyle) -> Option<cranpose_ui::text::LineBox> {
         let font = self.fonts.resolve(style)?;
         Some(font_line_box(style, font, resolve_font_size(style)))
+    }
+
+    fn line_box_and_height(
+        &self,
+        _node_id: Option<cranpose_core::NodeId>,
+        text: &AnnotatedString,
+        style: &TextStyle,
+    ) -> (Option<cranpose_ui::text::LineBox>, f32) {
+        let Some((font, covers)) = self.fonts.resolve_covering(&text.text, style) else {
+            return (None, self.line_height(text, style));
+        };
+        let line_box = font_line_box(style, font, resolve_font_size(style));
+        let height = if covers && text.span_styles.is_empty() {
+            line_box.height
+        } else {
+            self.line_height(text, style)
+        };
+        (Some(line_box), height)
     }
 
     fn visit_line_boxes(
@@ -4317,16 +4337,17 @@ pub(crate) fn visit_annotated_line_boxes(
     Some(())
 }
 
-pub(crate) fn effective_style_for_range(
+pub(crate) fn effective_style_for_range<'a>(
     span_styles: &[RangeStyle<SpanStyle>],
-    style: &TextStyle,
+    style: &'a TextStyle,
     start: usize,
     end: usize,
-) -> TextStyle {
-    let mut effective = style.clone();
+) -> Cow<'a, TextStyle> {
+    let mut effective = Cow::Borrowed(style);
     for span in span_styles {
         if span.range.start < end && span.range.end > start {
-            effective.span_style = effective.span_style.merge(&span.item);
+            let merged = effective.span_style.merge(&span.item);
+            effective.to_mut().span_style = merged;
         }
     }
     effective

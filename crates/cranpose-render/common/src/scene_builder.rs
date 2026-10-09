@@ -2272,6 +2272,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
         clip,
         paint: TextPaintCache::holding(TextPaint::of(
             visual_style,
+            prepared.visual_style_hash(),
             &prepared.text.span_styles,
             font_size,
         )),

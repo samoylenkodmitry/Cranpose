@@ -60,6 +60,7 @@ pub struct PreparedTextLayout {
     /// `text` as a renderer draws it, converted on first use: see
     /// [`PreparedTextLayout::render_text`].
     pub render_text: std::cell::OnceCell<std::sync::Arc<crate::text::RenderString>>,
+    pub(crate) visual_style_hash: std::cell::OnceCell<u64>,
     /// The max widths the layout's greedy wrap breaks the same lines at and
     /// cuts its ellipsis at the same character, when it wrapped: `None` when
     /// it did not, broke lines another way, or a line overflowed its width.
@@ -119,6 +120,17 @@ impl PreparedTextLayout {
         let converted = std::sync::Arc::new(self.text.render_string());
         let _ = self.render_text.set(std::sync::Arc::clone(&converted));
         converted
+    }
+
+    /// [`TextStyle::render_hash`] of `visual_style`, hashed once for the
+    /// layout, or handed over by the node that knows its style's hash.
+    pub fn visual_style_hash(&self) -> u64 {
+        if let Some(hash) = self.visual_style_hash.get() {
+            return *hash;
+        }
+        let hash = self.visual_style.render_hash();
+        let _ = self.visual_style_hash.set(hash);
+        hash
     }
 }
 
@@ -332,6 +344,21 @@ pub trait TextMeasurer: 'static {
     ) -> f32 {
         let _ = node_id;
         self.line_height(text, style)
+    }
+
+    /// [`TextMeasurer::line_box`] of `style` and
+    /// [`TextMeasurer::line_height_for_node`] of `text` in it, together: a
+    /// measurer that finds both in one font lookup answers them at once.
+    fn line_box_and_height(
+        &self,
+        node_id: Option<NodeId>,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> (Option<crate::text::LineBox>, f32) {
+        (
+            self.line_box(style),
+            self.line_height_for_node(node_id, text, style),
+        )
     }
 
     fn get_offset_for_position(
@@ -714,15 +741,26 @@ impl TextService {
         {
             return prepared;
         }
-        let prepared = Rc::new(self.with_measurer(|m| {
-            m.prepare_with_options_for_node(node_id, text, style, options.normalized(), max_width)
-        }));
+        let prepared = self.prepare_unshared(node_id, text, style, options, max_width);
         if let Some(key) = key {
             self.prepared_cache
                 .borrow_mut()
                 .push(key, Rc::clone(&prepared));
         }
         prepared
+    }
+
+    pub(crate) fn prepare_unshared(
+        &self,
+        node_id: Option<NodeId>,
+        text: &Rc<crate::text::AnnotatedString>,
+        style: &Arc<TextStyle>,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> Rc<PreparedTextLayout> {
+        Rc::new(self.with_measurer(|m| {
+            m.prepare_with_options_for_node(node_id, text, style, options.normalized(), max_width)
+        }))
     }
 
     pub(crate) fn layout(
@@ -908,11 +946,32 @@ pub fn prepare_text_layout_for_node(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> Rc<PreparedTextLayout> {
-    let prepare = |text: &Rc<crate::text::AnnotatedString>, style: &Arc<TextStyle>| {
+    with_font_scaled(text, style, |text, style| {
         crate::render_state::with_text_service(|service| {
             service.prepare_with_options(node_id, text, style, options.normalized(), max_width)
         })
-    };
+    })
+}
+
+pub(crate) fn prepare_unshared_text_layout_for_node(
+    node_id: Option<NodeId>,
+    text: &Rc<crate::text::AnnotatedString>,
+    style: &Arc<TextStyle>,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> Rc<PreparedTextLayout> {
+    with_font_scaled(text, style, |text, style| {
+        crate::render_state::with_text_service(|service| {
+            service.prepare_unshared(node_id, text, style, options, max_width)
+        })
+    })
+}
+
+fn with_font_scaled<R>(
+    text: &Rc<crate::text::AnnotatedString>,
+    style: &Arc<TextStyle>,
+    prepare: impl FnOnce(&Rc<crate::text::AnnotatedString>, &Arc<TextStyle>) -> R,
+) -> R {
     let Some(curve) = crate::render_state::current_scaling_font_scale_curve() else {
         return prepare(text, style);
     };
@@ -1264,6 +1323,7 @@ fn prepare_layout<M: TextMeasurer + ?Sized>(
         },
         did_overflow,
         render_text: Default::default(),
+        visual_style_hash: Default::default(),
         wrap_hold,
     };
 
@@ -1301,8 +1361,10 @@ fn prepared_line_metrics<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     min_lines: usize,
 ) -> PreparedLineMetrics {
-    let base_box = measurer.line_box(style);
+    let mut span_base_box = None;
     if !display.span_styles.is_empty() {
+        let base_box = measurer.line_box(style);
+        span_base_box = Some(base_box);
         let mut top = 0.0;
         let mut trim_bottom = 0.0;
         let mut first = None;
@@ -1336,9 +1398,14 @@ fn prepared_line_metrics<M: TextMeasurer + ?Sized>(
     } else {
         display
     };
-    let line_height = measurer
-        .line_height_for_node(node_id, measured_text, style)
-        .max(0.0);
+    let (base_box, line_height) = match span_base_box {
+        Some(base_box) => (
+            base_box,
+            measurer.line_height_for_node(node_id, measured_text, style),
+        ),
+        None => measurer.line_box_and_height(node_id, measured_text, style),
+    };
+    let line_height = line_height.max(0.0);
     let first = base_box
         .map(crate::text::LineBox::first_baseline)
         .or_else(|| measurer.first_baseline(style));

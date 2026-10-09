@@ -46,10 +46,12 @@ struct TextPreparedLayoutCacheEntry {
 struct TextPreparedLayoutOwner {
     text: Rc<AnnotatedString>,
     style: std::sync::Arc<TextStyle>,
+    style_hash: u64,
     options: TextLayoutOptions,
     node_id: Cell<Option<cranpose_core::NodeId>>,
     measured_max_width: Cell<Option<Option<f32>>>,
     cache: RefCell<SmallVec<[TextPreparedLayoutCacheEntry; 1]>>,
+    shares_layouts: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -60,18 +62,21 @@ pub(crate) struct TextPreparedLayoutHandle {
 impl TextPreparedLayoutOwner {
     fn new(
         text: Rc<AnnotatedString>,
-        style: std::sync::Arc<TextStyle>,
+        (style, style_hash): (std::sync::Arc<TextStyle>, u64),
         options: TextLayoutOptions,
         node_id: Option<cranpose_core::NodeId>,
         measured_max_width: Option<Option<f32>>,
+        shares_layouts: bool,
     ) -> Self {
         Self {
             text,
             style,
+            style_hash,
             options: options.normalized(),
             node_id: Cell::new(node_id),
             measured_max_width: Cell::new(measured_max_width),
             cache: RefCell::new(SmallVec::new()),
+            shares_layouts,
         }
     }
 
@@ -125,13 +130,21 @@ impl TextPreparedLayoutOwner {
             }
         }
 
-        let prepared = crate::text::prepare_text_layout_for_node(
+        let prepare = if self.shares_layouts {
+            crate::text::prepare_text_layout_for_node
+        } else {
+            crate::text::measure::prepare_unshared_text_layout_for_node
+        };
+        let prepared = prepare(
             self.node_id(),
             &self.text,
             &self.style,
             self.options,
             normalized_max_width,
         );
+        if std::sync::Arc::ptr_eq(&prepared.visual_style, &self.style) {
+            let _ = prepared.visual_style_hash.set(self.style_hash);
+        }
         let widths = crate::text::measure::PreparedWidths::of(
             self.text.as_ref(),
             self.options,
@@ -231,13 +244,15 @@ impl TextModifierNode {
         options: TextLayoutOptions,
         density: Density,
     ) -> Self {
+        let style_hash = style.render_hash();
         Self {
             layout: Rc::new(TextPreparedLayoutOwner::new(
                 text,
-                std::sync::Arc::new(style),
+                (std::sync::Arc::new(style), style_hash),
                 options,
                 None,
                 None,
+                true,
             )),
             density,
             state: NodeState::new(),
@@ -463,7 +478,6 @@ impl TextModifierElement {
 impl Hash for TextModifierElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.text.render_hash().hash(state);
-        self.style.render_hash().hash(state);
         self.options.hash(state);
         self.density.density().to_bits().hash(state);
     }
@@ -489,9 +503,12 @@ impl ModifierNodeElement for TextModifierElement {
             // A text that changed in the same style, as a ticker's does,
             // keeps sharing the style it had.
             let style = if same_style {
-                std::sync::Arc::clone(&current.style)
+                (std::sync::Arc::clone(&current.style), current.style_hash)
             } else {
-                std::sync::Arc::new(self.style.clone())
+                (
+                    std::sync::Arc::new(self.style.clone()),
+                    self.style.render_hash(),
+                )
             };
             let owner = TextPreparedLayoutOwner::new(
                 self.text.clone(),
@@ -499,6 +516,7 @@ impl ModifierNodeElement for TextModifierElement {
                 self.options,
                 current.node_id(),
                 current.measured_max_width.get(),
+                false,
             );
             // A layout no handle still reads keeps its allocation.
             match Rc::get_mut(&mut node.layout) {

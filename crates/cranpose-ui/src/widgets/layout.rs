@@ -46,7 +46,7 @@ pub(crate) fn compose_layout<F, P>(
     modifier: Modifier,
     measure_policy: P,
     composed_density: crate::density::Density,
-    mut content: F,
+    content: F,
 ) -> NodeId
 where
     F: FnMut() + 'static,
@@ -70,6 +70,28 @@ where
         }
         Rc::clone(&holder.policy)
     };
+    emit_layout(modifier, policy, composed_density, content)
+}
+
+pub(crate) fn compose_empty_layout(
+    modifier: Modifier,
+    composed_density: crate::density::Density,
+) -> NodeId {
+    thread_local! {
+        static EMPTY: Rc<dyn MeasurePolicy> = Rc::new(crate::layout::policies::EmptyMeasurePolicy);
+    }
+    emit_layout(modifier, EMPTY.with(Rc::clone), composed_density, || {})
+}
+
+fn emit_layout<F>(
+    modifier: Modifier,
+    policy: Rc<dyn MeasurePolicy>,
+    composed_density: crate::density::Density,
+    mut content: F,
+) -> NodeId
+where
+    F: FnMut() + 'static,
+{
     let id = cranpose_core::with_current_composer(|composer| {
         composer.emit_recyclable_node(
             || LayoutNode::new(modifier.clone(), Rc::clone(&policy)),
