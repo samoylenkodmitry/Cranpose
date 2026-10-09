@@ -151,6 +151,12 @@ impl ShapeRecords {
         self.sources.clear();
     }
 
+    pub(crate) fn trim_growth(&mut self) {
+        trim_growth(&mut self.bodies);
+        trim_growth(&mut self.curves);
+        trim_growth(&mut self.sources);
+    }
+
     pub(crate) fn reserve(&mut self, additional: usize) {
         self.bodies.reserve(additional);
         self.curves.reserve(additional);
@@ -172,6 +178,16 @@ impl ShapeRecords {
         }
         push_sized(&mut self.bodies, body);
         push_sized(&mut self.curves, curve);
+    }
+}
+
+/// Gives back the room past an eighth more than `items` holds once growth
+/// left over a quarter more: a recording drawn again keeps its capacity,
+/// so room its first growth left would stay for as long as its node.
+pub(crate) fn trim_growth<T>(items: &mut Vec<T>) {
+    let len = items.len();
+    if items.capacity() > len + len / 4 {
+        items.shrink_to(len + len / 8);
     }
 }
 

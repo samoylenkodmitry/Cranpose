@@ -739,6 +739,18 @@ impl RecordTables {
         self.fingerprint.take();
     }
 
+    /// Gives back the room growth left in every table; see
+    /// [`crate::shape_records::trim_growth`]. The content, and so the
+    /// fingerprint, stay.
+    fn trim_growth(&mut self) {
+        use crate::shape_records::trim_growth;
+        self.shapes.trim_growth();
+        trim_growth(&mut self.brushes);
+        trim_growth(&mut self.stops);
+        trim_growth(&mut self.explicit_stops);
+        trim_growth(&mut self.segments);
+    }
+
     /// Empty tables with this one's capacities, so a recording that starts
     /// while a scene still holds the last one grows nothing.
     fn with_capacity_of(&self) -> Self {
@@ -2145,7 +2157,12 @@ impl CommandRecorder {
     }
 
     /// Publishes completed command data without copying its shape columns.
-    pub fn finish(self) -> CommandRecording {
+    /// A recording that took no earlier one's allocation gives back the
+    /// room its growth left: drawing it again then refills that allocation.
+    pub fn finish(mut self) -> CommandRecording {
+        if self.vessel.is_none() {
+            self.shapes.tables.trim_growth();
+        }
         CommandRecording {
             shapes: fill_vessel(self.vessel, self.shapes),
             content: self.content,

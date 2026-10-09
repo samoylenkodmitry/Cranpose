@@ -313,4 +313,19 @@ fn a_one_shape_recording_holds_room_for_one_record_and_one_segment() {
         two.shape_capacity() >= 2,
         "a second shape grows the columns as usual"
     );
+    let nine = CommandRecording::from_primitives(std::iter::repeat_with(rect).take(9));
+    assert_eq!(
+        nine.shape_capacity(),
+        10,
+        "a new recording keeps an eighth more than it holds, not the sixteen its growth reached"
+    );
+    let mut redrawn = CommandRecorder::reusing(nine);
+    for _ in 0..10 {
+        redrawn.push_primitive(rect());
+    }
+    assert_eq!(
+        redrawn.finish().shape_capacity(),
+        10,
+        "drawing it again into its allocation keeps that room"
+    );
 }

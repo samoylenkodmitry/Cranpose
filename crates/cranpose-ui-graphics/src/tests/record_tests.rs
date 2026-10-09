@@ -713,7 +713,6 @@ fn clearing_keeps_the_capacity_and_forgets_the_content() {
 fn publishing_and_unique_reuse_move_the_shape_columns() {
     let mut recorder = CommandRecorder::default();
     assert!(recorder.is_empty());
-    recorder.reserve_shapes(512);
     recorder.push_primitive(every_primitive().remove(0));
     recorder.push_content();
     assert_eq!(recorder.len(), 2);
