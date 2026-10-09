@@ -366,7 +366,8 @@ impl TableVersion {
     /// Tables for `needed` elements, mapped from the start in the mapped
     /// mode; an empty brush or stop table binds the empty stand-in.
     fn new(context: &StoreContext<'_>, needed: [usize; STORED_TABLES]) -> Self {
-        let capacities = std::array::from_fn(|index| stored_capacity(needed[index]));
+        let capacities =
+            std::array::from_fn(|index| stored_capacity(needed[index], context.upload));
         let mut offsets = [0; STORED_TABLES];
         let mut end = 0;
         for index in 0..STORED_TABLES {
@@ -637,15 +638,19 @@ fn stored_needs(tables: &RecordTables) -> [usize; STORED_TABLES] {
     ]
 }
 
-/// The elements a stored run's table takes for `needed`: a quarter more,
-/// so a run that grows a little keeps its buffer, in whole groups of 16.
-/// A run of 70 records took 256 at the start and the next power of two
-/// after: 341 runs held 20 MB of tables on the desktop gauntlet.
-fn stored_capacity(needed: usize) -> usize {
-    if needed == 0 {
-        return 0;
+/// The elements a stored run's table takes for `needed`, in whole groups
+/// of 16. A run of 70 records took 256 at the start and the next power of
+/// two after: 341 runs held 20 MB of tables on the desktop gauntlet. A
+/// copied run takes a quarter more, so a run that grows a little keeps the
+/// buffer its changes are copied into. A mapped run writes each change into
+/// another version, so room to grow would only let a spare serve once more:
+/// the desktop gauntlet's 680 versions at tier 16 held 2.1 MB of it while
+/// no run grew.
+fn stored_capacity(needed: usize, upload: UploadMode) -> usize {
+    match upload {
+        UploadMode::Copied => (needed + needed / 4).next_multiple_of(16),
+        UploadMode::Mapped => needed.next_multiple_of(16),
     }
-    (needed + needed / 4).next_multiple_of(16)
 }
 
 /// The usage of an arena table, short of how the CPU writes it.
