@@ -3,7 +3,9 @@ use std::collections::VecDeque;
 use web_time::{Duration, Instant};
 
 use super::{
-    lazy_list_measure::{DEFAULT_ITEM_SIZE_ESTIMATE, LazyListMeasureConfig},
+    lazy_list_measure::{
+        BeyondItem, DEFAULT_ITEM_SIZE_ESTIMATE, LazyItemSource, LazyListMeasureConfig,
+    },
     lazy_list_measured_item::LazyListMeasuredItem,
 };
 
@@ -24,30 +26,8 @@ pub struct ItemMeasurePass {
     pub viewport_filled: bool,
 }
 
-pub trait BeyondBoundsMeasurePolicy {
-    fn should_measure_beyond_item(&mut self, index: usize) -> bool;
-}
-
-pub struct AlwaysMeasureBeyond;
-
-impl BeyondBoundsMeasurePolicy for AlwaysMeasureBeyond {
-    fn should_measure_beyond_item(&mut self, _index: usize) -> bool {
-        true
-    }
-}
-
-impl<F> BeyondBoundsMeasurePolicy for F
-where
-    F: FnMut(usize) -> bool,
-{
-    fn should_measure_beyond_item(&mut self, index: usize) -> bool {
-        self(index)
-    }
-}
-
-pub struct ItemMeasurer<'a, F, B = AlwaysMeasureBeyond> {
-    measure_fn: &'a mut F,
-    beyond_bounds_policy: B,
+pub struct ItemMeasurer<'a, S> {
+    source: &'a mut S,
     pre_measured: VecDeque<LazyListMeasuredItem>,
     config: &'a LazyListMeasureConfig,
     guaranteed_after_beyond_bounds_item_count: usize,
@@ -60,12 +40,12 @@ pub struct ItemMeasurer<'a, F, B = AlwaysMeasureBeyond> {
     telemetry_pass_id: Option<u64>,
 }
 
-impl<'a, F> ItemMeasurer<'a, F, AlwaysMeasureBeyond>
+impl<'a, S> ItemMeasurer<'a, S>
 where
-    F: FnMut(usize) -> LazyListMeasuredItem,
+    S: LazyItemSource,
 {
     pub fn new(
-        measure_fn: &'a mut F,
+        source: &'a mut S,
         config: &'a LazyListMeasureConfig,
         items_count: usize,
         effective_viewport_size: f32,
@@ -73,8 +53,7 @@ where
         pre_measured: VecDeque<LazyListMeasuredItem>,
     ) -> Self {
         Self {
-            measure_fn,
-            beyond_bounds_policy: AlwaysMeasureBeyond,
+            source,
             pre_measured,
             config,
             guaranteed_after_beyond_bounds_item_count: config.beyond_bounds_item_count,
@@ -87,13 +66,7 @@ where
             telemetry_pass_id: None,
         }
     }
-}
 
-impl<'a, F, B> ItemMeasurer<'a, F, B>
-where
-    F: FnMut(usize) -> LazyListMeasuredItem,
-    B: BeyondBoundsMeasurePolicy,
-{
     pub fn with_beyond_bounds_item_count(mut self, count: usize) -> Self {
         self.beyond_bounds_item_count = count;
         self
@@ -112,28 +85,6 @@ where
     pub fn with_telemetry_pass_id(mut self, pass_id: Option<u64>) -> Self {
         self.telemetry_pass_id = pass_id;
         self
-    }
-
-    pub fn with_beyond_bounds_measure_policy<N>(self, policy: N) -> ItemMeasurer<'a, F, N>
-    where
-        N: BeyondBoundsMeasurePolicy,
-    {
-        ItemMeasurer {
-            measure_fn: self.measure_fn,
-            beyond_bounds_policy: policy,
-            pre_measured: self.pre_measured,
-            config: self.config,
-            guaranteed_after_beyond_bounds_item_count: self
-                .guaranteed_after_beyond_bounds_item_count,
-            guaranteed_before_beyond_bounds_item_count: self
-                .guaranteed_before_beyond_bounds_item_count,
-            beyond_bounds_item_count: self.beyond_bounds_item_count,
-            items_count: self.items_count,
-            effective_viewport_size: self.effective_viewport_size,
-            average_item_size: self.average_item_size,
-            include_before_beyond_bounds: self.include_before_beyond_bounds,
-            telemetry_pass_id: self.telemetry_pass_id,
-        }
     }
 
     pub fn measure_all(
@@ -168,7 +119,7 @@ where
             .unwrap_or(first_item_index);
         let backfilled = effective_first_index != first_item_index;
 
-        self.measure_beyond_after(
+        self.keep_beyond_after(
             current_index,
             current_offset,
             &mut visible_items,
@@ -179,14 +130,10 @@ where
             && effective_first_index > 0
             && !visible_items.is_empty()
         {
-            let before_items = self.measure_beyond_before(
-                effective_first_index,
-                visible_items[0].offset,
-                visible_items.len(),
-                start_time,
-            );
-            if !before_items.is_empty() {
-                let mut combined = before_items;
+            let placed_before =
+                self.keep_beyond_before(effective_first_index, visible_items[0].offset, start_time);
+            if !placed_before.is_empty() {
+                let mut combined = placed_before;
                 combined.append(&mut visible_items);
                 visible_items = combined;
             }
@@ -249,7 +196,7 @@ where
             idx -= 1;
             let mut item = self
                 .take_pre_measured(idx)
-                .unwrap_or_else(|| (self.measure_fn)(idx));
+                .unwrap_or_else(|| self.source.measure(idx));
             top -= item.main_axis_size + self.config.spacing;
             item.offset = top;
             visible_items.insert(0, item);
@@ -285,7 +232,7 @@ where
         {
             let mut item = self
                 .take_pre_measured(current_index)
-                .unwrap_or_else(|| (self.measure_fn)(current_index));
+                .unwrap_or_else(|| self.source.measure(current_index));
             item.offset = current_offset;
             current_offset += item.main_axis_size + self.config.spacing;
             items.push(item);
@@ -304,7 +251,7 @@ where
         (items, current_index, current_offset)
     }
 
-    fn measure_beyond_after(
+    fn keep_beyond_after(
         &mut self,
         mut current_index: usize,
         mut current_offset: f32,
@@ -315,67 +262,52 @@ where
             .beyond_bounds_item_count
             .min(self.items_count - current_index);
 
-        for measured_after in 0..after_count {
-            if current_index >= self.items_count {
-                break;
-            }
-            if measured_after >= self.guaranteed_after_beyond_bounds_item_count
+        for kept_after in 0..after_count {
+            if kept_after >= self.guaranteed_after_beyond_bounds_item_count
                 && start_time.elapsed() > DEFAULT_TIME_BUDGET
             {
                 break;
             }
-            if !self
-                .beyond_bounds_policy
-                .should_measure_beyond_item(current_index)
-            {
-                break;
+            match self.source.keep_beyond(current_index) {
+                BeyondItem::Declined => break,
+                BeyondItem::Kept => {}
+                BeyondItem::Placed(mut item) => {
+                    item.offset = current_offset;
+                    current_offset += item.main_axis_size + self.config.spacing;
+                    items.push(item);
+                }
             }
-            let mut item = self
-                .take_pre_measured(current_index)
-                .unwrap_or_else(|| (self.measure_fn)(current_index));
-            item.offset = current_offset;
-            current_offset += item.main_axis_size + self.config.spacing;
-            items.push(item);
             current_index += 1;
         }
     }
 
-    fn measure_beyond_before(
+    fn keep_beyond_before(
         &mut self,
         first_index: usize,
         first_offset: f32,
-        following_item_count: usize,
         start_time: Instant,
     ) -> Vec<LazyListMeasuredItem> {
         let before_count = self.beyond_bounds_item_count.min(first_index);
-        if before_count == 0 {
-            return Vec::new();
-        }
-
-        let mut before_items =
-            Vec::with_capacity(before_count.saturating_add(following_item_count));
+        let mut placed = Vec::new();
         let mut before_offset = first_offset;
-
-        for i in 0..before_count {
-            if i >= self.guaranteed_before_beyond_bounds_item_count
+        for kept_before in 0..before_count {
+            if kept_before >= self.guaranteed_before_beyond_bounds_item_count
                 && start_time.elapsed() > DEFAULT_TIME_BUDGET
             {
                 break;
             }
-            let idx = first_index - 1 - i;
-            if !self.beyond_bounds_policy.should_measure_beyond_item(idx) {
-                break;
+            match self.source.keep_beyond(first_index - 1 - kept_before) {
+                BeyondItem::Declined => break,
+                BeyondItem::Kept => {}
+                BeyondItem::Placed(mut item) => {
+                    before_offset -= item.main_axis_size + self.config.spacing;
+                    item.offset = before_offset;
+                    placed.push(item);
+                }
             }
-            let mut item = self
-                .take_pre_measured(idx)
-                .unwrap_or_else(|| (self.measure_fn)(idx));
-            before_offset -= item.main_axis_size + self.config.spacing;
-            item.offset = before_offset;
-            before_items.push(item);
         }
-
-        before_items.reverse();
-        before_items
+        placed.reverse();
+        placed
     }
 
     fn estimated_measure_capacity(
@@ -401,9 +333,7 @@ where
             .ceil()
             .min(MAX_VISIBLE_ITEMS_SAFETY as f32) as usize;
 
-        estimated_visible
-            .saturating_add(self.beyond_bounds_item_count)
-            .min(remaining_items)
+        estimated_visible.min(remaining_items)
     }
 
     fn estimated_item_extent(&self) -> f32 {

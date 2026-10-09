@@ -28,10 +28,14 @@ where
         }
         self.app.revealed_focus = focused;
         let Some(focused) = focused else { return };
-        self.reveal_node_in_context(focused);
+        self.reveal_node_with(focused, true);
     }
 
     fn reveal_node_in_context(&mut self, focused: NodeId) -> bool {
+        self.reveal_node_with(focused, false)
+    }
+
+    fn reveal_node_with(&mut self, focused: NodeId, remeasure_containers: bool) -> bool {
         let mut revealed = false;
         for index in 0..self.surfaces.len() {
             let surface = &self.surfaces[index];
@@ -52,6 +56,13 @@ where
                 .semantics_tree_for_input(&mut self.app)
                 .and_then(|tree| scroll_ancestors(tree.root(), focused))
                 .unwrap_or_default();
+            if remeasure_containers && !ancestors.is_empty() {
+                for &ancestor in &ancestors {
+                    cranpose_ui::schedule_measure_repass(ancestor);
+                }
+                self.app.request_layout_pass();
+                self.run_layout_phase_in_context();
+            }
             for ancestor in ancestors {
                 revealed |= self.reveal_within_container(index, focused, ancestor);
             }

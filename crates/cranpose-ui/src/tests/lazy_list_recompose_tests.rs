@@ -1078,7 +1078,10 @@ fn invalidated_cached_lazy_item_remeasures_when_text_height_shrinks() {
         height: 360.0,
     };
     let initial_records = render_text_records_with_size(&mut composition, root, viewport);
-    let initial_following_y = text_y(&initial_records, "Following retained comment");
+    let initial_following_y = initial_records
+        .iter()
+        .find(|record| record.value == "Following retained comment")
+        .map_or(f32::INFINITY, |record| record.y);
     assert!(
         initial_following_y > 120.0,
         "long retained item should push following item down, got y={initial_following_y:.1}"

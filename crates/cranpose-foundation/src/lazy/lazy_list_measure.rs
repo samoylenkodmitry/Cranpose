@@ -9,7 +9,7 @@ use std::collections::VecDeque;
 use super::{
     bounds_adjuster::BoundsAdjuster,
     diagnostics,
-    item_measurer::{AlwaysMeasureBeyond, BeyondBoundsMeasurePolicy, ItemMeasurer},
+    item_measurer::ItemMeasurer,
     lazy_list_measured_item::{LazyListMeasureResult, LazyListMeasuredItem},
     lazy_list_state::{LazyListLayoutInfo, LazyListState},
     scroll_position_resolver::ScrollPositionResolver,
@@ -78,13 +78,52 @@ impl Default for LazyListMeasureConfig {
     }
 }
 
+/// What a lazy list measure pass does with an item beyond its viewport.
+pub enum BeyondItem {
+    /// The item stays composed without being placed.
+    Kept,
+    /// The item is placed beside the viewport's items, where a focus search
+    /// can move into it.
+    Placed(LazyListMeasuredItem),
+    /// The item is not kept, and neither is any further item on that side.
+    Declined,
+}
+
+/// Where a lazy list measure pass gets its items.
+pub trait LazyItemSource {
+    /// Composes and measures the item at `index`, which the pass places.
+    fn measure(&mut self, index: usize) -> LazyListMeasuredItem;
+
+    /// Keeps the item at `index`, which lies beyond the viewport, composed
+    /// ahead of a scroll. A source places either every beyond item it keeps
+    /// in a pass or none.
+    fn keep_beyond(&mut self, index: usize) -> BeyondItem;
+}
+
+struct MeasureEveryItem<F>(F);
+
+impl<F> LazyItemSource for MeasureEveryItem<F>
+where
+    F: FnMut(usize) -> LazyListMeasuredItem,
+{
+    fn measure(&mut self, index: usize) -> LazyListMeasuredItem {
+        (self.0)(index)
+    }
+
+    fn keep_beyond(&mut self, index: usize) -> BeyondItem {
+        (self.0)(index);
+        BeyondItem::Kept
+    }
+}
+
 /// Measures a lazy list and returns the items to compose/place.
 ///
 /// This is the core algorithm that determines virtualization behavior:
 /// 1. Handle pending scroll-to-item requests
 /// 2. Apply scroll delta to current position
 /// 3. Determine which items are visible in the viewport
-/// 4. Compose and measure only those items (+ beyond bounds buffer)
+/// 4. Compose and measure only those items, and keep the beyond-bounds
+///    buffer composed without placing it
 /// 5. Calculate placements and total content size
 ///
 /// # Arguments
@@ -114,23 +153,22 @@ where
         viewport_size,
         _cross_axis_size,
         config,
-        measure_item,
-        AlwaysMeasureBeyond,
+        &mut MeasureEveryItem(measure_item),
     )
 }
 
-pub fn measure_lazy_list_with_beyond_bounds_policy<F, B>(
+/// [`measure_lazy_list`] with the items taken from `source`, which decides
+/// how the items beyond the viewport are kept.
+pub fn measure_lazy_list_with_beyond_bounds_policy<S>(
     items_count: usize,
     state: &LazyListState,
     viewport_size: f32,
     _cross_axis_size: f32,
     config: &LazyListMeasureConfig,
-    mut measure_item: F,
-    beyond_bounds_policy: B,
+    source: &mut S,
 ) -> LazyListMeasureResult
 where
-    F: FnMut(usize) -> LazyListMeasuredItem,
-    B: BeyondBoundsMeasurePolicy,
+    S: LazyItemSource,
 {
     let raw_viewport_size = viewport_size;
     let is_infinite_viewport = raw_viewport_size.is_infinite();
@@ -180,13 +218,7 @@ where
         config.spacing,
     );
     if viewport.is_infinite() {
-        return measure_unbounded_lazy_list(
-            items_count,
-            state,
-            raw_viewport_size,
-            config,
-            &mut measure_item,
-        );
+        return measure_unbounded_lazy_list(items_count, state, raw_viewport_size, config, source);
     }
     let effective_viewport_size = viewport.effective_size();
     let is_infinite_viewport = viewport.is_infinite();
@@ -208,7 +240,7 @@ where
         (first_index, first_offset) = resolver.normalize_backward_jump(first_index, first_offset);
         while first_offset < 0.0 && first_index > 0 {
             first_index -= 1;
-            let item = measure_item(first_index);
+            let item = source.measure(first_index);
             first_offset += item.main_axis_size + config.spacing;
             if first_index == 0 {
                 first_offset += config.before_content_padding;
@@ -239,7 +271,7 @@ where
         .is_some_and(|size| first_offset + 0.001 < item_extent_at(first_index, size));
 
     if !offset_known_within_current_item && first_offset > 0.0 && first_index < items_count {
-        let item = measure_item(first_index);
+        let item = source.measure(first_index);
         let item_extent = item_extent_at(first_index, item.main_axis_size);
 
         if first_offset + 0.001 < item_extent {
@@ -261,7 +293,7 @@ where
     );
     let guaranteed_beyond_bounds = adaptive_beyond_bounds;
     let mut measurer = ItemMeasurer::new(
-        &mut measure_item,
+        source,
         config,
         items_count,
         effective_viewport_size,
@@ -271,7 +303,6 @@ where
     .with_beyond_bounds_item_count(adaptive_beyond_bounds)
     .with_guaranteed_after_beyond_bounds_item_count(guaranteed_beyond_bounds)
     .with_include_before_beyond_bounds(window_scroll_delta >= -0.001)
-    .with_beyond_bounds_measure_policy(beyond_bounds_policy)
     .with_telemetry_pass_id(telemetry_enabled.then(|| state.next_item_measure_pass_id()));
     let measurement_pass = measurer.measure_all(first_index, first_offset);
     let measurement_start_index = measurement_pass.start_index;
@@ -441,15 +472,15 @@ const MAX_UNBOUNDED_REALIZED_ITEMS: usize = 10_000;
 /// both scroll capabilities are reported as exhausted (which also stops the
 /// scroll gesture detector from capturing drags that the outer scrollable
 /// needs).
-fn measure_unbounded_lazy_list<F>(
+fn measure_unbounded_lazy_list<S>(
     items_count: usize,
     state: &LazyListState,
     raw_viewport_size: f32,
     config: &LazyListMeasureConfig,
-    measure_item: &mut F,
+    source: &mut S,
 ) -> LazyListMeasureResult
 where
-    F: FnMut(usize) -> LazyListMeasuredItem,
+    S: LazyItemSource,
 {
     let realized_count = items_count.min(MAX_UNBOUNDED_REALIZED_ITEMS);
     if realized_count < items_count {
@@ -462,7 +493,7 @@ where
     let mut visible_items = Vec::with_capacity(realized_count);
     let mut offset = config.before_content_padding;
     for index in 0..realized_count {
-        let mut item = measure_item(index);
+        let mut item = source.measure(index);
         item.offset = offset;
         offset += item.main_axis_size;
         if index + 1 < items_count {

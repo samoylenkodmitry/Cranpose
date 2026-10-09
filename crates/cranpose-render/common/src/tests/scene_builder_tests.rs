@@ -3200,7 +3200,7 @@ fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
 }
 
 #[test]
-fn scrolled_lazy_column_render_graph_keeps_beyond_bound_text_rows() {
+fn scrolled_lazy_column_render_graph_holds_only_viewport_rows() {
     use std::{cell::RefCell, rc::Rc};
 
     let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
@@ -3246,9 +3246,10 @@ fn scrolled_lazy_column_render_graph_keeps_beyond_bound_text_rows() {
         vec![4, 5, 6],
         "test setup expects exactly three viewport-visible rows"
     );
-    assert!(
-        labels.iter().any(|label| label == "WarmRow 7"),
-        "render graph must retain at least one after-bound text row for glyph prewarm; labels={labels:?}, active_children={active_children:?}"
+    assert_eq!(
+        labels,
+        ["WarmRow 4", "WarmRow 5", "WarmRow 6"],
+        "rows kept composed beyond the viewport stay out of the render graph; active_children={active_children:?}"
     );
 }
 

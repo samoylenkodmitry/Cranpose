@@ -586,6 +586,10 @@ impl SubcomposeMeasureScopeImpl<'_> {
         self.state.slot_is_retained(slot_id)
     }
 
+    pub(crate) fn slot_is_active(&self, slot_id: SlotId) -> bool {
+        self.state.slot_is_active(slot_id)
+    }
+
     /// Registers the content type for a slot.
     ///
     /// Call this before `subcompose()` to enable content-type-aware slot reuse.
