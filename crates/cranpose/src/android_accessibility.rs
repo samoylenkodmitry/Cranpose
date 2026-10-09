@@ -9,7 +9,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
-    objects::{JClass, JObject, JString, JValue},
+    objects::{JByteArray, JClass, JObject, JString, JValue},
     sys::{jboolean, jfloat, jint},
 };
 
@@ -327,31 +327,36 @@ pub(crate) fn sync(
 }
 
 /// Hands the host the virtual ids in order, the records of the controls it
-/// does not hold as they are now, and the new bounds of those that moved.
+/// does not hold as they are now, and the new bounds of those that moved, as
+/// one message written into an array the host keeps for the next update: a
+/// fresh array for each update was garbage its Java heap kept resident.
 fn publish(app: &android_activity::AndroidApp, update: &AccessibilityUpdate) -> Result<(), String> {
+    let length = i32::try_from(update.message_len())
+        .map_err(|_| format!("an accessibility update of {} bytes", update.message_len()))?;
     with_android_activity_env(app, |env, activity| {
-        let order = int_array(env, &update.order)?;
-        let moves = int_array(env, &update.moves)?;
-        // The records' bytes: the host reads them on its UI thread, off this
-        // loop.
-        let records = env
-            .byte_array_from_slice(&update.records)
+        let buffer = env
+            .call_method(
+                &activity,
+                jni_str!("cranposeAccessibilityBuffer"),
+                jni_sig!("(I)[B"),
+                &[JValue::Int(length)],
+            )
+            .and_then(jni::JValueOwned::l)
+            .and_then(|buffer| env.cast_local::<JByteArray>(buffer))
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
-                format!("failed to copy Android accessibility records: {error}")
+                format!("failed to take the Android accessibility buffer: {error}")
             })?;
-        let records: &JObject = records.as_ref();
-        let order: &JObject = order.as_ref();
-        let moves: &JObject = moves.as_ref();
+        write_message(env, &buffer, update).map_err(|error| {
+            clear_pending_android_jni_exception(env);
+            format!("failed to write the Android accessibility update: {error}")
+        })?;
+        let buffer: &JObject = buffer.as_ref();
         env.call_method(
             &activity,
             jni_str!("cranposeUpdateAccessibilityElements"),
-            jni_sig!("([I[B[I)V"),
-            &[
-                JValue::Object(order),
-                JValue::Object(records),
-                JValue::Object(moves),
-            ],
+            jni_sig!("([BI)V"),
+            &[JValue::Object(buffer), JValue::Int(length)],
         )
         .map_err(|error| {
             clear_pending_android_jni_exception(env);
@@ -361,19 +366,26 @@ fn publish(app: &android_activity::AndroidApp, update: &AccessibilityUpdate) -> 
     })
 }
 
-fn int_array<'local>(
-    env: &mut jni::Env<'local>,
-    values: &[i32],
-) -> Result<jni::objects::JIntArray<'local>, String> {
-    let array = env.new_int_array(values.len()).map_err(|error| {
-        clear_pending_android_jni_exception(env);
-        format!("failed to allocate an Android accessibility array: {error}")
-    })?;
-    array.set_region(env, 0, values).map_err(|error| {
-        clear_pending_android_jni_exception(env);
-        format!("failed to fill an Android accessibility array: {error}")
-    })?;
-    Ok(array)
+/// Copies the update's message into the host's array through a stack chunk,
+/// as JNI takes signed bytes.
+fn write_message(
+    env: &jni::Env<'_>,
+    buffer: &JByteArray<'_>,
+    update: &AccessibilityUpdate,
+) -> jni::errors::Result<()> {
+    let mut chunk = [0i8; 4096];
+    let mut filled = 0;
+    let mut at: jint = 0;
+    for byte in update.message() {
+        chunk[filled] = byte as i8;
+        filled += 1;
+        if filled == chunk.len() {
+            buffer.set_region(env, at, &chunk)?;
+            at += filled as jint;
+            filled = 0;
+        }
+    }
+    buffer.set_region(env, at, &chunk[..filled])
 }
 
 /// The host met a control it holds no record of, so it asks for every

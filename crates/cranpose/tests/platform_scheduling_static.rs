@@ -1054,14 +1054,14 @@ fn android_accessibility_record_layout_agrees_across_the_jni_boundary() {
     );
     let read = wire_kinds(
         &java_source,
-        "parseAccessibilityElements(byte[] payload)",
-        "return result;",
+        "void read(ByteBuffer in) {",
+        "\n        }\n",
         &[
             ("in.getInt()", 'N'),
             ("flag(in)", 'N'),
             ("in.getFloat()", 'F'),
-            ("text(in)", 'T'),
-            ("actions(in)", 'A'),
+            ("text(in, ", 'T'),
+            ("actions(in, ", 'A'),
         ],
     );
     assert_eq!(
@@ -4116,7 +4116,7 @@ fn every_lazy_list_tells_android_how_many_rows_it_holds() {
     let java_source = crate_source("android/java/dev/cranpose/android/CranposeActivity.java");
     assert!(
         java_source.contains("info.setCollectionInfo(AccessibilityNodeInfo.CollectionInfo.obtain(")
-            && java_source.contains("final int collectionRows;"),
+            && java_source.contains("int collectionRows;"),
         "the Android host hands TalkBack the row count of a list"
     );
 }

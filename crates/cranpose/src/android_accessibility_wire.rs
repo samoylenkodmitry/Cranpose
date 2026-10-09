@@ -23,6 +23,29 @@ impl AccessibilityUpdate {
     pub(crate) fn is_empty(&self) -> bool {
         !self.reordered && self.records.is_empty() && self.moves.is_empty()
     }
+
+    /// The update as the one message the host reads, byte by byte: the
+    /// count of ids and the ids in order, the count of move numbers and the
+    /// moves, then the records, every number a little-endian `i32`. It is
+    /// read straight into the host's array, so no copy of the records is
+    /// made.
+    pub(crate) fn message(&self) -> impl Iterator<Item = u8> + '_ {
+        message_numbers(&self.order)
+            .chain(message_numbers(&self.moves))
+            .chain(self.records.iter().copied())
+    }
+
+    /// How many bytes [`Self::message`] holds.
+    pub(crate) fn message_len(&self) -> usize {
+        4 * (2 + self.order.len() + self.moves.len()) + self.records.len()
+    }
+}
+
+/// A list of numbers as the message holds it: its count, then each number.
+fn message_numbers(numbers: &[i32]) -> impl Iterator<Item = u8> + '_ {
+    std::iter::once(count(numbers.len()))
+        .chain(numbers.iter().copied())
+        .flat_map(i32::to_le_bytes)
 }
 
 /// What the host was last sent: the density its pixel bounds were made at,

@@ -1,8 +1,8 @@
 use super::*;
 use crate::accessibility::AccessibilityDetails;
 
-/// The fields in one record, as `CranposeActivity.parseAccessibilityElements`
-/// reads them.
+/// The fields in one record, as `CranposeAccessibilityElement.read` in
+/// `CranposeActivity` reads them.
 const RECORD_FIELDS: usize = 41;
 
 /// Each field's kind in wire order: N a little-endian `i32`, F an `f32`, T
@@ -164,6 +164,35 @@ fn an_unchanged_snapshot_leaves_the_host_alone() {
         .publish(&mut snapshot, elements.to_vec(), 2.0)
         .expect("unique identities");
     assert!(update.is_empty(), "{update:?}");
+}
+
+#[test]
+fn the_host_reads_the_order_then_the_moves_then_the_records_in_one_message() {
+    let (mut wire, mut snapshot) = published(&[labelled(1, "One", 0.0), labelled(2, "Two", 30.0)]);
+    let ids = snapshot.ids.clone();
+    let update = wire
+        .publish(
+            &mut snapshot,
+            vec![labelled(1, "Uno", 0.0), labelled(2, "Two", 40.0)],
+            2.0,
+        )
+        .expect("unique identities");
+    let message: Vec<u8> = update.message().collect();
+    assert_eq!(message.len(), update.message_len());
+    let mut reader = PayloadReader {
+        bytes: &message,
+        at: 0,
+    };
+    let numbers = |reader: &mut PayloadReader<'_>| {
+        let count = i32::from_le_bytes(reader.word());
+        (0..count)
+            .map(|_| i32::from_le_bytes(reader.word()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(numbers(&mut reader), ids);
+    assert_eq!(numbers(&mut reader), vec![ids[1], 0, 80, 200, 120]);
+    assert_eq!(&message[reader.at..], &update.records[..]);
+    assert_eq!(fields(&update.records)[0][9], "Uno");
 }
 
 #[test]
