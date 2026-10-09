@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use cranpose::Robot;
-use desktop_app::app::{DemoTab, TEST_ACTIVE_TAB_STATE, TEST_LIQUID_SCROLL_STATE};
+use desktop_app::app::TEST_LIQUID_SCROLL_STATE;
+
+use crate::robot_launch;
 
 const SETTLE_ROUNDS: usize = 6;
 const SETTLE_FRAMES: u32 = 12;
@@ -17,19 +19,7 @@ type Bounds = (f32, f32, f32, f32);
 /// flinging a drag at it and landing wherever the settle policy snaps.
 pub(crate) fn app_hook(name: String, argument: String) -> Result<Option<String>, String> {
     match name.as_str() {
-        "set-tab" => {
-            let tab = match argument.as_str() {
-                "liquid" => DemoTab::Liquid,
-                "receipts" => DemoTab::GlassFeed,
-                "tiles" => DemoTab::GlassTiles,
-                other => return Err(format!("unknown tab {other}")),
-            };
-            TEST_ACTIVE_TAB_STATE
-                .with(|cell| cell.borrow().as_ref().copied())
-                .ok_or_else(|| "active tab state was not installed".to_string())?
-                .set(tab);
-            Ok(None)
-        }
+        robot_launch::SET_TAB => robot_launch::set_tab(&argument),
         "scroll-liquid-to" => {
             let offset: f32 = argument
                 .parse()
@@ -46,18 +36,14 @@ pub(crate) fn app_hook(name: String, argument: String) -> Result<Option<String>,
 
 /// Opens the Liquid UI tab and waits for it to come to rest.
 pub(crate) fn open(robot: &Robot) {
-    robot
-        .invoke_app_hook("set-tab", "liquid")
-        .expect("select the liquid tab");
+    robot_launch::switch_tab(robot, "liquid");
     settle(robot);
 }
 
 /// Opens a tab by its hook name (`receipts`, `tiles`) and waits for it to
 /// come to rest.
 pub(crate) fn open_tab(robot: &Robot, tab: &str) {
-    robot
-        .invoke_app_hook("set-tab", tab)
-        .expect("select the tab");
+    robot_launch::switch_tab(robot, tab);
     settle(robot);
 }
 

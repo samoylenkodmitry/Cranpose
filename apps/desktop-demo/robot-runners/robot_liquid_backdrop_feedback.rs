@@ -1,9 +1,8 @@
-use crate::robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::{process::ExitCode, sync::atomic::AtomicBool, time::Duration};
 
 use cranpose::AppLauncher;
-use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 800;
@@ -19,13 +18,11 @@ pub(crate) fn main() -> ExitCode {
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
-        .with_robot_app_hook(set_tab_hook)
+        .with_robot_app_hook(robot_launch::set_tab_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(700));
             let _ = robot.wait_for_idle();
-            robot
-                .invoke_app_hook("set-tab", "liquid")
-                .expect("select liquid tab");
+            robot_launch::switch_tab(&robot, "liquid");
             settle(&robot, 900);
 
             let Some(pill) = scroll_to_button(&robot, "Sort filter pill", 260.0) else {
@@ -87,23 +84,9 @@ pub(crate) fn main() -> ExitCode {
             println!("PASS: liquid backdrop feedback contract");
             let _ = robot.exit();
         })
-        .try_run(crate::robot_launch::counter_demo)
+        .try_run(robot_launch::counter_demo)
         .expect("launch backdrop feedback runner");
     robot_exit::exit_code(&FAILED)
-}
-
-fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    if name != "set-tab" {
-        return Err(format!("unsupported robot app hook {name}({argument})"));
-    }
-    if argument != "liquid" {
-        return Err(format!("unknown demo tab '{argument}'"));
-    }
-    let state = TEST_ACTIVE_TAB_STATE
-        .with(|cell| cell.borrow().as_ref().copied())
-        .ok_or_else(|| "active tab state was not installed".to_string())?;
-    state.set(app::DemoTab::Liquid);
-    Ok(None)
 }
 
 fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {

@@ -1,10 +1,11 @@
+use crate::robot_launch;
+
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use cranpose::AppLauncher;
-use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
 
 const WINDOW_WIDTH: u32 = 900;
@@ -41,13 +42,11 @@ pub(crate) fn main() {
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
-        .with_robot_app_hook(set_tab_hook)
+        .with_robot_app_hook(robot_launch::set_tab_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(700));
             let _ = robot.wait_for_idle();
-            robot
-                .invoke_app_hook("set-tab", "liquid")
-                .expect("select liquid tab");
+            robot_launch::switch_tab(&robot, "liquid");
             settle(&robot, 1000);
             let selector = cranpose_testing::find_text_in_semantics(&robot, "wcKSRD OPTICS")
                 .expect("single wcKSRD optics heading");
@@ -338,22 +337,7 @@ pub(crate) fn main() {
             );
             robot.exit().expect("exit");
         })
-        .run(crate::robot_launch::counter_demo);
-}
-
-fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    if name != "set-tab" {
-        return Err(format!("unsupported robot app hook {name}({argument})"));
-    }
-    if argument != "liquid" {
-        return Err(format!("unknown demo tab '{argument}'"));
-    }
-    let tab = app::DemoTab::Liquid;
-    let state = TEST_ACTIVE_TAB_STATE
-        .with(|cell| cell.borrow().as_ref().copied())
-        .ok_or_else(|| "active tab state was not installed before selecting a tab".to_string())?;
-    state.set(tab);
-    Ok(None)
+        .run(robot_launch::counter_demo);
 }
 
 fn settle(robot: &cranpose::Robot, ms: u64) {

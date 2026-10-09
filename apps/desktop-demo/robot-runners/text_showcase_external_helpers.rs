@@ -6,6 +6,8 @@ use cranpose_testing::{
 };
 use image::RgbaImage;
 
+use crate::robot_launch;
+
 pub(crate) fn find_window_id(title: &str) -> String {
     let process_id = std::process::id().to_string();
     for _ in 0..20 {
@@ -268,6 +270,16 @@ pub(crate) fn open_text_tab(robot: &cranpose::Robot) {
     }
 
     panic!("Text showcase heading not found after tab switch");
+}
+
+/// Reaches the Text tab through the Mineswapper, Images and Lazy List tabs, so
+/// the text showcase is composed after other tabs have come and gone.
+pub(crate) fn walk_tabs_to_text(robot: &cranpose::Robot) {
+    for tab in ["mineswapper2", "images", "lazy-list", "text"] {
+        robot_launch::switch_tab(robot, tab);
+        std::thread::sleep(Duration::from_millis(180));
+        let _ = robot.wait_for_idle();
+    }
 }
 
 pub(crate) fn wait_for_text_showcase_heading(robot: &cranpose::Robot) {

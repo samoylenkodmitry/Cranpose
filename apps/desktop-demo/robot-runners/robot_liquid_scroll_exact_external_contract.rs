@@ -1,11 +1,9 @@
-use crate::{scroll_stability_external_helpers, text_showcase_external_helpers};
+use crate::{robot_launch, scroll_stability_external_helpers, text_showcase_external_helpers};
 
 use std::{path::Path, time::Duration};
 
 use cranpose::AppLauncher;
-use desktop_app::app::{
-    DemoTab, LIQUID_SCROLL_VIEWPORT_TAG, TEST_ACTIVE_TAB_STATE, TEST_LIQUID_SCROLL_STATE,
-};
+use desktop_app::app::{LIQUID_SCROLL_VIEWPORT_TAG, TEST_LIQUID_SCROLL_STATE};
 use scroll_stability_external_helpers::{
     advance_scroll_with_app_hook, run_presented_scroll_probe_with_app_hook,
     run_scroll_stability_capture_with_app_hook, semantics_bounds_for_exact_text,
@@ -78,13 +76,11 @@ pub(crate) fn main() {
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(false)
-        .with_robot_app_hook(set_tab_hook)
+        .with_robot_app_hook(liquid_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(900));
             let _ = robot.wait_for_idle();
-            robot
-                .invoke_app_hook("set-tab", "liquid")
-                .expect("select Liquid UI tab");
+            robot_launch::switch_tab(&robot, "liquid");
             settle(&robot);
             let density = robot
                 .invoke_app_hook("liquid-density", "")
@@ -227,7 +223,7 @@ pub(crate) fn main() {
             println!("PASS: every Liquid UI scene stayed stable across exact 1px scrolls");
             robot.exit().expect("exit");
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }
 
 fn settle(robot: &cranpose::Robot) {
@@ -294,32 +290,23 @@ fn dominant_row_color(image: &image::RgbImage, left: u32, right: u32, row: u32) 
     (dominant, dominant_count as f32 / colors.len() as f32)
 }
 
-fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    if name == "liquid-density" {
-        return Ok(Some(cranpose_ui::current_density().to_string()));
+fn liquid_hook(name: String, argument: String) -> Result<Option<String>, String> {
+    match name.as_str() {
+        robot_launch::SET_TAB => robot_launch::set_tab(&argument),
+        "liquid-density" => Ok(Some(cranpose_ui::current_density().to_string())),
+        "scroll-liquid-content-by" => {
+            let content_delta = argument
+                .parse::<f32>()
+                .map_err(|err| format!("invalid liquid content delta '{argument}': {err}"))?;
+            let scroll = TEST_LIQUID_SCROLL_STATE
+                .with(|cell| *cell.borrow())
+                .ok_or_else(|| "liquid scroll state was not installed".to_string())?;
+            let consumed = scroll.dispatch_raw_delta(-content_delta);
+            Ok(Some(format!(
+                "content_delta={content_delta:.3} consumed={consumed:.3} offset={:.3}",
+                scroll.value_non_reactive()
+            )))
+        }
+        _ => Err(format!("unsupported robot app hook {name}({argument})")),
     }
-    if name == "scroll-liquid-content-by" {
-        let content_delta = argument
-            .parse::<f32>()
-            .map_err(|err| format!("invalid liquid content delta '{argument}': {err}"))?;
-        let scroll = TEST_LIQUID_SCROLL_STATE
-            .with(|cell| *cell.borrow())
-            .ok_or_else(|| "liquid scroll state was not installed".to_string())?;
-        let consumed = scroll.dispatch_raw_delta(-content_delta);
-        return Ok(Some(format!(
-            "content_delta={content_delta:.3} consumed={consumed:.3} offset={:.3}",
-            scroll.value_non_reactive()
-        )));
-    }
-    if name != "set-tab" {
-        return Err(format!("unsupported robot app hook {name}({argument})"));
-    }
-    if argument != "liquid" {
-        return Err(format!("unknown demo tab '{argument}'"));
-    }
-    let state = TEST_ACTIVE_TAB_STATE
-        .with(|cell| cell.borrow().as_ref().copied())
-        .ok_or_else(|| "active tab state was not installed".to_string())?;
-    state.set(DemoTab::Liquid);
-    Ok(None)
 }

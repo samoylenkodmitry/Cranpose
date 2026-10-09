@@ -1,3 +1,5 @@
+use crate::{robot_launch, text_showcase_external_helpers::walk_tabs_to_text};
+
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -6,7 +8,6 @@ use std::{
 
 use cranpose::AppLauncher;
 use cranpose_testing::{find_in_semantics, find_text_exact};
-use desktop_app::app::{DemoTab, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
 
 const WINDOW_WIDTH: u32 = 1083;
@@ -43,7 +44,7 @@ pub(crate) fn main() {
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(false)
-        .with_robot_app_hook(set_tab_hook)
+        .with_robot_app_hook(robot_launch::set_tab_hook)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(700));
             let _ = robot.wait_for_idle();
@@ -94,43 +95,11 @@ pub(crate) fn main() {
             println!("PASS: Text tab presented pixels survived tab walk");
             robot.exit().expect("exit");
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }
 
 fn capture_only() -> bool {
     std::env::var_os(CAPTURE_ONLY_ENV).is_some_and(|value| value != "0")
-}
-
-fn walk_tabs_to_text(robot: &cranpose::Robot) {
-    for tab in ["mineswapper2", "images", "lazy-list", "text"] {
-        set_active_tab(robot, tab);
-        std::thread::sleep(Duration::from_millis(180));
-        let _ = robot.wait_for_idle();
-    }
-}
-
-fn set_active_tab(robot: &cranpose::Robot, tab: &str) {
-    robot
-        .invoke_app_hook("set-tab", tab)
-        .unwrap_or_else(|err| panic!("failed to select tab '{tab}': {err}"));
-}
-
-fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    if name != "set-tab" {
-        return Err(format!("unsupported robot app hook {name}({argument})"));
-    }
-    let tab = match argument.as_str() {
-        "mineswapper2" => DemoTab::Mineswapper2,
-        "images" => DemoTab::Images,
-        "lazy-list" => DemoTab::LazyList,
-        "text" => DemoTab::Text,
-        _ => return Err(format!("unknown demo tab '{argument}'")),
-    };
-    let state = TEST_ACTIVE_TAB_STATE
-        .with(|cell| cell.borrow().as_ref().copied())
-        .unwrap_or_else(|| panic!("active tab state was not installed before selecting {tab:?}"));
-    state.set(tab);
-    Ok(None)
 }
 
 fn wait_for_exact_text(robot: &cranpose::Robot, text: &str, attempts: usize) {
