@@ -40,11 +40,10 @@ fn cached_key_helpers_agree_with_the_uncached_derivation() {
         "outlining the initializer must not change the definition key"
     );
 
-    let branch_cell = OnceLock::new();
     assert_eq!(
-        cached_branch_location_key(&branch_cell, "src/probe.rs", 56, 78, 3),
-        branch_location_key("src/probe.rs", 56, 78, 3),
-        "outlining the initializer must not change the branch key"
+        const_location_key("src/probe.rs", 56, 78),
+        location_key("src/probe.rs", 56, 78),
+        "a constant slot key must be the key the call site's caller key gives"
     );
 }
 
@@ -76,14 +75,6 @@ fn cached_key_helpers_latch_the_first_value() {
         first,
         "the definition cell must keep the key it latched"
     );
-
-    let branch_cell = OnceLock::new();
-    let first_branch = cached_branch_location_key(&branch_cell, "src/probe.rs", 1, 1, 0);
-    assert_eq!(
-        cached_branch_location_key(&branch_cell, "src/other.rs", 99, 99, 7),
-        first_branch,
-        "the branch cell must keep the key it latched"
-    );
 }
 
 #[test]
@@ -103,11 +94,9 @@ fn cached_key_helpers_separate_distinct_sites() {
     assert_ne!(key_a, key_b, "the definition marker must separate sites");
     assert_ne!(key_a, key_c, "the source location must separate sites");
 
-    let branch_zero = OnceLock::new();
-    let branch_one = OnceLock::new();
     assert_ne!(
-        cached_branch_location_key(&branch_zero, "src/probe.rs", 12, 34, 0),
-        cached_branch_location_key(&branch_one, "src/probe.rs", 12, 34, 1),
+        branch_location_key("src/probe.rs", 12, 34, 0),
+        branch_location_key("src/probe.rs", 12, 34, 1),
         "the branch index must separate guards emitted at one location"
     );
 }

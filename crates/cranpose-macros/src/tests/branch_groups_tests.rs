@@ -45,7 +45,7 @@ fn a_naked_nested_fn_stays_untouched() {
 }
 
 #[test]
-fn branch_keys_do_not_monomorphise_the_once_lock_initializer() {
+fn branch_keys_are_constants_of_their_guard_site() {
     let mut block: Block = syn::parse_quote!({
         if flag {
             first();
@@ -58,13 +58,12 @@ fn branch_keys_do_not_monomorphise_the_once_lock_initializer() {
     let tokens = block.to_token_stream().to_string();
 
     assert!(
-        tokens.contains("cached_branch_location_key"),
-        "branch keys must be latched through the outlined core helper, \
-         got: {tokens}"
+        tokens.contains("const __CRANPOSE_BRANCH_KEY"),
+        "a branch key must be a constant of its guard site, got: {tokens}"
     );
     assert!(
-        !tokens.contains("get_or_init"),
-        "no initializer closure may reach the expansion site, got: {tokens}"
+        !tokens.contains("OnceLock"),
+        "a guard must not check a lazily initialized key, got: {tokens}"
     );
 }
 
@@ -177,6 +176,6 @@ fn release_expansion_does_not_use_hot_keys() {
     });
     inject_branch_groups(&quote!(::cranpose_core), &mut block);
     let tokens = block.to_token_stream().to_string();
-    assert!(tokens.contains("cached_branch_location_key"));
+    assert!(tokens.contains("branch_location_key"));
     assert!(!tokens.contains("hot_branch_key"));
 }
