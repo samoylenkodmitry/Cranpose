@@ -24,6 +24,7 @@ use crate::{
 
 pub struct ValueSlotHandle<'pass, T: 'static> {
     slot: ValueSlotId,
+    record: Option<usize>,
     _pass: PhantomData<&'pass Composer>,
     _value: PhantomData<fn() -> T>,
 }
@@ -37,16 +38,13 @@ impl<T: 'static> Clone for ValueSlotHandle<'_, T> {
 }
 
 impl<T: 'static> ValueSlotHandle<'_, T> {
-    pub(crate) fn new(slot: ValueSlotId) -> Self {
+    pub(crate) fn new(slot: ValueSlotId, record: Option<usize>) -> Self {
         Self {
             slot,
+            record,
             _pass: PhantomData,
             _value: PhantomData,
         }
-    }
-
-    pub(crate) fn slot(self) -> ValueSlotId {
-        self.slot
     }
 }
 
@@ -1792,10 +1790,10 @@ impl Composer {
     #[track_caller]
     pub fn use_value_slot<T: 'static>(&self, init: impl FnOnce() -> T) -> ValueSlotHandle<'_, T> {
         let source = crate::caller_location_key();
-        let slot = self.with_slot_session_mut(|slots| {
-            slots.value_slot_with_kind(PayloadKind::Internal, source, init)
+        let (slot, record) = self.with_slot_session_mut(|slots| {
+            slots.located_value_slot(PayloadKind::Internal, source, init)
         });
-        ValueSlotHandle::new(slot)
+        ValueSlotHandle::new(slot, record)
     }
 
     #[doc(hidden)]
@@ -1804,10 +1802,10 @@ impl Composer {
         source: Key,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'_, T> {
-        let slot = self.with_slot_session_mut(|slots| {
-            slots.value_slot_with_kind(PayloadKind::Param, source, init)
+        let (slot, record) = self.with_slot_session_mut(|slots| {
+            slots.located_value_slot(PayloadKind::Param, source, init)
         });
-        ValueSlotHandle::new(slot)
+        ValueSlotHandle::new(slot, record)
     }
 
     /// Finds the call's next parameter slot and runs `update` on its value,
@@ -1842,8 +1840,8 @@ impl Composer {
         update: impl FnOnce(&mut T) -> R,
     ) -> (ValueSlotHandle<'_, T>, R) {
         self.with_slot_session_mut(|slots| {
-            let (slot, value) = slots.value_slot_and_value(kind, source, init);
-            (ValueSlotHandle::new(slot), update(value))
+            let (slot, record, value) = slots.value_slot_and_value(kind, source, init);
+            (ValueSlotHandle::new(slot, record), update(value))
         })
     }
 
@@ -1854,10 +1852,10 @@ impl Composer {
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'_, T> {
         let source = crate::caller_location_key();
-        let slot = self.with_slot_session_mut(|slots| {
-            slots.value_slot_with_kind(PayloadKind::Return, source, init)
+        let (slot, record) = self.with_slot_session_mut(|slots| {
+            slots.located_value_slot(PayloadKind::Return, source, init)
         });
-        ValueSlotHandle::new(slot)
+        ValueSlotHandle::new(slot, record)
     }
 
     #[doc(hidden)]
@@ -1879,7 +1877,7 @@ impl Composer {
         handle: ValueSlotHandle<'pass, T>,
         f: impl FnOnce(&T) -> R,
     ) -> R {
-        self.with_slots(|slots| f(slots.read_value(handle.slot())))
+        self.with_slots(|slots| f(slots.value_at(handle.slot, handle.record)))
     }
 
     pub fn with_slot_value_mut<'pass, T: 'static, R>(
@@ -1887,7 +1885,7 @@ impl Composer {
         handle: ValueSlotHandle<'pass, T>,
         f: impl FnOnce(&mut T) -> R,
     ) -> R {
-        self.with_slots_mut(|slots| f(slots.read_value_mut(handle.slot())))
+        self.with_slots_mut(|slots| f(slots.value_at_mut(handle.slot, handle.record)))
     }
 
     pub fn mutable_state_of<T: Clone + 'static>(&self, initial: T) -> MutableState<T> {
