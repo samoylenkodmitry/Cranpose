@@ -1,4 +1,5 @@
 mod anchors;
+mod branch_folds;
 mod checked;
 mod debug;
 mod dense_id_map;
@@ -27,6 +28,7 @@ mod tests;
 pub(crate) use anchors::AnchorRegistry;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use anchors::AnchorState;
+pub(crate) use branch_folds::BranchFolds;
 pub(crate) use checked::checked_usize_to_u32;
 pub(in crate::slot) use checked::{
     CheckedU32Delta, checked_u32_delta, checked_usize_to_i64, shift_u32_values,

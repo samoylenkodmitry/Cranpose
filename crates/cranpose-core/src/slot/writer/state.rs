@@ -1,24 +1,20 @@
+use std::rc::Rc;
+
 use super::{
-    super::{DetachedSubtree, SlotPassMode, SlotTable},
+    super::{BranchFolds, DetachedSubtree, SlotPassMode, SlotTable, branch_folds::mix_fold},
     frames::{GroupFrameStack, RootFrame},
 };
 use crate::{AnchorId, collections::map::HashMap};
 
-pub(in crate::slot) struct BranchFoldEntry {
-    key: crate::Key,
-    prev_fold: Option<crate::Key>,
-    live: bool,
-}
-
-#[derive(Default)]
 pub(crate) struct SlotWriteSessionState {
     pub(in crate::slot) root: RootFrame,
     pub(in crate::slot) group_stack: GroupFrameStack,
     payload_location_refreshes: HashMap<AnchorId, usize>,
     rejected_restore_subtrees: Vec<DetachedSubtree>,
-    branch_fold_entries: Vec<BranchFoldEntry>,
-    branch_fold: Option<crate::Key>,
-    dead_branch_folds: usize,
+    /// The composer's open branch guards; the pass's root-level groups fold
+    /// the entries from `root_fold_watermark`.
+    folds: Rc<BranchFolds>,
+    root_fold_watermark: usize,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
@@ -27,7 +23,31 @@ pub(crate) struct SlotWriteSessionState {
     pub(crate) request_payload_storage_compaction: bool,
 }
 
+#[cfg(test)]
+impl Default for SlotWriteSessionState {
+    fn default() -> Self {
+        Self::new(Rc::default())
+    }
+}
+
 impl SlotWriteSessionState {
+    pub(crate) fn new(folds: Rc<BranchFolds>) -> Self {
+        Self {
+            root: RootFrame::default(),
+            group_stack: GroupFrameStack::default(),
+            payload_location_refreshes: HashMap::default(),
+            rejected_restore_subtrees: Vec::new(),
+            folds,
+            root_fold_watermark: 0,
+            removed_payload_count: 0,
+            removed_node_count: 0,
+            removed_group_count: 0,
+            request_compaction: false,
+            request_anchor_storage_compaction: false,
+            request_payload_storage_compaction: false,
+        }
+    }
+
     pub(in crate::slot) const COMPACT_PAYLOAD_THRESHOLD: usize = 16 * 1024;
     const COMPACT_NODE_THRESHOLD: usize = 16 * 1024;
     const COMPACT_GROUP_THRESHOLD: usize = 32 * 1024;
@@ -43,15 +63,8 @@ impl SlotWriteSessionState {
             );
             self.rejected_restore_subtrees.clear();
         }
-        if !self.branch_fold_entries.is_empty() {
-            log::error!(
-                "slot writer reset discarded {} branch folds whose guards never closed",
-                self.branch_fold_entries.len()
-            );
-            self.branch_fold_entries.clear();
-            self.branch_fold = None;
-            self.dead_branch_folds = 0;
-        }
+        self.root_fold_watermark = self.folds.len();
+        self.folds.watermark_moved();
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
         self.removed_group_count = 0;
@@ -156,84 +169,22 @@ impl SlotWriteSessionState {
         self.request_payload_storage_compaction |= payload_pressure;
     }
 
-    pub(crate) fn push_branch_fold(&mut self, key: crate::Key) -> usize {
-        let prev_fold = self.branch_fold;
-        if let Some(fold) = prev_fold {
-            self.branch_fold = Some((fold ^ key).wrapping_mul(0x0000_0100_0000_01b3));
-        }
-        self.branch_fold_entries.push(BranchFoldEntry {
-            key,
-            prev_fold,
-            live: true,
-        });
-        self.branch_fold_entries.len() - 1
-    }
-
     fn fold_watermark(&self) -> usize {
         self.group_stack
             .last()
-            .map_or(0, |frame| frame.fold_watermark)
-            .min(self.branch_fold_entries.len())
+            .map_or(self.root_fold_watermark, |frame| frame.fold_watermark)
     }
 
-    pub(crate) fn close_branch_fold(&mut self, token: usize) {
-        if token + 1 == self.branch_fold_entries.len() {
-            let entry = self
-                .branch_fold_entries
-                .pop()
-                .expect("length checked above");
-            self.branch_fold = if self.dead_branch_folds == 0 {
-                entry.prev_fold
-            } else {
-                None
-            };
-            while self
-                .branch_fold_entries
-                .last()
-                .is_some_and(|entry| !entry.live)
-            {
-                self.branch_fold_entries.pop();
-                self.dead_branch_folds -= 1;
-                self.branch_fold = None;
-            }
-            return;
-        }
-        let Some(entry) = self.branch_fold_entries.get_mut(token) else {
-            log::error!(
-                "branch fold {token} closed past depth {}",
-                self.branch_fold_entries.len()
-            );
-            return;
-        };
-        if entry.live {
-            entry.live = false;
-            self.dead_branch_folds += 1;
-        }
-        self.branch_fold = None;
+    pub(in crate::slot) fn branch_fold(&self) -> crate::Key {
+        self.folds.fold(self.fold_watermark())
     }
 
-    pub(in crate::slot) fn branch_fold(&mut self) -> crate::Key {
-        if let Some(fold) = self.branch_fold {
-            return fold;
-        }
-        let watermark = self.fold_watermark();
-        let mut fold = super::super::BRANCH_PATH_ROOT;
-        for entry in &self.branch_fold_entries[watermark..] {
-            if entry.live {
-                fold ^= entry.key;
-                fold = fold.wrapping_mul(0x0000_0100_0000_01b3);
-            }
-        }
-        self.branch_fold = Some(fold);
-        fold
-    }
-
-    pub(in crate::slot) fn mix_branch_fold(&mut self, key: crate::Key) -> crate::Key {
+    pub(in crate::slot) fn mix_branch_fold(&self, key: crate::Key) -> crate::Key {
         let fold = self.branch_fold();
         if fold == super::super::BRANCH_PATH_ROOT {
             return key;
         }
-        (fold ^ key).wrapping_mul(0x0000_0100_0000_01b3)
+        mix_fold(fold, key)
     }
 
     pub(in crate::slot) fn current_parent_anchor(&self) -> AnchorId {
@@ -265,18 +216,17 @@ impl SlotWriteSessionState {
         old_payload_len: usize,
         old_node_len: usize,
     ) {
-        let fold_watermark = self.branch_fold_entries.len();
+        let fold_watermark = self.folds.begin_group();
         let frame = self.group_stack.push();
         frame.reset(anchor, group_index, old_payload_len, old_node_len);
         frame.fold_watermark = fold_watermark;
-        self.branch_fold = None;
     }
 
     /// Closes the top frame and returns its group's anchor and index.
     pub(in crate::slot) fn pop_group_frame(&mut self) -> Option<(AnchorId, usize)> {
         let frame = self.group_stack.pop()?;
         let group = (frame.group_anchor, frame.group_index);
-        self.branch_fold = None;
+        self.folds.watermark_moved();
         Some(group)
     }
 }

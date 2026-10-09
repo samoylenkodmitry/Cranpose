@@ -80,7 +80,7 @@ fn slots_host_into_table_reports_live_host_references() {
 #[test]
 fn slots_host_reset_reports_active_pass() {
     let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
-    slots_host.begin_pass(crate::slot::SlotPassMode::Compose);
+    slots_host.begin_pass(crate::slot::SlotPassMode::Compose, &Rc::default());
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slots_host.reset()));
 
@@ -101,10 +101,10 @@ fn slots_host_reset_reports_active_pass() {
 #[test]
 fn slots_host_begin_pass_while_active_is_noop() {
     let slots_host = Rc::new(SlotsHost::new(SlotTable::new()));
-    slots_host.begin_pass(crate::slot::SlotPassMode::Compose);
+    slots_host.begin_pass(crate::slot::SlotPassMode::Compose, &Rc::default());
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        slots_host.begin_pass(crate::slot::SlotPassMode::Recompose);
+        slots_host.begin_pass(crate::slot::SlotPassMode::Recompose, &Rc::default());
     }));
 
     slots_host.abandon_active_pass();

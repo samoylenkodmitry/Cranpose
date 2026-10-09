@@ -53,7 +53,8 @@ pub use callbacks::{
     SharedParam, refresh_param, refresh_shared_param,
 };
 pub use composer::{
-    BranchGroupGuard, CapturedCompositionContext, ComposableGroup, Composer, ValueSlotHandle,
+    BranchGroupGuard, CapturedCompositionContext, ComposableGroup, Composer,
+    ScopedBranchGroupGuard, ValueSlotHandle,
 };
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
@@ -579,8 +580,10 @@ fn note_location_key(_key: Key, _file: &str, _line: u32, _column: u32) {}
 
 #[doc(hidden)]
 #[inline]
-pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
-    composer_context::with_current_core(|core| core.open_branch_fold(key))
+pub fn __branch_group_scope_deferred(key: Key) -> Option<ScopedBranchGroupGuard> {
+    composer_context::with_current_core(|core| {
+        ScopedBranchGroupGuard::open(&core.branch_folds, key)
+    })
 }
 
 #[doc(hidden)]
@@ -4842,13 +4845,13 @@ impl SlotsHost {
         snapshot
     }
 
-    pub(crate) fn begin_pass(&self, mode: slot::SlotPassMode) {
+    pub(crate) fn begin_pass(&self, mode: slot::SlotPassMode, folds: &Rc<slot::BranchFolds>) {
         let mut inner = self.inner.borrow_mut();
         if inner.active_pass.is_some() {
             log::error!("slot pass already active for host");
             return;
         }
-        let mut state = slot::SlotWriteSessionState::default();
+        let mut state = slot::SlotWriteSessionState::new(Rc::clone(folds));
         state.reset_for_pass(mode);
         let storage_capacity = inner.table.storage_capacity();
         inner.active_pass = Some(ActivePassState {
@@ -4859,23 +4862,6 @@ impl SlotsHost {
 
     pub(crate) fn has_active_pass(&self) -> bool {
         self.inner.borrow().active_pass.is_some()
-    }
-
-    pub(crate) fn try_push_branch_fold(&self, key: Key) -> Option<usize> {
-        let mut inner = self.inner.try_borrow_mut().ok()?;
-        let pass = inner.active_pass.as_mut()?;
-        Some(pass.state.push_branch_fold(key))
-    }
-
-    pub(crate) fn try_close_branch_fold(&self, token: usize) -> bool {
-        let Ok(mut inner) = self.inner.try_borrow_mut() else {
-            return false;
-        };
-        let Some(pass) = inner.active_pass.as_mut() else {
-            return false;
-        };
-        pass.state.close_branch_fold(token);
-        true
     }
 
     pub(crate) fn abandon_active_pass(&self) {

@@ -724,23 +724,21 @@ fn moved_group_invalidates_previous_active_group_id() {
 
 #[test]
 fn a_non_lifo_fold_close_does_not_restore_a_dead_entry() {
-    let mut state = crate::slot::SlotWriteSessionState::default();
-    state.reset_for_pass(crate::slot::SlotPassMode::Compose);
+    let folds = crate::slot::BranchFolds::default();
 
-    let first = state.push_branch_fold(0x1111);
-    let _ = state.branch_fold();
-    let second = state.push_branch_fold(0x2222);
-    let _ = state.branch_fold();
-    let third = state.push_branch_fold(0x3333);
-    let _ = state.branch_fold();
-    let fourth = state.push_branch_fold(0x4444);
-    let _ = state.branch_fold();
-    let _ = first;
+    let first = folds.push(0x1111);
+    let _ = folds.fold(0);
+    let second = folds.push(0x2222);
+    let _ = folds.fold(0);
+    let third = folds.push(0x3333);
+    let _ = folds.fold(0);
+    let fourth = folds.push(0x4444);
+    let _ = folds.fold(0);
 
-    state.close_branch_fold(second);
-    state.close_branch_fold(fourth);
+    folds.close(second);
+    folds.close(fourth);
 
-    let observed = state.branch_fold();
+    let observed = folds.fold(0);
     let mut expected = crate::slot::BRANCH_PATH_ROOT;
     for key in [0x1111_u64, 0x3333] {
         expected ^= key;
@@ -750,6 +748,7 @@ fn a_non_lifo_fold_close_does_not_restore_a_dead_entry() {
         observed, expected,
         "the fold after non-LIFO closes must contain exactly the live entries"
     );
-    state.close_branch_fold(third);
-    state.close_branch_fold(first);
+    folds.close(third);
+    folds.close(first);
+    assert_eq!(folds.len(), 0);
 }

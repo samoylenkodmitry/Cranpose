@@ -28,7 +28,7 @@ fn fast_integrity_rejects_active_anchor_count_mismatch() {
 #[test]
 fn slots_host_finish_pass_reports_writer_invariant_violation() {
     let slots_host = Rc::new(crate::SlotsHost::new(SlotTable::new()));
-    slots_host.begin_pass(SlotPassMode::Compose);
+    slots_host.begin_pass(SlotPassMode::Compose, &std::rc::Rc::default());
     {
         let mut inner = slots_host.inner.borrow_mut();
         let active_pass = inner

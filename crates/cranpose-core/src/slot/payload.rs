@@ -51,7 +51,7 @@ impl<'a> PayloadInit<'a> {
 
     pub(in crate::slot) fn mix_source(&mut self, fold: crate::Key) {
         if fold != super::BRANCH_PATH_ROOT {
-            self.source = (fold ^ self.source).wrapping_mul(0x0000_0100_0000_01b3);
+            self.source = super::branch_folds::mix_fold(fold, self.source);
         }
     }
 

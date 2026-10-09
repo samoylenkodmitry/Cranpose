@@ -95,6 +95,8 @@ struct GroupScopeEntry<'a> {
 struct SlotHostPassGuard {
     core: Rc<ComposerCore>,
     host: Rc<SlotsHost>,
+    /// The branch fold depth the pass began at.
+    fold_base: usize,
     active: bool,
 }
 
@@ -115,6 +117,7 @@ impl SlotHostPassGuard {
                 log::error!("slot host stack underflow while closing slot host pass");
             }
         }
+        self.core.branch_folds.end_pass(self.fold_base);
         self.active = false;
     }
 }
@@ -160,6 +163,7 @@ pub(crate) struct ComposerRuntimeState {
     retention_policy: Cell<RetentionPolicy>,
     live_hosts: RefCell<HashMap<usize, std::rc::Weak<SlotsHost>>>,
     applier_host: RefCell<Option<std::rc::Weak<dyn ApplierHost>>>,
+    branch_folds: Rc<crate::slot::BranchFolds>,
 }
 
 /// How many applied command queues a thread keeps for its passes.
@@ -205,6 +209,7 @@ impl Default for ComposerRuntimeState {
             retention_policy: Cell::new(RetentionPolicy::default()),
             live_hosts: RefCell::new(HashMap::default()),
             applier_host: RefCell::new(None),
+            branch_folds: Rc::default(),
         }
     }
 }
@@ -631,6 +636,9 @@ fn provided_entry(stack: &LocalStackSnapshot, key: &LocalKey) -> Option<Rc<dyn A
 
 pub(crate) struct ComposerCore {
     pub(crate) shared_state: Rc<ComposerRuntimeState>,
+    /// The branch fold stack of the runtime state, which its nested
+    /// composers share.
+    pub(crate) branch_folds: Rc<crate::slot::BranchFolds>,
     pub(crate) slots: Rc<SlotsHost>,
     slot_hosts: RefCell<Vec<Rc<SlotsHost>>>,
     pub(crate) applier: Rc<dyn ApplierHost>,
@@ -721,16 +729,6 @@ impl Drop for ComposerCore {
 }
 
 impl ComposerCore {
-    pub(crate) fn open_branch_fold(&self, key: Key) -> BranchGroupGuard {
-        let hosts = self.slot_hosts.borrow();
-        let host = hosts.last().unwrap_or(&self.slots);
-        BranchGroupGuard {
-            fold: host
-                .try_push_branch_fold(key)
-                .map(|token| (Rc::clone(host), token)),
-        }
-    }
-
     pub(crate) fn new(
         shared_state: Rc<ComposerRuntimeState>,
         slots: Rc<SlotsHost>,
@@ -754,6 +752,7 @@ impl ComposerCore {
 
         let commands = spare_commands();
         Self {
+            branch_folds: Rc::clone(&shared_state.branch_folds),
             shared_state,
             slots,
             slot_hosts: RefCell::new(Vec::new()),
@@ -783,18 +782,43 @@ pub struct Composer {
     pub(crate) core: Rc<ComposerCore>,
 }
 
-pub struct BranchGroupGuard {
-    fold: Option<(Rc<SlotsHost>, usize)>,
+/// Keeps a branch's key in the fold of the groups composed inside it, for
+/// code `#[composable]` expands to.
+#[doc(hidden)]
+pub struct BranchGroupGuard<'a> {
+    folds: &'a crate::slot::BranchFolds,
+    token: usize,
 }
 
-impl Drop for BranchGroupGuard {
+impl Drop for BranchGroupGuard<'_> {
+    #[inline]
     fn drop(&mut self) {
-        let Some((host, token)) = &self.fold else {
-            return;
-        };
-        if !host.try_close_branch_fold(*token) {
-            log::error!("a branch fold guard closed while its slot host was busy");
+        self.folds.close(self.token);
+    }
+}
+
+/// A [`BranchGroupGuard`] for code that reaches the composer through the
+/// thread's current one, as a content closure does.
+#[doc(hidden)]
+pub struct ScopedBranchGroupGuard {
+    folds: Rc<crate::slot::BranchFolds>,
+    token: usize,
+}
+
+impl ScopedBranchGroupGuard {
+    #[inline]
+    pub(crate) fn open(folds: &Rc<crate::slot::BranchFolds>, key: Key) -> Self {
+        Self {
+            token: folds.push(key),
+            folds: Rc::clone(folds),
         }
+    }
+}
+
+impl Drop for ScopedBranchGroupGuard {
+    #[inline]
+    fn drop(&mut self) {
+        self.folds.close(self.token);
     }
 }
 
@@ -1005,7 +1029,8 @@ impl Composer {
         mode: crate::slot::SlotPassMode,
     ) -> SlotHostPassGuard {
         let slots = bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
-        slots.begin_pass(mode);
+        let fold_base = self.core.branch_folds.len();
+        slots.begin_pass(mode, &self.core.branch_folds);
         {
             let mut stack = self.core.slot_hosts.borrow_mut();
             if let Some(parent) = stack.last()
@@ -1018,6 +1043,7 @@ impl Composer {
         SlotHostPassGuard {
             core: self.clone_core(),
             host: slots,
+            fold_base,
             active: true,
         }
     }
@@ -1643,8 +1669,12 @@ impl Composer {
     }
 
     #[doc(hidden)]
-    pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard {
-        self.core.open_branch_fold(key)
+    pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard<'_> {
+        let folds = &*self.core.branch_folds;
+        BranchGroupGuard {
+            token: folds.push(key),
+            folds,
+        }
     }
 
     fn dispose_detached_nodes(&self, nodes: impl IntoIterator<Item = NodeId>) {
