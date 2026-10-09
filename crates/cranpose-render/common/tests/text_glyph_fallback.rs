@@ -384,3 +384,46 @@ fn ascii_text_falls_back_for_letters_the_requested_face_lacks() {
 
     assert_eq!(glyphs(&emoji), glyphs(&latin));
 }
+
+#[test]
+fn a_prepared_text_takes_the_line_height_of_the_faces_it_draws_in() {
+    const EMOJI: &[u8] = include_bytes!("../assets/TwemojiMozilla.ttf");
+    let latin = FontFamily::named("Latin");
+    let emoji = FontFamily::named("Emoji only");
+    let mut registry = SoftwareTextFontRegistry::new();
+    registry
+        .register_face_bytes(&latin, FontWeight::NORMAL, FontStyle::Normal, REGULAR)
+        .expect("Latin test font");
+    registry
+        .register_face_bytes(&emoji, FontWeight::NORMAL, FontStyle::Normal, EMOJI)
+        .expect("emoji test font");
+    let fonts = registry.into_font_set(&[]);
+    let measurer = SoftwareTextMeasurer::from_font_set(fonts.clone(), 16);
+    for family in [&latin, &emoji] {
+        let base_style = TextStyle {
+            span_style: style(family, FontWeight::NORMAL),
+            ..Default::default()
+        };
+        let style_box = measurer.line_box(&base_style).expect("line box");
+        let text = AnnotatedString::from("Hi");
+        let prepared = cranpose_ui::AppContext::new().enter(|| {
+            cranpose_ui::set_text_measurer(SoftwareTextMeasurer::from_font_set(fonts.clone(), 16));
+            cranpose_ui::prepare_text_layout(
+                &text,
+                &base_style,
+                cranpose_ui::TextLayoutOptions::default(),
+                None,
+            )
+        });
+        assert_eq!(
+            prepared.metrics.line_height,
+            measurer.line_height(&text, &base_style),
+            "{family:?}"
+        );
+        assert_eq!(
+            prepared.alignment_lines.first_baseline(),
+            Some(style_box.first_baseline()),
+            "{family:?}"
+        );
+    }
+}

@@ -334,6 +334,21 @@ pub trait TextMeasurer: 'static {
         self.line_height(text, style)
     }
 
+    /// [`TextMeasurer::line_box`] of `style` and
+    /// [`TextMeasurer::line_height_for_node`] of `text` in it, together: a
+    /// measurer that finds both in one font lookup answers them at once.
+    fn line_box_and_height(
+        &self,
+        node_id: Option<NodeId>,
+        text: &crate::text::AnnotatedString,
+        style: &TextStyle,
+    ) -> (Option<crate::text::LineBox>, f32) {
+        (
+            self.line_box(style),
+            self.line_height_for_node(node_id, text, style),
+        )
+    }
+
     fn get_offset_for_position(
         &self,
         text: &crate::text::AnnotatedString,
@@ -1333,8 +1348,10 @@ fn prepared_line_metrics<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     min_lines: usize,
 ) -> PreparedLineMetrics {
-    let base_box = measurer.line_box(style);
+    let mut span_base_box = None;
     if !display.span_styles.is_empty() {
+        let base_box = measurer.line_box(style);
+        span_base_box = Some(base_box);
         let mut top = 0.0;
         let mut trim_bottom = 0.0;
         let mut first = None;
@@ -1368,9 +1385,14 @@ fn prepared_line_metrics<M: TextMeasurer + ?Sized>(
     } else {
         display
     };
-    let line_height = measurer
-        .line_height_for_node(node_id, measured_text, style)
-        .max(0.0);
+    let (base_box, line_height) = match span_base_box {
+        Some(base_box) => (
+            base_box,
+            measurer.line_height_for_node(node_id, measured_text, style),
+        ),
+        None => measurer.line_box_and_height(node_id, measured_text, style),
+    };
+    let line_height = line_height.max(0.0);
     let first = base_box
         .map(crate::text::LineBox::first_baseline)
         .or_else(|| measurer.first_baseline(style));
