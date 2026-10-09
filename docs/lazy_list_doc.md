@@ -1,7 +1,8 @@
 # Lazy lists
 
-`LazyColumn` and `LazyRow` compose and measure the items needed for the current
-viewport and the list's beyond-bounds window. The public widgets and item DSL
+`LazyColumn` and `LazyRow` compose, measure and place the items needed for the
+current viewport, and keep the items of the list's beyond-bounds window
+composed without placing them. The public widgets and item DSL
 are in [`lazy_list.rs`](../crates/cranpose-ui/src/widgets/lazy_list.rs) and
 [`lazy_list_scope.rs`](../crates/cranpose-foundation/src/lazy/lazy_list_scope.rs).
 
@@ -9,8 +10,10 @@ are in [`lazy_list.rs`](../crates/cranpose-ui/src/widgets/lazy_list.rs) and
 
 `LazyListState` holds the scroll position, visible-item information and
 scroll-to-item requests. The measure policy reads intervals from the content,
-measures the visible range, fills the beyond-bounds window and places the
-result. Item keys preserve identity when items move; content types constrain
+measures and places the visible range, and keeps the beyond-bounds window
+composed: an item there is measured once, when it is composed, and again when
+it enters the viewport. While focus is in the list, the window's items are
+placed too, so a focus move can reach them. Item keys preserve identity when items move; content types constrain
 which subcompose slots can be reused. The measure algorithm and state live in
 [`lazy_list_measure.rs`](../crates/cranpose-foundation/src/lazy/lazy_list_measure.rs)
 and [`lazy_list_state.rs`](../crates/cranpose-foundation/src/lazy/lazy_list_state.rs).

@@ -13,8 +13,8 @@ use std::{
 
 use cranpose_core::{NodeId, SlotId};
 use cranpose_foundation::lazy::{
-    LazyListIntervalContent, LazyListMeasureConfig, LazyListMeasureResult, LazyListMeasuredItem,
-    LazyListState, SmallNodeVec, SmallOffsetVec, measure_lazy_list,
+    BeyondItem, LazyItemSource, LazyListIntervalContent, LazyListMeasureConfig,
+    LazyListMeasureResult, LazyListMeasuredItem, LazyListState, SmallNodeVec, SmallOffsetVec,
     measure_lazy_list_with_beyond_bounds_policy,
 };
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
@@ -253,19 +253,9 @@ fn measure_lazy_list_item(
         }
     }
 
-    let item_identity = key.is_user_key().then_some(key_slot_id);
-    let Some(item_content) = inputs
-        .content
-        .with_interval(index, |local_index, interval| {
-            let content = Rc::clone(&interval.content);
-            move || {
-                crate::lazy_item::ProvideLazyItemKey(item_identity, || (content)(local_index));
-            }
-        })
-    else {
+    let Some(root_children) = subcompose_lazy_list_item(scope, index, key, inputs) else {
         return LazyListMeasuredItem::new(index, key_slot_id, content_type, 1.0, 0.0);
     };
-    let root_children = scope.subcompose(slot_id, (), item_content);
 
     let was_reused = scope.was_last_slot_reused().unwrap_or(false);
     inputs.state.record_composition(was_reused);
@@ -307,6 +297,38 @@ fn measure_lazy_list_item(
     );
     crate::lazy_prefetch::record_lazy_item_cost(measure_start.elapsed());
     item
+}
+
+fn subcompose_lazy_list_item(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    index: usize,
+    key: cranpose_foundation::lazy::LazyLayoutKey,
+    inputs: &LazyListItemMeasureInputs<'_>,
+) -> Option<Vec<SubcomposeChild>> {
+    let key_slot_id = key.to_slot_id();
+    let item_identity = key.is_user_key().then_some(key_slot_id);
+    let item_content = inputs
+        .content
+        .with_interval(index, |local_index, interval| {
+            let content = Rc::clone(&interval.content);
+            move || {
+                crate::lazy_item::ProvideLazyItemKey(item_identity, || (content)(local_index));
+            }
+        })?;
+    Some(scope.subcompose(SlotId(key_slot_id), (), item_content))
+}
+
+fn keep_lazy_list_item(
+    scope: &mut SubcomposeMeasureScopeImpl<'_>,
+    index: usize,
+    inputs: &LazyListItemMeasureInputs<'_>,
+) {
+    let key = inputs.content.get_key(index);
+    scope.update_content_type(
+        SlotId(key.to_slot_id()),
+        inputs.content.get_content_type(index),
+    );
+    let _ = subcompose_lazy_list_item(scope, index, key, inputs);
 }
 
 fn lazy_list_child_constraints(is_vertical: bool, cross_axis_size: f32) -> Constraints {
@@ -481,7 +503,6 @@ fn measure_lazy_list_internal(
     }
 
     let scroll_delta_for_direction = state.peek_scroll_delta();
-    let skipped_slots_recycled = Cell::new(false);
     let item_measure_inputs = LazyListItemMeasureInputs {
         is_vertical,
         cross_axis_size,
@@ -492,28 +513,21 @@ fn measure_lazy_list_internal(
 
     let focused_item = measure_focused_lazy_item(scope, &item_measure_inputs);
     let node_id = scope.root_id();
+    let place_beyond = scope.focused_slot().is_some();
 
-    let measure_item = |index: usize| -> LazyListMeasuredItem {
-        if !skipped_slots_recycled.get()
-            && recycle_forward_skipped_active_slots(
-                scope,
-                content,
-                &near,
-                index,
-                scroll_delta_for_direction,
-            )
-        {
-            skipped_slots_recycled.set(true);
-        }
-        measure_lazy_list_item(scope, index, &item_measure_inputs)
-    };
-    let mut measure_item = measure_item;
     let mut result = measure_lazy_viewport(
-        &item_measure_inputs,
+        LazyListItems {
+            scope: &mut *scope,
+            inputs: &item_measure_inputs,
+            near,
+            scroll_delta: scroll_delta_for_direction,
+            skipped_slots_recycled: false,
+            place_beyond,
+            beyond: None,
+        },
         config,
         raw_viewport_size,
-        (node_id, scroll_delta_for_direction.abs() > 0.001),
-        &mut measure_item,
+        node_id,
     );
     if let Some(item) = focused_item {
         place_focused_lazy_item(&mut result, item, &item_measure_inputs, config.spacing);
@@ -595,75 +609,103 @@ fn measure_lazy_list_internal(
     })
 }
 
-/// Measures the list's viewport. While it scrolls, and in an idle prefetch
-/// pass, the items beyond it compose as [`BeyondBoundsComposition`] decides,
-/// and an item left for later asks for a pass for the list `node_id`.
-fn measure_lazy_viewport(
-    inputs: &LazyListItemMeasureInputs<'_>,
-    config: &LazyListMeasureConfig,
-    viewport_size: f32,
-    (node_id, active_scroll): (NodeId, bool),
-    measure_item: &mut impl FnMut(usize) -> LazyListMeasuredItem,
-) -> LazyListMeasureResult {
-    let items_count = inputs.content.item_count();
-    let idle_pass = crate::lazy_prefetch::in_lazy_prefetch_pass();
-    if !active_scroll && !idle_pass {
-        return measure_lazy_list(
-            items_count,
-            inputs.state,
-            viewport_size,
-            inputs.cross_axis_size,
-            config,
-            measure_item,
-        );
+struct LazyListItems<'s, 'a, 'i> {
+    scope: &'s mut SubcomposeMeasureScopeImpl<'a>,
+    inputs: &'i LazyListItemMeasureInputs<'i>,
+    near: std::ops::Range<usize>,
+    scroll_delta: f32,
+    skipped_slots_recycled: bool,
+    place_beyond: bool,
+    beyond: Option<BeyondBoundsComposition>,
+}
+
+impl LazyListItems<'_, '_, '_> {
+    fn composed(&self, index: usize) -> bool {
+        self.scope
+            .slot_is_active(SlotId(self.inputs.content.get_key(index).to_slot_id()))
     }
-    if idle_pass {
-        inputs.state.hold_scroll_window();
-    }
-    // An item an idle pass composes afresh has its modifier slices built
-    // before the frame it enters the screen in.
-    let mut measure_item = |index: usize| {
-        let fresh = idle_pass
-            && !inputs.measured_item_cache.borrow().has_candidate(
+}
+
+impl LazyItemSource for LazyListItems<'_, '_, '_> {
+    fn measure(&mut self, index: usize) -> LazyListMeasuredItem {
+        if !self.skipped_slots_recycled
+            && recycle_forward_skipped_active_slots(
+                self.scope,
+                self.inputs.content,
+                &self.near,
                 index,
-                inputs.content.get_key(index).to_slot_id(),
-                inputs.content.get_content_type(index),
-            );
-        let item = measure_item(index);
+                self.scroll_delta,
+            )
+        {
+            self.skipped_slots_recycled = true;
+        }
+        // An item an idle pass composes afresh has its modifier slices built
+        // before the frame it enters the screen in.
+        let fresh =
+            self.beyond.as_ref().is_some_and(|beyond| beyond.idle_pass) && !self.composed(index);
+        let item = measure_lazy_list_item(self.scope, index, self.inputs);
         if fresh {
             crate::lazy_prefetch::note_prefetched_item(&item.node_ids);
         }
         item
-    };
-    let mut policy = BeyondBoundsComposition::new(idle_pass);
+    }
+
+    fn keep_beyond(&mut self, index: usize) -> BeyondItem {
+        let composed = self.composed(index);
+        if let Some(beyond) = self.beyond.as_mut()
+            && !beyond.admits(composed)
+        {
+            return BeyondItem::Declined;
+        }
+        if self.place_beyond {
+            return BeyondItem::Placed(self.measure(index));
+        }
+        if composed {
+            keep_lazy_list_item(self.scope, index, self.inputs);
+        } else {
+            self.measure(index);
+        }
+        BeyondItem::Kept
+    }
+}
+
+/// Measures the list's viewport. While it scrolls, and in an idle prefetch
+/// pass, the items beyond it compose as [`BeyondBoundsComposition`] decides,
+/// and an item left for later asks for a pass for the list `node_id`.
+fn measure_lazy_viewport(
+    mut items: LazyListItems<'_, '_, '_>,
+    config: &LazyListMeasureConfig,
+    viewport_size: f32,
+    node_id: NodeId,
+) -> LazyListMeasureResult {
+    let inputs = items.inputs;
+    let items_count = inputs.content.item_count();
+    let idle_pass = crate::lazy_prefetch::in_lazy_prefetch_pass();
+    if idle_pass {
+        inputs.state.hold_scroll_window();
+    }
+    if idle_pass || items.scroll_delta.abs() > 0.001 {
+        items.beyond = Some(BeyondBoundsComposition::new(idle_pass));
+    }
     let result = measure_lazy_list_with_beyond_bounds_policy(
         items_count,
         inputs.state,
         viewport_size,
         inputs.cross_axis_size,
         config,
-        &mut measure_item,
-        |index| {
-            let key_slot_id = inputs.content.get_key(index).to_slot_id();
-            let content_type = inputs.content.get_content_type(index);
-            let cached =
-                inputs
-                    .measured_item_cache
-                    .borrow()
-                    .has_candidate(index, key_slot_id, content_type);
-            policy.should_measure(cached)
-        },
+        &mut items,
     );
-    if policy.wants_prefetch {
+    if items.beyond.is_some_and(|beyond| beyond.wants_prefetch) {
         crate::lazy_prefetch::request_lazy_prefetch(node_id);
     }
     result
 }
 
 /// Which items beyond the viewport a scrolling list composes, in order away
-/// from it. Composed items always measure. A frame composes new ones until
+/// from it. Composed items stay composed. A frame composes new ones until
 /// enough composed items lie ahead, counting its own; the next is left for
 /// an idle prefetch pass, which composes one.
+#[derive(Clone, Copy)]
 struct BeyondBoundsComposition {
     idle_pass: bool,
     ready: usize,
@@ -685,8 +727,8 @@ impl BeyondBoundsComposition {
         }
     }
 
-    fn should_measure(&mut self, cached: bool) -> bool {
-        if cached {
+    fn admits(&mut self, composed: bool) -> bool {
+        if composed {
             self.ready += 1;
             return true;
         }
@@ -957,14 +999,6 @@ impl LazyMeasuredItemCache {
             return None;
         }
         Some(cached)
-    }
-
-    fn has_candidate(&self, index: usize, key: u64, content_type: Option<u64>) -> bool {
-        self.entries.get(&index).is_some_and(|cached| {
-            cached.item.key == key
-                && cached.item.content_type == content_type
-                && cached.retained_children.len() == cached.item.node_ids.len()
-        })
     }
 
     fn remove(&mut self, index: usize) {

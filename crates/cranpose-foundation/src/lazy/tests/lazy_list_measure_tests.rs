@@ -285,8 +285,10 @@ fn test_time_budget_fills_visible_viewport_and_keeps_configured_beyond_bounds() 
     with_test_runtime(|| {
         let state = new_lazy_list_state_with_position(100, 5_000.0);
         let config = LazyListMeasureConfig::default();
+        let mut reached = Vec::new();
 
         let result = measure_lazy_list(10_000, &state, 100.0, 300.0, &config, |i| {
+            reached.push(i);
             std::thread::sleep(std::time::Duration::from_millis(8));
             create_test_item(i, 10.0)
         });
@@ -299,22 +301,25 @@ fn test_time_budget_fills_visible_viewport_and_keeps_configured_beyond_bounds() 
             (result.first_visible_item_scroll_offset - 4.0).abs() < 1.0,
             "expected actual visible offset to be preserved"
         );
-        assert_eq!(
-            result.visible_items.first().map(|item| item.index),
-            Some(200),
-            "measurement should keep the configured leading retained items"
-        );
-        assert_eq!(
-            result.visible_items.last().map(|item| item.index),
-            Some(224),
-            "measurement should keep the configured trailing retained items"
-        );
         assert!(
             result
                 .visible_items
                 .last()
-                .is_some_and(|item| item.offset + item.main_axis_size >= 100.0),
+                .is_some_and(|item| item.index == 222 && item.offset + item.main_axis_size >= 100.0),
             "visible measurement must fill the viewport before honoring the time budget"
+        );
+        assert!(
+            [200, 201, 223, 224]
+                .iter()
+                .all(|index| reached.contains(index)),
+            "the configured beyond-bounds items stay composed: {reached:?}"
+        );
+        assert!(
+            result
+                .visible_items
+                .iter()
+                .all(|item| (202..=222).contains(&item.index)),
+            "items kept beyond the viewport are not placed"
         );
     });
 }

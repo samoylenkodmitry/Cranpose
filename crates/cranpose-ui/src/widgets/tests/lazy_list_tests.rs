@@ -109,55 +109,6 @@ fn lazy_list_placements_retain_offscreen_measured_items_for_renderer_prewarm() {
 }
 
 #[test]
-fn lazy_list_placements_retain_after_viewport_prefetch_items_for_renderer_prewarm() {
-    let mut visible = LazyListMeasuredItem::new(0, 10, None, 40.0, 50.0);
-    visible.offset = 60.0;
-    visible.node_ids.push(101);
-    visible.child_offsets.push(0.0);
-
-    let mut warm = LazyListMeasuredItem::new(1, 11, None, 40.0, 50.0);
-    warm.offset = 110.0;
-    warm.node_ids.push(102);
-    warm.child_offsets.push(0.0);
-
-    let mut far = LazyListMeasuredItem::new(2, 12, None, 40.0, 50.0);
-    far.offset = 158.0;
-    far.node_ids.push(103);
-    far.child_offsets.push(0.0);
-
-    let config = LazyListMeasureConfig {
-        is_vertical: true,
-        is_rtl: false,
-        reverse_layout: false,
-        before_content_padding: 0.0,
-        after_content_padding: 0.0,
-        spacing: 8.0,
-        beyond_bounds_item_count: 8,
-        vertical_arrangement: Some(LinearArrangement::SpacedBy(8.0)),
-        horizontal_arrangement: None,
-    };
-    let mut placements = Vec::new();
-
-    push_lazy_list_placements(
-        &mut placements,
-        1.0,
-        &[visible, warm, far],
-        100,
-        true,
-        100.0,
-        &config,
-        50.0,
-    );
-
-    let placed_nodes = placements.iter().map(|p| p.node_id).collect::<Vec<_>>();
-    assert_eq!(
-        placed_nodes,
-        vec![101, 102, 103],
-        "prefetch rows remain in the retained placement list so renderers can prewarm clipped content"
-    );
-}
-
-#[test]
 fn lazy_measure_policy_does_not_schedule_speculative_prefetch_frames() {
     let source = include_str!("../lazy_list.rs");
     let start = source
@@ -233,22 +184,22 @@ fn measured_item_cache_keeps_only_items_whose_slots_are_retained() {
 fn a_frame_leaves_the_next_new_item_for_an_idle_pass_once_enough_are_ready() {
     let mut frame = BeyondBoundsComposition::new(false);
     for _ in 0..IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS {
-        assert!(frame.should_measure(true));
+        assert!(frame.admits(true));
     }
     assert!(!frame.wants_prefetch);
-    assert!(!frame.should_measure(false));
+    assert!(!frame.admits(false));
     assert!(frame.wants_prefetch);
 }
 
 #[test]
 fn a_frame_composes_new_items_only_until_enough_are_ready() {
     let mut frame = BeyondBoundsComposition::new(false);
-    assert!(frame.should_measure(true));
+    assert!(frame.admits(true));
     for _ in 1..IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS {
-        assert!(frame.should_measure(false));
+        assert!(frame.admits(false));
     }
     assert!(
-        !frame.should_measure(false),
+        !frame.admits(false),
         "the items a frame composes count as ready: a wider window gives it \
          no more to compose"
     );
@@ -259,9 +210,9 @@ fn a_frame_composes_new_items_only_until_enough_are_ready() {
 fn a_frame_with_none_ready_composes_as_many_as_it_keeps_ready() {
     let mut frame = BeyondBoundsComposition::new(false);
     for _ in 0..IDLE_PREFETCH_READY_BEYOND_BOUNDS_ITEMS {
-        assert!(frame.should_measure(false));
+        assert!(frame.admits(false));
     }
-    assert!(!frame.should_measure(false));
+    assert!(!frame.admits(false));
     assert!(frame.wants_prefetch);
 }
 
@@ -269,10 +220,10 @@ fn a_frame_with_none_ready_composes_as_many_as_it_keeps_ready() {
 fn an_idle_pass_composes_one_new_item_and_asks_for_the_next() {
     let mut idle = BeyondBoundsComposition::new(true);
     for _ in 0..3 {
-        assert!(idle.should_measure(true));
+        assert!(idle.admits(true));
     }
-    assert!(idle.should_measure(false));
+    assert!(idle.admits(false));
     assert!(!idle.wants_prefetch);
-    assert!(!idle.should_measure(false));
+    assert!(!idle.admits(false));
     assert!(idle.wants_prefetch);
 }

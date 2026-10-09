@@ -647,14 +647,23 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
         width: 240.0,
         height: 260.0,
     };
-    let layout = measure_tree(&mut composition, root, viewport_size);
+    measure_tree(&mut composition, root, viewport_size);
     let list_state = (*captured_state.borrow()).expect("state captured");
+    let first_size = list_state
+        .layout_info()
+        .visible_items_info
+        .iter()
+        .find(|item| item.index == 0)
+        .expect("first item should remain visible after initial scroll offset")
+        .size;
+    list_state.scroll_to_item(0, first_size - 100.0);
+    let layout = measure_tree(&mut composition, root, viewport_size);
     let layout_info = list_state.layout_info();
     let measured_first = layout_info
         .visible_items_info
         .iter()
         .find(|item| item.index == 0)
-        .expect("first item should remain visible after initial scroll offset");
+        .expect("the first item's end stays in view");
 
     let first_box = find_nearest_draw_ancestor_for_text(layout.root(), "Tall item")
         .expect("tall item box should be present");
