@@ -2,10 +2,7 @@
 
 use cranpose_core::NodeId;
 
-use crate::{
-    composable, layout::policies::EmptyMeasurePolicy, modifier::Modifier,
-    widgets::layout::compose_layout,
-};
+use crate::{composable, modifier::Modifier, widgets::layout::compose_empty_layout};
 
 /// Reserves layout space with the supplied modifier.
 ///
@@ -25,10 +22,5 @@ use crate::{
 /// ```
 #[composable]
 pub fn Spacer(modifier: Modifier) -> NodeId {
-    compose_layout(
-        modifier,
-        EmptyMeasurePolicy,
-        crate::density::density(),
-        || {},
-    )
+    compose_empty_layout(modifier, crate::density::density())
 }
