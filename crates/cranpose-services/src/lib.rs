@@ -45,6 +45,7 @@ mod registry;
 pub mod share_sheet;
 pub mod theme;
 pub mod uri_handler;
+pub mod wearable;
 pub mod writable_folder;
 
 pub use accessibility_options::{
@@ -249,6 +250,12 @@ pub use theme::{
 pub use uri_handler::{
     ProvideUriHandler, UriHandler, UriHandlerError, UriHandlerRef, clear_platform_uri_handler,
     default_uri_handler, local_uri_handler, set_platform_uri_handler,
+};
+pub use wearable::{
+    WearableError, WearableEvent, WearableLink, WearablePeer, WearableReceiver, WearableStream,
+    clear_platform_wearable_link, clear_wearable_receiver, open_wearable_stream,
+    publish_wearable_event, send_wearable_message, set_platform_wearable_link,
+    set_wearable_receiver, wearable_peers,
 };
 pub use writable_folder::{
     FolderEntry, FolderError, FolderReader, FolderWriter, WritableFolderStore,

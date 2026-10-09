@@ -554,21 +554,26 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "network",
             "notifications",
             "overlay",
+            "wearable",
         )
 
         /**
          * Extra Java source directories a service contributes, relative to
          * `androidRoot()`. Most services are manifest-only; `billing` also
-         * carries `CranposeBilling`, which needs the Play Billing library and
-         * so lives outside the base `java/` every application compiles.
+         * carries `CranposeBilling`, which needs the Play Billing library, and
+         * `wearable` carries `CranposeWearable`, which needs Google Play
+         * services' wearable library, so both live outside the base `java/`
+         * every application compiles.
          */
         val SERVICE_JAVA_SOURCE = mapOf(
             "billing" to "java-billing",
+            "wearable" to "java-wearable",
         )
 
         /** Third-party dependencies a service needs beyond the framework's own. */
         val SERVICE_DEPENDENCIES = mapOf(
             "billing" to listOf("com.android.billingclient:billing:9.1.0"),
+            "wearable" to listOf("com.google.android.gms:play-services-wearable:20.0.1"),
         )
 
         /**

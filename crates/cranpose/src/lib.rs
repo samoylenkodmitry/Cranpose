@@ -132,6 +132,8 @@ mod android_surface;
 mod android_text_input;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_vsync;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_wearable;
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android_wire_escape;
 #[cfg(all(feature = "android", target_os = "android"))]
