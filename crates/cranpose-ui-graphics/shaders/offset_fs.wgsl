@@ -15,6 +15,6 @@ fn offset_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let inside =
         shifted_uv.x >= 0.0 && shifted_uv.x <= 1.0 && shifted_uv.y >= 0.0 && shifted_uv.y <= 1.0;
     let clamped_uv = clamp(shifted_uv, vec2<f32>(0.0), vec2<f32>(1.0));
-    return textureSample(input_texture, input_sampler, clamped_uv)
+    return textureSampleLevel(input_texture, input_sampler, clamped_uv, 0.0)
         * select(0.0, 1.0, inside);
 }

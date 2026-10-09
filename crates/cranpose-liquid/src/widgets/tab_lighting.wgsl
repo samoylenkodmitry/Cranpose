@@ -1,6 +1,6 @@
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let source = textureSample(input_texture, input_sampler, input.uv);
+    let source = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
     let scale = u[62].zw / max(u[0].xy, vec2<f32>(0.001));
     let position = (input.uv * vec2<f32>(textureDimensions(input_texture)) - u[62].xy) / scale;
     let half_size = u[0].xy * 0.5;

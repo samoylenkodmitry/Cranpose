@@ -482,6 +482,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let composed = object + ground * (1.0 - object.a);
-    let base = textureSample(input_texture, input_sampler, input.uv);
+    let base = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
     return composed + base * (1.0 - composed.a);
 }

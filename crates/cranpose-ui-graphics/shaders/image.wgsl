@@ -102,12 +102,12 @@ fn image_rounded_vs_main(input: RoundedVertexInput) -> RoundedVertexOutput {
 
 fn image_color(color: vec4<f32>, uv: vec2<f32>, uv_bounds: vec4<f32>) -> vec4<f32> {
     let clamped = clamp(uv, uv_bounds.xy, uv_bounds.zw);
-    return textureSample(image_texture, image_sampler, clamped) * color;
+    return textureSampleLevel(image_texture, image_sampler, clamped, 0.0) * color;
 }
 
 fn mask_color(color: vec4<f32>, uv: vec2<f32>, uv_bounds: vec4<f32>) -> vec4<f32> {
     let clamped = clamp(uv, uv_bounds.xy, uv_bounds.zw);
-    let alpha = textureSample(image_texture, image_sampler, clamped).r;
+    let alpha = textureSampleLevel(image_texture, image_sampler, clamped, 0.0).r;
     return vec4<f32>(1.0, 1.0, 1.0, alpha) * color;
 }
 

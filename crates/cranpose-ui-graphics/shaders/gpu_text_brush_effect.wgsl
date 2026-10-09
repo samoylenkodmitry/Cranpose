@@ -148,7 +148,7 @@ fn evaluate_brush(local: vec2<f32>) -> vec4<f32> {
 }
 
 fn sample_mask_alpha(uv: vec2<f32>) -> f32 {
-    return textureSample(input_texture, input_sampler, uv).a;
+    return textureSampleLevel(input_texture, input_sampler, uv, 0.0).a;
 }
 
 fn max_dilated_alpha(uv: vec2<f32>, texel: vec2<f32>, radius_px: f32, center_alpha: f32) -> f32 {
@@ -181,7 +181,7 @@ fn max_dilated_alpha(uv: vec2<f32>, texel: vec2<f32>, radius_px: f32, center_alp
 
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
-    let sampled = textureSample(input_texture, input_sampler, input.uv);
+    let sampled = textureSampleLevel(input_texture, input_sampler, input.uv, 0.0);
     let draw_mode = uniform_u32(u[5].x);
     let fill_alpha = sampled.a;
     if (draw_mode == DRAW_FILL && fill_alpha <= 0.0) {

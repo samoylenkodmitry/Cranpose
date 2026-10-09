@@ -1116,7 +1116,7 @@ fn glass_fs(input: VertexOutput) -> vec4<f32> {
     // its foreground content. Keeping the mask in this shader guarantees
     // that blurred children and the refracted backdrop share one silhouette.
     if (GLASS_CONTENT_MASK_MODE == 1) | ((GLASS_CONTENT_MASK_MODE < 0) & (fixed_or(get_float(112u), 0.0, GLASS_CONTENT_MASK_OFF) > 0.5)) {
-        return textureSample(input_texture, input_sampler, map_uv(map, uv))
+        return textureSampleLevel(input_texture, input_sampler, map_uv(map, uv), 0.0)
             * coverage
             * material_activity;
     }
