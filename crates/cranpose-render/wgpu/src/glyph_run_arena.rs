@@ -438,11 +438,16 @@ impl GlyphRunArena {
             .max(MAPPED_CHUNK_QUADS);
         let id = self.next_chunk;
         self.next_chunk += 1;
+        // Free chunks that no frame like this one takes go: those under a
+        // quarter of what it wants and those over twice it. A screen's first
+        // frames write every run and open chunks of tens of thousands of
+        // quads; pooled, one such chunk held 3.6 MB on the desktop gauntlet
+        // at tier 16, whose later frames write a few hundred quads.
         let taken = self.pool.take(device, |free| {
-            free.retain(|chunk| chunk.spans.capacity() >= wanted / 4);
+            free.retain(|chunk| (wanted / 4..=wanted * 2).contains(&chunk.spans.capacity()));
             let slot = free
                 .iter()
-                .position(|chunk| (quads..=wanted * 2).contains(&chunk.spans.capacity()))?;
+                .position(|chunk| chunk.spans.capacity() >= quads)?;
             Some(free.swap_remove(slot))
         });
         let chunk = match taken {

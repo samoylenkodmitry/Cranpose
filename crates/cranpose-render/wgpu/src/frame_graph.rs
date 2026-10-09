@@ -1605,7 +1605,6 @@ impl UploadAllocatorSpec {
 }
 
 const MIN_UPLOAD_BUFFER_BYTES: u64 = 64 * 1024;
-const UPLOAD_SHRINK_FACTOR: u64 = 4;
 
 /// Where an upload lands in a ring: at an offset of the ring's current
 /// buffer, or at the start of a larger buffer the ring opens for it.
@@ -1705,6 +1704,20 @@ impl UploadMode {
         match backend {
             wgpu::Backend::Metal => Self::for_device(device),
             _ => Self::Copied,
+        }
+    }
+
+    /// How many times a frame's uploads a ring's buffer may hold and stay
+    /// for the next frames. A copied ring keeps one buffer, so it keeps a
+    /// roomy one. A mapped ring keeps one for each frame in flight, made at
+    /// a quarter more than the frame that asked: at four times, the buffers
+    /// of a screen's first frames, which upload everything, stayed. On the
+    /// desktop gauntlet at tier 16 its vertex buffers held 13.3 MB for
+    /// frames of 3.2 MB.
+    pub(crate) fn shrink_factor(self) -> u64 {
+        match self {
+            Self::Copied => 4,
+            Self::Mapped => 2,
         }
     }
 }
@@ -2077,7 +2090,7 @@ impl UploadRing {
             Some(chunks) => {
                 for generation in self.generations.drain(..) {
                     generation.buffer.unmap();
-                    if ring_outlives_frame(generation.capacity, staged) {
+                    if ring_outlives_frame(generation.capacity, staged, UploadMode::Mapped) {
                         chunks.recycle(generation, &mut self.requests);
                     }
                 }
@@ -2090,7 +2103,7 @@ impl UploadRing {
                 let keep = self.generations.len().saturating_sub(1);
                 self.generations.drain(..keep);
                 if let Some(last) = self.generations.last()
-                    && !ring_outlives_frame(last.capacity, staged)
+                    && !ring_outlives_frame(last.capacity, staged, UploadMode::Copied)
                 {
                     self.generations.clear();
                 }
@@ -2212,10 +2225,10 @@ fn write_before_passes(
     }
 }
 
-fn ring_outlives_frame(capacity: u64, staged: u64) -> bool {
+fn ring_outlives_frame(capacity: u64, staged: u64, mode: UploadMode) -> bool {
     staged == 0
         || capacity <= MIN_UPLOAD_BUFFER_BYTES
-        || staged.saturating_mul(UPLOAD_SHRINK_FACTOR) >= capacity
+        || staged.saturating_mul(mode.shrink_factor()) >= capacity
 }
 
 #[derive(Default)]

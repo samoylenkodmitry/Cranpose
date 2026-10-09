@@ -161,18 +161,29 @@ fn a_texture_a_cache_returns_counts_toward_the_frame_s_working_set() {
 }
 
 #[test]
-fn a_ring_outlives_the_frames_that_fill_a_quarter_of_it() {
+fn a_copied_ring_outlives_the_frames_that_fill_a_quarter_of_it() {
     let capacity = 16 * MIN_UPLOAD_BUFFER_BYTES;
-    assert!(ring_outlives_frame(capacity, capacity / 4));
-    assert!(ring_outlives_frame(capacity, capacity));
-    assert!(!ring_outlives_frame(capacity, capacity / 4 - 1));
-    assert!(!ring_outlives_frame(capacity, 1));
+    let copied = super::UploadMode::Copied;
+    assert!(ring_outlives_frame(capacity, capacity / 4, copied));
+    assert!(ring_outlives_frame(capacity, capacity, copied));
+    assert!(!ring_outlives_frame(capacity, capacity / 4 - 1, copied));
+    assert!(!ring_outlives_frame(capacity, 1, copied));
+}
+
+#[test]
+fn a_mapped_ring_outlives_the_frames_that_fill_half_of_it() {
+    let capacity = 16 * MIN_UPLOAD_BUFFER_BYTES;
+    let mapped = super::UploadMode::Mapped;
+    assert!(ring_outlives_frame(capacity, capacity / 2, mapped));
+    assert!(!ring_outlives_frame(capacity, capacity / 2 - 1, mapped));
 }
 
 #[test]
 fn a_ring_at_the_floor_and_a_ring_after_an_empty_frame_stay() {
-    assert!(ring_outlives_frame(MIN_UPLOAD_BUFFER_BYTES, 1));
-    assert!(ring_outlives_frame(16 * MIN_UPLOAD_BUFFER_BYTES, 0));
+    for mode in [super::UploadMode::Copied, super::UploadMode::Mapped] {
+        assert!(ring_outlives_frame(MIN_UPLOAD_BUFFER_BYTES, 1, mode));
+        assert!(ring_outlives_frame(16 * MIN_UPLOAD_BUFFER_BYTES, 0, mode));
+    }
 }
 
 /// The modes the test device offers: the copied one always, the mapped
