@@ -1088,27 +1088,6 @@ impl Modifier {
         }
     }
 
-    pub(crate) fn rehouse_for_live_compaction(&self) -> Self {
-        match &self.kind {
-            ModifierKind::Empty => Self::default(),
-            ModifierKind::Single {
-                elements,
-                inspector,
-            } => Self {
-                kind: ModifierKind::Single {
-                    elements: Elements::from_slice(elements),
-                    inspector: inspector
-                        .as_ref()
-                        .map(|inspector| inspector.iter().cloned().collect()),
-                },
-                strict_fingerprint: self.strict_fingerprint,
-                structural_fingerprint: self.structural_fingerprint,
-                element_count: self.element_count,
-                provides_composition_locals: self.provides_composition_locals,
-            },
-        }
-    }
-
     pub fn total_padding(&self) -> f32 {
         let padding = self.padding_values();
         padding
