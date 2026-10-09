@@ -16,9 +16,10 @@ formatting, spelling and diff gates skip the forks.
 
 Upstream: <https://github.com/gfx-rs/wgpu>, commit
 `40f4a34ebaf56f9a046231f54125ad046239d3f3` (`wgpu-hal` 30.0.1).
-`cranpose-wgpu-hal` is at 30.0.4 for the catch-up barrier, the Metal
-pipeline switch and the dedicated Vulkan allocations below, and
-`cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.4 to require it.
+`cranpose-wgpu-hal` is at 30.0.5 for the catch-up barrier, the Metal
+pipeline switch, the dedicated Vulkan allocations and the GL point size
+below, and `cranpose-wgpu-core` and `cranpose-wgpu` are at 30.0.5 to
+require it.
 
 | fork | upstream |
 | --- | --- |
@@ -105,6 +106,22 @@ device keeps upstream's behaviour). With the mobile hints that is 512 KiB
 and up; with wgpu's default `Performance` hints it is 8 MiB and up. On the
 Mate the allocator's peak over three launches was 40.3 to 41.6 MiB, against
 42.4 to 46.4 MiB before.
+
+### GL programs write the point size only to draw points
+
+Upstream's GL backend makes every vertex shader write `gl_PointSize`, so a
+pipeline that draws points gets a defined size. WebGL counts that output
+against the 15 varying vectors a program may link with (GLSL ES 1.00,
+appendix A.7), and so does it count `gl_FragCoord`, which a fragment stage
+reading `@builtin(position)` uses. On a Huawei Mate 20 X (Mali-G76, Chrome
+154, ANGLE on OpenGL ES) a program with 14 vector varyings, the position
+and the point size failed to link ("Could not pack varying gl_PointSize"),
+and the same program without the point size linked. The general shape
+pipeline of Cranpose's renderer has exactly those 14 vectors, so every
+frame that drew with it failed validation and drew nothing.
+
+The fork's GL device writes `gl_PointSize` only in the vertex stage of a
+pipeline whose topology is a point list; the program cache keys on it.
 
 ### Update the fork
 

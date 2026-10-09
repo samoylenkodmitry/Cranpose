@@ -12,9 +12,6 @@
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    // The corner radius of `clip_rect` in device pixels. Only a pipeline
-    // with `SHAPE_ROUNDED_CLIP` reads it, so the others never load it.
-    @location(1) @interpolate(flat) clip_radius: f32,
     @location(2) world_pos: vec4<f32>,
     @location(3) @interpolate(flat) rect: vec4<f32>,
     @location(4) @interpolate(flat) radii: vec4<f32>,
@@ -22,6 +19,12 @@ struct VertexOutput {
     @location(6) @interpolate(flat) clip_rect: vec4<f32>,
     @location(7) @interpolate(flat) stroke_params: vec4<f32>,
     @location(8) @interpolate(flat) arc_params: vec4<f32>,
+    // The brush kind with its stop count above `BRUSH_COUNT_SHIFT`, the
+    // first stop, the corner radius of `clip_rect` in device pixels as f32
+    // bits (only a pipeline with `SHAPE_ROUNDED_CLIP` writes or reads it),
+    // and the tile mode. The radius takes no vector of its own: WebGL counts
+    // `@builtin(position)`, which `fs_main` reads, against its 15 varying
+    // vectors, and ANGLE fails to link a 16th.
     @location(9) @interpolate(flat) brush: vec4<u32>,
     @location(10) @interpolate(flat) stop_offsets: vec4<f32>,
     @location(11) @interpolate(flat) stop_color0: vec4<f32>,
@@ -29,6 +32,10 @@ struct VertexOutput {
     @location(13) @interpolate(flat) stop_color2: vec4<f32>,
     @location(14) @interpolate(flat) stop_color3: vec4<f32>,
 }
+
+// Where `brush.x` keeps the stop count, above the brush kind.
+const BRUSH_COUNT_SHIFT: u32 = 8u;
+const BRUSH_KIND_MASK: u32 = 0xFFu;
 
 // What a solid batch's fragments need: `VertexOutput` without the brush
 // and its stops. A tiling GPU writes every vertex's varyings to memory
@@ -693,12 +700,11 @@ fn shape_output(
         output.stroke_params.y = f32(u32(output.stroke_params.y) | SHAPE_FLAG_TURNED);
     }
 
-    if (SHAPE_CLIPPED & ((placement.flags & PLACEMENT_CLIPPED) != 0u)) {
+    let clipped = SHAPE_CLIPPED & ((placement.flags & PLACEMENT_CLIPPED) != 0u);
+    if (clipped) {
         output.clip_rect = placement.clip;
-        output.clip_radius = select(0.0, placement.clip_radius, SHAPE_ROUNDED_CLIP);
     } else {
         output.clip_rect = vec4<f32>(0.0);
-        output.clip_radius = 0.0;
     }
 
     output.gradient_params = vec4<f32>(0.0);
@@ -726,7 +732,12 @@ fn shape_output(
                 0.0,
             );
         }
-        output.brush = vec4<u32>(brush.kind, brush.stop_start, brush.stop_count, brush.tile_mode);
+        output.brush = vec4<u32>(
+            brush.kind | (brush.stop_count << BRUSH_COUNT_SHIFT),
+            brush.stop_start,
+            0u,
+            brush.tile_mode,
+        );
         let stops = load_inline_gradient_stops(brush.stop_start, brush.stop_count);
         output.stop_offsets = stops.offsets;
         output.stop_color0 = stops.color0;
@@ -739,6 +750,9 @@ fn shape_output(
         } else {
             output.world_pos = vec4<f32>(position, vec2<f32>(UNDITHERED));
         }
+    }
+    if (SHAPE_ROUNDED_CLIP & clipped) {
+        output.brush.z = bitcast<u32>(placement.clip_radius);
     }
     return output;
 }
@@ -1541,7 +1555,7 @@ fn sample_inline_gradient(input: VertexOutput, count: u32, t: f32) -> vec4<f32> 
 }
 
 fn gradient_color(input: VertexOutput, t: f32) -> vec4<f32> {
-    let count = input.brush.z;
+    let count = input.brush.x >> BRUSH_COUNT_SHIFT;
     if (count > 0u && count <= INLINE_GRADIENT_STOPS) {
         return sample_inline_gradient(input, count, t);
     }
@@ -1592,7 +1606,8 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
 /// it). The pipeline constants fold branches; they never copy code.
 fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     let alpha = shape_record_coverage(input);
-    if (!SHAPE_ROUNDED_CLIP | (input.clip_radius <= 0.0)) {
+    let clip_radius = bitcast<f32>(input.brush.z);
+    if (!SHAPE_ROUNDED_CLIP | (clip_radius <= 0.0)) {
         return alpha;
     }
     // The same coverage the blit's mask takes of a rounded clip.
@@ -1603,7 +1618,7 @@ fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     );
     let half_size = input.clip_rect.zw * 0.5;
     let local_pos = rect_pos - (input.clip_rect.xy + half_size);
-    let dist = sdf_rounded_rect(local_pos, half_size, vec4<f32>(input.clip_radius));
+    let dist = sdf_rounded_rect(local_pos, half_size, vec4<f32>(clip_radius));
     let coverage = alpha * (1.0 - smoothstep(-0.5, 0.5, dist));
     if (coverage < 0.001) {
         discard;
@@ -1809,7 +1824,7 @@ fn fragment(input: VertexOutput) -> vec4<f32> {
 
     // Apply gradient if needed; a solid batch fixes the brush to solid and the
     // whole ladder folds away.
-    let carried_brush = select(input.brush.x, 0u, SHAPE_SOLID);
+    let carried_brush = select(input.brush.x & BRUSH_KIND_MASK, 0u, SHAPE_SOLID);
     let brush_type = select(carried_brush, u32(max(BRUSH_KIND_FIXED, 0)), BRUSH_KIND_FIXED >= 0);
     let gradient_tile_mode = input.brush.w;
     if (brush_type == 1u) {
