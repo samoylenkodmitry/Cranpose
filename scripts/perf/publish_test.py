@@ -171,6 +171,30 @@ class PublishPushTest(unittest.TestCase):
             index = json.loads(git('show', 'perf-data:index.json', cwd=origin))
             self.assertEqual(len(index['runs']), 3)
 
+    def test_a_data_tree_left_dirty_by_a_failed_commit_follows_a_branch_that_moved(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin, repo = scratch_repo(root)
+            self.assertEqual(publish_run(root, repo).returncode, 0)
+            # The commit of a later night failed after it wrote its run, and
+            # another job pushed to the branch since.
+            (root / 'tree/index.json').write_text(json.dumps({'runs': [{'file': 'runs/stale.json'}]}))
+            git('add', 'index.json', cwd=root / 'tree')
+            git('clone', '-q', '-b', 'perf-data', str(origin), str(root / 'other'), cwd=root)
+            index = json.loads((root / 'other/index.json').read_text())
+            index['runs'].append({'file': 'runs/other.json', 'started_at': '2026-10-06T01:30:00+00:00'})
+            (root / 'other/index.json').write_text(json.dumps(index))
+            git('add', 'index.json', cwd=root / 'other')
+            git('commit', '-q', '-m', 'other', cwd=root / 'other')
+            git('push', '-q', 'origin', 'perf-data', cwd=root / 'other')
+            (root / 'run.json').write_text(json.dumps({**run(), 'main': 'def456abc789'}))
+            published = publish_run(root, repo)
+            self.assertEqual(published.returncode, 0, published.stderr)
+            files = [entry['file'] for entry in json.loads(git('show', 'perf-data:index.json', cwd=origin))['runs']]
+            # The index lists runs by start; the stale entry of the failed night is not among them.
+            self.assertEqual(files, ['runs/earlier.json', 'runs/2026-10-05-nightly-abc123def-EVR-AL00.json',
+                                     'runs/2026-10-05-nightly-def456abc-EVR-AL00.json', 'runs/other.json'])
+
     def test_a_data_branch_that_cannot_be_fetched_is_not_started_again(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

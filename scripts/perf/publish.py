@@ -117,7 +117,10 @@ def data_tree(tree):
     if fetched.returncode == 0:
         # Detached at the data branch's head: the branch may be checked out in
         # another worktree, and the push names it.
-        git('checkout', '-q', '--detach', f'origin/{DATA_BRANCH}', cwd=tree)
+        # Forced and cleaned: a run whose commit failed left its files in the
+        # tree, and the branch has moved since.
+        git('checkout', '-q', '-f', '--detach', f'origin/{DATA_BRANCH}', cwd=tree)
+        git('clean', '-q', '-f', '-d', cwd=tree)
     elif "couldn't find remote ref" in fetched.stderr:
         git('checkout', '-q', '--orphan', DATA_BRANCH, cwd=tree)
         git('rm', '-q', '-r', '-f', '.', cwd=tree)
