@@ -48,7 +48,6 @@ import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.text.BreakIterator;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -509,18 +508,43 @@ public class CranposeActivity extends NativeActivity {
     }
 
     /**
-     * Publishes Cranpose's semantic tree through Android's native virtual-view
-     * API. {@code order} lists every virtual id in tree order, {@code records}
-     * carries only the controls that are new or say something else, and
-     * {@code moves} holds {@code id, left, top, right, bottom} runs for
-     * controls that only moved; every other control keeps what it had.
+     * The array the app writes its accessibility updates into, kept from one
+     * update to the next while the UI thread is done reading it: a new array
+     * for every update was garbage that the Java heap of a foreground process
+     * keeps resident.
      */
-    public void cranposeUpdateAccessibilityElements(int[] order, byte[] records, int[] moves) {
+    private byte[] accessibilityBuffer;
+    /** Whether the UI thread has yet to read the update in the kept array. */
+    private volatile boolean accessibilityBufferQueued;
+
+    /**
+     * An array of at least {@code length} bytes for the next update: the kept
+     * one, unless the UI thread has yet to read the update before.
+     */
+    public byte[] cranposeAccessibilityBuffer(int length) {
+        if (accessibilityBufferQueued) return new byte[length];
+        if (accessibilityBuffer == null || accessibilityBuffer.length < length) {
+            accessibilityBuffer = new byte[length + length / 4];
+        }
+        return accessibilityBuffer;
+    }
+
+    /**
+     * Publishes Cranpose's semantic tree through Android's native virtual-view
+     * API. The first {@code length} bytes of {@code update} hold, as
+     * little-endian ints, the count of virtual ids and every id in tree
+     * order, then the count of move numbers and {@code id, left, top, right,
+     * bottom} runs for the controls that only moved, then the records of the
+     * controls that are new or say something else; every other control keeps
+     * what it had.
+     */
+    public void cranposeUpdateAccessibilityElements(byte[] update, int length) {
+        boolean kept = update == accessibilityBuffer;
+        if (kept) accessibilityBufferQueued = true;
         // Read inside the posted task: the caller is the native frame loop,
         // whose budget the reading must not consume; the UI thread is idle in
         // this architecture.
         runOnUiThread(() -> {
-            final List<CranposeAccessibilityElement> updated = parseAccessibilityElements(records);
             View host = getWindow().getDecorView();
             if (cranposeAccessibilityProvider == null) {
                 host.postDelayed(CranposeActivity::collectStartupGarbage,
@@ -535,9 +559,13 @@ public class CranposeActivity extends NativeActivity {
                     }
                 });
             }
-            if (!cranposeAccessibilityProvider.update(order, updated, moves)) {
-                nativeOnAccessibilityTreeLost();
+            boolean complete;
+            try {
+                complete = cranposeAccessibilityProvider.update(update, length);
+            } finally {
+                if (kept) accessibilityBufferQueued = false;
             }
+            if (!complete) nativeOnAccessibilityTreeLost();
         });
     }
 
@@ -563,166 +591,178 @@ public class CranposeActivity extends NativeActivity {
      */
     private static final int ACCESSIBILITY_CUSTOM_ACTION_BASE = 0x7f000000;
 
-    /**
-     * Reads the records android_accessibility_wire.rs writes back to back:
-     * numbers and flags as little-endian ints, fractions as little-endian
-     * floats, text as its UTF-8 length and bytes, and custom actions as their
-     * count and labels, in the order the element's constructor takes them. A
-     * payload cut short keeps the records read before it.
-     */
-    private static List<CranposeAccessibilityElement> parseAccessibilityElements(byte[] payload) {
-        if (payload == null || payload.length == 0) return Collections.emptyList();
-        ByteBuffer in = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN);
-        ArrayList<CranposeAccessibilityElement> result = new ArrayList<>();
-        try {
-            while (in.hasRemaining()) {
-                result.add(new CranposeAccessibilityElement(
-                        in.getInt(), in.getInt(),
-                        new Rect(in.getInt(), in.getInt(), in.getInt(), in.getInt()),
-                        in.getFloat(), in.getFloat(), flag(in), text(in), text(in), text(in),
-                        text(in), in.getInt(), in.getInt(), flag(in), actions(in), flag(in),
-                        flag(in), flag(in), in.getFloat(), in.getFloat(), in.getFloat(),
-                        flag(in), flag(in), flag(in), in.getInt(), in.getInt(), in.getInt(),
-                        flag(in), in.getInt(), in.getInt(), text(in), text(in), flag(in),
-                        in.getInt(), text(in), flag(in), flag(in), in.getInt(), in.getInt()));
-            }
-        } catch (RuntimeException ignored) {
-            // A payload cut short must not make the host Activity inaccessible.
-        }
-        return result;
-    }
+    /** The custom actions of every control that has none. */
+    private static final String[] NO_ACTIONS = new String[0];
 
     private static boolean flag(ByteBuffer in) {
         return in.getInt() != 0;
     }
 
-    private static String text(ByteBuffer in) {
+    /**
+     * Reads one text field: its UTF-8 length and bytes. Returns
+     * {@code current} when the bytes spell it, so a control resent for
+     * another field keeps its strings instead of allocating equal ones.
+     */
+    private static String text(ByteBuffer in, String current) {
         int length = in.getInt();
         if (length == 0) return "";
-        String text = new String(in.array(), in.arrayOffset() + in.position(), length,
-                StandardCharsets.UTF_8);
+        int start = in.arrayOffset() + in.position();
         in.position(in.position() + length);
-        return text;
+        if (current != null && spells(in.array(), start, length, current)) return current;
+        return new String(in.array(), start, length, StandardCharsets.UTF_8);
     }
 
-    private static String[] actions(ByteBuffer in) {
+    /** Whether {@code bytes[start, start + length)} is the UTF-8 encoding of {@code text}. */
+    private static boolean spells(byte[] bytes, int start, int length, String text) {
+        int at = start;
+        int end = start + length;
+        for (int i = 0; i < text.length(); i++) {
+            int c = text.charAt(i);
+            if (Character.isHighSurrogate((char) c) && i + 1 < text.length()
+                    && Character.isLowSurrogate(text.charAt(i + 1))) {
+                c = Character.toCodePoint((char) c, text.charAt(++i));
+            }
+            if (c < 0x80) {
+                if (at >= end || bytes[at++] != (byte) c) return false;
+            } else if (c < 0x800) {
+                if (end - at < 2 || bytes[at++] != (byte) (0xC0 | c >> 6)
+                        || bytes[at++] != (byte) (0x80 | (c & 0x3F))) return false;
+            } else if (c < 0x10000) {
+                if (end - at < 3 || bytes[at++] != (byte) (0xE0 | c >> 12)
+                        || bytes[at++] != (byte) (0x80 | (c >> 6 & 0x3F))
+                        || bytes[at++] != (byte) (0x80 | (c & 0x3F))) return false;
+            } else {
+                if (end - at < 4 || bytes[at++] != (byte) (0xF0 | c >> 18)
+                        || bytes[at++] != (byte) (0x80 | (c >> 12 & 0x3F))
+                        || bytes[at++] != (byte) (0x80 | (c >> 6 & 0x3F))
+                        || bytes[at++] != (byte) (0x80 | (c & 0x3F))) return false;
+            }
+        }
+        return at == end;
+    }
+
+    /**
+     * Reads a control's custom actions: their count and labels. The labels
+     * go into {@code current} when it holds as many.
+     */
+    private static String[] actions(ByteBuffer in, String[] current) {
         int count = in.getInt();
         if (count < 0 || count > in.remaining()) {
             throw new IllegalArgumentException("action count " + count);
         }
-        String[] labels = new String[count];
+        if (count == 0) return NO_ACTIONS;
+        String[] labels = current.length == count ? current : new String[count];
         for (int i = 0; i < count; i++) {
-            labels[i] = text(in);
+            labels[i] = text(in, labels[i]);
         }
         return labels;
     }
 
     private static final class CranposeAccessibilityElement {
-        final int id;
-        final int role;
+        int id;
+        int role;
         /** Moved in place when the app reports that only the bounds changed. */
-        final Rect bounds;
-        final float centerX;
-        final float centerY;
-        final boolean clickable;
-        final String label;
-        final String value;
-        final String stateDescription;
-        final String clickLabel;
+        final Rect bounds = new Rect();
+        float centerX;
+        float centerY;
+        boolean clickable;
+        String label = "";
+        String value = "";
+        String stateDescription = "";
+        String clickLabel = "";
         /** -1 when the app said nothing, otherwise 0 or 1. */
-        final int selected;
-        final int toggled;
-        final boolean enabled;
-        final String[] customActions;
-        final boolean focusable;
-        final boolean focused;
+        int selected;
+        int toggled;
+        boolean enabled;
+        String[] customActions = NO_ACTIONS;
+        boolean focusable;
+        boolean focused;
         /** Whether a screen reader may move this control's value. */
-        final boolean adjustable;
-        final float progressCurrent;
-        final float progressMin;
-        final float progressMax;
+        boolean adjustable;
+        float progressCurrent;
+        float progressMin;
+        float progressMax;
         /** Whether a reader can page this container, and which way. */
-        final boolean scrollable;
-        final boolean canScrollForward;
-        final boolean canScrollBackward;
+        boolean scrollable;
+        boolean canScrollForward;
+        boolean canScrollBackward;
         /** The virtual id of the scroll container above this control, or -1. */
-        final int scrollParent;
-        final int collectionRows;
-        final int collectionColumns;
+        int scrollParent;
+        int collectionRows;
+        int collectionColumns;
         /** Whether the update that delivered this record says it now reads differently. */
         boolean changed;
-        final int itemRow;
-        final int itemColumn;
-        final String paneTitle;
-        final String error;
-        final boolean password;
-        final int expanded;
+        int itemRow;
+        int itemColumn;
+        String paneTitle = "";
+        String error = "";
+        boolean password;
+        int expanded;
         /**
          * Compose's onLongClick(label = …), or empty when the control takes
          * no long press. TalkBack reads "double tap and hold to <label>",
          * which is the only way a blind user reaches a long press.
          */
-        final String longClickLabel;
+        String longClickLabel = "";
         /** Whether the app said what this control does when a reader sends it away. */
-        final boolean dismissable;
+        boolean dismissable;
         /** Whether a screen reader may ask this list for the row at an index. */
-        final boolean scrollToIndex;
+        boolean scrollToIndex;
         /**
          * The two ends of a text field's selection in UTF-16 units of its
          * value, the anchor first, or -1 and -1 for a control with no caret.
          */
-        final int selectionStart;
-        final int selectionEnd;
+        int selectionStart;
+        int selectionEnd;
+        /** The update whose tree last held this control. */
+        int update;
 
-        CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
-                float centerY, boolean clickable, String label, String value,
-                String stateDescription, String clickLabel, int selected, int toggled,
-                boolean enabled, String[] customActions, boolean focusable,
-                boolean focused, boolean adjustable, float progressCurrent,
-                float progressMin, float progressMax, boolean scrollable,
-                boolean canScrollForward, boolean canScrollBackward, int scrollParent,
-                int collectionRows, int collectionColumns, boolean changed, int itemRow,
-                int itemColumn, String paneTitle, String error, boolean password,
-                int expanded, String longClickLabel, boolean dismissable,
-                boolean scrollToIndex, int selectionStart, int selectionEnd) {
-            this.id = id;
-            this.role = role;
-            this.bounds = bounds;
-            this.centerX = centerX;
-            this.centerY = centerY;
-            this.clickable = clickable;
-            this.label = label;
-            this.value = value;
-            this.stateDescription = stateDescription;
-            this.clickLabel = clickLabel;
-            this.selected = selected;
-            this.toggled = toggled;
-            this.enabled = enabled;
-            this.customActions = customActions;
-            this.focusable = focusable;
-            this.focused = focused;
-            this.adjustable = adjustable;
-            this.progressCurrent = progressCurrent;
-            this.progressMin = progressMin;
-            this.progressMax = progressMax;
-            this.scrollable = scrollable;
-            this.canScrollForward = canScrollForward;
-            this.canScrollBackward = canScrollBackward;
-            this.scrollParent = scrollParent;
-            this.collectionRows = collectionRows;
-            this.collectionColumns = collectionColumns;
-            this.changed = changed;
-            this.itemRow = itemRow;
-            this.itemColumn = itemColumn;
-            this.paneTitle = paneTitle;
-            this.error = error;
-            this.password = password;
-            this.expanded = expanded;
-            this.longClickLabel = longClickLabel;
-            this.dismissable = dismissable;
-            this.scrollToIndex = scrollToIndex;
-            this.selectionStart = selectionStart;
-            this.selectionEnd = selectionEnd;
+        /**
+         * Reads one record of android_accessibility_wire.rs over this
+         * control: numbers and flags as little-endian ints, fractions as
+         * little-endian floats, text as its UTF-8 length and bytes, and
+         * custom actions as their count and labels. Text that did not change
+         * keeps its string.
+         */
+        void read(ByteBuffer in) {
+            id = in.getInt();
+            role = in.getInt();
+            bounds.set(in.getInt(), in.getInt(), in.getInt(), in.getInt());
+            centerX = in.getFloat();
+            centerY = in.getFloat();
+            clickable = flag(in);
+            label = text(in, label);
+            value = text(in, value);
+            stateDescription = text(in, stateDescription);
+            clickLabel = text(in, clickLabel);
+            selected = in.getInt();
+            toggled = in.getInt();
+            enabled = flag(in);
+            customActions = actions(in, customActions);
+            focusable = flag(in);
+            focused = flag(in);
+            adjustable = flag(in);
+            progressCurrent = in.getFloat();
+            progressMin = in.getFloat();
+            progressMax = in.getFloat();
+            scrollable = flag(in);
+            canScrollForward = flag(in);
+            canScrollBackward = flag(in);
+            scrollParent = in.getInt();
+            collectionRows = in.getInt();
+            collectionColumns = in.getInt();
+            changed = flag(in);
+            itemRow = in.getInt();
+            itemColumn = in.getInt();
+            paneTitle = text(in, paneTitle);
+            error = text(in, error);
+            password = flag(in);
+            expanded = in.getInt();
+            longClickLabel = text(in, longClickLabel);
+            dismissable = flag(in);
+            scrollToIndex = flag(in);
+            selectionStart = in.getInt();
+            selectionEnd = in.getInt();
         }
 
         /**
@@ -784,6 +824,10 @@ public class CranposeActivity extends NativeActivity {
 
         /** Whether a reader types into this control: a text field or a search field. */
         boolean editsText() {
+            return editsText(role);
+        }
+
+        static boolean editsText(int role) {
             return role == 3 || role == 14;
         }
 
@@ -797,7 +841,7 @@ public class CranposeActivity extends NativeActivity {
     private static final class CranposeAccessibilityProvider extends AccessibilityNodeProvider {
         private static final int HOST_ID = View.NO_ID;
         private final View host;
-        private List<CranposeAccessibilityElement> elements = Collections.emptyList();
+        private ArrayList<CranposeAccessibilityElement> elements = new ArrayList<>();
         private int focusedId = HOST_ID;
         /**
          * Whether a read of, or an action on, the tree the provider holds was
@@ -820,44 +864,127 @@ public class CranposeActivity extends NativeActivity {
          */
         private final SparseArray<CranposeAccessibilityElement> byId = new SparseArray<>();
         private final SparseArray<int[]> childIds = new SparseArray<>();
+        private final SparseIntArray childCounts = new SparseIntArray();
+        /**
+         * The list the next tree is built in, and the controls that left a
+         * tree, read over again by the controls that join a later one. An
+         * update with resent records, as a scrolling list sends each time,
+         * then allocates only the strings that changed: the Java heap a
+         * foreground process grows stays resident.
+         */
+        private ArrayList<CranposeAccessibilityElement> nextElements = new ArrayList<>();
+        private final ArrayList<CranposeAccessibilityElement> spare = new ArrayList<>();
+        private int updates;
+        /** What the focused text fields held before the update now applied. */
+        private final ArrayList<TextBefore> textBefore = new ArrayList<>();
+
+        private static final class TextBefore {
+            final CranposeAccessibilityElement element;
+            final String value;
+            final int selectionStart;
+            final int selectionEnd;
+
+            TextBefore(CranposeAccessibilityElement element) {
+                this.element = element;
+                this.value = element.value;
+                this.selectionStart = element.selectionStart;
+                this.selectionEnd = element.selectionEnd;
+            }
+        }
 
         CranposeAccessibilityProvider(View host) {
             this.host = host;
         }
 
         /**
-         * Rebuilds the tree from the ids in {@code order}, taking each control
-         * from {@code records} when the app resent it and keeping it otherwise,
-         * after moving the bounds {@code moves} names. Returns false when an id
-         * has no control here, so the app sends every record again.
+         * Rebuilds the tree from the first {@code length} bytes of {@code
+         * update}: the ids in tree order, the bounds of the controls that
+         * only moved, then the records of the controls the app resent, each
+         * read over the control it held. Returns false when an id has no
+         * control here or the update is cut short, so the app sends every
+         * record again.
          */
-        boolean update(int[] order, List<CranposeAccessibilityElement> records, int[] moves) {
-            // byId holds the tree the reader has; the resent controls replace
-            // theirs in it, and indexing the next tree rebuilds it.
+        boolean update(byte[] update, int length) {
+            // byId holds the tree the reader has; the resent controls are
+            // read over theirs in it, and indexing the next tree rebuilds it.
             for (CranposeAccessibilityElement element : elements) element.changed = false;
-            for (int index = 0; index + 4 < moves.length; index += 5) {
-                CranposeAccessibilityElement element = byId.get(moves[index]);
-                if (element != null) {
-                    element.bounds.set(moves[index + 1], moves[index + 2], moves[index + 3], moves[index + 4]);
+            textBefore.clear();
+            ByteBuffer in = ByteBuffer.wrap(update, 0, length).order(ByteOrder.LITTLE_ENDIAN);
+            int ids;
+            int order;
+            try {
+                ids = in.getInt();
+                order = in.position();
+                if (ids < 0) return false;
+                in.position(order + 4 * ids);
+                int moves = in.getInt();
+                if (moves < 0) return false;
+                int movesEnd = in.position() + 4 * moves;
+                for (int index = 0; index + 4 < moves; index += 5) {
+                    CranposeAccessibilityElement element = byId.get(in.getInt());
+                    int left = in.getInt();
+                    int top = in.getInt();
+                    int right = in.getInt();
+                    int bottom = in.getInt();
+                    if (element != null) element.bounds.set(left, top, right, bottom);
                 }
+                in.position(movesEnd);
+            } catch (RuntimeException cutShort) {
+                return false;
             }
-            for (CranposeAccessibilityElement record : records) byId.put(record.id, record);
-            ArrayList<CranposeAccessibilityElement> next = new ArrayList<>(order.length);
-            boolean complete = true;
-            for (int id : order) {
-                CranposeAccessibilityElement element = byId.get(id);
+            boolean complete = readRecords(in);
+            updates++;
+            ArrayList<CranposeAccessibilityElement> next = nextElements;
+            next.clear();
+            for (int index = 0; index < ids; index++) {
+                CranposeAccessibilityElement element = byId.get(in.getInt(order + 4 * index));
                 if (element == null) {
                     complete = false;
                 } else {
+                    element.update = updates;
                     next.add(element);
                 }
             }
+            for (CranposeAccessibilityElement element : elements) {
+                if (element.update != updates && spare.size() < next.size()) spare.add(element);
+            }
+            nextElements = elements;
             setElements(next);
             return complete;
         }
 
-        void setElements(List<CranposeAccessibilityElement> elements) {
-            List<CranposeAccessibilityElement> previous = this.elements;
+        /**
+         * Reads each record left in {@code in} over the control with its id,
+         * or over a spare one that then takes the id. Returns false when a
+         * record is cut short.
+         */
+        private boolean readRecords(ByteBuffer in) {
+            try {
+                while (in.hasRemaining()) {
+                    int id = in.getInt(in.position());
+                    CranposeAccessibilityElement element = byId.get(id);
+                    if (element != null) {
+                        if (CranposeAccessibilityElement.editsText(in.getInt(in.position() + 4))) {
+                            textBefore.add(new TextBefore(element));
+                        }
+                        element.read(in);
+                        continue;
+                    }
+                    element = spare.isEmpty()
+                            ? new CranposeAccessibilityElement()
+                            : spare.remove(spare.size() - 1);
+                    element.read(in);
+                    byId.put(id, element);
+                }
+            } catch (RuntimeException cutShort) {
+                // A payload cut short must not make the host Activity
+                // inaccessible: the app sends every record again.
+                return false;
+            }
+            return true;
+        }
+
+        void setElements(ArrayList<CranposeAccessibilityElement> elements) {
             this.elements = elements;
             readReported = false;
             indexElements();
@@ -869,7 +996,7 @@ public class CranposeActivity extends NativeActivity {
             send(HOST_ID, changed);
             followAppFocus();
             announceChanges();
-            announceTextChanges(previous);
+            announceTextChanges();
         }
 
         /**
@@ -878,17 +1005,10 @@ public class CranposeActivity extends NativeActivity {
          * the text that was typed or removed and the character the caret
          * crossed.
          */
-        private void announceTextChanges(List<CranposeAccessibilityElement> previous) {
-            for (CranposeAccessibilityElement element : elements) {
-                if (!element.editsText() || !element.focused) continue;
-                CranposeAccessibilityElement before = null;
-                for (CranposeAccessibilityElement candidate : previous) {
-                    if (candidate.id == element.id) {
-                        before = candidate;
-                        break;
-                    }
-                }
-                if (before == null) continue;
+        private void announceTextChanges() {
+            for (TextBefore before : textBefore) {
+                CranposeAccessibilityElement element = before.element;
+                if (element.update != updates || !element.editsText() || !element.focused) continue;
                 if (!before.value.equals(element.value)) {
                     cursors.remove(element.id);
                     int prefix = commonPrefix(before.value, element.value);
@@ -1414,23 +1534,32 @@ public class CranposeActivity extends NativeActivity {
         /** Indexes {@link #elements} by id and each container's children by its id. */
         private void indexElements() {
             byId.clear();
-            childIds.clear();
-            SparseIntArray counts = new SparseIntArray();
+            childCounts.clear();
             for (CranposeAccessibilityElement element : elements) {
                 byId.put(element.id, element);
                 if (element.scrollParent >= 0) {
-                    counts.put(element.scrollParent, counts.get(element.scrollParent) + 1);
+                    childCounts.put(element.scrollParent, childCounts.get(element.scrollParent) + 1);
                 }
             }
-            for (int index = 0; index < counts.size(); index++) {
-                childIds.put(counts.keyAt(index), new int[counts.valueAt(index)]);
+            // A container keeps its array of child ids while it keeps as
+            // many children.
+            for (int index = childIds.size() - 1; index >= 0; index--) {
+                if (childIds.valueAt(index).length != childCounts.get(childIds.keyAt(index), -1)) {
+                    childIds.removeAt(index);
+                }
             }
-            SparseIntArray filled = new SparseIntArray();
+            for (int index = 0; index < childCounts.size(); index++) {
+                int container = childCounts.keyAt(index);
+                if (childIds.get(container) == null) {
+                    childIds.put(container, new int[childCounts.valueAt(index)]);
+                }
+                childCounts.setValueAt(index, 0);
+            }
             for (CranposeAccessibilityElement element : elements) {
                 if (element.scrollParent < 0) continue;
-                int at = filled.get(element.scrollParent);
+                int at = childCounts.get(element.scrollParent);
                 childIds.get(element.scrollParent)[at] = element.id;
-                filled.put(element.scrollParent, at + 1);
+                childCounts.put(element.scrollParent, at + 1);
             }
         }
 
