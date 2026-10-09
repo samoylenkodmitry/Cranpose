@@ -36,7 +36,7 @@ Read only the sections required by the current operation. These are project requ
 - Before diagnosing a red test, fetch `origin main` and rebase; confirm claimed fixes are ancestors of `HEAD`.
 - After a push, arm a CI watcher before the turn ends (`gh pr checks <n> --watch` under a monitor, or the desktop app's Auto-fix) and act on each result; a wait with no watcher is a stale session.
 - Keep related fixes in one PR; finish requested code changes before optional measurements or PR prose.
-- Merge ready PRs in a batch: a PR with one green run merges without a new rebase or run after another batch member lands, unless the two conflict. Watch main's CI once after the batch and fix any failure there.
+- A batch merge means merging each ready PR straight into main on its own green CI run, never through a combined branch; a PR is not rebased or run again after another PR of the batch lands, unless the two conflict. Watch main's CI once after the batch and fix any failure there.
 - Never use `git reset`; preserve work with a stash when needed.
 - Worktrees share stashes: inspect contents, resolve the immutable stash hash, and apply only the intended work.
 - Install hooks once per clone with `just hooks`; stage new files before `just precommit` so diff checks include them.
