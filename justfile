@@ -540,6 +540,21 @@ test-web-accessibility url:
 robot-accessibility-web site output:
     python3 scripts/a11y/web_robot.py --site {{quote(site)}} --output {{quote(output)}}
 
+# naga accepts WGSL that Chrome's compiler rejects, and only a browser on WebGPU
+# sees it. `site` is the output of apps/desktop-demo/package-web.sh; the check
+# fails on a GPU validation error, a panic or a blank page.
+# Open every page of a packaged web demo on WebGPU in headless Chrome.
+web-webgpu-smoke site output:
+    python3 scripts/a11y/web_robot.py --check webgpu --site {{quote(site)}} --output {{quote(output)}}
+
+# Build and package the web demo, then open every page on WebGPU.
+web-webgpu: web
+    #!/usr/bin/env bash
+    set -euo pipefail
+    run="$(mktemp -d "${TMPDIR:-/tmp}/web-webgpu.XXXXXX")"
+    apps/desktop-demo/package-web.sh "$run/site"
+    just web-webgpu-smoke "$run/site" "$run/smoke"
+
 test-web-ime-webdriver endpoint browser url output *args:
     python3 scripts/a11y/web_ime_robot.py --endpoint {{quote(endpoint)}} --browser {{quote(browser)}} --url {{quote(url)}} --output {{quote(output)}} {{args}}
 
@@ -935,7 +950,7 @@ ci: fmt-check typos versions twin-matrix-check test clippy clippy-release clippy
 # Needs a Linux box with the X11 stack, an Android SDK and (on macOS) Xcode.
 
 # Every gate, including the platform builds and the robot suite.
-ci-full: ci clippy-ios clippy-android web android watchos robot vulkan-sync
+ci-full: ci clippy-ios clippy-android web-webgpu android watchos robot vulkan-sync
 
 liquid-reference-traces output bundle="io.cranpose.liquid-reference" device="booted":
     python3 apps/liquid-reference/collect-traces.py '{{output}}' --bundle '{{bundle}}' --device '{{device}}'

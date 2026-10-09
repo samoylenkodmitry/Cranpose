@@ -51,6 +51,13 @@ pub fn web_init() {
     log::info!("Cranpose demo starting in browser");
 }
 
+/// Every page the demo can start on, as URL queries, for the browser robots.
+#[cfg(all(feature = "web", target_arch = "wasm32"))]
+#[wasm_bindgen]
+pub fn demo_startup_pages() -> Vec<String> {
+    desktop_demo::app::startup_pages().collect()
+}
+
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 #[wasm_bindgen]
 pub async fn run_app(

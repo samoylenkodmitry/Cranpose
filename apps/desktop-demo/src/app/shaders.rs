@@ -26,6 +26,14 @@ pub enum ShaderSection {
 }
 
 impl ShaderSection {
+    pub const ALL: [ShaderSection; 5] = [
+        Self::SweepGradient,
+        Self::InteractiveEffects,
+        Self::EffectSemantics,
+        Self::GraphicsLayerFields,
+        Self::MaskApi,
+    ];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::SweepGradient => "Sweep Gradient",
@@ -38,12 +46,7 @@ impl ShaderSection {
 
     #[cfg(any(test, target_arch = "wasm32"))]
     pub fn from_startup_name(name: &str) -> Option<Self> {
-        let normalized = name
-            .chars()
-            .filter(char::is_ascii_alphanumeric)
-            .map(|ch| ch.to_ascii_lowercase())
-            .collect::<String>();
-        match normalized.as_str() {
+        match super::startup_key(name).collect::<String>().as_str() {
             "sweep" | "sweepgradient" => Some(Self::SweepGradient),
             "interactive" | "interactiveeffects" => Some(Self::InteractiveEffects),
             "effectsemantics" | "semantics" => Some(Self::EffectSemantics),

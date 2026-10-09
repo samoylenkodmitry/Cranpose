@@ -295,6 +295,20 @@ jobs:
           name: web-demo
           path: ${{ runner.temp }}/web-demo
           retention-days: 3
+      - name: Open every page of the web demo on WebGPU
+        id: webgpu
+        if: ${{ !cancelled() && steps.provision.conclusion == 'success' && steps.changes.outputs.docs_only != 'true' && steps.memo.outputs.passed != 'true' }}
+        # naga accepts WGSL that Chrome's compiler rejects, so a shader can
+        # pass every native check and still blank the demo site on WebGPU
+        # (#1311). Headless Chrome here reaches the GPU through Vulkan.
+        run: just web-webgpu-smoke "$RUNNER_TEMP/web-demo" "$RUNNER_TEMP/webgpu-smoke"
+      - name: Keep the WebGPU check's screenshots and console
+        if: ${{ failure() && steps.webgpu.conclusion == 'failure' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: webgpu-smoke
+          path: ${{ runner.temp }}/webgpu-smoke
+          retention-days: 3
 
       - name: Remember that this tree passed
         if: ${{ success() && steps.memo.outputs.passed != 'true' }}

@@ -5,6 +5,15 @@ export const ENABLE_MIRROR = `(() => {
     return !!document.querySelector('[data-cranpose-accessibility]');
 })()`;
 
+// Joins console arguments the way DevTools shows them: "%c" marks a style
+// argument, which carries no text.
+function consoleText(args) {
+    const [format, ...rest] = args.map(arg => arg.value ?? arg.description ?? "");
+    if (typeof format !== "string" || !format.includes("%c")) return [format, ...rest].join(" ");
+    const styles = format.split("%c").length - 1;
+    return [format.replaceAll("%c", ""), ...rest.slice(styles)].join(" ");
+}
+
 export class Cdp {
     constructor() {
         this.pending = new Map();
@@ -25,7 +34,7 @@ export class Cdp {
                 this.logs.push(message.params.entry.level + ": " + message.params.entry.text);
             }
             if (message.method === "Runtime.consoleAPICalled") {
-                this.logs.push(message.params.type + ": " + message.params.args.map(arg => arg.value ?? arg.description ?? "").join(" "));
+                this.logs.push(message.params.type + ": " + consoleText(message.params.args));
             }
             if (message.method === "Runtime.exceptionThrown") {
                 const details = message.params.exceptionDetails;
