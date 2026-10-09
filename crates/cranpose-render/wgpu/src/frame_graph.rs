@@ -13,7 +13,7 @@ use web_time::Instant;
 
 use crate::{
     debug_toggles::DebugToggle,
-    idle_pool::{IDLE_FRAMES, IdlePool},
+    idle_pool::{IdlePool, RecentPeak},
     offscreen::OffscreenTarget,
     pass_timing::{GpuPassTimingReport, PassTimer},
 };
@@ -363,42 +363,14 @@ impl FrameTextureDescriptor {
     }
 }
 
-/// The bytes of transient textures the busiest recent frame used. The pool
-/// keeps that much between frames: the frame allocates it anyway, so keeping
-/// it adds nothing to the peak and spares recreating every texture each
-/// frame once a scene outgrows a fixed budget.
-#[derive(Default)]
-struct WorkingSet {
-    frame_bytes: u64,
-    peak_bytes: u64,
-    frames_since_peak: u64,
-}
-
-impl WorkingSet {
-    fn note(&mut self, bytes: u64) {
-        self.frame_bytes = self.frame_bytes.saturating_add(bytes);
-    }
-
-    fn bytes(&self) -> u64 {
-        self.peak_bytes.max(self.frame_bytes)
-    }
-
-    /// Ends a frame. The peak holds for [`IDLE_FRAMES`], as long as the pool
-    /// keeps an unused texture, then follows the frames that came since.
-    fn end_frame(&mut self) {
-        self.frames_since_peak = self.frames_since_peak.saturating_add(1);
-        if self.frame_bytes >= self.peak_bytes || self.frames_since_peak > IDLE_FRAMES {
-            self.peak_bytes = self.frame_bytes;
-            self.frames_since_peak = 0;
-        }
-        self.frame_bytes = 0;
-    }
-}
-
 #[derive(Default)]
 pub(crate) struct TransientTexturePool {
     available: IdlePool<PooledTransientTexture>,
-    working_set: WorkingSet,
+    /// The bytes of transient textures the busiest recent frame used. The
+    /// pool keeps that much between frames: the frame allocates it anyway,
+    /// so keeping it adds nothing to the peak and spares recreating every
+    /// texture each frame once a scene outgrows a fixed budget.
+    working_set: RecentPeak,
     acquires: u32,
     news: u32,
 }
@@ -427,12 +399,12 @@ impl TransientTexturePool {
             .available
             .take(|entry| descriptor.served_by(entry.descriptor))
         {
-            self.working_set.note(entry.descriptor.estimated_bytes());
+            self.working_set.add(entry.descriptor.estimated_bytes());
             return entry.target;
         }
 
         self.news = self.news.saturating_add(1);
-        self.working_set.note(descriptor.estimated_bytes());
+        self.working_set.add(descriptor.estimated_bytes());
         OffscreenTarget::new_labeled(
             device,
             descriptor.format,
@@ -448,7 +420,7 @@ impl TransientTexturePool {
         let descriptor = descriptor.sized_as(&target);
         let budget = self
             .working_set
-            .bytes()
+            .value()
             .clamp(MIN_RETAINED_TRANSIENT_BYTES, MAX_RETAINED_TRANSIENT_BYTES);
         self.available.put(
             PooledTransientTexture { descriptor, target },
@@ -462,7 +434,7 @@ impl TransientTexturePool {
     /// the pool, counting it toward the frame's working set.
     fn return_held(&mut self, descriptor: FrameTextureDescriptor, target: OffscreenTarget) {
         self.working_set
-            .note(descriptor.sized_as(&target).estimated_bytes());
+            .add(descriptor.sized_as(&target).estimated_bytes());
         self.release(descriptor, target);
     }
 

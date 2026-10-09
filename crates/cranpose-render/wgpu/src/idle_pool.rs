@@ -76,6 +76,95 @@ impl<T> IdlePool<T> {
     }
 }
 
+/// The most a frame of the last [`IDLE_FRAMES`] asked for. A busier frame
+/// raises it at once; once the peak is that old, it follows the frames that
+/// came since.
+#[derive(Default)]
+pub(crate) struct RecentPeak {
+    frame: u64,
+    peak: u64,
+    frames_since_peak: u64,
+}
+
+impl RecentPeak {
+    /// Adds `amount` to what this frame asks for.
+    pub(crate) fn add(&mut self, amount: u64) {
+        self.frame = self.frame.saturating_add(amount);
+    }
+
+    /// Raises what this frame asks for to at least `amount`.
+    pub(crate) fn reach(&mut self, amount: u64) {
+        self.frame = self.frame.max(amount);
+    }
+
+    /// The peak, or this frame's demand when that is higher.
+    pub(crate) fn value(&self) -> u64 {
+        self.peak.max(self.frame)
+    }
+
+    pub(crate) fn end_frame(&mut self) {
+        self.frames_since_peak = self.frames_since_peak.saturating_add(1);
+        if self.frame >= self.peak || self.frames_since_peak > IDLE_FRAMES {
+            self.peak = self.frame;
+            self.frames_since_peak = 0;
+        }
+        self.frame = 0;
+    }
+}
+
+/// A vector a renderer fills again every frame, keeping its capacity between
+/// frames so it never reallocates. Once the frames that need the most have
+/// passed [`IDLE_FRAMES`] ago, it gives back what is over twice the recent
+/// peak: a burst at startup or a scene the app has left holds no memory,
+/// and a frame that needs a little more than the peak doubles back within
+/// the bound, so nothing shrinks and grows from frame to frame.
+pub(crate) struct FrameScratch<T> {
+    items: Vec<T>,
+    peak: RecentPeak,
+}
+
+impl<T> Default for FrameScratch<T> {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            peak: RecentPeak::default(),
+        }
+    }
+}
+
+impl<T> FrameScratch<T> {
+    /// Empties the vector for its next use, noting the length the last use
+    /// reached.
+    pub(crate) fn clear(&mut self) {
+        self.peak.reach(self.items.len() as u64);
+        self.items.clear();
+    }
+
+    /// Ends a frame, emptying the vector after its last use.
+    pub(crate) fn end_frame(&mut self) {
+        self.clear();
+        self.peak.end_frame();
+        let peak = usize::try_from(self.peak.value()).unwrap_or(usize::MAX);
+        if self.items.capacity() > peak.saturating_mul(2) {
+            self.items.shrink_to(peak);
+        }
+    }
+}
+
+impl<T> std::ops::Deref for FrameScratch<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Vec<T> {
+        &self.items
+    }
+}
+
+impl<T> std::ops::DerefMut for FrameScratch<T> {
+    fn deref_mut(&mut self) -> &mut Vec<T> {
+        &mut self.items
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/idle_pool_tests.rs"]
 mod tests;

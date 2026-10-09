@@ -185,7 +185,7 @@ impl PlacementData {
             flags |= PLACEMENT_TURNED;
         }
         let (transform, translation, _) = turn.uniform_parts();
-        let (color_matrix, color_offset) = match placement.color_filter {
+        let (color_matrix, color_offset) = match &placement.color_filter {
             Some(filter) => {
                 flags |= PLACEMENT_FILTERED;
                 let m = filter.as_matrix();
@@ -244,6 +244,7 @@ impl PaintKey {
             alpha_bits: placement.alpha.to_bits(),
             filter: placement
                 .color_filter
+                .as_deref()
                 .map(|filter| filter.as_matrix().map(f32::to_bits)),
         }
     }
@@ -252,7 +253,7 @@ impl PaintKey {
 fn paint_layer(placement: &Placement) -> GraphicsLayer {
     GraphicsLayer {
         alpha: placement.alpha,
-        color_filter: placement.color_filter,
+        color_filter: placement.color_filter.as_deref().copied(),
         ..GraphicsLayer::default()
     }
 }

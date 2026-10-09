@@ -72,12 +72,12 @@ pub(crate) struct TextPreparedLayoutHandle {
 }
 
 impl TextPreparedLayoutOwner {
-    fn new(text: Rc<AnnotatedString>, style: TextStyle, options: TextLayoutOptions) -> Self {
+    fn new(text: Rc<AnnotatedString>, style: Arc<TextStyle>, options: TextLayoutOptions) -> Self {
         let style_hash = style.render_hash();
         Self {
             source: RefCell::new(TextLayoutSource {
                 text,
-                style: Arc::new(style),
+                style,
                 style_hash,
                 options: options.normalized(),
                 shares_layouts: true,
@@ -89,17 +89,27 @@ impl TextPreparedLayoutOwner {
     }
 
     /// Lays the text out from `text`, `style` and normalized `options` from
-    /// now on, dropping the layouts prepared from the old ones. A style equal
-    /// to the current one keeps being shared.
-    fn update(&self, text: &Rc<AnnotatedString>, style: &TextStyle, options: TextLayoutOptions) {
+    /// now on, dropping the layouts prepared from the old ones. The source
+    /// takes the element's style even when it equals the current one, so
+    /// the element, the source and the layouts prepared next share one
+    /// copy; the old one leaves with the layouts that hold it.
+    fn update(
+        &self,
+        text: &Rc<AnnotatedString>,
+        style: &Arc<TextStyle>,
+        options: TextLayoutOptions,
+    ) {
         let mut source = self.source.borrow_mut();
-        let same_style = *source.style == *style;
+        let shared_style = Arc::ptr_eq(&source.style, style);
+        let same_style = shared_style || *source.style == **style;
         if source.text == *text && same_style && source.options == options {
             return;
         }
         if !same_style {
-            source.style = Arc::new(style.clone());
             source.style_hash = style.render_hash();
+        }
+        if !shared_style {
+            source.style = Arc::clone(style);
         }
         source.text = Rc::clone(text);
         source.options = options;
@@ -262,12 +272,12 @@ impl TextModifierNode {
     /// A text node sized on `density`'s device pixel grid.
     pub fn new(
         text: Rc<AnnotatedString>,
-        style: TextStyle,
+        style: impl Into<Arc<TextStyle>>,
         options: TextLayoutOptions,
         density: Density,
     ) -> Self {
         Self {
-            layout: Rc::new(TextPreparedLayoutOwner::new(text, style, options)),
+            layout: Rc::new(TextPreparedLayoutOwner::new(text, style.into(), options)),
             density,
             state: NodeState::new(),
         }
@@ -459,10 +469,12 @@ impl SemanticsNode for TextModifierNode {
 /// - Declaring capabilities (LAYOUT | DRAW | SEMANTICS)
 ///
 /// Matches Jetpack Compose: `TextStringSimpleElement` in BasicText.kt
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TextModifierElement {
     text: Rc<AnnotatedString>,
-    style: TextStyle,
+    /// One copy for every text composed with an equal style: see
+    /// [`shared_text_style`].
+    style: Arc<TextStyle>,
     options: TextLayoutOptions,
     density: Density,
 }
@@ -478,11 +490,53 @@ impl TextModifierElement {
     ) -> Self {
         Self {
             text,
-            style,
+            style: shared_text_style(style),
             options: options.normalized(),
             density,
         }
     }
+}
+
+impl PartialEq for TextModifierElement {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text
+            && (Arc::ptr_eq(&self.style, &other.style) || self.style == other.style)
+            && self.options == other.options
+            && self.density == other.density
+    }
+}
+
+/// How many recent text styles [`shared_text_style`] keeps.
+const SHARED_TEXT_STYLES: usize = 16;
+
+thread_local! {
+    /// Styles texts were composed with, those in use toward the front.
+    static RECENT_TEXT_STYLES: RefCell<Vec<Arc<TextStyle>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// `style` shared with the texts recently composed with an equal one, so a
+/// screen of texts in a few styles keeps a few copies, not one a text, and
+/// a node updated to an element of the same style compares pointers. A
+/// style none of the kept [`SHARED_TEXT_STYLES`] equals gets a copy of its
+/// own, kept first; the last kept one goes.
+fn shared_text_style(style: TextStyle) -> Arc<TextStyle> {
+    RECENT_TEXT_STYLES.with_borrow_mut(|recent| {
+        match recent.iter().position(|kept| **kept == style) {
+            Some(0) => Arc::clone(&recent[0]),
+            // One step toward the front: styles in use stay among the first
+            // compared, without moving the whole list on every hit.
+            Some(index) => {
+                recent.swap(index, index - 1);
+                Arc::clone(&recent[index - 1])
+            }
+            None => {
+                let shared = Arc::new(style);
+                recent.truncate(SHARED_TEXT_STYLES - 1);
+                recent.insert(0, Arc::clone(&shared));
+                shared
+            }
+        }
+    })
 }
 
 impl Hash for TextModifierElement {
@@ -499,7 +553,7 @@ impl ModifierNodeElement for TextModifierElement {
     fn create(&self) -> Self::Node {
         TextModifierNode::new(
             self.text.clone(),
-            self.style.clone(),
+            Arc::clone(&self.style),
             self.options,
             self.density,
         )

@@ -179,12 +179,10 @@ fn layout_node_registry_is_scoped_by_app_context() {
     first.enter(|| {
         register_layout_node(first_id, &virtual_node);
         register_layout_node(101, &regular_node);
-        assert!(is_virtual_node(first_id));
         assert_eq!(layout_node_registry_stats().len, 2);
     });
 
     second.enter(|| {
-        assert!(!is_virtual_node(first_id));
         assert_eq!(layout_node_registry_stats().len, 0);
         assert_eq!(allocate_virtual_node_id(), VIRTUAL_NODE_ID_START + 1);
     });

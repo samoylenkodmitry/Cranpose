@@ -1582,8 +1582,12 @@ fn push_draw_run(out: &mut LayerScene, run: &DrawRunNode, content: &ContentConte
     let mut shapes_from: Option<u32> = None;
     let flush_shapes = |out: &mut LayerScene, end: u32, from: &mut Option<u32>| {
         if let Some(start) = from.take() {
-            out.scene
-                .push_run(RunDraw::of(recording, run.command, start..end, placement));
+            out.scene.push_run(RunDraw::of(
+                recording,
+                run.command,
+                start..end,
+                placement.clone(),
+            ));
         }
     };
     for (index, segment) in recording.segments_in(&run.segments).enumerate() {

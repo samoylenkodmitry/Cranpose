@@ -9,16 +9,14 @@ fn local_pointer_dispatch_preserves_consumption_and_terminal_delivery() {
     let delivered = Rc::new(RefCell::new(Vec::new()));
     let first = Rc::clone(&delivered);
     let second = Rc::clone(&delivered);
-    let slices = ModifierNodeSlices {
-        pointer_inputs: vec![
-            Rc::new(move |event| {
-                first.borrow_mut().push((1, event.kind, event.position));
-                event.consume();
-            }),
-            Rc::new(move |event| second.borrow_mut().push((2, event.kind, event.position))),
-        ],
-        ..Default::default()
-    };
+    let mut slices = ModifierNodeSlices::default();
+    slices.rare_mut().pointer_inputs = vec![
+        Rc::new(move |event| {
+            first.borrow_mut().push((1, event.kind, event.position));
+            event.consume();
+        }),
+        Rc::new(move |event| second.borrow_mut().push((2, event.kind, event.position))),
+    ];
     let local = Point { x: 12.0, y: 8.0 };
     for kind in [
         PointerEventKind::Down,

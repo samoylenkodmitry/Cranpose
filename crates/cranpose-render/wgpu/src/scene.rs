@@ -30,7 +30,7 @@ impl SnapAnchor {
 /// offset of its origin, the rigid anchor it snaps with, the clip its
 /// records take, and the paint every record takes on the way to the
 /// device. One placement per run; the vertex stage reads it as a uniform.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Placement {
     pub offset: Point,
     pub snap_anchor: Option<SnapAnchor>,
@@ -40,7 +40,9 @@ pub(crate) struct Placement {
     /// clipped to it composites through the same mask.
     pub clip_radius: f32,
     pub alpha: f32,
-    pub color_filter: Option<ColorFilter>,
+    /// Boxed: few layers filter, and inline the 4x5 matrix took 84 of a
+    /// run draw's 184 bytes.
+    pub color_filter: Option<Arc<ColorFilter>>,
 }
 
 impl Placement {
@@ -89,7 +91,7 @@ impl Placement {
             clip,
             clip_radius: 0.0,
             alpha: layer.alpha.clamp(0.0, 1.0),
-            color_filter: layer.color_filter,
+            color_filter: layer.color_filter.as_ref().map(|filter| Arc::new(*filter)),
         }
     }
 
@@ -128,20 +130,21 @@ impl RunDraw {
         segments: Range<u32>,
         placement: Placement,
     ) -> Self {
+        let bounds = recorder.bounds().map_or(
+            Rect {
+                x: placement.offset.x,
+                y: placement.offset.y,
+                width: 0.0,
+                height: 0.0,
+            },
+            |bounds| placement.translated_bounds(bounds),
+        );
         Self {
             recorder: Arc::clone(recorder),
             command,
             segments,
             placement,
-            bounds: recorder.bounds().map_or(
-                Rect {
-                    x: placement.offset.x,
-                    y: placement.offset.y,
-                    width: 0.0,
-                    height: 0.0,
-                },
-                |bounds| placement.translated_bounds(bounds),
-            ),
+            bounds,
         }
     }
 
@@ -483,7 +486,7 @@ impl CompositorScene {
         }
         let Some(run) = RunDraw::whole(
             Arc::new(std::mem::take(&mut self.loose.recorder)),
-            self.loose.placement,
+            self.loose.placement.clone(),
         ) else {
             return;
         };

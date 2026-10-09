@@ -587,6 +587,22 @@ fn clamp_subsequence_range(text: &str, range: Range<usize>) -> Range<usize> {
     start..end
 }
 
+/// The ranges a builder collected, in a vector that keeps no room past
+/// them: a string outlives its builder, and a span style is 296 bytes, so
+/// the room growth left for four took 1,184 bytes for a string of one or
+/// two spans.
+fn finished_ranges<T>(ranges: Vec<MutableRange<T>>) -> Vec<RangeStyle<T>> {
+    let mut finished: Vec<RangeStyle<T>> = ranges
+        .into_iter()
+        .map(|range| RangeStyle {
+            item: range.item,
+            range: range.start..range.end,
+        })
+        .collect();
+    finished.shrink_to_fit();
+    finished
+}
+
 fn append_clipped_ranges<T: Clone>(
     target: &mut Vec<MutableRange<T>>,
     source: &[RangeStyle<T>],
@@ -795,38 +811,10 @@ impl Builder {
 
         AnnotatedString {
             text: self.text,
-            span_styles: self
-                .span_styles
-                .into_iter()
-                .map(|s| RangeStyle {
-                    item: s.item,
-                    range: s.start..s.end,
-                })
-                .collect(),
-            paragraph_styles: self
-                .paragraph_styles
-                .into_iter()
-                .map(|s| RangeStyle {
-                    item: s.item,
-                    range: s.start..s.end,
-                })
-                .collect(),
-            string_annotations: self
-                .string_annotations
-                .into_iter()
-                .map(|s| RangeStyle {
-                    item: s.item,
-                    range: s.start..s.end,
-                })
-                .collect(),
-            link_annotations: self
-                .link_annotations
-                .into_iter()
-                .map(|s| RangeStyle {
-                    item: s.item,
-                    range: s.start..s.end,
-                })
-                .collect(),
+            span_styles: finished_ranges(self.span_styles),
+            paragraph_styles: finished_ranges(self.paragraph_styles),
+            string_annotations: finished_ranges(self.string_annotations),
+            link_annotations: finished_ranges(self.link_annotations),
         }
     }
 }

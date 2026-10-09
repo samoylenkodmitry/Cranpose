@@ -2377,6 +2377,7 @@ impl LayoutBuilderState {
     ) -> Result<(), NodeError> {
         let mut runtime_state = runtime_state.borrow_mut();
         runtime_state.frame.bind(self, pass);
+        runtime_state.reserve_children(child_ids.len());
         let mut bound = 0;
         for &child_id in child_ids {
             if self.bind_layout_child(applier, &mut runtime_state, bound, child_id)? {
@@ -2919,7 +2920,9 @@ impl CoordinatorChain {
 
     fn rebuild(&mut self, chain: &cranpose_foundation::ModifierNodeChain, len: usize) {
         let mut previous_nodes = std::mem::take(&mut self.nodes);
-        self.nodes.reserve(len);
+        // Exactly: most chains hold one layout modifier, where growth would
+        // make room for four.
+        self.nodes.reserve_exact(len);
         chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
             let Some((index, node)) = node_ref
                 .entry_index()
@@ -3210,6 +3213,17 @@ impl LayoutRuntimeState {
             self.child_measurables.swap(position, from);
         }
         &self.child_states[position]
+    }
+
+    /// Makes room for `count` children on the node's first bind: exactly
+    /// that many, where growth would make room for four in each of the
+    /// three lists. Children added later grow the lists as usual.
+    fn reserve_children(&mut self, count: usize) {
+        if self.child_ids.capacity() == 0 {
+            self.child_ids.reserve_exact(count);
+            self.child_states.reserve_exact(count);
+            self.child_measurables.reserve_exact(count);
+        }
     }
 
     fn truncate_children(&mut self, len: usize) {
