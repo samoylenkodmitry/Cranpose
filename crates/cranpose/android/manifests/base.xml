@@ -6,8 +6,9 @@
     own manifest.
 
     The activity is declared here in full, including the launcher intent filter:
-    an application supplies its label, icon and theme through the manifest
-    placeholders the Cranpose Gradle plugin sets, and declares no activity of
+    an application supplies its label and theme through the manifest
+    placeholders the Cranpose Gradle plugin sets, its icon as `android:icon` on
+    the application element of its own manifest, and declares no activity of
     its own. `android.app.lib_name` names the cdylib `NativeActivity` loads and
     must match the Cargo package's library name, which the plugin also supplies.
 -->

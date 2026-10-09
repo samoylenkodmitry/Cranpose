@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The launcher icon from Android 8 on. scripts/dev/render_app_icons.mjs draws
+    the layers from apps/desktop-demo/assets/icon/icon.svg; Android 7 shows the
+    flat ic_launcher pictures instead.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+    <monochrome android:drawable="@mipmap/ic_launcher_monochrome" />
+</adaptive-icon>

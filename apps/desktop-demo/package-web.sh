@@ -7,6 +7,10 @@ PACKAGE_DIR="${2:-$SCRIPT_DIR/pkg}"
 INDEX_HTML="${3:-$SCRIPT_DIR/index.html}"
 MODULE_FILE="$PACKAGE_DIR/desktop_app.js"
 WASM_FILE="$PACKAGE_DIR/desktop_app_bg.wasm"
+# The page's icons: the source drawing, and the 180 pixel picture iOS takes for
+# a home screen shortcut, the same one the iOS app shows.
+FAVICON_FILE="$SCRIPT_DIR/assets/icon/icon.svg"
+TOUCH_ICON_FILE="$SCRIPT_DIR/../ios-demo/ios/CranposeDemo/AppIcon60x60@3x.png"
 
 sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -19,7 +23,7 @@ sha256() {
     fi
 }
 
-for required_file in "$INDEX_HTML" "$MODULE_FILE" "$WASM_FILE"; do
+for required_file in "$INDEX_HTML" "$MODULE_FILE" "$WASM_FILE" "$FAVICON_FILE" "$TOUCH_ICON_FILE"; do
     if [ ! -f "$required_file" ]; then
         echo "Required web release file is missing: $required_file" >&2
         exit 1
@@ -39,6 +43,8 @@ bundle_dir="$OUTPUT_DIR/$bundle_relative"
 
 mkdir -p "$bundle_dir"
 cp "$INDEX_HTML" "$OUTPUT_DIR/index.html"
+cp "$FAVICON_FILE" "$OUTPUT_DIR/favicon.svg"
+cp "$TOUCH_ICON_FILE" "$OUTPUT_DIR/apple-touch-icon.png"
 cp "$MODULE_FILE" "$bundle_dir/desktop_app.js"
 cp "$WASM_FILE" "$bundle_dir/desktop_app_bg.wasm"
 touch "$OUTPUT_DIR/.nojekyll"

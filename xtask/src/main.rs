@@ -197,6 +197,7 @@ fn print_usage() {
            --bundle-id <id>       CFBundleIdentifier [io.cranpose.demo]\n\
            --out-dir <path>       Bundle output directory [target/macos-bundles]\n\
            --resources <path>     Directory copied into Contents/Resources\n\
+           --icon <path>          .icns file shown as the app icon [demo icon]\n\
            --target <triple>      Cargo target triple\n\
            --no-build             Bundle an already built binary\n\
            --sign-identity <id>   codesign identity to seal the bundle [ad-hoc \"-\"]"
@@ -628,10 +629,18 @@ struct BundleMacosOptions {
     bundle_id: String,
     out_dir: PathBuf,
     resources: Option<PathBuf>,
+    icon: PathBuf,
     target: Option<String>,
     build: bool,
     sign_identity: Option<String>,
 }
+
+/// The demo's macOS icon, rendered from its SVG by `scripts/dev/render_app_icons.mjs`.
+const DEMO_MACOS_ICON: &str = "apps/desktop-demo/assets/icon/CranposeDemo.icns";
+
+/// The name the icon takes inside `Contents/Resources`, without its extension
+/// as `CFBundleIconFile` names it.
+const BUNDLE_ICON_NAME: &str = "AppIcon";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct BinarySizeOptions {
@@ -699,6 +708,7 @@ impl BundleMacosOptions {
             bundle_id: "io.cranpose.demo".to_owned(),
             out_dir: PathBuf::from("target/macos-bundles"),
             resources: None,
+            icon: PathBuf::from(DEMO_MACOS_ICON),
             target: None,
             build: true,
             sign_identity: None,
@@ -724,6 +734,9 @@ impl BundleMacosOptions {
                         "--resources",
                     )?));
                 }
+                "--icon" => {
+                    options.icon = PathBuf::from(required_value(args, &mut index, "--icon")?);
+                }
                 "--target" => options.target = Some(required_value(args, &mut index, "--target")?),
                 "--no-build" => options.build = false,
                 "--sign-identity" => {
@@ -735,13 +748,28 @@ impl BundleMacosOptions {
             index += 1;
         }
 
-        validate_bundle_id(&options.bundle_id)?;
-        validate_non_empty("package", &options.package)?;
-        validate_non_empty("bin", &options.bin)?;
-        validate_non_empty("profile", &options.profile)?;
-        validate_non_empty("app-name", &options.app_name)?;
-
+        options.validate()?;
         Ok(options)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        validate_bundle_id(&self.bundle_id)?;
+        validate_non_empty("package", &self.package)?;
+        validate_non_empty("bin", &self.bin)?;
+        validate_non_empty("profile", &self.profile)?;
+        validate_non_empty("app-name", &self.app_name)?;
+        if self
+            .icon
+            .extension()
+            .is_some_and(|extension| extension == "icns")
+        {
+            Ok(())
+        } else {
+            Err(format!(
+                "icon `{}` is not an .icns file",
+                self.icon.display()
+            ))
+        }
     }
 }
 
@@ -1422,6 +1450,10 @@ fn create_bundle(
 
     let executable_name = executable_name(&options.app_name);
     copy_file(binary, &macos.join(&executable_name))?;
+    copy_file(
+        &workspace.join(&options.icon),
+        &resources.join(format!("{BUNDLE_ICON_NAME}.icns")),
+    )?;
     write_info_plist(
         &contents.join("Info.plist"),
         &options.app_name,
@@ -1512,6 +1544,8 @@ fn info_plist(app_name: &str, executable_name: &str, bundle_id: &str) -> String 
   <string>{}</string>
   <key>CFBundleExecutable</key>
   <string>{}</string>
+  <key>CFBundleIconFile</key>
+  <string>{BUNDLE_ICON_NAME}</string>
   <key>CFBundleIdentifier</key>
   <string>{}</string>
   <key>CFBundleInfoDictionaryVersion</key>

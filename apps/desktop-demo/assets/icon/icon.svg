@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>Cranpose</title>
+  <!--
+    The Cranpose demo's app icon, after the logo in docs/images/logo.webp.
+    scripts/dev/render_app_icons.mjs draws every platform's icon from this
+    file: it keeps #backdrop (the tile) apart from #mark (the crayfish over the
+    gear), and reshapes each rect, which is the tile. Each plate is an outlined
+    rim with its core inset inside it.
+  -->
+  <defs>
+    <linearGradient id="tile-fill" x1="0" y1="0" x2="0" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#382f26"/>
+      <stop offset="1" stop-color="#151b23"/>
+    </linearGradient>
+    <radialGradient id="warm-glow" cx="442" cy="355" r="551" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff8a36" stop-opacity=".6"/>
+      <stop offset="1" stop-color="#ff8a36" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="cool-glow" cx="515" cy="805" r="566" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5fb4d4" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#5fb4d4" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shell" x1="210" y1="167" x2="558" y2="602" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffc879"/>
+      <stop offset="1" stop-color="#f59843"/>
+    </linearGradient>
+    <linearGradient id="core" x1="210" y1="167" x2="558" y2="602" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f2862f"/>
+      <stop offset="1" stop-color="#cf5419"/>
+    </linearGradient>
+    <linearGradient id="deep" x1="210" y1="167" x2="558" y2="602" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c8461b"/>
+      <stop offset="1" stop-color="#9c2c12"/>
+    </linearGradient>
+    <linearGradient id="steel" x1="573" y1="196" x2="732" y2="428" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d2f2fa"/>
+      <stop offset="1" stop-color="#7fbdd3"/>
+    </linearGradient>
+    <linearGradient id="steel-core" x1="573" y1="196" x2="732" y2="428" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6cb1ca"/>
+      <stop offset="1" stop-color="#2a6c89"/>
+    </linearGradient>
+    <radialGradient id="ball" cx=".38" cy=".34" r=".75">
+      <stop offset="0" stop-color="#d4f1f9"/>
+      <stop offset=".5" stop-color="#5ea6c0"/>
+      <stop offset="1" stop-color="#235d78"/>
+    </radialGradient>
+    <linearGradient id="gear-fill" x1="516" y1="648" x2="516" y2="927" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5aa3c0"/>
+      <stop offset="1" stop-color="#2a6784"/>
+    </linearGradient>
+  </defs>
+  <g id="backdrop">
+    <rect width="1024" height="1024" rx="230" fill="url(#tile-fill)"/>
+    <rect width="1024" height="1024" rx="230" fill="url(#warm-glow)"/>
+    <rect width="1024" height="1024" rx="230" fill="url(#cool-glow)"/>
+  </g>
+  <g id="mark" stroke="#17110c" stroke-width="10" stroke-linejoin="round">
+    <g id="gear" stroke="#8ccbe0" stroke-width="5">
+      <path fill="url(#gear-fill)" d="M149 650A383 383 0 0 0 167 698L215 693A336 336 0 0 0 236 728L207 767A383 383 0 0 0 260 827L302 802A336 336 0 0 0 336 826L325 874A383 383 0 0 0 398 907L426 867A336 336 0 0 0 467 875L476 923A383 383 0 0 0 556 923L566 875A336 336 0 0 0 606 867L635 907A383 383 0 0 0 708 874L697 826A336 336 0 0 0 730 802L772 827A383 383 0 0 0 826 767L797 728A336 336 0 0 0 817 693L866 698A383 383 0 0 0 884 650L786 650A290 290 0 0 1 247 650Z"/>
+      <path fill="#a9dbea" stroke="none" d="M234 650A302 302 0 0 0 798 650L786 650A290 290 0 0 1 247 650Z"/>
+      <path fill="#3a7d96" d="M285 650A255 255 0 0 0 437 785L445 763A232 232 0 0 1 311 650Z"/>
+      <path fill="#3a7d96" d="M578 790A255 255 0 0 0 748 650L722 650A232 232 0 0 1 572 768Z"/>
+    </g>
+    <g id="crayfish">
+      <g id="raised-limb">
+        <path fill="url(#steel)" d="M576 445 616 425 674 416 738 425 779 440 808 463 582 477Z"/>
+        <path fill="url(#steel-core)" stroke="none" d="M586 450 619 434 674 425 736 434 774 447 784 455 589 468Z"/>
+        <path fill="url(#shell)" d="M582 477 814 466 828 506 761 515 674 518 579 512Z"/>
+        <path fill="url(#core)" stroke="none" d="M591 487 807 476 815 498 761 505 675 508 589 503Z"/>
+        <path fill="#9c2c12" stroke="none" d="M605 486 796 479 761 493 614 498Z"/>
+        <path fill="url(#shell)" d="M808 451 843 434 863 445 880 477 909 521 930 564 898 541 866 524 831 512Z"/>
+        <path fill="url(#deep)" stroke="none" d="M820 456 842 445 856 452 872 482 901 526 911 541 903 533 870 515 839 504Z"/>
+        <path fill="none" stroke-width="13" d="M799 451Q825 474 828 512"/>
+        <ellipse cx="642" cy="306" rx="154" ry="78" transform="rotate(-55 642 306)" fill="url(#steel)"/>
+        <ellipse cx="642" cy="306" rx="133" ry="58" transform="rotate(-55 642 306)" fill="url(#steel-core)" stroke="none"/>
+        <path fill="#d6f3fa" stroke="none" opacity=".75" d="M590 373C599 300 634 234 680 205C654 260 622 318 605 390Z"/>
+        <path fill="none" d="M558 428L709 184"/>
+        <path fill="url(#steel)" d="M584 208C605 126 724 100 756 222C727 170 651 155 584 208Z"/>
+      </g>
+      <g id="claw" fill="url(#shell)">
+        <path fill="#b8461d" stroke="none" d="M286 471 350 468 321 503Z"/>
+        <path fill="url(#shell)" d="M271 495 315 521 324 535 271 558 263 524Z"/>
+        <path fill="url(#core)" stroke="none" d="M276 506 309 526 313 532 276 548 270 524Z"/>
+        <path fill="url(#shell)" d="M384 573 419 582 445 599 460 622 463 642 440 622 413 611 390 605Z"/>
+        <path fill="url(#core)" stroke="none" d="M392 581 417 587 441 603 454 624 454 627 443 617 415 605 395 600Z"/>
+        <path fill="url(#shell)" d="M315 628 387 616 425 634 451 657 463 686 419 689 367 680 329 657Z"/>
+        <path fill="url(#deep)" stroke="none" d="M327 634 386 625 420 641 444 662 451 678 420 680 370 672 336 651Z"/>
+        <path fill="url(#shell)" d="M274 564 329 541 376 561 387 611 318 622 289 602Z"/>
+        <path fill="url(#deep)" stroke="none" d="M287 570 329 552 367 568 375 603 320 612 297 596Z"/>
+      </g>
+      <g id="front-leg" fill="url(#shell)">
+        <path fill="url(#shell)" d="M416 788 442 756 483 738 529 738 567 750Z"/>
+        <path fill="url(#core)" stroke="none" d="M433 777 447 761 484 745 528 745 547 749Z"/>
+        <path fill="url(#shell)" d="M416 788 567 750 556 776 512 799 460 802Z"/>
+        <path fill="url(#deep)" stroke="none" d="M436 788 555 760 550 771 510 793 461 795Z"/>
+        <path fill="url(#shell)" d="M503 587 538 582 550 750 524 747Z"/>
+        <path fill="url(#core)" stroke="none" d="M512 594 531 590 542 741 530 740Z"/>
+        <path fill="url(#shell)" d="M538 582 576 590 564 747 550 750Z"/>
+        <path fill="url(#core)" stroke="none" d="M546 591 568 596 557 741 557 741Z"/>
+        <path fill="url(#shell)" d="M466 440 489 445 541 524 529 544 466 486Z"/>
+        <path fill="url(#core)" stroke="none" d="M472 448 485 451 533 524 528 533 472 483Z"/>
+        <path fill="url(#shell)" d="M466 486 529 544 512 561 413 515 408 495Z"/>
+        <path fill="url(#deep)" stroke="none" d="M463 494 518 544 510 552 420 510 417 501Z"/>
+        <path fill="url(#shell)" d="M355 390 396 373 434 384 457 413 466 451 466 486Z"/>
+        <path fill="url(#core)" stroke="none" d="M371 393 396 382 429 392 449 417 457 452 457 467Z"/>
+        <path fill="url(#shell)" d="M355 390 466 486 399 483 364 463 347 428Z"/>
+        <path fill="url(#deep)" stroke="none" d="M360 406 442 477 401 475 371 457 356 427Z"/>
+        <circle cx="535" cy="564" r="20"/>
+        <circle cx="535" cy="564" r="8" fill="#9c2c12" stroke="none"/>
+      </g>
+      <g id="antennae" fill="#f8a453" stroke-width="4">
+        <path d="M120 268Q115 354 191 390L201 367Q123 336 120 268Z"/>
+        <path d="M74 315Q88 390 193 414L198 390Q92 371 74 315Z"/>
+      </g>
+      <g id="carapace">
+        <path fill="url(#shell)" d="M205 416 326 393 350 396 358 454 315 460 254 442Z"/>
+        <path fill="url(#deep)" stroke="none" d="M234 421 327 403 341 405 347 446 316 450 258 433Z"/>
+        <path fill="url(#shell)" d="M587 181 564 254 544 312 532 364 500 399 466 425 431 373 483 344 529 297 570 239Z"/>
+        <path fill="url(#deep)" stroke="none" d="M596 153 555 251 534 309 523 359 494 392 468 411 445 376 489 352 537 304 579 244Z"/>
+        <path fill="url(#shell)" d="M202 410 208 373 216 341 234 309 257 280 286 251 321 225 364 202 315 393 222 419Z"/>
+        <path fill="url(#core)" stroke="none" d="M213 404 217 375 225 345 242 314 264 287 292 258 326 233 349 221 307 385 223 409Z"/>
+        <path fill="url(#shell)" d="M373 202 512 280 428 373 318 393Z"/>
+        <path fill="url(#core)" stroke="none" d="M379 216 496 283 423 364 332 381Z"/>
+        <path fill="#9c2c12" stroke="none" opacity=".7" d="M408 309 492 289 428 361 361 376Z"/>
+        <path fill="url(#shell)" d="M373 199 402 178 448 158 500 141 558 129 631 123 587 164 442 228Z"/>
+        <path fill="url(#core)" stroke="none" d="M390 197 406 186 451 166 503 149 560 138 608 134 583 157 442 219Z"/>
+        <path fill="url(#shell)" d="M442 228 587 164 570 239 529 297 512 280Z"/>
+        <path fill="url(#deep)" stroke="none" d="M462 230 573 181 561 235 528 282 518 273Z"/>
+      </g>
+      <g id="eye">
+        <circle cx="248" cy="364" r="23" fill="url(#ball)"/>
+        <circle cx="241" cy="357" r="7" fill="#e8f8fc" stroke="none"/>
+      </g>
+      <g id="limb-joint">
+        <circle cx="550" cy="463" r="33" fill="url(#ball)"/>
+      </g>
+    </g>
+  </g>
+</svg>

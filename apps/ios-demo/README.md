@@ -42,7 +42,9 @@ PROFILE=release CODESIGN_IDENTITY="Apple Distribution: Your Team (TEAMID)" \
 
 `build-app.sh` prints the path to the assembled `CranposeDemo.app`. It is
 ad-hoc signed by default (`-`); pass `CODESIGN_IDENTITY` to sign for device
-installation. `CranposeDemo/Info.plist` is the bundle's property list.
+installation. `CranposeDemo/Info.plist` is the bundle's property list, and the
+`AppIcon*.png` files beside it are the icons its `CFBundleIcons` names, which
+`build-app.sh` copies into the bundle.
 
 ## The scene manifest every app needs
 

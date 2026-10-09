@@ -9,6 +9,10 @@ fn parse_bundle_defaults() {
     assert_eq!(options.profile, "release");
     assert_eq!(options.app_name, "Cranpose Demo");
     assert_eq!(options.bundle_id, "io.cranpose.demo");
+    assert_eq!(
+        options.icon,
+        PathBuf::from("apps/desktop-demo/assets/icon/CranposeDemo.icns")
+    );
     assert!(options.build);
 }
 
@@ -27,6 +31,8 @@ fn parse_bundle_options() {
         "io.cranpose.isolated".into(),
         "--out-dir".into(),
         "target/custom-bundles".into(),
+        "--icon".into(),
+        "assets/isolated.icns".into(),
         "--target".into(),
         "aarch64-apple-darwin".into(),
         "--no-build".into(),
@@ -38,11 +44,20 @@ fn parse_bundle_options() {
     assert_eq!(options.package, "isolated-demo");
     assert_eq!(options.profile, "release-small");
     assert_eq!(options.target.as_deref(), Some("aarch64-apple-darwin"));
+    assert_eq!(options.icon, PathBuf::from("assets/isolated.icns"));
     assert!(!options.build);
     assert_eq!(
         options.sign_identity.as_deref(),
         Some("Developer ID Application: Example")
     );
+}
+
+#[test]
+fn parse_bundle_rejects_an_icon_macos_cannot_show() {
+    let error = BundleMacosOptions::parse(&["--icon".into(), "icon.png".into()])
+        .expect_err("a PNG is not a bundle icon");
+
+    assert!(error.contains("not an .icns file"));
 }
 
 #[test]
@@ -607,6 +622,7 @@ fn create_bundle_writes_expected_layout() {
     let resources = workspace.join("resources");
     fs::create_dir_all(resources.join("nested")).expect("create resources");
     fs::write(resources.join("nested/data.txt"), b"resource").expect("write resource");
+    fs::write(workspace.join("demo.icns"), b"icns").expect("write icon");
 
     let options = BundleMacosOptions {
         package: "desktop-app".to_owned(),
@@ -616,6 +632,7 @@ fn create_bundle_writes_expected_layout() {
         bundle_id: "io.cranpose.demo".to_owned(),
         out_dir: PathBuf::from("bundles"),
         resources: Some(resources),
+        icon: PathBuf::from("demo.icns"),
         target: None,
         build: false,
         sign_identity: None,
@@ -623,9 +640,14 @@ fn create_bundle_writes_expected_layout() {
 
     let bundle = create_bundle(&workspace, &options, &binary).expect("create bundle");
 
-    assert!(bundle.join("Contents/Info.plist").exists());
+    let plist = fs::read_to_string(bundle.join("Contents/Info.plist")).expect("read Info.plist");
+    assert!(plist.contains("<key>CFBundleIconFile</key>\n  <string>AppIcon</string>"));
     assert!(bundle.join("Contents/MacOS/Cranpose-Demo").exists());
     assert!(bundle.join("Contents/Resources/nested/data.txt").exists());
+    assert_eq!(
+        fs::read(bundle.join("Contents/Resources/AppIcon.icns")).expect("read bundled icon"),
+        b"icns"
+    );
 }
 
 #[test]

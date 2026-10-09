@@ -3,12 +3,15 @@
     The demo declares only its own application attributes. The activity, its
     launcher entry and the `android.app.lib_name` metadata come from the
     Cranpose library; the permissions come from what the platform crate's build
-    script declares, which iOS and macOS read too.
+    script declares, which iOS and macOS read too. The activity shows the
+    application's icon, which scripts/dev/render_app_icons.mjs draws from
+    apps/desktop-demo/assets/icon/icon.svg.
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
         android:label="Compose Demo"
         android:supportsRtl="true">
         <!--
