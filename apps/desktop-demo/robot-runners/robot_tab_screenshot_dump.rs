@@ -1,4 +1,4 @@
-use crate::output_paths;
+use crate::{output_paths, robot_launch};
 
 use std::{
     path::{Path, PathBuf},
@@ -6,7 +6,7 @@ use std::{
 };
 
 use cranpose::AppLauncher;
-use desktop_app::app::{DemoTab, DEMO_TABS, TEST_ACTIVE_TAB_STATE};
+use desktop_app::app::{DemoTab, DEMO_TABS};
 use image::RgbaImage;
 
 const WINDOW_WIDTH: u32 = 1200;
@@ -38,7 +38,7 @@ pub(crate) fn main() {
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(headless())
-        .with_robot_app_hook(set_tab_hook)
+        .with_robot_app_hook(robot_launch::set_tab_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(700));
 
@@ -53,14 +53,12 @@ pub(crate) fn main() {
             );
             robot.exit().expect("exit");
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }
 
 fn dump_tab(robot: &cranpose::Robot, tab: DemoTab, shot_dir: &Path) {
-    let slug = tab_slug(tab);
-    robot
-        .invoke_app_hook("set-tab", slug)
-        .unwrap_or_else(|err| panic!("failed to select tab '{slug}': {err}"));
+    let slug = tab.slug();
+    robot_launch::switch_tab(robot, slug);
 
     robot
         .pump_frames(3)
@@ -83,25 +81,6 @@ fn dump_tab(robot: &cranpose::Robot, tab: DemoTab, shot_dir: &Path) {
         .save(&path)
         .unwrap_or_else(|err| panic!("failed to write {}: {err}", path.display()));
     println!("captured {slug} -> {}", path.display());
-}
-
-fn tab_slug(tab: DemoTab) -> &'static str {
-    tab.slug()
-}
-
-fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    if name != "set-tab" {
-        return Err(format!("unsupported robot app hook {name}({argument})"));
-    }
-    let tab = DEMO_TABS
-        .into_iter()
-        .find(|tab| tab_slug(*tab) == argument)
-        .ok_or_else(|| format!("unknown demo tab '{argument}'"))?;
-    let state = TEST_ACTIVE_TAB_STATE
-        .with(|cell| cell.borrow().as_ref().copied())
-        .ok_or_else(|| "active tab state was not installed before selecting a tab".to_string())?;
-    state.set(tab);
-    Ok(None)
 }
 
 fn shot_dir() -> PathBuf {

@@ -1,4 +1,4 @@
-use crate::robot_exit;
+use crate::{robot_exit, robot_launch};
 
 use std::{
     path::{Path, PathBuf},
@@ -7,7 +7,7 @@ use std::{
 
 use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
-use desktop_app::app::{self, DEMO_TABS, TEST_ACTIVE_TAB_STATE};
+use desktop_app::app::DEMO_TABS;
 use image::RgbaImage;
 
 const WINDOW_WIDTH: u32 = 900;
@@ -38,16 +38,14 @@ pub(crate) fn main() {
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
-        .with_robot_app_hook(set_tab_hook)
+        .with_robot_app_hook(robot_launch::set_tab_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(700));
             robot
                 .pump_frames(2)
                 .expect("initial Liquid frames should advance");
 
-            robot
-                .invoke_app_hook("set-tab", "shaderrect")
-                .expect("select shaderrect tab");
+            robot_launch::switch_tab(&robot, "shaderrect");
             settle(&robot, 800);
             let chrome_bottom = chrome_bottom(&robot);
             println!("chrome bottom measured at y={chrome_bottom:.1}");
@@ -103,22 +101,16 @@ pub(crate) fn main() {
             }
 
             for (target, threshold) in [("shaders", 600usize), ("markdown", 220usize)] {
-                robot
-                    .invoke_app_hook("set-tab", target)
-                    .unwrap_or_else(|_| panic!("select {target} tab"));
+                robot_launch::switch_tab(&robot, target);
                 settle(&robot, 1000);
                 let clean = robot.screenshot().expect("clean screenshot");
                 save(&clean, &shot_dir, &format!("{target}-clean"));
                 for scroll_delta in [-520.0f32, -1400.0, -4200.0] {
-                    robot
-                        .invoke_app_hook("set-tab", "liquid")
-                        .expect("select liquid tab");
+                    robot_launch::switch_tab(&robot, "liquid");
                     settle(&robot, 900);
                     scroll(&robot, 450.0, 400.0, scroll_delta);
                     settle(&robot, 900);
-                    robot
-                        .invoke_app_hook("set-tab", target)
-                        .unwrap_or_else(|_| panic!("select {target} tab"));
+                    robot_launch::switch_tab(&robot, target);
                     settle(&robot, 1200);
                     let shot = robot.screenshot().expect("screenshot");
                     let mut diff = 0usize;
@@ -144,9 +136,7 @@ pub(crate) fn main() {
                                 "liquid page (scrolled {scroll_delta}) ghosting through {target} tab: {diff} changed pixels"
                             ));
                     }
-                    robot
-                        .invoke_app_hook("set-tab", "liquid")
-                        .expect("select liquid tab");
+                    robot_launch::switch_tab(&robot, "liquid");
                     settle(&robot, 500);
                     scroll(&robot, 450.0, 400.0, 5000.0);
                     settle(&robot, 500);
@@ -156,7 +146,7 @@ pub(crate) fn main() {
             println!("PASS: fused-pass viewport contract");
             robot.exit().expect("exit");
         })
-        .run(crate::robot_launch::counter_demo);
+        .run(robot_launch::counter_demo);
 }
 
 fn count_ink(shot: &cranpose::RobotScreenshot, x: f32, y: f32, w: f32, h: f32) -> usize {
@@ -178,24 +168,6 @@ fn count_ink(shot: &cranpose::RobotScreenshot, x: f32, y: f32, w: f32, h: f32) -
         }
     }
     ink
-}
-
-fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    if name != "set-tab" {
-        return Err(format!("unsupported robot app hook {name}({argument})"));
-    }
-    let tab = match argument.as_str() {
-        "shaderrect" => app::DemoTab::ShaderRect,
-        "shaders" => app::DemoTab::Shaders,
-        "liquid" => app::DemoTab::Liquid,
-        "markdown" => app::DemoTab::MarkdownViewer,
-        _ => return Err(format!("unknown demo tab '{argument}'")),
-    };
-    let state = TEST_ACTIVE_TAB_STATE
-        .with(|cell| cell.borrow().as_ref().copied())
-        .ok_or_else(|| "active tab state was not installed".to_string())?;
-    state.set(tab);
-    Ok(None)
 }
 
 fn settle(robot: &cranpose::Robot, ms: u64) {

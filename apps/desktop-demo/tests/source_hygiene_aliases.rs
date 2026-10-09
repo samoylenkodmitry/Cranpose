@@ -417,7 +417,8 @@ fn external_visual_contracts_cover_text_tab_after_tab_walk() {
         fs::read_to_string(root.join("robot-runners/robot_tab_walk_text_visual_contract.rs"))
             .expect("failed to read tab-walk visual runner");
     assert!(
-        visual_runner.contains("TEST_ACTIVE_TAB_STATE")
+        visual_runner.contains("walk_tabs_to_text")
+            && visual_runner.contains("robot_launch::set_tab_hook")
             && visual_runner.contains("capture_x11_window")
             && visual_runner.contains("Serif Bold Italic")
             && visual_runner.contains("Decorated shadow text")
@@ -430,7 +431,7 @@ fn external_visual_contracts_cover_text_tab_after_tab_walk() {
             .expect("failed to read text scroll external runner");
     assert!(
         text_scroll_runner.contains("walk_tabs_to_text")
-            && text_scroll_runner.contains("TEST_ACTIVE_TAB_STATE")
+            && text_scroll_runner.contains("robot_launch::set_tab_hook")
             && text_scroll_runner.contains("run_scroll_stability_capture"),
         "external text scroll contract must exercise the tab-walk path before checking underline scroll stability"
     );

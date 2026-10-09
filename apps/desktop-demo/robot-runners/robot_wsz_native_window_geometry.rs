@@ -1,4 +1,4 @@
-use crate::output_paths;
+use crate::{output_paths, robot_launch};
 
 use std::{
     cell::RefCell,
@@ -9,7 +9,7 @@ use std::{
 
 use cranpose::AppLauncher;
 use cranpose_testing::find_button_in_semantics;
-use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
+use desktop_app::app::{self, DemoTab};
 use image::RgbaImage;
 
 const WINDOW_TITLE: &str = "Robot WSZ Native Geometry";
@@ -177,18 +177,7 @@ pub(crate) fn main() {
         .with_title(WINDOW_TITLE)
         .with_size(1200, 800)
         .with_headless(false)
-        .with_robot_app_hook(|name, argument| match (name.as_str(), argument.as_str()) {
-            ("set-tab", "xkcd") => TEST_ACTIVE_TAB_STATE.with(|slot| {
-                let active_tab = slot
-                    .borrow()
-                    .as_ref()
-                    .copied()
-                    .ok_or_else(|| "active tab state is not initialized".to_string())?;
-                active_tab.set(DemoTab::Xkcd);
-                Ok(None)
-            }),
-            _ => Err(format!("unsupported robot app hook {name}({argument})")),
-        })
+        .with_robot_app_hook(robot_launch::set_tab_hook)
         .with_test_driver(|robot| {
             let pid = std::process::id();
             let host_window = find_app_window(pid);
@@ -295,9 +284,7 @@ pub(crate) fn main() {
             click_transport_buttons_and_assert_stack_remains("transport-buttons", wsz);
             drag_volume_to_zero_and_assert_stack_remains("volume-zero", wsz);
 
-            robot
-                .invoke_app_hook("set-tab", "xkcd")
-                .expect("switch to XKCD tab");
+            robot_launch::switch_tab(&robot, "xkcd");
             robot.wait_for_idle().expect("XKCD tab idle");
             assert_windows_absent(pid, "after tab switch");
 

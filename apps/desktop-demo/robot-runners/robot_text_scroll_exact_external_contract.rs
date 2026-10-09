@@ -1,13 +1,16 @@
-use crate::{output_paths, scroll_stability_external_helpers, text_showcase_external_helpers};
+use crate::{
+    output_paths, robot_launch, scroll_stability_external_helpers, text_showcase_external_helpers,
+};
 
 use std::time::Duration;
 
 use cranpose::AppLauncher;
-use desktop_app::app::{DemoTab, TEST_ACTIVE_TAB_STATE};
 use scroll_stability_external_helpers::{
     prepare_internal_diagnostic, run_scroll_stability_capture, ScrollStabilityConfig,
 };
-use text_showcase_external_helpers::{scroll_text_into_view, wait_for_text_showcase_heading};
+use text_showcase_external_helpers::{
+    scroll_text_into_view, wait_for_text_showcase_heading, walk_tabs_to_text,
+};
 
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 900;
@@ -46,7 +49,7 @@ pub(crate) fn main() {
         .with_title(WINDOW_TITLE)
         .with_size(WINDOW_WIDTH, WINDOW_HEIGHT)
         .with_headless(false)
-        .with_robot_app_hook(set_tab_hook)
+        .with_robot_app_hook(robot_launch::set_tab_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(1000));
             let _ = robot.wait_for_idle();
@@ -106,37 +109,5 @@ pub(crate) fn main() {
             );
             robot.exit().expect("exit");
         })
-        .run(crate::robot_launch::counter_demo);
-}
-
-fn walk_tabs_to_text(robot: &cranpose::Robot) {
-    for tab in ["mineswapper2", "images", "lazy-list", "text"] {
-        set_active_tab(robot, tab);
-        std::thread::sleep(Duration::from_millis(180));
-        let _ = robot.wait_for_idle();
-    }
-}
-
-fn set_active_tab(robot: &cranpose::Robot, tab: &str) {
-    robot
-        .invoke_app_hook("set-tab", tab)
-        .unwrap_or_else(|err| panic!("failed to select tab '{tab}': {err}"));
-}
-
-fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String> {
-    if name != "set-tab" {
-        return Err(format!("unsupported robot app hook {name}({argument})"));
-    }
-    let tab = match argument.as_str() {
-        "mineswapper2" => DemoTab::Mineswapper2,
-        "images" => DemoTab::Images,
-        "lazy-list" => DemoTab::LazyList,
-        "text" => DemoTab::Text,
-        _ => return Err(format!("unknown demo tab '{argument}'")),
-    };
-    let state = TEST_ACTIVE_TAB_STATE
-        .with(|cell| cell.borrow().as_ref().copied())
-        .unwrap_or_else(|| panic!("active tab state was not installed before selecting {tab:?}"));
-    state.set(tab);
-    Ok(None)
+        .run(robot_launch::counter_demo);
 }
