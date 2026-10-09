@@ -1390,64 +1390,14 @@ impl Node for LayoutNode {
     }
 
     fn rehouse_for_live_compaction(&mut self) -> Option<Box<dyn cranpose_core::Node>> {
-        let mut previous = std::mem::replace(self, Self::new_recycled_shell(self.is_virtual));
-        let node_id = previous.id.replace(None);
-        let parent = previous.parent.get();
-        let folded_parent = previous.folded_parent.get();
-        let debug_modifiers = previous.debug_modifiers.get();
-        let density = previous.density;
-        let layout_direction = previous.modifier_chain.layout_direction();
-        let needs_measure = previous.needs_measure.get();
-        let needs_layout = previous.needs_layout.get();
-        let needs_semantics = previous.needs_semantics.get();
-        let descendant_needs_semantics = previous.descendant_needs_semantics.get();
-        let needs_redraw = previous.needs_redraw.get();
-        let needs_pointer_pass = previous.needs_pointer_pass.get();
-        let needs_focus_sync = previous.needs_focus_sync.get();
-        let virtual_children_count = previous.virtual_children_count.get();
-        let children = previous.children.to_vec();
-        let modifier = previous.modifier.rehouse_for_live_compaction();
-        let measure_policy = previous.measure_policy.clone();
-        let layout_state = previous.layout_state.clone();
-        let layout_runtime_state = previous.layout_runtime_state.clone();
-        let coordinator_geometry = Rc::clone(&previous.coordinator_geometry);
-
-        previous.modifier_chain.chain_mut().detach_nodes();
-
-        let mut compact = Self::new_with_virtual(modifier, measure_policy, previous.is_virtual);
-        compact.density = density;
-        compact
-            .modifier_chain
-            .set_layout_direction(layout_direction);
-        compact.children = children;
-        #[cfg(feature = "inspection")]
-        {
-            compact.source_trace = previous.source_trace.clone();
-        }
-        compact.parent.set(parent);
-        compact.folded_parent.set(folded_parent);
-        compact.id.set(node_id);
-        compact.debug_modifiers.set(debug_modifiers);
-        compact.needs_measure.set(needs_measure);
-        compact.needs_layout.set(needs_layout);
-        compact.needs_semantics.set(needs_semantics);
-        compact
-            .descendant_needs_semantics
-            .set(descendant_needs_semantics);
-        compact.needs_redraw.set(needs_redraw);
-        compact.needs_pointer_pass.set(needs_pointer_pass);
-        compact.needs_focus_sync.set(needs_focus_sync);
-        compact.virtual_children_count.set(virtual_children_count);
-        compact.layout_state = layout_state;
-        compact.layout_runtime_state = layout_runtime_state;
-        compact.coordinator_geometry = coordinator_geometry;
-        compact.sync_modifier_chain(false);
-        if let Some(id) = node_id {
-            let owner_context_id = register_layout_node(id, &compact);
-            compact.owner_context_id.set(Some(owner_context_id));
-        }
-
-        Some(Box::new(compact))
+        // The whole node moves into the new box. Its modifier nodes keep
+        // what the user is doing with it, such as a focus, a held press or an
+        // IME composition, and its caches and registry entry stay true for
+        // it. Only its child list, which a spike of children may have grown,
+        // is cut to size. The shell left behind has no id to unregister.
+        let mut node = std::mem::replace(self, Self::new_recycled_shell(self.is_virtual));
+        node.children.shrink_to_fit();
+        Some(Box::new(node))
     }
 }
 
