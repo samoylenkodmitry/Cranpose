@@ -14,6 +14,7 @@ mod moved_layers;
 mod multilingual_text;
 mod recording_reuse;
 mod scaling_list_scene;
+mod teardown_survivors;
 mod text_glyph_fallback;
 mod text_updates;
 mod wear_faded_row_composite;

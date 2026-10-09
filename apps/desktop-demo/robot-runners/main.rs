@@ -206,6 +206,7 @@ runners! {
     robot_subcompose_invalidation,
     robot_subcompose_lazy,
     robot_subcompose_loop_disposal,
+    robot_tab_labels_after_deep_layout,
     robot_tab_navigation,
     robot_tab_roundtrip_content,
     robot_tab_screenshot_dump,

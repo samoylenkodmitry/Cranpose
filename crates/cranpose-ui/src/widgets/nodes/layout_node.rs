@@ -1420,6 +1420,8 @@ impl Node for LayoutNode {
         let parent = previous.parent.get();
         let folded_parent = previous.folded_parent.get();
         let debug_modifiers = previous.debug_modifiers.get();
+        let density = previous.density;
+        let layout_direction = previous.modifier_chain.layout_direction();
         let needs_measure = previous.needs_measure.get();
         let needs_layout = previous.needs_layout.get();
         let needs_semantics = previous.needs_semantics.get();
@@ -1438,6 +1440,10 @@ impl Node for LayoutNode {
         previous.modifier_chain.chain_mut().detach_nodes();
 
         let mut compact = Self::new_with_virtual(modifier, measure_policy, previous.is_virtual);
+        compact.density = density;
+        compact
+            .modifier_chain
+            .set_layout_direction(layout_direction);
         compact.children = children;
         #[cfg(feature = "inspection")]
         {
