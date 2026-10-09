@@ -176,8 +176,8 @@ impl ShapeRecords {
                 arguments: source,
             });
         }
-        push_sized(&mut self.bodies, body);
-        push_sized(&mut self.curves, curve);
+        self.bodies.push(body);
+        self.curves.push(curve);
     }
 }
 
@@ -189,16 +189,6 @@ pub(crate) fn trim_growth<T>(items: &mut Vec<T>) {
     if items.capacity() > len + len / 4 {
         items.shrink_to(len + len / 8);
     }
-}
-
-/// Pushes `item`, giving a vector that has no room yet exactly one slot:
-/// most recordings hold one shape and one segment, where the first growth
-/// would make room for four. A second item grows the vector as usual.
-pub(crate) fn push_sized<T>(items: &mut Vec<T>, item: T) {
-    if items.capacity() == 0 {
-        items.reserve_exact(1);
-    }
-    items.push(item);
 }
 
 fn reconstruct(body: &ShapeRecordBody, curve: &ShapeRecordCurve, source: [f32; 4]) -> ShapeRecord {

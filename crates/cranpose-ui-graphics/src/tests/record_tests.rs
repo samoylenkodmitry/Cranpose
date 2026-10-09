@@ -713,9 +713,12 @@ fn clearing_keeps_the_capacity_and_forgets_the_content() {
 fn publishing_and_unique_reuse_move_the_shape_columns() {
     let mut recorder = CommandRecorder::default();
     assert!(recorder.is_empty());
-    recorder.push_primitive(every_primitive().remove(0));
+    // Four shapes fill the room growth makes, so finishing keeps it.
+    for _ in 0..4 {
+        recorder.push_primitive(every_primitive().remove(0));
+    }
     recorder.push_content();
-    assert_eq!(recorder.len(), 2);
+    assert_eq!(recorder.len(), 5);
     assert_eq!(recorder.content_markers(), 1);
     let body_pointer = recorder.shapes.tables.shapes.bodies().as_ptr();
     let published = recorder.finish();
