@@ -1053,7 +1053,7 @@ fn write_own_content_around_children(
     size: Size,
 ) {
     if modifier_slices.draw_commands()[modifier_slices.outer_draw_command_count()..].is_empty()
-        && modifier_slices.annotated_text().is_none()
+        && !modifier_slices.has_text()
     {
         return;
     }
@@ -1512,11 +1512,7 @@ fn write_node_content(
 ) {
     let outer_count = slices.outer_draw_command_count();
     let commands = &slices.draw_commands()[outer_count..];
-    list.reserve(layer_node_capacity(
-        commands,
-        written,
-        slices.annotated_text().is_some(),
-    ));
+    list.reserve(layer_node_capacity(commands, written, slices.has_text()));
     let first_kept = list.len() - kept;
     let first_draw = list.len();
     append_draw_nodes(
@@ -1531,7 +1527,7 @@ fn write_node_content(
     if let Some(text) = text_node_from_parts(TextNodeParts {
         node_id,
         text_rect: slices.text_content_rect(size),
-        text_style: slices.text_style(),
+        text_style: slices.text_style().as_deref(),
         text_layout_options: slices.text_layout_options(),
         text_pan: slices.text_pan_resolver(),
         measured_layout: slices.measured_text_layout(),

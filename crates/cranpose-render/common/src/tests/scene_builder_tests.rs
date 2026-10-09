@@ -352,7 +352,7 @@ fn text_slices(
                 options,
             );
         },
-        move |slices| slices.text_content() == Some(text),
+        move |slices| slices.text_content().as_deref() == Some(text),
     )
 }
 
@@ -3163,7 +3163,7 @@ fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
                     node.layout_state().is_placed(),
                     node.modifier_slices_snapshot()
                         .text_content()
-                        .map(str::to_string),
+                        .map(|text| text.to_string()),
                     node.children.clone()
                 )
             }) {

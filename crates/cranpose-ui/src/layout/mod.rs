@@ -3772,7 +3772,7 @@ fn role_from_modifier_slices(modifier_slices: &ModifierNodeSlices) -> SemanticsR
     modifier_slices
         .annotated_text()
         .map_or(SemanticsRole::Layout, |text| SemanticsRole::Text {
-            value: SemanticsText(Rc::clone(text)),
+            value: SemanticsText(Rc::clone(&text)),
         })
 }
 

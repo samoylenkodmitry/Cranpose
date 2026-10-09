@@ -3,7 +3,8 @@ use std::rc::Rc;
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
 use cranpose_ui::{
     BasicTextFieldOptions, BasicTextFieldWithOptions, Column, ColumnSpec, LayoutBox, LayoutEngine,
-    LayoutTree, Modifier, Size, Text, TextStyle, set_text_measurer,
+    LayoutTree, Modifier, SemanticsNode, SemanticsRole, Size, Text, TextStyle,
+    build_semantics_tree_from_applier, set_text_measurer,
 };
 
 use crate::text_contract_measurer::{CHAR_WIDTH, ContractMeasurer};
@@ -58,7 +59,7 @@ pub(crate) fn layout_composition(
 
 fn measured_body_lines(layout: &LayoutTree) -> Vec<String> {
     let body_box = find_box(layout.root(), &|node| {
-        node.node_data.modifier_slices().text_content() == Some(BODY)
+        node.node_data.modifier_slices().text_content().as_deref() == Some(BODY)
     })
     .expect("body box");
     body_box
@@ -134,7 +135,7 @@ fn measured_text_layout_of_a_text_field_wraps_at_the_field_s_own_constraint() {
 
 fn text_box_layout(layout: &LayoutTree, text: &str) -> (Vec<String>, Size) {
     let text_box = find_box(layout.root(), &|node| {
-        node.node_data.modifier_slices().text_content() == Some(text)
+        node.node_data.modifier_slices().text_content().as_deref() == Some(text)
     })
     .expect("text box");
     let lines = text_box
@@ -191,5 +192,51 @@ fn a_text_that_changes_in_place_lays_out_as_a_text_composed_with_its_string() {
         while composition.process_invalid_scopes().expect("text change") {}
         let layout = layout_composition(&mut composition, Size::new(300.0, 300.0));
         assert_eq!(&text_box_layout(&layout, text), expected, "{text}");
+    }
+}
+
+fn semantics_texts(node: &SemanticsNode, out: &mut Vec<String>) {
+    if let SemanticsRole::Text { value } = &node.role {
+        out.push(value.as_str().to_owned());
+    }
+    for child in &node.children {
+        semantics_texts(child, out);
+    }
+}
+
+#[test]
+fn a_text_that_changes_in_place_names_each_new_string_to_semantics() {
+    let mut composition = cranpose_ui::run_test_composition(|| {});
+    set_text_measurer(ContractMeasurer);
+    let value =
+        cranpose_core::MutableState::with_runtime(BODY.to_string(), composition.runtime_handle());
+    composition
+        .render(
+            cranpose_core::location_key(file!(), line!(), column!()),
+            move || {
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    Text(value.value(), Modifier::empty(), TextStyle::default());
+                    Text("static", Modifier::empty(), TextStyle::default());
+                });
+            },
+        )
+        .expect("text composition");
+    let _ = layout_composition(&mut composition, Size::new(300.0, 300.0));
+    // Back to an earlier string too: the node must not keep the one before.
+    for text in ["dd ee", BODY, "ffff"] {
+        value.set_value(text.to_string());
+        while composition.process_invalid_scopes().expect("text change") {}
+        let _ = layout_composition(&mut composition, Size::new(300.0, 300.0));
+        let root = composition.root().expect("composition root");
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let tree = build_semantics_tree_from_applier(&mut applier, root)
+            .expect("semantics")
+            .expect("a semantics tree");
+        applier.clear_runtime_handle();
+        let mut texts = Vec::new();
+        semantics_texts(tree.root(), &mut texts);
+        assert_eq!(texts, [text, "static"], "{text}");
     }
 }

@@ -399,7 +399,7 @@ fn extract_rects_from_layout(layout: &LayoutTree) -> Vec<(Rect, Option<String>)>
             .node_data
             .modifier_slices()
             .text_content()
-            .map(ToString::to_string);
+            .map(|text| text.to_string());
 
         let rect = Rect {
             x: node.rect.x,
