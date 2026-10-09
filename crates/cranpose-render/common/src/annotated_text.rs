@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
 use cranpose_ui::text::{FontExtent, LineBox, TextMetrics, TextStyle, line_box};
 use cranpose_ui_graphics::{Brush, Point, Rect};
@@ -167,16 +167,11 @@ impl<'a> AnnotatedTextLayout<'a> {
             if start >= end {
                 continue;
             }
-            let resolved_style = if text.span_styles.is_empty() {
-                None
-            } else {
-                Some(effective_style_for_range(
-                    text.span_styles,
-                    style,
-                    start,
-                    end,
-                ))
-            };
+            let resolved_style =
+                match effective_style_for_range(text.span_styles, style, start, end) {
+                    Cow::Borrowed(_) => None,
+                    Cow::Owned(resolved) => Some(resolved),
+                };
             let style_index = styles.len();
             styles.push(resolved_style);
             let span_style = styles[style_index]

@@ -4317,16 +4317,17 @@ pub(crate) fn visit_annotated_line_boxes(
     Some(())
 }
 
-pub(crate) fn effective_style_for_range(
+pub(crate) fn effective_style_for_range<'a>(
     span_styles: &[RangeStyle<SpanStyle>],
-    style: &TextStyle,
+    style: &'a TextStyle,
     start: usize,
     end: usize,
-) -> TextStyle {
-    let mut effective = style.clone();
+) -> Cow<'a, TextStyle> {
+    let mut effective = Cow::Borrowed(style);
     for span in span_styles {
         if span.range.start < end && span.range.end > start {
-            effective.span_style = effective.span_style.merge(&span.item);
+            let merged = effective.span_style.merge(&span.item);
+            effective.to_mut().span_style = merged;
         }
     }
     effective
