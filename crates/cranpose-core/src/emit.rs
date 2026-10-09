@@ -52,32 +52,29 @@ impl Composer {
         let adopted = {
             let mut skip = 0;
             loop {
-                let Some((id, slot_gen)) = self
+                let Some(found) = self
                     .with_slot_session_mut(|slots| slots.peek_node_record_by_source(source, skip))
                 else {
                     break None;
                 };
                 let (type_ok, gen_ok) = {
                     let mut applier = self.borrow_applier();
-                    let gen_ok = applier.node_generation(id) == slot_gen;
-                    let type_ok = match applier.get_mut(id) {
+                    let gen_ok = applier.node_generation(found.id) == found.generation;
+                    let type_ok = match applier.get_mut(found.id) {
                         Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
                         Err(_) => false,
                     };
                     (type_ok, gen_ok)
                 };
                 if type_ok && gen_ok {
-                    let committed = self.with_slot_session_mut(|slots| {
-                        slots.adopt_node_record_by_source(source, skip)
-                    });
-                    debug_assert_eq!(committed, Some((id, slot_gen)));
-                    break Some((id, slot_gen));
+                    break Some(found);
                 }
                 skip += 1;
             }
         };
 
-        if let Some((id, slot_gen)) = adopted {
+        if let Some(found) = adopted {
+            let id = found.id;
             let scope_debug = self.current_recompose_scope().map_or((0, None), |scope| {
                 (scope.id(), debug_scope_label(scope.id()))
             });
@@ -91,16 +88,15 @@ impl Composer {
             self.commands_mut().push(Command::update_node::<N>(id));
             self.attach_to_parent(id);
             let parent_id = self.planned_node_parent(id);
-            let recorded = self.with_slot_session_mut(|slots| {
-                slots.record_node_with_parent(id, slot_gen, parent_id, source)
-            });
+            let recorded = self
+                .with_slot_session_mut(|slots| slots.adopt_node_record(found, parent_id, source));
             match recorded {
                 NodeSlotUpdate::Reused {
                     id: recorded_id,
                     generation,
                 } => {
                     debug_assert_eq!(recorded_id, id);
-                    debug_assert_eq!(generation, slot_gen);
+                    debug_assert_eq!(generation, found.generation);
                 }
                 NodeSlotUpdate::Inserted { .. } => {
                     log::warn!(
