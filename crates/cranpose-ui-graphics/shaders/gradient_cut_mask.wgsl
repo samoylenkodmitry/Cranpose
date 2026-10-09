@@ -81,6 +81,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let shape_alpha = rounded_rect_alpha(local_px, size_px, corner_radius_px);
     let mask = directional_alpha * shape_alpha;
 
-    let sample = textureSample(input_texture, input_sampler, uv);
+    let sample = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     return sample * mask;
 }

@@ -66,6 +66,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
         keep_alpha = clamp((start_px - axis_value) / span, 0.0, 1.0);
     }
 
-    let sample = textureSample(input_texture, input_sampler, uv);
+    let sample = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     return sample * keep_alpha;
 }

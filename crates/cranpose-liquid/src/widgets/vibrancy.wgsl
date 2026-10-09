@@ -41,7 +41,7 @@ fn content_displacement(position: vec2<f32>, pixel_scale: f32) -> vec2<f32> {
 @fragment
 fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let uv = source_uv(input.uv);
-    let source = textureSample(input_texture, input_sampler, uv);
+    let source = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     let luminance = dot(source.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     var light_ink = u[3].x > 0.5;
     let region = u[58];

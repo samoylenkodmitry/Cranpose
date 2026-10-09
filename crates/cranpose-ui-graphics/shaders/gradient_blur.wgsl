@@ -188,7 +188,7 @@ fn blur_fs(input: VertexOutput) -> vec4<f32> {
     let progress = smoothstep(0.0, 1.0, axis);
     let radius_px = mix(get_float(0u), get_float(1u), progress);
     if radius_px < 0.25 {
-        return textureSample(input_texture, input_sampler, map_uv(map, input.uv));
+        return textureSampleLevel(input_texture, input_sampler, map_uv(map, input.uv), 0.0);
     }
 
     // With the renderer's substrates the radius at this fragment is
@@ -227,7 +227,7 @@ fn blur_fs(input: VertexOutput) -> vec4<f32> {
     // weights approximate a Gaussian while 37 taps keep the full-screen-bar
     // pass mobile-friendly.
     let texel = vec2<f32>(radius_px) / max(texture_size, vec2<f32>(1.0));
-    var color = textureSample(input_texture, input_sampler, map_uv(map, input.uv)) * 1.5;
+    var color = textureSampleLevel(input_texture, input_sampler, map_uv(map, input.uv), 0.0) * 1.5;
     var total_weight = 1.5;
     for (var i: u32 = 0u; i < 36u; i = i + 1u) {
         let offset = POISSON_OFFSETS[i];
@@ -238,7 +238,7 @@ fn blur_fs(input: VertexOutput) -> vec4<f32> {
             vec2<f32>(0.0),
             vec2<f32>(1.0)
         );
-        color = color + textureSample(input_texture, input_sampler, map_uv(map, sample_uv)) * weight;
+        color = color + textureSampleLevel(input_texture, input_sampler, map_uv(map, sample_uv), 0.0) * weight;
         total_weight = total_weight + weight;
     }
     return color / max(total_weight, 0.00001);

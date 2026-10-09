@@ -78,6 +78,6 @@ fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
     let feather_px = max(get_float(2u) * s, 0.0);
     let mask = rounded_rect_alpha(local_px, size_px, corner_radii_px, feather_px);
 
-    let sample = textureSample(input_texture, input_sampler, uv);
+    let sample = textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     return sample * mask;
 }

@@ -7,7 +7,7 @@ fn composite_sample(
     let safe_source_size = max(source_size, vec2<f32>(0.00001, 0.00001));
     let uv = source_pos / safe_source_size;
     if (sampling_mode <= 0.5) {
-        return textureSample(input_texture, input_sampler, uv);
+        return textureSampleLevel(input_texture, input_sampler, uv, 0.0);
     }
     let dims = vec2<i32>(textureDimensions(input_texture));
     let texel = clamp(vec2<i32>(floor(source_pos)), vec2<i32>(0), dims - vec2<i32>(1));

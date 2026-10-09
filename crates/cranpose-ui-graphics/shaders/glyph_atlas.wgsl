@@ -113,7 +113,7 @@ fn glyph_atlas_turned_vs_main(
 @fragment
 fn glyph_atlas_fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let uv = clamp(input.uv, input.uv_bounds.xy, input.uv_bounds.zw);
-    let coverage = textureSample(glyph_texture, glyph_sampler, uv).r;
+    let coverage = textureSampleLevel(glyph_texture, glyph_sampler, uv, 0.0).r;
     return vec4<f32>(input.color.rgb, input.color.a * coverage);
 }
 
@@ -141,6 +141,6 @@ fn glyph_atlas_aligned_vs_main(
 
 @fragment
 fn glyph_atlas_aligned_fs_main(input: AlignedVertexOutput) -> @location(0) vec4<f32> {
-    let coverage = textureSample(glyph_texture, glyph_sampler, input.uv).r;
+    let coverage = textureSampleLevel(glyph_texture, glyph_sampler, input.uv, 0.0).r;
     return vec4<f32>(input.color.rgb, input.color.a * coverage);
 }
