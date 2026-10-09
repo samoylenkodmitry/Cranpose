@@ -472,7 +472,6 @@ impl TextModifierElement {
 impl Hash for TextModifierElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.text.render_hash().hash(state);
-        self.style.render_hash().hash(state);
         self.options.hash(state);
         self.density.density().to_bits().hash(state);
     }

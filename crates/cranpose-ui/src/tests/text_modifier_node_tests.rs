@@ -216,33 +216,6 @@ impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
 }
 
 #[test]
-fn hash_changes_when_style_changes() {
-    let text = Rc::new(AnnotatedString::from("Hello"));
-    let element_a = TextModifierElement::new(
-        text.clone(),
-        TextStyle::default(),
-        TextLayoutOptions::default(),
-        crate::density::Density::new(1.0, 1.0),
-    );
-    let style_b = TextStyle {
-        span_style: crate::text::SpanStyle {
-            font_size: TextUnit::Sp(18.0),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let element_b = TextModifierElement::new(
-        text,
-        style_b,
-        TextLayoutOptions::default(),
-        crate::density::Density::new(1.0, 1.0),
-    );
-
-    assert_ne!(element_a, element_b);
-    assert_ne!(hash_of(&element_a), hash_of(&element_b));
-}
-
-#[test]
 fn hash_matches_for_equal_elements() {
     let style = TextStyle {
         span_style: crate::text::SpanStyle {
