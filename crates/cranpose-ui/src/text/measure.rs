@@ -714,15 +714,26 @@ impl TextService {
         {
             return prepared;
         }
-        let prepared = Rc::new(self.with_measurer(|m| {
-            m.prepare_with_options_for_node(node_id, text, style, options.normalized(), max_width)
-        }));
+        let prepared = self.prepare_unshared(node_id, text, style, options, max_width);
         if let Some(key) = key {
             self.prepared_cache
                 .borrow_mut()
                 .push(key, Rc::clone(&prepared));
         }
         prepared
+    }
+
+    pub(crate) fn prepare_unshared(
+        &self,
+        node_id: Option<NodeId>,
+        text: &Rc<crate::text::AnnotatedString>,
+        style: &Arc<TextStyle>,
+        options: TextLayoutOptions,
+        max_width: Option<f32>,
+    ) -> Rc<PreparedTextLayout> {
+        Rc::new(self.with_measurer(|m| {
+            m.prepare_with_options_for_node(node_id, text, style, options.normalized(), max_width)
+        }))
     }
 
     pub(crate) fn layout(
@@ -908,11 +919,32 @@ pub fn prepare_text_layout_for_node(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> Rc<PreparedTextLayout> {
-    let prepare = |text: &Rc<crate::text::AnnotatedString>, style: &Arc<TextStyle>| {
+    with_font_scaled(text, style, |text, style| {
         crate::render_state::with_text_service(|service| {
             service.prepare_with_options(node_id, text, style, options.normalized(), max_width)
         })
-    };
+    })
+}
+
+pub(crate) fn prepare_unshared_text_layout_for_node(
+    node_id: Option<NodeId>,
+    text: &Rc<crate::text::AnnotatedString>,
+    style: &Arc<TextStyle>,
+    options: TextLayoutOptions,
+    max_width: Option<f32>,
+) -> Rc<PreparedTextLayout> {
+    with_font_scaled(text, style, |text, style| {
+        crate::render_state::with_text_service(|service| {
+            service.prepare_unshared(node_id, text, style, options, max_width)
+        })
+    })
+}
+
+fn with_font_scaled<R>(
+    text: &Rc<crate::text::AnnotatedString>,
+    style: &Arc<TextStyle>,
+    prepare: impl FnOnce(&Rc<crate::text::AnnotatedString>, &Arc<TextStyle>) -> R,
+) -> R {
     let Some(curve) = crate::render_state::current_scaling_font_scale_curve() else {
         return prepare(text, style);
     };

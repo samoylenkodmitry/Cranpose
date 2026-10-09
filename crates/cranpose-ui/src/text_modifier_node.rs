@@ -50,6 +50,7 @@ struct TextPreparedLayoutOwner {
     node_id: Cell<Option<cranpose_core::NodeId>>,
     measured_max_width: Cell<Option<Option<f32>>>,
     cache: RefCell<SmallVec<[TextPreparedLayoutCacheEntry; 1]>>,
+    shares_layouts: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +65,7 @@ impl TextPreparedLayoutOwner {
         options: TextLayoutOptions,
         node_id: Option<cranpose_core::NodeId>,
         measured_max_width: Option<Option<f32>>,
+        shares_layouts: bool,
     ) -> Self {
         Self {
             text,
@@ -72,6 +74,7 @@ impl TextPreparedLayoutOwner {
             node_id: Cell::new(node_id),
             measured_max_width: Cell::new(measured_max_width),
             cache: RefCell::new(SmallVec::new()),
+            shares_layouts,
         }
     }
 
@@ -125,7 +128,12 @@ impl TextPreparedLayoutOwner {
             }
         }
 
-        let prepared = crate::text::prepare_text_layout_for_node(
+        let prepare = if self.shares_layouts {
+            crate::text::prepare_text_layout_for_node
+        } else {
+            crate::text::measure::prepare_unshared_text_layout_for_node
+        };
+        let prepared = prepare(
             self.node_id(),
             &self.text,
             &self.style,
@@ -238,6 +246,7 @@ impl TextModifierNode {
                 options,
                 None,
                 None,
+                true,
             )),
             density,
             state: NodeState::new(),
@@ -499,6 +508,7 @@ impl ModifierNodeElement for TextModifierElement {
                 self.options,
                 current.node_id(),
                 current.measured_max_width.get(),
+                false,
             );
             // A layout no handle still reads keeps its allocation.
             match Rc::get_mut(&mut node.layout) {

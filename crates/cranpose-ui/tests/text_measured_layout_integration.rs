@@ -131,3 +131,65 @@ fn measured_text_layout_of_a_text_field_wraps_at_the_field_s_own_constraint() {
         "a single-line field never wraps; it pans"
     );
 }
+
+fn text_box_layout(layout: &LayoutTree, text: &str) -> (Vec<String>, Size) {
+    let text_box = find_box(layout.root(), &|node| {
+        node.node_data.modifier_slices().text_content() == Some(text)
+    })
+    .expect("text box");
+    let lines = text_box
+        .node_data
+        .modifier_slices()
+        .measured_text_layout()
+        .expect("a measured text exposes its layout")
+        .text
+        .text
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    (lines, Size::new(text_box.rect.width, text_box.rect.height))
+}
+
+#[test]
+fn a_text_that_changes_in_place_lays_out_as_a_text_composed_with_its_string() {
+    let strings: [&'static str; 5] = [BODY, "dd ee", BODY, "ffff gggg hhhh iiii", "dd ee"];
+    let width = 10.0 * CHAR_WIDTH;
+    let composed: Vec<_> = strings
+        .iter()
+        .map(|&text| {
+            lay_out_in_column(
+                move || {
+                    Text(text, Modifier::empty().width(width), TextStyle::default());
+                },
+                |layout| text_box_layout(layout, text),
+            )
+        })
+        .collect();
+
+    let mut composition = cranpose_ui::run_test_composition(|| {});
+    set_text_measurer(ContractMeasurer);
+    let value = cranpose_core::MutableState::with_runtime(
+        strings[0].to_string(),
+        composition.runtime_handle(),
+    );
+    composition
+        .render(
+            cranpose_core::location_key(file!(), line!(), column!()),
+            move || {
+                Column(Modifier::empty(), ColumnSpec::default(), move || {
+                    Text(
+                        value.value(),
+                        Modifier::empty().width(width),
+                        TextStyle::default(),
+                    );
+                });
+            },
+        )
+        .expect("text composition");
+    for (text, expected) in strings.iter().zip(&composed) {
+        value.set_value(text.to_string());
+        while composition.process_invalid_scopes().expect("text change") {}
+        let layout = layout_composition(&mut composition, Size::new(300.0, 300.0));
+        assert_eq!(&text_box_layout(&layout, text), expected, "{text}");
+    }
+}
