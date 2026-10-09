@@ -275,7 +275,7 @@ fn an_atlas_whose_surfaces_shrink_to_a_third_draws_into_the_texture_it_had() {
 }
 
 #[test]
-fn an_atlas_whose_surfaces_grow_a_little_draws_into_the_texture_it_had() {
+fn an_atlas_whose_surfaces_grow_a_little_takes_one_texture_at_most() {
     let Some((first, second)) = resize_tiles_twice(40.0, 41.0) else {
         return;
     };
@@ -283,7 +283,11 @@ fn an_atlas_whose_surfaces_grow_a_little_draws_into_the_texture_it_had() {
         first <= 1,
         "the grown atlas takes one texture beside the kept one, not {first}"
     );
-    assert_eq!(second, 0, "the first atlas had room for a step of growth");
+    assert!(
+        second <= 1,
+        "a step of growth takes one texture of its own size on Metal and none \
+         where new atlases take a step of headroom, not {second}"
+    );
 }
 
 /// Tiles that hold still are kept and drawn from the cache as a fresh

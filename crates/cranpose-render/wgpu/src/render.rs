@@ -3425,7 +3425,7 @@ impl GpuRenderer {
             glyph_atlas_shader,
             rrect_shadow_shader,
             depth_targets: crate::idle_pool::IdlePool::default(),
-            surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::default(),
+            surface_atlas_sizes: crate::frame::SurfaceAtlasSizes::for_backend(adapter_backend),
             uniform_bind_group_layout,
             image_bind_group_layout,
             image_nearest_sampler,

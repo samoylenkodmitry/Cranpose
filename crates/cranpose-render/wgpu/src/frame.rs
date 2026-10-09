@@ -1918,16 +1918,30 @@ const KEPT_SURFACE_ATLAS_SIZES: usize = 4;
 /// exact size, then kept a texture and a depth buffer for every size a
 /// frame had used. An atlas now takes the newest recent size that holds it,
 /// grown to fit where that stays within [`SURFACE_ATLAS_SLACK`] times its
-/// area, so frames keep drawing into one texture. A new size takes one
-/// padding step more on each side: the frames after a screen's first add
+/// area, so frames keep drawing into one texture.
+///
+/// A new size takes one padding step more on each side where the GPU memory
+/// a process holds stays at its peak: the frames after a screen's first add
 /// members, and each step up meant a second atlas while the first stayed
-/// pooled, which set the process's peak of GPU memory.
-#[derive(Default)]
+/// pooled. Without the step, a Mate 20 X held two atlases and two depth
+/// buffers at the gauntlet's third frame, and its GL memory stayed 3 to
+/// 10 MB higher at tier 12. Metal takes a dropped texture's memory back, so
+/// there a new size is the size asked for: with the step, the desktop
+/// gauntlet drew its 1536-pixel frames at tier 16 into a 1792-pixel atlas,
+/// 3.4 MB more for as long as it ran.
 pub(crate) struct SurfaceAtlasSizes {
     recent: crate::idle_pool::IdlePool<(u32, u32)>,
+    step_ahead: bool,
 }
 
 impl SurfaceAtlasSizes {
+    pub(crate) fn for_backend(backend: wgpu::Backend) -> Self {
+        Self {
+            recent: crate::idle_pool::IdlePool::default(),
+            step_ahead: backend != wgpu::Backend::Metal,
+        }
+    }
+
     /// The size an atlas whose members pack into `size`, a padded size,
     /// takes this frame; no side passes `limit`.
     fn settle(&mut self, size: (u32, u32), limit: u32) -> (u32, u32) {
@@ -1942,10 +1956,14 @@ impl SurfaceAtlasSizes {
             .map(|recent| (recent.0.max(size.0), recent.1.max(size.1)))
             .find(|grown| area(*grown) <= served)
             .unwrap_or_else(|| {
-                (
-                    padded_dimension(size.0.saturating_add(1), limit),
-                    padded_dimension(size.1.saturating_add(1), limit),
-                )
+                if self.step_ahead {
+                    (
+                        padded_dimension(size.0.saturating_add(1), limit),
+                        padded_dimension(size.1.saturating_add(1), limit),
+                    )
+                } else {
+                    size
+                }
             });
         let _ = self.recent.take(|recent| *recent == settled);
         self.recent
