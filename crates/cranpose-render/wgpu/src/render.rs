@@ -56,6 +56,7 @@ use crate::{
     glyph_run::{RunGlyphScratch, RunGlyphs},
     glyph_run_arena::{GlyphRunArena, GlyphRunSpan},
     gpu_stats::{self, gpu_stats_enabled},
+    idle_pool::FrameScratch,
     layer_cache::LayerCache,
     offscreen::{COMPOSITION_BYTES_PER_PIXEL, OffscreenTarget},
     output_conversion::OutputConverter,
@@ -2064,14 +2065,21 @@ impl TurnedGlyph {
 /// those of layers drawn in place under a turn.
 #[derive(Default)]
 pub(crate) struct GlyphInstances {
-    pub(crate) plain: Vec<GlyphInstance>,
-    pub(crate) turned: Vec<TurnedGlyph>,
+    pub(crate) plain: FrameScratch<GlyphInstance>,
+    pub(crate) turned: FrameScratch<TurnedGlyph>,
 }
 
 impl GlyphInstances {
     pub(crate) fn clear(&mut self) {
         self.plain.clear();
         self.turned.clear();
+    }
+
+    /// Ends a frame: see [`FrameScratch::end_frame`]. Passes need the
+    /// most glyphs at startup, when nothing is cached yet.
+    pub(crate) fn end_frame(&mut self) {
+        self.plain.end_frame();
+        self.turned.end_frame();
     }
 
     fn lens(&self) -> (usize, usize) {
@@ -4134,6 +4142,7 @@ impl GpuRenderer {
         }
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
+        self.scratch_glyph_instances.end_frame();
 
         self.frame_stats
             .layer_cache_size
