@@ -309,7 +309,9 @@ release)
         git -C "$here" worktree prune
         git -C "$here" worktree add -q --force --detach "$tree" "$tag"
     fi
-    git -C "$tree" checkout -q --detach "$tag"
+    # Forced: the last build rewrote cranpose-app/Cargo.lock in this tree, and a
+    # new release that differs in it would refuse the checkout.
+    git -C "$tree" checkout -q -f --detach "$tag"
     app=$tree/benchmarks/compose-vs-cranpose/cranpose-app
     # A release before the desktop gauntlet has no `cranpose-release` to run.
     if ! grep -q 'pub fn run_desktop' "$app/src/lib.rs" 2>/dev/null; then

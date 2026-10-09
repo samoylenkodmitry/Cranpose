@@ -54,7 +54,9 @@ def release_has(tag, path, needle):
 
 def release_tree_at(tree, tag):
     worktree(tree, tag)
-    git('checkout', '-q', '--detach', tag, cwd=tree)
+    # Forced: the last night's build rewrote files of the tree, and a new
+    # release that differs in one of them would refuse the checkout.
+    git('checkout', '-q', '-f', '--detach', tag, cwd=tree)
     return tree
 
 
