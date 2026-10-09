@@ -2919,7 +2919,9 @@ impl CoordinatorChain {
 
     fn rebuild(&mut self, chain: &cranpose_foundation::ModifierNodeChain, len: usize) {
         let mut previous_nodes = std::mem::take(&mut self.nodes);
-        self.nodes.reserve(len);
+        // Exactly: most chains hold one layout modifier, where growth would
+        // make room for four.
+        self.nodes.reserve_exact(len);
         chain.for_each_forward_matching(NodeCapabilities::LAYOUT, |node_ref| {
             let Some((index, node)) = node_ref
                 .entry_index()

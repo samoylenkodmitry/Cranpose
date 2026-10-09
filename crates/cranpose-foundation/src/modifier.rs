@@ -2859,7 +2859,10 @@ impl ModifierNodeChain {
             }
         }
 
-        self.entries.reserve(scratch.final_slots.len());
+        // Exactly: a chain is rebuilt only when its modifiers change, and
+        // most hold one to three entries, where growth would make room for
+        // four.
+        self.entries.reserve_exact(scratch.final_slots.len());
         for slot in scratch.final_slots.drain(..) {
             if let Some(entry) = slot {
                 self.entries.push(entry);
@@ -3275,6 +3278,8 @@ impl ModifierNodeChain {
 
     fn rebuild_ordered_nodes(&mut self) {
         self.ordered_nodes.clear();
+        // One link per entry unless an entry delegates; see `rebuild_tail`.
+        self.ordered_nodes.reserve_exact(self.entries.len());
         let mut path_buf = [0usize; MAX_DELEGATE_DEPTH];
         for (index, entry) in self.entries.iter().enumerate() {
             let node_borrow = entry.node.borrow();
