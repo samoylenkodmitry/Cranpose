@@ -930,7 +930,7 @@ fn extend_segment_in(tables: &mut RecordTables, extend: bool, opened: RecordSegm
         last.bare_interiors |= opened.bare_interiors;
         return;
     }
-    tables.segments.push(opened);
+    crate::shape_records::push_sized(&mut tables.segments, opened);
 }
 
 impl ShapeRecorder {
@@ -1061,20 +1061,23 @@ impl ShapeRecorder {
 
     fn push_content_segment(&mut self) {
         self.last_segment_key = NO_SEGMENT_KEY;
-        self.tables_mut().segments.push(RecordSegment {
-            lane: RecordLane::Content,
-            start: 0,
-            count: 1,
-            blend: BlendMode::SrcOver,
-            gradient: false,
-            vertex_gradient: false,
-            brushes: 0,
-            kinds: 0,
-            band_class: 0,
-            interiors: false,
-            occluders: false,
-            bare_interiors: false,
-        });
+        crate::shape_records::push_sized(
+            &mut self.tables_mut().segments,
+            RecordSegment {
+                lane: RecordLane::Content,
+                start: 0,
+                count: 1,
+                blend: BlendMode::SrcOver,
+                gradient: false,
+                vertex_gradient: false,
+                brushes: 0,
+                kinds: 0,
+                band_class: 0,
+                interiors: false,
+                occluders: false,
+                bare_interiors: false,
+            },
+        );
     }
 
     /// Records the segment `line` stroked with `stroke` and returns the

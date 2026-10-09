@@ -278,3 +278,39 @@ fn scope_batches_preserve_bits_order_metadata_and_retained_frames() {
         bytemuck::cast_slice::<_, u8>(&retained_records)
     );
 }
+
+#[test]
+fn a_one_shape_recording_holds_room_for_one_record_and_one_segment() {
+    let rect = || DrawPrimitive::Rect {
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 8.0,
+            height: 4.0,
+        },
+        brush: Brush::Solid(Color::RED),
+        stroke: None,
+    };
+    let one = CommandRecording::from_primitives([rect()]);
+    assert_eq!(one.shape_capacity(), 1);
+    assert_eq!(
+        one.pod_heap_bytes(),
+        std::mem::size_of::<cranpose_ui_graphics::ShapeRecordBody>()
+            + std::mem::size_of::<cranpose_ui_graphics::ShapeRecordCurve>()
+            + std::mem::size_of::<cranpose_ui_graphics::RecordSegment>(),
+        "a background or border recording keeps no room it never fills"
+    );
+    let mut again = CommandRecorder::reusing(one);
+    again.push_primitive(rect());
+    assert_eq!(
+        again.finish().shape_capacity(),
+        1,
+        "recording it again keeps the one slot"
+    );
+    let two = CommandRecording::from_primitives([rect(), rect()]);
+    assert_eq!(two.len(), 2);
+    assert!(
+        two.shape_capacity() >= 2,
+        "a second shape grows the columns as usual"
+    );
+}
