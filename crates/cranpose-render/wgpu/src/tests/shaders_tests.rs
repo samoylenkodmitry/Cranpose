@@ -269,9 +269,11 @@ fn dithering_solid_batches_validate_for_webgl() {
     }
 }
 
-const GLES_VARYING_VECTOR_FLOOR: u32 = 15;
+const GLES_VARYING_VECTOR_FLOOR: usize = 15;
 
-fn fragment_input_locations(source: &str, entry_point: &str) -> Vec<u32> {
+/// A fragment entry's input locations, in order, and whether it takes
+/// `@builtin(position)`.
+fn fragment_inputs(source: &str, entry_point: &str) -> (Vec<u32>, bool) {
     let module = naga::front::wgsl::parse_str(source).expect("shader must parse");
     let entry = module
         .entry_points
@@ -279,24 +281,28 @@ fn fragment_input_locations(source: &str, entry_point: &str) -> Vec<u32> {
         .find(|entry| entry.name == entry_point)
         .unwrap_or_else(|| panic!("{entry_point} missing"));
     let mut locations = Vec::new();
+    let mut position = false;
+    let mut note = |binding: &Option<naga::Binding>| match binding {
+        Some(naga::Binding::Location { location, .. }) => locations.push(*location),
+        Some(naga::Binding::BuiltIn(naga::BuiltIn::Position { .. })) => position = true,
+        _ => {}
+    };
     for argument in &entry.function.arguments {
         match &module.types[argument.ty].inner {
             naga::TypeInner::Struct { members, .. } => {
                 for member in members {
-                    if let Some(naga::Binding::Location { location, .. }) = member.binding {
-                        locations.push(location);
-                    }
+                    note(&member.binding);
                 }
             }
-            _ => {
-                if let Some(naga::Binding::Location { location, .. }) = argument.binding {
-                    locations.push(location);
-                }
-            }
+            _ => note(&argument.binding),
         }
     }
     locations.sort_unstable();
-    locations
+    (locations, position)
+}
+
+fn fragment_input_locations(source: &str, entry_point: &str) -> Vec<u32> {
+    fragment_inputs(source, entry_point).0
 }
 
 #[test]
@@ -309,13 +315,14 @@ fn shape_fragment_inputs_fit_the_gles_varying_floor() {
         "fs_dithered_fill",
         "fs_gradient_fill",
     ] {
-        let locations = fragment_input_locations(super::SHADER, entry_point);
-        let highest = locations.last().copied().expect("fragment inputs");
+        let (locations, position) = fragment_inputs(super::SHADER, entry_point);
+        // WebGL counts the fragment position a stage reads against the same
+        // vectors (GLSL ES 1.00 appendix A.7), and ANGLE links no more.
+        let vectors = locations.len() + usize::from(position);
         assert!(
-            highest < GLES_VARYING_VECTOR_FLOOR,
-            "{entry_point} reads location {highest}; GLSL ES 3.0 only guarantees \
-             {GLES_VARYING_VECTOR_FLOOR} varying vectors, so every location must \
-             stay below it: {locations:?}"
+            vectors <= GLES_VARYING_VECTOR_FLOOR,
+            "{entry_point} takes {vectors} varying vectors (locations {locations:?}, \
+             position {position}); WebGL 2 only guarantees {GLES_VARYING_VECTOR_FLOOR}"
         );
         let mut deduplicated = locations.clone();
         deduplicated.dedup();

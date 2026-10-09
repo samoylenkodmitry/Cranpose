@@ -30,6 +30,9 @@ struct CompilationContext<'a> {
     immediates_items: &'a mut Vec<naga::back::glsl::ImmediateItem>,
     multiview_mask: Option<NonZeroU32>,
     clip_distance_count: &'a mut u32,
+    /// Whether the vertex stage writes `gl_PointSize`: only a pipeline that
+    /// draws points needs it, and WebGL counts it against the varyings.
+    force_point_size: bool,
 }
 
 impl CompilationContext<'_> {
@@ -348,8 +351,11 @@ impl super::Device {
             };
 
             let mut output = String::new();
+            let force_point_size =
+                context.force_point_size && naga_stage == naga::ShaderStage::Vertex;
             let needs_temp_options = stage.zero_initialize_workgroup_memory
-                != context.layout.naga_options.zero_initialize_workgroup_memory;
+                != context.layout.naga_options.zero_initialize_workgroup_memory
+                || force_point_size;
             let mut temp_options;
             let naga_options = if needs_temp_options {
                 // We use a conditional here, as cloning the naga_options could be expensive
@@ -357,6 +363,9 @@ impl super::Device {
                 temp_options = context.layout.naga_options.clone();
                 temp_options.zero_initialize_workgroup_memory =
                     stage.zero_initialize_workgroup_memory;
+                temp_options
+                    .writer_flags
+                    .set(glsl::WriterFlags::FORCE_POINT_SIZE, force_point_size);
                 &temp_options
             } else {
                 &context.layout.naga_options
@@ -402,6 +411,7 @@ impl super::Device {
         layout: &super::PipelineLayout,
         #[cfg_attr(target_arch = "wasm32", allow(unused))] label: Option<&str>,
         multiview_mask: Option<NonZeroU32>,
+        force_point_size: bool,
     ) -> Result<Arc<super::PipelineInner>, crate::PipelineError> {
         let mut program_stages = ArrayVec::new();
         let group_to_binding_to_slot = layout
@@ -429,6 +439,7 @@ impl super::Device {
             .entry(super::ProgramCacheKey {
                 stages: program_stages,
                 group_to_binding_to_slot: group_to_binding_to_slot.into_boxed_slice(),
+                force_point_size,
             })
             .or_insert_with(|| unsafe {
                 Self::create_program(
@@ -437,6 +448,7 @@ impl super::Device {
                     layout,
                     label,
                     multiview_mask,
+                    force_point_size,
                     self.shared.shading_language_version,
                     self.shared.private_caps,
                 )
@@ -464,6 +476,7 @@ impl super::Device {
         layout: &super::PipelineLayout,
         #[cfg_attr(target_arch = "wasm32", allow(unused))] label: Option<&str>,
         multiview_mask: Option<NonZeroU32>,
+        force_point_size: bool,
         glsl_version: naga::back::glsl::Version,
         private_caps: PrivateCapabilities,
     ) -> Result<Arc<super::PipelineInner>, crate::PipelineError> {
@@ -500,6 +513,7 @@ impl super::Device {
                 immediates_items: pc_item,
                 multiview_mask,
                 clip_distance_count: &mut clip_distance_count,
+                force_point_size,
             };
 
             let shader = Self::create_shader(gl, naga_stage, stage, context, program)?;
@@ -1309,9 +1323,9 @@ impl crate::Device for super::Device {
                 .private_caps
                 .contains(PrivateCapabilities::FULLY_FEATURED_INSTANCING),
         );
-        // We always force point size to be written and it will be ignored by the driver if it's not a point list primitive.
-        // https://github.com/gfx-rs/wgpu/pull/3440/files#r1095726950
-        writer_flags.set(glsl::WriterFlags::FORCE_POINT_SIZE, true);
+        // A point list pipeline writes the point size (`create_shader`); no
+        // other one does, as WebGL counts `gl_PointSize` against the 15
+        // varying vectors a program may link with.
         let mut binding_map = glsl::BindingMap::default();
 
         for (group_index, bg_layout) in desc.bind_group_layouts.iter().enumerate() {
@@ -1525,8 +1539,16 @@ impl crate::Device for super::Device {
         if let Some(ref fs) = desc.fragment_stage {
             shaders.push((naga::ShaderStage::Fragment, fs));
         }
+        let points = desc.primitive.topology == wgt::PrimitiveTopology::PointList;
         let inner = unsafe {
-            self.create_pipeline(gl, shaders, desc.layout, desc.label, desc.multiview_mask)
+            self.create_pipeline(
+                gl,
+                shaders,
+                desc.layout,
+                desc.label,
+                desc.multiview_mask,
+                points,
+            )
         }?;
 
         let (vertex_buffers, vertex_attributes) = {
@@ -1622,7 +1644,8 @@ impl crate::Device for super::Device {
         let gl = &self.shared.context.lock();
         let mut shaders = ArrayVec::new();
         shaders.push((naga::ShaderStage::Compute, &desc.stage));
-        let inner = unsafe { self.create_pipeline(gl, shaders, desc.layout, desc.label, None) }?;
+        let inner =
+            unsafe { self.create_pipeline(gl, shaders, desc.layout, desc.label, None, false) }?;
 
         self.counters.compute_pipelines.add(1);
 
